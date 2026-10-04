@@ -1,5 +1,4 @@
-use litellm_traces::decode_otlp;
-use litellm_traces::{AgentType, Integration, ObservationType, Shared};
+use litellm_traces::{AgentType, Integration, ObservationType, Shared, decode_otlp};
 use opentelemetry_proto::tonic::trace::v1::Span;
 use rstest::rstest;
 

@@ -9,8 +9,9 @@ use std::{
     str::FromStr,
 };
 
-use crate::{Error, otlp::DecodedEvent};
 use serde::{Deserialize, Serialize, Serializer};
+
+use crate::{Error, otlp::DecodedEvent};
 
 mod format;
 mod instrumentation;
@@ -118,7 +119,7 @@ pub enum CallEvidence {
 }
 
 impl CallEvidence {
-    pub(crate) fn row_keys(row: &crate::query::named::TraceSpansRow) -> BTreeSet<CallKey> {
+    pub(crate) fn row_keys(row: &crate::store::SpanRow) -> BTreeSet<CallKey> {
         if row.call_keys.is_empty() && !row.litellm_request_id.is_empty() {
             BTreeSet::from([CallKey::ProviderResponse(row.litellm_request_id.clone())])
         } else {
@@ -126,7 +127,7 @@ impl CallEvidence {
         }
     }
 
-    pub(crate) fn from_row(row: &crate::query::named::TraceSpansRow) -> Self {
+    pub(crate) fn from_row(row: &crate::store::SpanRow) -> Self {
         let kind = row
             .call_evidence
             .unwrap_or(if Self::row_keys(row).is_empty() {

@@ -1,15 +1,15 @@
 //! The common message format normalizers emit for span input and output: a JSON array of
 //! `{role, content, tool_calls?, name?}` that the UI renders as a conversation.
 
-use indexmap::IndexMap;
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Value, ser::Formatter};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
 };
 
+use indexmap::IndexMap;
 use litellm_llms_types::{formats::chat_completions::ChatMessageContent, recognized::Recognized};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Value, ser::Formatter};
 
 use super::{CallEvidence, CallKey, attr};
 
@@ -592,9 +592,9 @@ pub(super) fn state_conversation(input: &str) -> Option<Vec<Message>> {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use serde_json::Value;
 
     use super::{state_conversation, state_preview};
-    use serde_json::Value;
 
     #[rstest]
     #[case::latest_user(r#"{"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"reply"},{"role":"user","content":"last"}]}"#, Some("last"))]

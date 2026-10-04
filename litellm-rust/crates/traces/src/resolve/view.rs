@@ -3,15 +3,14 @@ use std::collections::{BTreeSet, HashSet};
 use indexmap::IndexMap;
 use time::OffsetDateTime;
 
-use crate::{
-    normalize::ObservationType,
-    query::named::{ListTracesRow, SpendByResponseIdsRow as SpendRow, TraceSpansRow},
-    view::{AgentNode, Span, SpanStatus, Trace, TraceSummary},
-};
-
 use super::{
     resolution::{Resolution, agent_label},
     spend::{Requests, request_cost, total},
+};
+use crate::{
+    normalize::ObservationType,
+    store::{CallRow as SpendRow, RunRow, SpanRow},
+    view::{AgentNode, Span, SpanStatus, Trace, TraceSummary},
 };
 
 const NANOS_PER_MS: f64 = 1_000_000.0;
@@ -136,7 +135,7 @@ fn sorted_unique<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
 pub fn resolve_trace(
     trace_id: &str,
     trace_ref: &str,
-    rows: &[TraceSpansRow],
+    rows: &[SpanRow],
     spend: &[SpendRow],
 ) -> Option<Trace> {
     let first = rows.first()?;
@@ -154,7 +153,7 @@ pub fn resolve_trace(
         .unwrap_or_default();
     let agents = agents(&resolution);
     let calls = &resolution.model_calls;
-    let counted: Vec<&TraceSpansRow> = if calls.is_empty() {
+    let counted: Vec<&SpanRow> = if calls.is_empty() {
         rows.iter().collect()
     } else {
         calls.iter().map(|call| &rows[*call]).collect()
@@ -214,7 +213,7 @@ pub fn resolve_trace(
     })
 }
 
-pub fn listed_summary(row: &ListTracesRow) -> TraceSummary {
+pub fn listed_summary(row: &RunRow) -> TraceSummary {
     TraceSummary {
         resolution_limited: true,
         trace_id: row.trace_id.clone(),

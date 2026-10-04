@@ -1,7 +1,7 @@
 use crate::InvalidScope;
 
 #[macro_rules_attribute::apply(wire_type)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum QueryScope {
     #[cfg_attr(feature = "schema", schemars(title = "AllQueryScope"))]

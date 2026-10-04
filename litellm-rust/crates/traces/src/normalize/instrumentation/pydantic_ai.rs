@@ -1,5 +1,4 @@
-use super::{Extraction, SpanContext, SpanFacts, messages, select_attribute};
-use super::{Integration, Rule};
+use super::{Extraction, Integration, Rule, SpanContext, SpanFacts, messages, select_attribute};
 use crate::normalize::format::genai::Operation;
 
 pub(super) const SCOPE: &str = "pydantic-ai";

@@ -3,6 +3,8 @@ Agent tracing endpoints. Thin wrappers over `TraceReceiver`: auth -> tenant/scop
 
 POST /v1/traces                              OTLP/HTTP trace export (protobuf or JSON)
 GET  /v1/traces                              TracePage
+GET  /v1/traces/histogram                    TraceHistogram
+GET  /v1/traces/values/{field}               RunValues
 GET  /v1/traces/{trace_id}                   Trace
 GET  /v1/traces/{trace_id}/spans/{span_id}   SpanDetail
 """
@@ -33,11 +35,13 @@ from litellm.rust_bridge.trace.generated.types import (
     AllQueryScope,
     OwnedQueryScope,
     QueryScope,
+    RunField,
+    RunValues,
     SpanDetail,
     SpanErrorPage,
     Trace,
+    TraceHistogram,
     TracePage,
-    TraceScope,
 )
 from litellm.rust_bridge.trace.queries import TraceSQLResponse
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
@@ -55,11 +59,11 @@ class TraceAccessContext:
     read_scope: ReadScope | None
     write_tenant: Tenant | None
 
-    def reader(self) -> tuple[TraceReceiver, TraceScope]:
+    def reader(self) -> tuple[TraceReceiver, QueryScope]:
         tracing: Final = require_receiver(self.receiver)
         if self.read_scope is None:
             raise HTTPException(status_code=403, detail="Not allowed to view agent traces")
-        return tracing, _trace_scope(self.read_scope)
+        return tracing, read_access(self.read_scope)
 
     def writer(self) -> tuple[TraceReceiver, Tenant]:
         if self.write_tenant is None:
@@ -78,16 +82,6 @@ async def provide_trace_access(
     write_tenant: Final = None if auth.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY else tenant
     read_scope: Final = await resolve_trace_read_scope(auth, partial(log_team_lookup, auth))
     return TraceAccessContext(tracing, read_scope, write_tenant)
-
-
-def _trace_scope(scope: ReadScope) -> TraceScope:
-    if isinstance(scope, AllRows):
-        return TraceScope(all_teams=1, user_id="", team_ids=())
-    return TraceScope(
-        all_teams=0,
-        user_id=scope.user_id or "",
-        team_ids=scope.team_ids,
-    )
 
 
 def otlp_error_response(
@@ -180,23 +174,75 @@ def read_failure(error: TraceChanged | ValueError | OverflowError | RuntimeError
             return assert_never(error)
 
 
+StartMs = Annotated[int | None, Query(description="Window start, unix ms. Default: 24h ago")]
+EndMs = Annotated[int | None, Query(description="Window end, unix ms. Default: now")]
+RunQuery = Annotated[
+    str,
+    Query(
+        max_length=1000,
+        description='Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. '
+        "Keys: name, agent, status, model, input, trace_id. `*` globs and a leading `-` negates",
+    ),
+]
+
+
+@dataclass(frozen=True, slots=True)
+class TraceWindow:
+    start_ms: int
+    end_ms: int
+
+
+def trace_window(start_ms: StartMs = None, end_ms: EndMs = None) -> TraceWindow:
+    now_ms: Final = int(time.time() * 1000)
+    return TraceWindow(
+        start_ms=start_ms if start_ms is not None else now_ms - MS_PER_DAY,
+        end_ms=end_ms if end_ms is not None else now_ms,
+    )
+
+
 @router.get("/v1/traces", response_model=TracePage)
 async def list_agent_traces(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
-    start_ms: Annotated[int | None, Query(description="Window start, unix ms. Default: 24h ago")] = None,
-    end_ms: Annotated[int | None, Query(description="Window end, unix ms. Default: now")] = None,
+    window: Annotated[TraceWindow, Depends(trace_window)],
+    q: RunQuery = "",
     cursor: Annotated[str | None, Query(max_length=512)] = None,
 ) -> TracePage:
-    now_ms: Final = int(time.time() * 1000)
     try:
         tracing, scope = context.reader()
         return await tracing.list_traces(
-            scope=scope,
-            start_ms=start_ms if start_ms is not None else now_ms - MS_PER_DAY,
-            end_ms=end_ms if end_ms is not None else now_ms,
-            cursor=cursor,
+            scope=scope, start_ms=window.start_ms, end_ms=window.end_ms, q=q, cursor=cursor
         )
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
+        raise read_failure(error) from error
+
+
+@router.get("/v1/traces/histogram", response_model=TraceHistogram)
+async def agent_trace_histogram(
+    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
+    window: Annotated[TraceWindow, Depends(trace_window)],
+    q: RunQuery = "",
+    buckets: Annotated[int, Query(ge=1, le=240)] = 60,
+) -> TraceHistogram:
+    try:
+        tracing, scope = context.reader()
+        return await tracing.trace_histogram(scope, window.start_ms, window.end_ms, q, buckets)
+    except (ValueError, OverflowError, RuntimeError) as error:
+        raise read_failure(error) from error
+
+
+@router.get("/v1/traces/values/{field}", response_model=RunValues)
+async def agent_trace_values(
+    field: RunField,
+    context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
+    window: Annotated[TraceWindow, Depends(trace_window)],
+    q: RunQuery = "",
+    contains: Annotated[str, Query(max_length=200)] = "",
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> RunValues:
+    try:
+        tracing, scope = context.reader()
+        return await tracing.run_values(scope, window.start_ms, window.end_ms, q, field, contains, limit)
+    except (ValueError, OverflowError, RuntimeError) as error:
         raise read_failure(error) from error
 
 
@@ -220,7 +266,7 @@ def provide_trace_query_secret() -> str:
     return master_key
 
 
-def trace_query_scope(scope: ReadScope) -> QueryScope:
+def read_access(scope: ReadScope) -> QueryScope:
     if isinstance(scope, AllRows):
         return AllQueryScope(kind="all")
     return OwnedQueryScope(
@@ -249,7 +295,7 @@ async def query_agent_traces(
     access: Annotated[TraceQueryAccess, Depends(provide_trace_query_access)],
 ) -> TraceSQLResponse:
     try:
-        return await access.storage.query_sql(body.sql, trace_query_scope(access.scope), access.secret)
+        return await access.storage.query_sql(body.sql, read_access(access.scope), access.secret)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
@@ -262,7 +308,7 @@ async def help_agent_trace_queries(
     access: Annotated[TraceQueryAccess, Depends(provide_trace_query_access)],
 ) -> TraceQueryHelp:
     try:
-        return await access.storage.query_help(trace_query_scope(access.scope), access.secret)
+        return await access.storage.query_help(read_access(access.scope), access.secret)
     except RuntimeError as error:
         verbose_proxy_logger.warning("Trace query help unavailable: %s", error)
         raise HTTPException(status_code=503, detail="Trace query help is temporarily unavailable") from error

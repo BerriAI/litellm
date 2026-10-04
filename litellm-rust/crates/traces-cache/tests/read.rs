@@ -8,14 +8,16 @@ use std::{
 };
 
 use litellm_traces::{
-    CallEvidenceKind, CallKey, ObservationType, SpanStatus,
-    query::named::{
-        ListTracesParams, ListTracesRow, ReadAccessParams, SpanDetailParams, SpanDetailRow,
-        SpanErrorParams, SpanErrorRow, SpendByResponseIdsParams, SpendByResponseIdsRow,
-        TraceIdentityParams, TracePageSpansParams, TraceSpansParams, TraceSpansRow,
+    CallEvidenceKind, CallKey, ObservationType, QueryScope, SpanStatus,
+    search::{AgentRuns, HistogramBucket, RunField, RunFilter, RunSearch},
+    store::{
+        CallQuery, CallRow, CountBy, CountValue, RunCount, RunCountQuery, RunQuery, RunRow,
+        RunSelection, SpanPart, SpanQuery, SpanRow, SpanSelection, SpanText, SpanTextQuery,
     },
 };
-use litellm_traces_cache::{LIVE_TTL, ReadError, StoreError, TraceReader, TraceStore};
+use litellm_traces_cache::{
+    LIVE_TTL, PageRequest, ReadError, StoreError, StoreResult, TraceReader, TraceStore,
+};
 use rstest::rstest;
 
 const START_NS: i64 = 1_790_742_989_000_000_000;
@@ -27,8 +29,7 @@ enum Operation {
     TraceSpans,
     RunSpans,
     Spend,
-    SpanDetail,
-    SpanError,
+    SpanText,
 }
 
 #[derive(Clone, Copy)]
@@ -45,42 +46,32 @@ struct FakeError;
 struct State {
     failures: HashMap<Operation, Failure>,
     trace_refs: Vec<String>,
-    list_runs: Vec<ListTracesRow>,
-    trace_spans: HashMap<String, Vec<TraceSpansRow>>,
-    run_spans: Vec<TraceSpansRow>,
-    spend: Vec<SpendByResponseIdsRow>,
-    span_detail: Option<SpanDetailRow>,
-    span_error: Option<SpanErrorRow>,
+    list_runs: Vec<RunRow>,
+    trace_spans: HashMap<String, Vec<SpanRow>>,
+    run_spans: Vec<SpanRow>,
+    spend: Vec<CallRow>,
+    texts: HashMap<(String, SpanPart), String>,
     list_runs_too_large_above: Option<u32>,
     trace_too_large_refs: HashSet<String>,
     spend_fails_above_response_ids: Option<usize>,
-}
-
-#[derive(Default)]
-struct Calls {
-    trace_refs: AtomicUsize,
-    list_runs: AtomicUsize,
-    trace_spans: AtomicUsize,
-    run_spans: AtomicUsize,
-    spend: AtomicUsize,
-    span_detail: AtomicUsize,
-    span_error: AtomicUsize,
+    count_rows: Vec<RunCount>,
+    count_reads: Vec<RunCountQuery>,
 }
 
 #[derive(Default)]
 struct FakeStore {
     state: Mutex<State>,
-    calls: Calls,
+    calls: Mutex<HashMap<Operation, AtomicUsize>>,
 }
 
 impl FakeStore {
-    fn with_spans(trace_ref: &str, spans: Vec<TraceSpansRow>) -> Self {
+    fn with_spans(trace_ref: &str, spans: Vec<SpanRow>) -> Self {
         Self {
             state: Mutex::new(State {
                 trace_spans: HashMap::from([(trace_ref.to_owned(), spans)]),
                 ..State::default()
             }),
-            calls: Calls::default(),
+            calls: Mutex::default(),
         }
     }
 
@@ -96,7 +87,7 @@ impl FakeStore {
         self.state.lock().unwrap().trace_refs = trace_refs;
     }
 
-    fn set_list_runs(&self, rows: Vec<ListTracesRow>) {
+    fn set_list_runs(&self, rows: Vec<RunRow>) {
         self.state.lock().unwrap().list_runs = rows;
     }
 
@@ -104,7 +95,7 @@ impl FakeStore {
         self.state.lock().unwrap().list_runs_too_large_above = Some(limit);
     }
 
-    fn set_run_spans(&self, rows: Vec<TraceSpansRow>) {
+    fn set_run_spans(&self, rows: Vec<SpanRow>) {
         self.state.lock().unwrap().run_spans = rows;
     }
 
@@ -116,31 +107,58 @@ impl FakeStore {
             .insert(trace_ref.to_owned());
     }
 
-    /// Fails `spend` only when the lookup covers more than `limit` response ids, so a batch
+    fn set_text(&self, span_id: &str, part: SpanPart, text: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .texts
+            .insert((span_id.to_owned(), part), text.to_owned());
+    }
+
+    /// Fails `calls` only when the lookup covers more than `limit` response ids, so a batch
     /// covering several runs fails while each run's own narrower lookup still succeeds.
     fn set_spend_fails_above_response_ids(&self, limit: usize) {
         self.state.lock().unwrap().spend_fails_above_response_ids = Some(limit);
     }
 
     fn calls(&self, operation: Operation) -> usize {
-        match operation {
-            Operation::TraceRefs => self.calls.trace_refs.load(Ordering::SeqCst),
-            Operation::ListRuns => self.calls.list_runs.load(Ordering::SeqCst),
-            Operation::TraceSpans => self.calls.trace_spans.load(Ordering::SeqCst),
-            Operation::RunSpans => self.calls.run_spans.load(Ordering::SeqCst),
-            Operation::Spend => self.calls.spend.load(Ordering::SeqCst),
-            Operation::SpanDetail => self.calls.span_detail.load(Ordering::SeqCst),
-            Operation::SpanError => self.calls.span_error.load(Ordering::SeqCst),
-        }
+        self.calls
+            .lock()
+            .unwrap()
+            .get(&operation)
+            .map_or(0, |count| count.load(Ordering::SeqCst))
     }
 
-    fn failure(state: &State, operation: Operation) -> Result<(), StoreError<FakeError>> {
+    fn record(&self, operation: Operation) {
+        self.calls
+            .lock()
+            .unwrap()
+            .entry(operation)
+            .or_default()
+            .fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn failure(state: &State, operation: Operation) -> StoreResult<(), FakeError> {
         match state.failures.get(&operation) {
             Some(Failure::TooLarge) => Err(StoreError::TooLarge),
             Some(Failure::Failed) => Err(StoreError::Failed(FakeError)),
             None => Ok(()),
         }
     }
+}
+
+fn keyset<R, C: Ord>(rows: &[R], cursor: impl Fn(&R) -> C, after: Option<C>, limit: u32) -> Vec<R>
+where
+    R: Clone,
+{
+    let mut rows: Vec<R> = rows
+        .iter()
+        .filter(|row| after.as_ref().is_none_or(|after| cursor(row) > *after))
+        .cloned()
+        .collect();
+    rows.sort_by_key(|row| cursor(row));
+    rows.truncate(limit as usize);
+    rows
 }
 
 impl TraceStore for FakeStore {
@@ -150,115 +168,152 @@ impl TraceStore for FakeStore {
         "fake"
     }
 
-    async fn trace_refs(
-        &self,
-        _: &TraceIdentityParams,
-    ) -> Result<Vec<String>, StoreError<Self::Error>> {
-        self.calls.trace_refs.fetch_add(1, Ordering::SeqCst);
+    async fn runs(&self, _: &QueryScope, query: &RunQuery) -> StoreResult<Vec<RunRow>, FakeError> {
         let state = self.state.lock().unwrap();
-        Self::failure(&state, Operation::TraceRefs)?;
-        Ok(state.trace_refs.clone())
-    }
-
-    async fn list_runs(
-        &self,
-        params: &ListTracesParams,
-    ) -> Result<Vec<ListTracesRow>, StoreError<Self::Error>> {
-        self.calls.list_runs.fetch_add(1, Ordering::SeqCst);
-        let state = self.state.lock().unwrap();
+        if let RunSelection::TraceId(trace_id) = &query.selection {
+            self.record(Operation::TraceRefs);
+            Self::failure(&state, Operation::TraceRefs)?;
+            return Ok(state
+                .trace_refs
+                .iter()
+                .take(query.limit as usize)
+                .map(|trace_ref| run(trace_id, trace_ref))
+                .collect());
+        }
+        self.record(Operation::ListRuns);
         Self::failure(&state, Operation::ListRuns)?;
         if state
             .list_runs_too_large_above
-            .is_some_and(|limit| params.limit > limit)
+            .is_some_and(|limit| query.limit > limit)
         {
             return Err(StoreError::TooLarge);
         }
         Ok(state
             .list_runs
             .iter()
-            .take(params.limit as usize)
+            .take(query.limit as usize)
             .cloned()
             .collect())
     }
 
-    async fn trace_spans(
+    async fn run_counts(
         &self,
-        params: &TraceSpansParams,
-        _: u64,
-    ) -> Result<Vec<TraceSpansRow>, StoreError<Self::Error>> {
-        self.calls.trace_spans.fetch_add(1, Ordering::SeqCst);
-        tokio::task::yield_now().await;
-        let state = self.state.lock().unwrap();
-        Self::failure(&state, Operation::TraceSpans)?;
-        if state.trace_too_large_refs.contains(&params.trace_ref) {
-            return Err(StoreError::TooLarge);
-        }
-        Ok(state
-            .trace_spans
-            .get(&params.trace_ref)
-            .cloned()
-            .unwrap_or_default())
+        _: &QueryScope,
+        query: &RunCountQuery,
+    ) -> StoreResult<Vec<RunCount>, FakeError> {
+        let mut state = self.state.lock().unwrap();
+        state.count_reads.push(query.clone());
+        Ok(state.count_rows.clone())
     }
 
-    async fn run_spans(
+    async fn spans(
         &self,
-        _: &TracePageSpansParams,
-        _: u64,
-    ) -> Result<Vec<TraceSpansRow>, StoreError<Self::Error>> {
-        self.calls.run_spans.fetch_add(1, Ordering::SeqCst);
+        _: &QueryScope,
+        query: &SpanQuery,
+    ) -> StoreResult<Vec<SpanRow>, FakeError> {
         tokio::task::yield_now().await;
         let state = self.state.lock().unwrap();
-        Self::failure(&state, Operation::RunSpans)?;
-        Ok(state.run_spans.clone())
+        let rows = match &query.selection {
+            SpanSelection::Trace { trace_ref, .. } => {
+                self.record(Operation::TraceSpans);
+                Self::failure(&state, Operation::TraceSpans)?;
+                if state.trace_too_large_refs.contains(trace_ref) {
+                    return Err(StoreError::TooLarge);
+                }
+                state
+                    .trace_spans
+                    .get(trace_ref)
+                    .cloned()
+                    .unwrap_or_default()
+            }
+            SpanSelection::Runs { .. } => {
+                self.record(Operation::RunSpans);
+                Self::failure(&state, Operation::RunSpans)?;
+                state.run_spans.clone()
+            }
+        };
+        Ok(keyset(
+            &rows,
+            SpanRow::cursor,
+            query.after.clone(),
+            query.limit,
+        ))
     }
 
-    async fn spend(
+    async fn span_text(
         &self,
-        params: &SpendByResponseIdsParams,
-    ) -> Result<Vec<SpendByResponseIdsRow>, StoreError<Self::Error>> {
-        self.calls.spend.fetch_add(1, Ordering::SeqCst);
+        _: &QueryScope,
+        query: &SpanTextQuery,
+    ) -> StoreResult<Option<SpanText>, FakeError> {
+        self.record(Operation::SpanText);
+        let state = self.state.lock().unwrap();
+        Self::failure(&state, Operation::SpanText)?;
+        let Some(text) = state.texts.get(&(query.span_id.clone(), query.part)) else {
+            return Ok(None);
+        };
+        let rest = text.chars().skip(query.offset as usize);
+        Ok(Some(SpanText {
+            text: match query.max_chars {
+                Some(max) => rest.take(max as usize).collect(),
+                None => rest.collect(),
+            },
+            total_chars: text.chars().count() as u64,
+            version: format!("{:0>64}", text.len()),
+        }))
+    }
+
+    async fn calls(
+        &self,
+        _: &QueryScope,
+        query: &CallQuery,
+    ) -> StoreResult<Vec<CallRow>, FakeError> {
+        self.record(Operation::Spend);
         let state = self.state.lock().unwrap();
         Self::failure(&state, Operation::Spend)?;
         if state
             .spend_fails_above_response_ids
-            .is_some_and(|limit| params.response_ids.len() > limit)
+            .is_some_and(|limit| query.response_ids.len() > limit)
         {
             return Err(StoreError::Failed(FakeError));
         }
-        Ok(state.spend.clone())
-    }
-
-    async fn span_detail(
-        &self,
-        _: &SpanDetailParams,
-    ) -> Result<Option<SpanDetailRow>, StoreError<Self::Error>> {
-        self.calls.span_detail.fetch_add(1, Ordering::SeqCst);
-        let state = self.state.lock().unwrap();
-        Self::failure(&state, Operation::SpanDetail)?;
-        Ok(state.span_detail.clone())
-    }
-
-    async fn span_error(
-        &self,
-        _: &SpanErrorParams,
-    ) -> Result<Option<SpanErrorRow>, StoreError<Self::Error>> {
-        self.calls.span_error.fetch_add(1, Ordering::SeqCst);
-        let state = self.state.lock().unwrap();
-        Self::failure(&state, Operation::SpanError)?;
-        Ok(state.span_error.clone())
+        Ok(keyset(
+            &state.spend,
+            CallRow::cursor,
+            query.after.clone(),
+            query.limit,
+        ))
     }
 }
 
-fn access() -> ReadAccessParams {
-    ReadAccessParams {
-        all_teams: true,
-        user_id: String::new(),
-        team_ids: Vec::new(),
+fn access() -> QueryScope {
+    QueryScope::All
+}
+
+fn everything() -> RunFilter {
+    RunFilter {
+        start_ms: 0,
+        end_ms: i64::MAX,
+        search: RunSearch::default(),
     }
 }
 
-fn span(index: usize) -> TraceSpansRow {
-    TraceSpansRow {
+fn window(start_ms: i64, end_ms: i64, q: &str) -> RunFilter {
+    RunFilter {
+        start_ms,
+        end_ms,
+        search: RunSearch::parse(q),
+    }
+}
+
+fn newest(limit: u32) -> PageRequest {
+    PageRequest {
+        cursor: None,
+        limit,
+    }
+}
+
+fn span(index: usize) -> SpanRow {
+    SpanRow {
         trace_id: "trace".into(),
         span_id: format!("span-{index}"),
         parent_span_id: if index == 0 {
@@ -291,8 +346,8 @@ fn span(index: usize) -> TraceSpansRow {
     }
 }
 
-fn run(trace_id: &str, trace_ref: &str) -> ListTracesRow {
-    ListTracesRow {
+fn run(trace_id: &str, trace_ref: &str) -> RunRow {
+    RunRow {
         trace_id: trace_id.into(),
         trace_ref: trace_ref.into(),
         team_id: "team".into(),
@@ -315,7 +370,6 @@ fn run(trace_id: &str, trace_ref: &str) -> ListTracesRow {
         output_tokens: 0,
         models: Vec::new(),
         error_count: 0,
-        request_ids: Vec::new(),
     }
 }
 
@@ -465,7 +519,7 @@ async fn list_run_budget_halves_the_limit_and_cursor_requires_a_full_page() {
     let reader = TraceReader::new(usize::MAX);
     let access = access();
     let page = reader
-        .list_traces(&store, &access, 0, i64::MAX, None, 8)
+        .list_traces(&store, &access, &everything(), &newest(8))
         .await
         .unwrap();
     assert_eq!(page.data.len(), 2);
@@ -476,7 +530,7 @@ async fn list_run_budget_halves_the_limit_and_cursor_requires_a_full_page() {
     shorter.set_list_runs(vec![run("only", "ref-only")]);
     shorter.set_list_runs_too_large_above(2);
     let page = reader
-        .list_traces(&shorter, &access, 0, i64::MAX, None, 8)
+        .list_traces(&shorter, &access, &everything(), &newest(8))
         .await
         .unwrap();
     assert_eq!(page.data.len(), 1);
@@ -497,7 +551,7 @@ async fn oversized_run_batch_falls_back_to_each_run_and_keeps_listed_summaries()
     store.set_failure(Operation::RunSpans, Failure::TooLarge);
     let reader = TraceReader::new(usize::MAX);
     let page = reader
-        .list_traces(&store, &access(), 0, i64::MAX, None, 2)
+        .list_traces(&store, &access(), &everything(), &newest(2))
         .await
         .unwrap();
     assert_eq!(page.data.len(), 2);
@@ -505,20 +559,27 @@ async fn oversized_run_batch_falls_back_to_each_run_and_keeps_listed_summaries()
     assert_eq!(page.data[0].trace_ref, "ref-large");
     assert!(!page.data[1].resolution_limited);
     assert_eq!(page.data[1].trace_ref, "ref-good");
-    assert_eq!(store.calls(Operation::RunSpans), 1);
-    assert_eq!(store.calls(Operation::TraceSpans), 2);
+    let reads = (
+        store.calls(Operation::RunSpans),
+        store.calls(Operation::TraceSpans),
+    );
 
     let again = reader
-        .list_traces(&store, &access(), 0, i64::MAX, None, 2)
+        .list_traces(&store, &access(), &everything(), &newest(2))
         .await
         .unwrap();
     assert_eq!(again.data, page.data);
-    assert_eq!(store.calls(Operation::RunSpans), 1);
-    assert_eq!(store.calls(Operation::TraceSpans), 2);
+    assert_eq!(
+        (
+            store.calls(Operation::RunSpans),
+            store.calls(Operation::TraceSpans)
+        ),
+        reads
+    );
 }
 
-fn spend_row(response_id: &str, cost: f64) -> SpendByResponseIdsRow {
-    SpendByResponseIdsRow {
+fn spend_row(response_id: &str, cost: f64) -> CallRow {
+    CallRow {
         request_id: response_id.into(),
         litellm_call_id: String::new(),
         response_id: response_id.into(),
@@ -563,7 +624,7 @@ async fn failed_batch_spend_lookup_falls_back_to_each_run_instead_of_losing_ever
     store.set_spend_fails_above_response_ids(1);
 
     let page = TraceReader::new(usize::MAX)
-        .list_traces(&store, &access(), 0, i64::MAX, None, 8)
+        .list_traces(&store, &access(), &everything(), &newest(8))
         .await
         .unwrap();
 
@@ -643,17 +704,166 @@ async fn invalid_page_sizes_are_rejected(#[case] page_size: u32) {
 }
 
 #[rstest]
+#[case::zero_limit(window(0, 10, ""), 0)]
+#[case::empty_window(window(10, 10, ""), 8)]
+#[case::reversed_window(window(10, 0, ""), 8)]
 #[tokio::test]
-async fn zero_list_limit_is_rejected() {
+async fn invalid_list_reads_are_rejected_before_storage(
+    #[case] filter: RunFilter,
+    #[case] limit: u32,
+) {
     let store = FakeStore::default();
-    let reader = TraceReader::new(usize::MAX);
-    let access = access();
     assert!(matches!(
-        reader
-            .list_traces(&store, &access, 0, i64::MAX, None, 0)
+        TraceReader::new(usize::MAX)
+            .list_traces(&store, &access(), &filter, &newest(limit))
             .await,
         Err(ReadError::InvalidParameters)
     ));
+    assert_eq!(store.calls(Operation::ListRuns), 0);
+}
+
+#[rstest]
+#[case::empty_window(window(10, 10, ""), 4)]
+#[case::reversed_window(window(10, 0, ""), 4)]
+#[case::zero_buckets(window(0, 10, ""), 0)]
+#[case::too_many_buckets(window(0, 10, ""), 241)]
+#[tokio::test]
+async fn invalid_histogram_reads_are_rejected_before_storage(
+    #[case] filter: RunFilter,
+    #[case] buckets: u32,
+) {
+    let store = FakeStore::default();
+    assert!(matches!(
+        TraceReader::new(usize::MAX)
+            .histogram(&store, &access(), &filter, buckets)
+            .await,
+        Err(ReadError::InvalidParameters)
+    ));
+    assert!(store.state.lock().unwrap().count_reads.is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn histogram_reads_the_search_and_fills_every_bucket() {
+    let store = FakeStore::default();
+    store.state.lock().unwrap().count_rows = vec![
+        RunCount {
+            bucket: 1,
+            failed: false,
+            value: "writer".into(),
+            runs: 2,
+        },
+        RunCount {
+            bucket: 1,
+            failed: true,
+            value: "reviewer".into(),
+            runs: 1,
+        },
+    ];
+    let filter = window(0, 30, "model:gpt*");
+    let histogram = TraceReader::new(usize::MAX)
+        .histogram(&store, &access(), &filter, 3)
+        .await
+        .unwrap();
+
+    let empty = |start_ms, end_ms| HistogramBucket {
+        start_ms,
+        end_ms,
+        total: 0,
+        failed: 0,
+        agents: Vec::new(),
+    };
+    assert_eq!(
+        histogram.buckets,
+        vec![
+            empty(0, 10),
+            HistogramBucket {
+                start_ms: 10,
+                end_ms: 20,
+                total: 3,
+                failed: 1,
+                agents: vec![AgentRuns {
+                    agent: "writer".into(),
+                    runs: 2,
+                }],
+            },
+            empty(20, 30),
+        ]
+    );
+    let state = store.state.lock().unwrap();
+    let [query] = state.count_reads.as_slice() else {
+        panic!("expected one histogram read");
+    };
+    assert_eq!(
+        query.by,
+        CountBy {
+            buckets: Some(3),
+            failed: true,
+            value: Some(CountValue::PrimaryAgent),
+        }
+    );
+    assert_eq!((query.filter.clone(), query.limit), (filter, None));
+}
+
+#[rstest]
+#[case::empty_window(window(10, 10, ""), 20)]
+#[case::zero_limit(window(0, 10, ""), 0)]
+#[case::too_many_values(window(0, 10, ""), 101)]
+#[tokio::test]
+async fn invalid_value_reads_are_rejected_before_storage(
+    #[case] filter: RunFilter,
+    #[case] limit: u32,
+) {
+    let store = FakeStore::default();
+    assert!(matches!(
+        TraceReader::new(usize::MAX)
+            .values(&store, &access(), &filter, RunField::Agent, "", limit)
+            .await,
+        Err(ReadError::InvalidParameters)
+    ));
+    assert!(store.state.lock().unwrap().count_reads.is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn values_narrow_by_the_search_and_the_needle() {
+    let store = FakeStore::default();
+    store.state.lock().unwrap().count_rows = vec![
+        RunCount {
+            bucket: 0,
+            failed: false,
+            value: "researcher".into(),
+            runs: 3,
+        },
+        RunCount {
+            bucket: 0,
+            failed: false,
+            value: "re_writer".into(),
+            runs: 1,
+        },
+    ];
+    let filter = window(0, 10, "-status:error");
+    let values = TraceReader::new(usize::MAX)
+        .values(&store, &access(), &filter, RunField::Agent, "re_", 20)
+        .await
+        .unwrap();
+
+    assert_eq!(values.values, vec!["researcher", "re_writer"]);
+    let state = store.state.lock().unwrap();
+    let [query] = state.count_reads.as_slice() else {
+        panic!("expected one values read");
+    };
+    assert_eq!(
+        query.by,
+        CountBy {
+            value: Some(CountValue::Field(RunField::Agent)),
+            ..CountBy::default()
+        }
+    );
+    assert_eq!(
+        (query.contains.as_str(), query.limit, &query.filter),
+        ("re_", Some(20), &filter)
+    );
 }
 
 fn now_ns() -> i64 {
@@ -707,12 +917,12 @@ async fn failed_reads_are_not_cached() {
 #[rstest]
 #[tokio::test]
 async fn listed_runs_are_read_once_until_a_live_run_expires() {
-    let live = TraceSpansRow {
+    let live = SpanRow {
         trace_id: "trace-live".into(),
         start_ns: now_ns(),
         ..span(0)
     };
-    let settled = TraceSpansRow {
+    let settled = SpanRow {
         trace_id: "trace-settled".into(),
         ..span(0)
     };
@@ -724,7 +934,9 @@ async fn listed_runs_are_read_once_until_a_live_run_expires() {
     store.set_run_spans(vec![live, settled]);
     let reader = TraceReader::new(usize::MAX);
     let access = access();
-    let list = || reader.list_traces(&store, &access, 0, i64::MAX, None, 2);
+    let filter = everything();
+    let page = newest(2);
+    let list = || reader.list_traces(&store, &access, &filter, &page);
 
     let first = list().await.unwrap();
     assert!(first.data.iter().all(|summary| summary.name == "agent"));
@@ -765,4 +977,113 @@ async fn concurrent_pages_of_an_evicted_snapshot_share_one_storage_read() {
     assert_eq!(left.unwrap().unwrap().spans[0].span_id, "span-1");
     assert_eq!(right.unwrap().unwrap().spans[0].span_id, "span-1");
     assert_eq!(store.calls(Operation::TraceSpans), 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn trace_reads_follow_the_keyset_past_one_storage_page() {
+    let spans: Vec<_> = (0..600).map(span).collect();
+    let store = FakeStore::with_spans("ref", spans);
+    let trace = TraceReader::new(usize::MAX)
+        .get_trace(&store, &access(), "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(trace.spans.len(), 600);
+    assert_eq!(store.calls(Operation::TraceSpans), 3);
+}
+
+fn llm(index: usize, offset_ms: i64) -> SpanRow {
+    SpanRow {
+        kind: ObservationType::Llm,
+        start_ns: START_NS + offset_ms * 1_000_000,
+        ..span(index)
+    }
+}
+
+#[rstest]
+#[case::agent_with_output("answer", "answer")]
+#[case::agent_without_output("", "latest")]
+#[tokio::test]
+async fn span_detail_answers_a_silent_agent_with_its_latest_llm_output(
+    #[case] recorded: &str,
+    #[case] expected: &str,
+) {
+    let store = FakeStore::with_spans("ref", vec![span(0), llm(1, 1), llm(2, 5), llm(3, 9)]);
+    store.set_text("span-0", SpanPart::Input, "question");
+    store.set_text("span-0", SpanPart::Output, recorded);
+    store.set_text("span-0", SpanPart::Attributes, r#"{"k":"v"}"#);
+    store.set_text("span-1", SpanPart::Output, "earliest");
+    store.set_text("span-2", SpanPart::Output, "latest");
+    store.set_text("span-3", SpanPart::Output, "");
+    let detail = TraceReader::new(usize::MAX)
+        .get_span(&store, &access(), "trace", "span-0", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (detail.input.as_str(), detail.output.as_str()),
+        ("question", expected)
+    );
+    assert_eq!(detail.attributes["k"], "v");
+}
+
+#[rstest]
+#[tokio::test]
+async fn span_detail_keeps_an_empty_output_for_spans_that_are_not_agents() {
+    let store = FakeStore::with_spans("ref", vec![span(0), llm(1, 1), llm(2, 2)]);
+    store.set_text("span-1", SpanPart::Input, "question");
+    store.set_text("span-2", SpanPart::Output, "child output");
+    let detail = TraceReader::new(usize::MAX)
+        .get_span(&store, &access(), "trace", "span-1", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.output, "");
+}
+
+#[rstest]
+#[tokio::test]
+async fn span_detail_of_an_invisible_span_is_absent() {
+    let store = FakeStore::with_spans("ref", vec![span(0)]);
+    assert!(
+        TraceReader::new(usize::MAX)
+            .get_span(&store, &access(), "trace", "span-0", "ref")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn span_errors_page_by_characters_until_the_message_changes() {
+    let store = FakeStore::default();
+    let message = "é".repeat(20_000);
+    store.set_text("span", SpanPart::Error, &message);
+    let reader = TraceReader::new(usize::MAX);
+    let first = reader
+        .get_span_error(&store, &access(), "trace", "span", "ref", None)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.message.chars().count(), 16_384);
+    assert_eq!(first.total_chars, 20_000);
+    let cursor = first.next_cursor.unwrap();
+    let second = reader
+        .get_span_error(&store, &access(), "trace", "span", "ref", Some(&cursor))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.message.chars().count(), 20_000 - 16_384);
+    assert!(second.next_cursor.is_none());
+
+    store.set_text("span", SpanPart::Error, "changed");
+    assert!(
+        reader
+            .get_span_error(&store, &access(), "trace", "span", "ref", Some(&cursor))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

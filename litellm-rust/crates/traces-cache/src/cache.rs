@@ -1,9 +1,6 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
-use litellm_traces::{
-    Trace, TraceSummary,
-    query::named::{ReadAccessParams, TraceSpansRow},
-};
+use litellm_traces::{QueryScope, Trace, TraceSummary, store::SpanRow};
 use moka::{Expiry, future::Cache};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -28,7 +25,7 @@ impl SnapshotKey {
 
     pub fn new(
         source: &str,
-        access: &ReadAccessParams,
+        access: &QueryScope,
         trace_id: &str,
         trace_ref: &str,
         snapshot_ms: u64,
@@ -38,7 +35,7 @@ impl SnapshotKey {
 
     pub fn latest(
         source: &str,
-        access: &ReadAccessParams,
+        access: &QueryScope,
         trace_id: &str,
         trace_ref: &str,
     ) -> Result<Self, Error> {
@@ -47,13 +44,13 @@ impl SnapshotKey {
 
     pub(crate) fn run(
         source: &str,
-        access: &ReadAccessParams,
+        access: &QueryScope,
         run: (&str, &str, &str, &str),
     ) -> Result<Self, Error> {
         Self::digest(&("run", source, access, run))
     }
 
-    pub(crate) fn scope(source: &str, access: &ReadAccessParams) -> Result<Self, Error> {
+    pub(crate) fn scope(source: &str, access: &QueryScope) -> Result<Self, Error> {
         Self::digest(&("scope", source, access))
     }
 }
@@ -68,7 +65,7 @@ pub enum Freshness {
 }
 
 impl Freshness {
-    pub fn of(rows: &[TraceSpansRow], spend_known: bool, snapshot_ms: u64) -> Self {
+    pub fn of(rows: &[SpanRow], spend_known: bool, snapshot_ms: u64) -> Self {
         let last_end_ms = rows
             .iter()
             .map(|row| row.start_ns.saturating_add_unsigned(row.duration_ns) / 1_000_000)
@@ -287,16 +284,15 @@ impl ListCache {
 #[cfg(test)]
 mod tests {
     use litellm_traces::{
-        SpanStatus,
-        query::named::{SpendByResponseIdsRow, TraceSpansRow},
-        resolve_trace,
+        SpanStatus, resolve_trace,
+        store::{CallRow, SpanRow},
     };
     use rstest::rstest;
 
     use super::*;
 
-    fn row(span_id: &str) -> TraceSpansRow {
-        TraceSpansRow {
+    fn row(span_id: &str) -> SpanRow {
+        SpanRow {
             trace_id: String::new(),
             span_id: span_id.into(),
             parent_span_id: String::new(),
@@ -326,20 +322,14 @@ mod tests {
     }
 
     fn trace(span_id: &str) -> Trace {
-        resolve_trace(
-            "trace",
-            "ref",
-            &[row(span_id)],
-            &[] as &[SpendByResponseIdsRow],
-        )
-        .expect("fixture should resolve")
+        resolve_trace("trace", "ref", &[row(span_id)], &[] as &[CallRow])
+            .expect("fixture should resolve")
     }
 
     fn key(suffix: &str) -> SnapshotKey {
         SnapshotKey::new(
             "source",
-            &ReadAccessParams {
-                all_teams: false,
+            &QueryScope::Owned {
                 user_id: String::new(),
                 team_ids: vec!["team".into()],
             },

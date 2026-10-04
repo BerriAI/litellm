@@ -22,7 +22,7 @@ from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
 from litellm.rust_bridge import loader
 from litellm.rust_bridge.trace.errors import TraceChanged
 from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
-from litellm.rust_bridge.trace.generated.types import AllQueryScope, TraceScope
+from litellm.rust_bridge.trace.generated.types import AllQueryScope, OwnedQueryScope, QueryScope
 from litellm.rust_bridge.trace.queries import TraceSQLResponse
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
@@ -104,25 +104,25 @@ SPAN_DETAIL_RESPONSE: Final = {
     (
         pytest.param(
             UserAPIKeyAuth(token="admin-key", team_id="team-a", user_role=LitellmUserRoles.PROXY_ADMIN),
-            TraceScope(all_teams=1, user_id="", team_ids=()),
+            AllQueryScope(kind="all"),
             True,
             id="admin",
         ),
         pytest.param(
             UserAPIKeyAuth(token="view-key", team_id="team-a", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
-            TraceScope(all_teams=1, user_id="", team_ids=()),
+            AllQueryScope(kind="all"),
             False,
             id="view-only-admin",
         ),
         pytest.param(
             TEAM_KEY,
-            TraceScope(all_teams=0, user_id="user", team_ids=()),
+            OwnedQueryScope(kind="owned", user_id="user", team_ids=()),
             True,
             id="team-key",
         ),
         pytest.param(
             UserAPIKeyAuth(user_id="user", token="hashed-key", user_role=LitellmUserRoles.INTERNAL_USER),
-            TraceScope(all_teams=0, user_id="user", team_ids=()),
+            OwnedQueryScope(kind="owned", user_id="user", team_ids=()),
             True,
             id="teamless-key",
         ),
@@ -135,7 +135,7 @@ SPAN_DETAIL_RESPONSE: Final = {
     ),
 )
 def test_trace_read_and_write_permissions(
-    client: TestClient, receiver: MagicMock, auth: UserAPIKeyAuth, scope: TraceScope | None, can_write: bool
+    client: TestClient, receiver: MagicMock, auth: UserAPIKeyAuth, scope: QueryScope | None, can_write: bool
 ) -> None:
     client.app.dependency_overrides[user_api_key_auth] = lambda: auth
 
@@ -144,7 +144,7 @@ def test_trace_read_and_write_permissions(
     if scope is None:
         receiver.list_traces.assert_not_awaited()
     else:
-        receiver.list_traces.assert_awaited_once_with(scope=scope, start_ms=1, end_ms=2, cursor=None)
+        receiver.list_traces.assert_awaited_once_with(scope=scope, start_ms=1, end_ms=2, q="", cursor=None)
 
     write: Final = client.post("/v1/traces", json={})
     assert write.status_code == (200 if can_write else 403), write.text
@@ -165,6 +165,8 @@ def receiver(client) -> MagicMock:
     fake = MagicMock()
     fake.ingest = AsyncMock(return_value=1)
     fake.list_traces = AsyncMock(return_value={"data": [], "next_cursor": None})
+    fake.trace_histogram = AsyncMock(return_value={"buckets": []})
+    fake.run_values = AsyncMock(return_value={"values": ["researcher"]})
     fake.get_trace = AsyncMock(return_value=None)
     fake.get_span = AsyncMock(return_value=None)
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: fake
@@ -243,16 +245,75 @@ def test_post_too_large_is_413(client, receiver):
     assert "exceeds" in Status.FromString(response.content).message
 
 
-def test_list_traces_passes_scope_window_and_cursor(client, receiver):
-    response = client.get("/v1/traces", params={"start_ms": 1, "end_ms": 2, "cursor": "abc"})
+def test_list_traces_passes_scope_window_query_and_cursor(client, receiver):
+    response = client.get(
+        "/v1/traces", params={"start_ms": 1, "end_ms": 2, "q": "agent:research* -status:ok", "cursor": "abc"}
+    )
     assert response.status_code == 200
     assert response.json() == {"data": [], "next_cursor": None}
     receiver.list_traces.assert_awaited_once_with(
-        scope={"all_teams": 0, "user_id": "user", "team_ids": ()},
+        scope={"kind": "owned", "user_id": "user", "team_ids": ()},
         start_ms=1,
         end_ms=2,
+        q="agent:research* -status:ok",
         cursor="abc",
     )
+
+
+def test_histogram_passes_scope_window_query_and_buckets(client, receiver):
+    response = client.get("/v1/traces/histogram", params={"start_ms": 1, "end_ms": 2, "q": "x", "buckets": 12})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"buckets": []}
+    receiver.trace_histogram.assert_awaited_once_with(
+        {"kind": "owned", "user_id": "user", "team_ids": ()}, 1, 2, "x", 12
+    )
+
+
+def test_values_pass_scope_window_query_field_and_needle(client, receiver):
+    response = client.get(
+        "/v1/traces/values/agent", params={"start_ms": 1, "end_ms": 2, "q": "model:gpt*", "contains": "res"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {"values": ["researcher"]}
+    receiver.run_values.assert_awaited_once_with(
+        {"kind": "owned", "user_id": "user", "team_ids": ()}, 1, 2, "model:gpt*", "agent", "res", 20
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "/v1/traces?q=" + "x" * 1001,
+        "/v1/traces/histogram?buckets=0",
+        "/v1/traces/histogram?buckets=241",
+        "/v1/traces/values/color",
+        "/v1/traces/values/agent?limit=101",
+        "/v1/traces/values/agent?contains=" + "x" * 201,
+        "/v1/traces/values/agent?q=" + "x" * 1001,
+    ),
+)
+def test_search_reads_reject_unbounded_parameters(client: TestClient, receiver: MagicMock, path: str) -> None:
+    assert client.get(path).status_code == 422
+    receiver.list_traces.assert_not_awaited()
+    receiver.trace_histogram.assert_not_awaited()
+    receiver.run_values.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "error, status",
+    (
+        (ValueError("invalid trace read parameters"), 400),
+        (OverflowError("too large"), 413),
+        (RuntimeError("down"), 503),
+    ),
+)
+def test_histogram_and_values_failures_map_to_read_statuses(
+    client: TestClient, receiver: MagicMock, error: Exception, status: int
+) -> None:
+    receiver.trace_histogram.side_effect = error
+    receiver.run_values.side_effect = error
+    assert client.get("/v1/traces/histogram").status_code == status
+    assert client.get("/v1/traces/values/name").status_code == status
 
 
 def test_list_traces_defaults_to_last_24h(client, receiver):
@@ -260,6 +321,7 @@ def test_list_traces_defaults_to_last_24h(client, receiver):
     kwargs = receiver.list_traces.call_args.kwargs
     assert kwargs["end_ms"] - kwargs["start_ms"] == tracing_endpoints.MS_PER_DAY
     assert kwargs["cursor"] is None
+    assert kwargs["q"] == ""
 
 
 def test_get_trace_404_and_200(client, receiver):
@@ -268,7 +330,7 @@ def test_get_trace_404_and_200(client, receiver):
     response = client.get("/v1/traces/t1")
     assert response.status_code == 200
     assert response.json() == TRACE_RESPONSE
-    receiver.get_trace.assert_awaited_with("t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "", None, None)
+    receiver.get_trace.assert_awaited_with("t1", {"kind": "owned", "user_id": "user", "team_ids": ()}, "", None, None)
 
 
 def test_get_span_404_and_200(client, receiver):
@@ -277,7 +339,7 @@ def test_get_span_404_and_200(client, receiver):
     response = client.get("/v1/traces/t1/spans/s1")
     assert response.status_code == 200
     assert response.json()["span_id"] == "s1"
-    receiver.get_span.assert_awaited_with("t1", "s1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "")
+    receiver.get_span.assert_awaited_with("t1", "s1", {"kind": "owned", "user_id": "user", "team_ids": ()}, "")
 
 
 @pytest.mark.parametrize("suffix,cursor,page_size", [("", None, None), ("&cursor=next&page_size=200", "next", 200)])
@@ -285,7 +347,7 @@ def test_trace_detail_passes_scoped_reference(client, receiver, suffix, cursor, 
     receiver.get_trace.return_value = TRACE_RESPONSE
     assert client.get(f"/v1/traces/t1?trace_ref=run-one{suffix}").status_code == 200
     receiver.get_trace.assert_awaited_with(
-        "t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one", cursor, page_size
+        "t1", {"kind": "owned", "user_id": "user", "team_ids": ()}, "run-one", cursor, page_size
     )
 
 
@@ -372,6 +434,8 @@ def test_key_without_user_cannot_read_traces(client: TestClient, auth: UserAPIKe
     client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
     for path in (
         "/v1/traces",
+        "/v1/traces/histogram",
+        "/v1/traces/values/agent",
         "/v1/traces/t1",
         "/v1/traces/t1/spans/s1",
         "/v1/traces/t1/spans/s1/error",
@@ -381,7 +445,14 @@ def test_key_without_user_cannot_read_traces(client: TestClient, auth: UserAPIKe
         assert response.status_code == 403, response.text
     query: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
     assert query.status_code == 403, query.text
-    for read in (storage.list_traces, storage.get_trace, storage.get_span, storage.get_span_error):
+    for read in (
+        storage.list_traces,
+        storage.trace_histogram,
+        storage.run_values,
+        storage.get_trace,
+        storage.get_span,
+        storage.get_span_error,
+    ):
         read.assert_not_called()
     storage.query_sql.assert_not_called()
     storage.query_help.assert_not_called()
@@ -491,7 +562,7 @@ def test_lifespan_receivers_are_app_local() -> None:
     assert first_response.status_code == second_response.status_code == 200
     assert first_response.json()["span_id"] == "first-span"
     assert second_response.json()["span_id"] == "second-span"
-    scope: Final = TraceScope(all_teams=0, user_id=TEAM_KEY.user_id or "", team_ids=())
+    scope: Final = OwnedQueryScope(kind="owned", user_id=TEAM_KEY.user_id or "", team_ids=())
     assert first_storage.get_span.await_count == 2
     first_storage.get_span.assert_awaited_with("t1", "first-span", scope, "first-run")
     second_storage.get_span.assert_awaited_once_with("t1", "second-span", scope, "second-run")
@@ -704,13 +775,6 @@ def test_shared_trace_permissions_reach_read_and_sql_boundaries(
     response: Final = client.get("/v1/traces/t1/spans/s1?trace_ref=run-one")
     assert response.status_code == 200, response.text
     assert response.json()["span_id"] == "s1"
-    storage.get_span.assert_awaited_once_with(
-        "t1", "s1", TraceScope(all_teams=expected[0], user_id=expected[1], team_ids=expected[2]), "run-one"
-    )
-    sql_response: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
-    assert sql_response.status_code == 200, sql_response.text
-    assert sql_response.json() == SQL_ENVELOPE
-    assert client.get("/v1/traces/query/help").json() == QUERY_HELP
     query_scope: Final = (
         {"kind": "all"}
         if expected[0]
@@ -720,6 +784,11 @@ def test_shared_trace_permissions_reach_read_and_sql_boundaries(
             "team_ids": expected[2],
         }
     )
+    storage.get_span.assert_awaited_once_with("t1", "s1", query_scope, "run-one")
+    sql_response: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
+    assert sql_response.status_code == 200, sql_response.text
+    assert sql_response.json() == SQL_ENVELOPE
+    assert client.get("/v1/traces/query/help").json() == QUERY_HELP
     storage.query_sql.assert_awaited_once_with("SELECT * FROM otel_traces", query_scope, "test-secret")
     storage.query_help.assert_awaited_once_with(query_scope, "test-secret")
     assert team_lookup.await_count == (
@@ -741,8 +810,7 @@ def test_trace_storage_permissions_map_owned_rows(
     scope: ReadScope,
     expected: tuple[str, tuple[str, ...]],
 ) -> None:
-    assert tracing_endpoints._trace_scope(scope) == TraceScope(all_teams=0, user_id=expected[0], team_ids=expected[1])
-    assert tracing_endpoints.trace_query_scope(scope) == {
+    assert tracing_endpoints.read_access(scope) == {
         "kind": "owned",
         "user_id": expected[0],
         "team_ids": expected[1],
@@ -781,7 +849,7 @@ async def test_storage_preserves_page_cursor_and_normalizes_native_trace_data(
     native: Final = _NativeReturningHelp(QUERY_HELP, {**TRACE_RESPONSE, "next_cursor": "more"})
     monkeypatch.setattr(loader, "_cached_bridge", native)
     storage: Final = ClickHouseStorage(TraceStorageConfig("http://clickhouse:8123"))
-    scope: Final[TraceScope] = {"all_teams": 0, "user_id": "owner", "team_ids": ()}
+    scope: Final[QueryScope] = {"kind": "owned", "user_id": "owner", "team_ids": ()}
     trace: Final = await storage.get_trace("t1", scope, "run", cursor, page_size)
     assert trace is not None
     assert trace["next_cursor"] == "more"

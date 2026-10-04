@@ -2,17 +2,16 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
-use crate::{
-    normalize::{CallKey, ObservationType},
-    query::named::{SpendByResponseIdsRow as SpendRow, TraceSpansRow},
-};
-
 use super::{
     graph::Graph,
     spend::{self, Ownership, Requests, SpendEvidence},
 };
+use crate::{
+    normalize::{CallKey, ObservationType},
+    store::{CallRow as SpendRow, SpanRow},
+};
 
-pub(super) fn agent_label(row: &TraceSpansRow) -> &str {
+pub(super) fn agent_label(row: &SpanRow) -> &str {
     if row.agent.is_empty() {
         &row.name
     } else {
@@ -29,7 +28,7 @@ pub(super) struct Resolution<'a> {
 }
 
 impl<'a> Resolution<'a> {
-    pub(super) fn new(rows: &'a [TraceSpansRow], spend: &'a [SpendRow]) -> Self {
+    pub(super) fn new(rows: &'a [SpanRow], spend: &'a [SpendRow]) -> Self {
         let graph = Graph::new(rows);
         let named_agents = rows.iter().any(|row| !row.agent.is_empty());
         let types: HashMap<&str, ObservationType> = (0..rows.len())
@@ -57,7 +56,7 @@ impl<'a> Resolution<'a> {
         }
     }
 
-    pub(super) fn row(&self, index: usize) -> &'a TraceSpansRow {
+    pub(super) fn row(&self, index: usize) -> &'a SpanRow {
         &self.graph.rows[index]
     }
 

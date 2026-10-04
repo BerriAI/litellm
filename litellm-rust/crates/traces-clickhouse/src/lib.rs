@@ -10,6 +10,7 @@ macro_rules_attribute::attribute_alias! {
         #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
 }
 
+mod access;
 mod config;
 mod error;
 mod insert;
@@ -17,7 +18,6 @@ pub mod query;
 mod query_access;
 mod reads;
 mod schema;
-mod span_batches;
 mod span_row;
 mod sql;
 mod table;

@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 
-use litellm_storage_clickhouse::fetch;
-use litellm_traces::query::named as contracts;
-use litellm_traces_clickhouse::{
-    QueryScope,
-    query::named::{ListTraces, ListTracesParams, TraceSpans, TraceSpansParams},
-    query_help, query_sql,
+use litellm_traces::{
+    search::RunFilter,
+    store::{RunQuery, RunRow, RunSelection, SpanQuery, SpanRow, SpanSelection},
 };
+use litellm_traces_cache::{StoreResult, TraceStore};
+use litellm_traces_clickhouse::{ClickHouseTraces, Error, QueryScope, query_help, query_sql};
 use rstest::{fixture, rstest};
 use serde::Deserialize;
 use serde_json::Value;
@@ -133,41 +132,57 @@ fn fixture_clock() -> TestResult<u64> {
     Ok(spans.first().ok_or("missing fixture root")?.start_ns / 1_000_000_000)
 }
 
-#[fixture]
-fn admin_access() -> TestResult<contracts::ReadAccessParams> {
-    Ok(serde_json::from_str(include_str!(
-        "queries/read_access.json"
-    ))?)
+fn newest(limit: u32, after: Option<&RunRow>) -> RunQuery {
+    RunQuery {
+        selection: RunSelection::Matching(RunFilter {
+            start_ms: 0,
+            end_ms: i64::MAX / 1_000_000,
+            search: Default::default(),
+        }),
+        after: after.map(RunRow::cursor),
+        limit,
+    }
+}
+
+async fn trace_spans(
+    store: &ClickHouseTraces,
+    trace_id: &str,
+    trace_ref: &str,
+) -> StoreResult<Vec<SpanRow>, Error> {
+    let query = SpanQuery {
+        selection: SpanSelection::Trace {
+            trace_id: trace_id.into(),
+            trace_ref: trace_ref.into(),
+        },
+        as_of_ms: u64::MAX,
+        after: None,
+        limit: 1000,
+    };
+    let mut spans = store.spans(&QueryScope::All, &query).await?;
+    spans.sort_by_key(|span| span.start_ns);
+    Ok(spans)
 }
 
 #[rstest]
 #[tokio::test]
 async fn typed_queries_read_normalized_spans_and_keep_trace_identities_separate(
     #[future(awt)] seeded_database: TestResult<SeededDatabase>,
-    admin_access: TestResult<contracts::ReadAccessParams>,
 ) -> TestResult {
     let fixture = seeded_database?;
     let reader = fixture
         .readers
         .connection(&fixture.database.client, &QueryScope::All, "fixture-secret")
         .await?;
-    let params = ListTracesParams::from(contracts::ListTracesParams {
-        access: admin_access?,
-        start_ms: 0,
-        end_ms: i64::MAX / 1_000_000,
-        cursor_ms: 0,
-        cursor_trace_id: String::new(),
-        limit: 10,
-    });
-    let traces = fetch::<ListTraces>(&fixture.database.client, &reader, &params).await?;
+    let store = ClickHouseTraces::new(fixture.database.client.clone(), reader);
+    let traces = store.runs(&QueryScope::All, &newest(10, None)).await?;
     assert_eq!(
         traces
             .iter()
-            .map(|row| row.0.api_key_hash.as_str())
+            .map(|row| row.api_key_hash.as_str())
             .collect::<Vec<_>>(),
         ["key-b", "key-alt", "key-a"]
     );
-    let trace = &traces[2].0;
+    let trace = &traces[2];
     assert_eq!(
         (
             trace.span_count,
@@ -179,33 +194,24 @@ async fn typed_queries_read_normalized_spans_and_keep_trace_identities_separate(
     );
     assert_eq!((trace.input_tokens, trace.output_tokens), (12, 6));
     assert_eq!(trace.input_preview, "Review the change");
-    let span_params = TraceSpansParams {
-        access: params.0.access,
-        trace_id: trace.trace_id.clone(),
-        trace_ref: trace.trace_ref.clone(),
-    };
-    let spans = fetch::<TraceSpans>(&fixture.database.client, &reader, &span_params).await?;
+    let spans = trace_spans(&store, &trace.trace_id, &trace.trace_ref).await?;
     assert_eq!(
         spans
             .iter()
-            .map(|row| row.0.name.as_str())
+            .map(|row| row.name.as_str())
             .collect::<Vec<_>>(),
         ["review", "completion", "lookup"]
     );
     assert!(
         spans
             .iter()
-            .all(|row| row.0.api_key_hash == trace.api_key_hash)
+            .all(|row| row.api_key_hash == trace.api_key_hash)
     );
     assert_eq!(
-        (
-            spans[1].0.kind,
-            spans[1].0.input_tokens,
-            spans[1].0.output_tokens
-        ),
+        (spans[1].kind, spans[1].input_tokens, spans[1].output_tokens),
         (litellm_traces::ObservationType::Llm, 12, 6)
     );
-    assert_eq!(spans[2].0.status_message, "lookup timed out");
+    assert_eq!(spans[2].status_message, "lookup timed out");
     Ok(())
 }
 
@@ -213,33 +219,22 @@ async fn typed_queries_read_normalized_spans_and_keep_trace_identities_separate(
 #[tokio::test]
 async fn typed_trace_cursor_returns_the_next_fixture_trace(
     #[future(awt)] seeded_database: TestResult<SeededDatabase>,
-    admin_access: TestResult<contracts::ReadAccessParams>,
 ) -> TestResult {
     let fixture = seeded_database?;
     let reader = fixture
         .readers
         .connection(&fixture.database.client, &QueryScope::All, "fixture-secret")
         .await?;
-    let params = ListTracesParams::from(contracts::ListTracesParams {
-        access: admin_access?,
-        start_ms: 0,
-        end_ms: i64::MAX / 1_000_000,
-        cursor_ms: 0,
-        cursor_trace_id: String::new(),
-        limit: 1,
-    });
-    let first = fetch::<ListTraces>(&fixture.database.client, &reader, &params).await?;
+    let store = ClickHouseTraces::new(fixture.database.client.clone(), reader);
+    let first = store.runs(&QueryScope::All, &newest(1, None)).await?;
     assert_eq!(first.len(), 1);
-    assert_eq!(first[0].0.api_key_hash, "key-b");
-    let next_params = ListTracesParams::from(contracts::ListTracesParams {
-        cursor_ms: first[0].0.start_ms,
-        cursor_trace_id: first[0].0.trace_ref.clone(),
-        ..params.0
-    });
-    let next = fetch::<ListTraces>(&fixture.database.client, &reader, &next_params).await?;
+    assert_eq!(first[0].api_key_hash, "key-b");
+    let next = store
+        .runs(&QueryScope::All, &newest(1, Some(&first[0])))
+        .await?;
     assert_eq!(next.len(), 1);
-    assert_eq!(next[0].0.api_key_hash, "key-alt");
-    assert_ne!(first[0].0.trace_ref, next[0].0.trace_ref);
+    assert_eq!(next[0].api_key_hash, "key-alt");
+    assert_ne!(first[0].trace_ref, next[0].trace_ref);
     Ok(())
 }
 
@@ -250,7 +245,6 @@ async fn typed_trace_cursor_returns_the_next_fixture_trace(
 #[tokio::test]
 async fn captured_sdk_exports_round_trip_through_clickhouse(
     #[future(awt)] migrated_database: TestResult<SeededDatabase>,
-    admin_access: TestResult<contracts::ReadAccessParams>,
     #[case] export: &[u8],
 ) -> TestResult {
     let fixture = migrated_database?;
@@ -259,37 +253,25 @@ async fn captured_sdk_exports_round_trip_through_clickhouse(
         .readers
         .connection(&fixture.database.client, &QueryScope::All, "fixture-secret")
         .await?;
-    let params = TraceSpansParams {
-        access: admin_access?,
-        trace_id: decoded[0].trace_id.clone(),
-        trace_ref: String::new(),
-    };
-    let stored = fetch::<TraceSpans>(&fixture.database.client, &reader, &params).await?;
-    assert_eq!(stored.len(), decoded.len());
-    let list_params = ListTracesParams::from(contracts::ListTracesParams {
-        access: params.access,
-        start_ms: 0,
-        end_ms: i64::MAX / 1_000_000,
-        cursor_ms: 0,
-        cursor_trace_id: String::new(),
-        limit: 10,
-    });
-    let traces = fetch::<ListTraces>(&fixture.database.client, &reader, &list_params).await?;
+    let store = ClickHouseTraces::new(fixture.database.client.clone(), reader);
+    let traces = store.runs(&QueryScope::All, &newest(10, None)).await?;
     assert_eq!(traces.len(), 1);
+    let stored = trace_spans(&store, &decoded[0].trace_id, &traces[0].trace_ref).await?;
+    assert_eq!(stored.len(), decoded.len());
     let roots = decoded
         .iter()
         .filter(|span| span.parent_span_id.is_empty())
         .collect::<Vec<_>>();
     assert_eq!(roots.len(), 1);
     assert_eq!(
-        traces[0].0.status,
+        traces[0].status,
         serde_json::from_value::<litellm_traces::SpanStatus>(serde_json::json!(
             roots[0].status_code
         ))
         .unwrap()
     );
     assert_eq!(
-        traces[0].0.error_count,
+        traces[0].error_count,
         decoded
             .iter()
             .filter(|span| span.status_code == "STATUS_CODE_ERROR")
@@ -297,7 +279,7 @@ async fn captured_sdk_exports_round_trip_through_clickhouse(
     );
     let by_id: BTreeMap<_, _> = stored
         .iter()
-        .map(|row| (row.0.span_id.as_str(), &row.0))
+        .map(|row| (row.span_id.as_str(), row))
         .collect();
     for span in &decoded {
         let row = by_id

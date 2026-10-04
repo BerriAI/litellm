@@ -1,7 +1,7 @@
 import asyncio
 import os
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -14,8 +14,9 @@ from prisma import Prisma
 from psycopg import sql
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
-from litellm.proxy.lens.models import Check, Lens, LensSettings, Scope, Worker
+from litellm.proxy.lens.models import Check, Lens, LensSettings, MetadataFilter, Scope, Worker
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
+from litellm.proxy.lens.search import LensField, parse_search
 from litellm.proxy.lens.state import claim_job, queue_job
 
 
@@ -51,6 +52,107 @@ async def test_concurrent_workers_cannot_both_acquire_the_same_job(lens_db: Pris
         assert tuple(r.jobs[0].worker_id for r in results if r) == (stored.jobs[0].worker_id, stored.jobs[0].worker_id)
     finally:
         await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', lens.id)
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def searchable_lenses(lens_db: Prisma) -> AsyncIterator[tuple[LensRepository, str]]:
+    tag: Final = uuid4().hex[:12]
+    start: Final = datetime.now(timezone.utc)
+    repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
+
+    def lens(lens_id: str, minutes: int, status: str | None, **settings: object) -> Lens:
+        created: Final = start + timedelta(minutes=minutes)
+        base: Final = Lens(
+            id=f"{tag}-{lens_id}",
+            scope=Scope(all_teams=True),
+            settings=LensSettings.model_validate({"model": "test", "context": "Find failures", **settings}),
+            created_at=created,
+            next_run_at=created,
+            budget_month=created.strftime("%Y-%m"),
+        )
+        if status is None:
+            return base
+        queued: Final = queue_job(base, created, uuid4().hex)
+        return queued.model_copy(update={"jobs": (queued.jobs[0].model_copy(update={"status": status}),)})
+
+    lenses: Final = (
+        lens(
+            "a",
+            0,
+            "failed",
+            name=f"{tag} nightly",
+            agent_name=f"{tag}-researcher",
+            filters=(MetadataFilter(key="env", value="prod"),),
+        ),
+        lens("b", 1, None, name=f"{tag} weekly 100%_x", service=f"{tag}-billing", enabled=False),
+        lens("c", 2, "completed", name=f"{tag} adhoc"),
+    )
+    for created in lenses:
+        await repo.create(created)
+    try:
+        yield repo, tag
+    finally:
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id LIKE $1', f"{tag}-%")
+
+
+@pytest.mark.parametrize(
+    "q, expected",
+    (
+        ("", ("c", "b", "a")),
+        ("status:failed", ("a",)),
+        ("status:never", ("b",)),
+        ("-status:never", ("c", "a")),
+        ("status:FAIL*", ("a",)),
+        ("schedule:paused", ("b",)),
+        ("-schedule:paused", ("c", "a")),
+        ("agent:{tag}-researcher", ("a",)),
+        ("agent:{tag}-bill*", ("b",)),
+        ("agent:researcher", ()),
+        ("-agent:*", ("c",)),
+        ("name:*nightly", ("a",)),
+        ("name:nightly", ()),
+        ('"env: prod"', ("a",)),
+        ('"all activity"', ("c",)),
+        ("100%_x", ("b",)),
+        ("100%x", ()),
+        ("100__x", ()),
+        ("weekly status:never -schedule:watching", ("b",)),
+    ),
+)
+@pytest.mark.asyncio
+async def test_search_selects_lenses_newest_first(
+    searchable_lenses: tuple[LensRepository, str], q: str, expected: tuple[str, ...]
+) -> None:
+    repo, tag = searchable_lenses
+    found: Final = await repo.search(parse_search(f"{tag} {q.format(tag=tag)}"))
+    assert tuple(lens.id.removeprefix(f"{tag}-") for lens in found if lens.id.startswith(tag)) == expected
+
+
+@pytest.mark.parametrize(
+    "field, needle, expected",
+    (
+        ("name", "{tag}", ("{tag} adhoc", "{tag} nightly", "{tag} weekly 100%_x")),
+        ("name", "{tag} W", ("{tag} weekly 100%_x",)),
+        ("name", "{tag}_", ()),
+        ("name", "{tag} weekly 100%", ("{tag} weekly 100%_x",)),
+        ("name", "{tag} weekly 1%", ()),
+        ("agent", "{tag}", ("{tag}-billing", "{tag}-researcher")),
+        ("agent", "{tag}-RESEARCH", ("{tag}-researcher",)),
+    ),
+)
+@pytest.mark.asyncio
+async def test_values_list_distinct_field_values_containing_the_needle(
+    searchable_lenses: tuple[LensRepository, str], field: LensField, needle: str, expected: tuple[str, ...]
+) -> None:
+    repo, tag = searchable_lenses
+    assert await repo.values(field, needle.format(tag=tag), 100) == tuple(e.format(tag=tag) for e in expected)
+
+
+@pytest.mark.asyncio
+async def test_values_include_derived_status_and_schedule(searchable_lenses: tuple[LensRepository, str]) -> None:
+    repo, _ = searchable_lenses
+    assert {"failed", "completed", "never"} <= set(await repo.values("status", "", 100))
+    assert {"watching", "paused"} <= set(await repo.values("schedule", "", 100))
 
 
 @pytest.mark.asyncio

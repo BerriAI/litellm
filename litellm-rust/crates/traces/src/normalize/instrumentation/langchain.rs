@@ -1,9 +1,10 @@
+use std::collections::BTreeMap;
+
 use super::{
     AgentMetadata, Integration, ObservationType, RoleEvidence, SpanContext, SpanFacts, attr,
     messages,
 };
 use crate::normalize::present;
-use std::collections::BTreeMap;
 
 pub(super) fn adjust(context: &SpanContext<'_>, facts: SpanFacts) -> SpanFacts {
     let middleware = !context.parent_span_id.is_empty() && is_langchain_middleware(context.name);

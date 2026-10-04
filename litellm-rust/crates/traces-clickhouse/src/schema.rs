@@ -1,7 +1,8 @@
+use std::time::Duration;
+
 use litellm_http::Client;
 use litellm_migrate::Migration;
 use serde::Serialize;
-use std::time::Duration;
 
 use super::{Connection, Error};
 

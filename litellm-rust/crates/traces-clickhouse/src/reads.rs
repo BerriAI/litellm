@@ -1,27 +1,21 @@
 use litellm_http::Client;
 use litellm_storage_clickhouse::{Error as StorageError, Query, fetch};
-use litellm_traces::query::named as contracts;
-use litellm_traces_cache::{StoreError, TraceStore};
+use litellm_traces::{
+    QueryScope,
+    store::{
+        CallQuery, CallRow, RunCount, RunCountQuery, RunQuery, RunRow, SpanQuery, SpanRow,
+        SpanText, SpanTextQuery,
+    },
+};
+use litellm_traces_cache::{StoreError, StoreResult, TraceStore};
 
 use crate::{
     Connection, Error,
     query::named::{
-        ListTracesParams, ListTracesRow, SpanDetail as SpanDetailQuery, SpanError, SpanErrorParams,
-        SpendByResponseIdsParams, TraceIdentity, TracePageSpansParams,
+        Calls, CallsParams, RunCounts, RunCountsParams, RunSpans, Runs, RunsParams, SpanTextParams,
+        SpanTexts, SpansParams, TraceSpans,
     },
 };
-
-struct RunCandidates;
-
-impl Query for RunCandidates {
-    type Params = ListTracesParams;
-    type Row = ListTracesRow;
-    const SQL: &'static str = concat!(
-        "SELECT * EXCEPT (request_ids), [] AS request_ids FROM (",
-        include_str!("../query/list_traces.sql"),
-        ") ORDER BY start_ms DESC, trace_ref DESC"
-    );
-}
 
 pub struct ClickHouseTraces {
     client: Client,
@@ -32,6 +26,15 @@ impl ClickHouseTraces {
     pub fn new(client: Client, connection: Connection) -> Self {
         Self { client, connection }
     }
+
+    async fn fetch<Q: Query>(&self, params: &Q::Params) -> StoreResult<Vec<Q::Row>, Error> {
+        fetch::<Q>(&self.client, &self.connection, params)
+            .await
+            .map_err(|error| match error {
+                StorageError::ResponseTooLarge => StoreError::TooLarge,
+                error => StoreError::Failed(Error::Storage(error)),
+            })
+    }
 }
 
 impl TraceStore for ClickHouseTraces {
@@ -41,85 +44,53 @@ impl TraceStore for ClickHouseTraces {
         self.connection.url().as_str()
     }
 
-    async fn trace_refs(
-        &self,
-        params: &contracts::TraceIdentityParams,
-    ) -> Result<Vec<String>, StoreError<Self::Error>> {
-        fetch::<TraceIdentity>(&self.client, &self.connection, params)
-            .await
-            .map(|rows| rows.into_iter().map(|row| row.trace_ref).collect())
-            .map_err(failed)
+    async fn runs(&self, access: &QueryScope, query: &RunQuery) -> StoreResult<Vec<RunRow>, Error> {
+        let rows = self.fetch::<Runs>(&RunsParams::new(access, query)).await?;
+        Ok(rows.into_iter().map(|row| row.0).collect())
     }
 
-    async fn list_runs(
+    async fn run_counts(
         &self,
-        params: &contracts::ListTracesParams,
-    ) -> Result<Vec<contracts::ListTracesRow>, StoreError<Self::Error>> {
-        let storage_params = ListTracesParams::from(params.clone());
-        match fetch::<RunCandidates>(&self.client, &self.connection, &storage_params).await {
-            Ok(rows) => Ok(rows.into_iter().map(|row| row.0).collect()),
-            Err(StorageError::ResponseTooLarge) => Err(StoreError::TooLarge),
-            Err(error) => Err(failed(error)),
-        }
+        access: &QueryScope,
+        query: &RunCountQuery,
+    ) -> StoreResult<Vec<RunCount>, Error> {
+        let rows = self
+            .fetch::<RunCounts>(&RunCountsParams::new(access, query))
+            .await?;
+        Ok(rows.into_iter().map(|row| row.0).collect())
     }
 
-    async fn trace_spans(
+    async fn spans(
         &self,
-        params: &contracts::TraceSpansParams,
-        snapshot_ms: u64,
-    ) -> Result<Vec<contracts::TraceSpansRow>, StoreError<Self::Error>> {
-        crate::span_batches::read_spans(&self.client, &self.connection, params.clone(), snapshot_ms)
-            .await
+        access: &QueryScope,
+        query: &SpanQuery,
+    ) -> StoreResult<Vec<SpanRow>, Error> {
+        let rows = match SpansParams::new(access, query) {
+            SpansParams::Trace(params) => self.fetch::<TraceSpans>(&params).await?,
+            SpansParams::Runs(params) => self.fetch::<RunSpans>(&params).await?,
+        };
+        Ok(rows.into_iter().map(|row| row.0).collect())
     }
 
-    async fn run_spans(
+    async fn span_text(
         &self,
-        params: &contracts::TracePageSpansParams,
-        snapshot_ms: u64,
-    ) -> Result<Vec<contracts::TraceSpansRow>, StoreError<Self::Error>> {
-        crate::span_batches::read_list_spans(
-            &self.client,
-            &self.connection,
-            TracePageSpansParams::from(params.clone()),
-            snapshot_ms,
-        )
-        .await
+        access: &QueryScope,
+        query: &SpanTextQuery,
+    ) -> StoreResult<Option<SpanText>, Error> {
+        let rows = self
+            .fetch::<SpanTexts>(&SpanTextParams::new(access, query))
+            .await?;
+        Ok(rows.into_iter().next().map(|row| row.0))
     }
 
-    async fn spend(
+    async fn calls(
         &self,
-        params: &contracts::SpendByResponseIdsParams,
-    ) -> Result<Vec<contracts::SpendByResponseIdsRow>, StoreError<Self::Error>> {
-        crate::span_batches::read_spend(
-            &self.client,
-            &self.connection,
-            SpendByResponseIdsParams::from(params.clone()),
-        )
-        .await
+        access: &QueryScope,
+        query: &CallQuery,
+    ) -> StoreResult<Vec<CallRow>, Error> {
+        let rows = self
+            .fetch::<Calls>(&CallsParams::new(access, query))
+            .await?;
+        Ok(rows.into_iter().map(|row| row.0).collect())
     }
-
-    async fn span_detail(
-        &self,
-        params: &contracts::SpanDetailParams,
-    ) -> Result<Option<contracts::SpanDetailRow>, StoreError<Self::Error>> {
-        match fetch::<SpanDetailQuery>(&self.client, &self.connection, params).await {
-            Ok(rows) => Ok(rows.into_iter().next()),
-            Err(error) => Err(failed(error)),
-        }
-    }
-
-    async fn span_error(
-        &self,
-        params: &contracts::SpanErrorParams,
-    ) -> Result<Option<contracts::SpanErrorRow>, StoreError<Self::Error>> {
-        let storage_params = SpanErrorParams::from(params.clone());
-        match fetch::<SpanError>(&self.client, &self.connection, &storage_params).await {
-            Ok(rows) => Ok(rows.into_iter().next().map(|row| row.0)),
-            Err(error) => Err(failed(error)),
-        }
-    }
-}
-
-fn failed(error: StorageError) -> StoreError<Error> {
-    StoreError::Failed(Error::Storage(error))
 }

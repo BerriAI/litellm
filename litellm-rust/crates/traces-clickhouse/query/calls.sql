@@ -8,21 +8,17 @@ FROM (
            if(startsWith(response_id, 'resp_'),
               extract(tryBase64Decode(substring(response_id, 6)), 'response_id:([^;]+)'),
               '') AS upstream_response_id
-    FROM spend_logs FINAL
+    FROM owned_calls
     WHERE start_time >= fromUnixTimestamp64Milli({start_ms:Int64})
       AND start_time < fromUnixTimestamp64Milli({end_ms:Int64})
-      AND ({all_teams:UInt8} = 1
-           OR ({user_id:String} != '' AND user = {user_id:String})
-           OR has({team_ids:Array(String)}, team_id))
 )
 WHERE response_id IN {response_ids:Array(String)}
    OR upstream_response_id IN {response_ids:Array(String)}
    OR litellm_call_id IN {request_ids:Array(String)}
    OR (litellm_call_id = '' AND request_id IN {request_ids:Array(String)})
    OR (trace_id != '' AND trace_id IN {trace_ids:Array(String)})
-ORDER BY start_time DESC
 )
 WHERE {has_cursor:UInt8} = 0
    OR (team_id, start_ms, request_id) > ({after_team:String}, {after_ms:Int64}, {after_id:String})
 ORDER BY team_id, start_ms, request_id
-LIMIT {page_size:UInt32}
+LIMIT {limit:UInt32}

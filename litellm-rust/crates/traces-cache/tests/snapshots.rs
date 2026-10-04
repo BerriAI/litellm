@@ -1,12 +1,9 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use litellm_traces::{
-    SpanStatus, Trace,
-    query::named::{ReadAccessParams, SpendByResponseIdsRow, TraceSpansRow},
-    resolve_trace,
+    QueryScope, SpanStatus, Trace, resolve_trace,
+    store::{CallRow, SpanRow},
 };
-use std::sync::Arc;
-
 use litellm_traces_cache::{Error, Freshness, Snapshot, SnapshotCache, SnapshotKey};
 use rstest::{fixture, rstest};
 
@@ -14,8 +11,8 @@ const T0: i64 = 1_790_742_989_000_000_000;
 const MS: i64 = 1_000_000;
 const TTL: Duration = Duration::from_secs(120);
 
-fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> TraceSpansRow {
-    TraceSpansRow {
+fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> SpanRow {
+    SpanRow {
         trace_id: String::new(),
         span_id: span_id.into(),
         parent_span_id: parent.into(),
@@ -44,21 +41,14 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
     }
 }
 
-fn access() -> ReadAccessParams {
-    ReadAccessParams {
-        all_teams: false,
+fn access() -> QueryScope {
+    QueryScope::Owned {
         user_id: String::new(),
         team_ids: vec!["team".into()],
     }
 }
 
-fn key(
-    source: &str,
-    access: &ReadAccessParams,
-    trace_id: &str,
-    trace_ref: &str,
-    ms: u64,
-) -> SnapshotKey {
+fn key(source: &str, access: &QueryScope, trace_id: &str, trace_ref: &str, ms: u64) -> SnapshotKey {
     SnapshotKey::new(source, access, trace_id, trace_ref, ms).unwrap()
 }
 
@@ -80,32 +70,22 @@ fn trace() -> Trace {
         "trace",
         "ref",
         &[row("root", "", "run", "agent", "agent")],
-        &[] as &[SpendByResponseIdsRow],
+        &[] as &[CallRow],
     )
     .expect("fixture should resolve")
 }
 
 #[rstest]
-#[case::different_team(false, "", "other-team")]
-#[case::different_user(false, "other-user", "team")]
-#[case::different_scope(true, "", "team")]
+#[case::different_team(QueryScope::Owned { user_id: String::new(), team_ids: vec!["other-team".into()] })]
+#[case::different_user(QueryScope::Owned { user_id: "other-user".into(), team_ids: vec!["team".into()] })]
+#[case::different_scope(QueryScope::All)]
 #[tokio::test]
-async fn cached_trace_is_isolated_by_access_scope(
-    trace: Trace,
-    #[case] all_teams: bool,
-    #[case] user_id: &str,
-    #[case] team_id: &str,
-) {
+async fn cached_trace_is_isolated_by_access_scope(trace: Trace, #[case] other_access: QueryScope) {
     let cache = SnapshotCache::new(1024 * 1024, TTL);
     let stored = key("source", &access(), "trace", "ref", 100);
 
     insert(&cache, stored.clone(), trace.clone()).await.unwrap();
 
-    let other_access = ReadAccessParams {
-        all_teams,
-        user_id: user_id.into(),
-        team_ids: vec![team_id.into()],
-    };
     let other = key("source", &other_access, "trace", "ref", 100);
 
     assert!(cache.get(&other).await.is_none());
@@ -171,12 +151,11 @@ async fn snapshot_version_tracks_the_ordered_span_ids(
     #[case] equal: bool,
 ) {
     let build = |ids: &[&str]| -> Trace {
-        let rows: Vec<TraceSpansRow> = ids
+        let rows: Vec<SpanRow> = ids
             .iter()
             .map(|span_id| row(span_id, "", "run", "agent", "agent"))
             .collect();
-        resolve_trace("trace", "ref", &rows, &[] as &[SpendByResponseIdsRow])
-            .expect("fixture should resolve")
+        resolve_trace("trace", "ref", &rows, &[] as &[CallRow]).expect("fixture should resolve")
     };
     let cache = SnapshotCache::new(1024 * 1024, TTL);
 

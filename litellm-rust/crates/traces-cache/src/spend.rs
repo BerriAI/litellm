@@ -1,17 +1,16 @@
 use std::ops::Range;
 
-use crate::TraceStore;
 use litellm_traces::{
-    SpendLookup,
-    query::named::{
-        ReadAccessParams, SpendByResponseIdsParams, SpendByResponseIdsRow, TraceSpansRow,
-    },
+    QueryScope, SpendLookup,
+    store::{CallQuery, CallRow, SpanRow},
 };
+
+use crate::{TraceStore, pages::read_all};
 
 const NANOS_PER_MS: i64 = 1_000_000;
 const SPEND_WINDOW_MS: i64 = 30 * 60 * 1000;
 
-pub(super) fn spend_window(rows: &[TraceSpansRow]) -> Option<Range<i64>> {
+pub(super) fn spend_window(rows: &[SpanRow]) -> Option<Range<i64>> {
     let start_ns = rows.iter().map(|row| row.start_ns).min()?;
     let end_ns = rows
         .iter()
@@ -23,10 +22,7 @@ pub(super) fn spend_window(rows: &[TraceSpansRow]) -> Option<Range<i64>> {
     )
 }
 
-pub(super) fn spend_within(
-    spend: &[SpendByResponseIdsRow],
-    window: Range<i64>,
-) -> &[SpendByResponseIdsRow] {
+pub(super) fn spend_within(spend: &[CallRow], window: Range<i64>) -> &[CallRow] {
     let first = spend.partition_point(|row| row.start_ms < window.start);
     let end = spend.partition_point(|row| row.start_ms < window.end);
     &spend[first..end.max(first)]
@@ -35,9 +31,9 @@ pub(super) fn spend_within(
 /// Spend rows sorted by `start_ms`, or `None` when the lookup failed and spend is unknown.
 pub(super) async fn spend<S: TraceStore>(
     store: &S,
-    access: &ReadAccessParams,
-    rows: &[TraceSpansRow],
-) -> Option<Vec<SpendByResponseIdsRow>> {
+    access: &QueryScope,
+    rows: &[SpanRow],
+) -> Option<Vec<CallRow>> {
     let lookup = SpendLookup::new(rows);
     let Some(window) = spend_window(rows) else {
         return Some(Vec::new());
@@ -45,15 +41,19 @@ pub(super) async fn spend<S: TraceStore>(
     if lookup.is_empty() {
         return Some(Vec::new());
     }
-    let params = SpendByResponseIdsParams {
-        access: access.clone(),
-        response_ids: lookup.response_ids,
-        request_ids: lookup.request_ids,
-        trace_ids: lookup.trace_ids,
-        start_ms: window.start,
-        end_ms: window.end,
-    };
-    match store.spend(&params).await {
+    let calls = read_all(|after, limit| {
+        let query = CallQuery {
+            window: window.clone(),
+            response_ids: lookup.response_ids.clone(),
+            request_ids: lookup.request_ids.clone(),
+            trace_ids: lookup.trace_ids.clone(),
+            after,
+            limit,
+        };
+        async move { store.calls(access, &query).await }
+    })
+    .await;
+    match calls {
         Ok(rows) => {
             let mut rows = rows;
             rows.sort_by_key(|row| row.start_ms);

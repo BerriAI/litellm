@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::TraceTable;
 use futures_util::{
     StreamExt,
     stream::{self, TryStreamExt},
@@ -15,6 +14,7 @@ use super::{
     Connection, Error, NORMALIZED_FIELD_DEFINITIONS, NormalizedFieldDefinition, Parameter,
     query_access::READER_LIMITS,
 };
+use crate::TraceTable;
 
 mod guide;
 pub mod lens;
@@ -519,9 +519,10 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Quer
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
     use serde_json::json;
+
+    use super::*;
 
     #[cfg(feature = "schema")]
     #[rstest]

@@ -2,12 +2,6 @@ use litellm_traces::{InvalidQuery, ReadQuery};
 use rstest::rstest;
 
 #[rstest]
-#[case::list_traces("list_traces", ReadQuery::ListTraces)]
-#[case::trace_spans("trace_spans", ReadQuery::TraceSpans)]
-#[case::span_detail("span_detail", ReadQuery::SpanDetail)]
-#[case::span_error("span_error", ReadQuery::SpanError)]
-#[case::identity("trace_identity", ReadQuery::TraceIdentity)]
-#[case::spend("spend_by_response_ids", ReadQuery::SpendByResponseIds)]
 #[case::availability("availability", ReadQuery::Availability)]
 #[case::agents("agents", ReadQuery::Agents)]
 #[case::sample("sample", ReadQuery::Sample)]
@@ -21,14 +15,11 @@ fn names_select_the_public_query(#[case] name: &str, #[case] query: ReadQuery) {
 
 #[rstest]
 #[case::unknown("unknown")]
-#[case::case_sensitive("List_Traces")]
-#[case::whitespace(" list_traces")]
+#[case::case_sensitive("Sample")]
+#[case::whitespace(" sample")]
 #[case::empty("")]
 fn invalid_names_preserve_the_public_error(#[case] name: &str) {
     let error = ReadQuery::parse(name).unwrap_err();
     assert!(matches!(error, InvalidQuery));
     assert_eq!(error.to_string(), "unknown ClickHouse read query");
 }
-
-#[path = "query/named.rs"]
-mod named;

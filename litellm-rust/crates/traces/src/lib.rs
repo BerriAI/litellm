@@ -18,7 +18,9 @@ mod query_access;
 mod resolve;
 #[cfg(feature = "schema")]
 pub mod schema;
+pub mod search;
 mod shared;
+pub mod store;
 mod tenant;
 mod truncate;
 mod ui;

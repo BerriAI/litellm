@@ -4,16 +4,15 @@ use std::{
     io::{BufWriter, Write},
 };
 
-use serde::{Serialize, Serializer, ser::SerializeMap};
-
 use flate2::{Compression, write::GzEncoder};
 use litellm_http::Client;
+use litellm_traces::Shared;
+use serde::{Serialize, Serializer, ser::SerializeMap};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::{Connection, Error};
-use litellm_traces::Shared;
 
 fn max_insert_bytes() -> Result<usize, Error> {
     let name = "CLICKHOUSE_TRACE_MAX_INSERT_BYTES";
@@ -260,9 +259,10 @@ mod tests {
     #[case::absent(None)]
     #[case::submitted(Some(123))]
     fn streamed_insert_preserves_token_and_stamps_receive_time(#[case] submitted: Option<u64>) {
+        use std::io::Read;
+
         use flate2::read::GzDecoder;
         use sha2::{Digest, Sha256};
-        use std::io::Read;
         let mut row = BTreeMap::from([
             ("ApiKeyHash".into(), json!("key")),
             ("ResourceAttributes".into(), json!({"message": "雪\n\""})),

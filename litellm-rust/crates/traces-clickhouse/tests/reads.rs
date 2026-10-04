@@ -1,13 +1,21 @@
 use std::collections::BTreeMap;
 
 use litellm_http::Client;
-use litellm_traces::query::named::ReadAccessParams;
-use litellm_traces_cache::{ReadError, TraceReader};
+use litellm_traces::search::RunFilter;
+use litellm_traces_cache::{PageRequest, ReadError, TraceReader};
 use litellm_traces_clickhouse::{
     ClickHouseTraces, Connection, InsertTable, QueryScope, insert_rows,
 };
 use rstest::rstest;
 use serde_json::json;
+
+fn all_runs() -> RunFilter {
+    RunFilter {
+        start_ms: 0,
+        end_ms: 2_000_000_000_000,
+        search: Default::default(),
+    }
+}
 
 #[path = "queries/support.rs"]
 mod fixtures;
@@ -88,13 +96,20 @@ async fn list_costs_match_each_run_when_response_ids_are_reused(
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
     let (reader, store) = make_reader(client, connection);
-    let access = ReadAccessParams {
-        all_teams: false,
+    let access = QueryScope::Owned {
         user_id: user_id.into(),
         team_ids: vec!["team-a".into()],
     };
     let page = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .list_traces(
+            &store,
+            &access,
+            &all_runs(),
+            &PageRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
         .await?;
     assert_eq!(page.data.len(), runs.len());
     for (trace_id, _, cost) in runs {
@@ -217,13 +232,20 @@ async fn large_runs_remain_complete_under_default_reader_limits(
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
     let (reader, store) = make_reader(client, connection);
-    let access = ReadAccessParams {
-        all_teams: false,
+    let access = QueryScope::Owned {
         user_id: String::new(),
         team_ids: vec!["team-a".into()],
     };
     let page = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 500)
+        .list_traces(
+            &store,
+            &access,
+            &all_runs(),
+            &PageRequest {
+                cursor: None,
+                limit: 500,
+            },
+        )
         .await?;
     assert_eq!(page.data.len(), runs);
     assert!(
@@ -238,17 +260,20 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             .send()
             .await?
             .error_for_status()?;
-        for table in ["otel_traces AS o", "spend_logs FINAL"]
-            .into_iter()
-            .take(if costed { 2 } else { 1 })
+        for read in [
+            "LIMIT 1 BY TeamId, ApiKeyHash, TraceId, SpanId",
+            "FROM owned_calls",
+        ]
+        .into_iter()
+        .take(if costed { 2 } else { 1 })
         {
             let read_queries = client.post(writer.url().clone()).body(format!(
-                "SELECT count() FROM system.query_log WHERE type = 'QueryFinish' AND current_database = '{DATABASE}' AND query LIKE '%FROM {table}%' AND query NOT LIKE '%system.query_log%'"
+                "SELECT count() FROM system.query_log WHERE type = 'QueryFinish' AND current_database = '{DATABASE}' AND position(query, '{read}') > 0 AND query NOT LIKE '%system.query_log%'"
             )).send().await?.error_for_status()?.text().await?;
             let read_queries = read_queries.trim().parse::<usize>()?;
             assert!(
                 read_queries > 0 && read_queries < runs,
-                "{read_queries} {table} queries for {runs} runs"
+                "{read_queries} `{read}` queries for {runs} runs"
             );
         }
     }
@@ -290,9 +315,9 @@ async fn large_runs_remain_complete_under_default_reader_limits(
         },
         (steps - 1) as u64
     );
-    let denied = ReadAccessParams {
+    let denied = QueryScope::Owned {
+        user_id: String::new(),
         team_ids: vec!["other-team".into()],
-        ..access.clone()
     };
     assert!(
         reader
@@ -370,13 +395,17 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
     let (reader, store) = make_reader(client, connection.clone());
-    let access = ReadAccessParams {
-        all_teams: true,
-        user_id: String::new(),
-        team_ids: Vec::new(),
-    };
+    let access = QueryScope::All;
     let listed = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 10)
+        .list_traces(
+            &store,
+            &access,
+            &all_runs(),
+            &PageRequest {
+                cursor: None,
+                limit: 10,
+            },
+        )
         .await?;
     let summary = listed
         .data
@@ -419,8 +448,7 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
         ])],
     )
     .await?;
-    let denied = ReadAccessParams {
-        all_teams: false,
+    let denied = QueryScope::Owned {
         user_id: String::new(),
         team_ids: vec!["not-this-team".into()],
     };
@@ -533,13 +561,17 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
     let (reader, store) = make_reader(client, connection.clone());
-    let access = ReadAccessParams {
-        all_teams: true,
-        user_id: String::new(),
-        team_ids: Vec::new(),
-    };
+    let access = QueryScope::All;
     let before = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .list_traces(
+            &store,
+            &access,
+            &all_runs(),
+            &PageRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
         .await?;
     let run = before
         .data
@@ -568,12 +600,28 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
     )
     .await?;
     let cached = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .list_traces(
+            &store,
+            &access,
+            &all_runs(),
+            &PageRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
         .await?;
     assert_eq!(cached.data, before.data);
     let (reader, store) = make_reader(client, connection);
     let after = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .list_traces(
+            &store,
+            &access,
+            &all_runs(),
+            &PageRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
         .await?;
     assert_eq!(after.data.len(), before.data.len());
     let limited = after
@@ -686,13 +734,20 @@ async fn gateway_ids_resolve_through_detail_and_batch_reads_with_legacy_fallback
         .connection(client, &QueryScope::All, "fixture-secret")
         .await?;
     let (reader, store) = make_reader(client, connection);
-    let access = ReadAccessParams {
-        all_teams: false,
+    let access = QueryScope::Owned {
         user_id: String::new(),
         team_ids: vec!["team-a".into()],
     };
     let page = reader
-        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .list_traces(
+            &store,
+            &access,
+            &all_runs(),
+            &PageRequest {
+                cursor: None,
+                limit: 50,
+            },
+        )
         .await?;
     assert_eq!(page.data.len(), cases.len());
     for (id, _, _, _, _, expected) in cases {

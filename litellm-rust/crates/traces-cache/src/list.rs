@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 
+use litellm_traces::{
+    QueryScope, TraceSummary, listed_summary, resolve_trace,
+    store::{RunRow, SpanRow, SpanSelection},
+};
+
 use crate::{
     ReadError, SnapshotKey, TraceReader, TraceStore,
     cache::{Freshness, ListedRun},
-    reader::{map_store_error, now_ms},
+    reader::{map_store_error, now_ms, spans},
     spend::{spend, spend_window, spend_within},
     store::StoreError,
-};
-use litellm_traces::{
-    TraceSummary, listed_summary,
-    query::named::{ListTracesRow, ReadAccessParams, TracePageSpansParams, TraceSpansRow},
-    resolve_trace,
 };
 
 const RUNS_PER_SPAN_READ: usize = 16;
@@ -25,8 +25,8 @@ fn run_key(team_id: &str, api_key_hash: &str, trace_id: &str) -> (String, String
 
 fn cache_key<E>(
     source: &str,
-    access: &ReadAccessParams,
-    row: &ListTracesRow,
+    access: &QueryScope,
+    row: &RunRow,
 ) -> Result<SnapshotKey, ReadError<E>> {
     Ok(SnapshotKey::run(
         source,
@@ -40,7 +40,7 @@ fn cache_key<E>(
     )?)
 }
 
-fn summary(row: &ListTracesRow, listed: Option<&ListedRun>) -> TraceSummary {
+fn summary(row: &RunRow, listed: Option<&ListedRun>) -> TraceSummary {
     match listed {
         Some(ListedRun::Resolved(summary, _)) => (**summary).clone(),
         Some(ListedRun::Limited) | None => listed_summary(row),
@@ -52,8 +52,8 @@ fn summary(row: &ListTracesRow, listed: Option<&ListedRun>) -> TraceSummary {
 pub(super) async fn list_summaries<S: TraceStore>(
     reader: &TraceReader,
     store: &S,
-    access: &ReadAccessParams,
-    runs: &[ListTracesRow],
+    access: &QueryScope,
+    runs: &[RunRow],
 ) -> Result<Vec<TraceSummary>, ReadError<S::Error>> {
     let mut keys = Vec::with_capacity(runs.len());
     let mut listed = Vec::with_capacity(runs.len());
@@ -62,7 +62,7 @@ pub(super) async fn list_summaries<S: TraceStore>(
         listed.push(reader.lists.runs.get(&key).await);
         keys.push(key);
     }
-    let misses: Vec<&ListTracesRow> = runs
+    let misses: Vec<&RunRow> = runs
         .iter()
         .zip(&listed)
         .filter_map(|(row, listed)| listed.is_none().then_some(row))
@@ -92,8 +92,8 @@ pub(super) async fn list_summaries<S: TraceStore>(
 async fn resolve_runs<S: TraceStore>(
     reader: &TraceReader,
     store: &S,
-    access: &ReadAccessParams,
-    runs: &[&ListTracesRow],
+    access: &QueryScope,
+    runs: &[&RunRow],
 ) -> Result<Vec<Option<ListedRun>>, ReadError<S::Error>> {
     let (Some(start_ms), Some(end_ms)) = (
         runs.iter().map(|row| row.start_ms).min(),
@@ -103,14 +103,12 @@ async fn resolve_runs<S: TraceStore>(
     ) else {
         return Ok(Vec::new());
     };
-    let params = TracePageSpansParams {
-        access: access.clone(),
+    let selection = SpanSelection::Runs {
         trace_refs: runs.iter().map(|row| row.trace_ref.clone()).collect(),
-        start_ms,
-        end_ms: end_ms.saturating_add(1),
+        window: start_ms..end_ms.saturating_add(1),
     };
     let snapshot_ms = now_ms();
-    let spans = match store.run_spans(&params, snapshot_ms).await {
+    let spans = match spans(store, access, selection, snapshot_ms).await {
         Ok(spans) => spans,
         Err(StoreError::TooLarge) => {
             let mut resolved = Vec::with_capacity(runs.len());
@@ -140,7 +138,7 @@ async fn resolve_runs<S: TraceStore>(
             ))
             .then(left.start_ns.cmp(&right.start_ns))
     });
-    let by_run: HashMap<_, &[TraceSpansRow]> = spans
+    let by_run: HashMap<_, &[SpanRow]> = spans
         .chunk_by(|left, right| {
             (&left.team_id, &left.api_key_hash, &left.trace_id)
                 == (&right.team_id, &right.api_key_hash, &right.trace_id)
@@ -174,8 +172,8 @@ async fn resolve_runs<S: TraceStore>(
 async fn resolve_run<S: TraceStore>(
     reader: &TraceReader,
     store: &S,
-    access: &ReadAccessParams,
-    row: &ListTracesRow,
+    access: &QueryScope,
+    row: &RunRow,
 ) -> Result<Option<ListedRun>, ReadError<S::Error>> {
     match reader
         .current(store, access, &row.trace_id, &row.trace_ref)

@@ -1,13 +1,10 @@
 use std::collections::BTreeMap;
 
 use litellm_http::Client;
+use litellm_storage_clickhouse::{Query, fetch_json};
 use litellm_traces::ReadQuery;
 
-use super::{
-    Connection, Error, Parameter,
-    query::{lens::*, named::*},
-};
-use litellm_storage_clickhouse::{Query, fetch_json};
+use super::{Connection, Error, Parameter, query::lens::*};
 
 pub async fn execute_named_read(
     client: &Client,
@@ -16,19 +13,6 @@ pub async fn execute_named_read(
     parameters: &BTreeMap<String, Parameter>,
 ) -> Result<String, Error> {
     match query {
-        ReadQuery::ListTraces => named_json::<ListTraces>(client, connection, parameters).await,
-        ReadQuery::TraceIdentity => {
-            named_json::<TraceIdentity>(client, connection, parameters).await
-        }
-        ReadQuery::TraceSpans => named_json::<TraceSpans>(client, connection, parameters).await,
-        ReadQuery::TracePageSpans => {
-            named_json::<TracePageSpans>(client, connection, parameters).await
-        }
-        ReadQuery::SpanDetail => named_json::<SpanDetail>(client, connection, parameters).await,
-        ReadQuery::SpanError => named_json::<SpanError>(client, connection, parameters).await,
-        ReadQuery::SpendByResponseIds => {
-            named_json::<SpendByResponseIds>(client, connection, parameters).await
-        }
         ReadQuery::Availability => {
             named_json::<LensAvailability>(client, connection, parameters).await
         }
@@ -57,19 +41,21 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
 
+    use super::*;
+
     #[rstest]
-    #[case::missing_span(serde_json::json!({}))]
-    #[case::negative_offset(serde_json::json!({"span_id": "span", "error_offset": -1, "error_version": ""}))]
-    #[case::overflow(serde_json::json!({"span_id": "span", "error_offset": "18446744073709551616", "error_version": ""}))]
+    #[case::missing_cursor(serde_json::json!({"offset": 1}))]
+    #[case::negative_offset(serde_json::json!({"cursor": "", "offset": -1}))]
+    #[case::overflow(serde_json::json!({"cursor": "", "offset": "4294967296"}))]
     #[tokio::test]
     async fn named_read_rejects_invalid_parameters_before_transport(
         #[case] specific: serde_json::Value,
     ) {
         let common = serde_json::json!({
-            "all_teams": 1, "user_id": "", "team_ids": [], "trace_id": "trace", "trace_ref": ""
+            "all_teams": 1, "team": "", "key_hash": "", "source": "traces", "id": "trace",
+            "record_team": "team", "trace_ref": ""
         });
         let parameters: BTreeMap<String, Parameter> = common
             .as_object()
@@ -81,7 +67,7 @@ mod tests {
         let client = Client::no_redirect_for_test();
         let connection = Connection::parse("http://127.0.0.1:1").unwrap();
         assert!(matches!(
-            execute_named_read(&client, &connection, ReadQuery::SpanError, &parameters).await,
+            execute_named_read(&client, &connection, ReadQuery::Content, &parameters).await,
             Err(Error::InvalidParameters)
         ));
     }

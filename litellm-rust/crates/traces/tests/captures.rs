@@ -1,11 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use litellm_traces::{
     CallEvidence, CallEvidenceKind, CallKey, DecodedSpan, ObservationType, SpanStatus, decode_otlp,
-    query::named::{SpendByResponseIdsRow, TraceSpansRow},
     resolve_trace,
+    store::{CallRow, SpanRow},
 };
 use rstest::rstest;
 use serde::Deserialize;
@@ -99,7 +101,7 @@ fn upstream_response_id(response_id: &str) -> String {
         .unwrap_or_default()
 }
 
-fn captured_spend_rows(spend_logs: &str) -> (FixtureCapture, Vec<SpendByResponseIdsRow>) {
+fn captured_spend_rows(spend_logs: &str) -> (FixtureCapture, Vec<CallRow>) {
     let records: Vec<CapturedSpend> = spend_logs
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -112,7 +114,7 @@ fn captured_spend_rows(spend_logs: &str) -> (FixtureCapture, Vec<SpendByResponse
         .into_iter()
         .map(|record| {
             let upstream_response_id = upstream_response_id(&record.response_id);
-            SpendByResponseIdsRow {
+            CallRow {
                 request_id: record.request_id,
                 litellm_call_id: record.litellm_call_id,
                 response_id: record.response_id,
@@ -148,7 +150,7 @@ fn status_message(span: &DecodedSpan) -> &str {
         .unwrap_or_default()
 }
 
-fn trace_span(span: DecodedSpan) -> TraceSpansRow {
+fn trace_span(span: DecodedSpan) -> SpanRow {
     let service = span
         .resource_attributes
         .get("service.name")
@@ -175,7 +177,7 @@ fn trace_span(span: DecodedSpan) -> TraceSpansRow {
             CallKey::LiteLlmRequest(_) | CallKey::Transport | CallKey::GatewayAttempt => None,
         })
         .unwrap_or_default();
-    TraceSpansRow {
+    SpanRow {
         trace_id: span.trace_id,
         span_id: span.span_id,
         parent_span_id: span.parent_span_id,
@@ -211,7 +213,7 @@ fn trace_span(span: DecodedSpan) -> TraceSpansRow {
     }
 }
 
-fn trace_rows(otlp: &[u8]) -> Vec<TraceSpansRow> {
+fn trace_rows(otlp: &[u8]) -> Vec<SpanRow> {
     let mut seen = BTreeSet::new();
     decode_otlp(otlp, Some("application/json"))
         .expect("valid OTLP fixture")
@@ -220,14 +222,7 @@ fn trace_rows(otlp: &[u8]) -> Vec<TraceSpansRow> {
         .collect()
 }
 
-fn fixture(
-    spend_log_path: &Path,
-) -> (
-    CaptureData,
-    FixtureCapture,
-    Vec<TraceSpansRow>,
-    Vec<SpendByResponseIdsRow>,
-) {
+fn fixture(spend_log_path: &Path) -> (CaptureData, FixtureCapture, Vec<SpanRow>, Vec<CallRow>) {
     let spend_log_path = manifest_path(spend_log_path);
     let name = capture_name(&spend_log_path);
     let spend_log_contents = std::fs::read_to_string(&spend_log_path).unwrap_or_else(|error| {
@@ -261,11 +256,11 @@ fn agent_spends(trace: &litellm_traces::Trace) -> BTreeMap<String, Option<f64>> 
         .collect()
 }
 
-fn unrelated_transport(call: &TraceSpansRow) -> TraceSpansRow {
+fn unrelated_transport(call: &SpanRow) -> SpanRow {
     let start_ns =
         i64::try_from(i128::from(call.start_ns) + i128::from(call.duration_ns) + 1_000_000)
             .expect("valid unrelated transport timestamp");
-    TraceSpansRow {
+    SpanRow {
         trace_id: call.trace_id.clone(),
         span_id: format!("unrelated-transport-{}", call.span_id),
         parent_span_id: call.parent_span_id.clone(),

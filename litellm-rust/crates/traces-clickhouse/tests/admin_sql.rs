@@ -1,10 +1,11 @@
+use std::collections::BTreeMap;
+
 use litellm_http::Client;
 use litellm_traces_clickhouse::{
     Connection, Error, Parameter, QueryReaders, QueryScope, execute_read,
 };
 use rstest::{fixture, rstest};
 use serde_json::Value;
-use std::collections::BTreeMap;
 mod support;
 
 use support::{ClickHouseDatabase, database as start_database};

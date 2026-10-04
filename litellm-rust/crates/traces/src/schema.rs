@@ -46,15 +46,14 @@ fn emitted<T: JsonSchema>() -> Schema {
 
 pub fn schemas() -> BTreeMap<&'static str, Schema> {
     BTreeMap::from([
-        (
-            "TraceScope",
-            received::<crate::query::named::ReadAccessParams>(),
-        ),
         ("QueryScope", received::<crate::QueryScope>()),
         ("Tenant", received::<crate::Tenant>()),
         ("TracePage", emitted::<crate::TracePage>()),
         ("Trace", emitted::<crate::Trace>()),
         ("SpanDetail", emitted::<crate::SpanDetail>()),
         ("SpanErrorPage", emitted::<crate::SpanErrorPage>()),
+        ("TraceHistogram", emitted::<crate::search::TraceHistogram>()),
+        ("RunValues", emitted::<crate::search::RunValues>()),
+        ("RunField", received::<crate::search::RunField>()),
     ])
 }

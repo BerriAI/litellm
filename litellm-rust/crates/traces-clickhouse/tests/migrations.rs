@@ -1,14 +1,59 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
+use litellm_traces::{
+    search::RunFilter,
+    store::{CallQuery, RunCursor, RunQuery, RunSelection, SpanQuery, SpanSelection},
+};
+use litellm_traces_cache::{TraceReader, TraceStore};
 use litellm_traces_clickhouse::{
-    Connection, Error, InsertTable, NORMALIZED_FIELD_DEFINITIONS, Parameter, ReadQuery,
-    encode_rows, ensure_schema, execute_named_read, execute_read, schema_statements,
+    ClickHouseTraces, Connection, Error, InsertTable, NORMALIZED_FIELD_DEFINITIONS, Parameter,
+    QueryScope, encode_rows, ensure_schema, execute_named_read, execute_read, schema_statements,
 };
 use rstest::rstest;
+use sha2::{Digest, Sha256};
 mod support;
 
 use support::{ClickHouseDatabase, TestResult, database};
+
+fn owned(user_id: &str, team_ids: &[&str]) -> QueryScope {
+    QueryScope::Owned {
+        user_id: user_id.into(),
+        team_ids: team_ids.iter().map(|team| (*team).to_owned()).collect(),
+    }
+}
+
+fn traces(database: &ClickHouseDatabase, connection: &Connection) -> ClickHouseTraces {
+    ClickHouseTraces::new(database.client.clone(), connection.clone())
+}
+
+fn trace_ref(team_id: &str, api_key_hash: &str, trace_id: &str) -> String {
+    format!(
+        "{:X}",
+        Sha256::digest(format!("{team_id}\0{api_key_hash}\0{trace_id}"))
+    )
+}
+
+async fn list_runs(
+    database: &ClickHouseDatabase,
+    connection: &Connection,
+    access: &QueryScope,
+    window: std::ops::Range<i64>,
+    after: Option<RunCursor>,
+    limit: u32,
+) -> TestResult<serde_json::Value> {
+    let query = RunQuery {
+        selection: RunSelection::Matching(RunFilter {
+            start_ms: window.start,
+            end_ms: window.end,
+            search: Default::default(),
+        }),
+        after,
+        limit,
+    };
+    let rows = traces(database, connection).runs(access, &query).await?;
+    Ok(serde_json::json!({ "data": rows }))
+}
 
 async fn insert_rows(
     database: &ClickHouseDatabase,
@@ -95,83 +140,37 @@ async fn schema_supports_span_rollups_and_spend_joins(
     insert_rows(&database, "otel_traces", vec![span]).await?;
     insert_rows(&database, "spend_logs", vec![spend]).await?;
     let reader = Connection::reader(&database.url, "trace_test")?;
-    let detail =
-        litellm_storage_clickhouse::fetch::<litellm_traces_clickhouse::query::named::SpanDetail>(
-            &database.client,
-            &reader,
-            &litellm_traces_clickhouse::query::named::SpanDetailParams {
-                access: litellm_traces_clickhouse::query::named::ReadAccessParams {
-                    all_teams: false,
-                    user_id: String::new(),
-                    team_ids: vec!["team-1".into()],
-                },
-                trace_id: "trace-1".into(),
-                trace_ref: String::new(),
-                span_id: "span-1".into(),
+    let team = owned("", &["team-1"]);
+    let detail = TraceReader::new(usize::MAX)
+        .get_span(&traces(&database, &reader), &team, "trace-1", "span-1", "")
+        .await?
+        .ok_or("missing span detail")?;
+    assert_eq!(detail.input, "hello world");
+    assert_eq!(detail.attributes["gen_ai.response.id"], "response-1");
+    let request_ids = read_json(
+        &database,
+        "SELECT groupArrayArray(RequestIds) AS ids FROM trace_test.agent_traces_by_key \
+         WHERE TraceId = 'trace-1'",
+    )
+    .await?;
+    assert_eq!(
+        request_ids["data"][0]["ids"],
+        serde_json::json!(["response-1"])
+    );
+    let calls = traces(&database, &reader)
+        .calls(
+            &team,
+            &CallQuery {
+                window: timestamp / 1_000_000 - 1000..timestamp / 1_000_000 + 1000,
+                response_ids: vec!["response-1".into()],
+                request_ids: Vec::new(),
+                trace_ids: Vec::new(),
+                after: None,
+                limit: 10,
             },
         )
         .await?;
-    assert_eq!(detail.len(), 1);
-    assert_eq!(detail[0].input, "hello world");
-    assert_eq!(detail[0].attributes["gen_ai.response.id"], "response-1");
-    let list_parameters = BTreeMap::from([
-        ("all_teams".into(), Parameter::Integer(0)),
-        ("user_id".into(), Parameter::Text(String::new())),
-        ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
-        (
-            "start_ms".into(),
-            Parameter::Integer(timestamp / 1_000_000 - 1000),
-        ),
-        (
-            "end_ms".into(),
-            Parameter::Integer(timestamp / 1_000_000 + 1000),
-        ),
-        ("cursor_ms".into(), Parameter::Integer(0)),
-        ("cursor_trace_id".into(), Parameter::Text(String::new())),
-        ("limit".into(), Parameter::Integer(10)),
-    ]);
-    let listed: serde_json::Value = serde_json::from_str(
-        &execute_named_read(
-            &database.client,
-            &reader,
-            ReadQuery::ListTraces,
-            &list_parameters,
-        )
-        .await?,
-    )?;
-    assert_eq!(
-        listed["data"][0]["request_ids"],
-        serde_json::json!(["response-1"])
-    );
-    let spend_parameters = BTreeMap::from([
-        (
-            "response_ids".into(),
-            Parameter::Strings(vec!["response-1".into()]),
-        ),
-        ("request_ids".into(), Parameter::Strings(Vec::new())),
-        ("trace_ids".into(), Parameter::Strings(Vec::new())),
-        ("all_teams".into(), Parameter::Integer(0)),
-        ("user_id".into(), Parameter::Text(String::new())),
-        ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
-        (
-            "start_ms".into(),
-            Parameter::Integer(timestamp / 1_000_000 - 1000),
-        ),
-        (
-            "end_ms".into(),
-            Parameter::Integer(timestamp / 1_000_000 + 1000),
-        ),
-    ]);
-    let matched: serde_json::Value = serde_json::from_str(
-        &execute_named_read(
-            &database.client,
-            &reader,
-            ReadQuery::SpendByResponseIds,
-            &spend_parameters,
-        )
-        .await?,
-    )?;
-    assert_eq!(matched["data"][0]["spend"], 0.125);
+    assert_eq!(calls[0].spend, Some(0.125));
     let body = read_json(
         &database,
         "SELECT o.TeamId, o.ApiKeyHash, o.UserId, o.ObservationType, o.InputPreview, s.spend, \
@@ -478,53 +477,19 @@ async fn listed_agent_names_preserve_scope_and_cursor(
         .collect::<Result<Vec<_>, _>>()?;
     insert_rows(&database, "otel_traces", historical_rows).await?;
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
-    let parameters = BTreeMap::from([
-        ("all_teams".into(), Parameter::Integer(0)),
-        ("user_id".into(), Parameter::Text("owner".into())),
-        ("team_ids".into(), Parameter::Strings(vec![])),
-        (
-            "start_ms".into(),
-            Parameter::Integer(timestamp / 1_000_000 - 1000),
-        ),
-        (
-            "end_ms".into(),
-            Parameter::Integer(timestamp / 1_000_000 + 1000),
-        ),
-        ("cursor_ms".into(), Parameter::Integer(0)),
-        ("cursor_trace_id".into(), Parameter::Text(String::new())),
-        ("limit".into(), Parameter::Integer(1)),
-    ]);
-    let first: serde_json::Value = serde_json::from_str(
-        &execute_named_read(
-            &database.client,
-            &connection,
-            ReadQuery::ListTraces,
-            &parameters,
-        )
-        .await?,
-    )?;
-    let cursor = first["data"][0]["trace_ref"]
-        .as_str()
-        .ok_or("missing cursor")?;
-    let next_parameters = parameters
-        .into_iter()
-        .chain([
-            (
-                "cursor_ms".into(),
-                Parameter::Integer(timestamp / 1_000_000),
-            ),
-            ("cursor_trace_id".into(), Parameter::Text(cursor.into())),
-        ])
-        .collect();
-    let second: serde_json::Value = serde_json::from_str(
-        &execute_named_read(
-            &database.client,
-            &connection,
-            ReadQuery::ListTraces,
-            &next_parameters,
-        )
-        .await?,
-    )?;
+    let owner = owned("owner", &[]);
+    let window = timestamp / 1_000_000 - 1000..timestamp / 1_000_000 + 1000;
+    let first = list_runs(&database, &connection, &owner, window.clone(), None, 1).await?;
+    let after = RunCursor {
+        start_ms: first["data"][0]["start_ms"]
+            .as_i64()
+            .ok_or("missing start")?,
+        trace_ref: first["data"][0]["trace_ref"]
+            .as_str()
+            .ok_or("missing cursor")?
+            .into(),
+    };
+    let second = list_runs(&database, &connection, &owner, window, Some(after), 1).await?;
     assert_eq!(
         first["data"].as_array().ok_or("missing first page")?.len(),
         1
@@ -571,14 +536,21 @@ async fn listed_agent_names_preserve_scope_and_cursor(
         .collect::<BTreeMap<_, _>>();
     assert_eq!(counts["shared"], Some(3));
     assert_eq!(counts["second"], Some(1));
-    for page in [&first, &second] {
-        assert!(
-            page["statistics"]["rows_read"]
-                .as_u64()
-                .ok_or("missing read statistics")?
-                < 5000
-        );
-    }
+    execute_write(&database, "SYSTEM FLUSH LOGS").await?;
+    let reads = read_json(
+        &database,
+        "SELECT count() AS pages, max(read_rows) AS rows FROM system.query_log \
+         WHERE type = 'QueryFinish' AND current_database = 'trace_test' \
+         AND position(query, 'page AS (') > 0 AND query NOT LIKE '%system.query_log%'",
+    )
+    .await?;
+    assert_eq!(reads["data"][0]["pages"], 2);
+    assert!(
+        reads["data"][0]["rows"]
+            .as_u64()
+            .ok_or("missing read statistics")?
+            < 5000
+    );
     Ok(())
 }
 
@@ -629,28 +601,15 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
         }])
     );
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
-    let parameters = BTreeMap::from([
-        ("all_teams".into(), Parameter::Integer(0)),
-        ("user_id".into(), Parameter::Text(String::new())),
-        ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
-        (
-            "start_ms".into(),
-            Parameter::Integer(day_start / 1_000_000 - 2000),
-        ),
-        ("end_ms".into(), Parameter::Integer(day_start / 1_000_000)),
-        ("cursor_ms".into(), Parameter::Integer(0)),
-        ("cursor_trace_id".into(), Parameter::Text(String::new())),
-        ("limit".into(), Parameter::Integer(10)),
-    ]);
-    let listed: serde_json::Value = serde_json::from_str(
-        &execute_named_read(
-            &database.client,
-            &connection,
-            ReadQuery::ListTraces,
-            &parameters,
-        )
-        .await?,
-    )?;
+    let listed = list_runs(
+        &database,
+        &connection,
+        &owned("", &["team-1"]),
+        day_start / 1_000_000 - 2000..day_start / 1_000_000,
+        None,
+        10,
+    )
+    .await?;
     assert_eq!(
         listed["data"][0]["agent_names"],
         serde_json::json!(["lead", "researcher"])
@@ -880,37 +839,17 @@ async fn lens_filters_reads_and_evidence_keep_reused_trace_ids_separate(
     let rows = sample["data"].as_array().expect("sample rows");
     assert_eq!(rows.len(), 2);
     assert_ne!(rows[0]["trace_ref"], rows[1]["trace_ref"]);
-    let identity_params = BTreeMap::from([
-        ("trace_id".into(), Parameter::Text("shared".into())),
-        ("all_teams".into(), Parameter::Integer(0)),
-        ("user_id".into(), Parameter::Text(String::new())),
-        ("team_ids".into(), Parameter::Strings(vec!["team".into()])),
-    ]);
-    let identities: serde_json::Value = serde_json::from_str(
-        &execute_named_read(
-            &database.client,
-            &connection,
-            ReadQuery::TraceIdentity,
-            &identity_params,
-        )
-        .await?,
-    )?;
-    assert_eq!(identities["data"].as_array().map(Vec::len), Some(2));
-    let user_params = BTreeMap::from([
-        ("trace_id".into(), Parameter::Text("shared".into())),
-        ("all_teams".into(), Parameter::Integer(0)),
-        ("user_id".into(), Parameter::Text("one".into())),
-        ("team_ids".into(), Parameter::Strings(vec![])),
-    ]);
-    let identity: serde_json::Value = serde_json::from_str(
-        &execute_named_read(
-            &database.client,
-            &connection,
-            ReadQuery::TraceIdentity,
-            &user_params,
-        )
-        .await?,
-    )?;
+    let by_trace_id = RunQuery {
+        selection: RunSelection::TraceId("shared".into()),
+        after: None,
+        limit: 10,
+    };
+    let store = traces(&database, &connection);
+    let identities = store.runs(&owned("", &["team"]), &by_trace_id).await?;
+    assert_eq!(identities.len(), 2);
+    let identity = serde_json::json!({
+        "data": store.runs(&owned("one", &[]), &by_trace_id).await?,
+    });
     assert_eq!(identity["data"].as_array().map(Vec::len), Some(1));
     assert!(
         rows.iter()
@@ -1203,67 +1142,65 @@ async fn trace_error_previews_preserve_paginated_diagnostics(
         .collect::<Result<Vec<BTreeMap<String, serde_json::Value>>, _>>()?;
     insert_rows(&database, "otel_traces", rows).await?;
     let reader = Connection::reader(&database.url, "trace_test")?;
-    let mut parameters = BTreeMap::from([
-        (
-            "trace_id".into(),
-            Parameter::Text("diagnostic-trace".into()),
-        ),
-        ("all_teams".into(), Parameter::Integer(1)),
-        ("user_id".into(), Parameter::Text(String::new())),
-        ("team_ids".into(), Parameter::Strings(vec![])),
-        ("trace_ref".into(), Parameter::Text(String::new())),
-    ]);
-    let body = execute_named_read(
-        &database.client,
-        &reader,
-        ReadQuery::TraceSpans,
-        &parameters,
-    )
-    .await?;
-    let response: serde_json::Value = serde_json::from_str(&body)?;
-    let spans = response["data"].as_array().expect("trace spans");
+    let store = traces(&database, &reader);
+    let reference = trace_ref("", "", "diagnostic-trace");
+    let spans = store
+        .spans(
+            &QueryScope::All,
+            &SpanQuery {
+                selection: SpanSelection::Trace {
+                    trace_id: "diagnostic-trace".into(),
+                    trace_ref: reference.clone(),
+                },
+                as_of_ms: u64::MAX,
+                after: None,
+                limit: 1000,
+            },
+        )
+        .await?;
     assert_eq!(spans.len(), span_count);
     let prefix: String = message.chars().take(128).collect();
     assert!(!prefix.is_empty());
     assert!(
         spans
             .iter()
-            .all(|span| span["status_message"] == prefix && span["error_truncated"] == 1)
+            .all(|span| span.status_message == prefix && span.error_truncated)
     );
-    parameters.insert("span_id".into(), Parameter::Text("span-0".into()));
-    parameters.insert("error_version".into(), Parameter::Text(String::new()));
+    let reader = TraceReader::new(usize::MAX);
     let mut recovered = String::new();
+    let mut cursor = None;
     loop {
-        parameters.insert(
-            "error_offset".into(),
-            Parameter::Integer(recovered.chars().count() as i64),
-        );
-        let body = execute_named_read(&database.client, &reader, ReadQuery::SpanError, &parameters)
-            .await?;
-        assert!(body.len() < 128 * 1024);
-        let response: serde_json::Value = serde_json::from_str(&body)?;
-        let chunk = response["data"][0]["message"]
-            .as_str()
-            .expect("diagnostic chunk");
-        assert!(!chunk.is_empty());
-        recovered.push_str(chunk);
-        let version = response["data"][0]["version"]
-            .as_str()
-            .expect("diagnostic version");
-        parameters.insert("error_version".into(), Parameter::Text(version.into()));
-        if recovered.chars().count() >= message.chars().count() {
+        let page = reader
+            .get_span_error(
+                &store,
+                &QueryScope::All,
+                "diagnostic-trace",
+                "span-0",
+                &reference,
+                cursor.as_deref(),
+            )
+            .await?
+            .ok_or("missing diagnostic page")?;
+        assert!(!page.message.is_empty());
+        assert!(page.message.chars().count() <= 16_384);
+        recovered.push_str(&page.message);
+        let Some(next) = page.next_cursor else {
             break;
-        }
+        };
+        cursor = Some(next);
     }
     assert_eq!(recovered, message);
-    parameters.insert("all_teams".into(), Parameter::Integer(0));
-    parameters.insert("user_id".into(), Parameter::Text("unrelated-user".into()));
-    let denied =
-        execute_named_read(&database.client, &reader, ReadQuery::SpanError, &parameters).await?;
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&denied)?["data"],
-        serde_json::json!([])
-    );
+    let denied = reader
+        .get_span_error(
+            &store,
+            &owned("unrelated-user", &[]),
+            "diagnostic-trace",
+            "span-0",
+            &reference,
+            None,
+        )
+        .await?;
+    assert!(denied.is_none());
     Ok(())
 }
 
@@ -1296,30 +1233,36 @@ async fn duplicate_span_preview_matches_diagnostic(
     .collect::<Result<Vec<BTreeMap<String, serde_json::Value>>, _>>()?;
     insert_rows(&database, "otel_traces", rows).await?;
     let reader = Connection::reader(&database.url, "trace_test")?;
-    let parameters = BTreeMap::from([
-        ("trace_id".into(), Parameter::Text("duplicate-trace".into())),
-        ("span_id".into(), Parameter::Text("duplicate-span".into())),
-        ("all_teams".into(), Parameter::Integer(1)),
-        ("user_id".into(), Parameter::Text(String::new())),
-        ("team_ids".into(), Parameter::Strings(vec![])),
-        ("trace_ref".into(), Parameter::Text(String::new())),
-        ("error_version".into(), Parameter::Text(String::new())),
-        ("error_offset".into(), Parameter::Integer(0)),
-    ]);
-    let preview = execute_named_read(
-        &database.client,
-        &reader,
-        ReadQuery::TraceSpans,
-        &parameters,
-    )
-    .await?;
-    let diagnostic =
-        execute_named_read(&database.client, &reader, ReadQuery::SpanError, &parameters).await?;
-    let preview: serde_json::Value = serde_json::from_str(&preview)?;
-    let diagnostic: serde_json::Value = serde_json::from_str(&diagnostic)?;
-    assert_eq!(preview["data"].as_array().unwrap().len(), 1);
-    assert_eq!(preview["data"][0]["status_message"], message[..128]);
-    assert_eq!(diagnostic["data"][0]["message"], message);
+    let store = traces(&database, &reader);
+    let reference = trace_ref("", "", "duplicate-trace");
+    let preview = store
+        .spans(
+            &QueryScope::All,
+            &SpanQuery {
+                selection: SpanSelection::Trace {
+                    trace_id: "duplicate-trace".into(),
+                    trace_ref: reference.clone(),
+                },
+                as_of_ms: u64::MAX,
+                after: None,
+                limit: 10,
+            },
+        )
+        .await?;
+    let diagnostic = TraceReader::new(usize::MAX)
+        .get_span_error(
+            &store,
+            &QueryScope::All,
+            "duplicate-trace",
+            "duplicate-span",
+            &reference,
+            None,
+        )
+        .await?
+        .ok_or("missing diagnostic")?;
+    assert_eq!(preview.len(), 1);
+    assert_eq!(preview[0].status_message, message[..128]);
+    assert_eq!(diagnostic.message, message);
     Ok(())
 }
 
@@ -1845,9 +1788,10 @@ async fn query_help_displays_discovery_truncation(
 
 #[rstest]
 fn field_definitions_match_serialized_normalized_span() {
+    use std::collections::BTreeSet;
+
     use litellm_traces::{Tenant, decode_otlp};
     use litellm_traces_clickhouse::span_rows;
-    use std::collections::BTreeSet;
     let spans = decode_otlp(
         br#"{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"11111111111111111111111111111111","spanId":"2222222222222222","name":"root"}]}]}]}"#,
         Some("application/json"),
@@ -1875,22 +1819,17 @@ fn field_definitions_match_serialized_normalized_span() {
 }
 
 #[rstest]
-#[case::own_user("owner", vec![], None, vec!["own"])]
-#[case::own_user_and_permitted_team("owner", vec!["permitted"], None, vec!["own", "team"])]
-#[case::no_identity("", vec![], None, vec![])]
-#[case::legacy_key_without_identity("", vec![], Some("request-key"), vec![])]
+#[case::own_user("owner", vec![], vec!["own"])]
+#[case::own_user_and_permitted_team("owner", vec!["permitted"], vec!["own", "team"])]
+#[case::no_identity("", vec![], vec![])]
 #[tokio::test]
-async fn named_and_sql_readers_share_request_log_visibility(
+async fn trusted_and_sql_readers_share_request_log_visibility(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
     #[case] user: &str,
     #[case] teams: Vec<&str>,
-    #[case] legacy_key: Option<&str>,
     #[case] expected: Vec<&str>,
 ) -> TestResult {
-    use litellm_traces_clickhouse::{
-        QueryReaders, QueryScope,
-        query::named::{ReadAccessParams, SpendByResponseIds, SpendByResponseIdsParams},
-    };
+    use litellm_traces_clickhouse::QueryReaders;
 
     let database = database?;
     let writer = Connection::writer(&database.url)?;
@@ -1905,23 +1844,21 @@ async fn named_and_sql_readers_share_request_log_visibility(
         .collect::<Result<Vec<BTreeMap<String, serde_json::Value>>, _>>()?;
     insert_rows(&database, "spend_logs", rows).await?;
     let reader = Connection::reader(&database.url, "trace_test")?;
-    let params =
-        SpendByResponseIdsParams::from(litellm_traces::query::named::SpendByResponseIdsParams {
-            access: serde_json::from_value::<ReadAccessParams>(serde_json::json!({
-                "all_teams": 0, "user_id": user, "team_ids": teams,
-                "api_key_hash": legacy_key.unwrap_or_default(),
-            }))?,
-            response_ids: vec!["shared-response".into()],
-            request_ids: Vec::new(),
-            trace_ids: Vec::new(),
-            start_ms: timestamp / 1_000_000 - 1,
-            end_ms: timestamp / 1_000_000 + 1,
-        });
-    let spend =
-        litellm_storage_clickhouse::fetch::<SpendByResponseIds>(&database.client, &reader, &params)
-            .await?;
+    let spend = traces(&database, &reader)
+        .calls(
+            &owned(user, &teams),
+            &CallQuery {
+                window: timestamp / 1_000_000 - 1..timestamp / 1_000_000 + 1,
+                response_ids: vec!["shared-response".into()],
+                request_ids: Vec::new(),
+                trace_ids: Vec::new(),
+                after: None,
+                limit: 10,
+            },
+        )
+        .await?;
     let actual: std::collections::BTreeSet<_> =
-        spend.iter().map(|row| row.0.request_id.as_str()).collect();
+        spend.iter().map(|row| row.request_id.as_str()).collect();
     let expected: std::collections::BTreeSet<_> = expected.into_iter().collect();
     assert_eq!(actual, expected);
     let scope = QueryScope::Owned {
@@ -1981,77 +1918,69 @@ async fn rollup_cost_completeness_preserves_missing_ids_and_fails_closed_for_his
          VALUES ('team', 'export', 'historical', fromUnixTimestamp64Nano({timestamp}), fromUnixTimestamp64Nano({timestamp}), 2, ['response', 'non-llm-id'])"
     )).await?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
-    let params = litellm_traces_clickhouse::query::named::ListTracesParams::from(
-        litellm_traces::query::named::ListTracesParams {
-            access: litellm_traces::query::named::ReadAccessParams {
-                all_teams: false,
-                user_id: "".into(),
-                team_ids: vec!["team".into()],
-            },
-            start_ms: timestamp / 1_000_000 - 1,
-            end_ms: timestamp / 1_000_000 + 1,
-            cursor_ms: 0,
-            cursor_trace_id: "".into(),
-            limit: 10,
-        },
-    );
     let reader = Connection::reader(&database.url, "trace_test")?;
-    let listed = litellm_storage_clickhouse::fetch::<
-        litellm_traces_clickhouse::query::named::ListTraces,
-    >(&database.client, &reader, &params)
+    let window = timestamp / 1_000_000 - 1..timestamp / 1_000_000 + 1;
+    let listed = list_runs(
+        &database,
+        &reader,
+        &owned("", &["team"]),
+        window.clone(),
+        None,
+        10,
+    )
     .await?;
+    let listed = listed["data"].as_array().ok_or("missing runs")?;
     assert_eq!(listed.len(), 4);
-    let owned_params = litellm_traces_clickhouse::query::named::ListTracesParams::from(
-        litellm_traces::query::named::ListTracesParams {
-            access: litellm_traces::query::named::ReadAccessParams {
-                user_id: "owner".into(),
-                team_ids: vec![],
-                all_teams: false,
-            },
-            ..params.0
-        },
-    );
-    let owned = litellm_storage_clickhouse::fetch::<
-        litellm_traces_clickhouse::query::named::ListTraces,
-    >(&database.client, &reader, &owned_params)
-    .await?;
-    assert_eq!(owned.len(), 2);
-    assert!(
-        owned
-            .iter()
-            .all(|row| ["complete", "missing"].contains(&row.0.trace_id.as_str()))
-    );
+    let owner = list_runs(&database, &reader, &owned("owner", &[]), window, None, 10).await?;
+    let owner: std::collections::BTreeSet<_> = owner["data"]
+        .as_array()
+        .ok_or("missing owned runs")?
+        .iter()
+        .filter_map(|row| row["trace_id"].as_str())
+        .collect();
+    assert_eq!(owner, ["complete", "missing"].into());
     for row in listed {
-        match row.0.trace_id.as_str() {
+        match row["trace_id"].as_str().ok_or("missing trace id")? {
             "complete" => {
-                assert_eq!(row.0.user_id, "owner");
-                assert_eq!(row.0.request_ids, ["response"]);
-                assert_eq!(row.0.llm_calls, 2);
+                assert_eq!(row["user_id"], "owner");
+                assert_eq!(row["llm_calls"], 2);
             }
-            "missing" | "historical" => assert!(row.0.request_ids.iter().any(String::is_empty)),
-            "mixed" => assert!(row.0.user_id.is_empty()),
+            "missing" | "historical" => {}
+            "mixed" => assert_eq!(row["user_id"], ""),
             id => panic!("unexpected trace {id}"),
         }
     }
+    let completeness = read_json(
+        &database,
+        "SELECT TraceId AS trace, sum(IdentifiedLlmCount) = sum(LlmCount) AS complete, \
+         arraySort(groupArrayArray(RequestIds)) AS ids \
+         FROM trace_test.agent_traces_by_key GROUP BY TraceId ORDER BY TraceId",
+    )
+    .await?;
+    assert_eq!(
+        completeness["data"],
+        serde_json::json!([
+            {"trace": "complete", "complete": 1, "ids": ["response", "response"]},
+            {"trace": "historical", "complete": 0, "ids": ["non-llm-id", "response"]},
+            {"trace": "missing", "complete": 0, "ids": ["", "extra-id", "response"]},
+            {"trace": "mixed", "complete": 1, "ids": ["mine", "other"]},
+        ])
+    );
     assert_eq!(mutation_rows(&database).await?, initial_mutations);
     Ok(())
 }
 
 #[rstest]
-#[case::admin(1, "", vec![], "own answer")]
-#[case::user(0, "owner", vec![], "own answer")]
-#[case::team(0, "", vec!["alpha"], "own answer")]
-#[case::no_identity(0, "", vec![], "")]
+#[case::admin(QueryScope::All, Some("own answer"))]
+#[case::user(owned("owner", &[]), Some("own answer"))]
+#[case::team(owned("", &["alpha"]), Some("own answer"))]
+#[case::no_identity(owned("", &[]), None)]
 #[tokio::test]
 async fn agent_final_answer_preserves_visibility_and_trace_ownership(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
-    #[case] all_teams: u8,
-    #[case] user: &str,
-    #[case] teams: Vec<&str>,
-    #[case] expected: &str,
+    #[case] access: QueryScope,
+    #[case] expected: Option<&str>,
 ) -> TestResult {
-    use litellm_traces_clickhouse::query::named::{ReadAccessParams, SpanDetail, SpanDetailParams};
-
     let database = database?;
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
@@ -2098,28 +2027,21 @@ async fn agent_final_answer_preserves_visibility_and_trace_ownership(
     .collect::<Result<Vec<_>, _>>()?;
     insert_rows(&database, "otel_traces", rows).await?;
     let reader = Connection::reader(&database.url, "trace_test")?;
-    let details = litellm_storage_clickhouse::fetch::<SpanDetail>(
-        &database.client,
-        &reader,
-        &SpanDetailParams {
-            access: ReadAccessParams {
-                all_teams: all_teams == 1,
-                user_id: user.into(),
-                team_ids: teams.into_iter().map(str::to_owned).collect(),
-            },
-            trace_id: "shared".into(),
-            trace_ref: String::new(),
-            span_id: "root".into(),
-        },
-    )
-    .await?;
-    if expected.is_empty() {
-        assert!(details.is_empty());
-    } else {
-        assert_eq!(details.len(), 1);
-        assert_eq!(details[0].input, "prompt");
-        assert_eq!(details[0].output, expected);
-    }
+    let detail = TraceReader::new(usize::MAX)
+        .get_span(
+            &traces(&database, &reader),
+            &access,
+            "shared",
+            "root",
+            &trace_ref("alpha", "one", "shared"),
+        )
+        .await?;
+    assert_eq!(
+        detail
+            .as_ref()
+            .map(|detail| (detail.input.as_str(), detail.output.as_str())),
+        expected.map(|output| ("prompt", output))
+    );
     Ok(())
 }
 

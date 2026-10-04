@@ -57,8 +57,9 @@ pub(super) fn boolean<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool
 
 #[cfg(test)]
 mod tests {
-    use crate::query::named::SpanErrorRow;
     use rstest::rstest;
+
+    use crate::query::named::SpanTextRow;
 
     #[rstest]
     #[case::flag_zero(serde_json::json!(0), true)]
@@ -117,8 +118,8 @@ mod tests {
         #[case] value: serde_json::Value,
         #[case] expected: Option<u64>,
     ) {
-        let row = serde_json::from_value::<SpanErrorRow>(serde_json::json!({
-            "span_id": "span", "message": "error", "total_chars": value, "version": "hash"
+        let row = serde_json::from_value::<SpanTextRow>(serde_json::json!({
+            "text": "error", "total_chars": value, "version": "hash"
         }));
         match expected {
             Some(value) => assert_eq!(row.unwrap().0.total_chars, value),

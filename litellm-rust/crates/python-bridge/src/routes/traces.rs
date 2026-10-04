@@ -1,8 +1,11 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use litellm_http::ClientVariant;
-use litellm_traces::{QueryScope, ReadQuery, Tenant, query::named::ReadAccessParams};
-use litellm_traces_cache::{ReadError, TraceReader};
+use litellm_traces::{
+    QueryScope, ReadQuery, Tenant,
+    search::{RunField, RunFilter, RunSearch},
+};
+use litellm_traces_cache::{PageRequest, ReadError, TraceReader};
 use litellm_traces_clickhouse::{
     ClickHouseTraces, Config, Error, InsertTable, Parameter, QueryReaders,
 };
@@ -89,6 +92,14 @@ fn map_read_error(error: ReadError<Error>) -> PyErr {
         error @ ReadError::TooLarge => PyOverflowError::new_err(error.to_string()),
         error @ ReadError::Encode(_) => PyRuntimeError::new_err(error.to_string()),
         ReadError::Store(error) => map_error_ref(&error),
+    }
+}
+
+fn run_filter(start_ms: i64, end_ms: i64, q: &str) -> RunFilter {
+    RunFilter {
+        start_ms,
+        end_ms,
+        search: RunSearch::parse(q),
     }
 }
 
@@ -224,16 +235,79 @@ impl NativeTraceStorage {
         )
     }
 
-    #[pyo3(signature = (scope, start_ms, end_ms, cursor, limit))]
+    #[pyo3(signature = (scope, start_ms, end_ms, q, cursor, limit))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one parameter per Python argument"
+    )]
     fn list_traces<'py>(
         &self,
         py: Python<'py>,
-        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: ReadAccessParams,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
         start_ms: i64,
         end_ms: i64,
+        q: &str,
         cursor: Option<String>,
         limit: u32,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let filter = run_filter(start_ms, end_ms, q);
+        let page = PageRequest { cursor, limit };
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().reader().clone();
+        let reader = Arc::clone(&self.reader);
+        crate::execution::run_async(
+            py,
+            async move {
+                let store = ClickHouseTraces::new(client, connection);
+                reader.list_traces(&store, &scope, &filter, &page).await
+            },
+            map_read_error,
+        )
+    }
+
+    fn trace_histogram<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
+        start_ms: i64,
+        end_ms: i64,
+        q: &str,
+        buckets: u32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let filter = run_filter(start_ms, end_ms, q);
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().reader().clone();
+        let reader = Arc::clone(&self.reader);
+        crate::execution::run_async(
+            py,
+            async move {
+                let store = ClickHouseTraces::new(client, connection);
+                reader.histogram(&store, &scope, &filter, buckets).await
+            },
+            map_read_error,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one parameter per Python argument"
+    )]
+    fn run_values<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
+        start_ms: i64,
+        end_ms: i64,
+        q: &str,
+        field: &str,
+        contains: &str,
+        limit: u32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let field = field
+            .parse::<RunField>()
+            .map_err(|_| PyValueError::new_err(format!("unknown run field {field}")))?;
+        let filter = run_filter(start_ms, end_ms, q);
+        let contains = contains.to_owned();
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
         let reader = Arc::clone(&self.reader);
@@ -242,7 +316,7 @@ impl NativeTraceStorage {
             async move {
                 let store = ClickHouseTraces::new(client, connection);
                 reader
-                    .list_traces(&store, &scope, start_ms, end_ms, cursor.as_deref(), limit)
+                    .values(&store, &scope, &filter, field, &contains, limit)
                     .await
             },
             map_read_error,
@@ -254,7 +328,7 @@ impl NativeTraceStorage {
         &self,
         py: Python<'py>,
         trace_id: String,
-        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: ReadAccessParams,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
         trace_ref: String,
         cursor: Option<String>,
         page_size: Option<u32>,
@@ -294,7 +368,7 @@ impl NativeTraceStorage {
         py: Python<'py>,
         trace_id: String,
         span_id: String,
-        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: ReadAccessParams,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
         trace_ref: String,
     ) -> PyResult<Bound<'py, PyAny>> {
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
@@ -318,7 +392,7 @@ impl NativeTraceStorage {
         py: Python<'py>,
         trace_id: String,
         span_id: String,
-        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: ReadAccessParams,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
         trace_ref: String,
         cursor: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
@@ -438,8 +512,9 @@ pub fn trace_span_rows<'py>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     #[rstest]
     #[case::row(Error::InvalidRow, "ValueError")]

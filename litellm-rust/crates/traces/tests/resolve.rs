@@ -1,15 +1,14 @@
 use litellm_traces::{
-    AgentNode, SpanStatus, iso_time, listed_summary,
-    query::named::{ListTracesRow, SpendByResponseIdsRow, TraceSpansRow},
-    resolve_trace,
+    AgentNode, SpanStatus, iso_time, listed_summary, resolve_trace,
+    store::{CallRow, RunRow, SpanRow},
 };
 use rstest::rstest;
 
 const T0: i64 = 1_790_742_989_000_000_000;
 const MS: i64 = 1_000_000;
 
-fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> TraceSpansRow {
-    TraceSpansRow {
+fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> SpanRow {
+    SpanRow {
         trace_id: String::new(),
         span_id: span_id.into(),
         parent_span_id: parent.into(),
@@ -38,14 +37,14 @@ fn row(span_id: &str, parent: &str, name: &str, kind: &str, agent: &str) -> Trac
     }
 }
 
-fn at(mut span: TraceSpansRow, start_ms: i64, duration_ms: u64) -> TraceSpansRow {
+fn at(mut span: SpanRow, start_ms: i64, duration_ms: u64) -> SpanRow {
     span.start_ns = T0 + start_ms * MS;
     span.duration_ns = duration_ms * MS as u64;
     span
 }
 
-fn llm(span_id: &str, parent: &str, agent: &str, response_id: &str) -> TraceSpansRow {
-    TraceSpansRow {
+fn llm(span_id: &str, parent: &str, agent: &str, response_id: &str) -> SpanRow {
+    SpanRow {
         model: "claude-sonnet-4-5".into(),
         input_tokens: 100,
         output_tokens: 20,
@@ -55,7 +54,7 @@ fn llm(span_id: &str, parent: &str, agent: &str, response_id: &str) -> TraceSpan
     }
 }
 
-fn owned(mut span: TraceSpansRow, team: &str, user: &str, key: &str) -> TraceSpansRow {
+fn owned(mut span: SpanRow, team: &str, user: &str, key: &str) -> SpanRow {
     span.team_id = team.into();
     span.user_id = user.into();
     span.api_key_hash = key.into();
@@ -69,8 +68,8 @@ fn spend(
     user: &str,
     key: &str,
     cost: f64,
-) -> SpendByResponseIdsRow {
-    SpendByResponseIdsRow {
+) -> CallRow {
+    CallRow {
         request_id: request_id.into(),
         response_id: response_id.into(),
         litellm_call_id: String::new(),
@@ -86,7 +85,7 @@ fn spend(
 }
 
 /// root agent -> llm, task tool -> researcher subagent (N times) -> llm + search tool + middleware.
-fn deep_agent(researchers: usize) -> Vec<TraceSpansRow> {
+fn deep_agent(researchers: usize) -> Vec<SpanRow> {
     let mut rows = vec![
         at(
             row(
@@ -147,7 +146,7 @@ fn deep_agent(researchers: usize) -> Vec<TraceSpansRow> {
     rows
 }
 
-fn agents(rows: &[TraceSpansRow]) -> Vec<AgentNode> {
+fn agents(rows: &[SpanRow]) -> Vec<AgentNode> {
     resolve_trace("t", "", rows, &[])
         .map(|trace| trace.agents)
         .unwrap_or_default()
@@ -259,7 +258,7 @@ fn parent_agent_skips_same_name_ancestors_and_stops_at_cycles() {
 
 #[rstest]
 fn unnamed_calls_belong_to_the_nearest_agent_and_wrappers_are_not_agents() {
-    let crew = TraceSpansRow {
+    let crew = SpanRow {
         wrapper_candidate: true,
         ..row("crew", "", "crew.kickoff", "agent", "")
     };
@@ -285,7 +284,7 @@ fn unnamed_calls_belong_to_the_nearest_agent_and_wrappers_are_not_agents() {
 
 #[rstest]
 fn named_wrapper_inside_the_same_agent_is_a_chain() {
-    let wrapper = TraceSpansRow {
+    let wrapper = SpanRow {
         wrapper_candidate: true,
         ..row("w", "a", "researcher.run", "agent", "researcher")
     };
@@ -315,7 +314,7 @@ fn agents_named_only_by_their_tools_are_agents() {
 
 #[rstest]
 fn overlapping_tool_spans_count_one_call() {
-    let tool = |span_id: &str| TraceSpansRow {
+    let tool = |span_id: &str| SpanRow {
         tool_call_id: "call-1".into(),
         ..row(span_id, "a", "search", "tool", "")
     };
@@ -336,7 +335,7 @@ fn overlapping_tool_spans_count_one_call() {
 
 #[rstest]
 fn names_and_frameworks_are_sorted_and_distinct() {
-    let framed = |span: TraceSpansRow, framework: &str| TraceSpansRow {
+    let framed = |span: SpanRow, framework: &str| SpanRow {
         framework: framework.into(),
         ..span
     };
@@ -617,7 +616,7 @@ fn sibling_transport_does_not_lose_model_call_spend(
     #[case] expected: Option<f64>,
 ) {
     let call = owned(
-        TraceSpansRow {
+        SpanRow {
             trace_id: "trace".into(),
             call_keys: vec![litellm_traces::CallKey::ProviderResponse(
                 "chatcmpl-1".into(),
@@ -654,7 +653,7 @@ fn sibling_transport_does_not_lose_model_call_spend(
         }))
         .collect();
     let logs: Vec<_> = std::iter::once(spend("chatcmpl-1", "chatcmpl-1", "team", "", "key", 0.5))
-        .chain(unrelated_spend.then(|| SpendByResponseIdsRow {
+        .chain(unrelated_spend.then(|| CallRow {
             trace_id: "trace".into(),
             span_id: "tool-http".into(),
             ..spend("unrelated", "unrelated", "team", "", "key", 0.75)
@@ -714,7 +713,7 @@ fn gateway_attempt_identifiers_must_match_one_spend_row(
         ),
         owned(llm("call", "agent", "agent", ""), "team", "", "key"),
         owned(
-            TraceSpansRow {
+            SpanRow {
                 trace_id: "trace".into(),
                 call_keys: keys,
                 call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
@@ -726,13 +725,13 @@ fn gateway_attempt_identifiers_must_match_one_spend_row(
         ),
     ];
     let logs = [
-        SpendByResponseIdsRow {
+        CallRow {
             litellm_call_id: "call-a".into(),
             trace_id: "trace".into(),
             span_id: "attempt".into(),
             ..spend("request-a", "response-a", "team", "", "key", 0.25)
         },
-        SpendByResponseIdsRow {
+        CallRow {
             litellm_call_id: "call-b".into(),
             trace_id: "trace".into(),
             span_id: "other-attempt".into(),
@@ -781,7 +780,7 @@ fn gateway_id_miss_only_vetoes_rows_that_carry_a_call_id(
 
 #[rstest]
 fn listed_summary_keeps_rollup_counts_with_unknown_cost() {
-    let summary = listed_summary(&ListTracesRow {
+    let summary = listed_summary(&RunRow {
         trace_id: "t1".into(),
         trace_ref: "ref".into(),
         team_id: "team".into(),
@@ -804,7 +803,6 @@ fn listed_summary_keeps_rollup_counts_with_unknown_cost() {
         output_tokens: 2_620,
         models: vec!["claude-sonnet-4-5".into()],
         error_count: 1,
-        request_ids: Vec::new(),
     });
     assert_eq!(summary.spend, None);
     assert_eq!(summary.status, SpanStatus::Ok);
@@ -834,7 +832,7 @@ fn complete_wrapper_reconciles_ambiguous_response(
     #[case] exact_id: &str,
     #[case] expected: Option<f64>,
 ) {
-    let wrapper = TraceSpansRow {
+    let wrapper = SpanRow {
         call_keys: vec![litellm_traces::CallKey::LiteLlmRequest(exact_id.to_owned())],
         call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
         ..owned(llm("wrapper", "", "agent", ""), "team", "", "key")
@@ -874,7 +872,7 @@ fn complete_correlation_requires_known_finite_cost(
         "",
         "key",
     )];
-    let logged = SpendByResponseIdsRow {
+    let logged = CallRow {
         spend: cost,
         ..spend("request", "response", "team", "", "key", 0.25)
     };
@@ -896,7 +894,7 @@ fn transports_preserve_retry_spend_without_counting_unrelated_cached_rows(
 ) {
     let transport = |id: &str| {
         owned(
-            TraceSpansRow {
+            SpanRow {
                 trace_id: "trace".into(),
                 call_keys: vec!["transport:".parse().unwrap()],
                 call_evidence: Some(if id == "first" {
@@ -922,12 +920,12 @@ fn transports_preserve_retry_spend_without_counting_unrelated_cached_rows(
         transport("second"),
     ];
     let logs = [
-        SpendByResponseIdsRow {
+        CallRow {
             trace_id: "trace".into(),
             span_id: "first".into(),
             ..spend("retry", "retry-response", "team", "", "key", 0.25)
         },
-        SpendByResponseIdsRow {
+        CallRow {
             trace_id: "trace".into(),
             span_id: "second".into(),
             ..spend("final", "final-response", "team", "", "key", 0.5)
@@ -945,7 +943,7 @@ fn transports_preserve_retry_spend_without_counting_unrelated_cached_rows(
 #[case::ambiguous_response(true)]
 fn multiple_identifiers_for_one_request_count_its_spend_once(#[case] cached_row: bool) {
     let rows = [owned(
-        TraceSpansRow {
+        SpanRow {
             call_keys: vec![
                 "provider_response:response".parse().unwrap(),
                 "litellm_request:request".parse().unwrap(),
@@ -989,7 +987,7 @@ fn trace_cost_requires_a_finite_total(#[case] cost: f64, #[case] expected: Optio
 fn complete_wrapper_accounts_for_retries_missing_from_the_call_span() {
     let rows = [
         owned(
-            TraceSpansRow {
+            SpanRow {
                 call_keys: vec![
                     "litellm_request:retry".parse().unwrap(),
                     "litellm_request:final".parse().unwrap(),
@@ -1027,7 +1025,7 @@ fn legacy_request_id_fallback_respects_recorded_evidence(
     #[case] expected: Option<f64>,
 ) {
     let span = owned(
-        TraceSpansRow {
+        SpanRow {
             call_evidence: evidence,
             ..llm("call", "", "agent", "response")
         },
@@ -1036,7 +1034,7 @@ fn legacy_request_id_fallback_respects_recorded_evidence(
         "key",
     );
     let stored = serde_json::to_value(span).unwrap();
-    let decoded: TraceSpansRow = serde_json::from_value(stored).unwrap();
+    let decoded: SpanRow = serde_json::from_value(stored).unwrap();
     let logs = [spend("request", "response", "team", "", "key", 0.25)];
     let trace = resolve_trace("trace", "ref", &[decoded], &logs).unwrap();
     assert_eq!(trace.summary.spend, expected);
@@ -1055,7 +1053,7 @@ fn malformed_stored_span_fields_are_rejected(
 ) {
     let mut encoded = serde_json::to_value(row("span", "", "agent", "agent", "agent")).unwrap();
     encoded[field] = value;
-    assert!(serde_json::from_value::<TraceSpansRow>(encoded).is_err());
+    assert!(serde_json::from_value::<SpanRow>(encoded).is_err());
 }
 
 #[rstest]
@@ -1064,7 +1062,7 @@ fn malformed_stored_span_fields_are_rejected(
 fn spend_lookup_fetches_recorded_keys_before_resolving_completeness(
     #[case] evidence: litellm_traces::CallEvidenceKind,
 ) {
-    let recorded = TraceSpansRow {
+    let recorded = SpanRow {
         trace_id: "trace".to_owned(),
         call_keys: vec![
             litellm_traces::CallKey::ProviderResponse("response".to_owned()),
@@ -1084,12 +1082,12 @@ fn spend_lookup_fetches_recorded_keys_before_resolving_completeness(
 #[case::parent_first(false)]
 #[case::child_first(true)]
 fn overlapping_model_spans_count_leaf_usage_and_keep_agent_ownership(#[case] reverse: bool) {
-    let root = TraceSpansRow {
+    let root = SpanRow {
         input_tokens: 900,
         output_tokens: 800,
         ..row("root", "", "planner", "agent", "planner")
     };
-    let wrapper = TraceSpansRow {
+    let wrapper = SpanRow {
         input_tokens: 700,
         output_tokens: 600,
         ..llm("wrapper", "root", "", "")
@@ -1116,20 +1114,20 @@ fn overlapping_model_spans_count_leaf_usage_and_keep_agent_ownership(#[case] rev
 fn empty_root_preview_uses_the_earliest_agent_or_model_input() {
     let rows = [
         at(
-            TraceSpansRow {
+            SpanRow {
                 input_preview: "later input".into(),
                 ..llm("later", "root", "", "")
             },
             20,
             1,
         ),
-        TraceSpansRow {
+        SpanRow {
             input_preview: String::new(),
             ..row("root", "", "planner", "agent", "planner")
         },
         at(row("tool", "root", "search", "tool", ""), 1, 1),
         at(
-            TraceSpansRow {
+            SpanRow {
                 input_preview: "earlier input".into(),
                 ..llm("earlier", "root", "", "")
             },
@@ -1148,11 +1146,11 @@ fn empty_root_preview_uses_the_earliest_agent_or_model_input() {
 #[case::oldest_first(false)]
 #[case::newest_first(true)]
 fn repeated_request_ids_preserve_storage_identity(#[case] reverse: bool) {
-    let first = SpendByResponseIdsRow {
+    let first = CallRow {
         start_ms: 100,
         ..spend("same", "response", "team", "", "key", 0.25)
     };
-    let second = SpendByResponseIdsRow {
+    let second = CallRow {
         start_ms: 200,
         ..spend("same", "response", "team", "", "key", 0.5)
     };
@@ -1177,7 +1175,7 @@ fn repeated_request_ids_preserve_storage_identity(#[case] reverse: bool) {
 #[case::transport(true)]
 fn independent_key_disambiguates_repeated_request_ids(#[case] transport: bool) {
     let rows = [owned(
-        TraceSpansRow {
+        SpanRow {
             trace_id: "trace".into(),
             call_keys: vec![
                 litellm_traces::CallKey::ProviderResponse("response".into()),
@@ -1194,14 +1192,14 @@ fn independent_key_disambiguates_repeated_request_ids(#[case] transport: bool) {
         "key",
     )];
     let logs = [
-        SpendByResponseIdsRow {
+        CallRow {
             start_ms: 100,
             litellm_call_id: "gateway".into(),
             trace_id: "trace".into(),
             span_id: "call".into(),
             ..spend("same", "response", "team", "", "key", 0.25)
         },
-        SpendByResponseIdsRow {
+        CallRow {
             start_ms: 200,
             litellm_call_id: "other".into(),
             ..spend("same", "response", "team", "", "key", 0.5)
@@ -1229,11 +1227,11 @@ fn totals_deduplicate_only_equal_storage_identities(
         ),
     ];
     let logs = [
-        SpendByResponseIdsRow {
+        CallRow {
             start_ms: 100,
             ..spend("same", "a", "team", "", "key", 0.25)
         },
-        SpendByResponseIdsRow {
+        CallRow {
             start_ms: if duplicate { 100 } else { 200 },
             ..spend(
                 "same",
@@ -1258,7 +1256,7 @@ fn totals_deduplicate_only_equal_storage_identities(
 fn conflicting_keys_cannot_agree_on_request_id_alone() {
     let rows = [
         owned(
-            TraceSpansRow {
+            SpanRow {
                 call_keys: vec![litellm_traces::CallKey::LiteLlmRequest("gateway".into())],
                 ..llm("wrapper", "", "agent", "")
             },
@@ -1274,11 +1272,11 @@ fn conflicting_keys_cannot_agree_on_request_id_alone() {
         ),
     ];
     let logs = [
-        SpendByResponseIdsRow {
+        CallRow {
             start_ms: 100,
             ..spend("same", "response", "team", "", "key", 0.25)
         },
-        SpendByResponseIdsRow {
+        CallRow {
             start_ms: 200,
             litellm_call_id: "gateway".into(),
             ..spend("same", "other", "team", "", "key", 0.5)
@@ -1307,7 +1305,7 @@ fn gateway_lookup_respects_legacy_fallback_and_ownership(
     #[case] expected: Option<f64>,
 ) {
     let rows = [owned(
-        TraceSpansRow {
+        SpanRow {
             call_keys: vec![litellm_traces::CallKey::LiteLlmRequest("gateway".into())],
             ..llm("call", "", "agent", "")
         },
@@ -1315,7 +1313,7 @@ fn gateway_lookup_respects_legacy_fallback_and_ownership(
         "",
         "key",
     )];
-    let logs = [SpendByResponseIdsRow {
+    let logs = [CallRow {
         litellm_call_id: call_id.into(),
         ..spend(request_id, "provider", team, "", key, 0.25)
     }];

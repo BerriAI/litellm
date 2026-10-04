@@ -1,5 +1,6 @@
-use super::{ObservationType, RoleEvidence, SpanContext, SpanFacts, attr};
 use serde_json::Value;
+
+use super::{ObservationType, RoleEvidence, SpanContext, SpanFacts, attr};
 
 pub(super) fn adjust(context: &SpanContext<'_>, facts: SpanFacts) -> SpanFacts {
     let agent = context

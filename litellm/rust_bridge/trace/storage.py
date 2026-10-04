@@ -32,11 +32,12 @@ from litellm.rust_bridge.trace.queries import (
 from .generated.models import TraceQueryHelp
 from .generated.types import (
     QueryScope,
+    RunValues,
     SpanDetail,
     SpanErrorPage,
     Trace,
+    TraceHistogram,
     TracePage,
-    TraceScope,
 )
 from .queries import TraceSQLResponse
 
@@ -64,17 +65,25 @@ class NativeStore(Protocol):
     def ingest(self, payload: bytes, content_type: str | None, tenant: Mapping[str, str]) -> Awaitable[int]: ...
 
     def list_traces(
-        self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
+        self, scope: QueryScope, start_ms: int, end_ms: int, q: str, cursor: str | None, limit: int
+    ) -> Awaitable[JsonValue]: ...
+
+    def trace_histogram(
+        self, scope: QueryScope, start_ms: int, end_ms: int, q: str, buckets: int
+    ) -> Awaitable[JsonValue]: ...
+
+    def run_values(
+        self, scope: QueryScope, start_ms: int, end_ms: int, q: str, field: str, contains: str, limit: int
     ) -> Awaitable[JsonValue]: ...
 
     def get_trace(
-        self, trace_id: str, scope: TraceScope, trace_ref: str, cursor: str | None = None, page_size: int | None = None
+        self, trace_id: str, scope: QueryScope, trace_ref: str, cursor: str | None = None, page_size: int | None = None
     ) -> Awaitable[JsonValue]: ...
 
-    def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str) -> Awaitable[JsonValue]: ...
+    def get_span(self, trace_id: str, span_id: str, scope: QueryScope, trace_ref: str) -> Awaitable[JsonValue]: ...
 
     def get_span_error(
-        self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str, cursor: str | None
+        self, trace_id: str, span_id: str, scope: QueryScope, trace_ref: str, cursor: str | None
     ) -> Awaitable[JsonValue]: ...
 
     def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Awaitable[str]: ...
@@ -102,6 +111,8 @@ QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | float | list[str]])
 _SQL_RESPONSE: Final = TypeAdapter(TraceSQLResponse)
 _HELP_RESPONSE: Final = TypeAdapter(TraceQueryHelp)
 _TRACE_PAGE: Final = TypeAdapter(TracePage)
+_TRACE_HISTOGRAM: Final = TypeAdapter(TraceHistogram)
+_RUN_VALUES: Final = TypeAdapter(RunValues)
 _TRACE: Final[TypeAdapter[Trace | None]] = TypeAdapter(Trace | None)
 _SPAN_DETAIL: Final[TypeAdapter[SpanDetail | None]] = TypeAdapter(SpanDetail | None)
 _SPAN_ERROR_PAGE: Final[TypeAdapter[SpanErrorPage | None]] = TypeAdapter(SpanErrorPage | None)
@@ -182,19 +193,32 @@ class ClickHouseStorage:
 
     async def list_traces(
         self,
-        scope: TraceScope,
+        scope: QueryScope,
         start_ms: int,
         end_ms: int,
+        q: str = "",
         cursor: str | None = None,
         limit: int = AGENT_TRACING_LIST_PAGE_SIZE,
     ) -> TracePage:
-        result: Final = await self._native.list_traces(scope, start_ms, end_ms, cursor, limit)
+        result: Final = await self._native.list_traces(scope, start_ms, end_ms, q, cursor, limit)
         return _validate_query_response(_TRACE_PAGE, result)
+
+    async def trace_histogram(
+        self, scope: QueryScope, start_ms: int, end_ms: int, q: str, buckets: int
+    ) -> TraceHistogram:
+        result: Final = await self._native.trace_histogram(scope, start_ms, end_ms, q, buckets)
+        return _validate_query_response(_TRACE_HISTOGRAM, result)
+
+    async def run_values(
+        self, scope: QueryScope, start_ms: int, end_ms: int, q: str, field: str, contains: str, limit: int
+    ) -> RunValues:
+        result: Final = await self._native.run_values(scope, start_ms, end_ms, q, field, contains, limit)
+        return _validate_query_response(_RUN_VALUES, result)
 
     async def get_trace(
         self,
         trace_id: str,
-        scope: TraceScope,
+        scope: QueryScope,
         trace_ref: str = "",
         cursor: str | None = None,
         page_size: int | None = None,
@@ -202,12 +226,12 @@ class ClickHouseStorage:
         result: Final = await self._native.get_trace(trace_id, scope, trace_ref, cursor, page_size)
         return _validate_query_response(_TRACE, result)
 
-    async def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "") -> SpanDetail | None:
+    async def get_span(self, trace_id: str, span_id: str, scope: QueryScope, trace_ref: str = "") -> SpanDetail | None:
         result: Final = await self._native.get_span(trace_id, span_id, scope, trace_ref)
         return _validate_query_response(_SPAN_DETAIL, result)
 
     async def get_span_error(
-        self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str = "", cursor: str | None = None
+        self, trace_id: str, span_id: str, scope: QueryScope, trace_ref: str = "", cursor: str | None = None
     ) -> SpanErrorPage | None:
         result: Final = await self._native.get_span_error(trace_id, span_id, scope, trace_ref, cursor)
         return _validate_query_response(_SPAN_ERROR_PAGE, result)

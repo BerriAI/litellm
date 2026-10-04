@@ -5,9 +5,8 @@ use litellm_http::Client;
 use litellm_storage_clickhouse::READ_LIMITS;
 use litellm_traces::QueryScope;
 use moka::future::Cache;
-use strum::IntoEnumIterator;
-
 use sha2::{Digest, Sha256};
+use strum::IntoEnumIterator;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::{Connection, Error, TraceTable};
@@ -126,7 +125,7 @@ impl QueryReaders {
         )
         .await?;
         for table in TraceTable::iter() {
-            let predicate = predicate(scope, table);
+            let predicate = crate::access::predicate(scope, table);
             self.execute(
                 client,
                 format!(
@@ -175,71 +174,10 @@ impl QueryReaders {
     }
 }
 
-fn predicate(scope: &QueryScope, table: TraceTable) -> String {
-    let team = match table {
-        TraceTable::OtelTraces | TraceTable::AgentTracesByKey => "TeamId",
-        TraceTable::SpendLogs => "team_id",
-    };
-    match scope {
-        QueryScope::All => "1".to_owned(),
-        QueryScope::Owned { user_id, team_ids } => {
-            let owner = literal(user_id);
-            let user_clause = match table {
-                TraceTable::OtelTraces => format!("UserId = {owner}"),
-                TraceTable::AgentTracesByKey => format!("UserIds = [{owner}]"),
-                TraceTable::SpendLogs => format!("user = {owner}"),
-            };
-            let teams = team_ids
-                .iter()
-                .map(|value| literal(value))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let team_clause = if team_ids.is_empty() {
-                "0".to_owned()
-            } else {
-                format!("{team} IN ({teams})")
-            };
-            format!("({owner} != '' AND {user_clause}) OR ({team_clause})")
-        }
-    }
-}
-
 fn credential(secret: &str, purpose: &[u8], identity: &[u8]) -> Result<String, Error> {
     let mut mac =
         Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| Error::MissingSecret)?;
     mac.update(purpose);
     mac.update(identity);
     Ok(format!("{:x}", mac.finalize().into_bytes()))
-}
-
-fn literal(value: &str) -> String {
-    format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rstest::rstest;
-
-    #[rstest]
-    #[case::otel(TraceTable::OtelTraces, "TeamId", "UserId = ''")]
-    #[case::agent(TraceTable::AgentTracesByKey, "TeamId", "UserIds = ['']")]
-    #[case::spend(TraceTable::SpendLogs, "team_id", "user = ''")]
-    fn predicates_preserve_scope_and_escape_values(
-        #[case] table: TraceTable,
-        #[case] team: &str,
-        #[case] user: &str,
-    ) {
-        assert_eq!(predicate(&QueryScope::All, table), "1");
-        assert_eq!(
-            predicate(
-                &QueryScope::Owned {
-                    user_id: String::new(),
-                    team_ids: vec!["team'\\".into()]
-                },
-                table
-            ),
-            format!("('' != '' AND {user}) OR ({team} IN ('team\\'\\\\'))")
-        );
-    }
 }

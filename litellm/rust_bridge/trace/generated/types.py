@@ -23,6 +23,13 @@ class OwnedQueryScope(typing_extensions.TypedDict):
 QueryScope: TypeAlias = AllQueryScope | OwnedQueryScope
 
 
+RunField: TypeAlias = Literal["name", "agent", "status", "model", "input", "trace_id"]
+
+
+class RunValues(typing_extensions.TypedDict):
+    values: ReadOnly[tuple[str, ...]]
+
+
 class UIText(typing_extensions.TypedDict):
     text: ReadOnly[str]
     kind: ReadOnly[Literal["text"]]
@@ -77,10 +84,9 @@ SpanType: TypeAlias = Literal[
 ]
 
 
-class TraceScope(typing_extensions.TypedDict):
-    all_teams: ReadOnly[Literal[0, 1]]
-    user_id: ReadOnly[str]
-    team_ids: ReadOnly[tuple[str, ...]]
+class AgentRuns(typing_extensions.TypedDict):
+    agent: ReadOnly[str]
+    runs: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
 
 
 ReadQueryName: TypeAlias = Literal["availability", "agents", "sample", "content", "evidence"]
@@ -149,6 +155,18 @@ class Trace(typing_extensions.TypedDict):
     next_cursor: ReadOnly[NotRequired[str | None]]
 
 
+class HistogramBucket(typing_extensions.TypedDict):
+    start_ms: ReadOnly[Annotated[int, Field(ge=-9223372036854775808, le=9223372036854775807)]]
+    end_ms: ReadOnly[Annotated[int, Field(ge=-9223372036854775808, le=9223372036854775807)]]
+    total: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    failed: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    agents: ReadOnly[tuple[AgentRuns, ...]]
+
+
+class TraceHistogram(typing_extensions.TypedDict):
+    buckets: ReadOnly[tuple[HistogramBucket, ...]]
+
+
 class TracePage(typing_extensions.TypedDict):
     data: ReadOnly[tuple[TraceSummary, ...]]
     next_cursor: ReadOnly[str | None]
@@ -171,4 +189,6 @@ class SpanDetail(typing_extensions.TypedDict):
     attributes: ReadOnly[Mapping[str, str]]
 
 
-TraceWireTypes: TypeAlias = QueryScope | SpanDetail | SpanErrorPage | Trace | TracePage | TraceScope | ReadQueryName
+TraceWireTypes: TypeAlias = (
+    QueryScope | RunField | RunValues | SpanDetail | SpanErrorPage | Trace | TraceHistogram | TracePage | ReadQueryName
+)

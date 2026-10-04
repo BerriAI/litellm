@@ -7,6 +7,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.lens.models import Job, Lens, Scope, Worker
+from litellm.proxy.lens.search import FIELD_VALUES, LensField, LensSearch, like_literal, search_predicate
 
 
 class Database(Protocol):
@@ -28,6 +29,28 @@ class LensRepository:
     async def lenses(self) -> tuple[Lens, ...]:
         rows: Final = _ROWS.validate_python(await self.db.query_raw('SELECT data FROM "LiteLLM_Lens" ORDER BY id'))
         return tuple(Lens.model_validate(row.data) for row in rows)
+
+    async def search(self, search: LensSearch) -> tuple[Lens, ...]:
+        where, args = search_predicate(search)
+        rows: Final = _ROWS.validate_python(
+            await self.db.query_raw(
+                f"""SELECT data FROM "LiteLLM_Lens" WHERE {where}
+                ORDER BY (data->>'created_at')::timestamptz DESC, id""",
+                *args,
+            )
+        )
+        return tuple(Lens.model_validate(row.data) for row in rows)
+
+    async def values(self, field: LensField, contains: str, limit: int) -> tuple[str, ...]:
+        rows: Final = _ROWS.validate_python(
+            await self.db.query_raw(
+                f"""SELECT v AS data FROM "LiteLLM_Lens", unnest(array_remove({FIELD_VALUES[field]}, '')) AS v
+                WHERE v ILIKE $1 GROUP BY v ORDER BY count(*) DESC, v LIMIT $2""",
+                f"%{like_literal(contains)}%",
+                limit,
+            )
+        )
+        return tuple(TypeAdapter(str).validate_python(row.data) for row in rows)
 
     async def get(self, lens_id: str) -> Lens | None:
         rows: Final = _ROWS.validate_python(

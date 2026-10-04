@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Distinct values of one run field, most common first.",
+  "properties": {
+    "values": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "values"
+  ],
+  "title": "RunValues",
+  "type": "object"
+}

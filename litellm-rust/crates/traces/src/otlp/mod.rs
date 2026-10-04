@@ -3,10 +3,10 @@ mod limits;
 mod span;
 mod wire;
 
-pub use limits::DecodeLimits;
-
-use serde::Serialize;
 use std::collections::BTreeMap;
+
+pub use limits::DecodeLimits;
+use serde::Serialize;
 
 use crate::{Error, NormalizedSpan, Shared};
 

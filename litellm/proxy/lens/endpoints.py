@@ -46,6 +46,7 @@ from litellm.proxy.lens.models import (
 )
 from litellm.proxy.lens.release import PROTOCOL_VERSION, release_tag, worker_image
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
+from litellm.proxy.lens.search import LensField, parse_search
 from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
     add_step,
@@ -197,10 +198,21 @@ async def validate_workers(settings: LensSettings, scope: Scope) -> None:
 
 
 @router.get("", response_model=LensList)
-async def list_lenses(auth: Auth, storage: StorageDep) -> LensList:
+async def list_lenses(
+    auth: Auth,
+    storage: StorageDep,
+    q: Annotated[
+        str,
+        Query(
+            max_length=1000,
+            description="Free text and key:value filters, e.g. `status:failed -schedule:paused`. "
+            "Keys: name, agent, status, schedule. `*` globs and a leading `-` negates",
+        ),
+    ] = "",
+) -> LensList:
     scope: Final = user_scope(auth)
     return LensList(
-        lenses=tuple(e for e in await repository().lenses() if can_access(scope, e.scope)),
+        lenses=tuple(e for e in await repository().search(parse_search(q)) if can_access(scope, e.scope)),
         workers=tuple(w for w in await repository().workers() if can_access(scope, w.scope)),
         tracing_enabled=storage is not None,
     )
@@ -233,6 +245,17 @@ async def activity_available(auth: Auth, storage: StorageDep) -> ActivityAvailab
 async def list_agents(auth: Auth, storage: StorageDep) -> tuple[str, ...]:
     scope: Final = user_scope(auth)
     return await source_reader(storage).agents(scope) if storage is not None else ()
+
+
+@router.get("/values/{field}", response_model=tuple[str, ...])
+async def list_lens_values(
+    field: LensField,
+    auth: Auth,
+    contains: Annotated[str, Query(max_length=200)] = "",
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> tuple[str, ...]:
+    user_scope(auth)
+    return await repository().values(field, contains, limit)
 
 
 def watching(lens: Lens) -> Lens:

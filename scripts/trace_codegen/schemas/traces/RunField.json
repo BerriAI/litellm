@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "enum": [
+    "name",
+    "agent",
+    "status",
+    "model",
+    "input",
+    "trace_id"
+  ],
+  "title": "RunField",
+  "type": "string"
+}

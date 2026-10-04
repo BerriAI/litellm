@@ -1,15 +1,15 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::query::named::TraceSpansRow;
+use crate::store::SpanRow;
 
 pub(super) struct Graph<'a> {
-    pub(super) rows: &'a [TraceSpansRow],
+    pub(super) rows: &'a [SpanRow],
     by_id: HashMap<&'a str, usize>,
     children: HashMap<&'a str, Vec<usize>>,
 }
 
 impl<'a> Graph<'a> {
-    pub(super) fn new(rows: &'a [TraceSpansRow]) -> Self {
+    pub(super) fn new(rows: &'a [SpanRow]) -> Self {
         let by_id: HashMap<&str, usize> = rows
             .iter()
             .enumerate()
@@ -90,9 +90,9 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use super::Graph;
-    use crate::query::named::TraceSpansRow;
+    use crate::store::SpanRow;
 
-    fn row(id: &str, parent: &str) -> TraceSpansRow {
+    fn row(id: &str, parent: &str) -> SpanRow {
         serde_json::from_value(serde_json::json!({
             "span_id": id,
             "parent_span_id": parent,
@@ -118,7 +118,7 @@ mod tests {
     }
 
     #[fixture]
-    fn unordered_rows() -> Vec<TraceSpansRow> {
+    fn unordered_rows() -> Vec<SpanRow> {
         vec![
             row("leaf", "middle"),
             row("sibling", "root"),
@@ -128,7 +128,7 @@ mod tests {
     }
 
     #[rstest]
-    fn traversal_follows_links_instead_of_export_order(unordered_rows: Vec<TraceSpansRow>) {
+    fn traversal_follows_links_instead_of_export_order(unordered_rows: Vec<SpanRow>) {
         let graph = Graph::new(&unordered_rows);
         assert_eq!(graph.ancestors(0), [2, 3]);
         let descendants: std::collections::BTreeSet<&str> = graph

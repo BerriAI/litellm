@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 
 use crate::{
     CallEvidence, CallEvidenceKind, CallKey,
-    query::named::{SpendByResponseIdsRow as SpendRow, TraceSpansRow},
+    store::{CallRow as SpendRow, SpanRow},
 };
 
 /// The spend records to fetch for a set of spans.
@@ -17,7 +17,7 @@ pub struct SpendLookup {
 }
 
 impl SpendLookup {
-    pub fn new(rows: &[TraceSpansRow]) -> Self {
+    pub fn new(rows: &[SpanRow]) -> Self {
         let evidence: Vec<_> = rows
             .iter()
             .map(|row| (row, CallEvidence::row_keys(row)))
@@ -180,7 +180,7 @@ fn matches<'a>(
     ownership: &Ownership<'_>,
     spend_rows: &'a [SpendRow],
     key: &CallKey,
-    row: &TraceSpansRow,
+    row: &SpanRow,
 ) -> IndexMap<(&'a str, i64, &'a str), &'a SpendRow> {
     let matches = |spend: &SpendRow| match key {
         CallKey::ProviderResponse(id) => {
@@ -206,7 +206,7 @@ fn matches<'a>(
 }
 
 pub(super) fn requests<'a>(
-    row: &TraceSpansRow,
+    row: &SpanRow,
     ownership: &Ownership<'_>,
     spend_rows: &'a [SpendRow],
 ) -> SpendEvidence<'a> {

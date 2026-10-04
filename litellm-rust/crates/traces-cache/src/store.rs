@@ -1,62 +1,60 @@
 use std::future::Future;
 
-use litellm_traces::query::named::{
-    ListTracesParams, ListTracesRow, SpanDetailParams, SpanDetailRow, SpanErrorParams,
-    SpanErrorRow, SpendByResponseIdsParams, SpendByResponseIdsRow, TraceIdentityParams,
-    TracePageSpansParams, TraceSpansParams, TraceSpansRow,
+use litellm_traces::{
+    QueryScope,
+    store::{
+        CallQuery, CallRow, RunCount, RunCountQuery, RunQuery, RunRow, SpanQuery, SpanRow,
+        SpanText, SpanTextQuery,
+    },
 };
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError<E> {
+    /// The answer would exceed what storage returns in one response; a smaller `limit` may fit.
     #[error("trace read exceeds the storage read budget")]
     TooLarge,
     #[error(transparent)]
     Failed(E),
 }
 
+pub type StoreResult<T, E> = Result<T, StoreError<E>>;
+
+/// Every read trace storage serves. Each call returns at most `limit` rows from one round trip;
+/// paging, budgets and caching live above it.
 pub trait TraceStore: Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Identifies the backing storage for snapshot cache keys.
     fn source(&self) -> &str;
 
-    fn trace_refs(
+    fn runs(
         &self,
-        params: &TraceIdentityParams,
-    ) -> impl Future<Output = Result<Vec<String>, StoreError<Self::Error>>> + Send;
+        access: &QueryScope,
+        query: &RunQuery,
+    ) -> impl Future<Output = StoreResult<Vec<RunRow>, Self::Error>> + Send;
 
-    /// Returns `TooLarge` when the response exceeds the storage limit so the reader can halve `limit`.
-    fn list_runs(
+    fn run_counts(
         &self,
-        params: &ListTracesParams,
-    ) -> impl Future<Output = Result<Vec<ListTracesRow>, StoreError<Self::Error>>> + Send;
+        access: &QueryScope,
+        query: &RunCountQuery,
+    ) -> impl Future<Output = StoreResult<Vec<RunCount>, Self::Error>> + Send;
 
-    /// Returns spans visible at `snapshot_ms`, sorted by `start_ns`, or `TooLarge` past `MAX_GRAPH_BYTES`/`MAX_GRAPH_SPANS`.
-    fn trace_spans(
+    fn spans(
         &self,
-        params: &TraceSpansParams,
-        snapshot_ms: u64,
-    ) -> impl Future<Output = Result<Vec<TraceSpansRow>, StoreError<Self::Error>>> + Send;
+        access: &QueryScope,
+        query: &SpanQuery,
+    ) -> impl Future<Output = StoreResult<Vec<SpanRow>, Self::Error>> + Send;
 
-    /// Returns spans visible at `snapshot_ms`, sorted by `start_ns`, or `TooLarge` past `MAX_GRAPH_BYTES`/`MAX_GRAPH_SPANS`.
-    fn run_spans(
+    /// `None` when the span is not visible to `access`.
+    fn span_text(
         &self,
-        params: &TracePageSpansParams,
-        snapshot_ms: u64,
-    ) -> impl Future<Output = Result<Vec<TraceSpansRow>, StoreError<Self::Error>>> + Send;
+        access: &QueryScope,
+        query: &SpanTextQuery,
+    ) -> impl Future<Output = StoreResult<Option<SpanText>, Self::Error>> + Send;
 
-    fn spend(
+    fn calls(
         &self,
-        params: &SpendByResponseIdsParams,
-    ) -> impl Future<Output = Result<Vec<SpendByResponseIdsRow>, StoreError<Self::Error>>> + Send;
-
-    fn span_detail(
-        &self,
-        params: &SpanDetailParams,
-    ) -> impl Future<Output = Result<Option<SpanDetailRow>, StoreError<Self::Error>>> + Send;
-
-    fn span_error(
-        &self,
-        params: &SpanErrorParams,
-    ) -> impl Future<Output = Result<Option<SpanErrorRow>, StoreError<Self::Error>>> + Send;
+        access: &QueryScope,
+        query: &CallQuery,
+    ) -> impl Future<Output = StoreResult<Vec<CallRow>, Self::Error>> + Send;
 }

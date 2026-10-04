@@ -1,0 +1,80 @@
+{
+  "$defs": {
+    "AgentRuns": {
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "runs": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "agent",
+        "runs"
+      ],
+      "type": "object"
+    },
+    "HistogramBucket": {
+      "properties": {
+        "agents": {
+          "description": "Runs that did not fail, by their alphabetically first agent label, or service when unlabelled.",
+          "items": {
+            "$ref": "#/$defs/AgentRuns"
+          },
+          "type": "array"
+        },
+        "end_ms": {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        },
+        "failed": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start_ms": {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        },
+        "total": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start_ms",
+        "end_ms",
+        "total",
+        "failed",
+        "agents"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Matching runs per equal-width slice of the window.",
+  "properties": {
+    "buckets": {
+      "items": {
+        "$ref": "#/$defs/HistogramBucket"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "buckets"
+  ],
+  "title": "TraceHistogram",
+  "type": "object"
+}

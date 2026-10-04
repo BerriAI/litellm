@@ -1,5 +1,6 @@
-use super::{CallEvidence, CallKey, ObservationType, RoleEvidence, SpanContext, SpanFacts};
-use super::{Integration, Rule};
+use super::{
+    CallEvidence, CallKey, Integration, ObservationType, RoleEvidence, Rule, SpanContext, SpanFacts,
+};
 
 const SCOPES: [&str; 7] = [
     "opentelemetry.instrumentation.httpx",
