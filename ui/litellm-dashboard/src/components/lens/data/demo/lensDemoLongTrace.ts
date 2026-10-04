@@ -1,4 +1,4 @@
-import type { Span, SpanDetail, Trace } from "@/components/view_logs/TraceView/traceTypes";
+import type { Span, SpanDetail, Trace } from "@/components/lens/traces/types";
 
 export function withReleaseCases(run: { trace: Trace; details: SpanDetail[] }) {
   const { trace } = run;
