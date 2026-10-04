@@ -6,7 +6,7 @@ import { dismissLensIntro } from "@/../tests/lens-test-utils";
 import { readStorage } from "@/lib/storage";
 import { LENS_INTRO_DISMISSED, LENS_INTRO_SEEN } from "./storage";
 import { LensWorkspace } from "./LensWorkspace";
-import { createLensDemoData } from "./data/demo/createLensDemo";
+import { createLensDemoData } from "./data/demo/fixtures";
 import type { LensList } from "./model/types";
 
 const network = vi.fn<typeof fetch>();

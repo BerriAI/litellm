@@ -5,7 +5,7 @@ import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { dismissLensIntro } from "@/../tests/lens-test-utils";
 import { LensWorkspace } from "./LensWorkspace";
 import { lensKeys } from "./data/queries";
-import { createLensDemoData } from "./data/demo/createLensDemo";
+import { createLensDemoData } from "./data/demo/fixtures";
 
 const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
   new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));

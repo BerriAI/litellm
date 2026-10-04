@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createLensDemo, createLensDemoData } from "./createLensDemo";
+import { createLensDemo } from "./createLensDemo";
+import { createLensDemoData } from "./fixtures";
 import { evidenceTarget } from "../../model/findings";
 
 describe("Lens demo data", () => {
