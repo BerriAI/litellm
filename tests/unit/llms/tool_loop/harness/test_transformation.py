@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Final, Literal
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from litellm import sandbox
 from litellm.harness.context import GatewayTarget, SessionContext
@@ -126,6 +126,10 @@ def test_gateway_routing_and_response_format_override_options(tmp_path: Path) ->
                 "api_key": "wrong-key",
                 "api_base": "https://wrong",
                 "response_format": "wrong-format",
+                "extra_headers": {
+                    "x-caller-header": "preserved",
+                    "x-litellm-tags": "caller-tag",
+                },
             }
         ),
         output=OutputModel,
@@ -137,9 +141,37 @@ def test_gateway_routing_and_response_format_override_options(tmp_path: Path) ->
         "model": "litellm_proxy/anthropic/claude",
         "api_base": "https://gateway",
         "api_key": "virtual-key",
-        "extra_headers": {"x-litellm-tags": "harness,tool_loop"},
+        "extra_headers": {
+            "x-caller-header": "preserved",
+            "x-litellm-tags": "harness,tool_loop",
+        },
         "response_format": OutputModel,
     }
+
+
+def test_gateway_extra_headers_must_be_string_mappings(tmp_path: Path) -> None:
+    gateway: Final = GatewayTarget(api_base="https://gateway", api_key="virtual-key")
+    ctx: Final = make_context(
+        tmp_path,
+        gateway=gateway,
+        options=ToolLoopOptions(completion_kwargs={"extra_headers": {"x-invalid": 1}}),
+    )
+
+    with pytest.raises(ValidationError):
+        completion_kwargs(ctx)
+
+
+def test_gateway_none_extra_headers_uses_only_gateway_headers(tmp_path: Path) -> None:
+    gateway: Final = GatewayTarget(api_base="https://gateway", api_key="virtual-key")
+    ctx: Final = make_context(
+        tmp_path,
+        gateway=gateway,
+        options=ToolLoopOptions(completion_kwargs={"extra_headers": None}),
+    )
+
+    kwargs: Final = completion_kwargs(ctx)
+
+    assert kwargs["extra_headers"] == {"x-litellm-tags": "harness,tool_loop"}
 
 
 def test_configuration_requires_model_and_declares_capabilities(tmp_path: Path) -> None:
@@ -152,3 +184,19 @@ def test_configuration_requires_model_and_declares_capabilities(tmp_path: Path) 
     assert config.capabilities.permission_modes == frozenset({"ask", "full"})
     with pytest.raises(ValueError, match=r"Harness\.TOOL_LOOP needs model="):
         config.validate_environment(make_context(tmp_path, model=None))
+
+
+def test_configuration_rejects_truthy_completion_stream(tmp_path: Path) -> None:
+    ctx: Final = make_context(tmp_path, options=ToolLoopOptions(completion_kwargs={"stream": True}))
+
+    with pytest.raises(
+        ValueError,
+        match=r"Harness\.TOOL_LOOP does not support completion_kwargs\['stream'\]",
+    ):
+        ToolLoopHarnessConfig().validate_environment(ctx)
+
+
+def test_configuration_allows_false_completion_stream(tmp_path: Path) -> None:
+    ctx: Final = make_context(tmp_path, options=ToolLoopOptions(completion_kwargs={"stream": False}))
+
+    ToolLoopHarnessConfig().validate_environment(ctx)

@@ -20,6 +20,7 @@ from litellm.types.utils import ChatCompletionToolParam
 TOOL_LOOP_MAX_MODEL_CALLS: Final = 100
 _ANNOTATIONS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _OBJECT_ADAPTER: Final = TypeAdapter(object)
+_STRING_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 _MODEL_FACTORY: Final[Callable[..., type[BaseModel]]] = create_model
 
 
@@ -72,15 +73,25 @@ def function_tool(fn: Callable[..., object]) -> FunctionTool:
     return FunctionTool(name=fn.__name__, fn=fn, args_model=args_model, spec=spec)
 
 
-def _routing_kwargs(ctx: SessionContext) -> Mapping[str, object]:
+def _routing_kwargs(ctx: SessionContext, options: ToolLoopOptions) -> Mapping[str, object]:
     if not ctx.model:
         raise ValueError("Harness.TOOL_LOOP needs model=")
     if ctx.gateway is not None:
+        caller_headers_value: Final[object] = _OBJECT_ADAPTER.validate_python(
+            options.completion_kwargs.get("extra_headers")
+        )
+        caller_headers: Final = _STRING_HEADERS_ADAPTER.validate_python(
+            MappingProxyType({}) if caller_headers_value is None else caller_headers_value
+        )
+        extra_headers: Final[dict[str, str]] = {  # mutable-ok: acompletion(extra_headers=) requires a dict
+            **caller_headers,
+            **gateway_headers(ctx),
+        }
         return {
             "model": f"litellm_proxy/{ctx.model}",
             "api_base": ctx.gateway.api_base,
             "api_key": ctx.gateway.api_key,
-            "extra_headers": gateway_headers(ctx),
+            "extra_headers": extra_headers,
         }
     return {
         "model": ctx.model,
@@ -91,7 +102,7 @@ def _routing_kwargs(ctx: SessionContext) -> Mapping[str, object]:
 
 def completion_kwargs(ctx: SessionContext) -> Mapping[str, object]:
     options: Final = ToolLoopHarnessConfig().get_options(ctx)
-    routing: Final = _routing_kwargs(ctx)
+    routing: Final = _routing_kwargs(ctx, options)
     kwargs: Final[Mapping[str, object]] = MappingProxyType({**options.completion_kwargs, **routing})
     if ctx.output is None:
         return kwargs
@@ -114,6 +125,8 @@ class ToolLoopHarnessConfig(BaseHarnessConfig[ToolLoopOptions]):
     )
 
     def validate_environment(self, ctx: SessionContext) -> None:
-        self.get_options(ctx)
+        options: Final = self.get_options(ctx)
+        if options.completion_kwargs.get("stream"):
+            raise ValueError("Harness.TOOL_LOOP does not support completion_kwargs['stream']")
         if not ctx.model:
             raise ValueError("Harness.TOOL_LOOP needs model=")

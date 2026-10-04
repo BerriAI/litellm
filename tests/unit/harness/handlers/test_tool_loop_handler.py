@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import AsyncGenerator, Callable, Iterator, Mapping
 from pathlib import Path
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
-import litellm
 import pytest
 from pydantic import BaseModel
 
+import litellm
 from litellm import sandbox
+from litellm.harness import runtime
 from litellm.harness.context import GatewayTarget, SessionContext
 from litellm.harness.handlers.tool_loop_handler import ToolLoopHandler
 from litellm.harness.options import ToolLoopOptions
@@ -351,21 +352,56 @@ async def test_async_tool_is_awaited(tmp_path: Path) -> None:
     assert ToolResult(id="call-1", output="12", is_error=False) in events
 
 
-class Answer(BaseModel):
-    value: int
+class Range(BaseModel):
+    start: int
+    end: int
 
 
-async def test_structured_output_is_forwarded_and_retained(tmp_path: Path) -> None:
-    completion: Final = ScriptedCompletion((model_response(content='{"value": 7}'),))
-    ctx: Final = make_context(tmp_path, output=Answer)
+async def test_nested_pydantic_arguments_reach_the_tool_as_models(tmp_path: Path) -> None:
+    received: list[Range] = []  # mutable-ok: captures injected tool arguments
+
+    def describe_range(value: Range) -> str:
+        received.append(value)
+        return f"{value.start}:{value.end}"
+
+    completion: Final = ScriptedCompletion(
+        (
+            model_response(tool_calls=(function_call("describe_range", '{"value": {"start": 2, "end": 5}}'),)),
+            model_response(content="Range received"),
+        )
+    )
+    ctx: Final = make_context(tmp_path, tools=(describe_range,))
     handler: Final = make_handler(completion)
     await handler.start(ctx)
 
-    await run_turn(handler, ctx, "Return a value")
+    events: Final = await run_turn(handler, ctx, "Describe a range")
 
-    assert completion.calls[0]["response_format"] is Answer
-    assert ctx.output_json == '{"value": 7}'
-    assert ctx.final_text == '{"value": 7}'
+    assert received == [Range(start=2, end=5)]
+    assert isinstance(received[0], Range)
+    assert ToolResult(id="call-1", output="2:5", is_error=False) in events
+
+
+class Review(BaseModel):
+    summary: str
+
+
+async def test_structured_output_parses_fenced_json_and_forwards_response_format(tmp_path: Path) -> None:
+    content: Final = '```json\n{"summary": "Looks good"}\n```'
+    completion: Final = ScriptedCompletion((model_response(content=content),))
+    session: Final = runtime.aagent_session(
+        Harness.TOOL_LOOP,
+        sandbox=sandbox.local(tmp_path),
+        model="gpt-4o-mini",
+        output=Review,
+    )
+    session.handler = make_handler(completion)
+    async with session:
+        result: Final = await session.arun("Return a review")
+
+    assert isinstance(result.output, Review)
+    assert result.output.summary == "Looks good"
+    assert completion.calls[0]["response_format"] is Review
+    assert session.ctx.output_json is None
 
 
 async def test_gateway_routing_uses_proxy_model_and_tool_loop_tag(tmp_path: Path) -> None:
@@ -418,6 +454,22 @@ async def test_usage_and_cost_accumulate_across_model_calls(tmp_path: Path) -> N
     assert ctx.cost == pytest.approx(0.6)
 
 
+async def test_missing_usage_still_records_call_and_response_cost(tmp_path: Path) -> None:
+    response: Final = model_response(content="done", hidden_params={"response_cost": 0.5})
+    response.usage = None
+    completion: Final = ScriptedCompletion((response,))
+    ctx: Final = make_context(tmp_path)
+    handler: Final = make_handler(completion)
+    await handler.start(ctx)
+
+    await run_turn(handler, ctx, "Hi")
+
+    assert ctx.calls == 1
+    assert ctx.input_tokens == 0
+    assert ctx.output_tokens == 0
+    assert ctx.cost == pytest.approx(0.5)
+
+
 async def test_history_survives_stop_and_start(tmp_path: Path) -> None:
     completion: Final = ScriptedCompletion((model_response(content="first"), model_response(content="second")))
     ctx: Final = make_context(tmp_path, instructions="Keep answers concise")
@@ -438,6 +490,116 @@ async def test_history_survives_stop_and_start(tmp_path: Path) -> None:
     history: Final = await handler.history(ctx)
     history[0]["content"] = "changed"
     assert (await handler.history(ctx))[0]["content"] == "Keep answers concise"
+
+
+async def test_interrupted_tool_calls_are_closed_before_the_next_session_turn(tmp_path: Path) -> None:
+    executed: list[str] = []  # mutable-ok: records which injected tools ran
+
+    def first_tool() -> str:
+        executed.append("first")
+        return "first result"
+
+    def second_tool() -> str:
+        executed.append("second")
+        return "second result"
+
+    completion: Final = ScriptedCompletion(
+        (
+            model_response(
+                tool_calls=(
+                    function_call("first_tool", "{}", "call-1"),
+                    function_call("second_tool", "{}", "call-2"),
+                )
+            ),
+            model_response(content="Continued"),
+        )
+    )
+    session: Final = runtime.aagent_session(
+        Harness.TOOL_LOOP,
+        sandbox=sandbox.local(tmp_path),
+        model="gpt-4o-mini",
+        tools=(first_tool, second_tool),
+        max_turns=1,
+    )
+    session.handler = make_handler(completion)
+    async with session:
+        first_result: Final = await session.arun("first turn")
+        assert first_result.stop_reason == "max_turns"
+        await session.arun("second turn")
+
+    assert executed == ["first"]
+    assert completion.calls[1]["messages"] == [
+        {"role": "user", "content": "first turn"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "first_tool", "arguments": "{}"},
+                },
+                {
+                    "id": "call-2",
+                    "type": "function",
+                    "function": {"name": "second_tool", "arguments": "{}"},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": "first result"},
+        {
+            "role": "tool",
+            "tool_call_id": "call-2",
+            "content": "interrupted: the turn ended before this tool ran",
+        },
+        {"role": "user", "content": "second turn"},
+    ]
+
+
+async def test_closing_after_tool_result_keeps_result_and_interrupts_remaining_call(tmp_path: Path) -> None:
+    executed: list[str] = []  # mutable-ok: records which injected tools ran
+
+    def first_tool() -> str:
+        executed.append("first")
+        return "first result"
+
+    def second_tool() -> str:
+        executed.append("second")
+        return "second result"
+
+    completion: Final = ScriptedCompletion(
+        (
+            model_response(
+                tool_calls=(
+                    function_call("first_tool", "{}", "call-1"),
+                    function_call("second_tool", "{}", "call-2"),
+                )
+            ),
+        )
+    )
+    ctx: Final = make_context(tmp_path, tools=(first_tool, second_tool))
+    handler: Final = make_handler(completion)
+    await handler.start(ctx)
+
+    turn: Final = cast(AsyncGenerator[Event, None], handler.turn(ctx, "first turn"))
+    tool_results: list[ToolResult] = []  # mutable-ok: records the first yielded tool result
+    async for event in turn:
+        if isinstance(event, ToolResult):
+            tool_results.append(event)
+            break
+    await turn.aclose()
+    await handler.stop(ctx)
+
+    assert tool_results == [ToolResult(id="call-1", output="first result", is_error=False)]
+    assert executed == ["first"]
+    assert (await handler.history(ctx))[-2:] == [
+        {"role": "tool", "tool_call_id": "call-1", "content": "first result"},
+        {
+            "role": "tool",
+            "tool_call_id": "call-2",
+            "content": "interrupted: the turn ended before this tool ran",
+        },
+    ]
 
 
 async def test_duplicate_tool_names_are_rejected(tmp_path: Path) -> None:
