@@ -55,13 +55,13 @@ export function TimeRangeControls({
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Time range"
-          className={cn(SEGMENT, "text-foreground hover:bg-muted/60")}
+          className={cn(SEGMENT, "min-w-40 justify-between text-foreground hover:bg-muted/60")}
           data-testid="time-range-trigger"
         >
           <span className="tabular-nums">{fixedRange ? fixedRangeLabel(fixedRange) : presetLabel(rangeHours)}</span>
           <ChevronDown className="size-3.5 text-muted-foreground" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-auto min-w-44">
+        <DropdownMenuContent align="end" className="min-w-0">
           <DropdownMenuRadioGroup
             value={String(rangeHours)}
             onValueChange={(value: string) => onRangeHoursChange(Number(value))}
