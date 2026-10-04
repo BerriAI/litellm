@@ -232,13 +232,16 @@ def raise_if_intervention_was_refused(
 ) -> None:
     """A guardrail whose only real rewrite went to a field it was not sent would otherwise let the request
     through unchanged, so it is rejected instead. An echo of what the guardrail was sent changes nothing, and
-    neither do returned images, since no endpoint writes them back."""
+    neither do returned images, since no endpoint writes them back. Tools and rows count only when the endpoint
+    posted them, so a tool or row added to something the guardrail was never shown cannot stand in for the refused
+    rewrite."""
     if action != "GUARDRAIL_INTERVENED" or not accepted.refused_any:
         return
+    posted_tools: Final = posted.get("tools")
     applied: Final = (
-        rows_written_back
-        or _changes(accepted.texts, posted.get("texts"))
-        or _changes(accepted.tools, posted.get("tools"))
+        _changes(accepted.texts, posted.get("texts"))
+        or (rows_written_back and posted.get("structured_messages") is not None)
+        or (posted_tools is not None and _changes(accepted.tools, posted_tools))
     )
     if not applied:
         raise unappliable_request_rewrite(guardrail_name, input_type=input_type)

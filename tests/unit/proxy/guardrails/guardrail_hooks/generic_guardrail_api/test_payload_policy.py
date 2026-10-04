@@ -12,16 +12,19 @@ from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicM
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+from litellm.llms.openai.embeddings.guardrail_translation.handler import OpenAIEmbeddingsHandler
 from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.payload_policy import (
     IMAGE_OMITTED_PLACEHOLDER,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPIRequest
+from litellm.types.utils import ModelResponse
 
 SSN: Final = "123-45-6789"
 IMAGE_URL: Final = "data:image/png;base64,SECRETPIXELS"
 OTHER_IMAGE_URL: Final = "data:image/png;base64,OTHERPIXELS"
+RUN_TOOL: Final = {"type": "function", "function": {"name": "run"}}
 
 
 def _answer(body: dict) -> Callable[[dict], dict]:
@@ -674,6 +677,51 @@ async def test_a_refused_response_rewrite_names_the_response():
     )
 
 
+_FIELDS_THE_ENDPOINT_NEVER_SUPPLIED: Final = pytest.mark.parametrize(
+    "unsupplied_field",
+    [{"tools": [RUN_TOOL]}, {"structured_messages": [{"role": "assistant", "content": "[MASKED]"}]}],
+    ids=["tools", "structured_messages"],
+)
+
+
+@pytest.mark.asyncio
+@_FIELDS_THE_ENDPOINT_NEVER_SUPPLIED
+async def test_a_chat_response_is_rejected_when_masking_unsent_texts_comes_with_fields_it_never_supplied(
+    unsupplied_field,
+):
+    endpoint: Final = _GuardrailEndpoint(
+        _answer({"action": "GUARDRAIL_INTERVENED", "texts": ["[MASKED]"], **unsupplied_field})
+    )
+    response: Final = ModelResponse(
+        model="gpt-x", choices=[{"index": 0, "message": {"role": "assistant", "content": f"your ssn is {SSN}"}}]
+    )
+
+    with pytest.raises(UnappliableRequestRewrite):
+        await OpenAIChatCompletionsHandler().process_output_response(
+            response=response, guardrail_to_apply=_guardrail(endpoint, exclude_payload_fields=["texts"])
+        )
+
+    assert response.choices[0].message.content == f"your ssn is {SSN}"
+
+
+@pytest.mark.asyncio
+@_FIELDS_THE_ENDPOINT_NEVER_SUPPLIED
+async def test_an_embeddings_request_is_rejected_when_masking_unsent_texts_comes_with_fields_it_never_supplied(
+    unsupplied_field,
+):
+    endpoint: Final = _GuardrailEndpoint(
+        _answer({"action": "GUARDRAIL_INTERVENED", "texts": ["[MASKED]"], **unsupplied_field})
+    )
+    data: Final = {"model": "text-embedding-x", "input": f"my ssn is {SSN}"}
+
+    with pytest.raises(UnappliableRequestRewrite):
+        await OpenAIEmbeddingsHandler().process_input_messages(
+            data=data, guardrail_to_apply=_guardrail(endpoint, exclude_payload_fields=["texts"])
+        )
+
+    assert data["input"] == f"my ssn is {SSN}"
+
+
 @pytest.mark.asyncio
 async def test_a_chat_request_is_rejected_when_the_only_masking_went_to_texts_that_were_not_sent():
     def echo_rows_and_tools_and_mask_texts(payload: dict) -> dict:
@@ -701,12 +749,16 @@ async def test_a_chat_request_is_rejected_when_the_only_masking_went_to_texts_th
 @pytest.mark.parametrize(
     ("response", "expected"),
     [
-        ({"texts": ["[MASKED]"], "images": [OTHER_IMAGE_URL]}, {"texts": ["[MASKED]"], "images": [IMAGE_URL]}),
+        (
+            {"texts": ["[MASKED]"], "images": [OTHER_IMAGE_URL]},
+            {"texts": ["[MASKED]"], "images": [IMAGE_URL], "tools": [RUN_TOOL]},
+        ),
         (
             {"images": [OTHER_IMAGE_URL], "structured_messages": [{"role": "user", "content": "[MASKED]"}]},
             {
                 "texts": ["ssn 1"],
                 "images": [IMAGE_URL],
+                "tools": [RUN_TOOL],
                 "structured_messages": [{"role": "user", "content": "[MASKED]"}],
             },
         ),
@@ -714,7 +766,7 @@ async def test_a_chat_request_is_rejected_when_the_only_masking_went_to_texts_th
             {"images": [OTHER_IMAGE_URL], "tools": [{"type": "function", "function": {"name": "safe"}}]},
             {"texts": ["ssn 1"], "images": [IMAGE_URL], "tools": [{"type": "function", "function": {"name": "safe"}}]},
         ),
-        ({}, {"texts": ["ssn 1"], "images": [IMAGE_URL]}),
+        ({}, {"texts": ["ssn 1"], "images": [IMAGE_URL], "tools": [RUN_TOOL]}),
     ],
     ids=["texts_applied", "rows_applied", "tools_applied", "nothing_returned"],
 )
@@ -723,7 +775,12 @@ async def test_an_intervention_that_does_not_depend_on_an_unsent_field_goes_thro
 
     result: Final = await _apply(
         _guardrail(endpoint, exclude_payload_fields=["images"]),
-        {"texts": ["ssn 1"], "images": [IMAGE_URL], "structured_messages": [{"role": "user", "content": "ssn 1"}]},
+        {
+            "texts": ["ssn 1"],
+            "images": [IMAGE_URL],
+            "tools": [RUN_TOOL],
+            "structured_messages": [{"role": "user", "content": "ssn 1"}],
+        },
     )
 
     assert result == expected
