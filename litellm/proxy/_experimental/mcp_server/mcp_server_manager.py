@@ -2415,7 +2415,9 @@ class MCPServerManager:
         return self.catalog.registry()
 
     @property
-    def tool_name_to_mcp_server_name_mapping(self) -> dict[str, str]:
+    def tool_name_to_mcp_server_name_mapping(
+        self,
+    ) -> dict[str, str]:  # mutable-ok: callers remap tool routes through this dict
         return self.catalog.routing()
 
     @tool_name_to_mcp_server_name_mapping.setter

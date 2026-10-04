@@ -20323,18 +20323,11 @@ async def _resolve_mcp_csv_tokens(csv_segment: str, client_ip: str | None) -> li
             global_mcp_server_manager,
         )
 
-        seen: Final[set] = set()
-        deduped: Final[list[str]] = []
-        for raw in csv_segment.split(","):
-            token = raw.strip()
-            if not token or token in seen:
-                continue
-            seen.add(token)
-            deduped.append(token)
-            if len(deduped) >= DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS:
-                break
+        deduped: Final = tuple(
+            token for token in dict.fromkeys(raw.strip() for raw in csv_segment.split(",")) if token
+        )[:DEFAULT_MCP_NAMESPACE_CSV_MAX_TOKENS]
 
-        resolved: Final[list[str]] = []
+        resolved: Final[list[str]] = []  # mutable-ok: sequential await per token cannot live in a comprehension
         for token in deduped:
             if global_mcp_server_manager.get_mcp_server_by_name(token, client_ip=client_ip):
                 resolved.append(token)

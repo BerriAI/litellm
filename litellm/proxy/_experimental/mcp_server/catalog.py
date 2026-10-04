@@ -32,7 +32,7 @@ class CatalogSnapshot:
     servers: Mapping[str, MCPServer]
     identity: str
     tools: Mapping[str, MCPTool]
-    routing: dict[str, str]
+    routing: dict[str, str]  # mutable-ok: tool routes are remapped in place through this snapshot's live dict
 
 
 def _configuration_identity(server: MCPServer) -> str:
@@ -96,7 +96,7 @@ class TargetCatalog:
         scoped: Final = self._operation.get()
         return scoped[0] if scoped is not None and not scoped[1].is_set() else None
 
-    def routing(self) -> dict[str, str]:
+    def routing(self) -> dict[str, str]:  # mutable-ok: returns the live routing dict that callers remap in place
         staged: Final = self._staged_routing.get()
         if staged is not None and not staged[1].is_set():
             return staged[0]
@@ -361,7 +361,9 @@ class TargetCatalog:
             closed.set()
             self._staged_routing.reset(routing_token)
 
-    async def _stage_servers(self, rows: Sequence[BaseModel], *, reuse_unchanged: bool) -> dict[str, MCPServer]:
+    async def _stage_servers(
+        self, rows: Sequence[BaseModel], *, reuse_unchanged: bool
+    ) -> dict[str, MCPServer]:  # mutable-ok: assign_unique_short_prefix requires a dict registry
         from litellm.proxy._experimental.mcp_server.db import LiteLLM_MCPServerTable
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             carry_forward_resolved_oauth_endpoints,

@@ -2366,7 +2366,7 @@ if MCP_AVAILABLE:
     ):
         async with _oauth_server_operation(server_id, user_api_key_dict, request=request) as mcp_server:
             request_data: Final = await _read_request_body(request=request)
-            data: Final[dict] = {**request_data}
+            data: Final[Mapping[str, object]] = {**request_data}
             client_redirect_uris: Final = client_supplied_redirect_uris(data.get("redirect_uris"))
 
             return await register_client_with_server(
