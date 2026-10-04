@@ -8,9 +8,12 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
+from urllib.parse import urlsplit
 
 import httpx
+import psutil
 import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
@@ -109,6 +112,15 @@ def _held_anthropic_peer(release: threading.Event) -> Callable[[Request], Reply]
     return respond
 
 
+def _held_upstream_connections(pid: int, upstream: str) -> int:
+    port: Final = urlsplit(upstream).port
+    return sum(
+        1
+        for connection in psutil.Process(pid).net_connections(kind="tcp")
+        if connection.status == psutil.CONN_ESTABLISHED and connection.raddr and connection.raddr.port == port
+    )
+
+
 def _by_marker(received: Sequence[Request]) -> dict[str, tuple[Request, ...]]:
     counted: Final = Counter(marker_of(request) for request in received)
     return {marker: tuple(request for request in received if marker_of(request) == marker) for marker in counted}
@@ -183,7 +195,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_capped_reques
             tmp_path, [anthropic_deployment(_MODEL, wire.url, cache_control_injection_points=POINTS)]
         )
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
-            workers: Final = eventually(
+            workers: Final[tuple[int, ...]] = eventually(
                 lambda: tuple(int(pid) for pid in _STARTED_WORKER.findall(owned.log.read_text())),
                 lambda pids: len(pids) == 2,
                 seconds=30,
@@ -192,14 +204,19 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_capped_reques
             burst: Final = asyncio.create_task(_fire(owned_url, owned.gateway.key, tolerate_transport_errors=True))
             try:
                 await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= _BURST, 90)
-                os.kill(workers[0], signal.SIGKILL)
+                held_by: Final = MappingProxyType({pid: _held_upstream_connections(pid, wire.url) for pid in workers})
+                victim: Final = max(workers, key=held_by.__getitem__)
+                os.kill(victim, signal.SIGKILL)
             finally:
                 release.set()
             served: Final = await burst
             during: Final = wire.drain()
             after: Final = await _fire(owned_url, owned.gateway.key)
             after_received: Final = wire.drain()
-    assert 0 < len(served) < _BURST, len(served)
+    assert sum(held_by.values()) == _BURST, held_by
+    assert held_by[victim] > 0, held_by
+    assert len(served) == _BURST - held_by[victim], (len(served), held_by)
+    assert len(after) == _BURST, len(after)
     assert all(len(requests) == 1 for requests in _by_marker(during).values())
     _assert_capped(served, during)
     _assert_capped(after, after_received)
@@ -240,3 +257,38 @@ def test_yaml_auto_caching_stands_down_for_tool_call_marks_and_outranks_a_key_op
         [SYSTEM_LABEL, final_label(markers[1])],
         [SYSTEM_LABEL, final_label(markers[2])],
     ]
+
+
+@pytest.mark.timeout(360)
+async def test_proxy_restart_mid_burst_serves_capped_requests_after_the_reboot(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    release: Final = threading.Event()
+    with wire_server(_held_anthropic_peer(release)) as wire:
+        config: Final = owned_config(
+            tmp_path, [anthropic_deployment(_MODEL, wire.url, cache_control_injection_points=POINTS)]
+        )
+        with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as first:
+            burst: Final = asyncio.create_task(
+                _fire(str(first.gateway.client.base_url), first.gateway.key, tolerate_transport_errors=True)
+            )
+            try:
+                await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= _BURST, 90)
+                first.process.terminate()
+            finally:
+                release.set()
+            served: Final = await burst
+        during: Final = wire.drain()
+        with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as second:
+            after: Final = await _fire(str(second.gateway.client.base_url), second.gateway.key)
+            after_received: Final = wire.drain()
+    completed: Final = tuple(item for item in served if item.status == 200)
+    lost: Final = tuple(item for item in served if item.status != 200)
+    assert len(after) == _BURST, len(after)
+    assert all(len(requests) == 1 for requests in _by_marker(during).values())
+    _assert_capped(completed, during)
+    for item in lost:
+        assert '"error"' in item.text or item.text == "", (item.surface, item.status, item.text)
+    _assert_capped(after, after_received)
+    for item in (*completed, *after):
+        _single_spend_row(item)

@@ -1,9 +1,16 @@
+import asyncio
 import json
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
-from typing import Final
+from typing import Final, cast
 
+import anthropic
+import httpx
+import openai
 import pytest
-from integration._support.client import Gateway, Scenario, eventually, object_value
+from anthropic.types import MessageParam, TextBlockParam, ToolParam
+from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
+from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import (
     ANTHROPIC_MODEL,
@@ -16,6 +23,7 @@ from integration.providers._cache_control_marks_support import (
     PROVIDER_KEY,
     SYSTEM,
     SYSTEM_LABEL,
+    TOOL,
     anthropic_labels,
     anthropic_marks,
     anthropic_peer,
@@ -36,8 +44,12 @@ from integration.providers._cache_control_marks_support import (
     tool_call,
     tool_use_label,
 )
-from litellm.utils import get_prompt_cache_min_tokens
+from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
+from openai.types.responses import ResponseInputParam
+from openai.types.responses import ToolParam as ResponsesToolParam
 from pydantic import JsonValue, TypeAdapter
+
+from litellm.utils import get_prompt_cache_min_tokens
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _CLIENT_MARKED: Final = client_marked()
@@ -289,10 +301,9 @@ def test_bedrock_converse_cache_points_stay_within_the_cap(
     assert bedrock_labels(request) == expected
 
 
-_SERVER_CALL: Final = tool_call("web", cache_control=EPHEMERAL) | {
-    "id": "srvtoolu_web",
-    "function": {"name": "web_search", "arguments": "{}"},
-}
+_SERVER_CALL: Final = tool_call(
+    "web", cache_control=EPHEMERAL, id="srvtoolu_web", function={"name": "web_search", "arguments": "{}"}
+)
 _WEB_RESULTS: Final[dict[str, JsonValue]] = {
     "provider_specific_fields": {
         "web_search_results": [{"type": "web_search_tool_result", "tool_use_id": "srvtoolu_web", "content": []}]
@@ -319,7 +330,7 @@ def test_server_tool_call_mark_counts_only_when_forwarded(
     gateway: Gateway, assistant: dict[str, JsonValue], expected: list[str]
 ) -> None:
     marker: Final = new_marker()
-    calls: Final = [*marked_calls(cities=CITIES[:2]), _SERVER_CALL]
+    calls: Final[list[JsonValue]] = [*marked_calls(cities=CITIES[:2]), _SERVER_CALL]
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
         model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
         status, _, text = post_chat(gateway, chat_body(model, conversation(marker, calls, assistant=assistant)))
@@ -523,3 +534,396 @@ def test_assistant_without_tool_calls_keeps_configured_points(gateway: Gateway, 
         assert status == 200, text
         labels: Final = anthropic_labels(_only_request(wire))
     assert labels == [SYSTEM_LABEL, ASK_LABEL, final_label(marker)]
+
+
+def test_responses_stream_bridge_keeps_system_and_user_marks_within_the_cap(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
+        status, text = _stream(gateway, "/v1/responses", {**responses_body(model, marker), "stream": True})
+        assert status == 200, text
+        assert '"type":"response.completed"' in text, text
+        assert anthropic_labels(_only_request(wire)) == [SYSTEM_LABEL, ASK_LABEL]
+
+
+def _openai_client(gateway: Gateway) -> openai.OpenAI:
+    return openai.OpenAI(
+        base_url=f"{gateway.client.base_url}/v1",
+        api_key=gateway.key,
+        max_retries=0,
+        http_client=httpx.Client(trust_env=False, timeout=60),
+    )
+
+
+def _async_openai_client(gateway: Gateway) -> openai.AsyncOpenAI:
+    return openai.AsyncOpenAI(
+        base_url=f"{gateway.client.base_url}/v1",
+        api_key=gateway.key,
+        max_retries=0,
+        http_client=httpx.AsyncClient(trust_env=False, timeout=60),
+    )
+
+
+def _anthropic_client(gateway: Gateway) -> anthropic.Anthropic:
+    return anthropic.Anthropic(
+        base_url=str(gateway.client.base_url),
+        api_key=gateway.key,
+        max_retries=0,
+        http_client=httpx.Client(trust_env=False, timeout=60),
+    )
+
+
+def _async_anthropic_client(gateway: Gateway) -> anthropic.AsyncAnthropic:
+    return anthropic.AsyncAnthropic(
+        base_url=str(gateway.client.base_url),
+        api_key=gateway.key,
+        max_retries=0,
+        http_client=httpx.AsyncClient(trust_env=False, timeout=60),
+    )
+
+
+def _sdk_messages(marker: str) -> list[ChatCompletionMessageParam]:
+    return cast(list[ChatCompletionMessageParam], conversation(marker, marked_calls()))
+
+
+_SDK_TOOLS: Final = cast(list[ChatCompletionToolParam], [TOOL])
+
+
+def test_openai_sdk_sync_chat_keeps_the_capped_request_within_the_cap(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
+        completion: Final = _openai_client(gateway).chat.completions.create(
+            model=model, messages=_sdk_messages(marker), tools=_SDK_TOOLS, max_tokens=64
+        )
+        assert completion.choices[0].message.content == "sunny", completion.model_dump()
+        assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
+    assert gateway_injected(completion.id) is False
+
+
+async def test_openai_sdk_async_chat_stream_keeps_the_capped_request_within_the_cap(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
+        stream: Final = await _async_openai_client(gateway).chat.completions.create(
+            model=model, messages=_sdk_messages(marker), tools=_SDK_TOOLS, max_tokens=64, stream=True
+        )
+        chunks: Final = [chunk async for chunk in stream]
+        assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "sunny", chunks
+        assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
+    assert gateway_injected(chunks[0].id) is False
+
+
+def _messages_system(model: str, marker: str) -> Iterable[TextBlockParam]:
+    return cast(Iterable[TextBlockParam], messages_body(model, marker, stream=False)["system"])
+
+
+def _messages_tools(model: str, marker: str) -> Iterable[ToolParam]:
+    return cast(Iterable[ToolParam], messages_body(model, marker, stream=False)["tools"])
+
+
+def _messages_turns(model: str, marker: str) -> Iterable[MessageParam]:
+    return cast(Iterable[MessageParam], messages_body(model, marker, stream=False)["messages"])
+
+
+def test_anthropic_sdk_sync_messages_keeps_the_capped_request_within_the_cap(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
+        message: Final = _anthropic_client(gateway).messages.create(
+            model=model,
+            max_tokens=64,
+            system=_messages_system(model, marker),
+            tools=_messages_tools(model, marker),
+            messages=_messages_turns(model, marker),
+        )
+        assert message.id == f"msg_{marker}", message.model_dump()
+        assert [block.text for block in message.content if block.type == "text"] == ["sunny"], message.model_dump()
+        assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
+    assert gateway_injected(message.id) is False
+
+
+async def test_anthropic_sdk_async_messages_stream_keeps_the_capped_request_within_the_cap(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
+        stream: Final = await _async_anthropic_client(gateway).messages.create(
+            model=model,
+            max_tokens=64,
+            system=_messages_system(model, marker),
+            tools=_messages_tools(model, marker),
+            messages=_messages_turns(model, marker),
+            stream=True,
+        )
+        events: Final = [event async for event in stream]
+        assert [event.type for event in events][-1] == "message_stop", events
+        starts: Final = [event for event in events if event.type == "message_start"]
+        assert [start.message.id for start in starts] == [f"msg_{marker}"], events
+        assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
+    assert gateway_injected(f"msg_{marker}") is False
+
+
+async def test_openai_sdk_async_responses_keeps_system_and_user_marks_within_the_cap(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
+        body: Final = responses_body(model, marker)
+        response: Final = await _async_openai_client(gateway).responses.create(
+            model=model,
+            instructions=SYSTEM,
+            max_output_tokens=64,
+            tools=cast(Iterable[ResponsesToolParam], body["tools"]),
+            input=cast(ResponseInputParam, body["input"]),
+        )
+        assert response.status == "completed", response.model_dump()
+        assert anthropic_labels(_only_request(wire)) == [SYSTEM_LABEL, ASK_LABEL]
+
+
+def test_request_level_points_skip_injection_when_client_marks_fill_the_cap(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire)
+        body: Final = chat_body(model, conversation(marker, marked_calls()), cache_control_injection_points=POINTS)
+        status, response_id, text = post_chat(gateway, body)
+        assert status == 200, text
+        assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
+    assert gateway_injected(response_id) is False
+
+
+_OTHER_CALL_RESULT: Final[dict[str, JsonValue]] = {
+    "web_search_results": [{"type": "web_search_tool_result", "tool_use_id": "srvtoolu_other", "content": []}]
+}
+_SERVER_MARK_COUNTED: Final = [
+    ASK_LABEL,
+    tool_use_label(CITIES[0]),
+    tool_use_label(CITIES[1]),
+    "assistant:tool_use:srvtoolu_web",
+]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    (
+        pytest.param(1, id="int"),
+        pytest.param(["web_search_results"], id="list"),
+        pytest.param("", id="empty-string"),
+        pytest.param("x" * 5120, id="5kb-string"),
+        pytest.param({"web_search_results": "srvtoolu_web"}, id="results-not-a-list"),
+        pytest.param({"web_search_results": ["srvtoolu_web", 1]}, id="results-without-objects"),
+        pytest.param(_OTHER_CALL_RESULT, id="result-for-another-call"),
+    ),
+)
+def test_malformed_provider_specific_fields_count_the_server_tool_call_mark(
+    gateway: Gateway, fields: JsonValue
+) -> None:
+    marker: Final = new_marker()
+    calls: Final[list[JsonValue]] = [*marked_calls(cities=CITIES[:2]), _SERVER_CALL]
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
+        status, _, text = post_chat(
+            gateway, chat_body(model, conversation(marker, calls, assistant={"provider_specific_fields": fields}))
+        )
+        assert status == 200, text
+        labels: Final = anthropic_labels(_only_request(wire))
+    assert labels == _SERVER_MARK_COUNTED
+
+
+@pytest.mark.parametrize(
+    ("identity", "forwarded"),
+    (
+        pytest.param("", "tool_use_id", id="empty-string"),
+        pytest.param("x" * 5120, "x" * 5120, id="5kb-string"),
+    ),
+)
+def test_odd_tool_call_ids_still_count_their_marks(gateway: Gateway, identity: str, forwarded: str) -> None:
+    marker: Final = new_marker()
+    calls: Final[list[JsonValue]] = [
+        *marked_calls(cities=CITIES[:2]),
+        tool_call(CITIES[2], cache_control=EPHEMERAL, id=identity),
+    ]
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
+        status, _, text = post_chat(gateway, chat_body(model, conversation(marker, calls)))
+        assert status == 200, text
+        labels: Final = anthropic_labels(_only_request(wire))
+    assert labels == [
+        ASK_LABEL,
+        tool_use_label(CITIES[0]),
+        tool_use_label(CITIES[1]),
+        f"assistant:tool_use:{forwarded}",
+    ]
+
+
+def _without_id(call: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    return {key: value for key, value in call.items() if key != "id"}
+
+
+@pytest.mark.parametrize(
+    "odd_call",
+    (
+        pytest.param(tool_call(CITIES[2], cache_control=EPHEMERAL, id=123), id="int"),
+        pytest.param(tool_call(CITIES[2], cache_control=EPHEMERAL, id=["call_x"]), id="list"),
+        pytest.param(tool_call(CITIES[2], cache_control=EPHEMERAL, id=None), id="null"),
+        pytest.param(_without_id(tool_call(CITIES[2], cache_control=EPHEMERAL)), id="missing"),
+    ),
+)
+def test_non_string_tool_call_ids_answer_400_without_an_upstream_call(
+    gateway: Gateway, odd_call: dict[str, JsonValue]
+) -> None:
+    marker: Final = new_marker()
+    calls: Final[list[JsonValue]] = [*marked_calls(cities=CITIES[:2]), odd_call]
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
+        status, _, text = post_chat(gateway, chat_body(model, conversation(marker, calls)))
+        received: Final = wire.drain()
+    assert status == 400, text
+    assert '"error"' in text, text
+    assert len(received) == 0, [request.target for request in received]
+
+
+def _unauthorized_peer(request: Request) -> Reply:
+    assert len(anthropic_labels(request)) <= 4, anthropic_labels(request)
+    return Reply(
+        status=401,
+        body=json.dumps(
+            {"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
+        ).encode(),
+    )
+
+
+def test_provider_error_on_a_capped_request_reaches_the_caller(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    with wire_server(_unauthorized_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", chat_body(model, conversation(marker, marked_calls()))
+        )
+        received: Final = wire.drain()
+    assert response.status_code == 401, response.text
+    assert "invalid x-api-key" in response.text, response.text
+    assert [anthropic_labels(request) for request in received] == [_CLIENT_MARKED]
+
+
+@pytest.mark.parametrize("points", (pytest.param(None, id="null"), pytest.param([], id="empty")))
+def test_points_null_or_empty_forward_only_the_client_marks(gateway: Gateway, points: JsonValue) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=points)
+        status, response_id, text = post_chat(gateway, chat_body(model, conversation(marker, marked_calls())))
+        assert status == 200, text
+        assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
+    assert gateway_injected(response_id) is False
+
+
+def _cache_hit_rows(response_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        """SELECT request_id, metadata->>'litellm_gateway_injected_cache' AS injected FROM "LiteLLM_SpendLogs" """
+        "WHERE request_id LIKE %s",
+        (f"{response_id}_cache_hit%",),
+    )
+
+
+def test_response_cache_hit_records_the_injection_on_the_first_row_only(gateway: Gateway) -> None:
+    marker: Final = new_marker()
+    unmarked: Final = [tool_call(city) for city in CITIES]
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
+        body: Final = chat_body(model, conversation(marker, unmarked, ask_marked=False))
+        first: Final = post_chat(gateway, body)
+        second: Final = post_chat(gateway, body)
+        received: Final = wire.drain()
+    assert (first[0], second[0]) == (200, 200), (first[2], second[2])
+    assert first[1] == second[1], (first[2], second[2])
+    assert [anthropic_labels(request) for request in received] == [[SYSTEM_LABEL, final_label(marker)]]
+    assert gateway_injected(first[1]) is True
+    hit_rows: Final = eventually(lambda: _cache_hit_rows(first[1]), lambda rows: len(rows) == 1, seconds=70)
+    assert hit_rows[0]["injected"] is None, hit_rows
+
+
+@pytest.mark.parametrize("path", ("/v1/messages", "/v1/responses"))
+def test_response_cache_twins_on_messages_and_responses_stay_within_the_cap(gateway: Gateway, path: str) -> None:
+    marker: Final = new_marker()
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
+        body: Final = (
+            messages_body(model, marker, stream=False) if path == "/v1/messages" else responses_body(model, marker)
+        )
+        responses: Final = tuple(gateway.request("POST", path, body) for _ in range(2))
+        received: Final = wire.drain()
+    assert [response.status_code for response in responses] == [200, 200], [response.text for response in responses]
+    expected: Final = _CLIENT_MARKED if path == "/v1/messages" else [SYSTEM_LABEL, ASK_LABEL]
+    assert [anthropic_labels(request) for request in received] == [expected] * len(received)
+    assert len(received) == 1, [request.target for request in received]
+
+
+def _model_id(gateway: Gateway, model: str) -> str:
+    entries: Final = gateway.get("/model/info")["data"]
+    assert isinstance(entries, list), entries
+    matches: Final = [
+        string_value(object_value(object_value(entry)["model_info"])["id"])
+        for entry in entries
+        if object_value(entry)["model_name"] == model
+    ]
+    assert len(matches) == 1, matches
+    return matches[0]
+
+
+_ASSISTANT_POINT: Final[list[JsonValue]] = [{"location": "message", "role": "assistant"}]
+_UPDATE_BURST: Final = 20
+
+
+async def _capped_burst(gateway: Gateway, model: str) -> tuple[tuple[int, str], ...]:
+    async def one(client: httpx.AsyncClient) -> tuple[int, str]:
+        body: Final = chat_body(model, conversation(new_marker(), marked_calls()))
+        response: Final = await client.post(
+            "/v1/chat/completions", json=body, headers={"Authorization": f"Bearer {gateway.key}"}
+        )
+        return response.status_code, response.text
+
+    async with httpx.AsyncClient(base_url=str(gateway.client.base_url), timeout=60, trust_env=False) as client:
+        return tuple(await asyncio.gather(*(one(client) for _ in range(_UPDATE_BURST))))
+
+
+def _probe_assistant_point(gateway: Gateway, wire: Wire, model: str, marker: str) -> list[str]:
+    messages: Final[list[JsonValue]] = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": ASK},
+        {"role": "assistant", "content": "I will check."},
+        {"role": "user", "content": final_text(marker)},
+    ]
+    status, _, text = post_chat(gateway, chat_body(model, messages))
+    assert status == 200, text
+    return anthropic_labels(wire.drain()[-1])
+
+
+async def test_points_update_mid_burst_keeps_every_request_within_the_cap(gateway: Gateway) -> None:
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
+        identity: Final = _model_id(gateway, model)
+        burst: Final = asyncio.create_task(_capped_burst(gateway, model))
+        await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= 3, 30)
+        await asyncio.to_thread(
+            gateway.post,
+            "/model/update",
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": f"anthropic/{ANTHROPIC_MODEL}",
+                    "api_base": wire.url,
+                    "api_key": PROVIDER_KEY,
+                    "cache_control_injection_points": _ASSISTANT_POINT,
+                },
+                "model_info": {"id": identity},
+            },
+        )
+        sent: Final = await burst
+        received: Final = wire.drain()
+        assert [status for status, _ in sent] == [200] * _UPDATE_BURST, [text for _, text in sent]
+        assert [anthropic_labels(request) for request in received] == [_CLIENT_MARKED] * _UPDATE_BURST
+        landed: Final = await asyncio.to_thread(
+            eventually,
+            lambda: _probe_assistant_point(gateway, wire, model, new_marker()),
+            lambda labels: labels == ["assistant:text:I will check."],
+            60,
+        )
+    assert landed == ["assistant:text:I will check."]
