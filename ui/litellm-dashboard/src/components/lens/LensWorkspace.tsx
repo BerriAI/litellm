@@ -83,14 +83,14 @@ function NotchCorner({ side }: { side: "left" | "right" }) {
       )}
     >
       <path d="M0 11 A12.5 11 0 0 0 12.5 0 H13 V12 H0 Z" className="fill-card" />
-      <path d="M0 11.5 A12.5 11.5 0 0 0 12.5 0" className="fill-none stroke-border" />
+      <path d="M0 11.5 A12.5 11.5 0 0 0 12.5 0" className="fill-none stroke-foreground/15" />
     </svg>
   );
 }
 
 function LensModeSwitch({ activity }: { activity: InvestigationActivity }) {
   return (
-    <div className="relative z-raised -mb-px rounded-t-2xl border-x border-t border-border bg-card px-1.5 pt-1.5 pb-[7px]">
+    <div className="relative z-raised -mb-px rounded-t-2xl border-x border-t border-foreground/15 bg-card px-1.5 pt-1.5 pb-[7px]">
       <NotchCorner side="left" />
       <NotchCorner side="right" />
       <TabsPrimitive.List
@@ -140,10 +140,10 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
     open: !demo && activeTab === view ? () => setDemo(true) : undefined,
   });
   return (
-    <main className="flex h-full w-full min-w-0 flex-1 flex-col px-3 pt-2 pb-3">
+    <main className="flex h-full w-full min-w-0 flex-1 flex-col px-4 pt-3 pb-4">
       <Tabs value={activeTab} onValueChange={(value) => setTab(value as LensTab)} className="min-h-0 flex-1 gap-0">
         <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
-          <div className="flex min-w-0 flex-col gap-0.5 self-center">
+          <div className="flex min-w-0 flex-col gap-1 pb-3">
             <h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
               <Aperture aria-hidden="true" className="size-5" strokeWidth={2} />
               Lens
@@ -162,12 +162,12 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
             </p>
           </div>
           <LensModeSwitch activity={activity} />
-          <div className="flex min-w-0 flex-wrap items-center justify-end gap-3 self-center">
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-3 pb-3">
             <div ref={setPreviewTarget} />
             <DemoToggle demo={demo} onChange={setDemo} />
           </div>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-border bg-card p-3">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-foreground/15 bg-card">
           <TabsContent value="traces" keepMounted className={PANEL}>
             <LensPreviewContext.Provider value={preview("traces")}>
               <AgentTracesPage
@@ -178,7 +178,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
               />
             </LensPreviewContext.Provider>
           </TabsContent>
-          <TabsContent value="investigations" className={PANEL}>
+          <TabsContent value="investigations" className={cn(PANEL, "p-4")}>
             <LensPreviewContext.Provider value={preview("investigations")}>
               {canInvestigate ? (
                 <InvestigationsView

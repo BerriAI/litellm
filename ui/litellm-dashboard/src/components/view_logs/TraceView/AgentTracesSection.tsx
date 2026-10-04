@@ -184,7 +184,7 @@ export function AgentTracesSection({
   };
 
   return (
-    <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
+    <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden bg-card">
       {checkHistory && <TraceHistoryError history={history} />}
       <TracesReceived received={setup.received} />
       <TracingSetupAction live={live} isActive={isActive} onClick={() => setShowSetup(true)} />
