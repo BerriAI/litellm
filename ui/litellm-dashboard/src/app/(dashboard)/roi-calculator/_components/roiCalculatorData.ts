@@ -60,10 +60,16 @@ export const estimateLabel = (estimate: ROIEstimate): string => {
   return "Needs review";
 };
 
-export const filterPulls = (pulls: ROIPull[], query: string): ROIPull[] => {
+const matchedMethods = new Set(["manual", "commit email", "profile email"]);
+export const isMatchedPerson = (person: ROIPerson) =>
+  Boolean(person.email) && (person.spend !== null || person.match_methods.some((method) => matchedMethods.has(method)));
+export const isMatchedPull = (pull: ROIPull) => Boolean(pull.email) && matchedMethods.has(pull.match_method);
+
+export const filterPulls = (pulls: ROIPull[], query: string, matchedOnly = false): ROIPull[] => {
   const normalized = query.trim().toLocaleLowerCase();
-  if (!normalized) return pulls;
-  return pulls.filter((pull) =>
+  const visible = matchedOnly ? pulls.filter(isMatchedPull) : pulls;
+  if (!normalized) return visible;
+  return visible.filter((pull) =>
     `${pull.title} ${pull.repo} ${pull.number} ${pull.login} ${pull.source_branch ?? ""}`
       .toLocaleLowerCase()
       .includes(normalized),

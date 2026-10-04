@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   peopleCsv,
+  isMatchedPerson,
   effortNote,
   estimateLabel,
   formatMoney,
@@ -128,9 +129,11 @@ export function ROIBranches({
   pulls,
   query,
   onQueryChange,
+  matchedOnly,
 }: PullSelection & {
   pulls: ROIPull[];
   query: string;
+  matchedOnly: boolean;
   onQueryChange: (query: string) => void;
 }) {
   return (
@@ -145,6 +148,7 @@ export function ROIBranches({
         summary={summary}
         pulls={pulls}
         query={query}
+        matchedOnly={matchedOnly}
         onQueryChange={onQueryChange}
         onSelectPull={onSelectPull}
       />
@@ -159,12 +163,14 @@ function ROIPulls({
   query = "",
   onQueryChange,
   compact = false,
+  matchedOnly = false,
   onViewBranches,
 }: PullSelection & {
   pulls: ROIPull[];
   query?: string;
   onQueryChange?: (query: string) => void;
   compact?: boolean;
+  matchedOnly?: boolean;
   onViewBranches?: () => void;
 }) {
   const changeName = summary.source_provider === "gitlab" ? "merge request" : "pull request";
@@ -173,7 +179,7 @@ function ROIPulls({
   const metrics = summary.metrics;
   const emptyMessage = compact
     ? "No merged changes with tagged costs yet. Open Branches to see how to add tags."
-    : `No merged ${changeName}s in this period.`;
+    : `No merged ${changeName}s ${matchedOnly ? "from matched people " : ""}in this period.`;
   return (
     <section aria-label={`Merged ${changeName}s`} className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -182,10 +188,7 @@ function ROIPulls({
           <p className="text-sm text-muted-foreground">
             {compact
               ? "Merged work ranked by tagged AI cost"
-              : `${metrics.merged_prs} ${changeName}s · ${metrics.estimated_prs} estimated`}
-            {!compact && metrics.pending_prs > 0 && (
-              <span className="text-amber-700 dark:text-amber-400"> · {metrics.pending_prs} need attention</span>
-            )}
+              : `${pulls.length} of ${metrics.merged_prs} ${changeName}s`}
           </p>
         </div>
         {compact ? (
@@ -440,14 +443,17 @@ export function ROIPeopleView({
   identityMap,
   onMatch,
   readOnly = false,
+  matchedOnly = true,
 }: {
   summary: ROISummary;
   identityMap: Record<string, string>;
   onMatch: (person: ROIPerson, login: string) => void;
   readOnly?: boolean;
+  matchedOnly?: boolean;
 }) {
+  const people = matchedOnly ? summary.people.filter(isMatchedPerson) : summary.people;
   const exportCsv = () => {
-    const url = URL.createObjectURL(new Blob([peopleCsv(summary)], { type: "text/csv;charset=utf-8" }));
+    const url = URL.createObjectURL(new Blob([peopleCsv({ ...summary, people })], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = "litellm-roi.csv";
@@ -481,7 +487,7 @@ export function ROIPeopleView({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {summary.people.map((person) => (
+            {people.map((person) => (
               <TableRow key={person.id}>
                 <TableCell className="px-4 py-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -504,12 +510,7 @@ export function ROIPeopleView({
                       <span>Unassigned gateway spend</span>
                     )}
                     <span className="text-xs text-muted-foreground">
-                      {person.match_methods.some(
-                        (method) =>
-                          ["manual", "commit email", "profile email"].includes(method) && person.spend != null,
-                      )
-                        ? "Matched"
-                        : "Unmatched"}
+                      {isMatchedPerson(person) ? "Matched" : "Unmatched"}
                     </span>
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
@@ -531,10 +532,12 @@ export function ROIPeopleView({
                 </TableCell>
               </TableRow>
             ))}
-            {summary.people.length === 0 && (
+            {people.length === 0 && (
               <TableRow>
                 <TableCell className="h-32 text-center text-muted-foreground" colSpan={4}>
-                  No people in this period.
+                  {matchedOnly
+                    ? "No matched people in this period. Turn off the filter to see all contributors"
+                    : "No people in this period"}
                 </TableCell>
               </TableRow>
             )}

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ObservedROIView from "./ObservedROIView";
+import { createObservedDemo } from "./observedDemo";
 import type { ObservedSettings, ObservedSnapshot, ObservedStatus } from "./observedData";
 
 const settings: ObservedSettings = {
@@ -56,6 +57,81 @@ afterEach(() => {
 });
 
 describe("observed ROI dashboard", () => {
+  it("defaults every contributor list to matched people and keeps the switch across tabs", async () => {
+    const sample = createObservedDemo(7);
+    const outside = {
+      ...sample.pulls.current[0],
+      url: "https://gitlab.com/outside/api/-/merge_requests/999",
+      author: "outside",
+      agent: false,
+      title: "Outside change",
+      source_branch: "outside-only",
+      branch_cost: {
+        repo: "gitlab.com/outside/api",
+        branch: "outside-only",
+        spend: 123,
+        requests: 5,
+        status: "matched" as const,
+      },
+    };
+    const report = {
+      ...sample,
+      pulls: { ...sample.pulls, current: [...sample.pulls.current, outside] },
+      unlinked_branches: [{ repo: "gitlab.com/outside/api", branch: "orphan-only", spend: 5, requests: 1 }],
+    };
+    const requests = vi.fn(async (input: string, _init: RequestInit) => {
+      const path = new URL(input, "http://localhost").pathname;
+      if (path.endsWith("/settings")) return Response.json(settings);
+      if (path.endsWith("/report")) return Response.json({ report });
+      if (path.endsWith("/sync")) return Response.json(idle);
+      throw new Error(path);
+    });
+    vi.stubGlobal("fetch", requests);
+    const user = userEvent.setup();
+    render(<ObservedROIView accessToken="test-only-gateway-token" isViewOnly />);
+    expect(await screen.findByRole("switch", { name: "Matched people only" })).toBeChecked();
+    expect(screen.getByRole("tab", { name: "Engineers 3" })).toBeInTheDocument();
+    expect(screen.queryByText("outside")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: "Matched people only" }));
+    expect(screen.getByRole("tab", { name: "Engineers 4" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "View outside's merged changes" }));
+    expect(await screen.findByRole("dialog", { name: "outside" })).toHaveTextContent("Outside change");
+    expect(screen.queryByRole("button", { name: "Edit linked accounts" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await user.click(screen.getByRole("switch", { name: "Matched people only" }));
+    await user.click(screen.getByRole("tab", { name: "Merged changes" }));
+    expect(screen.queryByText("Outside change")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Branch spend" }));
+    expect(screen.getAllByText(/feature\/sample-/).length).toBeGreaterThan(0);
+    expect(screen.queryByText("outside-only")).not.toBeInTheDocument();
+    expect(screen.queryByText("orphan-only")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: "Matched people only" }));
+    expect(screen.getByText("outside-only")).toBeInTheDocument();
+    expect(screen.getByText("orphan-only")).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Merged changes" }));
+    expect(screen.getByText("Outside change")).toBeInTheDocument();
+    expect(requests.mock.calls.every(([, init]) => init.method === "GET")).toBe(true);
+  });
+
+  it("shows a useful empty matched view and exposes all changes when the filter is off", async () => {
+    const sample = { ...createObservedDemo(7), people: [] };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        const path = new URL(input, "http://localhost").pathname;
+        if (path.endsWith("/settings")) return Response.json(settings);
+        if (path.endsWith("/report")) return Response.json({ report: sample });
+        return Response.json(idle);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<ObservedROIView accessToken="test-only-gateway-token" />);
+    expect(await screen.findByText("No merged changes from matched people in this period")).toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: "Matched people only" }));
+    expect(screen.queryByText("No merged changes from matched people in this period")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: /Add repository search/ }).length).toBeGreaterThan(0);
+  });
+
   it("previews every sample view before setup, changes sample periods without writes, and exits back to setup", async () => {
     const requests = vi.fn(async (input: string, _init: RequestInit) => {
       const path = new URL(input, "http://localhost").pathname;
