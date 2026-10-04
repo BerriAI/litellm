@@ -5,7 +5,7 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 
-import { LogDetailsDrawer } from "../../../view_logs/LogDetailsDrawer";
+import { LogDetailsDrawer } from "../../../logs/detail";
 import { formatCost } from "../list/AgentTracesTable";
 import { DetailGroup } from "./AttributesDetail";
 import { CopyButton } from "../ui/CopyButton";
