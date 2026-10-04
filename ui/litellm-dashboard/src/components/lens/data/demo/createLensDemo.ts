@@ -405,5 +405,5 @@ function demoTracesApi(data: LensDemoData): TracesApi {
 
 export function createLensDemo(now = Date.now()): LensServices {
   const data = createLensDemoData(now);
-  return { lens: demoLensApi(data), traces: demoTracesApi(data) };
+  return { accessToken: "lens-demo", lens: demoLensApi(data), traces: demoTracesApi(data) };
 }

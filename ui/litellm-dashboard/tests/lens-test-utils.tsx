@@ -20,7 +20,6 @@ export function renderWithLens(ui: ReactElement, options?: LensRenderOptions) {
   const { accessToken = "test", onboarding: overrides, ...renderOptions } = options ?? {};
   const services = liveLensServices(accessToken);
   const onboarding: Onboarding = {
-    accessToken,
     readOnly: false,
     canViewInvestigations: true,
     canInvestigate: true,

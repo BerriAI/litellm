@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ArrowRight, ArrowUpRight, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cva.config";
 import styles from "./LensIntroduction.module.css";
 import { GatewayFlow } from "./GatewayFlow";
 
@@ -21,7 +22,7 @@ function TraceExample({ highlighted, onHighlight }: EvidenceProps) {
   return (
     <section
       aria-labelledby="lens-sample-trace"
-      className={`${styles.sampleCard} min-w-0 rounded-xl border bg-card p-4`}
+      className={cn(styles.sampleCard, "min-w-0 rounded-xl border bg-card p-4")}
     >
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
         <h3 id="lens-sample-trace" className="font-semibold">
@@ -36,7 +37,7 @@ function TraceExample({ highlighted, onHighlight }: EvidenceProps) {
             "grid w-full grid-cols-[minmax(0,1fr)_minmax(48px,1fr)_2.5rem] items-center gap-2 text-left sm:gap-3";
           const content = (
             <>
-              <span className={`flex min-w-0 items-center gap-1 ${index > 0 ? "pl-2" : ""}`}>
+              <span className={cn("flex min-w-0 items-center gap-1", index > 0 && "pl-2")}>
                 {index === 0 ? (
                   <ChevronDown aria-hidden="true" className="size-3 shrink-0" />
                 ) : (
@@ -49,7 +50,11 @@ function TraceExample({ highlighted, onHighlight }: EvidenceProps) {
               </span>
               <span aria-hidden="true" className="relative h-2.5 overflow-hidden rounded-sm bg-muted/70">
                 <span
-                  className={`absolute inset-y-0 rounded-sm ${linked ? styles.evidenceBar : ""} ${item.failed ? "bg-rose-400" : "bg-indigo-600 dark:bg-indigo-400"}`}
+                  className={cn(
+                    "absolute inset-y-0 rounded-sm",
+                    linked && styles.evidenceBar,
+                    item.failed ? "bg-rose-400" : "bg-indigo-600 dark:bg-indigo-400",
+                  )}
                   style={{ left: `${(item.start / 14.2) * 100}%`, width: `${(item.duration / 14.2) * 100}%` }}
                 />
               </span>
@@ -61,7 +66,7 @@ function TraceExample({ highlighted, onHighlight }: EvidenceProps) {
               {linked ? (
                 <button
                   type="button"
-                  className={`${rowClass} ${styles.evidenceLink}`}
+                  className={cn(rowClass, styles.evidenceLink)}
                   data-evidence-link=""
                   aria-label={`${item.name}, ${item.duration} seconds${item.failed ? ", failed" : ""}. Highlight related finding`}
                   aria-controls="lens-linked-finding"
@@ -78,11 +83,11 @@ function TraceExample({ highlighted, onHighlight }: EvidenceProps) {
         })}
       </ol>
       <div className="mt-3 grid gap-3 border-t pt-3 sm:grid-cols-2">
-        <div id="lens-benchmark-output" className={`${styles.evidenceOutput} rounded-lg bg-muted/60 p-2.5`}>
+        <div id="lens-benchmark-output" className={cn(styles.evidenceOutput, "rounded-lg bg-muted/60 p-2.5")}>
           <p className="text-xs text-muted-foreground">run_benchmark · output</p>
           <p className="mt-1.5 text-sm leading-4.5">Error: benchmark runner unavailable (503)</p>
         </div>
-        <div id="lens-answer-output" className={`${styles.evidenceOutput} rounded-lg bg-muted/60 p-2.5`}>
+        <div id="lens-answer-output" className={cn(styles.evidenceOutput, "rounded-lg bg-muted/60 p-2.5")}>
           <p className="text-xs text-muted-foreground">answer · output</p>
           <p className="mt-1.5 text-sm leading-4.5">“{sampleAnswer}”</p>
         </div>
@@ -95,7 +100,7 @@ function FindingExamples({ highlighted, onHighlight }: EvidenceProps) {
   return (
     <section
       aria-labelledby="lens-sample-findings"
-      className={`${styles.sampleCard} min-w-0 rounded-xl border bg-card p-4`}
+      className={cn(styles.sampleCard, "min-w-0 rounded-xl border bg-card p-4")}
     >
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
         <h3 id="lens-sample-findings" className="font-semibold">
@@ -104,11 +109,11 @@ function FindingExamples({ highlighted, onHighlight }: EvidenceProps) {
         <p className="text-xs text-muted-foreground">500 sample runs reviewed</p>
       </div>
       <div className="mt-3 divide-y border-t">
-        <article id="lens-linked-finding" className={`${styles.evidenceFinding} py-3`}>
+        <article id="lens-linked-finding" className={cn(styles.evidenceFinding, "py-3")}>
           <h4 className="text-sm font-semibold">
             <button
               type="button"
-              className={`${styles.evidenceLink} flex w-full items-start gap-2 text-left`}
+              className={cn(styles.evidenceLink, "flex w-full items-start gap-2 text-left")}
               data-evidence-link=""
               aria-controls="lens-benchmark-output lens-answer-output"
               aria-pressed={highlighted}
@@ -179,7 +184,7 @@ export function LensIntroduction({ onStart, onDemo }: { onStart: () => void; onD
       </div>
       <GatewayFlow />
       <div
-        className={`${styles.examples} mt-4 grid items-stretch gap-3 md:grid-cols-2`}
+        className={cn(styles.examples, "mt-4 grid items-stretch gap-3 md:grid-cols-2")}
         data-evidence-active={highlighted}
       >
         <TraceExample highlighted={highlighted} onHighlight={toggleEvidence} />

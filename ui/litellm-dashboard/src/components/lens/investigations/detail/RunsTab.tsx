@@ -30,11 +30,10 @@ function assessmentLabel(assessment: Job["assessments"][number] | undefined): st
 export interface RunsTabProps {
   readonly lens: Lens;
   readonly job?: Job;
-  readonly accessToken: string;
 }
 
 /** The runs a batch reviewed; each opens its original trace or request in the side panel. */
-export function RunsTab({ lens, job, accessToken }: RunsTabProps) {
+export function RunsTab({ lens, job }: RunsTabProps) {
   const { runId, selectRun } = useRunEvidenceRoute();
   const [runOffset, setRunOffset] = useState(0);
   const [runFilter, setRunFilter] = useState("all");
@@ -142,9 +141,7 @@ export function RunsTab({ lens, job, accessToken }: RunsTabProps) {
         )}
       </TabsContent>
       <Inspector.Panel label="Run details" testId="run-panel">
-        {(run: RunRef) => (
-          <EvidenceView lensId={lens.id} evidence={{ id: run.id, span: "" }} accessToken={accessToken} />
-        )}
+        {(run: RunRef) => <EvidenceView lensId={lens.id} evidence={{ id: run.id, span: "" }} />}
       </Inspector.Panel>
     </Inspector.Root>
   );

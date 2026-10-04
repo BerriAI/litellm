@@ -147,7 +147,6 @@ export function FindingDetails({
 export interface FindingPanelProps {
   readonly readOnly: boolean;
   readonly busy: boolean;
-  readonly accessToken: string;
   /** Runs to name evidence by; defaults to every run the owning investigation has sampled. */
   readonly sampledRuns?: Sample["executions"];
   readonly onReview: (owned: OwnedFinding, status: Finding["status"], reason: string) => void;
@@ -161,7 +160,6 @@ export function FindingPanelBody({
   owned,
   readOnly,
   busy,
-  accessToken,
   sampledRuns,
   onReview,
 }: FindingPanelProps & { readonly owned: OwnedFinding }) {
@@ -184,7 +182,6 @@ export function FindingPanelBody({
         <EvidenceView
           lensId={owned.lens.id}
           evidence={evidence}
-          accessToken={accessToken}
           backLabel="Back to finding"
           onBack={() => setEvidence(null)}
         />

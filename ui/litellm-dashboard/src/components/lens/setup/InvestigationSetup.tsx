@@ -61,7 +61,6 @@ interface SetupProps {
   initial?: Settings;
   mode: SetupMode;
   defaultSource?: Settings["source"];
-  accessToken: string;
   ready?: boolean;
   onClose: () => void;
   onSave: (settings: Settings) => Promise<void>;
@@ -84,7 +83,6 @@ export function InvestigationSetup(props: SetupProps) {
 function SetupEditor({
   initial,
   mode,
-  accessToken,
   ready = true,
   onClose,
   onSave,
@@ -164,7 +162,7 @@ function SetupEditor({
         </Button>
       </header>
       {offline && (
-        <p role="status" className="text-sm text-amber-700">
+        <p role="status" className="text-sm text-warning">
           The worker or trace storage is unavailable. Your draft is safe; you can start when it reconnects.
         </p>
       )}
@@ -226,7 +224,6 @@ function SetupEditor({
                 traceId={run.trace_id}
                 traceRef={run.trace_ref}
                 initialSpanId={null}
-                accessToken={accessToken}
                 onBack={() => setTrace(null)}
               />
             )}

@@ -9,7 +9,7 @@ import { RunView } from "@/components/view_logs/TraceView/TraceDrawer";
 import { useLocalRunSelection } from "@/components/view_logs/TraceView/traceRouting";
 
 import { lensQueries } from "../data/queries";
-import { useLensApi } from "../data/LensServices";
+import { useLensAccessToken, useLensApi } from "../data/LensServices";
 import { evidenceTarget, type EvidenceTarget } from "../model/findings";
 import type { EvidenceRef } from "../route";
 
@@ -18,14 +18,13 @@ const SECTION = 8000;
 export interface EvidenceViewProps {
   readonly lensId: string;
   readonly evidence: EvidenceRef;
-  readonly accessToken: string;
   /** Shown as a back link above the evidence when it is stacked over something else. */
   readonly backLabel?: string;
   readonly onBack?: () => void;
 }
 
 /** The original trace step or logged request a piece of evidence points at, filling the panel. */
-export function EvidenceView({ lensId, evidence, accessToken, backLabel, onBack }: EvidenceViewProps) {
+export function EvidenceView({ lensId, evidence, backLabel, onBack }: EvidenceViewProps) {
   const target = evidenceTarget(evidence.id);
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="evidence-view">
@@ -39,7 +38,6 @@ export function EvidenceView({ lensId, evidence, accessToken, backLabel, onBack 
         lensId={lensId}
         target={target}
         evidence={evidence}
-        accessToken={accessToken}
         onBack={onBack}
       />
     </div>
@@ -50,13 +48,11 @@ function EvidenceBody({
   lensId,
   target,
   evidence,
-  accessToken,
   onBack = () => {},
 }: {
   lensId: string;
   target: EvidenceTarget | null;
   evidence: EvidenceRef;
-  accessToken: string;
   onBack?: () => void;
 }) {
   if (target?.source === "traces")
@@ -65,7 +61,6 @@ function EvidenceBody({
         traceId={target.id}
         traceRef={target.traceRef}
         initialSpanId={evidence.span || null}
-        accessToken={accessToken}
         onBack={onBack}
       />
     );
@@ -77,16 +72,15 @@ export function TraceEvidence({
   traceId,
   traceRef,
   initialSpanId,
-  accessToken,
   onBack,
 }: {
   traceId: string;
   traceRef?: string;
   initialSpanId: string | null;
-  accessToken: string;
   onBack: () => void;
 }) {
   const selection = useLocalRunSelection(initialSpanId);
+  const accessToken = useLensAccessToken();
   return (
     <RunView
       traceId={traceId}

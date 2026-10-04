@@ -16,7 +16,7 @@ import { ownedFindingKey } from "../FindingDetails";
 import { FINDING_PANEL_WIDTH_KEY } from "../../storage";
 import { useFindingFilters, useFindingRoute } from "../../route";
 
-const priorityColors = { high: "bg-red-500", medium: "bg-amber-500", low: "bg-slate-400" };
+const priorityColors = { high: "bg-destructive", medium: "bg-warning", low: "bg-muted-foreground" };
 function emptyFindingTitle(active: boolean, scanned: boolean, status?: string) {
   if (status === "failed" || status === "cancelled") return "No findings from this run";
   if (active) return "Your findings will appear here";

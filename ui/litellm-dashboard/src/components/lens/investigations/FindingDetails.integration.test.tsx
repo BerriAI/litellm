@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 
 import type { RunSelection } from "@/components/view_logs/TraceView/traceRouting";
 
-import { renderWithProviders } from "@/../tests/test-utils";
+import { renderWithLens } from "@/../tests/lens-test-utils";
 import { Inspector } from "@/components/shared/Inspector";
 
 import type { OwnedFinding } from "../model/inbox";
@@ -56,7 +56,7 @@ function Harness({ current, onReview }: { current: Finding | null; onReview: Fin
       noun="finding"
       storageKey="test.finding"
     >
-      <FindingPanel readOnly={false} busy={false} accessToken="t" onReview={onReview} />
+      <FindingPanel readOnly={false} busy={false} onReview={onReview} />
     </Inspector.Root>
   );
 }
@@ -76,7 +76,7 @@ it("keeps a feedback draft during refreshes, sends it with status changes, and r
   );
   const user = userEvent.setup();
   const onReview = vi.fn();
-  const view = renderWithProviders(<Harness current={finding} onReview={onReview} />);
+  const view = renderWithLens(<Harness current={finding} onReview={onReview} />);
   const reason = () => screen.getByRole("textbox", { name: "What should Lens remember?" });
   expect(screen.getByRole("complementary", { name: "Finding details" })).toHaveTextContent("support_agent");
   expect(reason()).toHaveValue("Saved feedback");
@@ -112,7 +112,7 @@ it("stacks a quote's original step over the finding and keeps the feedback draft
     ],
   };
   const onUrlUpdate = vi.fn();
-  renderWithProviders(<Harness current={quoted} onReview={vi.fn()} />, { onUrlUpdate });
+  renderWithLens(<Harness current={quoted} onReview={vi.fn()} />, { onUrlUpdate });
   const panel = screen.getByRole("complementary", { name: "Finding details" });
   const reason = () => within(panel).getByRole("textbox", { name: "What should Lens remember?", hidden: true });
   fireEvent.change(reason(), { target: { value: "Draft feedback" } });

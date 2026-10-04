@@ -92,7 +92,7 @@ export function WorkerInstall({ address, created, connected, children, className
       className={cn("flex flex-col items-center gap-5 text-center", className)}
     >
       <header className="flex flex-col items-center gap-3">
-        <div className="flex size-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400">
+        <div className="flex size-12 items-center justify-center rounded-full bg-success/10 text-success">
           <CheckCircle2 className="size-6" />
         </div>
         <h3 className="text-base font-semibold">Worker connected</h3>

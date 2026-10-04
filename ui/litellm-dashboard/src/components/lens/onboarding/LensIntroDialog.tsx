@@ -67,8 +67,8 @@ export function LensIntroDialog({ open, onClose, ...gettingStarted }: LensIntroD
 }
 
 function IntroContent(props: Omit<LensGettingStartedProps, "state">) {
-  const { accessToken, canViewInvestigations } = useOnboarding();
-  const state = useLensReadiness(accessToken, canViewInvestigations);
+  const { canViewInvestigations } = useOnboarding();
+  const state = useLensReadiness(canViewInvestigations);
   if (state.loading)
     return (
       <p role="status" className="flex items-center gap-2 py-8 text-sm text-muted-foreground">

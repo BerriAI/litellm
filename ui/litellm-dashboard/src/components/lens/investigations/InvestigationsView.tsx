@@ -1,13 +1,14 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 import { LensPreviewButton } from "@/components/view_logs/TraceView/LensPreviewButton";
 
-import { lensKeys, lensQueries } from "../data/queries";
+import { useInvalidateLenses } from "../data/mutations";
+import { lensQueries } from "../data/queries";
 import { useLensApi } from "../data/LensServices";
 import { findFinding, findingKey, type OwnedFinding } from "../model/inbox";
 import type { Finding, Lens, Settings } from "../model/types";
@@ -33,7 +34,6 @@ import { useInvestigationActions } from "./useInvestigationActions";
 import { WatchAllBanner } from "./WatchAllBanner";
 
 export interface InvestigationsViewProps {
-  readonly accessToken: string;
   readonly readOnly?: boolean;
 }
 
@@ -58,15 +58,15 @@ function Banners({ error, activityReady, flush, refresh }: BannersProps) {
   );
 }
 
-export function InvestigationsView({ accessToken, readOnly = false }: InvestigationsViewProps) {
+export function InvestigationsView({ readOnly = false }: InvestigationsViewProps) {
   const api = useLensApi();
-  const client = useQueryClient();
+  const invalidateLenses = useInvalidateLenses();
   const actions = useInvestigationActions();
   const { dialog, target, openDialog, closeDialog } = useDialogRoute();
   const { issueKey, setIssueKey } = useIssueRoute();
   const { lensId, setLensId } = useLensRoute();
   const list = useQuery(lensQueries.list(api));
-  const status = useLensReadiness(accessToken, true);
+  const status = useLensReadiness(true);
   const { connected } = status;
   const screenInput = { list, lensId, dialog, target };
   const screen = investigationScreen(screenInput);
@@ -90,8 +90,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
   const dialogLens = target ? lenses.find((candidate) => candidate.id === target) : lens;
   const refresh = () => {
     actions.reset();
-    void client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
-    void client.invalidateQueries({ queryKey: lensKeys.histories() });
+    void invalidateLenses();
   };
   const saveSetup = async (setup: SetupScreen, settings: Settings) => {
     if (setup.mode !== "edit" && !status.ready)
@@ -147,7 +146,6 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
                   owned={row}
                   readOnly={readOnly}
                   busy={actions.busy}
-                  accessToken={accessToken}
                   onReview={(owned, reviewStatus, reason) => void reviewPeeked(owned, reviewStatus, reason)}
                 />
               ) : (
@@ -158,7 +156,6 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
                     ready={status.ready}
                     busy={actions.busy}
                     connected={connected}
-                    accessToken={accessToken}
                     onEdit={() => openDialog("edit")}
                     onDuplicate={() => openDialog("duplicate")}
                     onPause={() => void actions.pause(row.lens)}
@@ -181,7 +178,6 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
             mode={current.mode}
             initial={current.mode === "new" ? undefined : current.initial}
             defaultSource={!status.tracesReady && status.requestsReady ? "requests" : "traces"}
-            accessToken={accessToken}
             onClose={closeDialog}
             onSave={(settings) => saveSetup(current, settings)}
           />

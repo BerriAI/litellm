@@ -36,7 +36,7 @@ import { useListSearchRoute } from "../route";
 import { FINDING_PANEL_WIDTH_KEY } from "../storage";
 import { filterInvestigations, INVESTIGATION_INDEX, INVESTIGATION_QUERY } from "./investigationQuery";
 
-const PRIORITY_COLOR = { high: "text-destructive", medium: "text-amber-500", low: "text-muted-foreground" } as const;
+const PRIORITY_COLOR = { high: "text-destructive", medium: "text-warning", low: "text-muted-foreground" } as const;
 const META = "truncate text-xs text-muted-foreground";
 const ACTION =
   "inline-flex size-7 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground";
@@ -84,7 +84,7 @@ function JobIcon({ lens }: { lens: Lens }) {
   if (status === "failed") return <CircleX aria-hidden="true" className={cn(className, "text-destructive")} />;
   if (status === "cancelled")
     return <CircleSlash aria-hidden="true" className={cn(className, "text-muted-foreground")} />;
-  if (status === "completed") return <CircleCheck aria-hidden="true" className={cn(className, "text-emerald-600")} />;
+  if (status === "completed") return <CircleCheck aria-hidden="true" className={cn(className, "text-success")} />;
   return <Circle aria-hidden="true" className={cn(className, "text-muted-foreground")} />;
 }
 

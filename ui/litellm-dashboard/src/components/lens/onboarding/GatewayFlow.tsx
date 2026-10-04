@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { cn } from "@/lib/cva.config";
 import styles from "./LensIntroduction.module.css";
 
 const dotColors = [
@@ -45,7 +46,7 @@ export function GatewayFlow() {
       <svg
         aria-hidden="true"
         viewBox="0 0 1000 108"
-        className={`${styles.flowGraphic} mt-2 h-auto w-full`}
+        className={cn(styles.flowGraphic, "mt-2 h-auto w-full")}
         focusable="false"
       >
         <defs>
@@ -105,7 +106,7 @@ export function GatewayFlow() {
           <ellipse cx="500" cy="54" rx="44" ry="40" fill={`url(#${id}-glow)`} className={styles.gatewayGlow} />
           <g clipPath={`url(#${id}-after-gate)`}>
             <g mask={`url(#${id}-organized-shape)`}>
-              <g className={`${styles.organizedDots} fill-indigo-500 dark:fill-indigo-400`}>
+              <g className={cn(styles.organizedDots, "fill-indigo-500 dark:fill-indigo-400")}>
                 {organizedColumns.map((column) => (
                   <g key={column} opacity={0.6 + (((column + 8) * 3) % 8) * 0.05}>
                     {[34, 44, 54, 64, 74].map((y) => (

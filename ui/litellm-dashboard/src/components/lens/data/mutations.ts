@@ -9,18 +9,20 @@ import { useLensApi } from "./LensServices";
 
 export type LensWrite = (api: LensApi) => Promise<unknown>;
 
-export function useLensUpdate() {
+export function useInvalidateLenses() {
   const api = useLensApi();
   const client = useQueryClient();
-  return useMutation({
-    retry: false,
-    mutationFn: (write: LensWrite) => write(api),
-    onSettled: () =>
-      Promise.all([
-        client.invalidateQueries({ queryKey: lensKeys.list(api.scope) }),
-        client.invalidateQueries({ queryKey: lensKeys.histories() }),
-      ]),
-  });
+  return () =>
+    Promise.all([
+      client.invalidateQueries({ queryKey: lensKeys.list(api.scope) }),
+      client.invalidateQueries({ queryKey: lensKeys.histories() }),
+    ]);
+}
+
+export function useLensUpdate() {
+  const api = useLensApi();
+  const invalidate = useInvalidateLenses();
+  return useMutation({ retry: false, mutationFn: (write: LensWrite) => write(api), onSettled: invalidate });
 }
 
 function upsertLens(list: LensList | undefined, saved: Lens): LensList | undefined {

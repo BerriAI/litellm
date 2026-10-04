@@ -4,7 +4,6 @@ import { createContext, useContext } from "react";
 import type { TraceSummary } from "@/components/view_logs/TraceView/traceTypes";
 
 export interface Onboarding {
-  readonly accessToken: string;
   readonly readOnly: boolean;
   readonly canViewInvestigations: boolean;
   readonly canInvestigate: boolean;

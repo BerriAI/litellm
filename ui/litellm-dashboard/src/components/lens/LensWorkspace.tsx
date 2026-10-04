@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import type { TraceSummary } from "@/components/view_logs/TraceView/traceTypes";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { LensServicesProvider, useLensApi, useLiveLensServices } from "./data/LensServices";
+import { LensServicesProvider, useLensAccessToken, useLensApi, useLiveLensServices } from "./data/LensServices";
 import { LensPreviewContext } from "@/components/view_logs/TraceView/LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
@@ -35,7 +35,7 @@ function LiveSession(props: WorkspaceProps) {
   const services = useLiveLensServices(props.accessToken);
   return (
     <LensServicesProvider services={services}>
-      <LensContent {...props} />
+      <LensContent userRole={props.userRole} readOnly={props.readOnly} />
     </LensServicesProvider>
   );
 }
@@ -44,7 +44,7 @@ function SampleSession() {
   const [services] = useState(() => createLensDemo());
   return (
     <LensServicesProvider services={services}>
-      <LensContent accessToken="lens-demo" userRole="proxy_admin_viewer" readOnly />
+      <LensContent userRole="proxy_admin_viewer" readOnly />
     </LensServicesProvider>
   );
 }
@@ -76,7 +76,8 @@ function useLensOverview(enabled: boolean, settingsOpen: boolean) {
 const PANEL =
   "flex min-h-0 flex-1 flex-col overflow-y-auto animate-in fade-in-0 duration-300 motion-reduce:animate-none";
 
-function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
+function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">) {
+  const accessToken = useLensAccessToken();
   const { tab, lensId, demo, settingUp, setTab, setDemo, setSetup } = useLensRoute();
   const { dialog, openDialog } = useDialogRoute();
   const { openTrace } = useOpenTraceRouting();
@@ -122,7 +123,6 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
     setDemo(true);
   };
   const onboarding: Onboarding = {
-    accessToken,
     readOnly,
     canViewInvestigations,
     canInvestigate: isAdmin,
@@ -183,7 +183,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
             <TabsContent value="investigations" className={PANEL}>
               <LensPreviewContext.Provider value={preview("investigations")}>
                 {canViewInvestigations ? (
-                  <InvestigationsView accessToken={accessToken} readOnly={readOnly || !isAdmin} />
+                  <InvestigationsView readOnly={readOnly || !isAdmin} />
                 ) : (
                   <p className="py-6 text-sm text-muted-foreground">
                     Investigations require proxy administrator access. You can still view your traces.

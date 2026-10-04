@@ -5,6 +5,7 @@ import { ArrowRight, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TracingSetupFields } from "@/components/view_logs/TraceView/TracingSetupCard";
 import { cn } from "@/lib/cva.config";
+import { useLensAccessToken } from "../data/LensServices";
 import type { LensReadiness } from "../hooks/useLensReadiness";
 import { initialSetupStep } from "../model/readiness";
 import { StepIndicator, type StepState } from "../ui/StepIndicator";
@@ -18,7 +19,8 @@ function useLocked() {
 }
 
 function StorageStep({ state, goTo }: StepProps) {
-  const { accessToken, readOnly, openTrace } = useOnboarding();
+  const { readOnly, openTrace } = useOnboarding();
+  const accessToken = useLensAccessToken();
   if (!state.tracingEnabled)
     return (
       <>
@@ -71,7 +73,8 @@ function ActivityContinuation({ state }: { state: LensReadiness }) {
 }
 
 function AgentStep({ state }: StepProps) {
-  const { accessToken, readOnly, canMintTracingKey, openTrace } = useOnboarding();
+  const { readOnly, canMintTracingKey, openTrace } = useOnboarding();
+  const accessToken = useLensAccessToken();
   if (!state.tracingEnabled)
     return (
       <>

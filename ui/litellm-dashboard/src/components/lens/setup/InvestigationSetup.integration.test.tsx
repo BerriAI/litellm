@@ -91,7 +91,6 @@ describe("Investigation setup", () => {
       <InvestigationSetup
         mode="edit"
         initial={{ ...settings, execution_ids: ["saved-run"] }}
-        accessToken="test"
         onClose={vi.fn()}
         onSave={vi.fn()}
       />,
@@ -112,9 +111,7 @@ describe("Investigation setup", () => {
   it("preserves check identity and disabled state when a check is edited", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
-    renderWithProviders(
-      <InvestigationSetup mode="edit" initial={settings} accessToken="test" onClose={vi.fn()} onSave={save} />,
-    );
+    renderWithProviders(<InvestigationSetup mode="edit" initial={settings} onClose={vi.fn()} onSave={save} />);
     await user.click(screen.getByRole("button", { name: "Continue" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Check 1" }), {
       target: { value: "Find repetitive searches\nInclude retries that add no information" },
@@ -155,7 +152,7 @@ describe("Investigation setup", () => {
         : { eligible: 0, executions: [] };
     });
     mockGateway({ keyModels: ["analysis"] });
-    renderWithProviders(<InvestigationSetup mode="new" accessToken="test" onClose={vi.fn()} onSave={save} />);
+    renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={save} />);
     fireEvent.change(screen.getByRole("textbox", { name: "Investigation name" }), {
       target: { value: "Research follow-up" },
     });
@@ -201,7 +198,7 @@ describe("Investigation setup", () => {
 it("walks the three steps in order, reopens a finished step from its summary, and keeps the preview beside them", async () => {
   const user = userEvent.setup();
   mockGateway({ keyModels: ["analysis"] });
-  renderWithProviders(<InvestigationSetup mode="new" accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
+  renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />);
   const steps = within(screen.getByRole("list", { name: "Investigation setup" }));
   expect(steps.getByRole("button", { name: /^Activity/ })).toHaveAttribute("aria-current", "step");
   expect(steps.getByRole("button", { name: /^Run/ })).toBeDisabled();
@@ -231,9 +228,7 @@ it("searches providers and saves custom history while preserving existing schedu
       { model_group: "other", providers: ["Anthropic"], mode: "chat" },
     ],
   });
-  renderWithProviders(
-    <InvestigationSetup mode="edit" initial={settings} accessToken="test" onClose={vi.fn()} onSave={save} />,
-  );
+  renderWithProviders(<InvestigationSetup mode="edit" initial={settings} onClose={vi.fn()} onSave={save} />);
   await user.selectOptions(screen.getByRole("combobox", { name: "Review the last unit" }), "1");
   fireEvent.change(screen.getByRole("spinbutton", { name: "Review the last" }), { target: { value: "3" } });
   await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -263,9 +258,7 @@ it("configures monitoring separately and rejects a zero interval", async () => {
 it("allows retrying an investigation save after a server error", async () => {
   const user = userEvent.setup();
   const save = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValue(undefined);
-  renderWithProviders(
-    <InvestigationSetup mode="edit" initial={settings} accessToken="test" onClose={vi.fn()} onSave={save} />,
-  );
+  renderWithProviders(<InvestigationSetup mode="edit" initial={settings} onClose={vi.fn()} onSave={save} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   const saveButton = screen.getByRole("button", { name: "Save changes" });
@@ -318,9 +311,7 @@ it.each(["empty", "error"])("allows editing saved settings when the preview is %
   if (state === "error") vi.mocked(apiClient.post).mockRejectedValue(new Error("Storage unavailable"));
   else vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
   const user = userEvent.setup();
-  renderWithProviders(
-    <InvestigationSetup mode="edit" initial={settings} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />,
-  );
+  renderWithProviders(<InvestigationSetup mode="edit" initial={settings} onClose={vi.fn()} onSave={vi.fn()} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
@@ -335,9 +326,7 @@ it.each(["loading", "error"])("saves edits with the existing model while models 
     if (path !== "/models") return Promise.resolve(gatewayResponse(path, {}));
     return state === "loading" ? new Promise(() => {}) : Promise.reject(new Error("Temporarily unavailable"));
   });
-  renderWithProviders(
-    <InvestigationSetup mode="edit" initial={settings} accessToken="test" onClose={vi.fn()} onSave={save} />,
-  );
+  renderWithProviders(<InvestigationSetup mode="edit" initial={settings} onClose={vi.fn()} onSave={save} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   fireEvent.change(screen.getByRole("textbox", { name: "What should the agent be doing?" }), {
     target: { value: "Include verified sources" },
@@ -357,9 +346,7 @@ it.each(["new", "duplicate"] as const)("blocks a %s investigation until its mode
       ? Promise.reject(new Error("Temporarily unavailable"))
       : Promise.resolve(gatewayResponse(path, {})),
   );
-  renderWithProviders(
-    <InvestigationSetup initial={settings} mode={mode} accessToken="test" onClose={vi.fn()} onSave={save} />,
-  );
+  renderWithProviders(<InvestigationSetup initial={settings} mode={mode} onClose={vi.fn()} onSave={save} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   expect(await screen.findByText("1 matching run")).toBeInTheDocument();
@@ -370,9 +357,7 @@ it.each(["new", "duplicate"] as const)("blocks a %s investigation until its mode
 it("keeps a duplicated investigation's schedule off and saves the interval once switched on", async () => {
   const user = userEvent.setup();
   const save = vi.fn().mockResolvedValue(undefined);
-  renderWithProviders(
-    <InvestigationSetup initial={settings} mode="duplicate" accessToken="test" onClose={vi.fn()} onSave={save} />,
-  );
+  renderWithProviders(<InvestigationSetup initial={settings} mode="duplicate" onClose={vi.fn()} onSave={save} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled());
@@ -391,7 +376,7 @@ it("watches new investigations every 15 minutes by default, outside advanced opt
   const user = userEvent.setup();
   const save = vi.fn().mockResolvedValue(undefined);
   mockGateway({ keyModels: ["analysis"] });
-  renderWithProviders(<InvestigationSetup mode="new" accessToken="test" onClose={vi.fn()} onSave={save} />);
+  renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={save} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   const watching = await screen.findByRole("checkbox", { name: "Keep watching for new traces" });
@@ -419,9 +404,7 @@ it("appends the next preview page as the list scrolls near its end, then stops a
       finishSecondPage = () => resolve({ eligible: 2, selected: 2, executions: [run("two")], next_offset: null });
     });
   });
-  renderWithProviders(
-    <InvestigationSetup mode="edit" initial={settings} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />,
-  );
+  renderWithProviders(<InvestigationSetup mode="edit" initial={settings} onClose={vi.fn()} onSave={vi.fn()} />);
   expect(await screen.findByText("Run one")).toBeVisible();
   expect(screen.getByText(/Showing 1 of 2/)).toBeVisible();
   expect(screen.getByRole("status")).toHaveTextContent("2 matching runs");
@@ -457,9 +440,7 @@ it("does not silently analyze everything after individual selection is enabled",
       },
     ],
   });
-  renderWithProviders(
-    <InvestigationSetup mode="edit" initial={settings} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />,
-  );
+  renderWithProviders(<InvestigationSetup mode="edit" initial={settings} onClose={vi.fn()} onSave={vi.fn()} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByText("Advanced options"));
@@ -474,7 +455,7 @@ it("refreshes agent suggestions when the first activity arrives", async () => {
   try {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
-    renderWithProviders(<InvestigationSetup mode="new" accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
+    renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />);
     await vi.advanceTimersByTimeAsync(400);
     await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
     expect(await screen.findByText(/No matches. You can enter/)).toBeVisible();
@@ -507,7 +488,7 @@ it("fetches one preview for two keystrokes inside the debounce window", async ()
   vi.useFakeTimers({ shouldAdvanceTime: true });
   try {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    renderWithProviders(<InvestigationSetup mode="new" accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
+    renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />);
     await user.click(screen.getByText("Advanced filters"));
     const previewsFor = (teamId: string) =>
       vi
@@ -530,9 +511,7 @@ it.each(["empty", "error"])("blocks a new investigation when its preview is %s",
   if (state === "error") vi.mocked(apiClient.post).mockRejectedValue(new Error("Storage unavailable"));
   else vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
   const user = userEvent.setup();
-  renderWithProviders(
-    <InvestigationSetup mode="duplicate" initial={settings} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />,
-  );
+  renderWithProviders(<InvestigationSetup mode="duplicate" initial={settings} onClose={vi.fn()} onSave={vi.fn()} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   expect(screen.getByRole("button", { name: "Run investigation" })).toBeDisabled();
@@ -541,9 +520,7 @@ it.each(["empty", "error"])("blocks a new investigation when its preview is %s",
 it("exposes an unsupported inherited model before allowing a run", async () => {
   const user = userEvent.setup();
   mockGateway({ modelDetails: [{ model_group: "analysis", mode: "embedding", providers: [] }] });
-  renderWithProviders(
-    <InvestigationSetup mode="duplicate" initial={settings} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />,
-  );
+  renderWithProviders(<InvestigationSetup mode="duplicate" initial={settings} onClose={vi.fn()} onSave={vi.fn()} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   expect(screen.getByText("Choose a chat model that supports JSON output.")).toBeVisible();
@@ -559,7 +536,6 @@ it("saves a discovered agent independently of the application name", async () =>
     <InvestigationSetup
       mode="edit"
       initial={{ ...settings, service: "shared-service" }}
-      accessToken="test"
       onClose={vi.fn()}
       onSave={save}
     />,
@@ -581,7 +557,7 @@ describe("Watch for", () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     mockGateway({ keyModels: ["analysis"] });
-    renderWithProviders(<InvestigationSetup mode="new" accessToken="test" onClose={vi.fn()} onSave={save} />);
+    renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={save} />);
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(tile("unhappy"));
     tile("unsolved").focus();
@@ -604,9 +580,7 @@ describe("Watch for", () => {
       ...settings,
       checks: [{ id: "watch_invented", instruction: "old wording", enabled: true }, settings.checks[1]],
     };
-    renderWithProviders(
-      <InvestigationSetup mode="edit" initial={initial} accessToken="test" onClose={vi.fn()} onSave={save} />,
-    );
+    renderWithProviders(<InvestigationSetup mode="edit" initial={initial} onClose={vi.fn()} onSave={save} />);
     await user.click(screen.getByRole("button", { name: "Continue" }));
     expect(tile("invented")).toHaveAttribute("aria-pressed", "true");
     expect(tile("unsolved")).toHaveAttribute("aria-pressed", "false");
@@ -623,7 +597,7 @@ describe("Watch for", () => {
   it("lets a run start from presets alone and blocks it once nothing is selected", async () => {
     const user = userEvent.setup();
     mockGateway({ keyModels: ["analysis"] });
-    renderWithProviders(<InvestigationSetup mode="new" accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
+    renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
     expect(await screen.findByRole("button", { name: "Run and monitor" })).toBeInTheDocument();

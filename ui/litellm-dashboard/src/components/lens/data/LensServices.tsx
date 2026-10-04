@@ -6,21 +6,26 @@ import { liveTracesApi, TracesApiContext, type TracesApi } from "@/components/vi
 import { liveLensApi, type LensApi } from "./service";
 
 export interface LensServices {
+  readonly accessToken: string;
   readonly lens: LensApi;
   readonly traces: TracesApi;
 }
 
-const LensApiContext = createContext<LensApi | null>(null);
+const LensServicesContext = createContext<LensServices | null>(null);
 
 export function liveLensServices(accessToken: string): LensServices {
-  return { lens: liveLensApi(apiClient, accessToken), traces: liveTracesApi(accessToken) };
+  return { accessToken, lens: liveLensApi(apiClient, accessToken), traces: liveTracesApi(accessToken) };
 }
 
-export function useLensApi(): LensApi {
-  const provided = useContext(LensApiContext);
-  if (!provided) throw new Error("useLensApi needs a LensServicesProvider above it");
+function useLensServices(): LensServices {
+  const provided = useContext(LensServicesContext);
+  if (!provided) throw new Error("Lens services need a LensServicesProvider above them");
   return provided;
 }
+
+export const useLensApi = (): LensApi => useLensServices().lens;
+
+export const useLensAccessToken = (): string => useLensServices().accessToken;
 
 export function useLiveLensServices(accessToken: string): LensServices {
   return useMemo(() => liveLensServices(accessToken), [accessToken]);
@@ -28,8 +33,8 @@ export function useLiveLensServices(accessToken: string): LensServices {
 
 export function LensServicesProvider({ services, children }: { services: LensServices; children: ReactNode }) {
   return (
-    <LensApiContext.Provider value={services.lens}>
+    <LensServicesContext.Provider value={services}>
       <TracesApiContext.Provider value={services.traces}>{children}</TracesApiContext.Provider>
-    </LensApiContext.Provider>
+    </LensServicesContext.Provider>
   );
 }

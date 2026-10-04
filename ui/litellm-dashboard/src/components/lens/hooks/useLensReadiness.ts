@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { isTracingNotEnabled, useTraceAvailability } from "@/components/view_logs/TraceView/useAgentTraces";
-import { useLensApi } from "../data/LensServices";
+import { useLensAccessToken, useLensApi } from "../data/LensServices";
 import { lensQueries } from "../data/queries";
 import { readiness, type Readiness, type ReadinessInput } from "../model/readiness";
 import { useWorkerConnected } from "./useWorkerConnected";
@@ -14,8 +14,9 @@ export interface LensReadiness extends Readiness {
   refresh(): void;
 }
 
-export function useLensReadiness(accessToken: string, canInvestigate: boolean): LensReadiness {
+export function useLensReadiness(canInvestigate: boolean): LensReadiness {
   const api = useLensApi();
+  const accessToken = useLensAccessToken();
   const traces = useTraceAvailability(accessToken, true);
   const list = useQuery({ ...lensQueries.list(api), enabled: canInvestigate });
   const activity = useQuery(lensQueries.activity(api, canInvestigate && list.isSuccess));

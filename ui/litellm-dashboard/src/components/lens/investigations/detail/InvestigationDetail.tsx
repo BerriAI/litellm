@@ -28,7 +28,6 @@ export type InvestigationDetailProps = InvestigationIntents & {
   readonly ready: boolean;
   readonly busy: boolean;
   readonly connected: boolean;
-  readonly accessToken: string;
   readonly onReviewFinding: (owned: OwnedFinding, status: Finding["status"], reason: string) => void;
 };
 
@@ -38,7 +37,6 @@ export function InvestigationDetail({
   ready,
   busy,
   connected,
-  accessToken,
   onCancelRun,
   onReviewFinding,
   ...intents
@@ -91,13 +89,12 @@ export function InvestigationDetail({
             <FindingPanel
               readOnly={readOnly}
               busy={busy}
-              accessToken={accessToken}
               sampledRuns={job?.sample?.executions}
               onReview={onReviewFinding}
             />
           </FindingsTab>
           <CriteriaTab settings={batchSettings} readOnly={readOnly} onEditCriteria={intents.onEdit} />
-          <RunsTab key={job?.id ?? batchId} lens={lens} job={job} accessToken={accessToken} />
+          <RunsTab key={job?.id ?? batchId} lens={lens} job={job} />
           <HistoryTab lens={lens} />
         </Tabs>
       </section>
