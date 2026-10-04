@@ -1,6 +1,5 @@
 use litellm_http::Client;
-use litellm_storage_clickhouse::Error as StorageError;
-use litellm_storage_clickhouse::{Query, fetch};
+use litellm_storage_clickhouse::{Error as StorageError, Query, fetch};
 use litellm_traces::query::named as contracts;
 use litellm_traces_cache::{StoreError, TraceStore};
 

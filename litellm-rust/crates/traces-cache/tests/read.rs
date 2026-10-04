@@ -571,7 +571,13 @@ async fn failed_batch_spend_lookup_falls_back_to_each_run_instead_of_losing_ever
     let by_ref: HashMap<&str, f64> = page
         .data
         .iter()
-        .map(|run| (run.trace_ref.as_str(), run.spend.expect("run's own spend read should have succeeded")))
+        .map(|run| {
+            (
+                run.trace_ref.as_str(),
+                run.spend
+                    .expect("run's own spend read should have succeeded"),
+            )
+        })
         .collect();
     assert_eq!(by_ref["ref-a"], 1.5);
     assert_eq!(by_ref["ref-b"], 2.5);
