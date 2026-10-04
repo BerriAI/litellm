@@ -1025,6 +1025,53 @@ def test_anthropic_messages_uses_deployment_max_tokens_default(gateway: Gateway)
         assert outbound.get("max_tokens") == 32, provider_requests
 
 
+def test_anthropic_messages_uses_router_wide_max_tokens_default(gateway: Gateway, tmp_path: Path) -> None:
+    with gateway.scenario() as scenario:
+        identity: Final = f"router-default-{uuid.uuid4().hex}"
+        handle: Final = register_scenario(identity, _response("anthropic_messages"))
+        scenario.cleanups.callback(delete_scenario, handle)
+        config: Final = tmp_path / "router-default.yaml"
+        config.write_text(
+            json.dumps(
+                {
+                    "model_list": [
+                        {
+                            "model_name": "router-default-anthropic",
+                            "litellm_params": {
+                                "model": "anthropic/claude-haiku-4-5",
+                                "api_base": handle.api_base(),
+                                "api_key": identity,
+                            },
+                        }
+                    ],
+                    "router_settings": {"default_litellm_params": {"max_tokens": 32}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned:
+            candidate: Final = Gateway(owned.gateway.client, owned.gateway.key, gateway.upstream_url)
+            response: Final = _post(
+                candidate,
+                "/v1/messages",
+                {"model": "router-default-anthropic", "messages": [{"role": "user", "content": "router default"}]},
+            )
+            assert response.status_code == 200, response.text
+            _assert_scripted_response("anthropic_messages", JSON_OBJECT.validate_python(response.json()))
+            observations: Final = _Observations(gateway.upstream_url)
+            captured: Final = eventually(
+                observations.read,
+                lambda _items: any(item.get("method") == "POST" for item in observations.for_scenario(identity)),
+                seconds=20,
+            )
+            provider_requests: Final = tuple(
+                item for item in observations.for_scenario(identity) if item.get("method") == "POST"
+            )
+            assert len(provider_requests) == 1, captured
+            outbound: Final = object_value(provider_requests[0]["body"])
+            assert outbound.get("max_tokens") == 32, provider_requests
+
+
 def test_anthropic_messages_explicit_null_reaches_upstream(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         model, identity, _handle = _register(

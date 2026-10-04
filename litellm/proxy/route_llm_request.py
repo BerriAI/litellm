@@ -245,17 +245,27 @@ def _find_missing_required_body_param(
     if not missing_present_params:
         return None
     candidate_litellm_params: Final = _candidate_deployment_litellm_params(data, llm_router)
+    router_default_litellm_params: Final = _router_default_litellm_params(llm_router)
     missing_param: Final = next(
         (
             param
             for param in missing_present_params
-            if not any(deployment_params.get(param) is not None for deployment_params in candidate_litellm_params)
+            if router_default_litellm_params.get(param) is None
+            and not any(deployment_params.get(param) is not None for deployment_params in candidate_litellm_params)
         ),
         None,
     )
     if missing_param is None:
         return None
     return MissingBodyParam(name=missing_param, model_deployments_loaded=bool(candidate_litellm_params))
+
+
+def _router_default_litellm_params(llm_router: LitellmRouter | None) -> Mapping[str, object]:
+    # The router merges default_litellm_params into kwargs only during dispatch, after this
+    # route-entry check, so a router-wide default counts as supplying the param; None-valued
+    # defaults are skipped by that merge and therefore do not count here either.
+    defaults: Final[Mapping[str, object] | None] = getattr(llm_router, "default_litellm_params", None)
+    return defaults if isinstance(defaults, Mapping) else {}
 
 
 def _candidate_deployment_litellm_params(
