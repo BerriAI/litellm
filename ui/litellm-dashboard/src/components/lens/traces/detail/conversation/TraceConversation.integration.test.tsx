@@ -2,19 +2,19 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
-import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
-import { RunView } from "./TraceDrawer";
-import { useOpenTraceRouting } from "../routing";
+import { renderWithProviders, testQueryClient } from "../../../../../../tests/test-utils";
+import { RunView } from "../run/RunView";
+import { useOpenTraceRouting } from "../../routing";
 import { TraceConversation } from "./TraceConversation";
-import type { SpanDetail, Trace } from "../types";
-import research from "../__fixtures__/research_trace.json";
+import type { SpanDetail, Trace } from "../../types";
+import research from "../../__fixtures__/research_trace.json";
 
-vi.mock("../../../networking", () => ({
+vi.mock("../../../../networking", () => ({
   agentTraceCall: vi.fn(),
   agentTraceSpanCall: vi.fn(),
   getProxyBaseUrl: () => "http://proxy.test",
 }));
-import { agentTraceCall, agentTraceSpanCall } from "../../../networking";
+import { agentTraceCall, agentTraceSpanCall } from "../../../../networking";
 
 function RoutedRunView(props: Omit<ComponentProps<typeof RunView>, "selection">) {
   const { selection } = useOpenTraceRouting();

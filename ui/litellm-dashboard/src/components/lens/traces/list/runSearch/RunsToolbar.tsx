@@ -17,9 +17,9 @@ interface RunsToolbarProps {
 
 export function RunsToolbar({ query, onQueryChange, runs, range, children }: RunsToolbarProps) {
   return (
-    <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card p-2">
+    <div className="flex h-10 shrink-0 items-stretch border-b border-border bg-card">
       <RunSearch value={query} onChange={onQueryChange} runs={runs} range={range} />
-      {children && <div className="ml-auto flex items-center gap-2">{children}</div>}
+      {children && <div className="flex shrink-0 items-stretch">{children}</div>}
     </div>
   );
 }

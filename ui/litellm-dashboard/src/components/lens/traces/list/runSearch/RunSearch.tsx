@@ -31,8 +31,12 @@ export function RunSearch({ value, onChange, runs, range }: RunSearchProps) {
       value={value}
       onValueChange={onChange}
       label="Search runs"
+      className="h-full min-w-0"
     >
-      <SearchBox.Input className="rounded-lg" placeholder="Search runs, or filter like agent:researcher status:error" />
+      <SearchBox.Input
+        className="h-full rounded-none border-0 px-3 focus-within:bg-muted/40 focus-within:ring-0 dark:bg-transparent"
+        placeholder="Search runs, or filter like agent:researcher status:error"
+      />
       <SearchBox.Suggestions>
         <SearchBox.CopyCommand title={COPY_HINT} command={command} />
       </SearchBox.Suggestions>

@@ -25541,6 +25541,47 @@ export interface components {
              */
             traces: boolean;
         };
+        /** ActivitySelection */
+        ActivitySelection: {
+            /**
+             * Agent Name
+             * @default
+             */
+            agent_name: string;
+            /**
+             * Execution Ids
+             * @default []
+             */
+            execution_ids: string[];
+            /**
+             * Filters
+             * @default []
+             */
+            filters: components["schemas"]["MetadataFilter"][];
+            /**
+             * Sample Percent
+             * @default 100
+             */
+            sample_percent: number;
+            /** Sample Size */
+            sample_size?: number | null;
+            /**
+             * Service
+             * @default
+             */
+            service: string;
+            /**
+             * Source
+             * @default traces
+             * @enum {string}
+             */
+            source: "traces" | "requests" | "both";
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
+        };
         /** AdaptiveRouterWeights */
         AdaptiveRouterWeights: {
             /**
@@ -41454,7 +41495,7 @@ export interface components {
              * @default 0
              */
             offset: number;
-            settings: components["schemas"]["LensSettings"];
+            selection: components["schemas"]["ActivitySelection"];
         };
         /** Progress */
         Progress: {

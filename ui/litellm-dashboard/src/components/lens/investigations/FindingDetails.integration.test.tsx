@@ -11,7 +11,7 @@ import type { OwnedFinding } from "../model/inbox";
 import type { Finding, Lens } from "../model/types";
 import { FindingPanel, ownedFindingKey } from "./FindingDetails";
 
-vi.mock("@/components/lens/traces/detail/TraceDrawer", () => ({
+vi.mock("@/components/lens/traces/detail/run/RunView", () => ({
   RunView: ({ traceId, selection }: { traceId: string; selection: RunSelection }) => (
     <div data-testid="run-view">
       {traceId} at {selection.spanId}

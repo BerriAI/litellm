@@ -3,20 +3,20 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type ComponentProps, useState } from "react";
 
-import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "../../../../../../tests/test-utils";
 import { DetailPane } from "./DetailPane";
-import type { SpanTab } from "../routing";
-import { absoluteTime, SpanHoverCard, spanFacts } from "./SpanHoverCard";
-import type { GroupRowData, SpanRowData } from "../tree";
-import type { Span, SpanDetail, SpanErrorPage, Trace } from "../types";
+import type { SpanTab } from "../../routing";
+import { absoluteTime, SpanHoverCard, spanFacts } from "../tree/SpanHoverCard";
+import type { GroupRowData, SpanRowData } from "../../tree";
+import type { Span, SpanDetail, SpanErrorPage, Trace } from "../../types";
 
-vi.mock("../../../networking", () => ({
+vi.mock("../../../../networking", () => ({
   agentTraceSpanCall: vi.fn(),
   agentTraceSpanErrorCall: vi.fn(),
   getProxyBaseUrl: () => "http://proxy.test/",
 }));
 
-import { agentTraceSpanCall, agentTraceSpanErrorCall } from "../../../networking";
+import { agentTraceSpanCall, agentTraceSpanErrorCall } from "../../../../networking";
 
 type SpanFields = Partial<Span> & Pick<Span, "span_id">;
 
@@ -137,6 +137,40 @@ const textDetail: SpanDetail = {
   attributes: {},
 };
 
+const workflowDetail: SpanDetail = {
+  span_id: "root",
+  input: '{"init_state": {"config": {"timeout": null}}}',
+  input_ui: {
+    kind: "fields",
+    fields: [
+      { key: "init_state", value: '{"config": {"timeout": null, "workers": 4}}' },
+      { key: "start_event", value: "AgentWorkflowStartEvent()" },
+    ],
+  },
+  output: "StopEvent(result='done')",
+  output_ui: { kind: "text", text: "An **agent trace** records each step" },
+  attributes: {},
+};
+
+const langchainDetail: SpanDetail = {
+  span_id: "root",
+  input: "",
+  output: '{"messages": []}',
+  output_ui: {
+    kind: "fields",
+    fields: [
+      {
+        key: "messages",
+        value: JSON.stringify([
+          { type: "human", data: { content: "What is an agent trace?" } },
+          { type: "ai", data: { content: "A record of every step an agent took." } },
+        ]),
+      },
+    ],
+  },
+  attributes: {},
+};
+
 const failedToolMessageDetail: SpanDetail = {
   span_id: "tool1",
   input: '{"customer_id":"acme-404"}',
@@ -174,7 +208,7 @@ describe("DetailPane", () => {
     expect(screen.getByRole("tab", { name: "Content" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Request" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Attributes" })).toBeInTheDocument();
-    expect(await screen.findByText("You are a LiteLLM support agent.")).toBeInTheDocument();
+    expect(await screen.findByText("Customer acme-404 says billing is wrong.")).toBeVisible();
     expect(screen.getAllByText("get_customer_plan").length).toBeGreaterThan(0);
     expect(vi.mocked(agentTraceSpanCall)).toHaveBeenCalledWith("sk-test", "t1", "llm1", undefined);
   });
@@ -282,7 +316,9 @@ describe("DetailPane", () => {
     renderPane(spanRow(llm));
     const input = await screen.findByRole("region", { name: /^Input/ });
     const systemText = "You are a LiteLLM support agent.";
-    expect(within(input).getByText(systemText, { ignore: "[inert] *" })).toBeInTheDocument();
+    expect(within(input).queryByText(systemText)).not.toBeInTheDocument();
+    await user.click(within(input).getByRole("button", { name: "Expand System" }));
+    expect(within(input).getByText(systemText, { ignore: "[inert] *" })).toBeVisible();
     await user.click(within(input).getByRole("button", { name: /^Input/ }));
     expect(within(input).getByRole("button", { name: /^Input/ })).toHaveAttribute("aria-expanded", "false");
     expect(within(input).queryByText(systemText, { ignore: "[inert] *" })).not.toBeInTheDocument();
@@ -320,6 +356,37 @@ describe("DetailPane", () => {
     const output = await screen.findByRole("region", { name: "Output" });
     expect(within(output).getByText("all done", { selector: "pre" })).toBeInTheDocument();
     expect(output).not.toHaveTextContent("answer");
+  });
+
+  it("unfolds JSON-encoded field values into a nested tree and shows the raw payload on request", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceSpanCall).mockResolvedValue(workflowDetail);
+    renderPane(spanRow(root));
+    const input = await screen.findByRole("region", { name: /^Input/ });
+    expect(within(input).getByText("AgentWorkflowStartEvent()")).toBeVisible();
+    expect(within(input).getByRole("button", { name: "Collapse init_state" })).toHaveAttribute("aria-expanded", "true");
+    expect(within(input).queryByText("workers")).not.toBeInTheDocument();
+    await user.click(within(input).getByRole("button", { name: "Expand config" }));
+    expect(within(input).getByText("workers")).toBeVisible();
+    expect(within(input).getByText("4")).toBeVisible();
+
+    const output = screen.getByRole("region", { name: "Output" });
+    expect(within(output).getByText("agent trace", { selector: "strong" })).toBeVisible();
+    await user.click(within(output).getByRole("radio", { name: "Raw" }));
+    expect(within(output).getByText("StopEvent(result='done')", { selector: "pre" })).toBeVisible();
+    expect(within(output).queryByText("agent trace", { selector: "strong" })).not.toBeInTheDocument();
+    expect(within(input).getByText("AgentWorkflowStartEvent()")).toBeVisible();
+  });
+
+  it("renders LangChain's serialized messages as conversation cards", async () => {
+    vi.mocked(agentTraceSpanCall).mockResolvedValue(langchainDetail);
+    renderPane(spanRow(root));
+    const output = await screen.findByRole("region", { name: "Output" });
+    expect(within(output).getByRole("button", { name: "Collapse messages" })).toHaveAttribute("aria-expanded", "true");
+    expect(within(output).getByRole("button", { name: "Collapse User" })).toBeVisible();
+    expect(within(output).getByText("What is an agent trace?")).toBeVisible();
+    expect(within(output).getByText("A record of every step an agent took.")).toBeVisible();
+    expect(output).not.toHaveTextContent('"type": "human"');
   });
 
   it("groups ids and OTEL attributes into separate key / value sections on the Attributes tab", async () => {
