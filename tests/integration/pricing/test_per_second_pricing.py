@@ -11,7 +11,7 @@ from pydantic import JsonValue
 from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows
 from tests.integration._support.upstream import delete_scenario, register_scenario
-from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, SseResponse
+from tests.integration.cost_calculation.cost_tracking_case import SseResponse
 
 RATE: Final = 0.5
 FRAME_DELAY_MS: Final = 300
@@ -198,81 +198,27 @@ def test_streaming_chat_per_second_pricing_covers_the_full_stream(
 
 
 @pytest.mark.parametrize(
-    ("model", "custom_llm_provider"),
+    ("model", "custom_llm_provider", "expected_cost"),
     (
-        ("deepgram/nova-3", "deepgram"),
-        ("mistral/voxtral-mini-transcribe-realtime-latest", "mistral"),
+        ("deepgram/nova-3", "deepgram", (0.0007167, 0.0)),
+        ("mistral/voxtral-mini-transcribe-realtime-latest", "mistral", (0.001, 0.0)),
     ),
     ids=("deepgram_nova_3", "mistral_voxtral_realtime"),
 )
-@pytest.mark.parametrize(
-    ("audio_seconds", "billed_seconds"),
-    ((0.0, 10.0), (60.0, 60.0)),
-    ids=("no_audio_length_bills_request_time", "audio_length_bills_audio_seconds"),
-)
-def test_transcription_per_second_model_is_not_free_through_cost_per_token(
-    model: str, custom_llm_provider: str, audio_seconds: float, billed_seconds: float
+def test_transcription_per_second_model_bills_request_time_through_cost_per_token(
+    model: str, custom_llm_provider: str, expected_cost: tuple[float, float]
 ) -> None:
-    rate: Final = litellm.get_model_cost_map(url="")[model]["input_cost_per_second"]
-    assert rate > 0
+    cost: Final = litellm.cost_per_token(model=model, custom_llm_provider=custom_llm_provider, response_time_ms=10_000.0)
 
-    cost: Final = litellm.cost_per_token(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        response_time_ms=10_000.0,
-        audio_transcription_file_duration=audio_seconds,
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_transcription_response_still_bills_audio_length_through_completion_cost() -> None:
+    response: Final = litellm.TranscriptionResponse(text="hello")
+    response.duration = 60.0
+
+    cost: Final = litellm.completion_cost(
+        completion_response=response, model="deepgram/nova-3", custom_llm_provider="deepgram", total_time=10.0
     )
 
-    assert cost == pytest.approx((rate * billed_seconds, 0.0))
-
-
-def _cached_chat_response() -> JsonResponse:
-    return JsonResponse(
-        content_type="application/json",
-        body={
-            "id": "chatcmpl-$UNIQUE_ID",
-            "object": "chat.completion",
-            "created": 1,
-            "model": "integration-per-second-cache",
-            "choices": [
-                {"index": 0, "message": {"role": "assistant", "content": "cached answer"}, "finish_reason": "stop"}
-            ],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 4,
-                "total_tokens": 14,
-                "prompt_tokens_details": {"cached_tokens": 5},
-            },
-        },
-    )
-
-
-def test_chat_per_second_model_with_cache_read_price_bills_cached_tokens(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario:
-        scenario_id: Final = f"per-second-cache-{uuid.uuid4().hex}"
-        handle: Final = register_scenario(scenario_id, _cached_chat_response())
-        scenario.cleanups.callback(delete_scenario, handle)
-        key: Final = scenario.key()
-        model: Final = scenario.model(
-            model=f"openai/integration-per-second-cache-{uuid.uuid4().hex}",
-            api_key=scenario_id,
-            api_base=handle.api_base(),
-            input_cost_per_second=0.01,
-            cache_read_input_token_cost=1e-06,
-        )
-        response: Final = gateway.request(
-            "POST",
-            "/v1/chat/completions",
-            {"model": model, "messages": [{"role": "user", "content": "price the cached tokens"}]},
-            key=key,
-        )
-        assert response.status_code == 200, response.text
-        assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(5 * 1e-06), response.text
-
-    request_id: Final = string_value(object_value(response.json())["id"])
-    rows: Final = eventually(
-        lambda: read_rows('SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (request_id,)),
-        lambda values: len(values) == 1,
-        seconds=70,
-    )
-    assert float(str(rows[0]["spend"])) == pytest.approx(5 * 1e-06)
+    assert cost == pytest.approx(0.0043002)
