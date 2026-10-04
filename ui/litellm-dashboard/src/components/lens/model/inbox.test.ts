@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  ALL_AGENTS,
   UNKNOWN_AGENT,
-  filterInbox,
+  findFinding,
   findingAgents,
-  inboxAgents,
-  inboxRows,
+  findingKey,
+  openFindings,
   modelsUsed,
   scheduleLabel,
   stepLine,
@@ -70,50 +69,35 @@ const ranked = (id: string, title: string, priority: Finding["priority"], lastSe
   last_seen: lastSeen,
 });
 
-describe("inboxRows", () => {
-  it("merges the same problem for the same agent across investigations into one row", () => {
-    const rows = inboxRows([
-      lens("a", "support", [finding({ id: "1", occurrences: ["run-1", "run-2"] })]),
-      lens("b", "support", [finding({ id: "2", title: "tool errors swallowed ", occurrences: ["run-2", "run-3"] })]),
-    ]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].sources).toHaveLength(2);
-    expect(rows[0].runs).toBe(3);
-  });
-
-  it("keeps the same title for different agents as separate problems", () => {
-    expect(inboxRows([lens("a", "support", [finding({})]), lens("b", "billing", [finding({})])])).toHaveLength(2);
-  });
-
-  it("takes the most urgent priority and latest sighting across merged findings", () => {
-    const [row] = inboxRows([
-      lens("a", "support", [finding({ priority: "low", last_seen: "2026-10-03T00:00:00Z" })]),
-      lens("b", "support", [finding({ priority: "high", last_seen: "2026-10-01T00:00:00Z" })]),
-    ]);
-    expect(row.priority).toBe("high");
-    expect(row.lastSeen).toBe("2026-10-03T00:00:00Z");
-  });
-
+describe("openFindings", () => {
   it("leaves out resolved, dismissed and pattern findings", () => {
-    const rows = inboxRows([
-      lens("a", "support", [
-        finding({ id: "1", status: "resolved", title: "a" }),
-        finding({ id: "2", status: "dismissed", title: "b" }),
-        finding({ id: "3", kind: "pattern", title: "c" }),
-      ]),
+    const owner = lens("a", "support", [
+      finding({ id: "1", status: "resolved", title: "a" }),
+      finding({ id: "2", status: "dismissed", title: "b" }),
+      finding({ id: "3", kind: "pattern", title: "c" }),
+      finding({ id: "4", title: "d" }),
     ]);
-    expect(rows).toEqual([]);
+    expect(openFindings(owner).map((f) => f.title)).toEqual(["d"]);
   });
 
   it("orders by priority, then by most recent", () => {
-    const rows = inboxRows([
-      lens("a", "x", [
-        finding(ranked("1", "old high", "high", "2026-10-01T00:00:00Z")),
-        finding(ranked("2", "new low", "low", "2026-10-03T00:00:00Z")),
-        finding(ranked("3", "new high", "high", "2026-10-02T00:00:00Z")),
-      ]),
+    const owner = lens("a", "x", [
+      finding(ranked("1", "old high", "high", "2026-10-01T00:00:00Z")),
+      finding(ranked("2", "new low", "low", "2026-10-03T00:00:00Z")),
+      finding(ranked("3", "new high", "high", "2026-10-02T00:00:00Z")),
     ]);
-    expect(rows.map((r) => r.title)).toEqual(["new high", "old high", "new low"]);
+    expect(openFindings(owner).map((f) => f.title)).toEqual(["new high", "old high", "new low"]);
+  });
+});
+
+describe("findFinding", () => {
+  it("resolves a key to the investigation that owns the finding, even when ids repeat across investigations", () => {
+    const a = lens("a", "support", [finding({ id: "same", title: "from a" })]);
+    const b = lens("b", "support", [finding({ id: "same", title: "from b" })]);
+    const found = findFinding([a, b], findingKey(b, b.findings[0]));
+    expect(found?.lens.id).toBe("b");
+    expect(found?.finding.title).toBe("from b");
+    expect(findFinding([a, b], "missing:same")).toBeUndefined();
   });
 });
 
@@ -129,20 +113,6 @@ const step = (overrides: Partial<Step>): Step =>
     cost: 0,
     ...overrides,
   }) as Step;
-
-describe("filterInbox", () => {
-  const rows = inboxRows([
-    lens("a", "support", [finding({ id: "1", title: "one", priority: "high" })]),
-    lens("b", "billing", [finding({ id: "2", title: "two", priority: "low" })]),
-  ]);
-
-  it("narrows to one agent and one priority, and lists every agent once", () => {
-    expect(filterInbox(rows, { agent: "billing", priority: "all" }).map((r) => r.title)).toEqual(["two"]);
-    expect(filterInbox(rows, { agent: ALL_AGENTS, priority: "high" }).map((r) => r.title)).toEqual(["one"]);
-    expect(filterInbox(rows, { agent: "billing", priority: "high" })).toEqual([]);
-    expect(inboxAgents(rows)).toEqual(["billing", "support"]);
-  });
-});
 
 describe("step feed helpers", () => {
   it("summarizes a model call with its token count and cost", () => {

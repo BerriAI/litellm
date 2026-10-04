@@ -55,7 +55,7 @@ describe("Lens demo data", () => {
   it("filters time windows locally and rejects writes or unknown reads without network access", async () => {
     const network = vi.spyOn(globalThis, "fetch");
     const now = Date.now();
-    const { services } = createLensDemo(now);
+    const services = createLensDemo(now);
     const all = await services.traces.list({ startMs: 0, endMs: now });
     const recent = await services.traces.list({ startMs: now - 3600_000, endMs: now });
     expect(recent.data.length).toBeGreaterThan(0);

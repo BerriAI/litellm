@@ -8,15 +8,18 @@ use opentelemetry_proto::tonic::{
 use super::{
     DecodedEvent, DecodedSpan,
     attributes::attributes,
-    limits::{Budget, MAX_ATTRIBUTES, MAX_DECODED_SPAN_BYTES, MAX_EVENTS, MAX_SPANS},
+    limits::{Budget, DecodeLimits},
 };
 use crate::{
     Error, Shared,
     normalize::{SpanContext, normalize},
 };
 
-pub(super) fn flatten(request: ExportTraceServiceRequest) -> Result<Vec<DecodedSpan>, Error> {
-    let mut budget = Budget::new(MAX_DECODED_SPAN_BYTES);
+pub(super) fn flatten(
+    request: ExportTraceServiceRequest,
+    limits: DecodeLimits,
+) -> Result<Vec<DecodedSpan>, Error> {
+    let mut budget = Budget::new(limits);
     let mut spans = Vec::new();
     for resource in request.resource_spans {
         append_resource(resource, &mut budget, &mut spans)?;
@@ -49,17 +52,17 @@ fn append_scope(
     spans: &mut Vec<DecodedSpan>,
 ) -> Result<(), Error> {
     let scope = scope_spans.scope.unwrap_or_default();
-    if scope.attributes.len() > MAX_ATTRIBUTES {
+    if scope.attributes.len() > budget.limits.attributes {
         return Err(Error::TooLarge);
     }
     budget.consume(scope.name.len() + scope.version.len())?;
     let scope_name: Shared<String> = scope.name.into();
     let scope_version: Shared<String> = scope.version.into();
     for span in scope_spans.spans {
-        if spans.len() >= MAX_SPANS {
+        if spans.len() >= budget.limits.spans {
             return Err(Error::TooLarge);
         }
-        validate_span(&span)?;
+        validate_span(&span, &budget.limits)?;
         budget.consume(
             span.name.len()
                 + span.trace_state.len()
@@ -85,7 +88,7 @@ fn valid_id(value: &[u8], length: usize) -> bool {
     value.len() == length && value.iter().any(|byte| *byte != 0)
 }
 
-fn validate_span(span: &Span) -> Result<(), Error> {
+fn validate_span(span: &Span, limits: &DecodeLimits) -> Result<(), Error> {
     if !valid_id(&span.trace_id, 16)
         || !valid_id(&span.span_id, 8)
         || (!span.parent_span_id.is_empty() && !valid_id(&span.parent_span_id, 8))
@@ -99,17 +102,17 @@ fn validate_span(span: &Span) -> Result<(), Error> {
     {
         return Err(Error::InvalidPayload);
     }
-    if span.events.len() > MAX_EVENTS
-        || span.links.len() > MAX_EVENTS
-        || span.attributes.len() > MAX_ATTRIBUTES
+    if span.events.len() > limits.events
+        || span.links.len() > limits.links
+        || span.attributes.len() > limits.attributes
         || span
             .links
             .iter()
-            .any(|link| link.attributes.len() > MAX_ATTRIBUTES)
+            .any(|link| link.attributes.len() > limits.attributes)
         || span
             .events
             .iter()
-            .any(|event| event.attributes.len() > MAX_ATTRIBUTES)
+            .any(|event| event.attributes.len() > limits.attributes)
     {
         return Err(Error::TooLarge);
     }

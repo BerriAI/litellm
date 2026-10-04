@@ -1,8 +1,10 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ComponentProps } from "react";
 import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import { RunView } from "./TraceDrawer";
+import { useOpenTraceRouting } from "./traceRouting";
 import { TraceConversation } from "./TraceConversation";
 import type { SpanDetail, Trace } from "./traceTypes";
 import research from "./__fixtures__/research_trace.json";
@@ -13,6 +15,11 @@ vi.mock("../../networking", () => ({
   getProxyBaseUrl: () => "http://proxy.test",
 }));
 import { agentTraceCall, agentTraceSpanCall } from "../../networking";
+
+function RoutedRunView(props: Omit<ComponentProps<typeof RunView>, "selection">) {
+  const { selection } = useOpenTraceRouting();
+  return <RunView {...props} selection={selection} />;
+}
 
 const root = { ...research.spans[0], span_id: "root", parent_span_id: null };
 const tool = { ...root, span_id: "tool", name: "read_file", parent_span_id: "root", type: "tool", start_offset_ms: 1 };
@@ -41,7 +48,9 @@ describe("TraceConversation", () => {
 
   it("switches to a readable transcript and opens the exact tool step from it", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<RunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />);
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
     const conversationTab = await screen.findByRole("tab", { name: "Conversation", selected: false });
     await user.click(conversationTab);
     expect(conversationTab).toHaveAttribute("aria-selected", "true");

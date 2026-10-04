@@ -1,4 +1,5 @@
 import { RunView } from "@/components/view_logs/TraceView/TraceDrawer";
+import { useLocalRunSelection } from "@/components/view_logs/TraceView/traceRouting";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 
 export function TraceSheet({
@@ -29,16 +30,35 @@ export function TraceSheet({
           <SheetDescription>Recorded agent steps and evidence</SheetDescription>
         </SheetHeader>
         {open && (
-          <RunView
+          <SheetRun
             key={`${traceId}:${traceRef}:${initialSpanId}`}
             traceId={traceId}
             traceRef={traceRef}
-            initialSpanId={initialSpanId}
+            initialSpanId={initialSpanId ?? null}
             accessToken={accessToken}
             onBack={onClose}
           />
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+function SheetRun({
+  traceId,
+  traceRef,
+  initialSpanId,
+  accessToken,
+  onBack,
+}: {
+  traceId: string;
+  traceRef?: string;
+  initialSpanId: string | null;
+  accessToken: string;
+  onBack: () => void;
+}) {
+  const selection = useLocalRunSelection(initialSpanId);
+  return (
+    <RunView traceId={traceId} traceRef={traceRef} selection={selection} accessToken={accessToken} onBack={onBack} />
   );
 }

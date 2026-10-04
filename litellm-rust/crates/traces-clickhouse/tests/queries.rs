@@ -244,10 +244,11 @@ async fn typed_trace_cursor_returns_the_next_fixture_trace(
 }
 
 #[rstest]
-#[case::authentication_error(include_bytes!("../../traces/tests/fixtures/deeplite_auth_error.json"))]
-#[case::swarm(include_bytes!("../../traces/tests/fixtures/deeplite_swarm.json"))]
+#[case::billed_failure(include_bytes!("../../traces/tests/fixtures/google_adk_billed_failure.json"))]
+#[case::retry(include_bytes!("../../traces/tests/fixtures/pydantic_ai_retry.json"))]
+#[case::swarm(include_bytes!("../../traces/tests/fixtures/deepagents_swarm.json"))]
 #[tokio::test]
-async fn captured_deeplite_exports_round_trip_through_clickhouse(
+async fn captured_sdk_exports_round_trip_through_clickhouse(
     #[future(awt)] migrated_database: TestResult<SeededDatabase>,
     admin_access: TestResult<contracts::ReadAccessParams>,
     #[case] export: &[u8],

@@ -2,6 +2,8 @@
 pub enum Error {
     #[error("invalid ClickHouse insert row")]
     InvalidRow,
+    #[error("{0} must be a positive integer")]
+    InvalidLimit(&'static str),
     #[error("invalid ClickHouse insert table")]
     InvalidTable,
     #[error("invalid ClickHouse HTTP URL")]

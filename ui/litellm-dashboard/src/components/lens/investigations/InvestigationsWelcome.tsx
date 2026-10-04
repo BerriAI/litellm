@@ -15,7 +15,7 @@ export function InvestigationsWelcome({
   onConnect,
   onCreate,
   onRetry,
-  onDemo,
+  showPreview = false,
 }: {
   tracesReady: boolean;
   requestsReady?: boolean;
@@ -26,7 +26,7 @@ export function InvestigationsWelcome({
   onConnect: () => void;
   onCreate: () => void;
   onRetry: () => void;
-  onDemo?: () => void;
+  showPreview?: boolean;
 }) {
   const activityReady = tracesReady || requestsReady;
   const workerReady = activityReady && connected;
@@ -41,7 +41,7 @@ export function InvestigationsWelcome({
   });
   return (
     <section aria-labelledby="lens-welcome" className="max-w-3xl pb-6">
-      {onDemo && <LensPreviewButton onClick={onDemo} />}
+      {showPreview && <LensPreviewButton />}
       <h2 id="lens-welcome" className="text-xl font-semibold tracking-tight">
         Find what needs attention
       </h2>

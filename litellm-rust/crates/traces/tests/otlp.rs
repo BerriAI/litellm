@@ -1333,3 +1333,98 @@ fn resource_identity_preserves_explicit_names_and_sdk_fallbacks(
         expected
     );
 }
+
+#[rstest]
+#[case::depth(litellm_traces::DecodeLimits { depth: 1, ..Default::default() })]
+#[case::nodes(litellm_traces::DecodeLimits { nodes: 1, ..Default::default() })]
+#[case::spans(litellm_traces::DecodeLimits { spans: 1, ..Default::default() })]
+#[case::attributes(litellm_traces::DecodeLimits { attributes: 1, ..Default::default() })]
+#[case::events(litellm_traces::DecodeLimits { events: 1, ..Default::default() })]
+#[case::links(litellm_traces::DecodeLimits { links: 1, ..Default::default() })]
+#[case::decoded_bytes(litellm_traces::DecodeLimits { decoded_span_bytes: 1, ..Default::default() })]
+fn configurable_decode_limits_apply_to_both_wire_formats(
+    mut span: Span,
+    #[case] limits: litellm_traces::DecodeLimits,
+) {
+    use opentelemetry_proto::tonic::{
+        common::v1::KeyValue,
+        trace::v1::span::{Event, Link},
+    };
+    use prost::Message;
+    span.attributes = vec![
+        KeyValue {
+            key: "a".into(),
+            ..Default::default()
+        },
+        KeyValue {
+            key: "b".into(),
+            ..Default::default()
+        },
+    ];
+    span.events = vec![Event::default(), Event::default()];
+    span.links = vec![
+        Link {
+            trace_id: vec![1; 16],
+            span_id: vec![2; 8],
+            ..Default::default()
+        };
+        2
+    ];
+    let mut request = request_with(span.clone());
+    request.resource_spans[0].scope_spans[0].spans.push(span);
+    for (body, content_type) in [
+        (serde_json::to_vec(&request).unwrap(), "application/json"),
+        (request.encode_to_vec(), "application/x-protobuf"),
+    ] {
+        assert!(matches!(
+            litellm_traces::decode_otlp_with_limits(&body, Some(content_type), limits),
+            Err(litellm_traces::Error::TooLarge)
+        ));
+        assert_eq!(
+            litellm_traces::decode_otlp_with_limits(
+                &body,
+                Some(content_type),
+                litellm_traces::DecodeLimits::default()
+            )
+            .unwrap()
+            .len(),
+            2
+        );
+    }
+}
+
+#[test]
+fn environment_decode_limits_are_used_and_invalid_values_fail() {
+    for value in ["2", "4", "0", "invalid"] {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "environment_decode_limits_child"])
+            .env("LITELLM_TEST_DECODE_LIMIT", value)
+            .env("OTLP_MAX_SPANS", value)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+    }
+}
+
+#[test]
+fn environment_decode_limits_child() {
+    let Ok(value) = std::env::var("LITELLM_TEST_DECODE_LIMIT") else {
+        return;
+    };
+    let result = decode_otlp(
+        include_bytes!("fixtures/opentelemetry_simple.json"),
+        Some("application/json"),
+    );
+    match value.as_str() {
+        "2" => assert!(matches!(result, Err(litellm_traces::Error::TooLarge))),
+        "4" => assert_eq!(result.unwrap().len(), 3),
+        _ => assert!(matches!(
+            result,
+            Err(litellm_traces::Error::InvalidLimit("OTLP_MAX_SPANS"))
+        )),
+    }
+}

@@ -1,8 +1,9 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "../../../../tests/test-utils";
 import { clampDrawerWidth, RunDrawer } from "./RunDrawer";
+import { type RunSelection, traceRefOf, useOpenTraceRouting } from "./traceRouting";
 import type { TraceSummary } from "./traceTypes";
 
 vi.mock("./TraceDrawer", () => ({
@@ -28,6 +29,37 @@ const run = (trace_id: string): TraceSummary => ({
   models: [],
   spend: null,
 });
+
+const selection: RunSelection = {
+  spanId: null,
+  view: "steps",
+  spanTab: "content",
+  stepQuery: "",
+  errorsOnly: false,
+  selectSpan: vi.fn(),
+  setView: vi.fn(),
+  setSpanTab: vi.fn(),
+  setStepQuery: vi.fn(),
+  setErrorsOnly: vi.fn(),
+};
+
+function RoutedDrawer({ runs }: { runs: TraceSummary[] }) {
+  const { trace, openTrace, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
+  return (
+    <RunDrawer
+      trace={trace}
+      runs={runs}
+      accessToken="sk"
+      selection={selection}
+      onSelect={openTrace}
+      fullScreen={fullScreen}
+      onFullScreenChange={setFullScreen}
+    />
+  );
+}
+
+const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
+  new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
 
 const mockReducedMotion = (reduce: boolean) =>
   vi
@@ -56,12 +88,10 @@ describe("RunDrawer", () => {
     window.localStorage.clear();
   });
 
-  it("fills the page across trace navigation and restores the resized drawer width", () => {
+  it("fills the page across trace navigation and restores the resized drawer width", async () => {
     const runs = [run("a"), run("b")];
-    const onSelect = vi.fn();
-    const { rerender } = renderWithProviders(
-      <RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={onSelect} />,
-    );
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<RoutedDrawer runs={runs} />, { searchParams: "?trace=a", onUrlUpdate });
     const drawer = screen.getByRole("complementary", { name: "Trace details" });
     fireEvent.keyDown(screen.getByRole("separator", { name: "Resize trace panel" }), { key: "ArrowLeft" });
     const resizedWidth = drawer.style.width;
@@ -71,10 +101,9 @@ describe("RunDrawer", () => {
     expect(drawer).toHaveStyle({ width: "100%" });
     expect(screen.queryByRole("separator", { name: "Resize trace panel" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Next trace (J)" }));
-    expect(onSelect).toHaveBeenCalledWith(runs[1]);
-    rerender(<RunDrawer trace={runs[1]} runs={runs} accessToken="sk" onSelect={onSelect} />);
     expect(drawer).toHaveStyle({ width: "100%" });
     expect(screen.getByTestId("run-view")).toHaveTextContent("run b");
+    await waitFor(() => expect(lastUrl(onUrlUpdate).get("fullscreen")).toBe("true"));
 
     fireEvent.click(screen.getByRole("button", { name: "Exit full screen" }));
     expect(drawer).toHaveStyle({ width: resizedWidth });
@@ -82,28 +111,29 @@ describe("RunDrawer", () => {
     expect(window.localStorage.getItem("litellm.agentTraces.drawerWidth")).toBe(storedWidth);
   });
 
-  it.each([false, true])("reopens at the saved width after closing full screen (reduced motion: %s)", (reduce) => {
-    mockReducedMotion(reduce);
-    const runs = [run("a"), run("b")];
-    const onSelect = vi.fn();
-    const { rerender } = renderWithProviders(
-      <RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={onSelect} />,
-    );
-    fireEvent.keyDown(screen.getByRole("separator", { name: "Resize trace panel" }), { key: "ArrowLeft" });
-    const savedWidth = screen.getByRole("complementary", { name: "Trace details" }).style.width;
-    fireEvent.click(screen.getByRole("button", { name: "Enter full screen" }));
-    rerender(<RunDrawer trace={null} runs={runs} accessToken="sk" onSelect={onSelect} />);
-    rerender(<RunDrawer trace={runs[1]} runs={runs} accessToken="sk" onSelect={onSelect} />);
-    expect(screen.getByRole("complementary", { name: "Trace details" })).toHaveStyle({ width: savedWidth });
-    expect(screen.getByRole("button", { name: "Enter full screen" })).toBeVisible();
-    expect(screen.getByRole("separator", { name: "Resize trace panel" })).toBeVisible();
+  it("opens full screen from a shared link and drops it from the URL on close", async () => {
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<RoutedDrawer runs={[run("a")]} />, { searchParams: "?trace=a&fullscreen=true", onUrlUpdate });
+    expect(screen.getByRole("complementary", { name: "Trace details" })).toHaveStyle({ width: "100%" });
+    fireEvent.click(screen.getByRole("button", { name: "Close trace (Esc)" }));
+    await waitFor(() => expect(lastUrl(onUrlUpdate).has("trace")).toBe(false));
+    expect(lastUrl(onUrlUpdate).has("fullscreen")).toBe(false);
   });
 
   it.each(["Close (Esc)", "Close trace (Esc)"])("closes a full-screen trace using %s", (name) => {
     const runs = [run("a")];
     const onSelect = vi.fn();
-    renderWithProviders(<RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={onSelect} />);
-    fireEvent.click(screen.getByRole("button", { name: "Enter full screen" }));
+    renderWithProviders(
+      <RunDrawer
+        trace={traceRefOf(runs[0])}
+        runs={runs}
+        accessToken="sk"
+        selection={selection}
+        onSelect={onSelect}
+        fullScreen
+        onFullScreenChange={vi.fn()}
+      />,
+    );
     fireEvent.click(screen.getByRole("button", { name }));
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(null);
   });
@@ -111,8 +141,17 @@ describe("RunDrawer", () => {
   it("keeps Escape available to close a full-screen trace", () => {
     const runs = [run("a")];
     const onSelect = vi.fn();
-    renderWithProviders(<RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={onSelect} />);
-    fireEvent.click(screen.getByRole("button", { name: "Enter full screen" }));
+    renderWithProviders(
+      <RunDrawer
+        trace={traceRefOf(runs[0])}
+        runs={runs}
+        accessToken="sk"
+        selection={selection}
+        onSelect={onSelect}
+        fullScreen
+        onFullScreenChange={vi.fn()}
+      />,
+    );
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(null);
   });
@@ -121,10 +160,28 @@ describe("RunDrawer", () => {
     mockReducedMotion(true);
     const runs = [run("a")];
     const { rerender } = renderWithProviders(
-      <RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={vi.fn()} />,
+      <RunDrawer
+        trace={traceRefOf(runs[0])}
+        runs={runs}
+        accessToken="sk"
+        selection={selection}
+        onSelect={vi.fn()}
+        fullScreen={false}
+        onFullScreenChange={vi.fn()}
+      />,
     );
     expect(screen.getByRole("complementary", { name: "Trace details" })).toBeInTheDocument();
-    rerender(<RunDrawer trace={null} runs={runs} accessToken="sk" onSelect={vi.fn()} />);
+    rerender(
+      <RunDrawer
+        trace={null}
+        runs={runs}
+        accessToken="sk"
+        selection={selection}
+        onSelect={vi.fn()}
+        fullScreen={false}
+        onFullScreenChange={vi.fn()}
+      />,
+    );
     expect(screen.queryByRole("complementary", { name: "Trace details" })).not.toBeInTheDocument();
   });
 
@@ -132,9 +189,27 @@ describe("RunDrawer", () => {
     mockReducedMotion(false);
     const runs = [run("a")];
     const { rerender } = renderWithProviders(
-      <RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={vi.fn()} />,
+      <RunDrawer
+        trace={traceRefOf(runs[0])}
+        runs={runs}
+        accessToken="sk"
+        selection={selection}
+        onSelect={vi.fn()}
+        fullScreen={false}
+        onFullScreenChange={vi.fn()}
+      />,
     );
-    rerender(<RunDrawer trace={null} runs={runs} accessToken="sk" onSelect={vi.fn()} />);
+    rerender(
+      <RunDrawer
+        trace={null}
+        runs={runs}
+        accessToken="sk"
+        selection={selection}
+        onSelect={vi.fn()}
+        fullScreen={false}
+        onFullScreenChange={vi.fn()}
+      />,
+    );
     expect(screen.getByRole("complementary", { name: "Trace details" })).toHaveClass("animate-trace-drawer-out");
   });
 });

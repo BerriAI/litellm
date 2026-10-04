@@ -5,7 +5,7 @@ import { useState } from "react";
 import { ChevronRight, Wrench } from "lucide-react";
 import { cn } from "@/lib/cva.config";
 import { CopyButton } from "./CopyButton";
-import { useTracesApi } from "@/components/lens/services";
+import { useTracesApi } from "./tracesApi";
 import { Button } from "@/components/ui/button";
 import { buildConversation, conversationSteps, CONVERSATION_PAGE_SIZE, type ConversationItem } from "./conversation";
 import { ErrorBlock } from "./DetailContent";

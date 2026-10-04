@@ -5,14 +5,62 @@ use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 
 use crate::{Error, Shared};
 
-pub(super) const MAX_DEPTH: usize = 32;
-pub(super) const MAX_NODES: usize = 65_536;
-pub(super) const MAX_SPANS: usize = 4_096;
-pub(super) const MAX_ATTRIBUTES: usize = 256;
-pub(super) const MAX_EVENTS: usize = 256;
-pub(super) const MAX_DECODED_SPAN_BYTES: usize = 16 * 1024 * 1024;
+#[derive(Clone, Copy, Debug)]
+pub struct DecodeLimits {
+    pub depth: usize,
+    pub nodes: usize,
+    pub spans: usize,
+    pub attributes: usize,
+    pub events: usize,
+    pub links: usize,
+    pub decoded_span_bytes: usize,
+}
 
-pub(super) fn json_preflight(payload: &[u8]) -> Result<(), Error> {
+impl Default for DecodeLimits {
+    fn default() -> Self {
+        Self {
+            depth: 32,
+            nodes: 65_536,
+            spans: 4_096,
+            attributes: 256,
+            events: 256,
+            links: 256,
+            decoded_span_bytes: 16 * 1024 * 1024,
+        }
+    }
+}
+
+impl DecodeLimits {
+    pub fn from_env() -> Result<Self, Error> {
+        let defaults = Self::default();
+        Ok(Self {
+            depth: env_limit("OTLP_MAX_DECODE_DEPTH", defaults.depth)?,
+            nodes: env_limit("OTLP_MAX_DECODE_NODES", defaults.nodes)?,
+            spans: env_limit("OTLP_MAX_SPANS", defaults.spans)?,
+            attributes: env_limit("OTLP_MAX_ATTRIBUTES", defaults.attributes)?,
+            events: env_limit("OTLP_MAX_EVENTS", defaults.events)?,
+            links: env_limit("OTLP_MAX_LINKS", defaults.links)?,
+            decoded_span_bytes: env_limit(
+                "OTLP_MAX_DECODED_SPAN_BYTES",
+                defaults.decoded_span_bytes,
+            )?,
+        })
+    }
+}
+
+fn env_limit(name: &'static str, default: usize) -> Result<usize, Error> {
+    match std::env::var(name) {
+        Ok(value) => value
+            .parse::<usize>()
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or(Error::InvalidLimit(name)),
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(_) => Err(Error::InvalidLimit(name)),
+    }
+}
+
+pub(super) fn json_preflight(payload: &[u8], limits: &DecodeLimits) -> Result<(), Error> {
     let mut nodes = 0;
     let mut exceeded = false;
     let mut decoder = serde_json::Deserializer::from_slice(payload);
@@ -20,6 +68,7 @@ pub(super) fn json_preflight(payload: &[u8]) -> Result<(), Error> {
         nodes: &mut nodes,
         exceeded: &mut exceeded,
         depth: 0,
+        limits,
     }
     .deserialize(&mut decoder)
     .and_then(|()| decoder.end());
@@ -33,6 +82,7 @@ struct JsonBudget<'a> {
     nodes: &'a mut usize,
     exceeded: &'a mut bool,
     depth: usize,
+    limits: &'a DecodeLimits,
 }
 
 impl<'de> DeserializeSeed<'de> for JsonBudget<'_> {
@@ -40,7 +90,7 @@ impl<'de> DeserializeSeed<'de> for JsonBudget<'_> {
 
     fn deserialize<D: serde::Deserializer<'de>>(self, decoder: D) -> Result<(), D::Error> {
         *self.nodes += 1;
-        if *self.nodes > MAX_NODES || self.depth > MAX_DEPTH {
+        if *self.nodes > self.limits.nodes || self.depth > self.limits.depth {
             *self.exceeded = true;
             return Err(serde::de::Error::custom("OTLP structure exceeds budget"));
         }
@@ -79,6 +129,7 @@ impl<'de> Visitor<'de> for JsonBudget<'_> {
                 nodes: self.nodes,
                 exceeded: self.exceeded,
                 depth: self.depth + 1,
+                limits: self.limits,
             })?
             .is_some()
         {}
@@ -91,6 +142,7 @@ impl<'de> Visitor<'de> for JsonBudget<'_> {
                 nodes: self.nodes,
                 exceeded: self.exceeded,
                 depth: self.depth + 1,
+                limits: self.limits,
             })?
             .is_some()
         {
@@ -98,6 +150,7 @@ impl<'de> Visitor<'de> for JsonBudget<'_> {
                 nodes: self.nodes,
                 exceeded: self.exceeded,
                 depth: self.depth + 1,
+                limits: self.limits,
             })?;
         }
         Ok(())
@@ -146,8 +199,8 @@ impl MessageKind {
     }
 }
 
-pub(super) fn protobuf_preflight(payload: &[u8]) -> Result<(), Error> {
-    scan_message(payload, MessageKind::Export, 0, &mut 0)
+pub(super) fn protobuf_preflight(payload: &[u8], limits: &DecodeLimits) -> Result<(), Error> {
+    scan_message(payload, MessageKind::Export, 0, &mut 0, limits)
 }
 
 fn scan_message(
@@ -155,13 +208,14 @@ fn scan_message(
     kind: MessageKind,
     depth: usize,
     nodes: &mut usize,
+    limits: &DecodeLimits,
 ) -> Result<(), Error> {
-    if depth > MAX_DEPTH {
+    if depth > limits.depth {
         return Err(Error::TooLarge);
     }
     while !payload.is_empty() {
         *nodes += 1;
-        if *nodes > MAX_NODES {
+        if *nodes > limits.nodes {
             return Err(Error::TooLarge);
         }
         let (tag, wire) = decode_key(&mut payload).map_err(|_| Error::InvalidPayload)?;
@@ -171,7 +225,7 @@ fn scan_message(
             let (message, rest) = payload
                 .split_at_checked(length)
                 .ok_or(Error::InvalidPayload)?;
-            scan_message(message, child, depth + 1, nodes)?;
+            scan_message(message, child, depth + 1, nodes, limits)?;
             payload = rest;
         } else {
             skip_field(wire, tag, &mut payload, DecodeContext::default())
@@ -183,11 +237,15 @@ fn scan_message(
 
 pub(super) struct Budget {
     remaining: usize,
+    pub(super) limits: DecodeLimits,
 }
 
 impl Budget {
-    pub(super) fn new(remaining: usize) -> Self {
-        Self { remaining }
+    pub(super) fn new(limits: DecodeLimits) -> Self {
+        Self {
+            remaining: limits.decoded_span_bytes,
+            limits,
+        }
     }
 
     pub(super) fn clone_shared<T: Clone>(

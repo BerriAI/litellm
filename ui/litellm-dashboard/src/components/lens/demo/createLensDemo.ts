@@ -1,6 +1,5 @@
 import { ApiError } from "@/lib/http/client";
 import type { TracesApi } from "@/components/view_logs/TraceView/tracesApi";
-import type { LensDemo } from "../LensDemoContext";
 import type { LensServices } from "../services";
 import type { LensApi } from "../api/service";
 import type { Trace, Span, SpanDetail } from "@/components/view_logs/TraceView/traceTypes";
@@ -375,6 +374,12 @@ function demoLensApi(data: LensDemoData): LensApi {
 function demoTracesApi(data: LensDemoData): TracesApi {
   const run = (traceId: string) => data.runs.find(({ trace }) => trace.summary.trace_id === traceId);
   return {
+    live: false,
+    handoff: (traceId, spanId) => {
+      const found = run(traceId);
+      const step = spanId ? found?.details.find((span) => span.span_id === spanId) : found;
+      return { text: JSON.stringify(step, null, 2), copied: spanId ? "Step copied" : "Trace copied" };
+    },
     list: async ({ startMs, endMs }) => ({
       data: data.runs
         .map((item) => item.trace.summary)
@@ -398,17 +403,7 @@ function demoTracesApi(data: LensDemoData): TracesApi {
   };
 }
 
-export interface LensDemoSession extends LensDemo {
-  readonly services: LensServices;
-}
-
-export function createLensDemo(now = Date.now()): LensDemoSession {
+export function createLensDemo(now = Date.now()): LensServices {
   const data = createLensDemoData(now);
-  return {
-    services: { lens: demoLensApi(data), traces: demoTracesApi(data) },
-    copyTrace: (traceId, spanId) => {
-      const run = data.runs.find(({ trace }) => trace.summary.trace_id === traceId);
-      return JSON.stringify(spanId ? run?.details.find((span) => span.span_id === spanId) : run, null, 2);
-    },
-  };
+  return { lens: demoLensApi(data), traces: demoTracesApi(data) };
 }

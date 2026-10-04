@@ -138,3 +138,56 @@ fn insert_encoding_preserves_timestamp_precision_and_other_fields(
 fn insert_encoding_rejects_invalid_span_timestamps(#[case] timestamp: Value) {
     assert!(encode_rows(vec![BTreeMap::from([("Timestamp".into(), timestamp)])]).is_err());
 }
+
+#[test]
+fn insert_byte_limit_environment_controls_transport() {
+    for value in ["1", "1024", "0", "invalid"] {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "insert_byte_limit_environment_child"])
+            .env("LITELLM_TEST_INSERT_LIMIT", value)
+            .env("CLICKHOUSE_TRACE_MAX_INSERT_BYTES", value)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+    }
+}
+
+#[tokio::test]
+async fn insert_byte_limit_environment_child() {
+    let Ok(value) = std::env::var("LITELLM_TEST_INSERT_LIMIT") else {
+        return;
+    };
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let connection = Connection::parse(&server.uri()).unwrap();
+    let result = insert_shared_rows(
+        &Client::no_redirect_for_test(),
+        &connection,
+        "traces",
+        InsertTable::OtelTraces,
+        vec![BTreeMap::from([(
+            "SpanId".into(),
+            Shared::new(json!("test")),
+        )])],
+    )
+    .await;
+    match value.as_str() {
+        "1" => assert!(matches!(result, Err(Error::InsertTooLarge))),
+        "1024" => assert!(result.is_ok()),
+        _ => assert!(matches!(
+            result,
+            Err(Error::InvalidLimit("CLICKHOUSE_TRACE_MAX_INSERT_BYTES"))
+        )),
+    }
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        usize::from(value == "1024")
+    );
+}

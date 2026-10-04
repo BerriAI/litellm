@@ -1,6 +1,5 @@
 "use client";
-import { useLensDemo } from "@/components/lens/LensDemoContext";
-import { useTracesApi } from "@/components/lens/services";
+import { type TraceHandoff, useTracesApi } from "./tracesApi";
 
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy } from "lucide-react";
@@ -12,7 +11,6 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
-import { getProxyBaseUrl } from "../../networking";
 import { DetailPane } from "./DetailPane";
 import { IdChip } from "./IdChip";
 import { formatCost } from "./AgentTracesTable";
@@ -20,6 +18,7 @@ import { SpanIcon } from "./SpanIcon";
 import { SpanTree } from "./SpanTree";
 import { TraceConversation } from "./TraceConversation";
 import { FrameworkLogo, traceFramework } from "./TraceFramework";
+import type { RunSelection } from "./traceRouting";
 import type { SpanTreeState, TreeRow } from "./traceTree";
 import type { Trace } from "./traceTypes";
 import {
@@ -36,13 +35,6 @@ import {
   traceDisplayName,
 } from "./traceUtils";
 import { ignoresLetterShortcut } from "../letterShortcut";
-
-/** What "Copy for agent" puts on the clipboard: a one-liner Claude Code / Codex can run. */
-export const agentHandoffText = (traceId: string, spanId?: string | null, traceRef?: string): string => {
-  const url = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${traceId}?format=md${spanId ? `&span_id=${spanId}` : ""}${traceRef ? `&trace_ref=${traceRef}` : ""}`;
-  const what = spanId ? "this step of a LiteLLM agent trace" : "this LiteLLM agent trace";
-  return `Read ${what} and explain what happened and why it failed:\ncurl -s -H "Authorization: Bearer $LITELLM_API_KEY" "${url}"`;
-};
 
 const INITIAL_STATE: SpanTreeState = {
   hideFramework: true,
@@ -86,8 +78,7 @@ const toggle = (set: ReadonlySet<string>, id: string): Set<string> => {
   return next;
 };
 
-function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: string }) {
-  const demo = useLensDemo();
+function CopyForAgent({ handoff }: { handoff: TraceHandoff }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -99,14 +90,7 @@ function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: strin
       variant="outline"
       size="xs"
       className="h-7 shrink-0 gap-1.5 rounded-md text-[12px] shadow-none"
-      onClick={async () =>
-        setCopied(
-          await copyToClipboard(
-            demo ? demo.copyTrace(traceId) : agentHandoffText(traceId, null, traceRef),
-            demo ? "Trace copied" : "Command copied",
-          ),
-        )
-      }
+      onClick={async () => setCopied(await copyToClipboard(handoff.text, handoff.copied))}
     >
       {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
       {copied ? "Copied" : "Copy for agent"}
@@ -142,7 +126,17 @@ function RunIcon({ summary, failed }: { summary: Trace["summary"]; failed: boole
   );
 }
 
-function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => void; embedded: boolean }) {
+function RunHeader({
+  trace,
+  handoff,
+  onBack,
+  embedded,
+}: {
+  trace: Trace;
+  handoff: TraceHandoff;
+  onBack: () => void;
+  embedded: boolean;
+}) {
   const { summary } = trace;
   const failed = summary.status === "error";
   return (
@@ -165,7 +159,7 @@ function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => vo
           </TabsTrigger>
         </TabsList>
         <div className="shrink-0">
-          <CopyForAgent traceId={summary.trace_id} traceRef={summary.trace_ref} />
+          <CopyForAgent handoff={handoff} />
         </div>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
@@ -193,25 +187,20 @@ function ignoreStepKey(event: KeyboardEvent): boolean {
   return event.defaultPrevented || ignoresLetterShortcut(event) || Boolean(control);
 }
 
-type TraceView = "steps" | "conversation";
-
 interface RunBodyProps {
   trace: Trace;
   accessToken: string;
-  initialSpanId?: string;
+  selection: RunSelection;
   embedded: boolean;
-  view: TraceView;
-  onViewChange: (view: TraceView) => void;
 }
 
-function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChange }: RunBodyProps) {
+function RunBody({ trace, accessToken, selection, embedded }: RunBodyProps) {
   const spanKeys = embedded ? EMBEDDED_SPAN_KEYS : SPAN_KEYS;
-  const initial = useMemo(() => initialRunSelection(trace, initialSpanId), [trace, initialSpanId]);
+  const { view, selectSpan, setView, stepQuery: query, setStepQuery: setQuery, errorsOnly, setErrorsOnly } = selection;
+  const [initial] = useState(() => initialRunSelection(trace, selection.spanId ?? undefined));
   const [state, setState] = useState<SpanTreeState>(initial.state);
-  const [selectedId, setSelectedId] = useState<string>(initial.selectedId);
+  const selectedId = selection.spanId ?? initial.selectedId;
   const [detailOpen, setDetailOpen] = useState(true);
-  const [query, setQuery] = useState("");
-  const [errorsOnly, setErrorsOnly] = useState(false);
   const filtering = Boolean(query.trim()) || errorsOnly;
 
   const treeRows = useMemo(() => buildTreeRows(trace.spans, state), [trace, state]);
@@ -234,11 +223,11 @@ function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChan
 
   const select = useCallback(
     (id: string) => {
-      setSelectedId(id);
+      selectSpan(id);
       setDetailOpen(true);
       setState((prev) => revealSpanInState(trace.spans, prev, id));
     },
-    [trace.spans],
+    [trace.spans, selectSpan],
   );
   const toggleSpan = useCallback(
     (id: string) => setState((prev) => ({ ...prev, collapsedSpanIds: toggle(prev.collapsedSpanIds, id) })),
@@ -302,7 +291,7 @@ function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChan
           accessToken={accessToken}
           onOpenStep={(id) => {
             select(id);
-            onViewChange("steps");
+            setView("steps");
           }}
         />
       </TabsContent>
@@ -350,8 +339,15 @@ function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChan
         }
       />
       {detailOpen && (
-        <div className="min-h-0 min-w-0 animate-slide-left motion-reduce:animate-none">
-          <DetailPane trace={trace} row={selectedRow} accessToken={accessToken} onClose={() => setDetailOpen(false)} />
+        <div className="min-h-0 min-w-0">
+          <DetailPane
+            trace={trace}
+            row={selectedRow}
+            accessToken={accessToken}
+            spanTab={selection.spanTab}
+            onSpanTabChange={selection.setSpanTab}
+            onClose={() => setDetailOpen(false)}
+          />
         </div>
       )}
     </TabsContent>
@@ -361,21 +357,20 @@ function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChan
 interface RunViewProps {
   traceId: string;
   traceRef?: string;
-  initialSpanId?: string;
+  selection: RunSelection;
   accessToken: string;
   onBack: () => void;
   /** Rendered inside the side drawer: the drawer owns closing and sizing. */
   embedded?: boolean;
 }
 
-function initialSpanMissing(trace: Trace | undefined, spanId?: string): boolean {
+function selectedSpanMissing(trace: Trace | undefined, spanId: string | null): boolean {
   return Boolean(spanId && trace && !trace.spans.some((span) => span.span_id === spanId));
 }
 
-export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack, embedded = false }: RunViewProps) {
+export function RunView({ traceId, traceRef, selection, accessToken, onBack, embedded = false }: RunViewProps) {
   const traces = useTracesApi(accessToken);
   const queryClient = useQueryClient();
-  const [view, setView] = useState<TraceView>("steps");
   const traceQueryOptions = {
     queryKey: ["agentTrace", traceId, traceRef, accessToken],
     queryFn: ({ pageParam }: { pageParam: string | null }) => traces.trace(traceId, traceRef, pageParam),
@@ -394,7 +389,7 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
     if (!pages?.length) return undefined;
     return { ...pages[0], spans: pages.flatMap((page) => page.spans) };
   }, [traceQuery.data]);
-  const seekingSpan = initialSpanMissing(trace, initialSpanId);
+  const seekingSpan = selectedSpanMissing(trace, selection.spanId);
   const { hasNextPage, isFetching, isError, fetchNextPage } = traceQuery;
   const canSeek = seekingSpan && hasNextPage;
   useEffect(() => {
@@ -439,15 +434,20 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
   }
   return (
     <Tabs
-      value={view}
-      onValueChange={(value) => setView(value as TraceView)}
+      value={selection.view}
+      onValueChange={(value) => selection.setView(value as RunSelection["view"])}
       className={cn(
         "@container/trace flex flex-1 flex-col gap-0 overflow-hidden bg-background",
-        embedded ? "min-h-0 animate-view-fade-in motion-reduce:animate-none" : "min-h-[560px] border-y border-border",
+        embedded ? "min-h-0" : "min-h-[560px] border-y border-border",
       )}
       data-testid="run-view"
     >
-      <RunHeader trace={trace} onBack={onBack} embedded={embedded} />
+      <RunHeader
+        trace={trace}
+        handoff={traces.handoff(trace.summary.trace_id, null, trace.summary.trace_ref)}
+        onBack={onBack}
+        embedded={embedded}
+      />
       {(traceQuery.hasNextPage || traceQuery.isError) && (
         <div className="flex items-center justify-between gap-3 border-b px-3 py-2 text-xs" role="status">
           <span>
@@ -471,13 +471,11 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
         </div>
       )}
       <RunBody
-        key={`${trace.summary.trace_ref || trace.summary.trace_id}:${initialSpanId && !seekingSpan ? initialSpanId : "root"}`}
+        key={seekingSpan ? "seeking" : "loaded"}
         trace={trace}
         accessToken={accessToken}
-        initialSpanId={initialSpanId}
+        selection={selection}
         embedded={embedded}
-        view={view}
-        onViewChange={setView}
       />
     </Tabs>
   );
