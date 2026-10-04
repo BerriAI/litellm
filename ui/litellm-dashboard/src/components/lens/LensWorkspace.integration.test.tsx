@@ -147,9 +147,10 @@ describe("Lens interactive demo", () => {
     expect(await navigator.clipboard.readText()).not.toContain("Authorization");
     await user.click(screen.getByRole("tab", { name: "Attributes" }));
     expect(await screen.findByText("gen_ai.agent.name")).toBeVisible();
-    await user.click(
-      within(screen.getByRole("dialog", { name: "Original run" })).getByRole("button", { name: "Close" }),
-    );
+    expect(within(finding).getByRole("button", { name: "Back to finding" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await user.click(within(finding).getByRole("button", { name: "Back to finding" }));
+    expect(within(finding).getByText(/The support agent retries/)).toBeVisible();
     await user.click(within(finding).getByRole("button", { name: "Close finding (Esc)" }));
     expect(await screen.findByRole("table", { name: "Investigations" })).toBeVisible();
     expect(network).not.toHaveBeenCalled();

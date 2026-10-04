@@ -17,7 +17,6 @@ import { useWorkerConnected } from "../useWorkerConnected";
 
 import { InvestigationDetail } from "./detail/InvestigationDetail";
 import { RunNowDialog } from "./detail/RunNowDialog";
-import { EvidenceSheets } from "./EvidenceSheets";
 import { FindingPanel } from "./FindingDetails";
 import { InvestigationList } from "./InvestigationList";
 import { investigationScreen, type Screen, type SetupScreen } from "./investigationScreen";
@@ -128,6 +127,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
             <FindingPanel
               readOnly={readOnly}
               busy={actions.busy}
+              accessToken={accessToken}
               onReview={(owned, status, reason) => void reviewPeeked(owned, status, reason)}
             />
           </InvestigationList>
@@ -146,6 +146,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
               ready={status.ready}
               busy={actions.busy}
               connected={connected}
+              accessToken={accessToken}
               onEdit={() => openDialog("edit")}
               onDuplicate={() => openDialog("duplicate")}
               onPause={() => void actions.pause(current.lens)}
@@ -201,7 +202,6 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
           }}
         />
       )}
-      <EvidenceSheets lenses={lenses} lens={lens} accessToken={accessToken} />
     </section>
   );
 }

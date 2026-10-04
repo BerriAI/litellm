@@ -76,12 +76,20 @@ export function useLensRoute(): LensRoute {
   return { tab, lensId: lens, demo, setTab, setLensId, setDemo };
 }
 
+const ISSUE_ROUTE_PARSERS = {
+  ...ISSUE_PARSERS,
+  evidence: RESULT_PARSERS.evidence,
+  evidence_span: RESULT_PARSERS.evidence_span,
+};
+
+/** Peeking at a finding starts from its summary, so evidence stacked over the previous one is dropped. */
 export function useIssueRoute() {
-  const [{ issue }, setParams] = useQueryStates(ISSUE_PARSERS);
+  const [{ issue }, setParams] = useQueryStates(ISSUE_ROUTE_PARSERS);
   return {
     issueKey: issue,
     setIssueKey: useCallback(
-      (next: string | null) => void setParams({ issue: next }, { history: "push" }),
+      (next: string | null) =>
+        void setParams({ issue: next, evidence: null, evidence_span: null }, { history: "push" }),
       [setParams],
     ),
   };

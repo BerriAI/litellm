@@ -2,7 +2,7 @@
 
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
-import { ChevronDown, ChevronsRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronsRight, ChevronUp, Maximize2, Minimize2, X } from "lucide-react";
 import {
   createContext,
   type KeyboardEvent,
@@ -134,12 +134,13 @@ function Row<T>({ item, render, ...props }: InspectorRowProps<T>) {
       toggle(item);
     },
   };
-  return useRender({
-    defaultTagName: "div",
+  const rendered = {
+    defaultTagName: "div" as const,
     render,
     state: { slot: ROW_SLOT, state: isSelected ? "selected" : "idle" },
     props: mergeProps<"div">(own, props),
-  });
+  };
+  return useRender(rendered);
 }
 
 function usePanelWidth(storageKey: string) {
@@ -315,4 +316,19 @@ function Panel<T>({ label, testId, children }: InspectorPanelProps<T>) {
   );
 }
 
-export const Inspector = { Root, Row, Panel } as const;
+/** Returns from content stacked inside the panel, such as evidence opened over a finding. */
+function BackLink({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-slot="inspector-back"
+      className="-ml-1 inline-flex max-w-full items-center gap-1 rounded px-1 text-xs text-muted-foreground hover:text-foreground"
+    >
+      <ArrowLeft aria-hidden="true" className="size-3 shrink-0" />
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
+export const Inspector = { Root, Row, Panel, BackLink } as const;

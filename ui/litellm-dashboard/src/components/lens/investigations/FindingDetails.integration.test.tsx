@@ -1,6 +1,8 @@
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
+
+import type { RunSelection } from "@/components/view_logs/TraceView/traceRouting";
 
 import { renderWithProviders } from "@/../tests/test-utils";
 import { Inspector } from "@/components/shared/Inspector";
@@ -8,6 +10,14 @@ import { Inspector } from "@/components/shared/Inspector";
 import type { OwnedFinding } from "../model/inbox";
 import type { Finding, Lens } from "../model/types";
 import { FindingPanel, ownedFindingKey } from "./FindingDetails";
+
+vi.mock("@/components/view_logs/TraceView/TraceDrawer", () => ({
+  RunView: ({ traceId, selection }: { traceId: string; selection: RunSelection }) => (
+    <div data-testid="run-view">
+      {traceId} at {selection.spanId}
+    </div>
+  ),
+}));
 
 const lens = {
   id: "lens",
@@ -46,7 +56,7 @@ function Harness({ current, onReview }: { current: Finding | null; onReview: Fin
       noun="finding"
       storageKey="test.finding"
     >
-      <FindingPanel readOnly={false} busy={false} onReview={onReview} />
+      <FindingPanel readOnly={false} busy={false} accessToken="t" onReview={onReview} />
     </Inspector.Root>
   );
 }
@@ -89,4 +99,37 @@ it("keeps a feedback draft during refreshes, sends it with status changes, and r
   const other: Finding = { ...finding, id: "other", reason: "Other feedback" };
   view.rerender(<Harness current={other} onReview={onReview} />);
   expect(reason()).toHaveValue("Other feedback");
+});
+
+it("stacks a quote's original step over the finding and keeps the feedback draft on the way back", async () => {
+  const user = userEvent.setup();
+  const traceOf = (id: string) => btoa(JSON.stringify(["traces", "", id]));
+  const quoted: Finding = {
+    ...finding,
+    evidence: [
+      { execution_id: traceOf("trace-1"), span_id: "step-a", quote: "first quote", role: "support" },
+      { execution_id: traceOf("trace-2"), span_id: "step-b", quote: "second quote", role: "support" },
+    ],
+  };
+  const onUrlUpdate = vi.fn();
+  renderWithProviders(<Harness current={quoted} onReview={vi.fn()} />, { onUrlUpdate });
+  const panel = screen.getByRole("complementary", { name: "Finding details" });
+  const reason = () => within(panel).getByRole("textbox", { name: "What should Lens remember?", hidden: true });
+  fireEvent.change(reason(), { target: { value: "Draft feedback" } });
+  for (const summary of within(panel).getAllByText(/quote$/)) await user.click(summary);
+  await user.click(within(panel).getAllByRole("button", { name: "Open original step" })[0]);
+  expect(await within(panel).findByTestId("run-view")).toHaveTextContent("trace-1 at step-a");
+  expect(reason()).not.toBeVisible();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+  await user.click(within(panel).getByRole("button", { name: "Back to finding" }));
+  expect(within(panel).queryByTestId("run-view")).not.toBeInTheDocument();
+  expect(reason()).toBeVisible();
+  expect(reason()).toHaveValue("Draft feedback");
+
+  await user.click(within(panel).getAllByRole("button", { name: "Open original step" })[1]);
+  expect(await within(panel).findByTestId("run-view")).toHaveTextContent("trace-2 at step-b");
+  const url = new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
+  expect(url.get("evidence")).toBe(traceOf("trace-2"));
+  expect(url.get("evidence_span")).toBe("step-b");
 });

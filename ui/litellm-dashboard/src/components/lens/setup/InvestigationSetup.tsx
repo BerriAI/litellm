@@ -24,7 +24,10 @@ import { MatchingActivityPreview } from "./MatchingActivityPreview";
 import { useMatchingActivity } from "./useMatchingActivity";
 import { useAnalysisModels } from "./fields/useAnalysisModels";
 import { modelGate } from "./fields/analysisModels";
-import { TraceSheet } from "../investigations/TraceSheet";
+import { Inspector } from "@/components/shared/Inspector";
+import { TraceEvidence } from "../investigations/Evidence";
+import { FINDING_PANEL_WIDTH_KEY } from "../investigations/FindingDetails";
+import type { Execution } from "./useMatchingActivity";
 import { durationLabel } from "../model/format";
 import { type Settings } from "../model/types";
 
@@ -90,13 +93,14 @@ function SetupEditor({
   const analysis = useAnalysisModels();
   const [step, setStep] = useState<SetupStepId>("activity");
   const [error, setError] = useState("");
-  const [trace, setTrace] = useState<{ id: string; ref?: string } | null>(null);
+  const [trace, setTrace] = useState<Execution | null>(null);
   const { control, register, setValue, subscribe, trigger, formState } = form;
   const [selectedModel, repeat, selection, context, watching, questions] = useWatch({
     control,
     name: ["selectedModel", "repeat", "selection", "context", "watching", "questions"],
   });
   const activity = useMatchingActivity();
+  const traceRuns = activity.preview.page.executions.filter((run) => run.source === "traces");
   const model = selectedModel ?? analysis.defaultModel ?? "";
   useEffect(
     () =>
@@ -207,21 +211,28 @@ function SetupEditor({
             </div>
           </SetupStep>
         </SetupSteps>
-        <MatchingActivityPreview
-          {...activity.preview}
-          className="min-w-0 lg:sticky lg:top-0"
-          onOpen={(run) => setTrace({ id: run.trace_id, ref: run.trace_ref })}
-        />
+        <Inspector.Root
+          items={traceRuns}
+          itemKey={(run) => run.id}
+          selected={trace}
+          onSelectedChange={setTrace}
+          noun="run"
+          storageKey={FINDING_PANEL_WIDTH_KEY}
+        >
+          <MatchingActivityPreview {...activity.preview} className="min-w-0 lg:sticky lg:top-0" onOpen={setTrace} />
+          <Inspector.Panel label="Run details" testId="run-panel">
+            {(run: Execution) => (
+              <TraceEvidence
+                traceId={run.trace_id}
+                traceRef={run.trace_ref}
+                initialSpanId={null}
+                accessToken={accessToken}
+                onBack={() => setTrace(null)}
+              />
+            )}
+          </Inspector.Panel>
+        </Inspector.Root>
       </div>
-      {trace && (
-        <TraceSheet
-          open
-          traceId={trace.id}
-          traceRef={trace.ref}
-          accessToken={accessToken}
-          onClose={() => setTrace(null)}
-        />
-      )}
     </section>
   );
 }

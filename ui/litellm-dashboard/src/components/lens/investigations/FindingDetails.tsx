@@ -11,6 +11,7 @@ import { evidenceTarget } from "../model/findings";
 import { runTime } from "../model/format";
 import { findingAgents, findingKey, type OwnedFinding, sampledExecutions } from "../model/inbox";
 import type { Finding, Sample } from "../model/types";
+import { EvidenceView } from "./Evidence";
 import { IssueBrief } from "./IssueBrief";
 import { type EvidenceRef, useEvidenceRoute } from "./resultRoute";
 
@@ -147,27 +148,44 @@ export function FindingDetails({
 export interface FindingPanelProps {
   readonly readOnly: boolean;
   readonly busy: boolean;
+  readonly accessToken: string;
   /** Runs to name evidence by; defaults to every run the owning investigation has sampled. */
   readonly sampledRuns?: Sample["executions"];
   readonly onReview: (owned: OwnedFinding, status: Finding["status"], reason: string) => void;
 }
 
-/** The side panel for whichever finding the surrounding Inspector has open. */
-export function FindingPanel({ readOnly, busy, sampledRuns, onReview }: FindingPanelProps) {
-  const { setEvidence } = useEvidenceRoute();
+/**
+ * The side panel for whichever finding the surrounding Inspector has open. Opening a quote's original step or
+ * request stacks it over the finding, which stays mounted so a feedback draft survives the round trip.
+ */
+export function FindingPanel({ readOnly, busy, accessToken, sampledRuns, onReview }: FindingPanelProps) {
+  const { evidence, setEvidence } = useEvidenceRoute();
   return (
     <Inspector.Panel label="Finding details" testId="finding-panel">
       {(owned: OwnedFinding) => (
-        <FindingDetails
-          key={ownedFindingKey(owned)}
-          finding={owned.finding}
-          agents={findingAgents(owned.lens, owned.finding)}
-          sampledRuns={sampledRuns ?? sampledExecutions(owned.lens)}
-          readOnly={readOnly}
-          busy={busy}
-          onOpenEvidence={setEvidence}
-          onReview={(status, reason) => onReview(owned, status, reason)}
-        />
+        <>
+          <div hidden={evidence !== null} className={evidence ? undefined : "flex min-h-0 flex-1 flex-col"}>
+            <FindingDetails
+              key={ownedFindingKey(owned)}
+              finding={owned.finding}
+              agents={findingAgents(owned.lens, owned.finding)}
+              sampledRuns={sampledRuns ?? sampledExecutions(owned.lens)}
+              readOnly={readOnly}
+              busy={busy}
+              onOpenEvidence={setEvidence}
+              onReview={(status, reason) => onReview(owned, status, reason)}
+            />
+          </div>
+          {evidence && (
+            <EvidenceView
+              lensId={owned.lens.id}
+              evidence={evidence}
+              accessToken={accessToken}
+              backLabel="Back to finding"
+              onBack={() => setEvidence(null)}
+            />
+          )}
+        </>
       )}
     </Inspector.Panel>
   );

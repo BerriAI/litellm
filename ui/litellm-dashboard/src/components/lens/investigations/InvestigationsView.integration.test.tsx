@@ -405,7 +405,12 @@ it("reads request content from the beginning after its abbreviated preview", asy
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView accessToken="test" readOnly />);
   await user.click(await screen.findByRole("tab", { name: "Agent traces" }));
-  await user.click(screen.getByRole("button", { name: /Release-42/ }));
+  const row = screen.getByRole("button", { name: /Release-42/ });
+  await user.click(row);
+  const panel = await screen.findByRole("complementary", { name: "Run details" });
+  expect(row).toHaveAttribute("aria-selected", "true");
+  expect(panel).toHaveTextContent("1 / 1");
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(await screen.findByText("Abbreviated preview")).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Next section" }));
   expect(await screen.findByText("Original at 1")).toBeVisible();

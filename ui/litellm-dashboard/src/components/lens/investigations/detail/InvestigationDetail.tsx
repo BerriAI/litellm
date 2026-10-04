@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RunsTab } from "./RunsTab";
 import { InvestigationProgress } from "../InvestigationProgress";
 import { StepFeed } from "../StepFeed";
@@ -13,7 +13,7 @@ import type { OwnedFinding } from "../../model/inbox";
 import { activeJob } from "../../model/status";
 import { type Finding, type Lens } from "../../model/types";
 import { FindingPanel } from "../FindingDetails";
-import { useEvidenceRoute, useSectionRoute } from "../resultRoute";
+import { useSectionRoute } from "../resultRoute";
 import { useRunSnapshot } from "../useRunSnapshot";
 
 import { InvestigationActions, type InvestigationIntents } from "./InvestigationActions";
@@ -28,6 +28,7 @@ export type InvestigationDetailProps = InvestigationIntents & {
   readonly ready: boolean;
   readonly busy: boolean;
   readonly connected: boolean;
+  readonly accessToken: string;
   readonly onReviewFinding: (owned: OwnedFinding, status: Finding["status"], reason: string) => void;
 };
 
@@ -37,12 +38,12 @@ export function InvestigationDetail({
   ready,
   busy,
   connected,
+  accessToken,
   onCancelRun,
   onReviewFinding,
   ...intents
 }: InvestigationDetailProps) {
   const { section, setSection } = useSectionRoute();
-  const { setEvidence } = useEvidenceRoute();
   const snapshot = useRunSnapshot(lens);
   const { job, batchId, batchSettings, batchFindings, missingSnapshot } = snapshot;
   const active = activeJob(lens.jobs);
@@ -90,14 +91,13 @@ export function InvestigationDetail({
             <FindingPanel
               readOnly={readOnly}
               busy={busy}
+              accessToken={accessToken}
               sampledRuns={job?.sample?.executions}
               onReview={onReviewFinding}
             />
           </FindingsTab>
           <CriteriaTab settings={batchSettings} readOnly={readOnly} onEditCriteria={intents.onEdit} />
-          <TabsContent value="runs" className="pt-4 space-y-4">
-            <RunsTab key={job?.id ?? batchId} job={job} onOpen={(id) => setEvidence({ id, span: "" })} />
-          </TabsContent>
+          <RunsTab key={job?.id ?? batchId} lens={lens} job={job} accessToken={accessToken} />
           <HistoryTab lens={lens} />
         </Tabs>
       </section>

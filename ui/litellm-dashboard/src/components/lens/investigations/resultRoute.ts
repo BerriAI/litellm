@@ -29,13 +29,25 @@ export function useSectionRoute() {
   return { section, setSection };
 }
 
+/** Picking a finding starts from its summary, so any evidence stacked over the previous one is dropped. */
 export function useFindingRoute() {
   const [{ finding }, setParams] = useQueryStates(RESULT_PARSERS);
   const setFindingId = useCallback(
-    (next: string | null) => void setParams({ finding: next }, { history: "push" }),
+    (next: string | null) =>
+      void setParams({ finding: next, evidence: null, evidence_span: null }, { history: "push" }),
     [setParams],
   );
   return { findingId: finding, setFindingId };
+}
+
+/** A run opened from the Runs tab is evidence on its own, outside any finding. */
+export function useRunEvidenceRoute() {
+  const [{ finding, evidence }, setParams] = useQueryStates(RESULT_PARSERS);
+  const selectRun = useCallback(
+    (id: string | null) => void setParams({ finding: null, evidence: id, evidence_span: null }, { history: "push" }),
+    [setParams],
+  );
+  return { runId: finding === null ? evidence : null, selectRun };
 }
 
 export function useFindingFilters() {
