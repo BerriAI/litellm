@@ -7,6 +7,7 @@ Verifies that the hook:
 3. Actually yields chunks from async generators
 """
 
+import logging
 from typing import AsyncGenerator, Any
 from unittest.mock import MagicMock, patch
 
@@ -382,3 +383,139 @@ async def test_a_hook_iterator_with_a_synchronous_aclose_streams_everything_and_
 
     assert [chunk async for chunk in mock_streaming_response()] == received
     assert [iterator.closed for iterator in callback.returned] == [True]
+
+
+class _RaisingAcloseIterator(_ClosableAsyncIterator):
+    """Non-generator async iterator whose asynchronous aclose raises."""
+
+    def __init__(self, response: AsyncGenerator[Any, None], error: Exception) -> None:
+        super().__init__(response)
+        self.error = error
+
+    async def aclose(self) -> None:
+        self.closed = True
+        raise self.error
+
+
+class _SyncRaisingAcloseIterator(_SyncClosableAsyncIterator):
+    """Non-generator async iterator whose synchronous aclose raises."""
+
+    def __init__(self, response: AsyncGenerator[Any, None], error: Exception) -> None:
+        super().__init__(response)
+        self.error = error
+
+    def aclose(self) -> None:
+        self.closed = True
+        raise self.error
+
+
+class RaisingAcloseIteratorCallback(CustomLogger):
+    """Iterator hook that returns a non-generator async iterator whose aclose raises."""
+
+    def __init__(
+        self,
+        iterator_type: type[_RaisingAcloseIterator] | type[_SyncRaisingAcloseIterator] = _RaisingAcloseIterator,
+        error: Exception | None = None,
+    ) -> None:
+        super().__init__()
+        self.iterator_type = iterator_type
+        self.error = error if error is not None else RuntimeError("cleanup failed")
+        self.returned: tuple[_RaisingAcloseIterator | _SyncRaisingAcloseIterator, ...] = ()
+
+    def async_post_call_streaming_iterator_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # a custom async iterator worked before aclose handling
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncGenerator[Any, None],
+        request_data: dict[str, object],
+    ) -> _RaisingAcloseIterator | _SyncRaisingAcloseIterator:
+        iterator = self.iterator_type(response, self.error)
+        self.returned = (*self.returned, iterator)
+        return iterator
+
+
+@pytest.mark.asyncio
+async def test_a_hook_iterator_whose_aclose_raises_still_finishes_the_stream(caplog):
+    proxy_logging = ProxyLogging(user_api_key_cache=MagicMock())
+    callback = RaisingAcloseIteratorCallback()
+
+    with patch.object(litellm, "callbacks", [callback]):
+        ProxyLogging._callback_capabilities_cache.clear()
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            received = [
+                chunk
+                async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+                    response=mock_streaming_response(),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                    request_data={"model": "gpt-4", "messages": []},
+                )
+            ]
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    assert [chunk async for chunk in mock_streaming_response()] == received
+    assert [iterator.closed for iterator in callback.returned] == [True]
+    warnings_emitted = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelname == "WARNING" and "RaisingAcloseIteratorCallback" in record.getMessage()
+    ]
+    assert len(warnings_emitted) == 1
+    assert "RuntimeError" in warnings_emitted[0]
+    assert "cleanup failed" in warnings_emitted[0]
+
+
+@pytest.mark.asyncio
+async def test_a_hook_iterator_whose_synchronous_aclose_raises_still_finishes_the_stream(caplog):
+    proxy_logging = ProxyLogging(user_api_key_cache=MagicMock())
+    callback = RaisingAcloseIteratorCallback(
+        iterator_type=_SyncRaisingAcloseIterator, error=ValueError("sync cleanup failed")
+    )
+
+    with patch.object(litellm, "callbacks", [callback]):
+        ProxyLogging._callback_capabilities_cache.clear()
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            received = [
+                chunk
+                async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+                    response=mock_streaming_response(),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                    request_data={"model": "gpt-4", "messages": []},
+                )
+            ]
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    assert [chunk async for chunk in mock_streaming_response()] == received
+    assert [iterator.closed for iterator in callback.returned] == [True]
+    warnings_emitted = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelname == "WARNING" and "RaisingAcloseIteratorCallback" in record.getMessage()
+    ]
+    assert len(warnings_emitted) == 1
+    assert "ValueError" in warnings_emitted[0]
+
+
+@pytest.mark.asyncio
+async def test_a_hook_iterator_with_a_clean_aclose_streams_everything_without_warning(caplog):
+    proxy_logging = ProxyLogging(user_api_key_cache=MagicMock())
+    callback = ClosableIteratorCallback()
+
+    with patch.object(litellm, "callbacks", [callback]):
+        ProxyLogging._callback_capabilities_cache.clear()
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            received = [
+                chunk
+                async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+                    response=mock_streaming_response(),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test_key"),
+                    request_data={"model": "gpt-4", "messages": []},
+                )
+            ]
+    ProxyLogging._callback_capabilities_cache.clear()
+
+    assert [chunk async for chunk in mock_streaming_response()] == received
+    assert [iterator.closed for iterator in callback.returned] == [True]
+    assert not [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelname == "WARNING" and "ClosableIteratorCallback" in record.getMessage()
+    ]

@@ -2773,9 +2773,17 @@ class ProxyLogging:
                     yield chunk
             finally:
                 if isinstance(guarded, _ClosableAsyncIterator):
-                    closing: Final = guarded.aclose()
-                    if inspect.isawaitable(closing):
-                        await closing
+                    try:
+                        closing: Final = guarded.aclose()
+                        if inspect.isawaitable(closing):
+                            await closing
+                    except Exception as e:  # noqa: BLE001  # a finished stream must not fail on callback cleanup
+                        verbose_proxy_logger.warning(
+                            "Closing the streaming iterator of %s raised %s: %s",
+                            getattr(callback, "guardrail_name", None) or type(callback).__name__,
+                            type(e).__name__,
+                            e,
+                        )
         except Exception as e:
             if e is not upstream.failure:
                 enrich_http_exception_with_guardrail_context(e, callback)
