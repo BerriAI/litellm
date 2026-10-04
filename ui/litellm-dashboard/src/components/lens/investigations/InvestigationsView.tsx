@@ -26,7 +26,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FindingSheet } from "./FindingSheet";
 import { TraceSheet } from "./TraceSheet";
 import { InvestigationSetupDialog } from "../setup/InvestigationSetupDialog";
-import { WorkerDialog } from "../setup/worker/WorkerDialog";
 import { useAnalysisKeyInfo } from "../setup/worker/AnalysisKeyDetails";
 import { InvestigationList } from "./InvestigationList";
 import { Button } from "@/components/ui/button";
@@ -46,14 +45,13 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
   const saveLens = useSaveLens(accessToken);
   const { dialog, target: dialogTarget, openDialog, closeDialog } = useDialogRoute();
   const { issueKey, setIssueKey } = useIssueRoute();
-  const workerSetup = dialog === "settings";
   const now = useNow(2000);
-  const query = useQuery(lensQueries.list(api, workerSetup));
+  const query = useQuery(lensQueries.list(api, false));
   const models = useQuery(lensQueries.models(api));
   const modelDetails = useQuery(lensQueries.modelDetails(api));
   const [agentsAsOf] = useState(() => new Date().toISOString());
   const agents = useQuery(lensQueries.agents(api, agentsAsOf, "traces"));
-  const { lensId: selected, setLensId: setSelected } = useLensRoute();
+  const { lensId: selected, setLensId: setSelected, setTab } = useLensRoute();
   const [skipped, setSkipped] = useState<readonly { id: string; name: string; reason: string }[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -89,7 +87,6 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
     resetResults();
   };
   const setEditing = (mode: "new" | "edit" | "duplicate") => openDialog(mode);
-  const setWorkerSetup = (open: boolean) => (open ? openDialog("settings") : closeDialog());
   const setMonitoring = (open: boolean) => (open ? openDialog("monitoring") : closeDialog());
   const connected = query.data?.workers?.some((w) => workerConnected(w, now)) ?? false;
   const activeWorkers = query.data?.workers.filter((worker) => !worker.revoked) ?? [];
@@ -187,7 +184,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
             void activity.refetch();
             refresh();
           }}
-          onConnect={() => setWorkerSetup(true)}
+          onConnect={() => setTab("settings")}
           onCreate={() => setEditing("new")}
           showPreview={activity.isSuccess && !ready}
         />
@@ -267,15 +264,6 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
             await update((api) => api.startRun(targetLens.id, request));
             closeDialog();
           }}
-        />
-      )}
-      {workerSetup && (
-        <WorkerDialog
-          accessToken={accessToken}
-          workers={query.data?.workers ?? []}
-          onClose={closeDialog}
-          onChanged={refresh}
-          onReady={ready && showEmpty ? () => openDialog("new") : undefined}
         />
       )}
       {dialog === "monitoring" && lens && (

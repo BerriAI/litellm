@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Tabs as TabsPrimitive } from "@base-ui/react/tabs";
 import { Activity, Aperture, ArrowUpRight, ScanSearch, Settings } from "lucide-react";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
@@ -12,8 +12,9 @@ import { LensServicesProvider } from "./LensServicesProvider";
 import { LensPreviewContext } from "./LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
+import { WorkerSettings } from "./setup/worker/WorkerSettings";
 import { createLensDemo } from "./demo/createLensDemo";
-import { lensQueries } from "./api/queries";
+import { lensKeys, lensQueries } from "./api/queries";
 import { useLensApi } from "./services";
 import { investigationActivity, workerConnected, type InvestigationActivity } from "./model/status";
 import { cn } from "@/lib/cva.config";
@@ -45,7 +46,7 @@ function DemoToggle({ demo, onChange }: { demo: boolean; onChange: (demo: boolea
   );
 }
 
-const MODE_ICONS = { traces: Activity, investigations: ScanSearch } as const;
+const MODE_ICONS = { traces: Activity, investigations: ScanSearch, settings: Settings } as const;
 
 const ACTIVITY_DOT: Record<Exclude<InvestigationActivity, "idle">, { className: string; label: string }> = {
   running: { className: "bg-info motion-safe:animate-pulse", label: "An investigation is running" },
@@ -103,43 +104,25 @@ function NotchCorner({ side, demo }: { side: "left" | "right"; demo: boolean }) 
   );
 }
 
-type WorkerStatus = { connected: boolean; open: () => void } | null;
+type WorkerStatus = { connected: boolean } | null;
 
-/** Secondary notch entry: quieter than the mode tabs, it opens Lens settings and carries worker health as a corner dot. */
-function SettingsNotch({ connected, open }: NonNullable<WorkerStatus>) {
-  return (
-    <>
-      <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-border" />
-      <button
-        type="button"
-        onClick={open}
-        aria-label="Lens settings"
-        title={connected ? "Settings · Worker connected" : "Settings · Connect worker"}
-        className="relative inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors duration-200 hover:bg-muted/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-      >
-        <Settings aria-hidden="true" className="size-4" strokeWidth={1.75} />
-        <StatusDot state={connected ? "ok" : "warn"} className="absolute top-1 right-1 size-1.5 ring-2 ring-card" />
-      </button>
-    </>
-  );
-}
+const workerTitle = (worker: WorkerStatus) => (worker?.connected ? "Worker connected" : "Connect worker");
 
+/** Settings is a quieter third tab: icon only until selected, carrying worker health as a corner dot. */
 function LensModeSwitch({
   activity,
   demo,
+  activeTab,
   worker,
 }: {
   activity: InvestigationActivity;
   demo: boolean;
+  activeTab: LensTab;
   worker: WorkerStatus;
 }) {
+  const tabs = Object.entries(LENS_TABS).filter(([view]) => view !== "settings" || worker);
   return (
-    <div
-      className={cn(
-        "relative z-raised flex items-center rounded-t-2xl bg-card px-1.5 pt-1.5 pb-[7px]",
-        frameOf(demo).tab,
-      )}
-    >
+    <div className={cn("relative z-raised rounded-t-2xl bg-card px-1.5 pt-1.5 pb-[7px]", frameOf(demo).tab)}>
       <NotchCorner side="left" demo={demo} />
       <NotchCorner side="right" demo={demo} />
       <TabsPrimitive.List
@@ -147,35 +130,50 @@ function LensModeSwitch({
         className="relative inline-flex h-9 items-center rounded-full bg-muted/70 p-1"
       >
         <TabsPrimitive.Indicator className="absolute top-1 bottom-1 left-(--active-tab-left) w-(--active-tab-width) rounded-full bg-background shadow-sm ring-1 ring-border transition-[left,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none" />
-        {Object.entries(LENS_TABS).map(([view, label]) => {
+        {tabs.map(([view, label]) => {
           const Icon = MODE_ICONS[view as LensTab];
+          const quiet = view === "settings" && activeTab !== "settings";
           return (
             <TabsPrimitive.Tab
               key={view}
               value={view}
+              title={view === "settings" ? workerTitle(worker) : undefined}
               aria-description={
                 view === "investigations" && activity !== "idle" ? ACTIVITY_DOT[activity].label : undefined
               }
-              className="relative z-raised inline-flex h-full items-center gap-2 rounded-full px-4 text-sm font-medium text-muted-foreground outline-none transition-colors duration-200 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-active:text-foreground"
+              className={cn(
+                "relative z-raised inline-flex h-full items-center gap-2 rounded-full text-sm font-medium text-muted-foreground outline-none transition-colors duration-200 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-active:text-foreground",
+                quiet ? "px-2.5" : "px-4",
+              )}
             >
-              <Icon aria-hidden="true" className="size-4" />
-              {label}
+              <span className="relative inline-flex">
+                <Icon aria-hidden="true" className="size-4" />
+                {view === "settings" && worker && (
+                  <StatusDot
+                    state={worker.connected ? "ok" : "warn"}
+                    className="absolute -top-0.5 -right-0.5 size-1.5 ring-2 ring-muted"
+                  />
+                )}
+              </span>
+              <span className={cn(quiet && "sr-only")}>{label}</span>
               {view === "investigations" && <ActivityDot activity={activity} />}
             </TabsPrimitive.Tab>
           );
         })}
       </TabsPrimitive.List>
-      {worker && <SettingsNotch {...worker} />}
     </div>
   );
 }
 
-function useLensOverview(accessToken: string, enabled: boolean) {
+function useLensOverview(accessToken: string, enabled: boolean, settingsOpen: boolean) {
   const api = useLensApi(accessToken);
-  const { data } = useQuery({ ...lensQueries.list(api, false), enabled });
+  const client = useQueryClient();
+  const { data } = useQuery({ ...lensQueries.list(api, settingsOpen), enabled });
   return {
     activity: investigationActivity(data?.lenses ?? []),
+    lenses: data?.lenses,
     workers: data?.workers,
+    refresh: () => void client.invalidateQueries({ queryKey: lensKeys.list(api.scope) }),
   };
 }
 
@@ -188,17 +186,18 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
   const [previewTarget, setPreviewTarget] = useState<HTMLDivElement | null>(null);
   const activeTab = tab ?? (lensId ? "investigations" : "traces");
   const canInvestigate = isProxyAdminTierRole(userRole);
-  const { activity, workers } = useLensOverview(accessToken, canInvestigate);
+  const canConfigure = canInvestigate && !readOnly;
+  const { activity, lenses, workers, refresh } = useLensOverview(
+    accessToken,
+    canInvestigate,
+    canConfigure && activeTab === "settings",
+  );
   const worker: WorkerStatus =
-    workers && !readOnly
-      ? {
-          connected: workers.some((candidate) => workerConnected(candidate)),
-          open: () => {
-            setTab("investigations");
-            openDialog("settings");
-          },
-        }
-      : null;
+    canConfigure && workers ? { connected: workers.some((candidate) => workerConnected(candidate)) } : null;
+  const startFirstInvestigation = () => {
+    setTab("investigations");
+    openDialog("new");
+  };
   const preview = (view: LensTab) => ({
     target: previewTarget,
     open: !demo && activeTab === view ? () => setDemo(true) : undefined,
@@ -225,7 +224,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
               </a>
             </p>
           </div>
-          <LensModeSwitch activity={activity} demo={demo} worker={worker} />
+          <LensModeSwitch activity={activity} demo={demo} activeTab={activeTab} worker={worker} />
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-3 pb-3">
             <div ref={setPreviewTarget} />
             <DemoToggle demo={demo} onChange={setDemo} />
@@ -253,6 +252,16 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
               )}
             </LensPreviewContext.Provider>
           </TabsContent>
+          {worker && (
+            <TabsContent value="settings" className={cn(PANEL, "p-4")}>
+              <WorkerSettings
+                accessToken={accessToken}
+                workers={workers ?? []}
+                onChanged={refresh}
+                onReady={lenses?.length === 0 ? startFirstInvestigation : undefined}
+              />
+            </TabsContent>
+          )}
         </div>
       </Tabs>
     </main>

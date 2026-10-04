@@ -223,7 +223,7 @@ describe("Lens interactive demo", () => {
     await waitFor(() => expect(tab).toHaveAccessibleDescription(""));
   });
 
-  it("shows a settings entry with worker health beside the mode tabs and opens it from Traces", async () => {
+  it("adds a quiet Settings tab that manages the worker inline and reflects its health", async () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     const saved = createLensDemoData().lenses[0];
@@ -244,34 +244,51 @@ describe("Lens interactive demo", () => {
       return Response.json({ data: [], traces: true, requests: false });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, { onUrlUpdate });
-    const status = await screen.findByRole("button", { name: "Lens settings" });
-    expect(status).toHaveAttribute("title", "Settings · Worker connected");
-    expect(screen.getByRole("tab", { name: "Traces" })).toHaveAttribute("aria-selected", "true");
-    await user.click(status);
-    const settings = within(await screen.findByRole("dialog", { name: "Settings" }));
-    expect(settings.getByRole("heading", { name: "Analysis worker" })).toBeVisible();
-    expect(settings.getByText("Connected")).toBeVisible();
-    expect(screen.getByRole("tab", { name: "Investigations", hidden: true })).toHaveAttribute("aria-selected", "true");
-    await expectUrl(onUrlUpdate, (url) => {
-      expect(url.get("tab")).toBe("investigations");
-      expect(url.get("dialog")).toBe("settings");
-    });
-    await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
+    const settings = await tabs.findByRole("tab", { name: "Settings" });
+    expect(settings).toHaveAttribute("title", "Worker connected");
+    await user.click(settings);
+    await expectUrl(onUrlUpdate, (url) => expect(url.get("tab")).toBe("settings"));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const panel = within(screen.getByRole("region", { name: "Settings" }));
+    expect(panel.getByRole("heading", { name: "Analysis worker" })).toBeVisible();
+    expect(panel.getByText("Connected")).toBeVisible();
+    await user.click(panel.getByRole("button", { name: "Edit access" }));
+    expect(panel.getByRole("heading", { name: "Analysis access" })).toBeVisible();
+    await user.click(panel.getByRole("button", { name: "Cancel" }));
+    expect(panel.getByRole("heading", { name: "Analysis worker" })).toBeVisible();
     workers.mockReturnValue([{ ...worker, revoked: true }]);
     await testQueryClient.refetchQueries({ queryKey: ["lens", "list"] });
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Lens settings" })).toHaveAttribute(
-        "title",
-        "Settings · Connect worker",
-      ),
-    );
+    await waitFor(() => expect(settings).toHaveAttribute("title", "Connect worker"));
+    expect(panel.getByRole("heading", { name: "Connect a worker" })).toBeVisible();
+    expect(panel.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
   });
 
-  it("hides the settings entry for read-only sessions", async () => {
+  it("sends the first-time guide's Connect worker into the Settings tab", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    network.mockImplementation(async (input) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/lens") return Response.json({ lenses: [], workers: [], tracing_enabled: true });
+      if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
+      return Response.json({ data: [], traces: true, requests: false });
+    });
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
+      searchParams: "?tab=investigations",
+      onUrlUpdate,
+    });
+    const guide = within(await screen.findByRole("region", { name: "Find what needs attention" }));
+    await user.click(await guide.findByRole("button", { name: "Connect worker" }));
+    await expectUrl(onUrlUpdate, (url) => expect(url.get("tab")).toBe("settings"));
+    const panel = within(await screen.findByRole("region", { name: "Settings" }));
+    expect(panel.getByRole("heading", { name: "Connect a worker" })).toBeVisible();
+    expect(panel.getByRole("button", { name: "Get install command" })).toBeVisible();
+  });
+
+  it("hides the Settings tab for read-only sessions", async () => {
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly />);
     expect(await screen.findByRole("tablist", { name: "Lens" })).toBeVisible();
     await waitFor(() => expect(network).toHaveBeenCalled());
-    expect(screen.queryByRole("button", { name: "Lens settings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
   });
 });

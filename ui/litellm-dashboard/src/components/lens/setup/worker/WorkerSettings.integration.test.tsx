@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { apiClient } from "@/components/networking";
-import { WorkerDialog } from "./WorkerDialog";
+import { WorkerSettings } from "./WorkerSettings";
 
 vi.mock("@/components/networking", () => ({
   apiClient: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn() },
@@ -39,7 +39,7 @@ describe("Worker setup", () => {
   it("generates a complete command using one worker credential and the configured proxy address", async () => {
     vi.mocked(apiClient.post).mockResolvedValue(created);
     const user = userEvent.setup();
-    renderWithProviders(<WorkerDialog accessToken="admin" workers={[]} onClose={vi.fn()} onChanged={vi.fn()} />);
+    renderWithProviders(<WorkerSettings accessToken="admin" workers={[]} onChanged={vi.fn()} />);
     await user.click(screen.getByText("Advanced options"));
     await user.click(screen.getByRole("switch", { name: "Use an existing virtual key" }));
     expect(screen.getByRole("textbox", { name: "LiteLLM proxy URL" })).toHaveValue("https://gateway.example/proxy");
@@ -69,10 +69,9 @@ describe("Worker setup", () => {
     const changed = vi.fn();
     vi.mocked(apiClient.put).mockResolvedValue(created.worker);
     renderWithProviders(
-      <WorkerDialog
+      <WorkerSettings
         accessToken="admin"
         workers={[{ ...created.worker, analysis_key_id: null }]}
-        onClose={vi.fn()}
         onChanged={changed}
       />,
     );
@@ -92,14 +91,14 @@ describe("Worker setup", () => {
     const user = userEvent.setup();
     const changed = vi.fn();
     vi.mocked(apiClient.delete).mockResolvedValue(true);
-    const props = { accessToken: "admin", onClose: vi.fn(), onChanged: changed };
-    const view = renderWithProviders(<WorkerDialog {...props} workers={[created.worker]} />);
+    const props = { accessToken: "admin", onChanged: changed };
+    const view = renderWithProviders(<WorkerSettings {...props} workers={[created.worker]} />);
     expect(screen.queryByRole("button", { name: "Add worker" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Get install command" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Revoke access" }));
     expect(apiClient.delete).toHaveBeenCalledWith("/lens/workers/worker", { accessToken: "admin" });
     expect(changed).toHaveBeenCalledOnce();
-    view.rerender(<WorkerDialog {...props} workers={[{ ...created.worker, revoked: true }]} />);
+    view.rerender(<WorkerSettings {...props} workers={[{ ...created.worker, revoked: true }]} />);
     expect(screen.getByRole("button", { name: "Get install command" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Analysis model" })).toBeVisible();
   });
@@ -116,7 +115,7 @@ describe("Worker setup", () => {
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({ token_id: "retry-key-id" })
       .mockResolvedValueOnce(created);
-    renderWithProviders(<WorkerDialog accessToken="admin" workers={[]} onClose={vi.fn()} onChanged={vi.fn()} />);
+    renderWithProviders(<WorkerSettings accessToken="admin" workers={[]} onChanged={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Get install command" })).toBeDisabled();
     expect(screen.getByRole("textbox", { name: "LiteLLM proxy URL", hidden: true })).not.toBeVisible();
     await user.click(screen.getByRole("combobox", { name: "Analysis model" }));

@@ -308,7 +308,8 @@ it("guides a first-time administrator into worker connection and lens setup", as
     return { traces: true, requests: false, data: [] };
   });
   const user = userEvent.setup();
-  renderWithProviders(withPreview(<InvestigationsView accessToken="test" />, vi.fn()));
+  const onUrlUpdate = vi.fn();
+  renderWithProviders(withPreview(<InvestigationsView accessToken="test" />, vi.fn()), { onUrlUpdate });
   const guide = within(await screen.findByRole("region", { name: "Find what needs attention" }));
   expect(apiClient.get).toHaveBeenCalledWith("/lens/activity/available", { accessToken: "test" });
   expect(await guide.findByRole("link", { name: "View traces" })).toHaveAttribute(
@@ -317,9 +318,10 @@ it("guides a first-time administrator into worker connection and lens setup", as
   );
   expect(await screen.findByRole("button", { name: "Preview sample" })).toBeVisible();
   await user.click(guide.getByRole("button", { name: "Connect worker" }));
-  const connection = within(await screen.findByRole("dialog", { name: "Connect a worker" }));
-  expect(connection.getByRole("button", { name: "Get install command" })).toBeVisible();
-  await user.click(connection.getByRole("button", { name: "Close" }));
+  await waitFor(() =>
+    expect(new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? "")).get("tab")).toBe("settings"),
+  );
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   expect(guide.getByRole("button", { name: "New investigation" })).toBeDisabled();
   await act(async () => {
     testQueryClient.setQueryData(lensKeys.list("test"), {

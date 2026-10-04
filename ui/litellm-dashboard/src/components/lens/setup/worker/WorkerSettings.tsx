@@ -9,16 +9,8 @@ import { WorkerForm } from "./WorkerForm";
 import { useNow } from "@/hooks/useNow";
 
 import { FormProvider } from "react-hook-form";
-import { useId, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
 import { CheckCircle2 } from "lucide-react";
 import { workerConnected } from "../../model/status";
 import { workerFormSchema, type WorkerFormInput } from "./workerSchema";
@@ -35,16 +27,14 @@ function defaultWorkerFormValues(): WorkerFormInput {
   };
 }
 
-export function WorkerDialog({
+export function WorkerSettings({
   accessToken,
   workers,
-  onClose,
   onChanged,
   onReady,
 }: {
   accessToken: string;
   workers: LensList["workers"];
-  onClose: () => void;
   onChanged: () => void;
   onReady?: () => void;
 }) {
@@ -55,27 +45,23 @@ export function WorkerDialog({
     mode: "onChange",
   });
   const { formState, reset, setValue } = form;
-  const workerHeadingId = useId();
   const [editingWorker, setEditingWorker] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [created, setCreated] = useState<WorkerCreated | null>(null);
   const [error, setError] = useState("");
+  const hasActiveWorker = workers.some((w) => !w.revoked);
   const connected = created
     ? workers.some((w) => w.id === created.worker.id && workerConnected(w, now))
     : workers.some((w) => workerConnected(w, now));
-  const formVisible = !workers.some((w) => !w.revoked) || !!editingWorker;
+  const formVisible = !hasActiveWorker || !!editingWorker;
   const uninstalledScreen = formVisible ? "form" : "list";
   const screen = created ? "install" : uninstalledScreen;
   const createdTitle = connected ? "Worker connected" : "Run the worker";
   const formTitle = editingWorker ? "Analysis access" : "Connect a worker";
-  const baseTitle = formVisible ? formTitle : "Settings";
-  const dialogTitle = created ? createdTitle : baseTitle;
+  const baseTitle = formVisible ? formTitle : "Analysis worker";
+  const title = created ? createdTitle : baseTitle;
   const actionLabel = editingWorker ? "Save analysis access" : "Get install command";
   const cancelForm = () => {
-    if (!workers.some((w) => !w.revoked)) {
-      onClose();
-      return;
-    }
     setEditingWorker(null);
     reset(defaultWorkerFormValues());
   };
@@ -127,79 +113,56 @@ export function WorkerDialog({
   const awaitingConnection = !editingWorker && !connected;
   const describeSetup = awaitingConnection && (formVisible || !!created);
   const completed = !!created && connected;
-  const modalSize = cn(
-    created && connected && "sm:max-w-sm p-8",
-    created && !connected && "sm:max-w-lg",
-    !created && "sm:max-w-xl",
-  );
-  const description = describeSetup ? setupDescription : "Lens configuration for this proxy";
+  const description = describeSetup ? setupDescription : "Worker status and model access";
   return (
     <FormProvider {...form}>
-      <Dialog
-        open
-        onOpenChange={(open) => {
-          if (!open && !formState.isSubmitting) onClose();
-        }}
+      <section
+        aria-label="Settings"
+        className={cn("flex w-full flex-col gap-6", completed ? "max-w-sm items-center text-center" : "max-w-xl")}
       >
-        <DialogContent className={cn("max-h-[90dvh] overflow-y-auto", modalSize)}>
-          <DialogHeader className={cn(completed && "items-center gap-3 text-center sm:text-center")}>
-            {completed && (
-              <div className="flex size-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400">
-                <CheckCircle2 className="size-6" />
-              </div>
-            )}
-            <DialogTitle className="text-xl leading-7">{dialogTitle}</DialogTitle>
-            <DialogDescription className={cn(!(describeSetup || completed) && "sr-only")}>
-              {completed ? "Ready to run investigations." : description}
-            </DialogDescription>
-          </DialogHeader>
-          {screen === "form" && <WorkerForm accessToken={accessToken} editingWorker={editingWorker} />}
-          {screen === "install" && created ? (
-            <WorkerInstall
-              connected={connected}
-              address={form.getValues("address")}
-              created={created}
-              copied={copied}
-              setCopied={setCopied}
-              setError={setError}
-              onReady={onReady}
-              onClose={onClose}
-            />
-          ) : null}
-          {screen === "form" && (
-            <DialogFooter>
+        <header className={cn("space-y-1", completed && "flex flex-col items-center gap-3")}>
+          {completed && (
+            <div className="flex size-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400">
+              <CheckCircle2 className="size-6" />
+            </div>
+          )}
+          <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+          <p className="text-sm text-muted-foreground">{completed ? "Ready to run investigations." : description}</p>
+        </header>
+        {screen === "form" && <WorkerForm accessToken={accessToken} editingWorker={editingWorker} />}
+        {screen === "install" && created ? (
+          <WorkerInstall
+            connected={connected}
+            address={form.getValues("address")}
+            created={created}
+            copied={copied}
+            setCopied={setCopied}
+            setError={setError}
+            onReady={onReady}
+            onClose={() => setCreated(null)}
+          />
+        ) : null}
+        {screen === "form" && (
+          <div className="flex justify-end gap-2">
+            {hasActiveWorker && (
               <Button variant="outline" disabled={formState.isSubmitting} onClick={cancelForm}>
                 Cancel
               </Button>
-              <Button disabled={!formState.isValid || formState.isSubmitting} onClick={() => void createWorker()}>
-                {formState.isSubmitting ? "Preparing…" : actionLabel}
-              </Button>
-            </DialogFooter>
-          )}
-          {screen === "list" && (
-            <section aria-labelledby={workerHeadingId} className="space-y-4">
-              <div className="space-y-1">
-                <h3 id={workerHeadingId} className="text-sm font-semibold">
-                  Analysis worker
-                </h3>
-                <p className="text-xs text-muted-foreground">Worker status and model access</p>
-              </div>
-              <WorkerList
-                workers={workers}
-                now={now}
-                accessToken={accessToken}
-                editBilling={editBilling}
-                revoke={revoke}
-              />
-            </section>
-          )}
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          )}
-        </DialogContent>
-      </Dialog>
+            )}
+            <Button disabled={!formState.isValid || formState.isSubmitting} onClick={() => void createWorker()}>
+              {formState.isSubmitting ? "Preparing…" : actionLabel}
+            </Button>
+          </div>
+        )}
+        {screen === "list" && (
+          <WorkerList workers={workers} now={now} accessToken={accessToken} editBilling={editBilling} revoke={revoke} />
+        )}
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
+      </section>
     </FormProvider>
   );
 }
