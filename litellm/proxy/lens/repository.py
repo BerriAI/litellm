@@ -7,7 +7,6 @@ from typing import Final, Protocol
 
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
-from litellm.constants import LENS_UPDATE_ATTEMPTS, LENS_UPDATE_BACKOFF_SECONDS
 from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.lens.models import Job, Lens, Scope, Worker
 
@@ -22,6 +21,8 @@ class Row(BaseModel):
 
 
 _ROWS: Final = TypeAdapter(tuple[Row, ...])
+UPDATE_ATTEMPTS: Final = 40
+UPDATE_BACKOFF_SECONDS: Final = 0.02
 
 
 class LensRepository:
@@ -54,7 +55,7 @@ class LensRepository:
         self,
         lens_id: str,
         transform: Callable[[Lens], Lens],
-        attempts: int = LENS_UPDATE_ATTEMPTS,
+        attempts: int = UPDATE_ATTEMPTS,
         *,
         changed_only: bool = False,
     ) -> Lens | None:
@@ -62,7 +63,7 @@ class LensRepository:
             completed, updated = await self._try_update(lens_id, transform, changed_only)
             if completed:
                 return updated
-            await self.sleep(random.uniform(0, LENS_UPDATE_BACKOFF_SECONDS * min(attempt + 1, 8)))
+            await self.sleep(random.uniform(0, UPDATE_BACKOFF_SECONDS * min(attempt + 1, 8)))
         return None
 
     async def _try_update(

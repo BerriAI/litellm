@@ -3,9 +3,8 @@ from typing import Final
 
 import pytest
 
-from litellm.constants import LENS_UPDATE_ATTEMPTS
 from litellm.proxy.lens.models import Check, Lens, LensSettings, Scope
-from litellm.proxy.lens.repository import LensRepository, Row
+from litellm.proxy.lens.repository import UPDATE_ATTEMPTS, LensRepository, Row
 
 NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
 STORED: Final = Lens(
@@ -59,8 +58,8 @@ async def test_update_backs_off_between_lost_writes_and_gives_up_after_the_limit
     async def record(seconds: float) -> None:
         waits.append(seconds)
 
-    db: Final = ContendedDatabase(losses=LENS_UPDATE_ATTEMPTS)
+    db: Final = ContendedDatabase(losses=UPDATE_ATTEMPTS)
     assert await LensRepository(db, sleep=record).update("lens", renamed) is None
-    assert db.writes == LENS_UPDATE_ATTEMPTS
-    assert len(waits) == LENS_UPDATE_ATTEMPTS
+    assert db.writes == UPDATE_ATTEMPTS
+    assert len(waits) == UPDATE_ATTEMPTS
     assert all(w >= 0 for w in waits)
