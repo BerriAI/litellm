@@ -12,6 +12,7 @@ import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation 
 import { SpanIcon } from "../ui/SpanIcon";
 import { StatusMark } from "../ui/StatusMark";
 import { FrameworkLogo, traceFramework } from "../ui/TraceFramework";
+import { LoadingState } from "../../ui/LoadingState";
 import type { TraceSummary } from "../types";
 import { traceRefOf } from "../routing";
 import { fmtMs, previewText, traceDisplayName, traceAgentNames } from "../utils";
@@ -215,7 +216,7 @@ export function AgentTracesTable({
   };
   const table = useReactTable(tableOptions);
   return (
-    <InspectorTable.Root table={table} data-testid="runs-table">
+    <InspectorTable.Root table={table} data-testid="runs-table" className="flex flex-col">
       <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">
         <InspectorTable.Header />
         <InspectorTable.Body<TraceSummary>
@@ -232,7 +233,7 @@ export function AgentTracesTable({
           )}
         </InspectorTable.Body>
       </InspectorTable.Grid>
-      {isLoading && <div className="py-16 text-center text-xs text-muted-foreground">Loading runs…</div>}
+      {isLoading && <LoadingState title="Loading runs…" description="Fetching agent runs for this time range." />}
       {error && (
         <div role="alert" className="flex items-center justify-center gap-3 py-6 text-xs text-muted-foreground">
           <span>

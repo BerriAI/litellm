@@ -51,6 +51,26 @@ describe("AgentTracesTable empty state", () => {
   });
 });
 
+describe("AgentTracesTable loading state", () => {
+  it("announces the first page load instead of an empty table", () => {
+    render(
+      inList(
+        <AgentTracesTable
+          traces={[]}
+          isLoading
+          error={null}
+          hasMore={false}
+          onLoadMore={vi.fn()}
+          rangeEmpty
+          onSetUpTracing={vi.fn()}
+        />,
+      ),
+    );
+    expect(screen.getByRole("status", { name: "Loading runs…" })).toBeVisible();
+    expect(screen.queryByText(/No runs/)).not.toBeInTheDocument();
+  });
+});
+
 describe("AgentTracesTable virtualization", () => {
   const template = (traceList as TracePage).data[0] as TraceSummary;
   const manyRuns: TraceSummary[] = Array.from({ length: 500 }, (_, i) => ({

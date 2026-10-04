@@ -311,6 +311,26 @@ it("runs with saved settings from Run now without opening setup, then accepts an
   expect(sentBody(proxy.post, "/lens/lens/runs")).toEqual([{ agent_name: "billing", lookback_hours: 24 }]);
 });
 
+it("shows a loading state until the investigation list arrives", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  let resolveList: (list: unknown) => void = () => {};
+  proxy.get.mockImplementation((path) => {
+    if (path === "/lens")
+      return new Promise((resolve) => {
+        resolveList = resolve;
+      });
+    return Promise.resolve({ traces: true, requests: false, data: [] });
+  });
+  renderWithProviders(withPreview(<InvestigationsView />, vi.fn()));
+  expect(await screen.findByRole("status", { name: "Loading investigations…" })).toBeVisible();
+  expect(screen.queryByRole("region", { name: "Get Lens running" })).not.toBeInTheDocument();
+
+  act(() => resolveList({ lenses: [], workers: [], tracing_enabled: true }));
+  expect(await screen.findByRole("region", { name: "Get Lens running" })).toBeVisible();
+  expect(screen.queryByRole("status", { name: "Loading investigations…" })).not.toBeInTheDocument();
+});
+
 it("offers the interactive demo without starting an investigation", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();

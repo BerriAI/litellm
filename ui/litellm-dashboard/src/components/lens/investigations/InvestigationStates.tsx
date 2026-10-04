@@ -1,7 +1,8 @@
 "use client";
 
-import { ArrowUpRight, Loader2, SearchX, TriangleAlert } from "lucide-react";
+import { ArrowUpRight, SearchX, TriangleAlert } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { LoadingState } from "../ui/LoadingState";
 import { StateMessage } from "../ui/StateMessage";
 
 import { ApiError } from "@/lib/http/client";
@@ -63,9 +64,7 @@ export function InvestigationError({ message, refresh }: { message: string; refr
 
 export function InvestigationsLoading() {
   return (
-    <StateMessage
-      role="status"
-      icon={<Loader2 className="size-5 animate-spin motion-reduce:animate-none" />}
+    <LoadingState
       title="Loading investigations…"
       description="Fetching your investigations and their latest findings."
     />
