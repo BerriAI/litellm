@@ -414,6 +414,8 @@ def test_openinference_raw_tool_arguments_fall_back_to_repr_instead_of_raising()
     serializes them with a ``repr`` fallback instead of letting the exception
     escape before the span is exported.
     """
+    # rebind-ok: a self-referencing dict cannot be built in one shot — the cycle
+    # only exists once the finished dict is inserted into itself.
     circular: dict[str, object] = {}
     circular["self"] = circular
     for label, raw_arguments in (("tuple-key", {(1, 2): "v"}), ("circular", circular)):

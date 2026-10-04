@@ -107,12 +107,15 @@ def _tool_call_groups_by_message(
     Indexing once keeps the shed order linear in the group count: rescanning the
     full group map per message made attribute fitting quadratic on long prompts.
     """
-    indexed: dict[tuple[str, int], list[tuple[str, int, int]]] = {}
-    for family, message_idx, tool_idx in groups:
-        if tool_idx != _MESSAGE_BASE:
-            indexed.setdefault((family, message_idx), []).append((family, message_idx, tool_idx))
+    ordered: Final = sorted(
+        (group for group in groups if group[2] != _MESSAGE_BASE),
+        key=lambda group: (group[0], group[1], group[2]),
+    )
     return MappingProxyType(
-        {key: tuple(sorted(value, key=lambda group: group[2], reverse=True)) for key, value in indexed.items()}
+        {
+            message: tuple(reversed(tuple(message_tool_groups)))
+            for message, message_tool_groups in groupby(ordered, key=lambda group: group[:2])
+        }
     )
 
 

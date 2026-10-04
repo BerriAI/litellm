@@ -611,6 +611,37 @@ def test_metadata_blob_keeps_the_indexed_messages_it_competes_with():
     assert len(a) <= SpanLimits().max_span_attributes
 
 
+def test_preset_message_key_the_fit_sheds_still_never_overflows_the_span():
+    """A pre-set indexed-message key the fit later sheds cannot push the span over its limit.
+
+    The budget treats every mapped key already on the span as an overwrite
+    (free). If the fit then sheds that key, the value stamped earlier simply
+    stays in its slot, so the span holds one entry for it either way and the
+    total never exceeds the limit — the SDK's dropped-attributes counter stays
+    at zero.
+    """
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=False,
+        mapper_names=["genai", "openinference"],
+        capture_message_content="span_only",
+    )
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+    span = engine.start_span(SpanRole.LLM_CALL, "chat gpt-4o")
+    span.set_attribute("llm.input_messages.1.message.role", "stale-role")
+    engine.finish_span(
+        SpanRole.LLM_CALL,
+        span,
+        LLMCallSpanData.from_standard_logging_payload(
+            _conversation_payload(60), capture_content=True, metadata_keys=("user_api_key_alias",)
+        ),
+    )
+    (finished,) = exporter.get_finished_spans()
+    _assert_core_intact(finished)
+    assert len(finished.attributes) <= SpanLimits().max_span_attributes
+
+
 def test_attribute_budget_counts_only_keys_the_fit_does_not_overwrite():
     """Pre-set attributes the mapped set overwrites consume no slot against the span limit.
 
