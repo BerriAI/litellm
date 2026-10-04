@@ -1033,18 +1033,12 @@ class CustomGuardrail(CustomLogger):
             "metadata": scratch_metadata,
         }
         if self.logging_only_scope != "output":
-            try:
-                await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
-            except Exception as e:
-                verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
+            await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
         if response is None or self.logging_only_scope == "input":
             return
-        try:
-            await output_translation.process_output_response(
-                response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
-            )
-        except Exception as e:
-            verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
+        await output_translation.process_output_response(
+            response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
+        )
 
     def supports_scan_only_tool_results(self) -> bool:
         """Whether this guardrail can scan tool-result content.

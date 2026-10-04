@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+import json
 from typing import ClassVar, Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -402,6 +403,86 @@ def test_sync_guardrail_from_db_marks_source_db_when_unchanged():
     handler.sync_guardrail_from_db(g)
 
     assert handler.get_source("collide") == "db"
+
+
+def test_sync_guardrail_from_db_reject_flag_keeps_callback_order_on_noop_update():
+    """
+    The PUT endpoint syncs the whole object with reject_invalid_logging_only_scope=True.
+    That strictness must not force a teardown + re-append of an unchanged guardrail:
+    initialize_guardrail appends the rebuilt callback at the END of litellm.callbacks,
+    so a description-only PUT would reorder guardrails and change which one wins
+    between a BLOCK and a MASK guardrail over the same content.
+    """
+    import litellm
+
+    registry_module = _register_mode_following_initializer("mode_following_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    sentinel: Final = CustomGuardrail(
+        guardrail_name="order-sentinel",
+        supported_event_hooks=[GuardrailEventHooks.pre_call],
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+    try:
+        handler = InMemoryGuardrailHandler()
+        handler.initialize_guardrail(guardrail=_mode_following_db_row("123", "pre_call"), source="db")
+        original = handler.guardrail_id_to_custom_guardrail["123"]
+        assert original is not None
+        # Park another callback after the guardrail so a re-append would be visible.
+        litellm.callbacks.append(sentinel)
+        index_before = litellm.callbacks.index(original)
+
+        handler.sync_guardrail_from_db(
+            guardrail=_mode_following_db_row("123", "pre_call", "description-only edit"),
+            reject_invalid_logging_only_scope=True,
+        )
+
+        assert handler.guardrail_id_to_custom_guardrail["123"] is original
+        assert litellm.callbacks.index(original) == index_before
+        assert _live_instances_named("mode-following") == 1
+    finally:
+        registry_module.guardrail_initializer_registry.pop("mode_following_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_sync_guardrail_from_db_reject_flag_still_rejects_invalid_unchanged_scope():
+    """
+    A PUT sends the whole object, so an unchanged row that already carries an
+    invalid logging_only_scope (tolerated at load) must still be rejected on the
+    strict sync path, without rebuilding the live callback.
+    """
+    registry_module = _register_mode_following_initializer("mode_following_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    row: Final = Guardrail(
+        guardrail_id="123",
+        guardrail_name="mode-following",
+        litellm_params={
+            "guardrail": "mode_following_test",
+            "mode": "pre_call",
+            "default_on": True,
+            "logging_only_scope": "input",
+        },
+        guardrail_info={},
+    )
+    try:
+        handler = InMemoryGuardrailHandler()
+        handler.initialize_guardrail(guardrail=row, source="db")
+        original = handler.guardrail_id_to_custom_guardrail["123"]
+        assert original is not None
+        assert original.logging_only_scope is None  # tolerated at load
+
+        with pytest.raises(ValueError, match="logging_only_scope is set"):
+            handler.sync_guardrail_from_db(guardrail=row, reject_invalid_logging_only_scope=True)
+
+        # Rejected without touching the live instance.
+        assert handler.guardrail_id_to_custom_guardrail["123"] is original
+        assert _live_instances_named("mode-following") == 1
+    finally:
+        registry_module.guardrail_initializer_registry.pop("mode_following_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
 
 
 def _db_litellm_params() -> dict:
@@ -1258,6 +1339,41 @@ async def test_update_guardrail_in_db_raises_when_row_missing():
             ),
             prisma_client=prisma_client,
         )
+
+
+@pytest.mark.asyncio
+async def test_update_guardrail_in_db_persists_raw_sparse_params_verbatim():
+    """
+    After a rejected PATCH, the endpoint rolls back by writing the stored row's
+    raw litellm_params through update_guardrail_in_db. A raw dict must be
+    persisted exactly as stored — a legacy 4-key row stays a 4-key row — instead
+    of being round-tripped through LitellmParams.model_dump(), which materializes
+    every field default and rewrites a row the admin never wrote.
+    """
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.update = AsyncMock(
+        return_value={"guardrail_id": "legacy-row", "guardrail_name": "legacy-one"}
+    )
+    legacy_params: Final = {
+        "guardrail": "litellm_content_filter",
+        "mode": "pre_call",
+        "guardrail_name": "legacy-one",
+        "blocked_words": [{"keyword": "x", "action": "BLOCK"}],
+    }
+
+    await GuardrailRegistry().update_guardrail_in_db(
+        guardrail_id="legacy-row",
+        guardrail=Guardrail(
+            guardrail_id="legacy-row",
+            guardrail_name="legacy-one",
+            litellm_params=legacy_params,
+            guardrail_info={},
+        ),
+        prisma_client=prisma_client,
+    )
+
+    persisted: Final = prisma_client.db.litellm_guardrailstable.update.call_args.kwargs["data"]
+    assert json.loads(persisted["litellm_params"]) == legacy_params
 
 
 def test_reinitialize_guardrail_restores_previous_on_failure():

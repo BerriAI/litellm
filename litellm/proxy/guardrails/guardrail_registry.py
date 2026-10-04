@@ -669,6 +669,28 @@ class InMemoryGuardrailHandler:
         siblings: Final = self.guardrail_id_to_sibling_callbacks.get(guardrail_id, ())
         return (() if primary is None else (primary,)) + siblings
 
+    def _reject_invalid_logging_only_scope(self, guardrail_id: str, guardrail: Guardrail) -> None:
+        """
+        Strictly validate logging_only_scope on a row whose params are otherwise
+        unchanged, without rebuilding the live callback.
+
+        API write paths send the whole object, so an invalid scope must still be
+        rejected even when the write changed nothing else. But an unchanged row
+        must not force a teardown + re-append: initialize_guardrail appends the
+        rebuilt callback at the END of litellm.callbacks, so a no-op PUT would
+        reorder guardrails and change which one wins between a BLOCK and a MASK
+        guardrail over the same content.
+        """
+        params: Final = guardrail.get("litellm_params")
+        if not isinstance(params, (dict, LitellmParams)):
+            return
+        litellm_params: Final = LitellmParams(**params) if isinstance(params, dict) else params
+        guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
+        for custom_guardrail_callback in self._tracked_callbacks(guardrail_id):
+            error: Final = _logging_only_scope_error(custom_guardrail_callback, guardrail_name, litellm_params)
+            if error is not None:
+                raise ValueError(error)
+
     def initialize_custom_guardrail(
         self,
         guardrail: Guardrail,
@@ -737,13 +759,15 @@ class InMemoryGuardrailHandler:
         previous instance and raises), anything else only refreshes the stored row
         """
         updated_guardrail: Final = cast(Guardrail, {**guardrail, "guardrail_id": guardrail_id})
-        if reject_invalid_logging_only_scope or self._has_guardrail_params_changed(guardrail_id, updated_guardrail):
+        if self._has_guardrail_params_changed(guardrail_id, updated_guardrail):
             self.reinitialize_guardrail(
                 guardrail=updated_guardrail,
                 source=source,
                 reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
             )
             return
+        if reject_invalid_logging_only_scope:
+            self._reject_invalid_logging_only_scope(guardrail_id, updated_guardrail)
         self.IN_MEMORY_GUARDRAILS[guardrail_id] = updated_guardrail
         self._sources[guardrail_id] = source
 
@@ -967,7 +991,7 @@ class InMemoryGuardrailHandler:
             verbose_proxy_logger.error("Cannot sync guardrail without guardrail_id")
             return None
 
-        if reject_invalid_logging_only_scope or self._has_guardrail_params_changed(guardrail_id, guardrail):
+        if self._has_guardrail_params_changed(guardrail_id, guardrail):
             guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
             verbose_proxy_logger.info(
                 "Guardrail '%s' (ID: %s) params changed, re-initializing...", guardrail_name, guardrail_id
@@ -978,6 +1002,9 @@ class InMemoryGuardrailHandler:
                 source="db",
                 reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
             )
+
+        if reject_invalid_logging_only_scope:
+            self._reject_invalid_logging_only_scope(guardrail_id, guardrail)
 
         # Params unchanged but the entry is still DB-backed; make sure the
         # source marker reflects that even if it was previously set differently
