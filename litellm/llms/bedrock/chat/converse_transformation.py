@@ -622,7 +622,9 @@ class AmazonConverseConfig(BaseConfig):
                     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
                     budget,
                 )
-                thinking["budget_tokens"] = BEDROCK_MIN_THINKING_BUDGET_TOKENS
+                thinking_copy = copy.deepcopy(thinking)
+                thinking_copy["budget_tokens"] = BEDROCK_MIN_THINKING_BUDGET_TOKENS
+                optional_params["thinking"] = thinking_copy
 
     def _is_deepseek_model(self, model: str, base_model: str) -> bool:
         return "deepseek" in model or "deepseek" in base_model
@@ -1334,21 +1336,14 @@ class AmazonConverseConfig(BaseConfig):
             thinking_value: Final = optional_params.get("thinking")
             if isinstance(max_tokens, int) and isinstance(thinking_value, dict):
                 budget: Final = thinking_value.get("budget_tokens")
-                if isinstance(budget, int):
-                    if max_tokens <= BEDROCK_MIN_THINKING_BUDGET_TOKENS:
-                        if drop_params:
-                            verbose_logger.warning(
-                                "Dropping thinking for Bedrock: maxTokens (%s) is too small to fit the minimum thinking budget (%s).",
-                                max_tokens,
-                                BEDROCK_MIN_THINKING_BUDGET_TOKENS,
-                            )
-                            optional_params.pop("thinking", None)
-                    elif budget >= max_tokens:
-                        thinking_value["budget_tokens"] = max_tokens - 1
-                        verbose_logger.warning(
-                            "Capped thinking.budget_tokens to %s to satisfy maxTokens > budget_tokens for Bedrock.",
-                            max_tokens - 1,
-                        )
+                if isinstance(budget, int) and max_tokens > BEDROCK_MIN_THINKING_BUDGET_TOKENS and budget >= max_tokens:
+                    thinking_copy = copy.deepcopy(thinking_value)
+                    thinking_copy["budget_tokens"] = max_tokens - 1
+                    optional_params["thinking"] = thinking_copy
+                    verbose_logger.warning(
+                        "Capped thinking.budget_tokens to %s to satisfy maxTokens > budget_tokens for Bedrock.",
+                        max_tokens - 1,
+                    )
 
     @overload
     def get_cache_point_block(
@@ -1955,6 +1950,35 @@ class AmazonConverseConfig(BaseConfig):
             optional_params=optional_params,
             custom_llm_provider="bedrock",
         )
+
+        # Handle thinking budget and dropping for Bedrock Converse
+        thinking: Final = optional_params.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") == "enabled":
+            max_tokens: Final = optional_params.get("maxTokens")
+            if isinstance(max_tokens, int):
+                if max_tokens <= BEDROCK_MIN_THINKING_BUDGET_TOKENS:
+                    # maxTokens <= BEDROCK_MIN_THINKING_BUDGET_TOKENS
+                    # Only drop thinking if NO assistant message in history contains thinking blocks.
+                    # If history contains thinking blocks, Bedrock requires thinking to remain enabled.
+                    should_drop = drop_params or (
+                        litellm_params is not None and litellm_params.get("drop_params") is True
+                    )
+                    has_thinking_history = messages is not None and any_assistant_message_has_thinking_blocks(messages)
+                    if should_drop and not has_thinking_history:
+                        verbose_logger.warning(
+                            "Dropping thinking for Bedrock: maxTokens (%s) is too small to fit the minimum thinking budget (%s).",
+                            max_tokens,
+                            BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+                        )
+                        optional_params.pop("thinking", None)
+                elif isinstance(thinking.get("budget_tokens"), int) and thinking["budget_tokens"] >= max_tokens:
+                    thinking_copy = copy.deepcopy(thinking)
+                    thinking_copy["budget_tokens"] = max_tokens - 1
+                    optional_params["thinking"] = thinking_copy
+                    verbose_logger.warning(
+                        "Capped thinking.budget_tokens to %s to satisfy maxTokens > budget_tokens for Bedrock.",
+                        max_tokens - 1,
+                    )
 
         # Prepare and separate parameters
         (

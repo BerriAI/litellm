@@ -3,7 +3,10 @@ Tests for Anthropic thinking budget vs. max_tokens sanitization.
 
 Anthropic API requires max_tokens > budget_tokens (and budget_tokens >= 1024).
 When budget_tokens >= max_tokens, LiteLLM must cap budget_tokens to max_tokens - 1.
-When max_tokens <= 1024 and drop_params=True, thinking should be dropped to prevent 400 errors.
+When max_tokens <= 1024 and drop_params=True:
+- If conversation history contains thinking blocks, thinking must remain enabled
+  (Anthropic rejects assistant thinking blocks when thinking is disabled).
+- If conversation history has no thinking blocks, thinking should be dropped to prevent 400 errors.
 """
 
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -63,36 +66,77 @@ def test_thinking_budget_untouched_when_max_tokens_is_greater():
     assert result["max_tokens"] == 4096
 
 
-def test_thinking_dropped_when_max_tokens_below_minimum_with_drop_params():
-    """When max_tokens <= 1024 and drop_params=True, thinking is dropped."""
+def test_thinking_dropped_in_transform_request_when_no_thinking_history():
+    """When max_tokens <= 1024, drop_params=True, and no assistant thinking blocks exist, thinking is dropped."""
     config = AnthropicConfig()
-    result = config.map_openai_params(
-        non_default_params={
+    data = config.transform_request(
+        model="claude-3-7-sonnet-20250219",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
             "thinking": {"type": "enabled", "budget_tokens": 2048},
             "max_tokens": 512,
         },
-        optional_params={},
-        model="claude-3-7-sonnet-20250219",
-        drop_params=True,
+        litellm_params={"drop_params": True},
+        headers={},
     )
-    assert "thinking" not in result
-    assert result["max_tokens"] == 512
+    assert "thinking" not in data
+    assert data["max_tokens"] == 512
+
+
+def test_thinking_preserved_in_transform_request_when_thinking_history_present():
+    """When max_tokens <= 1024 and drop_params=True, thinking is KEPT if an assistant message has thinking blocks."""
+    config = AnthropicConfig()
+    data = config.transform_request(
+        model="claude-3-7-sonnet-20250219",
+        messages=[
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Pondering the query...",
+                        "signature": "valid_sig",
+                    },
+                    {"type": "text", "text": "Here is the response."},
+                ],
+                "thinking_blocks": [
+                    {
+                        "type": "thinking",
+                        "thinking": "Pondering the query...",
+                        "signature": "valid_sig",
+                    }
+                ],
+            },
+            {"role": "user", "content": "Follow-up question"},
+        ],
+        optional_params={
+            "thinking": {"type": "enabled", "budget_tokens": 2048},
+            "max_tokens": 512,
+        },
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+    assert "thinking" in data
+    assert data["thinking"]["type"] == "enabled"
+    assert data["max_tokens"] == 512
 
 
 def test_thinking_kept_when_max_tokens_below_minimum_without_drop_params():
     """When drop_params=False, thinking is preserved even if max_tokens <= minimum."""
     config = AnthropicConfig()
-    result = config.map_openai_params(
-        non_default_params={
+    data = config.transform_request(
+        model="claude-3-7-sonnet-20250219",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
             "thinking": {"type": "enabled", "budget_tokens": 2048},
             "max_tokens": 512,
         },
-        optional_params={},
-        model="claude-3-7-sonnet-20250219",
-        drop_params=False,
+        litellm_params={"drop_params": False},
+        headers={},
     )
-    assert "thinking" in result
-    assert result["thinking"]["budget_tokens"] == 2048
+    assert "thinking" in data
+    assert data["thinking"]["budget_tokens"] == 2048
+    assert data["max_tokens"] == 512
 
 
 def test_thinking_budget_capped_in_transform_request():

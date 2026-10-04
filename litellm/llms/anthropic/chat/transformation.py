@@ -1661,16 +1661,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     thinking=cast(AnthropicThinkingParam, thinking),
                     max_tokens=max_tokens,
                 )
-                if capped_thinking is None:
-                    if drop_params:
-                        litellm.verbose_logger.warning(
-                            "Dropping thinking for model=%s: max_tokens (%s) is too small to fit the minimum thinking budget (%s).",
-                            model,
-                            max_tokens,
-                            ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
-                        )
-                        optional_params.pop("thinking", None)
-                elif capped_thinking != thinking:
+                if capped_thinking is not None and capped_thinking != thinking:
                     litellm.verbose_logger.warning(
                         "Capped thinking.budget_tokens from %s to %s to satisfy max_tokens > budget_tokens for model=%s.",
                         thinking.get("budget_tokens"),
@@ -1983,7 +1974,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     max_tokens=max_tokens,
                 )
                 if capped_thinking is None:
-                    if litellm.drop_params or litellm_params.get("drop_params") is True:
+                    # max_tokens <= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS
+                    # Only drop thinking if NO assistant message in history contains thinking blocks.
+                    # If history contains thinking blocks, Anthropic rejects the request when thinking is disabled.
+                    should_drop: Final = litellm.drop_params or litellm_params.get("drop_params") is True
+                    has_thinking_history: Final = messages is not None and any_assistant_message_has_thinking_blocks(
+                        messages
+                    )
+                    if should_drop and not has_thinking_history:
                         litellm.verbose_logger.warning(
                             "Dropping thinking for model=%s: max_tokens (%s) is too small to fit the minimum thinking budget (%s).",
                             model,
