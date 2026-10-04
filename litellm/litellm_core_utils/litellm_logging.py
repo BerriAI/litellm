@@ -3232,10 +3232,10 @@ class Logging(LiteLLMLoggingBaseClass):
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
         print_verbose(f"Logging Details LiteLLM-Async Success Call, cache_hit={cache_hit}")
-        if not self._is_assembled_stream_success(result) and not self.should_run_logging(
-            event_type="async_success"
-        ):  # prevent double logging (non-streaming)
-            return
+        if not self._is_assembled_stream_success(result):
+            if not self.should_run_logging(event_type="async_success"):  # prevent double logging (non-streaming)
+                return
+            self.has_run_logging(event_type="async_success")  # claim before any await so a concurrent task skips
 
         ## CALCULATE COST FOR BATCH JOBS
         if self.call_type == CallTypes.aretrieve_batch.value and isinstance(result, LiteLLMBatch):

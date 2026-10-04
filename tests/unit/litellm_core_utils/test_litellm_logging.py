@@ -9536,3 +9536,69 @@ def test_get_custom_logger_compatible_class_does_not_match_generic_api_logger(
         assert logging_module.get_custom_logger_compatible_class(integration) is None
     finally:
         logging_module._in_memory_loggers.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("yield_point", ["base64_truncation", "async_logging_hook"])
+async def test_concurrent_async_success_handlers_log_once_when_handler_yields(monkeypatch, yield_point):
+    """
+    Nested @client wrappers (chat over the Responses bridge) schedule two async success
+    tasks on one logging object. Any await between the dedup check and the callbacks
+    (the worker-thread base64 offload for large prompts, logging hooks) lets the second
+    task pass the same check, so the flag has to be claimed before the first await.
+    """
+    from litellm.litellm_core_utils import litellm_logging
+
+    class CountingLogger(CustomLogger):
+        def __init__(self):
+            super().__init__()
+            self.logged_results: list[object] = []
+
+        async def async_logging_hook(self, kwargs, result, call_type):
+            if yield_point == "async_logging_hook":
+                await asyncio.sleep(0)
+            return kwargs, result
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.logged_results.append(response_obj)
+
+    counting_logger: Final = CountingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [counting_logger])
+
+    if yield_point == "base64_truncation":
+        real_truncate: Final = litellm_logging.truncate_base64_in_messages_async
+
+        async def yielding_truncate(messages):
+            await asyncio.sleep(0)
+            return await real_truncate(messages)
+
+        monkeypatch.setattr(litellm_logging, "truncate_base64_in_messages_async", yielding_truncate)
+
+    messages: Final = [{"role": "user", "content": "hello"}]
+    logging_obj: Final = LitellmLogging(
+        model="gpt-5.6-luna",
+        messages=messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="bridge-call-id",
+        function_id="bridge-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={},
+        optional_params={},
+        model="gpt-5.6-luna",
+        custom_llm_provider="openai",
+        input=messages,
+    )
+    inner_result: Final = ModelResponse(id="inner")
+    outer_result: Final = ModelResponse(id="outer")
+    now: Final = datetime.datetime.now()
+
+    await asyncio.gather(
+        logging_obj.async_success_handler(result=inner_result, start_time=now, end_time=now),
+        logging_obj.async_success_handler(result=outer_result, start_time=now, end_time=now),
+    )
+
+    assert len(counting_logger.logged_results) == 1
+    assert counting_logger.logged_results[0] is inner_result
