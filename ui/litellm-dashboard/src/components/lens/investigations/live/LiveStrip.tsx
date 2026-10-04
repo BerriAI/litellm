@@ -1,6 +1,6 @@
 "use client";
 
-import { PanelRight, X } from "lucide-react";
+import { ArrowRight, PanelRight, X } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
@@ -10,8 +10,7 @@ import { useNow } from "@/hooks/useNow";
 import { cn } from "@/lib/cva.config";
 
 import { money } from "../../model/format";
-import { outcome, providerOf, queueRows, reviewKey, shortVerdict, type IssueCount, type StripState } from "../../model/live";
-import type { Playback } from "../../model/live";
+import { newestFirst, outcome, providerOf, reviewKey, shortVerdict, type IssueCount, type StripState } from "../../model/live";
 import type { Review } from "../../model/types";
 
 const RECENT = 3;
@@ -29,14 +28,17 @@ export function ModelName({ model, size = "sm" }: { model: string; size?: keyof 
   );
 }
 
-function RecentLine({ review, now, onOpen }: { review: Review; now: number; onOpen: (review: Review) => void }) {
+function RecentLine({ review, now, onOpen }: { review: Review; now: number; onOpen: () => void }) {
   const result = outcome(review);
   const issue = result === "issue";
   return (
     <li className="motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-300">
       <button
         type="button"
-        onClick={() => onOpen(review)}
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpen();
+        }}
         className="grid w-full grid-cols-[0.75rem_minmax(0,9rem)_minmax(0,1fr)_auto] items-center gap-2 rounded px-1.5 py-0.5 text-left hover:bg-muted"
       >
         <span aria-label={result} className={issue ? "text-[#e5484d]" : ""}>
@@ -59,7 +61,7 @@ function issueLabel({ count, scope }: IssueCount): string {
 export function LiveStrip({
   model,
   state,
-  playback,
+  reviews,
   reviewed,
   selected,
   issues,
@@ -71,26 +73,42 @@ export function LiveStrip({
   model: string;
   state: StripState;
   waiting?: ReactNode;
-  playback: Pick<Playback, "played" | "current">;
+  reviews: readonly Review[];
   reviewed: number;
   selected: number;
   issues: IssueCount;
   cost: number;
-  onOpen: (review?: Review) => void;
+  onOpen: () => void;
   onClose: () => void;
 }) {
   const now = useNow(5000);
-  const recent = queueRows(playback, RECENT);
+  const recent = newestFirst(reviews, RECENT);
   return (
     <section
       aria-label="Live trace results"
-      className="flex flex-wrap items-start gap-x-6 gap-y-2 rounded-md bg-muted/30 px-3 py-2 text-[12px] text-muted-foreground"
+      onClick={onOpen}
+      className="flex cursor-pointer flex-wrap items-start gap-x-6 gap-y-2 rounded-md bg-muted/30 px-3 py-2 text-[12px] text-muted-foreground transition-colors hover:bg-muted/50"
     >
-      <div className="flex min-w-[16rem] flex-col gap-1">
-        <ModelName model={model} />
-        <span className="tabular-nums">
-          {reviewed} of {selected} traces · {issueLabel(issues)} · {money(cost)}
-        </span>
+      <div className="flex min-w-[16rem] items-start gap-3">
+        <div className="flex flex-col gap-1">
+          <ModelName model={model} />
+          <span className="tabular-nums">
+            {reviewed} of {selected} traces · {issueLabel(issues)} · {money(cost)}
+          </span>
+        </div>
+        <Button
+          variant="outline"
+          size="xs"
+          className="mt-0.5 shrink-0"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpen();
+          }}
+        >
+          <PanelRight />
+          View run
+          <ArrowRight />
+        </Button>
       </div>
       <div className="min-w-0 flex-1">
         {state.kind === "failed" && (
@@ -99,7 +117,7 @@ export function LiveStrip({
           </p>
         )}
         {state.kind === "waiting" && (
-          <div role="status" className="flex flex-col gap-0.5 py-0.5">
+          <div role="status" className="flex flex-col gap-0.5 py-0.5" onClick={(event) => event.stopPropagation()}>
             {waiting ?? state.message}
           </div>
         )}
@@ -111,15 +129,18 @@ export function LiveStrip({
           </ol>
         )}
       </div>
-      <div className="flex shrink-0 items-center gap-1">
-        <Button variant="outline" size="xs" onClick={() => onOpen()} disabled={state.kind === "done" && !recent.length}>
-          <PanelRight />
-          View run
-        </Button>
-        <Button variant="ghost" size="icon-xs" aria-label="Hide live trace results" onClick={onClose}>
-          <X />
-        </Button>
-      </div>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Hide live trace results"
+        className="shrink-0"
+        onClick={(event) => {
+          event.stopPropagation();
+          onClose();
+        }}
+      >
+        <X />
+      </Button>
     </section>
   );
 }

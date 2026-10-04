@@ -6,9 +6,9 @@ import { modelsUsed } from "../../model/inbox";
 import {
   analysisModel,
   conclusions,
-  decidedReviews,
+  inFlight,
   issueCount,
-  shownCount,
+  nowLine,
   stripState,
 } from "../../model/live";
 import { queueReasonText } from "../../model/status";
@@ -18,7 +18,6 @@ import { useQueueReason, type QueueContext } from "../useQueueReason";
 import { LiveDrawer } from "./LiveDrawer";
 import { LiveStrip } from "./LiveStrip";
 import { useStripOpen } from "./useLivePanels";
-import { useReviewPlayback } from "./useReviewPlayback";
 
 export function LiveRun({
   job,
@@ -35,12 +34,10 @@ export function LiveRun({
   const reason = useQueueReason(job, queue);
   const [stripOpen, setStripOpen] = useStripOpen();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const playback = useReviewPlayback(reviews, live);
+  const reading = inFlight(job);
   const withReviews = { ...job, reviews: [...reviews] };
   const model = analysisModel([...reviews.map((r) => r.model), ...modelsUsed(job.steps), job.settings.model]);
   const issues = issueCount(withReviews);
-  const reviewed = live ? shownCount(job.reviewed, playback) : job.reviewed;
-  const decided = decidedReviews(playback, playback.phase.verdict);
   const open = () => setDrawerOpen(true);
   const waiting = reason && (
     <>
@@ -56,8 +53,8 @@ export function LiveRun({
           model={model}
           state={stripState(withReviews, model, reason ? queueReasonText(reason) : undefined)}
           waiting={waiting}
-          playback={playback}
-          reviewed={reviewed}
+          reviews={reviews}
+          reviewed={job.reviewed}
           selected={job.coverage.selected}
           issues={issues}
           cost={job.cost}
@@ -79,10 +76,11 @@ export function LiveRun({
         name={name}
         model={model}
         status={job.status}
-        reviewed={reviewed}
-        playback={playback}
-        groups={conclusions(decided, job.settings.checks)}
-        decided={decided.length}
+        reviewed={job.reviewed}
+        reviews={reviews}
+        now={job.status === "running" ? nowLine(job, reading.length) : null}
+        reading={reading}
+        groups={conclusions(reviews, job.settings.checks)}
         scope={job.reviewed > reviews.length ? `From the latest ${reviews.length} of ${job.reviewed} reviewed traces` : ""}
         waiting={waiting}
       />

@@ -5,8 +5,8 @@ import { useState, type ReactNode } from "react";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
-import type { Conclusion, Playback } from "../../model/live";
-import type { Job } from "../../model/types";
+import type { Conclusion, InFlight } from "../../model/live";
+import type { Job, Review } from "../../model/types";
 import { ConclusionsPanel } from "./ConclusionsPanel";
 import { ModelName } from "./LiveStrip";
 import { TraceList } from "./TraceList";
@@ -27,9 +27,10 @@ export function LiveDrawer({
   model,
   status,
   reviewed,
-  playback,
+  reviews,
+  now,
+  reading,
   groups,
-  decided,
   scope,
   waiting,
 }: {
@@ -39,16 +40,15 @@ export function LiveDrawer({
   model: string;
   status: Job["status"];
   reviewed: number;
-  playback: Pick<Playback, "played" | "current" | "pending">;
+  reviews: readonly Review[];
+  now: string | null;
+  reading: readonly InFlight[];
   groups: readonly Conclusion[];
-  decided: number;
   scope: string;
   waiting?: ReactNode;
 }) {
   const [group, setGroup] = useState<string | null>(null);
   const badge = STATUS[status];
-  const shown = playback.played.length + (playback.current ? 1 : 0);
-  const empty = !shown && !playback.pending.length;
   return (
     <Sheet open={open} onOpenChange={(value) => !value && onClose()}>
       <SheetContent className="flex h-full w-full flex-col gap-0 data-[side=right]:sm:max-w-[min(1200px,94vw)]">
@@ -64,26 +64,28 @@ export function LiveDrawer({
             <div className="mb-2 flex items-baseline justify-between gap-3 px-2">
               <h2 className={PANE_TITLE}>Traces</h2>
               <span className="text-[11px] tabular-nums text-muted-foreground">
-                {reviewed} reviewed{reviewed > shown && shown ? ` · showing latest ${shown}` : ""}
+                {now ?? `${reviewed} reviewed`}
+                {reviewed > reviews.length && reviews.length ? ` · showing latest ${reviews.length}` : ""}
               </span>
             </div>
-            {empty ? (
+            {reviews.length || reading.length ? (
+              <TraceList reading={reading} reviews={reviews} model={model} group={group} />
+            ) : (
               <div className="flex flex-col gap-1 px-2 py-6 text-[12px] text-muted-foreground">
                 <p className="text-[13px] text-foreground">Waiting for the first trace…</p>
                 {waiting}
               </div>
-            ) : (
-              <TraceList
-                playback={playback}
-                model={model}
-                live={status === "queued" || status === "running"}
-                group={group}
-              />
             )}
           </section>
           <section aria-label="Conclusions so far" className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 py-4">
             <h2 className={PANE_TITLE}>Conclusions so far</h2>
-            <ConclusionsPanel groups={groups} total={decided} scope={scope} selected={group} onSelect={setGroup} />
+            <ConclusionsPanel
+              groups={groups}
+              total={reviews.length}
+              scope={scope}
+              selected={group}
+              onSelect={setGroup}
+            />
           </section>
         </div>
       </SheetContent>
