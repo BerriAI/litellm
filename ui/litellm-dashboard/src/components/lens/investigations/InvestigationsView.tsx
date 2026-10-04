@@ -25,7 +25,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { FindingSheet } from "./FindingSheet";
 import { TraceSheet } from "./TraceSheet";
-import { InvestigationSetupDialog } from "../setup/InvestigationSetupDialog";
+import { InvestigationSetup } from "../setup/InvestigationSetup";
 import { useAnalysisKeyInfo } from "../setup/worker/AnalysisKeyDetails";
 import { InvestigationList } from "./InvestigationList";
 import { Button } from "@/components/ui/button";
@@ -152,10 +152,12 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
   const detailAgents = lens && finding ? findingAgents(lens, finding) : [];
   const sheetAgents = peeked ? findingAgents(peeked.lens, peeked.finding) : detailAgents;
 
-  const onDetail = !!selected;
+  const onSetup = !!setupMode;
+  const onDetail = !!selected && !onSetup;
   const showDetailNav = onDetail && !showEmpty;
-  const showTables = !onDetail && lenses.length > 0;
-  const showMissing = missingSelection && !lens;
+  const showWelcome = loaded && showEmpty && !onSetup;
+  const showTables = !onDetail && !onSetup && lenses.length > 0;
+  const showMissing = missingSelection && !lens && !onSetup;
   return (
     <section aria-label="Investigations" className="flex w-full min-w-0 flex-1 flex-col gap-3">
       {showDetailNav && (
@@ -172,7 +174,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
         (error || query.error) && <InvestigationError message={error || query.error?.message || ""} refresh={refresh} />
       )}
       {query.isLoading && <InvestigationsLoading />}
-      {loaded && showEmpty && (
+      {showWelcome && (
         <InvestigationsWelcome
           tracesReady={tracesReady}
           requestsReady={requestsReady}
@@ -189,7 +191,9 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
           showPreview={activity.isSuccess && !ready}
         />
       )}
-      {showReadiness && !ready && <ReadinessBanner activityReady={activityReady} className="py-2 text-xs" />}
+      {showReadiness && !onSetup && !ready && (
+        <ReadinessBanner activityReady={activityReady} className="py-2 text-xs" />
+      )}
       {showTables && (
         <InvestigationList
           lenses={lenses}
@@ -224,7 +228,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
         />
       )}
       {showMissing && <InvestigationMissing selectLens={selectLens} />}
-      {lens && (
+      {lens && onDetail && (
         <InvestigationDetail
           lens={lens}
           readOnly={readOnly}
@@ -239,7 +243,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
         />
       )}
       {setupMode && (
-        <InvestigationSetupDialog
+        <InvestigationSetup
           ready={ready}
           mode={setupMode}
           initial={setupSettings()}

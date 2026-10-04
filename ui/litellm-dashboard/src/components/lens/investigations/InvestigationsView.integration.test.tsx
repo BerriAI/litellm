@@ -342,7 +342,9 @@ it("guides a first-time administrator into worker connection and lens setup", as
   await waitFor(() => expect(guide.getByRole("button", { name: "New investigation" })).toBeEnabled());
   expect(guide.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
   await user.click(guide.getByRole("button", { name: "New investigation" }));
-  expect(await screen.findByRole("dialog", { name: "Which activity should we investigate?" })).toBeVisible();
+  expect(await screen.findByRole("region", { name: "New investigation" })).toBeVisible();
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Matching activity" })).toBeVisible();
 });
 
 it("opens the saved results of an older batch", async () => {
@@ -528,7 +530,7 @@ it("allows request-only accounts to connect a worker without requiring agent tra
   expect(screen.getByRole("button", { name: "New investigation" })).toBeDisabled();
 });
 
-it("reopens the edit dialog from a shared link and drops it from the URL on cancel", async () => {
+it("reopens the inline editor from a shared link and drops it from the URL on cancel", async () => {
   testQueryClient.clear();
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
@@ -542,10 +544,13 @@ it("reopens the edit dialog from a shared link and drops it from the URL on canc
     searchParams: `?lens=${lens.id}&dialog=edit`,
     onUrlUpdate,
   });
-  const dialog = await screen.findByRole("dialog");
-  expect(within(dialog).getByDisplayValue(lens.settings.name)).toBeVisible();
-  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  const editor = await screen.findByRole("region", { name: "Edit investigation" });
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(within(editor).getByDisplayValue(lens.settings.name)).toBeVisible();
+  expect(screen.queryByRole("heading", { level: 2, name: lens.settings.name })).not.toBeInTheDocument();
+  await user.click(within(editor).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("region", { name: "Edit investigation" })).not.toBeInTheDocument());
+  expect(await screen.findByRole("heading", { level: 2, name: lens.settings.name })).toBeVisible();
   const url = new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
   expect(url.has("dialog")).toBe(false);
   expect(url.get("lens")).toBe(lens.id);
@@ -642,9 +647,10 @@ it("opens investigations from the keyboard without treating nested edit keys as 
   editButton.focus();
   expect(editButton).toHaveFocus();
   await user.keyboard("{Enter}");
-  const dialog = await screen.findByRole("dialog");
-  expect(within(dialog).getByDisplayValue(lens.settings.name)).toBeVisible();
+  const editor = await screen.findByRole("region", { name: "Edit investigation" });
+  expect(within(editor).getByDisplayValue(lens.settings.name)).toBeVisible();
   expect(screen.queryByRole("heading", { level: 2, name: lens.settings.name })).not.toBeInTheDocument();
+  expect(screen.queryByRole("row", { name: lens.settings.name })).not.toBeInTheDocument();
 });
 
 it("opens a failed investigation's details from its row and edits only from the pencil", async () => {
@@ -669,11 +675,10 @@ it("opens a failed investigation's details from its row and edits only from the 
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView accessToken="test" />);
   await user.click(await screen.findByRole("button", { name: `Edit ${lens.settings.name}` }));
-  const dialog = await screen.findByRole("dialog");
-  expect(within(dialog).getByDisplayValue(lens.settings.name)).toBeVisible();
-  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-  await user.click(screen.getByRole("row", { name: lens.settings.name }));
+  const editor = await screen.findByRole("region", { name: "Edit investigation" });
+  expect(within(editor).getByDisplayValue(lens.settings.name)).toBeVisible();
+  await user.click(within(editor).getByRole("button", { name: "Cancel" }));
+  await user.click(await screen.findByRole("row", { name: lens.settings.name }));
   expect(within(await screen.findByRole("alert")).getByLabelText("Investigation error")).toHaveTextContent("boom");
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });

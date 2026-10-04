@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { FieldPath } from "react-hook-form";
 import type { Settings } from "../model/types";
 import { normalizeFilters } from "./filters";
 import { initialWatches, isWatch, watchChecks } from "./watches";
@@ -146,22 +145,6 @@ export const investigationSchema = draftSchema
 
 export type InvestigationInput = z.input<typeof investigationSchema>;
 export type InvestigationOutput = z.output<typeof investigationSchema>;
-
-export const investigationStepFields: readonly FieldPath<InvestigationInput>[][] = [
-  ["name", "selection.source", "selection.service", "selection.agent_name", "selection.filters", "selection.team_id"],
-  ["context", "questions", "watching"],
-  [
-    "selection.execution_ids",
-    "selection.lookback_hours",
-    "selection.sample_size",
-    "selection.sample_percent",
-    "selectedModel",
-    "budget",
-    "interval",
-    "repeat",
-    "manualSelection",
-  ],
-];
 
 function activitySelectionDefaults(
   initial: Settings | undefined,

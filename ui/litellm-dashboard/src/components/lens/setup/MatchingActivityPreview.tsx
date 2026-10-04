@@ -73,7 +73,7 @@ export function MatchingActivityPreview({
         </div>
         <p className="mt-1 text-xs text-muted-foreground">{windowLabel} · No analysis cost</p>
       </div>
-      <div className="max-h-64 overflow-y-auto px-4">
+      <div className="max-h-[60dvh] overflow-y-auto px-4">
         {ready && error && (
           <p role="alert" className="py-3 text-sm text-destructive">
             {error.message}{" "}

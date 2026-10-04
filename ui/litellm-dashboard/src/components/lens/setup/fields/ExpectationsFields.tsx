@@ -9,7 +9,7 @@ import { WatchPicker } from "../WatchPicker";
 import { Controller, useFieldArray, useFormContext } from "react-hook-form";
 import type { InvestigationInput } from "../investigationSchema";
 
-export function ExpectationsStep() {
+export function ExpectationsFields() {
   const {
     control,
     register,

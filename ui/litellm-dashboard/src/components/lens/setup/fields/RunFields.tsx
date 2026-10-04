@@ -5,10 +5,10 @@ import type { InvestigationInput } from "../investigationSchema";
 import { Input } from "@/components/ui/input";
 
 import { DurationInput } from "@/components/shared/DurationInput";
-import { type AnalysisModelInfo } from "../fields/analysisModels";
+import { type AnalysisModelInfo } from "./analysisModels";
 
-import { AnalysisModelField } from "../fields/AnalysisModelField";
-export function RunStep({
+import { AnalysisModelField } from "./AnalysisModelField";
+export function RunFields({
   modelValid,
   models,
   modelDetails,

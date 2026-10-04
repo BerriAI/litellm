@@ -1,47 +1,69 @@
 "use client";
 
-import { FormProvider, useWatch } from "react-hook-form";
+import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
+import { useEffect, useState } from "react";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   investigationSchema,
   investigationDefaults,
   investigationSettings,
-  investigationStepFields,
+  type InvestigationInput,
+  type InvestigationOutput,
 } from "./investigationSchema";
-import { ScopeStep } from "./steps/ScopeStep";
-import { ExpectationsStep } from "./steps/ExpectationsStep";
-import { RunStep } from "./steps/RunStep";
-
-import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { ScopeFields } from "./fields/ScopeFields";
+import { SampleFields } from "./fields/SampleFields";
+import { ExpectationsFields } from "./fields/ExpectationsFields";
+import { RunFields } from "./fields/RunFields";
+import { MatchingActivityPreview } from "./MatchingActivityPreview";
+import { useMatchingActivity } from "./useMatchingActivity";
+import { TraceSheet } from "../investigations/TraceSheet";
 import { type Settings } from "../model/types";
 import { type AnalysisModelInfo } from "./fields/analysisModels";
-import { cn } from "@/lib/cva.config";
 
-export function InvestigationSetupDialog({
-  initial,
-  mode = initial ? "edit" : "new",
-  models,
-  modelDetails = [],
-  modelsLoading = false,
-  modelsError,
-  defaultModel,
-  defaultSource = "traces",
-  accessToken,
-  ready = true,
-  onClose,
-  onSave,
-}: {
+type SetupMode = "new" | "edit" | "duplicate";
+
+const TITLES: Record<SetupMode, string> = {
+  new: "New investigation",
+  edit: "Edit investigation",
+  duplicate: "Duplicate investigation",
+};
+
+interface ModelGate {
+  readonly modelValid: boolean;
+  readonly unavailable: boolean;
+  readonly unsupported: boolean;
+}
+
+/** An edit may keep its saved model while the model list is loading or failing; a new run needs a verified one. */
+function modelGate(input: {
+  model: string;
+  models: string[];
+  modelDetails: AnalysisModelInfo[];
+  modelsLoading: boolean;
+  modelsError?: string;
+  savedModel?: string;
+  mode: SetupMode;
+}): ModelGate {
+  const { model, models, modelDetails, modelsLoading, modelsError, savedModel, mode } = input;
+  const unsupported = modelDetails.some((m) => m.model_group === model && m.mode && m.mode !== "chat");
+  const modelsReady = !modelsLoading && !modelsError;
+  const unavailable = !!model && modelsReady && !models.includes(model);
+  const preservingSavedModel = mode === "edit" && model === savedModel;
+  const supported = !unsupported && !unavailable;
+  const modelReady = modelsReady || preservingSavedModel;
+  return { modelValid: !!model && supported && modelReady, unavailable, unsupported };
+}
+
+function saveLabelFor(mode: SetupMode, repeat: boolean): string {
+  if (mode === "edit") return "Save changes";
+  return repeat ? "Run and monitor" : "Run investigation";
+}
+
+interface SetupProps {
   initial?: Settings;
-  mode?: "new" | "edit" | "duplicate";
+  mode?: SetupMode;
   models: string[];
   modelDetails?: AnalysisModelInfo[];
   modelsLoading?: boolean;
@@ -52,19 +74,41 @@ export function InvestigationSetupDialog({
   ready?: boolean;
   onClose: () => void;
   onSave: (settings: Settings) => Promise<void>;
-}) {
-  const [step, setStep] = useState(0);
-  const [previewReady, setPreviewReady] = useState(false);
-  const [error, setError] = useState("");
+}
+
+/** Replaces the Investigations tab body: matching activity on the left reacts live to the settings on the right. */
+export function InvestigationSetup(props: SetupProps) {
+  const { initial, mode = initial ? "edit" : "new", defaultSource = "traces" } = props;
   const form = useZodForm(investigationSchema, {
     defaultValues: investigationDefaults(initial, mode, defaultSource),
     mode: "onChange",
   });
-  const { control, setValue, subscribe, trigger, formState } = form;
-  const [selectedModel, repeat] = useWatch({
-    control,
-    name: ["selectedModel", "repeat"],
-  });
+  return (
+    <FormProvider {...form}>
+      <SetupEditor {...props} mode={mode} form={form} />
+    </FormProvider>
+  );
+}
+
+function SetupEditor({
+  initial,
+  mode,
+  models,
+  modelDetails = [],
+  modelsLoading = false,
+  modelsError,
+  defaultModel,
+  accessToken,
+  ready = true,
+  onClose,
+  onSave,
+  form,
+}: SetupProps & { mode: SetupMode; form: UseFormReturn<InvestigationInput, unknown, InvestigationOutput> }) {
+  const [error, setError] = useState("");
+  const [trace, setTrace] = useState<{ id: string; ref?: string } | null>(null);
+  const { control, register, setValue, subscribe, formState } = form;
+  const [selectedModel, repeat] = useWatch({ control, name: ["selectedModel", "repeat"] });
+  const activity = useMatchingActivity(accessToken);
   const model = selectedModel ?? defaultModel ?? "";
   useEffect(
     () =>
@@ -84,9 +128,6 @@ export function InvestigationSetupDialog({
       }),
     [setValue, subscribe],
   );
-  const next = async () => {
-    if (await trigger(investigationStepFields[step])) setStep(step + 1);
-  };
   const save = form.handleSubmit(async (values) => {
     setError("");
     try {
@@ -95,111 +136,94 @@ export function InvestigationSetupDialog({
       setError(cause instanceof Error ? cause.message : "Could not save investigation");
     }
   });
-  const unsupported = modelDetails.some((m) => m.model_group === model && m.mode && m.mode !== "chat");
-  const canRun = ready || mode === "edit";
-  const modelsReady = !modelsLoading && !modelsError;
-  const unavailable = !!model && modelsReady && !models.includes(model);
-  const supported = !unsupported && !unavailable;
-  const preservingSavedModel = mode === "edit" && model === initial?.model;
-  const modelReady = modelsReady || preservingSavedModel;
-  const modelValid = !!model && supported && modelReady;
-  const runReady = canRun && (mode === "edit" || previewReady);
+  const gateInput = { model, models, modelDetails, modelsLoading, modelsError, savedModel: initial?.model, mode };
+  const gate = modelGate(gateInput);
+  const runReady = mode === "edit" || (ready && activity.canReview);
   const formReady = formState.isValid && !formState.isSubmitting;
-  const canSave = formReady && modelValid && runReady;
-  const createLabel = repeat ? "Run and monitor" : "Run investigation";
-  const saveLabel = mode === "edit" ? "Save changes" : createLabel;
-  const headings = [
-    "Which activity should we investigate?",
-    "What should Lens look for?",
-    mode === "edit" ? "Review changes" : "Ready to investigate",
-  ];
+  const canSave = formReady && gate.modelValid && runReady;
+  const saveLabel = saveLabelFor(mode, repeat);
+  const offline = !ready && mode !== "edit";
   return (
-    <FormProvider {...form}>
-      <Dialog
-        open
-        onOpenChange={(open) => {
-          if (!open && !formState.isSubmitting) onClose();
-        }}
-      >
-        <DialogContent
-          className={cn(
-            "flex max-h-[90dvh] flex-col gap-6 overflow-hidden",
-            ["sm:max-w-xl", "sm:max-w-2xl", "sm:max-w-3xl"][step],
-          )}
-        >
-          <DialogHeader>
-            <DialogTitle className="text-xl">{headings[step]}</DialogTitle>
-            <DialogDescription className="sr-only">
-              {
-                [
-                  "Start with an agent, or use filters to investigate any recorded activity.",
-                  "Describe the expected behavior, the questions you have, or both.",
-                  "Review the selected activity, then start your investigation.",
-                ][step]
-              }
-            </DialogDescription>
-          </DialogHeader>
-          <nav aria-label="Investigation setup" className="flex gap-2 text-xs">
-            {["Activity", "Expectations", "Run"].map((label, index) => (
-              <button
-                key={label}
-                disabled={index > step || formState.isSubmitting}
-                aria-current={index === step ? "step" : undefined}
-                onClick={() => {
-                  setStep(index);
-                }}
-                data-state={index === step ? "active" : "inactive"}
-                className="flex-1 border-t-2 border-border pt-2 text-left text-muted-foreground data-[state=active]:border-foreground data-[state=active]:font-medium data-[state=active]:text-foreground"
-              >
-                {index + 1}. {label}
-              </button>
-            ))}
-          </nav>
-          <div className="min-h-0 overflow-y-auto pr-1 space-y-5">
-            {(step === 0 || step === 2) && (
-              <ScopeStep step={step} accessToken={accessToken} setPreviewReady={setPreviewReady} />
-            )}
-            {step === 1 && <ExpectationsStep />}
-            {step === 2 && (
-              <RunStep
-                modelValid={modelValid}
-                models={models}
-                modelDetails={modelDetails}
-                modelsLoading={modelsLoading}
-                modelsError={modelsError}
-                unavailable={unavailable}
-                unsupported={unsupported}
-              />
-            )}
-            {!ready && mode !== "edit" && (
-              <p role="status" className="text-sm text-amber-700">
-                The worker or trace storage is unavailable. Your draft is safe; you can start when it reconnects.
-              </p>
-            )}
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
-          </div>
-          <DialogFooter className="border-t pt-4">
-            <Button
-              variant="outline"
-              disabled={formState.isSubmitting}
-              onClick={() => (step ? setStep(step - 1) : onClose())}
-            >
-              {step ? "Back" : "Cancel"}
+    <section aria-label={TITLES[mode]} className="flex min-w-0 flex-1 flex-col gap-6">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">{TITLES[mode]}</h2>
+          <p className="text-xs text-muted-foreground">
+            Matching activity on the left updates as you change the settings on the right.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" disabled={formState.isSubmitting} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button disabled={!canSave} onClick={() => void save()}>
+            {formState.isSubmitting ? "Saving…" : saveLabel}
+          </Button>
+        </div>
+      </header>
+      {offline && (
+        <p role="status" className="text-sm text-amber-700">
+          The worker or trace storage is unavailable. Your draft is safe; you can start when it reconnects.
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      <div className="grid min-w-0 gap-8 lg:grid-cols-2">
+        <div className="min-w-0 space-y-3 lg:sticky lg:top-0 lg:self-start">
+          <MatchingActivityPreview
+            {...activity.preview}
+            onOpen={(run) => setTrace({ id: run.trace_id, ref: run.trace_ref })}
+          />
+          {activity.manualSelection && activity.selectedRunCount > 0 && (
+            <Button variant="outline" size="sm" onClick={activity.clearSelection}>
+              Clear {activity.selectedRunCount} selected runs
             </Button>
-            {step < 2 ? (
-              <Button onClick={() => void next()}>Continue</Button>
-            ) : (
-              <Button disabled={!canSave} onClick={() => void save()}>
-                {formState.isSubmitting ? "Saving…" : saveLabel}
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </FormProvider>
+          )}
+        </div>
+        <div className="min-w-0 space-y-8">
+          <section aria-label="Activity" className="space-y-5">
+            <h3 className="text-sm font-semibold">Activity</h3>
+            <ScopeFields
+              {...activity.scope}
+              nameField={
+                <label className="grid gap-2 text-sm font-medium">
+                  Investigation name
+                  <Input {...register("name")} placeholder="e.g. Support quality" />
+                </label>
+              }
+            />
+            <SampleFields />
+          </section>
+          <section aria-label="Expectations" className="space-y-5">
+            <h3 className="text-sm font-semibold">Expectations</h3>
+            <ExpectationsFields />
+          </section>
+          <section aria-label="Run" className="space-y-5">
+            <h3 className="text-sm font-semibold">Run</h3>
+            <RunFields
+              modelValid={gate.modelValid}
+              models={models}
+              modelDetails={modelDetails}
+              modelsLoading={modelsLoading}
+              modelsError={modelsError}
+              unavailable={gate.unavailable}
+              unsupported={gate.unsupported}
+            />
+          </section>
+        </div>
+      </div>
+      {trace && (
+        <TraceSheet
+          open
+          traceId={trace.id}
+          traceRef={trace.ref}
+          accessToken={accessToken}
+          onClose={() => setTrace(null)}
+        />
+      )}
+    </section>
   );
 }
