@@ -5,7 +5,7 @@ import type { InvestigationInput } from "../investigationSchema";
 import { Input } from "@/components/ui/input";
 
 import { DurationInput } from "@/components/shared/DurationInput";
-import { type AnalysisModelInfo } from "./analysisModels";
+import { type AnalysisModelInfo } from "../../model/types";
 
 import { AnalysisModelField } from "./AnalysisModelField";
 export function RunFields({

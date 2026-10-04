@@ -2,7 +2,8 @@
 import { WorkerList } from "./WorkerList";
 
 import { initialProxyAddress } from "./workerCommand";
-import { usePrepareWorker, useRevokeWorker } from "../../api/mutations";
+import { useRevokeWorker } from "../../api/mutations";
+import { usePrepareWorker } from "./usePrepareWorker";
 import { WorkerInstall } from "./WorkerInstall";
 import { WorkerForm } from "./WorkerForm";
 
@@ -17,7 +18,7 @@ import { workerFormSchema, type WorkerFormInput } from "./workerSchema";
 import type { LensList, WorkerCreated } from "../../model/types";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { cn } from "@/lib/cva.config";
-import { SettingsCard } from "../SettingsLayout";
+import { SettingsCard } from "../SettingsSection";
 
 function defaultWorkerFormValues(): WorkerFormInput {
   return {

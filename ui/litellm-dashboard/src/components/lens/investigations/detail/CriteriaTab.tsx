@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 
 import { TabsContent } from "@/components/ui/tabs";
 import { type Settings } from "../../model/types";
-import { watches } from "../../setup/watches";
+import { watches } from "../../model/watches";
 
 export function CriteriaTab({
   batchSettings,

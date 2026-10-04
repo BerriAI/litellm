@@ -5,7 +5,7 @@ import { analysisKeysQuery, type Key } from "../../api/queries";
 import { Controller, useFormContext, useWatch } from "react-hook-form";
 import { useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { useLensApi } from "../../services";
+import { useLensApi } from "../../LensServices";
 import { AnalysisKeyDetails } from "./AnalysisKeyDetails";
 import type { WorkerFormInput } from "./workerSchema";
 import {

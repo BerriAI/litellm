@@ -2,7 +2,8 @@
 
 import { Controller, useFormContext, useWatch } from "react-hook-form";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { analysisModelOptions, type AnalysisModelInfo } from "./analysisModels";
+import { analysisModelOptions } from "./analysisModels";
+import type { AnalysisModelInfo } from "../../model/types";
 import type { InvestigationInput } from "../investigationSchema";
 
 export function AnalysisModelField({

@@ -4,7 +4,7 @@ import { Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
-import { ScanDuration } from "../InvestigationProgress";
+import { ScanDuration } from "./JobMeta";
 import type { Lens, Job } from "../../model/types";
 
 import { money, when } from "../../model/format";

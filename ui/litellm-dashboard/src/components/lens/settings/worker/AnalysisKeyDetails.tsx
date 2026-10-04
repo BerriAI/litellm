@@ -1,11 +1,8 @@
 "use client";
 
-import { analysisKeyInfoQuery } from "../../api/queries";
-
-import { useQuery } from "@tanstack/react-query";
-import { useLensApi } from "../../services";
 import { Button } from "@/components/ui/button";
 import { runTime } from "../../model/format";
+import { useAnalysisKeyInfo } from "./useAnalysisKeyInfo";
 
 function budgetLabel(amount: number | null, duration?: string | null): string {
   if (amount === null) return "No key budget";
@@ -23,11 +20,6 @@ function budgetLabel(amount: number | null, duration?: string | null): string {
     maximumFractionDigits: 2,
   }).format(amount);
   return duration ? `${dollars} / ${periods[duration] ?? duration}` : `${dollars} total`;
-}
-
-export function useAnalysisKeyInfo(accessToken: string, keyId?: string) {
-  const api = useLensApi(accessToken);
-  return useQuery(analysisKeyInfoQuery(api, keyId));
 }
 
 function modelsLabel(models: readonly string[]): string {

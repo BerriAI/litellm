@@ -7,7 +7,7 @@ import {
   SETUP_STEPS,
   type InvestigationInput,
 } from "./investigationSchema";
-import { watchChecks } from "./watches";
+import { watchChecks } from "../model/watches";
 
 const defaults = investigationDefaults(undefined, "new", "traces");
 

@@ -1,4 +1,4 @@
-import type { Settings } from "../model/types";
+import type { Settings } from "./types";
 
 export interface Watch {
   id: string;

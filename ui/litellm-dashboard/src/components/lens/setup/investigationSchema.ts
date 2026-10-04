@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Settings } from "../model/types";
 import { normalizeFilters } from "./filters";
-import { initialWatches, isWatch, watchChecks } from "./watches";
+import { initialWatches, isWatch, watchChecks } from "../model/watches";
 
 const selectionFields = {
   source: z.enum(["traces", "requests", "both"]),

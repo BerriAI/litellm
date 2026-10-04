@@ -15,8 +15,7 @@ import {
   type ProgressSample,
 } from "../model/progress";
 import { durationText } from "../model/format";
-import { nextCheckStatus } from "../model/status";
-import { type Lens, type Job } from "../model/types";
+import { type Job } from "../model/types";
 import { cn } from "@/lib/cva.config";
 
 const steps = ["review runs", "find patterns", "check evidence"];
@@ -128,22 +127,5 @@ export function InvestigationProgress({ job, onCancel }: { job: Job; onCancel?: 
         </div>
       </div>
     </section>
-  );
-}
-
-export function NextCheck({ lens }: { lens: Lens }) {
-  const now = useNow(15000);
-  const label = nextCheckStatus(lens, now);
-  if (!label) return null;
-  return <p className="mt-1 text-xs text-muted-foreground">{label}</p>;
-}
-
-export function ScanDuration({ job }: { job: Job }) {
-  if (!job.finished_at) return null;
-  return (
-    <span title="Total time, including any wait for an analyzer">
-      {" · Took "}
-      {analysisElapsed(job.created_at, Date.parse(job.finished_at))}
-    </span>
   );
 }

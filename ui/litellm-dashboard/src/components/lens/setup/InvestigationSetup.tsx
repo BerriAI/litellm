@@ -26,7 +26,7 @@ import { useMatchingActivity } from "./useMatchingActivity";
 import { TraceSheet } from "../investigations/TraceSheet";
 import { durationLabel } from "../model/format";
 import { type Settings } from "../model/types";
-import { type AnalysisModelInfo } from "./fields/analysisModels";
+import { type AnalysisModelInfo } from "../model/types";
 
 type SetupMode = "new" | "edit" | "duplicate";
 type StepState = "done" | "current" | "upcoming";

@@ -4,7 +4,7 @@ import { Controller, useFormContext } from "react-hook-form";
 import { lensQueries } from "../../api/queries";
 
 import { useQuery } from "@tanstack/react-query";
-import { useLensApi } from "../../services";
+import { useLensApi } from "../../LensServices";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Input } from "@/components/ui/input";
 import type { WorkerFormInput } from "./workerSchema";

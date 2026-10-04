@@ -6,7 +6,7 @@ import { renderWithProviders } from "@/../tests/test-utils";
 import { MonitoringDialog } from "./MonitoringDialog";
 import { InvestigationSetup } from "./InvestigationSetup";
 import { apiClient } from "@/components/networking";
-import { initialWatches, watchChecks } from "./watches";
+import { initialWatches, watchChecks } from "../model/watches";
 import { type Settings } from "../model/types";
 
 vi.mock("@/components/networking", () => ({ apiClient: { post: vi.fn(), get: vi.fn() } }));

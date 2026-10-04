@@ -4,14 +4,14 @@ import {
   InvestigationsLoadFailed,
   InvestigationsLoading,
   InvestigationError,
-} from "./InvestigationStatus";
+} from "./InvestigationStates";
 
 import { InvestigationNavigation } from "./InvestigationNavigation";
 import { useInvestigationResults } from "./useInvestigationResults";
 
 import { useLensUpdate, useSaveLens, type LensWrite } from "../api/mutations";
 import { lensKeys, lensQueries } from "../api/queries";
-import { useLensApi } from "../services";
+import { useLensApi } from "../LensServices";
 
 import { InvestigationDetail } from "./detail/InvestigationDetail";
 import { ReadinessBanner } from "./ReadinessBanner";
@@ -26,7 +26,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FindingSheet } from "./FindingSheet";
 import { TraceSheet } from "./TraceSheet";
 import { InvestigationSetup } from "../setup/InvestigationSetup";
-import { useAnalysisKeyInfo } from "../setup/worker/AnalysisKeyDetails";
+import { useAnalysisKeyInfo } from "../settings/worker/useAnalysisKeyInfo";
 import { InvestigationList } from "./InvestigationList";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";

@@ -5,7 +5,7 @@ import { ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 import { TabsContent } from "@/components/ui/tabs";
-import { ScanDuration } from "../InvestigationProgress";
+import { ScanDuration } from "./JobMeta";
 import type { Lens, Job } from "../../model/types";
 
 import { money, when } from "../../model/format";

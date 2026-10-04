@@ -1,9 +1,4 @@
-export interface AnalysisModelInfo {
-  model_group: string;
-  providers: string[];
-  mode?: string | null;
-  supported_openai_params?: string[] | null;
-}
+import type { AnalysisModelInfo } from "../../model/types";
 
 export function analysisModelOptions(models: string[], details: AnalysisModelInfo[]) {
   return [...new Set(models)].sort().map((name) => {

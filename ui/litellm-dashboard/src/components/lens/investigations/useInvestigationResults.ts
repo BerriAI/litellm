@@ -3,7 +3,7 @@
 import { useQueryStates } from "nuqs";
 import { useCallback, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useLensApi } from "../services";
+import { useLensApi } from "../LensServices";
 import { lensQueries } from "../api/queries";
 import { evidenceTarget, mergeFeedback, sortedFindings } from "../model/findings";
 import type { Job, Lens } from "../model/types";

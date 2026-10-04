@@ -4,7 +4,7 @@ import { Activity, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { WorkerSettings } from "./worker/WorkerSettings";
-import { SettingsCard, SettingsSection } from "./SettingsLayout";
+import { SettingsCard, SettingsSection } from "./SettingsSection";
 import type { LensList } from "../model/types";
 
 const TRACING_DOCS = "https://docs.litellm.ai/docs/proxy/lens";

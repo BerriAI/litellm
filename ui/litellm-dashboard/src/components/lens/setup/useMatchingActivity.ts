@@ -4,7 +4,7 @@ import { useEffect, useId, useState, type ComponentProps } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useFormContext, useWatch } from "react-hook-form";
 import { lensQueries } from "../api/queries";
-import { useLensApi } from "../services";
+import { useLensApi } from "../LensServices";
 import { durationLabel } from "../model/format";
 import type { Sample } from "../model/types";
 import type { ScopeFields } from "./fields/ScopeFields";

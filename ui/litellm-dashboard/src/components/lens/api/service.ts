@@ -1,9 +1,17 @@
 import { z } from "zod";
-import type { RunWindow } from "../investigations/detail/RunNowDialog";
 import type { ApiClient } from "@/lib/http/client";
 import type { components } from "@/lib/http/schema";
-import type { ActivitySelection, Job, Lens, LensList, Sample, Settings, WorkerCreated } from "../model/types";
-import type { AnalysisModelInfo } from "../setup/fields/analysisModels";
+import type {
+  ActivitySelection,
+  AnalysisModelInfo,
+  Job,
+  Lens,
+  LensList,
+  RunWindow,
+  Sample,
+  Settings,
+  WorkerCreated,
+} from "../model/types";
 
 export type ExecutionContent = components["schemas"]["ExecutionContent"];
 export type FindingStatus = components["schemas"]["FindingUpdate"]["status"];
