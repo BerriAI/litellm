@@ -1944,6 +1944,21 @@ class ComplexityRouter(CustomLogger):
         return await self._llm_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
 
     def _classify_with_heuristic_v2(self, prompt: str) -> ClassificationOutcome:
+        # The reasoning-marker override is a classifier-wide contract, not a
+        # heuristic-scorer quirk: an operator who sets reasoning_override_min_score
+        # (0 = unconditional) expects 2+ markers to promote on every path that
+        # classifies. The success predictor reads outcome statistics, never the
+        # ask's markers, so honor the override here through the same gate the
+        # heuristic scorer uses -- otherwise the setting silently does nothing
+        # under heuristic_v2 while still being documented as classifier-wide.
+        overridden: Final = self._score_and_classify(prompt)
+        if overridden[3] == "reasoning_override":
+            return ClassificationOutcome(
+                tier=overridden[0],
+                score=overridden[1],
+                signals=overridden[2],
+                cause="reasoning_override",
+            )
         predictor: Final = self._tier_success_predictor
         if predictor is None:
             raise ValueError("heuristic v2 predictor is not configured")
