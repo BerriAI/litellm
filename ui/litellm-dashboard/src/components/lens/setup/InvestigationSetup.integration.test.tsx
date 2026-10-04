@@ -1,5 +1,6 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { mockAllIsIntersecting, setupIntersectionMocking } from "react-intersection-observer/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 import { MonitoringDialog } from "./MonitoringDialog";
@@ -34,6 +35,7 @@ const settings: Settings = {
 };
 
 beforeEach(() => {
+  setupIntersectionMocking(vi.fn);
   vi.mocked(apiClient.get).mockReset();
   vi.mocked(apiClient.get).mockResolvedValue([]);
   vi.mocked(apiClient.post).mockReset();
@@ -398,6 +400,51 @@ it("watches new investigations every 15 minutes by default, outside advanced opt
   await waitFor(() => expect(screen.getByRole("button", { name: "Run and monitor" })).toBeEnabled());
   await user.click(screen.getByRole("button", { name: "Run and monitor" }));
   expect(save).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, interval_minutes: 15 }));
+});
+
+it("appends the next preview page as the list scrolls near its end, then stops at the last page", async () => {
+  const run = (id: string) => ({
+    id,
+    name: `Run ${id}`,
+    trace_id: id,
+    source: "traces",
+    start_time: "2026-10-01T12:00:00Z",
+    span_count: 2,
+  });
+  let finishSecondPage = (): void => {};
+  vi.mocked(apiClient.post).mockImplementation((_path, options) => {
+    const { offset } = options?.body as { offset: number };
+    if (offset === 0) return Promise.resolve({ eligible: 2, selected: 2, executions: [run("one")], next_offset: 1 });
+    return new Promise((resolve) => {
+      finishSecondPage = () => resolve({ eligible: 2, selected: 2, executions: [run("two")], next_offset: null });
+    });
+  });
+  renderWithProviders(
+    <InvestigationSetup
+      initial={settings}
+      models={["analysis"]}
+      accessToken="test"
+      onClose={vi.fn()}
+      onSave={vi.fn()}
+    />,
+  );
+  expect(await screen.findByText("Run one")).toBeVisible();
+  expect(screen.getByText(/Showing 1 of 2/)).toBeVisible();
+  expect(screen.getByRole("status")).toHaveTextContent("2 matching runs");
+  const nextPageCalls = () =>
+    vi.mocked(apiClient.post).mock.calls.filter(([, options]) => (options?.body as { offset: number }).offset === 1);
+  expect(nextPageCalls()).toHaveLength(0);
+  act(() => mockAllIsIntersecting(true));
+  await waitFor(() => expect(nextPageCalls()).toHaveLength(1));
+  expect(screen.getByText("Run one")).toBeVisible();
+  expect(screen.getByRole("status")).toHaveTextContent("2 matching runs");
+  act(() => finishSecondPage());
+  expect(await screen.findByText("Run two")).toBeVisible();
+  expect(screen.getByText("Run one")).toBeVisible();
+  expect(screen.queryByText(/Showing/)).not.toBeInTheDocument();
+  expect(screen.queryByTestId("preview-placeholder")).not.toBeInTheDocument();
+  act(() => mockAllIsIntersecting(true));
+  expect(nextPageCalls()).toHaveLength(1);
 });
 
 it("does not silently analyze everything after individual selection is enabled", async () => {

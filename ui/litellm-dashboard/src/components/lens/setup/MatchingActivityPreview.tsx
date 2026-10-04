@@ -1,12 +1,18 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { ChevronRight, RotateCw } from "lucide-react";
+import { useInView } from "react-intersection-observer";
 import { Button } from "@/components/ui/button";
 
 import { type Sample } from "../model/types";
 import { runTime } from "../model/format";
 
-export function RunList({ executions }: { executions: Sample["executions"] }) {
+const PREFETCH_MARGIN = "0px 0px 240px 0px";
+
+type Execution = Sample["executions"][number];
+
+export function RunList({ executions }: { executions: Execution[] }) {
   return (
     <div className="divide-y">
       {executions.map((run) => (
@@ -23,8 +29,6 @@ export function RunList({ executions }: { executions: Sample["executions"] }) {
 }
 
 export function MatchingActivityPreview({
-  offset,
-  onPage,
   onSelect,
   selectedIds,
   manualSelection,
@@ -33,12 +37,14 @@ export function MatchingActivityPreview({
   windowLabel,
   ready,
   error,
-  data,
+  eligible,
+  executions,
+  hasMore,
+  loadingMore,
+  onLoadMore,
   onOpen,
   onRetry,
 }: {
-  offset: number;
-  onPage: (offset: number) => void;
   onSelect: (id: string, checked: boolean) => void;
   selectedIds: string[];
   manualSelection: boolean;
@@ -47,13 +53,22 @@ export function MatchingActivityPreview({
   windowLabel: string;
   ready: boolean;
   error: Error | null;
-  data: Sample | undefined;
+  eligible: number | undefined;
+  executions: Execution[];
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
   onRetry: () => void;
-  onOpen: (run: Sample["executions"][number]) => void;
+  onOpen: (run: Execution) => void;
 }) {
-  const paginated = data?.next_offset != null || offset > 0;
-  const showSelection = selectedCount !== data?.eligible || paginated;
-  const selectionData = ready && showSelection ? data : undefined;
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  const { ref: tailRef, inView: nearTail } = useInView({ root: scroller, rootMargin: PREFETCH_MARGIN });
+  const canContinue = ready && hasMore && executions.length > 0;
+  useEffect(() => {
+    if (nearTail && canContinue && !loadingMore) onLoadMore();
+  }, [nearTail, canContinue, loadingMore, onLoadMore]);
+  const partial = eligible != null && executions.length < eligible;
+  const showSelection = ready && eligible != null && (selectedCount !== eligible || partial);
   return (
     <section aria-label="Matching activity" className="self-start rounded-lg border">
       <div className="border-b px-4 py-3">
@@ -73,7 +88,7 @@ export function MatchingActivityPreview({
         </div>
         <p className="mt-1 text-xs text-muted-foreground">{windowLabel} · No analysis cost</p>
       </div>
-      <div className="max-h-[60dvh] overflow-y-auto px-4">
+      <div ref={setScroller} aria-busy={loadingMore} className="max-h-[60dvh] overflow-y-auto px-4">
         {ready && error && (
           <p role="alert" className="py-3 text-sm text-destructive">
             {error.message}{" "}
@@ -82,14 +97,14 @@ export function MatchingActivityPreview({
             </Button>
           </p>
         )}
-        {ready && data?.eligible === 0 && (
+        {ready && eligible === 0 && (
           <p className="py-4 text-sm text-muted-foreground">
             No matches. Try removing a condition or check that your agent records this metadata. Recent trace updates
             need two minutes to settle.
           </p>
         )}
         {ready &&
-          data?.executions.map((run) => (
+          executions.map((run) => (
             <div key={run.id} className="flex items-center justify-between gap-3 border-b last:border-0">
               {manualSelection && (
                 <input
@@ -109,39 +124,23 @@ export function MatchingActivityPreview({
               )}
             </div>
           ))}
+        {canContinue && (
+          <p ref={tailRef} data-testid="preview-placeholder" className="py-3 text-xs text-muted-foreground">
+            Loading more…
+          </p>
+        )}
       </div>
-      {selectionData && (
-        <div className="border-t px-4 py-3 space-y-2">
+      {showSelection && (
+        <div className="border-t px-4 py-3">
           <p className="text-xs text-muted-foreground">
             {selectedCount} selected for analysis
-            {paginated && (
+            {partial && (
               <>
                 {" "}
-                · Showing {offset + (selectionData.executions.length ? 1 : 0)}–
-                {offset + selectionData.executions.length} of {selectionData.eligible}
+                · Showing {executions.length} of {eligible}
               </>
             )}
           </p>
-          {paginated && (
-            <div className="flex justify-between">
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={offset === 0}
-                onClick={() => onPage(Math.max(0, offset - 100))}
-              >
-                Previous
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={selectionData.next_offset == null}
-                onClick={() => onPage(selectionData.next_offset ?? offset)}
-              >
-                Next
-              </Button>
-            </div>
-          )}
         </div>
       )}
     </section>

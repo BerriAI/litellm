@@ -1,5 +1,5 @@
 import { infiniteQueryOptions, queryOptions, type Query } from "@tanstack/react-query";
-import type { LensList, Settings, ActivitySelection } from "../model/types";
+import type { LensList, Sample, Settings, ActivitySelection } from "../model/types";
 import type { KeyPage, LensApi } from "./service";
 
 export type { Key } from "./service";
@@ -21,8 +21,8 @@ export const lensKeys = {
   activity: (scope: string) => [...lensKeys.all, "activity-available", { scope }] as const,
   discovery: (scope: string, source: Settings["source"], hours: number | undefined, asOf: string) =>
     [...lensKeys.all, "discovery", { scope, source, hours, asOf }] as const,
-  preview: (scope: string, selection: ActivitySelection, offset: number, asOf: string) =>
-    [...lensKeys.all, "preview", { scope, selection, offset, asOf }] as const,
+  preview: (scope: string, selection: ActivitySelection, asOf: string) =>
+    [...lensKeys.all, "preview", { scope, selection, asOf }] as const,
   agents: (scope: string, asOf: string) => [...lensKeys.all, "agents", { scope, asOf }] as const,
   analysisKeys: (scope: string, query: string) => [...lensKeys.all, "analysis-keys", { scope, query }] as const,
   analysisKeyInfo: (scope: string, keyId: string | undefined) =>
@@ -106,17 +106,16 @@ export const lensQueries = {
     };
     return queryOptions(options);
   },
-  preview(
-    api: LensApi,
-    { scope, offset, asOf, enabled }: { scope: ActivitySelection; offset: number; asOf: string; enabled: boolean },
-  ) {
+  preview(api: LensApi, { scope, asOf, enabled }: { scope: ActivitySelection; asOf: string; enabled: boolean }) {
     const options = {
-      queryKey: lensKeys.preview(api.scope, scope, offset, asOf),
-      queryFn: () => api.sample(scope, offset, asOf),
+      queryKey: lensKeys.preview(api.scope, scope, asOf),
+      initialPageParam: 0,
+      queryFn: ({ pageParam }: { pageParam: number }) => api.sample(scope, pageParam, asOf),
+      getNextPageParam: (lastPage: Sample) => lastPage.next_offset ?? undefined,
       enabled,
       staleTime: 30000,
     };
-    return queryOptions(options);
+    return infiniteQueryOptions(options);
   },
   agents(api: LensApi, asOf: string, source: Settings["source"]) {
     const options = {

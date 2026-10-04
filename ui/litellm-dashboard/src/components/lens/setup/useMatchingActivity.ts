@@ -1,17 +1,19 @@
 "use client";
 
 import { useEffect, useId, useState, type ComponentProps } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useFormContext, useWatch } from "react-hook-form";
 import { lensQueries } from "../api/queries";
 import { useLensApi } from "../services";
 import { durationLabel } from "../model/format";
+import type { Sample } from "../model/types";
 import type { ScopeFields } from "./fields/ScopeFields";
 import type { MatchingActivityPreview } from "./MatchingActivityPreview";
 import type { InvestigationInput } from "./investigationSchema";
 
 type ScopeProps = Omit<ComponentProps<typeof ScopeFields>, "nameField">;
 type PreviewProps = Omit<ComponentProps<typeof MatchingActivityPreview>, "onOpen">;
+type PreviewPage = Pick<Sample, "eligible" | "selected">;
 
 export interface MatchingActivity {
   readonly scope: ScopeProps;
@@ -41,7 +43,7 @@ function validScope(scope: Selection): boolean {
 function previewTitle(
   state: { pending: boolean; validWindow: boolean; valid: boolean },
   source: Selection["source"],
-  data: PreviewProps["data"],
+  data: PreviewPage | undefined,
 ): string {
   if (state.pending) return "Finding matching activity…";
   if (!state.validWindow) return "Choose a history window between 1 hour and 365 days";
@@ -79,14 +81,12 @@ export function useMatchingActivity(accessToken: string): MatchingActivity {
   const { control, setValue } = useFormContext<InvestigationInput>();
   const [selection, manualSelection] = useWatch({ control, name: ["selection", "manualSelection"] });
   const api = useLensApi(accessToken);
-  const [offset, setOffset] = useState(0);
   const [scope, setScope] = useState(selection);
   const [asOf, setAsOf] = useState(() => new Date().toISOString());
   const serialized = JSON.stringify({ ...selection, execution_ids: [] });
   useEffect(() => {
     const timer = setTimeout(() => {
       setScope(JSON.parse(serialized) as Selection);
-      setOffset(0);
       setAsOf(new Date().toISOString());
     }, 350);
     return () => clearTimeout(timer);
@@ -94,22 +94,20 @@ export function useMatchingActivity(accessToken: string): MatchingActivity {
   const windowValid = validWindow(selection);
   const valid = windowValid && validScope(scope);
   const scopeFields = useScopeFieldOptions(api, selection, asOf);
-  const previewInput = { scope, offset, asOf, enabled: valid };
-  const preview = useQuery(lensQueries.preview(api, previewInput));
-  const empty = preview.data?.eligible === 0;
+  const preview = useInfiniteQuery(lensQueries.preview(api, { scope, asOf, enabled: valid }));
+  const firstPage = preview.data?.pages[0];
+  const executions = preview.data?.pages.flatMap((page) => page.executions) ?? [];
+  const empty = firstPage?.eligible === 0;
   useEffect(() => {
     if (!empty || !valid) return;
     const timer = window.setTimeout(() => setAsOf(new Date().toISOString()), 15000);
     return () => window.clearTimeout(timer);
   }, [empty, valid, asOf]);
-  const refreshPreview = () => {
-    setOffset(0);
-    setAsOf(new Date().toISOString());
-  };
-  const pending = serialized !== JSON.stringify(scope) || preview.isFetching;
+  const refreshPreview = () => setAsOf(new Date().toISOString());
+  const pending = serialized !== JSON.stringify(scope) || (preview.isFetching && !preview.isFetchingNextPage);
   const ready = !pending && valid;
   const hasSelection = !manualSelection || !!selection.execution_ids.length;
-  const hasMatches = !preview.error && (preview.data?.selected ?? 0) > 0;
+  const hasMatches = !preview.error && (firstPage?.selected ?? 0) > 0;
   const windowLabel = windowValid
     ? `Last ${durationLabel(selection.lookback_hours ?? 24, "hours")}`
     : "Choose a valid history window";
@@ -117,20 +115,24 @@ export function useMatchingActivity(accessToken: string): MatchingActivity {
   return {
     scope: scopeFields,
     preview: {
-      offset,
-      onPage: setOffset,
       onSelect: (runId, checked) =>
         setExecutionIds(
           checked ? [...selection.execution_ids, runId] : selection.execution_ids.filter((id) => id !== runId),
         ),
       manualSelection,
       selectedIds: selection.execution_ids,
-      selectedCount: manualSelection ? manualSelectedCount(selection) : preview.data?.selected ?? 0,
-      title: previewTitle({ pending, validWindow: windowValid, valid }, selection.source, preview.data),
+      selectedCount: manualSelection ? manualSelectedCount(selection) : firstPage?.selected ?? 0,
+      title: previewTitle({ pending, validWindow: windowValid, valid }, selection.source, firstPage),
       windowLabel,
       ready,
       error: preview.error,
-      data: preview.data,
+      eligible: firstPage?.eligible,
+      executions,
+      hasMore: preview.hasNextPage,
+      loadingMore: preview.isFetchingNextPage,
+      onLoadMore: () => {
+        if (preview.hasNextPage && !preview.isFetching) void preview.fetchNextPage({ cancelRefetch: false });
+      },
       onRetry: refreshPreview,
     },
     canReview: ready && hasMatches && hasSelection,
