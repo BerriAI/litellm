@@ -133,6 +133,36 @@ describe("RunView", () => {
     expect(screen.queryByRole("button", { name: "Back to runs" })).not.toBeInTheDocument();
   });
 
+  it("keeps the current run on screen, inert, while an unvisited run loads in the drawer", async () => {
+    const user = userEvent.setup();
+    let resolveSwarm: (trace: Trace) => void = () => {};
+    vi.mocked(agentTraceCall).mockImplementation((_token, traceId) =>
+      traceId === swarm.summary.trace_id
+        ? new Promise<Trace>((resolve) => {
+            resolveSwarm = resolve;
+          })
+        : Promise.resolve(research),
+    );
+    const props = { accessToken: "sk-test", onBack: vi.fn(), embedded: true };
+    const { rerender } = renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} {...props} />);
+    const root = rootSpanId(research);
+    expect(await screen.findByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
+
+    rerender(<RoutedRunView traceId={swarm.summary.trace_id} {...props} />);
+    await waitFor(() => expect(screen.getByTestId("run-view")).toHaveAttribute("aria-busy", "true"));
+    expect(screen.queryByRole("status", { name: "Loading trace" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);
+
+    act(() => resolveSwarm(swarm));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(swarm.summary)),
+    );
+    expect(screen.getByTestId("run-view")).toHaveAttribute("aria-busy", "false");
+    expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", initialRunSelection(swarm).selectedId);
+  });
+
   it("moves the selection with J / K and closes the detail pane with Esc", async () => {
     const user = userEvent.setup();
     renderRun(research);

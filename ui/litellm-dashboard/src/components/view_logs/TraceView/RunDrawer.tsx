@@ -53,7 +53,6 @@ export function RunDrawer({
     >
       {(shown) => (
         <RunView
-          key={traceKey(shown)}
           traceId={shown.traceId}
           traceRef={shown.traceRef}
           selection={selection}

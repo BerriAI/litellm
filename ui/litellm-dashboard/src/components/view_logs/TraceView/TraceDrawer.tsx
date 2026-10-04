@@ -1,7 +1,7 @@
 "use client";
 import { type TraceHandoff, useTracesApi } from "./tracesApi";
 
-import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useEventListener, useTimeout } from "usehooks-ts";
@@ -189,9 +189,10 @@ interface RunBodyProps {
   accessToken: string;
   selection: RunSelection;
   embedded: boolean;
+  stale: boolean;
 }
 
-function RunBody({ trace, accessToken, selection, embedded }: RunBodyProps) {
+function RunBody({ trace, accessToken, selection, embedded, stale }: RunBodyProps) {
   const spanKeys = embedded ? EMBEDDED_SPAN_KEYS : SPAN_KEYS;
   const { view, selectSpan, setView, stepQuery: query, setStepQuery: setQuery, errorsOnly, setErrorsOnly } = selection;
   const [initial] = useState(() => initialRunSelection(trace, selection.spanId ?? undefined));
@@ -253,7 +254,7 @@ function RunBody({ trace, accessToken, selection, embedded }: RunBodyProps) {
   useEventListener(
     "keydown",
     (event) => {
-      if (view !== "steps" || ignoreStepKey(event)) return;
+      if (stale || view !== "steps" || ignoreStepKey(event)) return;
       const index = rows.findIndex((row) => row.id === selectedRow?.id);
       const row = rows[index];
       if (event.key === "Escape" && detailOpen) {
@@ -378,6 +379,7 @@ export function RunView({ traceId, traceRef, selection, accessToken, onBack, emb
     refetchOnReconnect: false,
     refetchOnMount: false,
     retry: false,
+    placeholderData: keepPreviousData,
   };
   const traceQuery = useInfiniteQuery(traceQueryOptions);
   const refreshTrace = () => queryClient.resetQueries({ queryKey: traceQueryOptions.queryKey, exact: true });
@@ -386,7 +388,8 @@ export function RunView({ traceId, traceRef, selection, accessToken, onBack, emb
     if (!pages?.length) return undefined;
     return { ...pages[0], spans: pages.flatMap((page) => page.spans) };
   }, [traceQuery.data]);
-  const seekingSpan = selectedSpanMissing(trace, selection.spanId);
+  const switching = traceQuery.isPlaceholderData;
+  const seekingSpan = !switching && selectedSpanMissing(trace, selection.spanId);
   const { hasNextPage, isFetching, isError, fetchNextPage } = traceQuery;
   const canSeek = seekingSpan && hasNextPage;
   useEffect(() => {
@@ -436,7 +439,10 @@ export function RunView({ traceId, traceRef, selection, accessToken, onBack, emb
       className={cn(
         "@container/trace flex flex-1 flex-col gap-0 overflow-hidden bg-background",
         embedded ? "min-h-0" : "min-h-[560px] border-y border-border",
+        switching && "opacity-60 transition-opacity delay-150 duration-150 motion-reduce:transition-none",
       )}
+      aria-busy={switching}
+      inert={switching}
       data-testid="run-view"
     >
       <RunHeader
@@ -468,11 +474,12 @@ export function RunView({ traceId, traceRef, selection, accessToken, onBack, emb
         </div>
       )}
       <RunBody
-        key={seekingSpan ? "seeking" : "loaded"}
+        key={`${trace.summary.trace_id}:${trace.summary.trace_ref}:${seekingSpan ? "seeking" : "loaded"}`}
         trace={trace}
         accessToken={accessToken}
         selection={selection}
         embedded={embedded}
+        stale={switching}
       />
     </Tabs>
   );
