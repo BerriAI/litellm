@@ -14,7 +14,6 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
-import { ShortcutHints } from "@/components/shared/ShortcutHints";
 
 import { FoldChevron } from "./Collapse";
 import { PaneBar } from "./PaneBar";
@@ -411,7 +410,6 @@ export function SpanTree({
           })}
         </div>
       </div>
-      <ShortcutHints className="min-h-10 shrink-0 border-t border-border px-3 py-1.5" />
     </section>
   );
 }

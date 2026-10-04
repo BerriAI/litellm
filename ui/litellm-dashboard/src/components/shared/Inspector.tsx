@@ -17,6 +17,7 @@ import {
 } from "react";
 import { useLocalStorage, useMediaQuery, useOnClickOutside, useWindowSize } from "usehooks-ts";
 
+import { ShortcutHints } from "@/components/shared/ShortcutHints";
 import { useShortcut } from "@/components/shared/useShortcut";
 import { cn } from "@/lib/cva.config";
 
@@ -325,6 +326,7 @@ function Panel<T>({ label, testId, children }: InspectorPanelProps<T>) {
       {!fullScreen && <ResizeHandle noun={noun} width={width} onResize={setWidth} />}
       <Header />
       <div className="flex min-h-0 flex-1 flex-col">{children(shown)}</div>
+      <ShortcutHints className="min-h-10 shrink-0 border-t border-border px-3 py-1.5" />
     </aside>
   );
 }

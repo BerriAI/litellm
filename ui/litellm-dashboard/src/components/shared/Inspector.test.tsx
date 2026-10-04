@@ -144,6 +144,11 @@ describe("Inspector", () => {
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
   });
+  it("lists the active shortcuts in the panel footer", () => {
+    mockReducedMotion(true);
+    render(<Notes initial={notes[0]} />);
+    expect(within(panel()).getByLabelText("Keyboard shortcuts")).toHaveTextContent("J/K noteEsc close");
+  });
 
   it("shows an item that is not in the list and steps from the top of the list", () => {
     mockReducedMotion(true);

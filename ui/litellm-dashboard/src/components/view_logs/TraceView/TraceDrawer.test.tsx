@@ -7,6 +7,7 @@ import { renderWithProviders, testQueryClient } from "../../../../tests/test-uti
 import researchTrace from "./__fixtures__/research_trace.json";
 import swarmTrace from "./__fixtures__/swarm_trace.json";
 import type { ComponentProps } from "react";
+import { ShortcutHints } from "@/components/shared/ShortcutHints";
 import { initialRunSelection, RunView } from "./TraceDrawer";
 import { useOpenTraceRouting } from "./traceRouting";
 import { agentHandoffText } from "./tracesApi";
@@ -42,7 +43,12 @@ const research = researchTrace as Trace;
 
 function RoutedRunView(props: Omit<ComponentProps<typeof RunView>, "selection">) {
   const { selection } = useOpenTraceRouting();
-  return <RunView {...props} selection={selection} />;
+  return (
+    <>
+      <RunView {...props} selection={selection} />
+      <ShortcutHints />
+    </>
+  );
 }
 
 const renderRun = (trace: Trace) => {
