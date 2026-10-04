@@ -735,7 +735,7 @@ if MCP_AVAILABLE:
         """
         from litellm.proxy.proxy_server import proxy_logging_obj
 
-        listed_generation: Final = global_mcp_server_manager._listed_tools_generations.get(server.server_id, 0)
+        listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
         tools: Final = await _list_server_tools(
             server,
             server_auth_header,
@@ -757,7 +757,7 @@ if MCP_AVAILABLE:
             if apply_tool_filters and user_api_key_auth
             else server_filtered
         )
-        global_mcp_server_manager._record_listed_tools(
+        global_mcp_server_manager.record_listed_tools(
             server,
             served_tools,
             ListedToolsCaller(

@@ -4474,6 +4474,20 @@ class MCPServerManager:
             sorted((name.lower(), value) for name, value in raw_headers.items() if name.lower() in forwarded_names)
         )
 
+    def listed_tools_generation(self, server_id: str) -> int:
+        return self._listed_tools_generations.get(server_id, 0)
+
+    def record_listed_tools(
+        self,
+        server: MCPServer,
+        tools: Sequence[MCPTool],
+        caller: ListedToolsCaller | None,
+        generation: int,
+        *,
+        record_listing: bool = True,
+    ) -> None:
+        self._record_listed_tools(server, tools, caller, generation, record_listing=record_listing)
+
     def _record_listed_tools(
         self,
         server: MCPServer,
