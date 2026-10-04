@@ -205,4 +205,25 @@ describe("Lens interactive demo", () => {
     expect(await screen.findByRole("table", { name: "Agent runs" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
   });
+
+  it("marks the Investigations tab while a scan runs and clears it once the scan finishes", async () => {
+    const saved = createLensDemoData().lenses[0];
+    const withJob = (status: (typeof saved.jobs)[number]["status"]) => ({
+      ...saved,
+      jobs: [{ ...saved.jobs[0], status }, ...saved.jobs.slice(1)],
+    });
+    const lenses = vi.fn(() => [withJob("running")]);
+    network.mockImplementation(async (input) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/lens") return Response.json({ lenses: lenses(), workers: [], tracing_enabled: false });
+      if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
+      return Response.json({ data: [], traces: false, requests: false });
+    });
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />);
+    const tab = within(screen.getByRole("tablist", { name: "Lens" })).getByRole("tab", { name: "Investigations" });
+    await waitFor(() => expect(tab).toHaveAccessibleDescription("An investigation is running"));
+    lenses.mockReturnValue([withJob("completed")]);
+    await testQueryClient.refetchQueries({ queryKey: ["lens", "list"] });
+    await waitFor(() => expect(tab).toHaveAccessibleDescription(""));
+  });
 });
