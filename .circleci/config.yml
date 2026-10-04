@@ -3338,7 +3338,6 @@ jobs:
     working_directory: ~/project
     environment:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/litellm_test
-      LITELLM_LOCAL_MODEL_COST_MAP: "True"
     steps:
       - checkout
       - skip_if_unrelated_changes
@@ -3436,8 +3435,6 @@ jobs:
       image: ubuntu-2204:2024.04.1
     resource_class: large
     working_directory: ~/project
-    environment:
-      LITELLM_LOCAL_MODEL_COST_MAP: "True"
     steps:
       - checkout
       - skip_if_unrelated_changes:
