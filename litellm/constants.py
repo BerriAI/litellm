@@ -965,6 +965,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.cognition.ai/v1",
     "https://api.cortecs.ai/v1",
     "https://api.scx.ai/v1",
+    "https://api.lab.vispark.in/v1",
     "https://api.prisminference.com/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
 ]
@@ -1036,6 +1037,7 @@ openai_compatible_providers: Final[list] = [
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
+    "vispark",  # Vispark Lab - JSON-configured provider
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "cortecs",
@@ -1067,6 +1069,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "poe",
     "chutes",
     "v0",
+    "vispark",
     "lambda_ai",
     "hyperbolic",
     "wandb",
