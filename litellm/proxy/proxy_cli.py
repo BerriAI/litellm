@@ -1014,6 +1014,16 @@ class ProxyInitializationHelpers:
     ),
     envvar="PROMETHEUS_METRICS_PORT",
 )
+def _value_type_name(value: object) -> str:
+    """Return the runtime class name of an arbitrary config value.
+
+    The value read from YAML is untyped; annotate the parameter as ``object``
+    so ``type()`` receives a known-typed argument and the strict type gate does
+    not count a ``reportUnknownArgumentType`` error on the error path.
+    """
+    return type(value).__name__
+
+
 def run_server(
     cli_args,
     host,
@@ -1230,7 +1240,7 @@ def run_server(
             elif not isinstance(general_settings, dict):
                 raise ValueError(
                     "`general_settings` in the proxy config must be a mapping "
-                    f"(got {type(general_settings).__name__}). Check the "
+                    f"(got {_value_type_name(general_settings)}). Check the "
                     "`general_settings:` block in your config file."
                 )
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
