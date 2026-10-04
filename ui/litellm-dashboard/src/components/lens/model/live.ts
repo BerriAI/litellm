@@ -68,13 +68,17 @@ export type StripState =
   | { kind: "reviewing" }
   | { kind: "done" };
 
-export function stripState(job: Pick<Job, "status" | "error" | "stage" | "steps" | "coverage" | "reviews">, model: string): StripState {
+export function stripState(
+  job: Pick<Job, "status" | "error" | "stage" | "steps" | "coverage" | "reviews">,
+  model: string,
+  queued = "Queued, waiting for a worker to pick this up",
+): StripState {
   if (job.status === "failed") return { kind: "failed", message: job.error || "The investigation failed" };
   const stepError = job.steps.findLast((step) => step.kind === "error");
   if (stepError && !job.reviews.length) return { kind: "failed", message: stepError.label };
   if (job.status === "completed" || job.status === "cancelled") return { kind: "done" };
   if (job.reviews.length) return { kind: "reviewing" };
-  if (job.status === "queued") return { kind: "waiting", message: "Queued, waiting for a worker to pick this up" };
+  if (job.status === "queued") return { kind: "waiting", message: queued };
   const { selected } = job.coverage;
   const using = model ? ` with ${model}` : "";
   if (job.stage === "Reading executions" && selected) {
@@ -180,6 +184,16 @@ export function decidedReviews(playback: Pick<Playback, "played" | "current">, v
 
 export function readingStart(job: Pick<Job, "steps" | "created_at">): string {
   return job.steps.find((step) => step.kind === "stage" && step.label === "Reading executions")?.at ?? job.created_at;
+}
+
+export function secondsToFinishReading(
+  job: Pick<Job, "steps" | "created_at" | "reviewed" | "coverage">,
+  now: number,
+): number | null {
+  const remaining = job.coverage.selected - job.reviewed;
+  const elapsed = (now - Date.parse(readingStart(job))) / 1000;
+  if (remaining <= 0 || job.reviewed <= 0 || elapsed <= 0) return null;
+  return Math.ceil(remaining / (job.reviewed / elapsed));
 }
 
 export function liveStats(job: Job, now: number): LiveStats {

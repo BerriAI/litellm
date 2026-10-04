@@ -20,6 +20,7 @@ import {
   queueRows,
   rateLabel,
   reviewKey,
+  secondsToFinishReading,
   shownCount,
   startPlayback,
   stepDuration,
@@ -295,7 +296,10 @@ describe("strip state", () => {
       kind: "waiting",
       message: "Grouping observations…",
     });
-    expect(stripState({ ...base, status: "queued" }, MODEL).kind).toBe("waiting");
+    expect(stripState({ ...base, status: "queued" }, MODEL, "No worker connected.")).toEqual({
+      kind: "waiting",
+      message: "No worker connected.",
+    });
   });
 
   it("shows the job error plainly when the run failed", () => {
@@ -352,6 +356,24 @@ describe("drawer focus", () => {
 
   it("goes back to live when the picked review was dropped by the cap", () => {
     expect(focusedReview(reviews, "gone@x", reviews[1])).toEqual({ review: reviews[1], following: true });
+  });
+});
+
+describe("time left reading", () => {
+  const started = {
+    created_at: "2026-10-03T16:00:00Z",
+    steps: [{ kind: "stage", label: "Reading executions", at: "2026-10-03T16:00:20Z" }] as Job["steps"],
+    coverage: { selected: 328 } as Job["coverage"],
+  };
+  const now = Date.parse("2026-10-03T16:01:00Z");
+
+  it("projects the remaining traces at the rate since reading started", () => {
+    expect(secondsToFinishReading({ ...started, reviewed: 80 }, now)).toBe(124);
+  });
+
+  it("has no estimate before the first review or once every trace is read", () => {
+    expect(secondsToFinishReading({ ...started, reviewed: 0 }, now)).toBeNull();
+    expect(secondsToFinishReading({ ...started, reviewed: 328 }, now)).toBeNull();
   });
 });
 
