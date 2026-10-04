@@ -16,6 +16,7 @@ from pydantic import (
     JsonValue,
     PositiveInt,
     PrivateAttr,
+    TypeAdapter,
     field_validator,
     model_validator,
 )
@@ -46,6 +47,8 @@ from litellm.types.mcp import (
     MCPCredentials,
     MCPTransport,
     MCPTransportType,
+    MCPUpstreamProtocol,
+    validate_mcp_protocol_transport,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
 from litellm.types.proxy.agent_identity import ManagedAgentContext
@@ -475,6 +478,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/search",
         "/search/{search_tool_name}",
         "/v1/search/{search_tool_name}",
+        "/decisions",
+        "/v1/decisions",
         # OCR
         "/ocr",
         "/v1/ocr",
@@ -508,6 +513,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mistral",
         "/typesafe",
         "/laya",
+        "/bespoke",
         "/openrouter",
         "/milvus",
         "/gigachat",
@@ -543,6 +549,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
         "/v1/traces/{trace_id}/spans/{span_id}",
+        "/v1/traces/{trace_id}/spans/{span_id}/error",
     ]
 
     anthropic_routes = [
@@ -1672,6 +1679,16 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         description="Server-managed: set by the endpoint; caller values are overridden.",
     )
 
+    @model_validator(mode="after")
+    def validate_protocol_transport(self) -> "NewMCPServerRequest":
+        validate_mcp_protocol_transport(
+            TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
+                (self.mcp_info or {}).get("protocol_version", "auto")
+            ),
+            self.transport,
+        )
+        return self
+
     @model_validator(mode="before")
     @classmethod
     def validate_transport_fields(cls, values):
@@ -1754,6 +1771,18 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     source_url: str | None = None
     timeout: float | None = None
     max_concurrent_requests: int | None = None
+
+    @model_validator(mode="after")
+    def validate_protocol_transport(self) -> "UpdateMCPServerRequest":
+        if not {"transport", "mcp_info"}.issubset(self.model_fields_set):
+            return self
+        validate_mcp_protocol_transport(
+            TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
+                (self.mcp_info or {}).get("protocol_version", "auto")
+            ),
+            self.transport,
+        )
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -4187,6 +4216,7 @@ class SpendLogsMetadata(TypedDict):
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None
     routing_decision: StandardLoggingRoutingDecision | None
     internal_call_origin: InternalCallOrigin | None
+    litellm_roi_estimator: ReadOnly[NotRequired[bool | None]]
     guardrail_information: list[StandardLoggingGuardrailInformation] | None
     eval_information: Any | None
     status: StandardLoggingPayloadStatus
@@ -5464,6 +5494,17 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
             "'auto_register': auto-create a virtual key and mapping on first encounter."
         ),
     )
+    auto_register_map_existing_key: bool = Field(
+        default=False,
+        description=(
+            "Only used with unregistered_jwt_client_behavior='auto_register'. When True and the virtual key claim "
+            "field is the user_id_jwt_field or user_email_jwt_field, the JWT claim is mapped to a virtual key the "
+            "JWT-resolved user already owns instead of minting a new one. If the user owns several, the most recently created key in the "
+            "JWT-resolved team (or with no team when the JWT resolves none) is chosen among keys that never "
+            "expire, are not blocked, are not Admin UI session keys, were not minted by auto_register, and "
+            "have no allowed_routes or include llm_api_routes. Otherwise a new key is minted as usual."
+        ),
+    )
     routing_overrides: list[JWTRoutingOverride] | None = Field(
         default=None,
         description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",
@@ -5563,6 +5604,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         if issuer_config is not None and issuer_config.virtual_key_claim_field is not None:
             return issuer_config.virtual_key_claim_field
         return self.virtual_key_claim_field
+
+    def is_user_identity_claim(self, claim_field: str, issuer: str | None) -> bool:
+        issuer_config: Final = self.get_issuer_config(issuer)
+        if issuer_config is None:
+            return claim_field in (self.user_id_jwt_field, self.user_email_jwt_field)
+        return claim_field in (
+            issuer_config.user_id_jwt_field or self.user_id_jwt_field,
+            issuer_config.user_email_jwt_field or self.user_email_jwt_field,
+        )
 
     def get_unregistered_jwt_client_behavior(self, issuer: str | None) -> UnregisteredJWTClientBehavior:
         issuer_config: Final = self.get_issuer_config(issuer)

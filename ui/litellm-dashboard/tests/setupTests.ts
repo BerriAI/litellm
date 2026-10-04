@@ -227,3 +227,33 @@ if (typeof window !== "undefined") {
     disconnect() {}
   };
 }
+
+// jsdom lacks the layout and input APIs ProseMirror editors use. Browsers report the selection as an edit's
+// target range; layout calls only need a value of the right shape, since tests do not assert on positions.
+if (typeof InputEvent !== "undefined" && !("getTargetRanges" in InputEvent.prototype)) {
+  Object.defineProperty(InputEvent.prototype, "getTargetRanges", {
+    configurable: true,
+    value: () => {
+      const selection = document.getSelection();
+      return selection && selection.rangeCount > 0 ? [selection.getRangeAt(0)] : [];
+    },
+  });
+}
+if (typeof Range !== "undefined" && !("getClientRects" in Range.prototype)) {
+  Object.defineProperties(Range.prototype, {
+    getClientRects: { configurable: true, value: () => [] },
+    getBoundingClientRect: { configurable: true, value: () => new DOMRect() },
+  });
+}
+// The virtualized runs list renders no rows in a zero-height viewport, and jsdom reports 0 for every offsetHeight.
+if (typeof HTMLElement !== "undefined") {
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.dataset.testid === "runs-table" ? 720 : 0;
+    },
+  });
+}
+if (typeof document !== "undefined" && !("elementFromPoint" in document)) {
+  Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => null });
+}

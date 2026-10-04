@@ -1473,6 +1473,8 @@ from .embeddings.dispatch import *
 from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *
+from .decisions.main import *
+from .tool_loop import ToolLoopMaxRoundsExceeded, arun_tool_loop, run_tool_loop
 from .search.main import *
 from .realtime_api.main import (
     _arealtime,
@@ -1647,6 +1649,9 @@ if TYPE_CHECKING:
     from .llms.jina_ai.rerank.transformation import (
         JinaAIRerankConfig as JinaAIRerankConfig,
     )
+    from .llms.scaleway.rerank.transformation import (
+        ScalewayRerankConfig as ScalewayRerankConfig,
+    )
     from .llms.deepinfra.rerank.transformation import (
         DeepinfraRerankConfig as DeepinfraRerankConfig,
     )
@@ -1779,6 +1784,9 @@ if TYPE_CHECKING:
     )
     from .llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
         AmazonBedrockOpenAIConfig as AmazonBedrockOpenAIConfig,
+    )
+    from .llms.bedrock.chat.chat_completions.transformation import (
+        AmazonBedrockRuntimeChatCompletionsConfig as AmazonBedrockRuntimeChatCompletionsConfig,
     )
     from .llms.bedrock.image_generation.amazon_stability1_transformation import (
         AmazonStabilityConfig as AmazonStabilityConfig,
@@ -2296,6 +2304,7 @@ _AGENT_EXPORTS: Final = frozenset(
         "CodexOptions",
         "OpenCodeOptions",
         "DeepAgentsOptions",
+        "ToolLoopOptions",
     }
 )
 

@@ -1,3 +1,4 @@
+from litellm.proxy._experimental.mcp_server.upstream import resolve_upstream_auth
 import importlib
 import asyncio
 import functools
@@ -98,7 +99,7 @@ async def test_manager_sampling_preserves_explicit_headers_without_ambient_conte
     client.call_tool = AsyncMock(return_value=CallToolResult(content=[]))
     assert legacy_server.get_active_auth_context() is None
     with (
-        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient", return_value=client) as factory,
+        patch("litellm.proxy._experimental.mcp_server.upstream.MCPClient", return_value=client) as factory,
         patch("litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message", sampling),
     ):
         await MCPServerManager()._call_regular_mcp_tool(
@@ -1344,7 +1345,7 @@ class TestMCPServerManager:
                 "ensure_oauth_metadata_discovered",
                 new=ensure_oauth_metadata_discovered,
             ),
-            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient"),
+            patch("litellm.proxy._experimental.mcp_server.upstream.MCPClient"),
         ):
             await manager._create_mcp_client(server)
 
@@ -3903,10 +3904,10 @@ class TestMCPServerManager:
         )
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.resolve_mcp_auth",
+                "litellm.proxy._experimental.mcp_server.upstream.resolve_mcp_auth",
                 new_callable=AsyncMock,
             ) as mock_resolve,
-            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient") as mock_client_cls,
+            patch("litellm.proxy._experimental.mcp_server.upstream.MCPClient") as mock_client_cls,
         ):
             await manager._create_mcp_client(server=server, extra_headers={"Authorization": "Bearer upstream-token"})
         mock_resolve.assert_not_awaited()
@@ -3956,10 +3957,10 @@ class TestMCPServerManager:
         )
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.resolve_mcp_auth",
+                "litellm.proxy._experimental.mcp_server.upstream.resolve_mcp_auth",
                 new_callable=AsyncMock,
             ) as mock_resolve,
-            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient") as mock_client_cls,
+            patch("litellm.proxy._experimental.mcp_server.upstream.MCPClient") as mock_client_cls,
         ):
             await manager._create_mcp_client(
                 server=server,
@@ -3999,10 +4000,10 @@ class TestMCPServerManager:
         )
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.mcp_server_manager.resolve_mcp_auth",
+                "litellm.proxy._experimental.mcp_server.upstream.resolve_mcp_auth",
                 new_callable=AsyncMock,
             ) as mock_resolve,
-            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient") as mock_client_cls,
+            patch("litellm.proxy._experimental.mcp_server.upstream.MCPClient") as mock_client_cls,
         ):
             await manager._create_mcp_client(
                 server=server,
@@ -6723,20 +6724,11 @@ class TestMCPServerManager:
         server.mcp_info = {"server_name": "test-server"}
 
         # Mock tools returned from manager (3 tools, but only 2 are allowed)
-        tool1 = MagicMock()
-        tool1.name = "allowed_tool_1"
-        tool1.description = "This tool is allowed"
-        tool1.input_schema = {}
+        tool1 = MCPTool(name="allowed_tool_1", description="This tool is allowed", inputSchema={})
 
-        tool2 = MagicMock()
-        tool2.name = "blocked_tool"
-        tool2.description = "This tool is not allowed"
-        tool2.input_schema = {}
+        tool2 = MCPTool(name="blocked_tool", description="This tool is not allowed", inputSchema={})
 
-        tool3 = MagicMock()
-        tool3.name = "allowed_tool_2"
-        tool3.description = "This tool is also allowed"
-        tool3.input_schema = {}
+        tool3 = MCPTool(name="allowed_tool_2", description="This tool is also allowed", inputSchema={})
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -6773,20 +6765,11 @@ class TestMCPServerManager:
         server.mcp_info = {"server_name": "test-server"}
 
         # Mock tools returned from manager
-        tool1 = MagicMock()
-        tool1.name = "tool_1"
-        tool1.description = "Tool 1"
-        tool1.input_schema = {}
+        tool1 = MCPTool(name="tool_1", description="Tool 1", inputSchema={})
 
-        tool2 = MagicMock()
-        tool2.name = "tool_2"
-        tool2.description = "Tool 2"
-        tool2.input_schema = {}
+        tool2 = MCPTool(name="tool_2", description="Tool 2", inputSchema={})
 
-        tool3 = MagicMock()
-        tool3.name = "tool_3"
-        tool3.description = "Tool 3"
-        tool3.input_schema = {}
+        tool3 = MCPTool(name="tool_3", description="Tool 3", inputSchema={})
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -6823,15 +6806,9 @@ class TestMCPServerManager:
         server.mcp_info = {"server_name": "test-server"}
 
         # Mock tools returned from manager
-        tool1 = MagicMock()
-        tool1.name = "tool_1"
-        tool1.description = "Tool 1"
-        tool1.input_schema = {}
+        tool1 = MCPTool(name="tool_1", description="Tool 1", inputSchema={})
 
-        tool2 = MagicMock()
-        tool2.name = "tool_2"
-        tool2.description = "Tool 2"
-        tool2.input_schema = {}
+        tool2 = MCPTool(name="tool_2", description="Tool 2", inputSchema={})
 
         # Mock the global_mcp_server_manager._get_tools_from_server
         from litellm.proxy._experimental.mcp_server import rest_endpoints
@@ -14843,7 +14820,8 @@ async def test_debug_resolution_matches_final_header_conflict_winner(
         "none": NoneConfig(),
     }[config]
     try:
-        auth, remaining = await MCPServerManager()._resolve_v2_auth(
+        auth, remaining = await resolve_upstream_auth(
+            root_path="",
             server=MCPServer(
                 server_id="s",
                 name="s",
@@ -16463,7 +16441,7 @@ async def test_client_sampling_does_not_fill_explicit_context_from_another_ambie
             client_ip="192.0.2.99",
         )
         with (
-            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient") as factory,
+            patch("litellm.proxy._experimental.mcp_server.upstream.MCPClient") as factory,
             patch("litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message", sampling),
         ):
             if legacy_factory:
@@ -17206,3 +17184,57 @@ class TestToolCatalogGuard:
             proxy_logging_obj=proxy_logging_obj,
             server=server,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command,args", [(None, []), ("python", None), ("blocked-executable", [])])
+async def test_upstream_preparation_rejects_blocked_or_preserves_incomplete_stdio_config(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str | None,
+    args: list[str] | None,
+) -> None:
+    monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
+    server: Final = MCPServer(server_id="stdio", name="stdio", transport=MCPTransport.stdio, command=command, args=args)
+    if command == "blocked-executable":
+        with pytest.raises(HTTPException) as error:
+            await MCPServerManager()._create_mcp_client(server)
+        assert error.value.status_code == 403
+        assert "not in the allowlist" in error.value.detail
+    else:
+        client: Final = await MCPServerManager()._create_mcp_client(server)
+        assert client.stdio_config is None
+
+
+@pytest.mark.asyncio
+async def test_upstream_preparation_preserves_windows_command_and_caller_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.constants import MCP_NPM_CACHE_DIR
+
+    monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
+    environment: Final = {"PEER_USER": "alice"}
+    server: Final = MCPServer(
+        server_id="stdio", name="stdio", transport=MCPTransport.stdio, command="python.exe", args=[]
+    )
+    client: Final = await MCPServerManager()._create_mcp_client(server, stdio_env=environment)
+    assert client.stdio_config == {
+        "command": "python.exe",
+        "args": [],
+        "env": {"PEER_USER": "alice", "NPM_CONFIG_CACHE": MCP_NPM_CACHE_DIR},
+    }
+    assert environment == {"PEER_USER": "alice"}
+
+
+@pytest.mark.asyncio
+async def test_upstream_preparation_honors_case_sensitive_extra_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server import upstream
+
+    monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
+    monkeypatch.setattr(upstream, "MCP_STDIO_ALLOWED_COMMANDS", frozenset({"CustomRunner"}))
+    server: Final = MCPServer(
+        server_id="custom-stdio", name="custom-stdio", transport=MCPTransport.stdio,
+        command="/opt/tools/CustomRunner", args=[],
+    )
+    client: Final = await MCPServerManager()._create_mcp_client(server)
+    assert client.stdio_config is not None
+    assert client.stdio_config["command"] == "/opt/tools/CustomRunner"

@@ -27,38 +27,41 @@ const RANGE_LABEL_FORMAT = "MMM D, h:mm A";
 export const rangeLabel = (range: TimeWindow): string =>
   `${moment(range.startMs).format(RANGE_LABEL_FORMAT)} to ${moment(range.endMs).format(RANGE_LABEL_FORMAT)}`;
 
-const SEGMENT = "inline-flex h-7 items-center gap-1.5 px-2.5 text-[13px] outline-none focus-visible:bg-accent";
+const SEGMENT = "inline-flex h-7 items-center gap-1.5 px-2.5 text-sm outline-none focus-visible:bg-accent";
 
 interface TimeRangeControlsProps {
   range: TimeWindow;
   rangeHours: number;
   onRangeHoursChange: (hours: number) => void;
   live: boolean;
+  showLive?: boolean;
   onLiveChange: (live: boolean) => void;
-  zoomed: boolean;
-  onResetZoom: () => void;
+  onRefresh: () => void;
+  refreshing: boolean;
 }
 
-/** Joined control group: reset zoom, the actual time range (opens presets), and Live. */
+/** Joined control group: refresh, the actual time range (opens presets), and Live. */
 export function TimeRangeControls({
   range,
   rangeHours,
   onRangeHoursChange,
   live,
+  showLive = true,
   onLiveChange,
-  zoomed,
-  onResetZoom,
+  onRefresh,
+  refreshing,
 }: TimeRangeControlsProps) {
   return (
     <div className="flex items-center gap-1.5">
       <button
         type="button"
-        onClick={onResetZoom}
-        disabled={!zoomed}
-        aria-label="Reset zoom"
-        className="inline-flex size-7 items-center justify-center rounded-md border border-border text-info hover:bg-info/10 disabled:text-muted-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+        onClick={onRefresh}
+        aria-label="Refresh"
+        title="Refresh"
+        aria-busy={refreshing}
+        className="inline-flex size-7 items-center justify-center rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted/60"
       >
-        <RotateCcw className="size-3.5" />
+        <RotateCcw className={cn("size-3.5", refreshing && "animate-spin")} />
       </button>
       <div className="flex items-center divide-x divide-border overflow-hidden rounded-md border border-border bg-card">
         <DropdownMenu>
@@ -76,25 +79,27 @@ export function TimeRangeControls({
               onValueChange={(value: string) => onRangeHoursChange(Number(value))}
             >
               {RANGE_PRESETS.map((preset) => (
-                <DropdownMenuRadioItem key={preset.hours} value={String(preset.hours)} className="text-[13px]">
+                <DropdownMenuRadioItem key={preset.hours} value={String(preset.hours)} className="text-sm">
                   {preset.label}
                 </DropdownMenuRadioItem>
               ))}
             </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
-        <button
-          type="button"
-          aria-pressed={live}
-          onClick={() => onLiveChange(!live)}
-          className={cn(
-            SEGMENT,
-            live ? "bg-info/10 text-info hover:bg-info/15" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {live ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
-          Live
-        </button>
+        {showLive && (
+          <button
+            type="button"
+            aria-pressed={live}
+            onClick={() => onLiveChange(!live)}
+            className={cn(
+              SEGMENT,
+              live ? "bg-info/10 text-info hover:bg-info/15" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {live ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+            Live
+          </button>
+        )}
       </div>
     </div>
   );

@@ -10,7 +10,9 @@ from unittest.mock import Mock
 import pytest
 from fastapi import HTTPException
 
+from litellm.proxy._experimental.mcp_server.contracts import TargetCatalog
 from litellm.proxy._experimental.mcp_server.server_resolution import (
+    MCPServerTargetCatalog,
     ResolutionSource,
     ResolvedMCPServer,
     authorize_mcp_server,
@@ -460,3 +462,94 @@ async def test_missing_alias_does_not_produce_a_resolution() -> None:
     manager: Final = _manager()
     assert await resolve_mcp_server("missing", manager=manager, match_name=True) is None
     manager.name_lookup_spy.assert_called_once_with("missing", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["db", "registry", "temp"])
+@pytest.mark.parametrize("allowed", [False, True])
+async def test_target_catalog_authorizes_canonical_identity(source: ResolutionSource, allowed: bool) -> None:
+    server: Final = _runtime_server()
+    manager: Final = _manager(
+        servers_by_name={"requested-alias": server},
+        allowed_server_ids=(server.server_id,) if allowed else ("requested-alias",),
+    )
+
+    async def database_lookup(server_id: str) -> LiteLLM_MCPServerTable | None:
+        return _table_server(server.server_id)
+
+    async def temporary_lookup(server_id: str) -> MCPServer | None:
+        return server
+
+    catalog: Final[TargetCatalog] = MCPServerTargetCatalog(
+        manager=manager,
+        db_lookup=database_lookup if source == "db" else None,
+        temp_lookup=temporary_lookup if source == "temp" else None,
+        match_name=True,
+    )
+    operation: Final = catalog.resolve(
+        "requested-alias",
+        _auth(),
+        is_admin_view=False,
+        not_found_detail={"error": "missing"},
+        forbidden_detail={"error": "denied"},
+        non_admin_missing="forbidden",
+    )
+    if allowed and source != "temp":
+        result: Final = await operation
+        assert result.table.server_id == server.server_id
+        assert result.source == source
+        assert result.runtime is (None if source == "db" else server)
+    else:
+        with pytest.raises(HTTPException) as error:
+            await operation
+        assert (error.value.status_code, error.value.detail) == (403, {"error": "denied"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "admin,missing,status_code", [(True, "forbidden", 404), (False, "forbidden", 403), (False, "not_found", 404)]
+)
+async def test_target_catalog_preserves_missing_target_policy(
+    admin: bool,
+    missing: Literal["forbidden", "not_found"],
+    status_code: int,
+) -> None:
+    catalog: Final[TargetCatalog] = MCPServerTargetCatalog(manager=_manager())
+    with pytest.raises(HTTPException) as error:
+        await catalog.resolve(
+            "missing",
+            _auth(),
+            is_admin_view=admin,
+            not_found_detail={"error": "missing"},
+            forbidden_detail={"error": "denied"},
+            non_admin_missing=missing,
+        )
+    assert error.value.status_code == status_code
+    assert error.value.detail == {"error": "missing" if status_code == 404 else "denied"}
+
+
+@pytest.mark.asyncio
+async def test_target_catalog_does_not_reuse_admin_authorization_for_another_caller() -> None:
+    server: Final = _runtime_server()
+    manager: Final = _manager(servers_by_id={server.server_id: server})
+    catalog: Final[TargetCatalog] = MCPServerTargetCatalog(manager=manager)
+    admin: Final = await catalog.resolve(
+        server.server_id,
+        UserAPIKeyAuth(user_id="admin"),
+        is_admin_view=True,
+        not_found_detail={"error": "missing"},
+        forbidden_detail={"error": "denied"},
+        non_admin_missing="forbidden",
+    )
+    assert admin.runtime is server
+    with pytest.raises(HTTPException) as error:
+        await catalog.resolve(
+            server.server_id,
+            _auth(),
+            is_admin_view=False,
+            not_found_detail={"error": "missing"},
+            forbidden_detail={"error": "denied"},
+            non_admin_missing="forbidden",
+        )
+    assert (error.value.status_code, error.value.detail) == (403, {"error": "denied"})
+    manager.allowed_servers_spy.assert_called_once_with(_auth())

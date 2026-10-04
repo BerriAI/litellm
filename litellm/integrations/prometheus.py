@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import PROXY_LLM_PROVIDER_FALLBACK, PROXY_REJECTED_BEFORE_ROUTING_KEY
 from litellm.exceptions import (
@@ -45,6 +46,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.organization_repository import OrganizationRepository
@@ -4182,6 +4184,7 @@ class PrometheusLogger(CustomLogger):
                 self._get_remaining_hours_for_budget_reset(budget_reset_at=budget_reset_at)
             )
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def _set_customer_budget_metrics_after_api_request(
         self,
         end_user_id: str | None,

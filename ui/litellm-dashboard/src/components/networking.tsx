@@ -92,10 +92,12 @@ import { decodeToken } from "@/utils/jwtUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
-import type { SkillRegisterRequest } from "./claude_code_plugins/types";
+import type { ListPluginsResponse, SkillRegisterRequest } from "./claude_code_plugins/types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
 import type { ObjectPermission } from "./object_permission_types";
 import type { components } from "@/lib/http/schema";
+import { fetchClient } from "@/lib/http/api";
+import { toAgent, toAgentCard, type Agent, type AgentsResponse } from "./agents/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import type {
   MCPGatewaySessionSelector,
@@ -1031,29 +1033,8 @@ export const teamDeleteCall = async (accessToken: string, teamID: string) => {
   }
 };
 
-export interface UserInfo {
-  user_id: string;
-  user_email: string;
-  user_alias: string | null;
-  user_role: string;
-  spend: number;
-  max_budget: number | null;
-  models: string[];
-  key_count: number;
-  created_at: string;
-  updated_at: string;
-  sso_user_id: string | null;
-  budget_duration: string | null;
-  metadata?: Record<string, unknown> | null;
-}
-
-export type UserListResponse = {
-  page: number;
-  page_size: number;
-  total: number;
-  total_pages: number;
-  users: UserInfo[];
-};
+export type UserListResponse = components["schemas"]["UserListResponse"];
+export type UserInfo = UserListResponse["users"][number];
 
 export const userListCall = async (
   accessToken: string,
@@ -1068,13 +1049,10 @@ export const userListCall = async (
   sortOrder: "asc" | "desc" | null = null,
   organizationIds: string[] | null = null,
   search: string | null = null,
-) => {
-  /**
-   * Get all available teams on proxy
-   */
-  try {
-    const data = (await apiClient.get(`/user/list`, {
-      accessToken,
+): Promise<UserListResponse> => {
+  const { data } = await fetchClient.GET("/user/list", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    params: {
       query: {
         user_ids: userIDs && userIDs.length > 0 ? userIDs.join(",") : undefined,
         page: page || undefined,
@@ -1088,12 +1066,10 @@ export const userListCall = async (
         organization_ids: organizationIds && organizationIds.length > 0 ? organizationIds.join(",") : undefined,
         search: search || undefined,
       },
-    })) as UserListResponse;
-    return data;
-  } catch (error) {
-    console.error("Failed to create key:", error);
-    throw error;
-  }
+    },
+  });
+  if (!data) throw new Error("User list response is empty");
+  return data;
 };
 
 /**
@@ -1999,10 +1975,15 @@ export const agentTraceListCall = async ({
 export const sendOtlpTraceCall = async (accessToken: string, exportRequest: object): Promise<void> =>
   apiClient.post(`/v1/traces`, { accessToken, body: exportRequest });
 
-export const agentTraceCall = async (accessToken: string, traceId: string, traceRef?: string): Promise<Trace> =>
+export const agentTraceCall = async (
+  accessToken: string,
+  traceId: string,
+  traceRef?: string,
+  cursor?: string | null,
+): Promise<Trace> =>
   apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
     accessToken,
-    query: { trace_ref: traceRef || undefined },
+    query: { trace_ref: traceRef || undefined, cursor: cursor ?? undefined, page_size: 200 },
   });
 
 export const agentTraceSpanCall = async (
@@ -2184,7 +2165,7 @@ export const testConnectionRequest = async (
   accessToken: string,
   litellm_params: Record<string, any>,
   model_info: Record<string, any>,
-  mode: string,
+  mode?: string,
 ) => {
   try {
     // Construct the URL based on environment
@@ -4571,77 +4552,28 @@ export const createAgentCall = async (accessToken: string, agentData: any) => {
   }
 };
 
-export interface DiscoveredAgentCard {
-  protocolVersion?: string;
-  name?: string;
-  description?: string;
-  version?: string;
-  url?: string;
-  iconUrl?: string;
-  documentationUrl?: string;
-  defaultInputModes?: string[];
-  defaultOutputModes?: string[];
-  capabilities?: Record<string, any>;
-  skills?: Array<{
-    id?: string;
-    name?: string;
-    description?: string;
-    tags?: string[];
-    examples?: string[];
-    [key: string]: any;
-  }>;
-  provider?: { organization?: string; url?: string };
-  [key: string]: any;
-}
+export type DiscoveredAgentCard = Agent["agent_card_params"];
 
-export interface DiscoverAgentCardResponse {
-  url: string;
+export type DiscoverAgentCardResponse = Omit<components["schemas"]["DiscoverAgentResponse"], "agent_card"> & {
   agent_card: DiscoveredAgentCard;
-}
+};
 
-/**
- * How the backend should locate the upstream agent card.
- *
- * - ``well_known_fallback`` (default): pure A2A — try the three standard
- *   well-known paths under the base URL.
- * - ``langgraph_platform``: LangGraph Platform — hits the canonical
- *   well-known path with an ``assistant_id`` query parameter, because
- *   LangGraph mounts one shared card endpoint per deployment.
- */
-export type DiscoveryMode = "well_known_fallback" | "langgraph_platform";
-
-export interface DiscoverAgentCardOptions {
-  discovery_mode?: DiscoveryMode;
-  /** Mode-specific params. ``langgraph_platform`` requires ``assistant_id``. */
-  params?: Record<string, any>;
-}
+export type DiscoveryMode = components["schemas"]["DiscoveryMode"];
+export type DiscoverAgentCardOptions = Partial<
+  Pick<components["schemas"]["DiscoverAgentRequest"], "discovery_mode" | "params">
+>;
 
 export const discoverAgentCardCall = async (
   accessToken: string,
   url: string,
   options?: DiscoverAgentCardOptions,
 ): Promise<DiscoverAgentCardResponse> => {
-  const endpoint = proxyBaseUrl ? `${proxyBaseUrl}/v1/a2a/discover` : `/v1/a2a/discover`;
-  const body: Record<string, any> = { url };
-  if (options?.discovery_mode) body.discovery_mode = options.discovery_mode;
-  if (options?.params) body.params = options.params;
-
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
+  const { data } = await fetchClient.POST("/v1/a2a/discover", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    body: { url, ...options, discovery_mode: options?.discovery_mode ?? "well_known_fallback" },
   });
-
-  if (!response.ok) {
-    const errorData = await response.text();
-    handleError(errorData);
-    throw new Error(errorData);
-  }
-
-  return (await response.json()) as DiscoverAgentCardResponse;
+  if (!data) throw new Error("Agent discovery response is empty");
+  return { ...data, agent_card: toAgentCard(data.agent_card) };
 };
 
 export const createGuardrailCall = async (accessToken: string, guardrailData: any) => {
@@ -5260,55 +5192,17 @@ export const callMCPTool = async (
 };
 
 export const tagCreateCall = async (accessToken: string, formValues: TagNewRequest): Promise<void> => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/new` : `/tag/new`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify(formValues),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      await handleError(errorData);
-      return;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error("Error creating tag:", error);
-    throw error;
-  }
+  await fetchClient.POST("/tag/new", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    body: formValues,
+  });
 };
 
 export const tagUpdateCall = async (accessToken: string, formValues: TagUpdateRequest): Promise<void> => {
-  try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/update` : `/tag/update`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify(formValues),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      await handleError(errorData);
-      return;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error("Error updating tag:", error);
-    throw error;
-  }
+  await fetchClient.POST("/tag/update", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    body: formValues,
+  });
 };
 
 export const tagInfoCall = async (accessToken: string, tagNames: string[]): Promise<TagInfoResponse> => {
@@ -6024,57 +5918,22 @@ export const getMajorAirlines = async (accessToken: string) => {
   }
 };
 
-export const getAgentsList = async (accessToken: string, healthCheck: boolean = false) => {
-  try {
-    const params = healthCheck ? "?health_check=true" : "";
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents${params}` : `/v1/agents${params}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Failed to get agents list");
-    }
-
-    const data = await response.json();
-    return { agents: data };
-  } catch (error) {
-    console.error("Failed to get agents list:", error);
-    throw error;
-  }
+export const getAgentsList = async (accessToken: string, healthCheck: boolean = false): Promise<AgentsResponse> => {
+  const { data } = await fetchClient.GET("/v1/agents", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    params: { query: { health_check: healthCheck } },
+  });
+  if (!data) throw new Error("Agent list response is empty");
+  return { agents: data.map(toAgent) };
 };
 
-export const getAgentInfo = async (accessToken: string, agentId: string) => {
-  try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents/${agentId}` : `/v1/agents/${agentId}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Failed to get agent info");
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to get agent info:", error);
-    throw error;
-  }
+export const getAgentInfo = async (accessToken: string, agentId: string): Promise<Agent> => {
+  const { data } = await fetchClient.GET("/v1/agents/{agent_id}", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    params: { path: { agent_id: agentId } },
+  });
+  if (!data) throw new Error("Agent response is empty");
+  return toAgent(data);
 };
 
 export type AgentKillSwitchResult = components["schemas"]["AgentKillSwitchResult"];
@@ -7211,34 +7070,16 @@ export const updateUserBanner = async (accessToken: string, banner: UserBannerUp
  * @param accessToken - Admin access token
  * @param enabledOnly - If true, only return enabled plugins (default: false)
  */
-export const getClaudeCodePluginsList = async (accessToken: string, enabledOnly: boolean = false) => {
-  try {
-    const proxyBaseUrl = getProxyBaseUrl();
-    const url = proxyBaseUrl
-      ? `${proxyBaseUrl}/claude-code/plugins?enabled_only=${enabledOnly}`
-      : `/claude-code/plugins?enabled_only=${enabledOnly}`;
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.text();
-      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error("Failed to fetch Claude Code plugins list:", error);
-    throw error;
-  }
+export const getClaudeCodePluginsList = async (
+  accessToken: string,
+  enabledOnly: boolean = false,
+): Promise<ListPluginsResponse> => {
+  const { data } = await fetchClient.GET("/claude-code/plugins", {
+    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
+    params: { query: { enabled_only: enabledOnly } },
+  });
+  if (!data) throw new Error("Plugin list response is empty");
+  return data;
 };
 
 /**
