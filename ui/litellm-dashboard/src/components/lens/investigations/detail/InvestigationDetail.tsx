@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RunsTab } from "./RunsTab";
 import { InvestigationProgress } from "../InvestigationProgress";
-import { StepFeed } from "../StepFeed";
 import { LiveRun } from "../live/LiveRun";
 import { liveJob } from "../../model/live";
 import { RunNowDialog } from "./RunNowDialog";
@@ -75,7 +74,6 @@ export function InvestigationDetail({
     setHistoryOffset,
   } = results;
   const live = liveJob(lens.jobs);
-  const cancel = readOnly ? undefined : () => void update((api) => api.cancelRun(lens.id));
   return (
     <div>
       <section className="min-w-0 space-y-5">
@@ -100,9 +98,14 @@ export function InvestigationDetail({
           )}
         </div>
         <InvestigationSummary lens={lens} connected={connected} />
-        {live && <LiveRun key={live.id} job={live} onCancel={cancel} />}
-        {active && !live && <InvestigationProgress key={active.id} job={active} onCancel={cancel} />}
-        {active && !live && <StepFeed job={active} />}
+        {active && (
+          <InvestigationProgress
+            key={active.id}
+            job={active}
+            onCancel={readOnly ? undefined : () => void update((api) => api.cancelRun(lens.id))}
+          />
+        )}
+        {live && <LiveRun key={live.id} job={live} name={lens.settings.name} />}
         {runNow && (
           <RunNowDialog
             lens={lens}
