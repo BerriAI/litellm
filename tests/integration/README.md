@@ -20,6 +20,8 @@ There is no per-node manifest. A positional argument is a file of the group or a
 
 Provider sentinels currently use the controlled server, not live recordings. The provider shard also runs the existing strict replay controls for changed requests, exhausted interactions, leftover interactions and no provider connection. Future recorded scenarios must use that replay-only implementation; missing recordings cannot fall back to a real provider. The observation endpoint is destructive and the current selection runs serially against one owned upstream
 
+Translation tests in `translation/` compare exact provider requests and LiteLLM responses against a shared fake provider; `translation/README.md` has their rules
+
 Fixtures must contain synthetic data only. Keep private incident records and source documents out of code, fixtures, logs and PR descriptions
 
 Database cases own their temporary schemas, roles, constraints and proxy processes. They prove reader-versus-writer execution with PostgreSQL lock observations, exercise real transaction wait limits and verify rollback after a reached database failure

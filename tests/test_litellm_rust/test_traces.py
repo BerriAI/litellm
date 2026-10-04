@@ -494,10 +494,10 @@ def seeded_trace_api(clickhouse_url: str) -> Iterator[SeededTraceAPI]:
         rebase_spend,
     )
 
-    spends: Final = dict(spend_fixtures())["deeplite_swarm"]
+    spends: Final = dict(spend_fixtures())["openai_agents_swarm"]
     pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spends))
     replays: Final = fixture_replays(TRACE_FIXTURES, time.time_ns() // 1_000_000, "query-api", pattern)
-    swarm: Final = next(replay for replay in replays if replay.name == "deeplite_swarm")
+    swarm: Final = next(replay for replay in replays if replay.name == "openai_agents_swarm")
     rebased: Final = rebase_spend(spends, swarm.offset_ms, swarm.namespace, pattern)
     stamped: Final[tuple[SpendLogRecord, ...]] = tuple(
         {**row, "team_id": "team-a", "api_key": "fixture-key", "user": "fixture-user"} for row in rebased
@@ -537,12 +537,11 @@ def test_fixture_backed_help_examples_execute_through_query_api(seeded_trace_api
     assert {table.name for table in api.help.tables} == {"otel_traces", "spend_logs", "agent_traces_by_key"}
     assert api.help.metadata.error is None
     assert api.help.metadata.sampled_rows == len(api.spends)
-    assert any(field.path == ("synthetic_spend",) for field in api.help.metadata.fields)
+    assert any(field.path == ("fixture_capture", "name") for field in api.help.metadata.fields)
     for example in api.help.examples:
         api.query_example(example.name)
     records: Final = api.query_example("Recent spend records")
     assert {str(row["request_id"]) for row in records} == {row["request_id"] for row in api.spends}
-    assert all(bool(row["synthetic_spend"]) for row in records)
     total: Final = sum(row["spend"] or 0 for row in api.spends)
     recorded: Final = api.query_example("Recorded spend by trace")
     assert len(recorded) == 1
@@ -620,7 +619,7 @@ def captured_trace_api() -> Iterator[SeededTraceAPI]:
         yield from _fixture_trace_api(url, replays, stamped)
 
 
-@pytest.mark.parametrize("name", tuple(name for name, _ in spend_fixtures() if name != "deeplite_swarm"))
+@pytest.mark.parametrize("name", tuple(name for name, _ in spend_fixtures()))
 def test_captured_sdk_cost_survives_seeding_and_is_queryable(name: str, captured_trace_api: SeededTraceAPI) -> None:
     api: Final = captured_trace_api
     rows: Final = tuple(row for row in api.spends if fixture_capture("", row).name == name)

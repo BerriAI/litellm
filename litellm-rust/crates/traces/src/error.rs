@@ -2,6 +2,8 @@
 pub enum Error {
     #[error("invalid OTLP trace payload")]
     InvalidPayload,
+    #[error("{0} must be a positive integer")]
+    InvalidLimit(&'static str),
     #[error("OTLP trace payload exceeds the decoding budget")]
     TooLarge,
     #[error("OTLP token count is outside the storage range")]

@@ -4,15 +4,21 @@ import { createContext, useContext } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 
-export const LensPreviewTarget = createContext<HTMLElement | null | undefined>(undefined);
+export interface LensPreview {
+  /** Header slot for portaled actions; null until it mounts. */
+  readonly target: HTMLElement | null;
+  readonly open?: () => void;
+}
 
-export function LensPreviewButton({ onClick }: { onClick: () => void }) {
-  const target = useContext(LensPreviewTarget);
-  const button = (
-    <Button variant="outline" onClick={onClick}>
+export const LensPreviewContext = createContext<LensPreview | undefined>(undefined);
+
+export function LensPreviewButton() {
+  const preview = useContext(LensPreviewContext);
+  if (!preview?.open || !preview.target) return null;
+  return createPortal(
+    <Button variant="outline" onClick={preview.open}>
       Preview sample
-    </Button>
+    </Button>,
+    preview.target,
   );
-  if (target === null) return null;
-  return target ? createPortal(button, target) : button;
 }

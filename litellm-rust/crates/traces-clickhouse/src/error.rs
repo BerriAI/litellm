@@ -2,6 +2,8 @@
 pub enum Error {
     #[error("invalid ClickHouse insert row")]
     InvalidRow,
+    #[error("{0} must be a positive integer")]
+    InvalidLimit(&'static str),
     #[error("invalid ClickHouse insert table")]
     InvalidTable,
     #[error("database must be a nonempty SQL identifier and retention must be positive")]
@@ -72,6 +74,7 @@ impl Error {
             }
             Self::Busy => FailureCode::Busy,
             Self::InvalidRow
+            | Self::InvalidLimit(_)
             | Self::InvalidTable
             | Self::InvalidSchema
             | Self::InvalidQuery
@@ -81,6 +84,7 @@ impl Error {
             | Self::Decode(_)
             | Self::Storage(
                 StorageError::InvalidRow
+                | StorageError::InvalidLimit(_)
                 | StorageError::InvalidTable
                 | StorageError::InvalidSchema
                 | StorageError::EmptySql
