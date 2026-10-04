@@ -299,6 +299,7 @@ export function createLensDemoData(now = Date.now()) {
         steps: [],
         reviews: [],
         reviewed: 0,
+        reading: [],
         trigger: "schedule" as const,
         error: "",
         cost: sample.length * 0.012,
