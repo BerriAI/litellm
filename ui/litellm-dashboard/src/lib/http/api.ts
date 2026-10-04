@@ -19,6 +19,12 @@ const middleware: Middleware = {
     if (token && !request.headers.has(getAuthHeaderName())) {
       request.headers.set(getAuthHeaderName(), `Bearer ${token}`);
     }
+    // openapi-fetch omits Content-Type on a bodyless GET, but the local dev rewrite in
+    // next.config.mjs (LENS_DEV_PROXY_URL) uses that header to tell an API call apart from a
+    // same-path dashboard page (e.g. GET /lens collides with the Lens page route) and send it to
+    // the real proxy instead of letting Next.js serve its own page HTML. Setting it unconditionally
+    // keeps that signal regardless of method or body.
+    request.headers.set("Content-Type", "application/json");
   },
   async onResponse({ response }) {
     if (response.ok) return response;

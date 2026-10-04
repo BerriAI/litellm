@@ -1,5 +1,8 @@
 import { ApiError } from "@/lib/http/client";
-import type { TracesApi } from "@/components/lens/traces/api";
+import type { TimeRange, TracesApi } from "@/components/lens/traces/api";
+import { filterRuns, RUN_INDEX } from "@/components/lens/traces/list/runSearch/runQuery";
+import type { TraceHistogram, TraceSummary } from "@/components/lens/traces/types";
+import { traceAgentNames } from "@/components/lens/traces/utils";
 import type { LensServices } from "../LensServices";
 import type { LensApi } from "../service";
 import { createLensDemoData, type LensDemoData } from "./fixtures";
@@ -38,21 +41,62 @@ function demoLensApi(data: LensDemoData): LensApi {
   };
 }
 
+const startedWithin = (run: TraceSummary, range: TimeRange): boolean => {
+  const startMs = Date.parse(run.start_time);
+  return startMs >= range.startMs && startMs < range.endMs;
+};
+
+/** Runs per equal-width slice of the window, the shape the server's histogram returns. */
+export function demoHistogram(runs: readonly TraceSummary[], range: TimeRange, buckets: number): TraceHistogram {
+  const width = (range.endMs - range.startMs) / buckets;
+  const placed = runs.map((run) => ({
+    index: Math.floor((Date.parse(run.start_time) - range.startMs) / width),
+    failed: run.error_count > 0,
+    agent: traceAgentNames(run)[0] ?? run.service,
+  }));
+  return {
+    buckets: Array.from({ length: buckets }, (_, index) => {
+      const hits = placed.filter((run) => run.index === index);
+      const agents = [...new Set(hits.filter((run) => !run.failed).map((run) => run.agent))].sort();
+      return {
+        start_ms: range.startMs + index * width,
+        end_ms: range.startMs + (index + 1) * width,
+        total: hits.length,
+        failed: hits.filter((run) => run.failed).length,
+        agents: agents.map((agent) => ({
+          agent,
+          runs: hits.filter((run) => !run.failed && run.agent === agent).length,
+        })),
+      };
+    }),
+  };
+}
+
 function demoTracesApi(data: LensDemoData): TracesApi {
   const run = (traceId: string) => data.runs.find(({ trace }) => trace.summary.trace_id === traceId);
+  const summaries = data.runs.map((item) => item.trace.summary);
+  const matching = (range: TimeRange, q: string) =>
+    filterRuns(
+      summaries.filter((summary) => startedWithin(summary, range)),
+      q,
+    );
   return {
+    scope: "demo",
     live: false,
     handoff: (traceId, spanId) => {
       const found = run(traceId);
       const step = spanId ? found?.details.find((span) => span.span_id === spanId) : found;
       return { text: JSON.stringify(step, null, 2), copied: spanId ? "Step copied" : "Trace copied" };
     },
-    list: async ({ startMs, endMs }) => ({
-      data: data.runs
-        .map((item) => item.trace.summary)
-        .filter((trace) => Date.parse(trace.start_time) >= startMs && Date.parse(trace.start_time) <= endMs),
-      next_cursor: null,
-    }),
+    list: async ({ startMs, endMs, q }) => ({ data: matching({ startMs, endMs }, q), next_cursor: null }),
+    histogram: async (range, q, buckets) => demoHistogram(matching(range, q), range, buckets),
+    values: async (field, contains, range) => {
+      const read = field in RUN_INDEX.read ? RUN_INDEX.read[field as keyof typeof RUN_INDEX.read] : null;
+      if (!read) return [];
+      const needle = contains.toLowerCase();
+      const values = matching(range, "").flatMap(read);
+      return [...new Set(values)].filter((value) => value && value.toLowerCase().includes(needle)).sort();
+    },
     anyRecorded: async () => data.runs.length > 0,
     trace: (traceId) => found(run(traceId)?.trace),
     span: (traceId, spanId) => found(run(traceId)?.details.find((span) => span.span_id === spanId)),

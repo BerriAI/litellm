@@ -3,7 +3,6 @@
 import moment from "moment";
 import { useMemo, useState } from "react";
 
-import { filterRuns } from "./runSearch/runQuery";
 import { RunsToolbar } from "./runSearch/RunsToolbar";
 import { Inspector } from "@/components/shared/Inspector";
 import { Button } from "@/components/ui/button";
@@ -20,18 +19,13 @@ import {
 import type { TraceSummary } from "../types";
 import { RunView } from "../detail/run/RunView";
 import { TimeRangeControls } from "./TimeRangeControls";
-import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
+import { TracesTimeline } from "./TracesTimeline";
 import { TracingSetupCard } from "../../onboarding/tracing/TracingSetupCard";
 import { useTracesLive } from "../api";
 import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
+import { useTraceHistogram } from "./useTraceHistogram";
 
 const DRAWER_WIDTH_KEY = "litellm.agentTraces.drawerWidth";
-
-const filterByWindow = (runs: TraceSummary[], range: TimeWindow): TraceSummary[] =>
-  runs.filter((run) => {
-    const t = moment(run.start_time).valueOf();
-    return t >= range.startMs && t < range.endMs;
-  });
 
 export interface TimeControls {
   rangeHours: number;
@@ -97,10 +91,11 @@ export function AgentTracesSection({
   const [showSetup, setShowSetup] = useState(false);
   const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
-  const traceQuery = { accessToken, startTime, endTime, isCustomDate, isLiveTail, enabled: isActive };
+  const traceQuery = { accessToken, startTime, endTime, isCustomDate, isLiveTail, enabled: isActive, q: query, zoom };
   const traces = useAgentTraces(traceQuery);
-  const setup = useTracingSetup(traces, isActive, rangeChanged);
-  const checkHistory = setup.isEmpty && !rangeChanged;
+  const narrowed = rangeChanged || zoom !== null || query.trim() !== "";
+  const setup = useTracingSetup(traces, isActive, narrowed);
+  const checkHistory = setup.isEmpty && !narrowed;
   const history = useTraceAvailability(accessToken, isActive && checkHistory && setup.disabledDetail == null);
 
   const checkTraces = () => {
@@ -114,8 +109,8 @@ export function AgentTracesSection({
     () => ({ startMs: traceWindowStartMs(startTime, endTime, isCustomDate, endMs), endMs }),
     [startTime, endTime, isCustomDate, endMs],
   );
-  const filtered = useMemo(() => filterRuns(traces.traces, query), [traces.traces, query]);
-  const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
+  const buckets = useTraceHistogram(accessToken, range, query, isActive);
+  const runs = traces.traces;
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
 
   const changeRange = (hours: number, apply: (hours: number) => void) => {
@@ -196,7 +191,7 @@ export function AgentTracesSection({
             />
           )}
         </RunsToolbar>
-        <TracesTimeline runs={filtered} range={range} selection={zoom} onSelect={setZoom} />
+        <TracesTimeline buckets={buckets} range={range} selection={zoom} onSelect={setZoom} />
         <AgentTracesTable
           traces={runs}
           isLoading={traces.isLoading || (checkHistory && history.isLoading)}

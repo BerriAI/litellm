@@ -9,12 +9,20 @@ import {
   apiClient,
   getProxyBaseUrl,
 } from "../../networking";
-import type { SpanDetail, SpanErrorPage, Trace, TracePage } from "./types";
+import type { RunField, SpanDetail, SpanErrorPage, Trace, TraceHistogram, TracePage } from "./types";
 
-export interface TraceWindow {
+export interface TimeRange {
   readonly startMs: number;
   readonly endMs: number;
+}
+
+export interface TraceWindow extends TimeRange {
   readonly cursor?: string | null;
+}
+
+/** One page of the runs list: the window, the `q` search the server applies, and where to resume. */
+export interface RunListRequest extends TraceWindow {
+  readonly q: string;
 }
 
 export interface TraceHandoff {
@@ -23,10 +31,14 @@ export interface TraceHandoff {
 }
 
 export interface TracesApi {
+  /** Partitions query caches between backends (one token, or the demo). */
+  readonly scope: string;
   /** False for a fixed snapshot: nothing new arrives, so live tail and tracing setup don't apply. */
   readonly live: boolean;
   handoff(traceId: string, spanId?: string | null, traceRef?: string): TraceHandoff;
-  list(window: TraceWindow): Promise<TracePage>;
+  list(request: RunListRequest): Promise<TracePage>;
+  histogram(range: TimeRange, q: string, buckets: number): Promise<TraceHistogram>;
+  values(field: RunField, contains: string, range: TimeRange): Promise<readonly string[]>;
   anyRecorded(): Promise<boolean>;
   trace(traceId: string, traceRef?: string, cursor?: string | null): Promise<Trace>;
   span(traceId: string, spanId: string, traceRef?: string): Promise<SpanDetail>;
@@ -46,12 +58,25 @@ export const agentHandoffText = (traceId: string, spanId?: string | null, traceR
 
 export function liveTracesApi(accessToken: string): TracesApi {
   return {
+    scope: accessToken,
     live: true,
     handoff: (traceId, spanId, traceRef) => ({
       text: agentHandoffText(traceId, spanId, traceRef),
       copied: "Command copied",
     }),
-    list: (window) => agentTraceListCall({ accessToken, ...window }),
+    list: (request) => agentTraceListCall({ accessToken, ...request }),
+    histogram: (range, q, buckets) =>
+      apiClient.get<TraceHistogram>("/v1/traces/histogram", {
+        accessToken,
+        query: { start_ms: range.startMs, end_ms: range.endMs, q: q || undefined, buckets },
+      }),
+    values: async (field, contains, range) => {
+      const found = await apiClient.get<{ values: string[] }>(`/v1/traces/values/${field}`, {
+        accessToken,
+        query: { start_ms: range.startMs, end_ms: range.endMs, contains: contains || undefined },
+      });
+      return found.values;
+    },
     anyRecorded: async () => {
       const page = await apiClient.get<TracePage>("/v1/traces", { accessToken, query: { start_ms: 0 } });
       return page.data.length > 0;

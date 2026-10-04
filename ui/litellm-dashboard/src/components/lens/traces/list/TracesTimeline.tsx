@@ -2,51 +2,27 @@
 
 import { X } from "lucide-react";
 import moment from "moment";
-import { useMemo, useRef, useState, type RefObject } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { useResizeObserver } from "usehooks-ts";
 
 import { DotFieldCanvas, DotFieldRoot } from "@/components/shared/dotField/DotField";
 import type { DotBand, DotColumn } from "@/components/shared/dotField/dots";
 import { cn } from "@/lib/cva.config";
 
-import type { TraceSummary } from "../types";
-import { traceAgentNames } from "../utils";
-
-const BUCKETS = 60;
+export const BUCKETS = 60;
 const TICKS = 6;
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const EDGE_FORMAT = "MMM DD, HH:mm";
 
-export interface TimeWindow {
-  startMs: number;
-  endMs: number;
-}
+import type { TimeRange as TimeWindow } from "../api";
+
+export type { TimeWindow };
 
 export interface Bucket extends DotColumn {
   startMs: number;
   endMs: number;
-}
-
-/** Run counts per equal-width time bucket across the window; runs outside it are dropped. */
-export function bucketRuns(runs: readonly TraceSummary[], range: TimeWindow, buckets = BUCKETS): Bucket[] {
-  const width = (range.endMs - range.startMs) / buckets;
-  const placed = runs.map((run) => ({
-    index: Math.floor((moment(run.start_time).valueOf() - range.startMs) / width),
-    failed: run.error_count > 0,
-    agent: traceAgentNames(run)[0] ?? "",
-  }));
-  return Array.from({ length: buckets }, (_, i) => {
-    const hits = placed.filter((p) => p.index === i);
-    return {
-      startMs: range.startMs + i * width,
-      endMs: range.startMs + (i + 1) * width,
-      total: hits.length,
-      failed: hits.filter((p) => p.failed).length,
-      series: hits.filter((p) => !p.failed).map((p) => p.agent),
-    };
-  });
 }
 
 /** Compact window length, Logfire-style: "45m", "6h 12m", "7d", "152d 23h". */
@@ -72,7 +48,7 @@ const tickShift = (t: number): string => {
 };
 
 interface TracesTimelineProps {
-  runs: readonly TraceSummary[];
+  buckets: readonly Bucket[];
   range: TimeWindow;
   selection: TimeWindow | null;
   onSelect: (selection: TimeWindow | null) => void;
@@ -232,8 +208,7 @@ function TickAxis({ range }: { range: TimeWindow }) {
 }
 
 /** Histogram of runs over the window. Drag to select; drag the bracket or its edges to adjust; Esc clears. */
-export function TracesTimeline({ runs, range, selection, onSelect }: TracesTimelineProps) {
-  const buckets = useMemo(() => bucketRuns(runs, range), [runs, range]);
+export function TracesTimeline({ buckets, range, selection, onSelect }: TracesTimelineProps) {
   const [hover, setHover] = useState<number | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [draft, setDraft] = useState<Band | null>(null);

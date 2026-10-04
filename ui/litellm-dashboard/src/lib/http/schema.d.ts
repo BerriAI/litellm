@@ -8990,6 +8990,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/values/{field}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Lens Values */
+        get: operations["list_lens_values_lens_values__field__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/watch-all": {
         parameters: {
             query?: never;
@@ -22616,6 +22633,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/traces/histogram": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Agent Trace Histogram */
+        get: operations["agent_trace_histogram_v1_traces_histogram_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/traces/query": {
         parameters: {
             query?: never;
@@ -22642,6 +22676,23 @@ export interface paths {
         };
         /** Help Agent Trace Queries */
         get: operations["help_agent_trace_queries_v1_traces_query_help_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces/values/{field}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Agent Trace Values */
+        get: operations["agent_trace_values_v1_traces_values__field__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -26052,6 +26103,13 @@ export interface components {
             updated_at?: string | null;
             /** Updated By */
             updated_by?: string | null;
+        };
+        /** AgentRuns */
+        AgentRuns: {
+            /** Agent */
+            agent: string;
+            /** Runs */
+            runs: number;
         };
         /**
          * AgentSkill
@@ -33139,6 +33197,19 @@ export interface components {
              * @description Token for Vault token-based authentication
              */
             vault_token?: string | null;
+        };
+        /** HistogramBucket */
+        HistogramBucket: {
+            /** Agents */
+            agents: components["schemas"]["AgentRuns"][];
+            /** End Ms */
+            end_ms: number;
+            /** Failed */
+            failed: number;
+            /** Start Ms */
+            start_ms: number;
+            /** Total */
+            total: number;
         };
         /** Hyperparameters */
         Hyperparameters: {
@@ -44911,6 +44982,11 @@ export interface components {
             /** Start */
             start?: string | null;
         };
+        /** RunValues */
+        RunValues: {
+            /** Values */
+            values: string[];
+        };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
             /** Costcenter */
@@ -47759,6 +47835,11 @@ export interface components {
             /** Spans */
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
+        };
+        /** TraceHistogram */
+        TraceHistogram: {
+            /** Buckets */
+            buckets: components["schemas"]["HistogramBucket"][];
         };
         /** TracePage */
         TracePage: {
@@ -62954,7 +63035,10 @@ export interface operations {
     };
     list_lenses_lens_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Free text and key:value filters, e.g. `status:failed -schedule:paused`. Keys: name, agent, status, schedule. `*` globs and a leading `-` negates */
+                q?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -62968,6 +63052,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LensList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -63065,6 +63158,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Sample"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_lens_values_lens_values__field__get: {
+        parameters: {
+            query?: {
+                contains?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                field: "name" | "agent" | "status" | "schedule";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
             /** @description Validation Error */
@@ -81301,11 +81428,13 @@ export interface operations {
     list_agent_traces_v1_traces_get: {
         parameters: {
             query?: {
+                /** @description Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. Keys: name, agent, status, model, input, trace_id. `*` globs and a leading `-` negates */
+                q?: string;
+                cursor?: string | null;
                 /** @description Window start, unix ms. Default: 24h ago */
                 start_ms?: number | null;
                 /** @description Window end, unix ms. Default: now */
                 end_ms?: number | null;
-                cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -81349,6 +81478,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    agent_trace_histogram_v1_traces_histogram_get: {
+        parameters: {
+            query?: {
+                /** @description Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. Keys: name, agent, status, model, input, trace_id. `*` globs and a leading `-` negates */
+                q?: string;
+                buckets?: number;
+                /** @description Window start, unix ms. Default: 24h ago */
+                start_ms?: number | null;
+                /** @description Window end, unix ms. Default: now */
+                end_ms?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceHistogram"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -81402,6 +81568,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TraceQueryHelp"];
+                };
+            };
+        };
+    };
+    agent_trace_values_v1_traces_values__field__get: {
+        parameters: {
+            query?: {
+                contains?: string;
+                limit?: number;
+                /** @description Window start, unix ms. Default: 24h ago */
+                start_ms?: number | null;
+                /** @description Window end, unix ms. Default: now */
+                end_ms?: number | null;
+            };
+            header?: never;
+            path: {
+                field: "name" | "agent" | "status" | "model" | "input" | "trace_id";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunValues"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

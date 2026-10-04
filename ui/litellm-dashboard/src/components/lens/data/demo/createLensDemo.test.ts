@@ -1,7 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
-import { createLensDemo } from "./createLensDemo";
+import { createLensDemo, demoHistogram } from "./createLensDemo";
 import { createLensDemoData } from "./fixtures";
 import { evidenceTarget } from "../../model/findings";
+import type { TraceSummary } from "../../traces/types";
+
+const HOUR = 3600 * 1000;
+const START = Date.UTC(2026, 8, 30, 0, 0, 0);
+const range = { startMs: START, endMs: START + 10 * HOUR };
+
+const run = (offsetMs: number, errorCount = 0, agent = "researcher"): TraceSummary =>
+  ({
+    trace_id: `t${offsetMs}`,
+    start_time: new Date(START + offsetMs).toISOString(),
+    error_count: errorCount,
+    agent_names: [agent],
+    service: "svc",
+  }) as TraceSummary;
+
+describe("demoHistogram", () => {
+  it("splits the window into equal buckets that tile it exactly", () => {
+    const { buckets } = demoHistogram([], range, 10);
+    expect(buckets).toHaveLength(10);
+    expect(buckets[0].start_ms).toBe(range.startMs);
+    expect(buckets.at(-1)?.end_ms).toBe(range.endMs);
+    expect(buckets[3]).toMatchObject({ start_ms: START + 3 * HOUR, end_ms: START + 4 * HOUR, total: 0, failed: 0 });
+  });
+
+  it("puts each run in the bucket covering its start time", () => {
+    const { buckets } = demoHistogram([run(0), run(30 * 60 * 1000), run(2.5 * HOUR), run(10 * HOUR - 1)], range, 10);
+    expect(buckets.map((b) => b.total)).toEqual([2, 0, 1, 0, 0, 0, 0, 0, 0, 1]);
+  });
+
+  it("counts failed runs apart and groups the rest by agent", () => {
+    const { buckets } = demoHistogram(
+      [run(HOUR, 3), run(HOUR + 1, 0, "writer"), run(HOUR + 2, 1), run(HOUR + 3), run(HOUR + 4, 0, "writer")],
+      range,
+      10,
+    );
+    expect(buckets[1]).toMatchObject({
+      total: 5,
+      failed: 2,
+      agents: [
+        { agent: "researcher", runs: 1 },
+        { agent: "writer", runs: 2 },
+      ],
+    });
+  });
+});
 
 describe("Lens demo data", () => {
   it("links every finding to the quoted original step and assessed run", () => {
@@ -57,8 +102,8 @@ describe("Lens demo data", () => {
     const network = vi.spyOn(globalThis, "fetch");
     const now = Date.now();
     const services = createLensDemo(now);
-    const all = await services.traces.list({ startMs: 0, endMs: now });
-    const recent = await services.traces.list({ startMs: now - 3600_000, endMs: now });
+    const all = await services.traces.list({ startMs: 0, endMs: now + 1, q: "" });
+    const recent = await services.traces.list({ startMs: now - 3600_000, endMs: now + 1, q: "" });
     expect(recent.data.length).toBeGreaterThan(0);
     expect(recent.data.length).toBeLessThan(all.data.length);
     expect(recent.data.every((trace) => Date.parse(trace.start_time) >= now - 3600_000)).toBe(true);

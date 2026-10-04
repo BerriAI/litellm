@@ -195,4 +195,12 @@ describe("typed api client middleware", () => {
 
     expect(onError).not.toHaveBeenCalled();
   });
+
+  it("sends Content-Type: application/json on a bodyless GET", async () => {
+    const { fetch, requests } = capturingFetch(jsonResponse(200, { data: [] }));
+
+    await fetchClient.GET("/model_group/info", { fetch });
+
+    expect(requests[0].headers.get("Content-Type")).toBe("application/json");
+  });
 });

@@ -1961,14 +1961,16 @@ export const agentTraceListCall = async ({
   accessToken,
   startMs,
   endMs,
+  q,
   cursor,
 }: {
   accessToken: string;
   startMs: number;
   endMs: number;
+  q: string;
   cursor?: string | null;
 }): Promise<TracePage> => {
-  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined };
+  const query = { start_ms: startMs, end_ms: endMs, q: q || undefined, cursor: cursor ?? undefined };
   return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
 };
 

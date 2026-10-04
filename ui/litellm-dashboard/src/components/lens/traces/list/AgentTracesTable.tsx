@@ -205,8 +205,7 @@ export function AgentTracesTable({
 }: AgentTracesTableProps) {
   const settled = !isLoading && !error;
   const isEmpty = settled && !hasMore && traces.length === 0;
-  const canContinue = settled && hasMore;
-  const autoContinue = canContinue && traces.length > 0;
+  const autoContinue = settled && hasMore && traces.length > 0;
   const tableOptions: TableOptions<TraceSummary> = {
     data: traces,
     columns: RUN_COLUMNS,
@@ -244,14 +243,6 @@ export function AgentTracesTable({
               Retry
             </Button>
           )}
-        </div>
-      )}
-      {canContinue && traces.length === 0 && (
-        <div className="flex items-center justify-center gap-3 py-16 text-xs text-muted-foreground">
-          <span>No loaded runs match these filters.</span>
-          <Button size="xs" variant="outline" disabled={isFetching} onClick={onLoadMore}>
-            Load older runs
-          </Button>
         </div>
       )}
       {isEmpty && <EmptyRuns rangeEmpty={rangeEmpty} onSetUpTracing={onSetUpTracing} />}
