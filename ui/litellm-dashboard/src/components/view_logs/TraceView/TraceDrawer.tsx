@@ -341,7 +341,7 @@ function RunBody({ trace, accessToken, selection, embedded }: RunBodyProps) {
         }
       />
       {detailOpen && (
-        <div className="min-h-0 min-w-0 animate-slide-left motion-reduce:animate-none">
+        <div className="min-h-0 min-w-0">
           <DetailPane
             trace={trace}
             row={selectedRow}
@@ -440,7 +440,7 @@ export function RunView({ traceId, traceRef, selection, accessToken, onBack, emb
       onValueChange={(value) => selection.setView(value as RunSelection["view"])}
       className={cn(
         "@container/trace flex flex-1 flex-col gap-0 overflow-hidden bg-background",
-        embedded ? "min-h-0 animate-view-fade-in motion-reduce:animate-none" : "min-h-[560px] border-y border-border",
+        embedded ? "min-h-0" : "min-h-[560px] border-y border-border",
       )}
       data-testid="run-view"
     >

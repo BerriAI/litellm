@@ -113,7 +113,7 @@ function SpanPane({
   const tokens = span.input_tokens + span.output_tokens;
   return (
     <aside
-      className="flex h-full min-w-0 animate-view-fade-in flex-col bg-background pt-4 text-[13px] text-foreground motion-reduce:animate-none"
+      className="flex h-full min-w-0 flex-col bg-background pt-4 text-[13px] text-foreground"
       aria-label="Span details"
     >
       <PaneHeader
@@ -187,7 +187,7 @@ function GroupPane({
   const handoff = useTracesApi(accessToken).handoff(trace.summary.trace_id, sample, trace.summary.trace_ref);
   return (
     <aside
-      className="flex h-full min-w-0 animate-view-fade-in flex-col bg-background pt-4 text-[13px] text-foreground motion-reduce:animate-none"
+      className="flex h-full min-w-0 flex-col bg-background pt-4 text-[13px] text-foreground"
       aria-label="Group details"
     >
       <PaneHeader
