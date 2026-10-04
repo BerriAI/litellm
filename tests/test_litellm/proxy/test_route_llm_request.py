@@ -511,6 +511,41 @@ async def test_route_request_with_router_settings_override_and_api_key():
     assert "model_group_alias" not in call_kwargs
 
 
+@pytest.mark.asyncio
+async def test_route_request_with_router_settings_override_and_api_key_real_router():
+    import litellm
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "openai/gpt-3.5-turbo",
+                    "api_key": "fake",
+                    "mock_response": "real-router-success",
+                },
+            }
+        ]
+    )
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "api_key": "sk-user-test-key",
+        "router_settings_override": {
+            "num_retries": 3,
+            "timeout": 15,
+        },
+    }
+
+    coroutine = await route_request(data, router, None, "acompletion")
+    response = await coroutine
+
+    assert response.choices[0].message.content == "real-router-success"
+    assert "router_settings_override" not in data
+    assert data["num_retries"] == 3
+    assert data["timeout"] == 15
+
+
 def test_gated_mock_params_cover_mock_router_testing_params():
     """``GATED_MOCK_PARAM_NAMES`` is hardcoded to avoid a cyclic import
     against ``litellm.types.router``. This test guards against drift — if a
