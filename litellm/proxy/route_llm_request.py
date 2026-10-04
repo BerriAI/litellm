@@ -245,7 +245,7 @@ def _find_missing_required_body_param(
     if not missing_present_params:
         return None
     candidate_litellm_params: Final = _candidate_deployment_litellm_params(data, llm_router)
-    router_default_litellm_params: Final = _router_default_litellm_params(llm_router)
+    router_default_litellm_params: Final = _router_default_litellm_params(route_type, data, llm_router)
     missing_param: Final = next(
         (
             param
@@ -260,12 +260,30 @@ def _find_missing_required_body_param(
     return MissingBodyParam(name=missing_param, model_deployments_loaded=bool(candidate_litellm_params))
 
 
-def _router_default_litellm_params(llm_router: LitellmRouter | None) -> Mapping[str, object]:
-    # The router merges default_litellm_params into kwargs only during dispatch, after this
-    # route-entry check, so a router-wide default counts as supplying the param; None-valued
-    # defaults are skipped by that merge and therefore do not count here either.
-    defaults: Final[Mapping[str, object] | None] = getattr(llm_router, "default_litellm_params", None)
-    return defaults if isinstance(defaults, Mapping) else {}
+_ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE: Final[frozenset[str]] = frozenset(
+    {"asearch", "acreate_agent", "acreate_eval", "acreate_run"}
+)
+
+
+def _router_default_litellm_params(
+    route_type: str,
+    data: Mapping[str, object],
+    llm_router: LitellmRouter | None,
+) -> Mapping[str, object]:
+    # Mirror exactly the defaults the dispatching router will merge at dispatch time:
+    # user_config requests dispatch on their own throwaway Router, and the listed route
+    # types (plus model-less direct dispatch) never pass through the router's merge.
+    user_config: Final[Mapping[str, object] | None] = (
+        data.get("user_config") if isinstance(data.get("user_config"), Mapping) else None
+    )
+    if user_config is not None:
+        defaults: Final[Mapping[str, object] | None] = user_config.get("default_litellm_params")
+        return defaults if isinstance(defaults, Mapping) else {}
+    model_name: Final = data.get("model")
+    if route_type in _ROUTE_TYPES_WITHOUT_ROUTER_DEFAULTS_MERGE or not isinstance(model_name, str) or not model_name:
+        return {}
+    router_defaults: Final[Mapping[str, object] | None] = getattr(llm_router, "default_litellm_params", None)
+    return router_defaults if isinstance(router_defaults, Mapping) else {}
 
 
 def _candidate_deployment_litellm_params(
