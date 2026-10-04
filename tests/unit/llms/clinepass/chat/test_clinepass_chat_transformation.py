@@ -8,6 +8,7 @@ shipped as dead code.
 """
 
 import json
+from typing import Final
 from unittest.mock import patch
 
 import httpx
@@ -56,6 +57,69 @@ def _response(payload: dict, url: str = "https://api.cline.bot/api/v1/chat/compl
 def _clinepass_env(monkeypatch):
     monkeypatch.setenv("CLINEPASS_API_KEY", API_KEY)
     monkeypatch.delenv("CLINEPASS_API_BASE", raising=False)
+
+
+@pytest.fixture
+def unrelated_credentials(monkeypatch):
+    for env_name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.setenv(env_name, f"sk-unrelated-{env_name}")
+    for attribute in ("api_key", "openai_key", "anthropic_key"):
+        monkeypatch.setattr(litellm, attribute, f"sk-unrelated-{attribute}")
+
+
+@pytest.mark.parametrize("credential_source", ["missing", "environment", "explicit"])
+@pytest.mark.parametrize("custom_llm_provider", [None, "clinepass"])
+def test_chat_sends_only_clinepass_credentials(
+    monkeypatch, unrelated_credentials, credential_source, custom_llm_provider
+):
+    if credential_source == "missing":
+        monkeypatch.delenv("CLINEPASS_API_KEY", raising=False)
+    explicit_key: Final = "cp-request-key" if credential_source == "explicit" else None
+    captured = {}
+
+    def fake_post(self, url, *args, **kwargs):
+        captured["url"] = str(url)
+        captured["headers"] = httpx.Headers(kwargs["headers"])
+        return _response(ENVELOPED_COMPLETION)
+
+    with patch.object(HTTPHandler, "post", fake_post):
+        response = litellm.completion(
+            model="deepseek-v4-flash" if custom_llm_provider else "clinepass/deepseek-v4-flash",
+            custom_llm_provider=custom_llm_provider,
+            api_key=explicit_key,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+
+    expected_key: Final = explicit_key or (API_KEY if credential_source == "environment" else None)
+    assert captured["url"] == "https://api.cline.bot/api/v1/chat/completions"
+    assert captured["headers"].get("authorization") == (f"Bearer {expected_key}" if expected_key else None)
+    assert response.choices[0].message.content == "pong"
+
+
+@pytest.mark.parametrize("credential_source", ["missing", "environment", "explicit"])
+@pytest.mark.asyncio
+async def test_async_chat_sends_only_clinepass_credentials(monkeypatch, unrelated_credentials, credential_source):
+    if credential_source == "missing":
+        monkeypatch.delenv("CLINEPASS_API_KEY", raising=False)
+    explicit_key: Final = "cp-request-key" if credential_source == "explicit" else None
+    captured = {}
+
+    async def fake_post(self, url, *args, **kwargs):
+        captured["url"] = str(url)
+        captured["headers"] = httpx.Headers(kwargs["headers"])
+        return _response(ENVELOPED_COMPLETION)
+
+    with patch.object(AsyncHTTPHandler, "post", fake_post):
+        response = await litellm.acompletion(
+            model="clinepass/deepseek-v4-flash",
+            api_key=explicit_key,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+
+    expected_key: Final = explicit_key or (API_KEY if credential_source == "environment" else None)
+    assert captured["url"] == "https://api.cline.bot/api/v1/chat/completions"
+    assert captured["headers"].get("authorization") == (f"Bearer {expected_key}" if expected_key else None)
+    assert response.choices[0].message.content == "pong"
 
 
 # --------------------------------------------------------------------------
@@ -308,8 +372,13 @@ async def test_acompletion_unwraps_envelope_and_prefixes_model():
     assert response.choices[0].message.content == "pong"
 
 
-def test_completion_streaming_is_not_unwrapped():
+@pytest.mark.parametrize("credential_source", ["missing", "environment", "explicit"])
+def test_completion_streaming_is_not_unwrapped(monkeypatch, unrelated_credentials, credential_source):
     """ClinePass does NOT wrap SSE chunks -- they are already OpenAI-shaped."""
+    if credential_source == "missing":
+        monkeypatch.delenv("CLINEPASS_API_KEY", raising=False)
+    explicit_key: Final = "cp-stream-key" if credential_source == "explicit" else None
+    captured = {}
     chunks = [
         {
             "id": "chatcmpl-test",
@@ -332,6 +401,7 @@ def test_completion_streaming_is_not_unwrapped():
     body = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
 
     def fake_post(self, url, *args, **kwargs):
+        captured["authorization"] = httpx.Headers(kwargs["headers"]).get("authorization")
         return httpx.Response(
             200,
             content=body.encode(),
@@ -343,6 +413,7 @@ def test_completion_streaming_is_not_unwrapped():
         stream = litellm.completion(
             model="clinepass/deepseek-v4-flash",
             messages=[{"role": "user", "content": "count"}],
+            api_key=explicit_key,
             max_tokens=4000,
             stream=True,
         )
@@ -357,10 +428,17 @@ def test_completion_streaming_is_not_unwrapped():
 
     assert text == "one two three"
     assert finish_reason == "stop"
+    expected_key: Final = explicit_key or (API_KEY if credential_source == "environment" else None)
+    assert captured["authorization"] == (f"Bearer {expected_key}" if expected_key else None)
 
 
+@pytest.mark.parametrize("credential_source", ["missing", "environment", "explicit"])
 @pytest.mark.asyncio
-async def test_acompletion_streaming_is_not_unwrapped():
+async def test_acompletion_streaming_is_not_unwrapped(monkeypatch, unrelated_credentials, credential_source):
+    if credential_source == "missing":
+        monkeypatch.delenv("CLINEPASS_API_KEY", raising=False)
+    explicit_key: Final = "cp-stream-key" if credential_source == "explicit" else None
+    captured = {}
     chunks = [
         {
             "id": "chatcmpl-test",
@@ -383,6 +461,7 @@ async def test_acompletion_streaming_is_not_unwrapped():
     body = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
 
     async def fake_post(self, url, *args, **kwargs):
+        captured["authorization"] = httpx.Headers(kwargs["headers"]).get("authorization")
         return httpx.Response(
             200,
             content=body.encode(),
@@ -394,6 +473,7 @@ async def test_acompletion_streaming_is_not_unwrapped():
         stream = await litellm.acompletion(
             model="clinepass/deepseek-v4-flash",
             messages=[{"role": "user", "content": "count"}],
+            api_key=explicit_key,
             max_tokens=4000,
             stream=True,
         )
@@ -408,6 +488,8 @@ async def test_acompletion_streaming_is_not_unwrapped():
 
     assert text == "one two three"
     assert finish_reason == "stop"
+    expected_key: Final = explicit_key or (API_KEY if credential_source == "environment" else None)
+    assert captured["authorization"] == (f"Bearer {expected_key}" if expected_key else None)
 
 
 def test_completion_streaming_tool_call_reassembly():

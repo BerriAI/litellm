@@ -2448,10 +2448,10 @@ def _complete_aiohttp_openai(
     )
 
 
-def _complete_clinepass(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+def _complete_http_provider(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion: Final = ctx.acompletion
-    api_base = ctx.api_base
-    api_key = ctx.api_key
+    api_base: Final = ctx.api_base
+    api_key: Final = ctx.api_key
     client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
@@ -2466,11 +2466,6 @@ def _complete_clinepass(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    api_key = api_key or get_secret_str("CLINEPASS_API_KEY")
-
-    api_base = api_base or litellm.api_base or get_secret_str("CLINEPASS_API_BASE") or "https://api.cline.bot/api/v1"
-
-    ## COMPLETION CALL
     response: Final = base_llm_http_handler.completion(
         model=model,
         messages=messages,  # pyright: ignore[reportUnknownArgumentType]  # ctx.messages is list[Unknown]
@@ -5966,7 +5961,7 @@ def completion(
         elif custom_llm_provider == "cometapi":
             response = _complete_cometapi(_dispatch_ctx)
         elif custom_llm_provider == "clinepass":
-            response = _complete_clinepass(_dispatch_ctx)
+            response = _complete_http_provider(_dispatch_ctx)
         elif custom_llm_provider == "minimax":
             response = _complete_minimax(_dispatch_ctx)
         elif custom_llm_provider == "hosted_vllm":

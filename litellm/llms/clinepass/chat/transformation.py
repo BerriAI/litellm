@@ -12,10 +12,13 @@ ClinePass is OpenAI-compatible apart from two quirks, both handled here:
    prefix before the request is built, so a qualifier has to be restored.
 
 Documentation: https://docs.cline.bot/
+
+Credentials come only from the request's api_key or CLINEPASS_API_KEY.
+Realtime endpoints are unsupported and rejected before HTTP dispatch.
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, NoReturn
 
 import httpx
 
@@ -120,6 +123,16 @@ class ClinePassConfig(OpenAIGPTConfig):
     Overrides only the request/response points where ClinePass diverges; see the
     module docstring for the two quirks.
     """
+
+    @staticmethod
+    def get_realtime_http_config(model: str) -> NoReturn:
+        from litellm.exceptions import BadRequestError
+
+        raise BadRequestError(
+            message="ClinePass does not support realtime endpoints",
+            model=model,
+            llm_provider="clinepass",
+        )
 
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None

@@ -13,6 +13,7 @@ leaves the process at all, and that the OpenAI credential is never transmitted.
 """
 
 import contextlib
+from typing import Final
 
 import httpx
 import pytest
@@ -36,10 +37,17 @@ def no_request_allowed(monkeypatch):
         attempted.append((str(request.url), request.headers.get("authorization", "")))
         raise AssertionError(f"outbound request attempted to {request.url}")
 
+    def record_handler_and_block(self, url, *args, **kwargs):
+        attempted.append((str(url), httpx.Headers(kwargs.get("headers") or {}).get("authorization", "")))
+        raise AssertionError(f"outbound request attempted to {url}")
+
+    async def record_async_handler_and_block(self, url, *args, **kwargs):
+        record_handler_and_block(self, url, *args, **kwargs)
+
     monkeypatch.setattr(httpx.Client, "send", record_and_block, raising=True)
     monkeypatch.setattr(httpx.AsyncClient, "send", record_and_block, raising=True)
-    for handler in (HTTPHandler, AsyncHTTPHandler):
-        monkeypatch.setattr(handler, "post", record_and_block, raising=True)
+    monkeypatch.setattr(HTTPHandler, "post", record_handler_and_block, raising=True)
+    monkeypatch.setattr(AsyncHTTPHandler, "post", record_async_handler_and_block, raising=True)
 
     monkeypatch.setenv("OPENAI_API_KEY", SENTINEL_OPENAI_KEY)
     monkeypatch.setenv("CLINEPASS_API_KEY", "cp-test-key")
@@ -152,3 +160,31 @@ def test_chat_does_not_fall_back_to_the_global_litellm_api_key(monkeypatch):
 
     assert sent, "the chat request never reached the transport, so nothing was checked"
     assert all(SENTINEL_OPENAI_KEY not in authorization for _, authorization in sent)
+
+
+@pytest.mark.parametrize("clinepass_key", [None, "cp-test-key"])
+@pytest.mark.parametrize("explicit_key", [None, "cp-explicit-key"])
+@pytest.mark.parametrize("endpoint", ["client_secret", "transcription_session", "calls"])
+@pytest.mark.asyncio
+async def test_realtime_rejects_clinepass_before_credential_fallback(
+    monkeypatch, no_request_allowed, clinepass_key, explicit_key, endpoint
+):
+    if clinepass_key is None:
+        monkeypatch.delenv("CLINEPASS_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("CLINEPASS_API_KEY", clinepass_key)
+    monkeypatch.setattr(litellm, "api_key", SENTINEL_OPENAI_KEY)
+    monkeypatch.setattr(litellm, "openai_key", SENTINEL_OPENAI_KEY)
+    kwargs: Final = {"model": "clinepass/deepseek-v4-flash", "api_key": explicit_key}
+    request: Final = (
+        litellm.acreate_realtime_client_secret(**kwargs)
+        if endpoint == "client_secret"
+        else litellm.acreate_realtime_transcription_session(**kwargs)
+        if endpoint == "transcription_session"
+        else litellm.arealtime_calls(openai_ephemeral_key=SENTINEL_OPENAI_KEY, sdp_body=b"v=0\r\n", **kwargs)
+    )
+
+    with pytest.raises(litellm.BadRequestError, match="ClinePass does not support realtime endpoints"):
+        await request
+
+    assert no_request_allowed == []
