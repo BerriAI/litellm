@@ -237,6 +237,7 @@ export function InvestigationsView({
             lenses={lenses}
             connected={connected}
             readOnly={readOnly}
+            onOpen={selectLens}
             onEdit={(id) => openDialog("edit", id)}
             onRunNow={(id) => openDialog("run_now", id)}
             onOpenFinding={openFinding}

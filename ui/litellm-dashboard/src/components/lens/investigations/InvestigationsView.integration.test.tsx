@@ -613,6 +613,37 @@ it("lists investigations without edit or run controls for read-only viewers", as
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 });
 
+it("opens a failed investigation's details from its row and edits only from the pencil", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  const job = {
+    ...lens.jobs[0],
+    id: "failed-run",
+    status: "failed" as const,
+    stage: "Failed",
+    error: "boom",
+    findings: [],
+  };
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [{ ...lens, jobs: [job] }], workers: [], tracing_enabled: true };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/lens/runs") return [job];
+    if (path === "/lens/lens/runs/failed-run") return job;
+    if (path === "/lens/agents") return [];
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" />);
+  await user.click(await screen.findByRole("button", { name: `Edit ${lens.settings.name}` }));
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByDisplayValue(lens.settings.name)).toBeVisible();
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  await user.click(screen.getByRole("row", { name: lens.settings.name }));
+  expect(within(await screen.findByRole("alert")).getByLabelText("Investigation error")).toHaveTextContent("boom");
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
 it("shows the actual saved failure and run context without opening backend logs", async () => {
   testQueryClient.clear();
   const error =

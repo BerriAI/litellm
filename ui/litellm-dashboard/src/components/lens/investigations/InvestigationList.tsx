@@ -56,6 +56,7 @@ export function InvestigationList({
   lenses,
   connected,
   readOnly = false,
+  onOpen,
   onEdit,
   onRunNow,
   onOpenFinding,
@@ -63,6 +64,7 @@ export function InvestigationList({
   lenses: Lens[];
   connected: boolean;
   readOnly?: boolean;
+  onOpen: (id: string) => void;
   onEdit: (id: string) => void;
   onRunNow: (id: string) => void;
   onOpenFinding: (lens: Lens, finding: Finding) => void;
@@ -112,9 +114,9 @@ export function InvestigationList({
               return (
                 <Fragment key={lens.id}>
                   <tr
-                    onClick={readOnly ? undefined : () => onEdit(lens.id)}
+                    onClick={() => onOpen(lens.id)}
                     aria-label={lens.settings.name}
-                    className={cn(ROW, "group h-14", !readOnly && "cursor-pointer")}
+                    className={cn(ROW, "group h-14 cursor-pointer")}
                   >
                     <td className="pl-2">
                       <span className="flex min-w-0 items-center gap-2">
@@ -186,12 +188,18 @@ export function InvestigationList({
                           >
                             <Play className="size-3.5" />
                           </button>
-                          <span
-                            aria-hidden="true"
-                            className="inline-flex size-7 items-center justify-center text-muted-foreground/60 group-hover:text-muted-foreground"
+                          <button
+                            type="button"
+                            aria-label={`Edit ${lens.settings.name}`}
+                            title="Edit"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onEdit(lens.id);
+                            }}
+                            className="inline-flex size-7 items-center justify-center rounded text-muted-foreground/60 hover:bg-muted hover:text-foreground group-hover:text-muted-foreground"
                           >
                             <Pencil className="size-3.5" />
-                          </span>
+                          </button>
                         </span>
                       )}
                     </td>
