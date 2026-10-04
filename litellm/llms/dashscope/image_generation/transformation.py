@@ -71,13 +71,13 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
-        mapped: Final[dict] = {}
+        mapped: Final[dict[str, object]] = {}
         for k, v in non_default_params.items():
             if k in optional_params:
                 continue
@@ -85,7 +85,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
                 continue
             if k == "size":
                 # Convert "WxH" → "W*H"
-                mapped["size"] = OPENAI_TO_DASHSCOPE_SIZE.get(v, v.replace("x", "*"))
+                mapped["size"] = OPENAI_TO_DASHSCOPE_SIZE.get(v, v.replace("x", "*")) if isinstance(v, str) else v
             else:
                 mapped[k] = v
         return mapped

@@ -73,6 +73,7 @@ export enum Providers {
   AI21_CHAT = "Ai21 Chat",
   AIML = "AI/ML API",
   AIOHTTP_OPENAI = "Aiohttp Openai",
+  ALIBABA_TOKEN_PLAN = "Alibaba Cloud Token Plan",
   Anthropic = "Anthropic",
   ANTHROPIC_TEXT = "Anthropic Text",
   AssemblyAI = "AssemblyAI",
@@ -193,6 +194,7 @@ export const provider_map: Record<string, string> = {
   AI21_CHAT: "ai21_chat",
   AIML: "aiml",
   AIOHTTP_OPENAI: "aiohttp_openai",
+  ALIBABA_TOKEN_PLAN: "alibaba_token_plan",
   Anthropic: "anthropic",
   ANTHROPIC_TEXT: "anthropic_text",
   AssemblyAI: "assemblyai",
@@ -336,6 +338,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Cursor]: cursorLogo.src,
   [Providers.Databricks]: databricksLogo.src,
   [Providers.Dashscope]: qwenLogo.src,
+  [Providers.ALIBABA_TOKEN_PLAN]: qwenLogo.src,
   [Providers.Deepseek]: deepseekLogo.src,
   [Providers.Deepgram]: deepgramLogo.src,
   [Providers.DeepInfra]: deepinfraLogo.src,
@@ -436,6 +439,7 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
 };
 
 const providerPlaceholderMap: Partial<Record<Providers, string>> = {
+  [Providers.ALIBABA_TOKEN_PLAN]: "alibaba_token_plan/qwen3.8-max",
   [Providers.AIML]: "aiml/flux-pro/v1.1",
   [Providers.Anthropic]: "claude-3-opus",
   [Providers.Azure]: "my-deployment",

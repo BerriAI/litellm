@@ -6940,6 +6940,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("WANDB_API_KEY")
+        elif custom_llm_provider == "alibaba_token_plan":
+            if os.environ.get("ALIBABA_TOKEN_PLAN_API_KEY"):
+                keys_in_environment = True
+            else:
+                missing_keys.append("ALIBABA_TOKEN_PLAN_API_KEY")
         elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
             if f"{custom_llm_provider.upper()}_API_KEY" in os.environ or "DASHSCOPE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8544,6 +8549,7 @@ class ProviderConfigManager:
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
             LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
+            LlmProviders.ALIBABA_TOKEN_PLAN: (lambda: litellm.AlibabaTokenPlanChatConfig(), False),
             LlmProviders.QWENCLOUD: (lambda: litellm.QwenCloudChatConfig(), False),
             LlmProviders.QWEN_AI_PLATFORM: (
                 lambda: litellm.QwenAIPlatformChatConfig(),
@@ -8951,6 +8957,8 @@ class ProviderConfigManager:
 
         json_provider: Final = JSONProviderRegistry.get(provider.value)
         if json_provider is not None and "/v1/messages" in json_provider.supported_endpoints:
+            if provider == LlmProviders.ALIBABA_TOKEN_PLAN:
+                return litellm.AlibabaTokenPlanAnthropicMessagesConfig(json_provider)
             from litellm.llms.openai_like.messages.transformation import (
                 JSONProviderAnthropicMessagesConfig,
             )
@@ -9054,6 +9062,8 @@ class ProviderConfigManager:
             )
 
             return GeminiAudioTranscriptionConfig()
+        elif LlmProviders.ALIBABA_TOKEN_PLAN == provider:
+            return litellm.AlibabaTokenPlanAudioTranscriptionConfig()
         elif litellm.LlmProviders.EDENAI == provider:
             return litellm.EdenAIAudioTranscriptionConfig()
         return None
@@ -9626,6 +9636,8 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_family_image_generation_config(provider.value)
+        elif LlmProviders.ALIBABA_TOKEN_PLAN == provider:
+            return litellm.AlibabaTokenPlanImageGenerationConfig()
         elif LlmProviders.MODELSCOPE == provider:
             from litellm.llms.modelscope.image_generation import (
                 get_modelscope_image_generation_config,
@@ -9671,6 +9683,8 @@ class ProviderConfigManager:
             return get_hosted_vllm_video_config(model)
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIVideoConfig()
+        elif LlmProviders.ALIBABA_TOKEN_PLAN == provider:
+            return litellm.AlibabaTokenPlanVideoConfig()
         return None
 
     @staticmethod
@@ -9704,6 +9718,8 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig()
+        elif LlmProviders.ALIBABA_TOKEN_PLAN == provider:
+            return litellm.AlibabaTokenPlanRealtimeConfig()
         return None
 
     @staticmethod
@@ -9797,6 +9813,8 @@ class ProviderConfigManager:
             )
 
             return get_bedrock_image_edit_config_for_model(model)
+        elif LlmProviders.ALIBABA_TOKEN_PLAN == provider:
+            return litellm.AlibabaTokenPlanImageEditConfig()
         elif LlmProviders.OPENROUTER == provider:
             from litellm.llms.openrouter.image_edit import (
                 get_openrouter_image_edit_config,
@@ -9981,6 +9999,8 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif LlmProviders.ALIBABA_TOKEN_PLAN == provider:
+            return litellm.AlibabaTokenPlanTextToSpeechConfig()
         elif litellm.LlmProviders.EDENAI == provider:
             return litellm.EdenAITextToSpeechConfig()
         return None

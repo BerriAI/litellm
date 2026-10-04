@@ -51,6 +51,38 @@ def test_get_llm_provider_still_rejects_unregistered_prefix(registered_custom_pr
         get_llm_provider(model="not-registered-llm/my-model")
 
 
+@pytest.mark.parametrize("from_environment", [False, True])
+@pytest.mark.parametrize(
+    ("base", "expected"),
+    [
+        ("https://gateway.example", "https://gateway.example/compatible-mode/v1"),
+        ("https://gateway.example/compatible-mode/v1", "https://gateway.example/compatible-mode/v1"),
+        ("https://gateway.example/apps/anthropic", "https://gateway.example/compatible-mode/v1"),
+        (
+            "https://gateway.example/token-plan/apps/anthropic/v1/messages",
+            "https://gateway.example/token-plan/compatible-mode/v1",
+        ),
+        (
+            "https://gateway.example/token-plan/compatible-mode/v1/chat/completions",
+            "https://gateway.example/token-plan/compatible-mode/v1",
+        ),
+    ],
+)
+def test_token_plan_provider_resolution_normalizes_shared_api_base(
+    base: str, expected: str, from_environment: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ALIBABA_TOKEN_PLAN_API_KEY", "token-plan-test-key")
+    monkeypatch.delenv("ALIBABA_TOKEN_PLAN_API_BASE", raising=False)
+    if from_environment:
+        monkeypatch.setenv("ALIBABA_TOKEN_PLAN_API_BASE", base)
+    assert get_llm_provider(model="alibaba_token_plan/auto", api_base=None if from_environment else base) == (
+        "auto",
+        "alibaba_token_plan",
+        "token-plan-test-key",
+        expected,
+    )
+
+
 @pytest.mark.parametrize(
     ("candidate", "expected"),
     [(CUSTOM_PROVIDER, True), ("not-registered-llm", False), (None, False), ("", False)],

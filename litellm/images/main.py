@@ -381,6 +381,7 @@ def image_generation(
             litellm.LlmProviders.VERTEX_AI,
             litellm.LlmProviders.OPENROUTER,
             litellm.LlmProviders.DASHSCOPE,
+            litellm.LlmProviders.ALIBABA_TOKEN_PLAN,
             litellm.LlmProviders.QWENCLOUD,
             litellm.LlmProviders.QWEN_AI_PLATFORM,
             litellm.LlmProviders.EDENAI,

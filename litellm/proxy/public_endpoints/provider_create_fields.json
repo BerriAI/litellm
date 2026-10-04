@@ -102,6 +102,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "ALIBABA_TOKEN_PLAN",
+    "provider_display_name": "Alibaba Cloud Token Plan",
+    "litellm_provider": "alibaba_token_plan",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Token Plan API Key",
+        "placeholder": "sk-sp-...",
+        "tooltip": "Use the dedicated API key from your Token Plan subscription",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+        "tooltip": "Optional override for the Token Plan endpoint",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "alibaba_token_plan/qwen3.8-max"
+  },
+  {
     "provider": "Bedrock",
     "provider_display_name": "Amazon Bedrock",
     "litellm_provider": "bedrock",

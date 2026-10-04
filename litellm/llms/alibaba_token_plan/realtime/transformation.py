@@ -1,0 +1,396 @@
+import json
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Final, cast  # noqa: TID251  # OpenAI's union omits validated provider extension events
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+from pydantic import JsonValue
+
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.alibaba_token_plan.common_utils import REALTIME_ENDPOINT, get_native_api_url, validate_headers
+from litellm.llms.base_llm.realtime.transcription_protocol import (
+    RealtimeTranscriptionProtocolError,
+    json_mapping,
+    json_object,
+)
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.types.llms.openai import OpenAIRealtimeEvents
+from litellm.types.realtime import RealtimeResponseTransformInput, RealtimeResponseTypedDict
+
+_EVENT_TYPES: Final = MappingProxyType(
+    {
+        "conversation.item.created": "conversation.item.added",
+        "response.text.delta": "response.output_text.delta",
+        "response.text.done": "response.output_text.done",
+        "response.audio.delta": "response.output_audio.delta",
+        "response.audio.done": "response.output_audio.done",
+        "response.audio_transcript.delta": "response.output_audio_transcript.delta",
+        "response.audio_transcript.done": "response.output_audio_transcript.done",
+    }
+)
+_SESSION_KEYS: Final = frozenset(
+    (
+        "modalities",
+        "voice",
+        "instructions",
+        "enable_speech_emotion",
+        "input_audio_transcription",
+        "output_audio",
+        "max_history_turns",
+        "enable_search",
+        "search_options",
+        "tools",
+        "turn_detection",
+    )
+)
+_CLIENT_EVENTS: Final = frozenset(
+    (
+        "session.update",
+        "input_audio_buffer.append",
+        "input_audio_buffer.commit",
+        "input_audio_buffer.clear",
+        "conversation.item.create",
+        "conversation.item.delete",
+        "conversation.item.retrieve",
+        "response.create",
+        "response.cancel",
+    )
+)
+_USAGE_KEYS: Final = MappingProxyType(
+    {"input_tokens_details": "input_token_details", "output_tokens_details": "output_token_details"}
+)
+
+
+def _items(value: JsonValue | None, name: str) -> Sequence[JsonValue]:
+    if not isinstance(value, list):
+        raise RealtimeTranscriptionProtocolError(f"{name} must be an array")
+    return value
+
+
+def _tools(value: JsonValue | None) -> Sequence[Mapping[str, JsonValue]]:
+    return tuple(_tool(json_mapping(item, "tool")) for item in _items(value, "tools"))
+
+
+def _tool(tool: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    if tool.get("type") != "function":
+        raise RealtimeTranscriptionProtocolError("Qwen Audio realtime supports function tools only")
+    function: Final = json_mapping(tool.get("function"), "function") if "function" in tool else tool
+    if not isinstance(function.get("name"), str):
+        raise RealtimeTranscriptionProtocolError("Function tools require a name")
+    return {"type": "function", "function": {key: value for key, value in function.items() if key != "type"}}
+
+
+def _turn_detection(value: JsonValue) -> Mapping[str, JsonValue] | None:
+    if value is None:
+        return None
+    config: Final = json_mapping(value, "turn_detection")
+    if config.get("type", "server_vad") not in ("server_vad", "smart_turn"):
+        raise RealtimeTranscriptionProtocolError("Qwen Audio turn_detection supports server_vad, smart_turn, or null")
+    if config.get("create_response") is False or config.get("interrupt_response") is False:
+        raise RealtimeTranscriptionProtocolError(
+            "Qwen Audio VAD always creates responses and interrupts speech; use turn_detection=null for manual control"
+        )
+    return {key: value for key, value in config.items() if key not in ("create_response", "interrupt_response")}
+
+
+def _audio_rate(value: JsonValue | None, *, output: bool = False) -> int:
+    if value in (None, "pcm16"):
+        return 24000
+    if value == "pcm":
+        return 24000 if output else 16000
+    config: Final = json_mapping(value, "audio format")
+    rate: Final = config.get("rate", 24000)
+    if config.get("type") != "audio/pcm" or config.get("channels", 1) != 1:
+        raise RealtimeTranscriptionProtocolError("Qwen Audio realtime requires mono PCM16 audio")
+    if not isinstance(rate, int) or rate != (24000 if output else 16000):
+        raise RealtimeTranscriptionProtocolError("Input PCM must be 16000 Hz; output PCM must be 24000 Hz")
+    return rate
+
+
+def _modalities(value: JsonValue | None) -> Sequence[str]:
+    modalities: Final = _items(value, "modalities")
+    if not modalities or any(item not in ("audio", "text") for item in modalities):
+        raise RealtimeTranscriptionProtocolError("Qwen Audio realtime supports text and audio output only")
+    return ("text", "audio") if "audio" in modalities else ("text",)
+
+
+def _content_to_ga(value: JsonValue, *, item_content: bool = False) -> JsonValue:
+    if isinstance(value, list):
+        return [_content_to_ga(item, item_content=item_content) for item in value]
+    if not isinstance(value, dict):
+        return value
+    content_type: Final = value.get("type")
+    renamed_type: Final = (
+        ("output_audio" if content_type == "audio" else "output_text" if content_type == "text" else content_type)
+        if item_content
+        else content_type
+    )
+    fields: Final = {
+        _USAGE_KEYS.get(key, key): _content_to_ga(item, item_content=key == "content")
+        for key, item in value.items()
+        if key != "type"
+    }
+    return {
+        **fields,
+        **({"type": renamed_type} if "type" in value else {}),
+        **({"transcript": value["text"]} if content_type == "audio" and "text" in value else {}),
+    }
+
+
+class AlibabaTokenPlanRealtimeConfig(BaseRealtimeConfig):
+    def __init__(self) -> None:
+        self._transcription_prefixes: Mapping[tuple[str, int], str] = MappingProxyType({})
+
+    def validate_environment(
+        self, headers: Mapping[str, str], model: str, api_key: str | None = None
+    ) -> dict[str, str]:  # mutable-ok: BaseRealtimeConfig requires a dictionary
+        return validate_headers(headers, api_key)
+
+    def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
+        parsed: Final = urlsplit(get_native_api_url(api_base, REALTIME_ENDPOINT))
+        if parsed.scheme not in ("http", "https", "ws", "wss"):
+            raise ValueError("Token Plan realtime api_base must use http, https, ws, or wss")
+        scheme: Final = "wss" if parsed.scheme in ("https", "wss") else "ws"
+        query: Final = tuple(
+            (key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key != "model"
+        )
+        return urlunsplit((scheme, parsed.netloc, parsed.path, urlencode((*query, ("model", model))), ""))
+
+    def _session_request(self, session: Mapping[str, JsonValue]) -> Mapping[str, object]:
+        if session.get("type", "realtime") != "realtime":
+            raise RealtimeTranscriptionProtocolError("Qwen Audio supports realtime conversation sessions only")
+        if session.get("tool_choice", "auto") != "auto":
+            raise RealtimeTranscriptionProtocolError("Qwen Audio supports automatic function tool choice only")
+        unsupported: Final = (
+            session.keys()
+            - _SESSION_KEYS
+            - {
+                "audio",
+                "type",
+                "model",
+                "output_modalities",
+                "input_audio_format",
+                "output_audio_format",
+                "tool_choice",
+            }
+        )
+        if unsupported:
+            raise RealtimeTranscriptionProtocolError(
+                f"Unsupported Qwen Audio session fields: {', '.join(sorted(unsupported))}"
+            )
+        audio: Final = json_mapping(session.get("audio"), "audio")
+        audio_input: Final = json_mapping(audio.get("input"), "audio.input")
+        audio_output: Final = json_mapping(audio.get("output"), "audio.output")
+        if (
+            audio.keys() - {"input", "output"}
+            or audio_input.keys() - {"format", "turn_detection", "transcription"}
+            or audio_output.keys() - {"format", "voice"}
+        ):
+            raise RealtimeTranscriptionProtocolError("Unsupported Qwen Audio input or output audio settings")
+        input_format: Final = audio_input.get("format", session.get("input_audio_format"))
+        if input_format is not None and _audio_rate(input_format) != 16000:
+            raise RealtimeTranscriptionProtocolError("Qwen Audio realtime input must be 16000 Hz PCM16")
+        _audio_rate(audio_output.get("format", session.get("output_audio_format")), output=True)
+        normalized: Final[Mapping[str, JsonValue]] = {
+            **{key: value for key, value in session.items() if key in _SESSION_KEYS},
+            **({"modalities": session["output_modalities"]} if "output_modalities" in session else {}),
+            **({"voice": audio_output["voice"]} if "voice" in audio_output else {}),
+            **({"turn_detection": audio_input["turn_detection"]} if "turn_detection" in audio_input else {}),
+            **({"input_audio_transcription": audio_input["transcription"]} if "transcription" in audio_input else {}),
+        }
+        if normalized.get("tools") and normalized.get("enable_search"):
+            raise RealtimeTranscriptionProtocolError("Qwen Audio tools and enable_search cannot be enabled together")
+        result: Final = {
+            **normalized,
+            "input_audio_format": "pcm",
+            "output_audio_format": "pcm",
+            **({"tools": _tools(normalized["tools"])} if "tools" in normalized else {}),
+            **({"modalities": _modalities(normalized["modalities"])} if "modalities" in normalized else {}),
+            **(
+                {"turn_detection": _turn_detection(normalized["turn_detection"])}
+                if "turn_detection" in normalized
+                else {}
+            ),
+        }
+        return result
+
+    def _item_request(self, item: Mapping[str, JsonValue]) -> Mapping[str, object]:
+        if "content" not in item:
+            return item
+        return {
+            **item,
+            "content": tuple(
+                self._input_content(json_mapping(part, "content")) for part in _items(item["content"], "content")
+            ),
+        }
+
+    def _input_content(self, content: Mapping[str, JsonValue]) -> Mapping[str, object]:
+        if content.get("type") == "text":
+            return {**content, "type": "output_text"}
+        return content
+
+    def transform_realtime_request(
+        self, message: str, model: str, session_configuration_request: str | None = None
+    ) -> Sequence[str | bytes]:
+        event: Final = json_object(message)
+        event_type: Final = event.get("type")
+        if not isinstance(event_type, str) or event_type not in _CLIENT_EVENTS:
+            raise RealtimeTranscriptionProtocolError(f"Unsupported Qwen Audio realtime event: {event_type}")
+        if event_type == "session.update":
+            return (
+                json.dumps({**event, "session": self._session_request(json_mapping(event.get("session"), "session"))}),
+            )
+        if event_type == "response.cancel" and "response_id" in event:
+            raise RealtimeTranscriptionProtocolError("Qwen Audio cancels the active response only; omit response_id")
+        if event_type == "conversation.item.create":
+            return (json.dumps({**event, "item": self._item_request(json_mapping(event.get("item"), "item"))}),)
+        if event_type == "response.create" and "response" in event:
+            response: Final = json_mapping(event["response"], "response")
+            if response.keys() - {"modalities", "output_modalities", "voice"}:
+                raise RealtimeTranscriptionProtocolError(
+                    "Qwen Audio response.create supports modalities and voice overrides only"
+                )
+            normalized: Final = {key: value for key, value in response.items() if key != "output_modalities"}
+            modalities: Final = response.get("output_modalities", response.get("modalities"))
+            return (
+                json.dumps(
+                    {
+                        **event,
+                        "response": {
+                            **normalized,
+                            **({"modalities": _modalities(modalities)} if modalities is not None else {}),
+                        },
+                    }
+                ),
+            )
+        return (message,)
+
+    def _session_response(self, session: Mapping[str, JsonValue]) -> Mapping[str, object]:
+        return {
+            **{
+                key: value
+                for key, value in session.items()
+                if key
+                not in (
+                    "modalities",
+                    "voice",
+                    "input_audio_format",
+                    "output_audio_format",
+                    "turn_detection",
+                    "input_audio_transcription",
+                    "tools",
+                )
+            },
+            "type": "realtime",
+            "modalities": session.get("modalities", ["text", "audio"]),
+            "voice": session.get("voice"),
+            "input_audio_format": "pcm",
+            "output_audio_format": "pcm16",
+            "turn_detection": session.get("turn_detection"),
+            "input_audio_transcription": session.get("input_audio_transcription"),
+            "output_modalities": ["audio"]
+            if "audio" in _items(session.get("modalities", ["text", "audio"]), "modalities")
+            else ["text"],
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 16000},
+                    "turn_detection": session.get("turn_detection"),
+                    "transcription": session.get("input_audio_transcription"),
+                },
+                "output": {"format": {"type": "audio/pcm", "rate": 24000}, "voice": session.get("voice")},
+            },
+            **(
+                {
+                    "tools": tuple(
+                        self._openai_tool(json_mapping(tool, "tool")) for tool in _items(session["tools"], "tools")
+                    )
+                }
+                if "tools" in session
+                else {}
+            ),
+        }
+
+    @staticmethod
+    def _openai_tool(tool: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+        if "function" not in tool:
+            return tool
+        return {"type": "function", **json_mapping(tool["function"], "function")}
+
+    @staticmethod
+    def _response_body(response: Mapping[str, JsonValue]) -> Mapping[str, object]:
+        return {
+            **response,
+            **(
+                {
+                    "output_modalities": ["audio"]
+                    if "audio" in _items(response["modalities"], "modalities")
+                    else ["text"]
+                }
+                if "modalities" in response
+                else {}
+            ),
+            **(
+                {"audio": {"output": {"voice": response["voice"], "format": {"type": "audio/pcm", "rate": 24000}}}}
+                if "voice" in response
+                else {}
+            ),
+        }
+
+    def transform_realtime_response(
+        self,
+        message: str | bytes,
+        model: str,
+        logging_obj: Logging,
+        realtime_response_transform_input: RealtimeResponseTransformInput,
+    ) -> RealtimeResponseTypedDict:
+        event: Final = json_object(message.decode("utf-8") if isinstance(message, bytes) else message)
+        event_type: Final = event.get("type")
+        normalized: Final = _content_to_ga(dict(event))
+        if not isinstance(normalized, dict):
+            raise RealtimeTranscriptionProtocolError("Expected a realtime event object")
+        result: Final = {
+            **normalized,
+            "type": _EVENT_TYPES.get(str(event_type), event_type),
+            **(
+                {"session": self._session_response(json_mapping(event.get("session"), "session"))}
+                if event_type in ("session.created", "session.updated")
+                else {}
+            ),
+            **self._transcription_delta(event),
+            **(
+                {"response": self._response_body(json_mapping(normalized.get("response"), "response"))}
+                if "response" in normalized
+                else {}
+            ),
+        }
+        return {
+            **realtime_response_transform_input,
+            "response": cast(  # cast-ok: validated JSON retains provider extension events beyond the OpenAI union
+                OpenAIRealtimeEvents, result
+            ),
+        }
+
+    def _transcription_delta(self, event: Mapping[str, JsonValue]) -> Mapping[str, str]:
+        event_type: Final = event.get("type")
+        if event_type not in (
+            "conversation.item.input_audio_transcription.delta",
+            "conversation.item.input_audio_transcription.completed",
+        ):
+            return {}
+        item_id: Final = event.get("item_id")
+        content_index: Final = event.get("content_index", 0)
+        if not isinstance(item_id, str) or not isinstance(content_index, int):
+            raise RealtimeTranscriptionProtocolError("Transcription events require an item ID and content index")
+        key: Final = (item_id, content_index)
+        if event_type == "conversation.item.input_audio_transcription.completed":
+            self._transcription_prefixes = MappingProxyType(
+                {item: text for item, text in self._transcription_prefixes.items() if item != key}
+            )
+            return {}
+        text: Final = event.get("text", "")
+        if not isinstance(text, str):
+            raise RealtimeTranscriptionProtocolError("Transcription text must be a string")
+        previous: Final = self._transcription_prefixes.get(key, "")
+        delta: Final = text[len(previous) :] if text.startswith(previous) else ""
+        self._transcription_prefixes = MappingProxyType({**self._transcription_prefixes, key: text})
+        return {"delta": delta}

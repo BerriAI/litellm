@@ -121,6 +121,27 @@
         "interactions": true
       }
     },
+    "alibaba_token_plan": {
+      "display_name": "Alibaba Cloud Token Plan (`alibaba_token_plan`)",
+      "url": "https://docs.litellm.ai/docs/providers/alibaba_token_plan",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": true,
+        "image_edits": true,
+        "audio_transcriptions": true,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "video_generations": true,
+        "realtime": true,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "amazon_nova": {
       "display_name": "Amazon Nova (`amazon_nova`)",
       "url": "https://docs.litellm.ai/docs/providers/amazon_nova",
