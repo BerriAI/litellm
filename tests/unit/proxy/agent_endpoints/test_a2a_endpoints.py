@@ -207,7 +207,7 @@ async def test_invoke_agent_a2a_adds_litellm_data():
 async def test_invoke_agent_a2a_handles_none_agent_card_params():
     """Agents without ``agent_card_params`` (e.g. plain chat agents routed
     through the A2A endpoint by mistake) must not raise ``AttributeError`` on
-    ``agent_card_params.get(...)`` — they should return a JSON-RPC error.
+    ``agent_card_params.get(...)`` - they should return a JSON-RPC error.
     """
     from litellm.proxy._types import UserAPIKeyAuth
 
@@ -2689,3 +2689,235 @@ def test_forwarding_headers_minted_bearer_replaces_a_forwarded_authorization_of_
     )
 
     assert merged == {"X-Custom": "kept", "Authorization": "Bearer minted-token"}
+
+
+@pytest.mark.asyncio
+async def test_task_forward_1_0_upstream_uses_native_wire():
+    """#44531: a 1.0-configured upstream receives the native PascalCase method,
+    unlowered params and an explicit A2A-Version header, not the 0.3 wire."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    upstream_response = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {"id": "task-1", "status": {"state": "completed"}},
+    }
+    agent = _make_agent_mock()
+    agent.agent_card_params["protocolVersion"] = "1.0"
+    mock_request = _make_request_mock("GetTask", {"id": "task-1"})
+
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = upstream_response
+    mock_http_response.is_success = True
+    mock_http_response.raise_for_status = MagicMock()
+
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+    mock_handler.client = MagicMock()
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert body["jsonrpc"] == "2.0"
+    assert body["result"]["id"] == "task-1"
+
+    posted = mock_handler.post.call_args
+    assert posted is not None
+    forwarded_body = posted.kwargs.get("json") or posted.args[1]
+    assert forwarded_body["method"] == "GetTask", "a 1.0 upstream must receive the native PascalCase method"
+    assert forwarded_body["params"] == {"id": "task-1"}, "1.0 params must not be lowered to the 0.3 wire"
+    headers = posted.kwargs.get("headers") or {}
+    assert headers.get("A2A-Version") == "1.0", "the negotiated 1.0 version must be advertised upstream"
+
+
+@pytest.mark.asyncio
+async def test_task_forward_0_3_upstream_keeps_legacy_wire():
+    """#44531: a 0.3-configured upstream keeps the legacy wire method and gains no
+    A2A-Version header, preserving existing 0.3 compatibility."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    upstream_response = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {"id": "task-1", "status": {"state": "completed"}},
+    }
+    agent = _make_agent_mock()
+    agent.agent_card_params["protocolVersion"] = "0.3"
+    mock_request = _make_request_mock("GetTask", {"id": "task-1"})
+
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = upstream_response
+    mock_http_response.is_success = True
+    mock_http_response.raise_for_status = MagicMock()
+
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+    mock_handler.client = MagicMock()
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert response.status_code == 200
+    posted = mock_handler.post.call_args
+    assert posted is not None
+    forwarded_body = posted.kwargs.get("json") or posted.args[1]
+    assert forwarded_body["method"] == "tasks/get", "a 0.3 upstream must keep the legacy wire method"
+    headers = posted.kwargs.get("headers") or {}
+    assert headers.get("A2A-Version") is None, "the 0.3 wire path must not advertise a version header"
+
+
+@pytest.mark.asyncio
+async def test_resubscribe_1_0_upstream_uses_pascal_method_and_version_header():
+    """#44531: SubscribeToTask to a 1.0 upstream keeps the PascalCase method and
+    negotiates the version instead of lowering to the 0.3 wire."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    agent.agent_card_params["protocolVersion"] = "1.0"
+    mock_request = _make_request_mock("SubscribeToTask", {"id": "task-1"})
+
+    async def fake_aiter_lines():
+        yield 'data: {"jsonrpc":"2.0","id":"req-1","result":{"kind":"status-update"}}'
+
+    mock_resp = AsyncMock()
+    mock_resp.is_success = True
+    mock_resp.aiter_lines = fake_aiter_lines
+    mock_resp.aclose = AsyncMock()
+
+    mock_async_client = MagicMock()
+    mock_async_client.build_request = MagicMock(return_value=MagicMock())
+    mock_async_client.send = AsyncMock(return_value=mock_resp)
+
+    mock_handler = MagicMock()
+    mock_handler.client = mock_async_client
+    mock_handler.post = AsyncMock()
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        async for _ in response.body_iterator:
+            pass
+
+    built = mock_async_client.build_request.call_args
+    assert built is not None
+    forwarded_body = built.kwargs.get("json") or built.args[1]
+    assert forwarded_body["method"] == "SubscribeToTask", "a 1.0 upstream must receive the native PascalCase method"
+    headers = built.kwargs.get("headers") or {}
+    assert headers.get("A2A-Version") == "1.0", "the negotiated 1.0 version must be advertised upstream"
+
+
+@pytest.mark.asyncio
+async def test_push_notification_config_1_0_envelope_is_validated_and_forwarded():
+    """#44531: a 1.0 CreateTaskPushNotificationConfig uses the 1.0 params envelope
+    ({id, config}) which the validation must accept and forward unlowered."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    upstream_response = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {"id": "task-1", "status": {"state": "completed"}},
+    }
+    agent = _make_agent_mock()
+    agent.agent_card_params["protocolVersion"] = "1.0"
+    params = {"id": "task-1", "config": {"url": "https://webhook.example.com"}}
+    mock_request = _make_request_mock("CreateTaskPushNotificationConfig", params)
+
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = upstream_response
+    mock_http_response.is_success = True
+    mock_http_response.raise_for_status = MagicMock()
+
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+    mock_handler.client = MagicMock()
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "litellm.proxy.agent_endpoints.a2a_endpoints.validate_url",
+                return_value=("https://webhook.example.com", "webhook.example.com"),
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert "error" not in body, f"the 1.0 push config envelope must validate, got: {body}"
+
+    posted = mock_handler.post.call_args
+    assert posted is not None
+    forwarded_body = posted.kwargs.get("json") or posted.args[1]
+    assert forwarded_body["method"] == "CreateTaskPushNotificationConfig"
+    assert forwarded_body["params"] == params, "1.0 params must not be lowered to the 0.3 wire"
