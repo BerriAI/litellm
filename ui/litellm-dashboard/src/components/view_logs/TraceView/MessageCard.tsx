@@ -31,7 +31,7 @@ const markdownComponents: Components = {
     <pre
       className={cn(
         BLOCK_GAP,
-        "max-w-full overflow-x-auto rounded-[4px] bg-muted/40 p-2.5 font-mono text-[13px] leading-[1.5] tracking-normal",
+        "max-w-full overflow-x-auto rounded-sm bg-muted/40 p-2.5 font-mono text-sm leading-normal tracking-normal",
       )}
       {...props}
     />
@@ -55,7 +55,7 @@ export function Card({ children, className }: { children: React.ReactNode; class
   return <section className={cn("rounded-md border border-border bg-background", className)}>{children}</section>;
 }
 
-const TILE = "grid size-4 shrink-0 place-items-center rounded-[2px] p-0.5";
+const TILE = "grid size-4 shrink-0 place-items-center rounded-sm p-0.5";
 
 function RoleTile({ failed = false }: { role: string; failed?: boolean }) {
   return <Wrench className={cn("size-3.5 shrink-0", failed ? "text-destructive" : "text-muted-foreground")} />;
@@ -83,8 +83,8 @@ const HEADER =
   "group/header flex min-w-0 items-center gap-2 border border-border bg-background py-2 pr-2 pl-3 transition-colors hover:bg-muted/30";
 const LABEL = "min-w-0 truncate text-xs leading-5 font-medium text-foreground";
 const CARD_COPY =
-  "ml-auto size-5 shrink-0 rounded-[3px] text-muted-foreground opacity-60 transition-opacity duration-150 group-hover/header:opacity-100 focus-visible:opacity-100 motion-reduce:transition-none [&_svg]:size-4";
-const INLINE_COPY = "size-4 shrink-0 rounded-[3px] text-muted-foreground";
+  "ml-auto size-5 shrink-0 rounded-sm text-muted-foreground opacity-60 transition-opacity duration-150 group-hover/header:opacity-100 focus-visible:opacity-100 motion-reduce:transition-none [&_svg]:size-4";
+const INLINE_COPY = "size-4 shrink-0 rounded-sm text-muted-foreground";
 
 export function ToolCallBlock({ call }: { call: TraceToolCall }) {
   const argEntries = objectEntries(call.args);
@@ -111,7 +111,7 @@ export function MessageCard({ message }: { message: TraceMessage; model: string 
   const expanded = open && hasBody;
   return (
     <article className="rounded-md">
-      <div className={cn(HEADER, "sticky top-10 z-sticky", expanded ? "rounded-t-[4px] border-b-0" : "rounded-[4px]")}>
+      <div className={cn(HEADER, "sticky top-10 z-sticky", expanded ? "rounded-t-sm border-b-0" : "rounded-sm")}>
         <FoldTile label={label} open={open} onToggle={() => setOpen((v) => !v)} />
         <span className={LABEL}>{label}</span>
         <CopyButton value={copyValue} label={`Copy ${label}`} iconOnly className={CARD_COPY} />
@@ -142,7 +142,7 @@ export function ToolResultCard({ name, result, failed = false }: { name: string;
   const tone = failed ? "text-destructive" : "text-muted-foreground";
   return (
     <article className="flex flex-col">
-      <div className={cn(HEADER, open ? "rounded-t-[4px]" : "rounded-[4px]")}>
+      <div className={cn(HEADER, open ? "rounded-t-sm" : "rounded-sm")}>
         <RoleTile role="tool" failed={failed} />
         <span className="flex min-w-0 max-w-[50%] shrink-0 items-center gap-1.5">
           <span className={cn(LABEL, failed && "text-destructive")}>{name}</span>
@@ -157,17 +157,17 @@ export function ToolResultCard({ name, result, failed = false }: { name: string;
             className={cn("flex min-w-0 cursor-pointer items-center gap-1 text-left", tone)}
           >
             <FoldChevron open={open} className="size-3 shrink-0" />
-            {!open && <span className="min-w-0 truncate text-[13px] leading-[1.2]">{result}</span>}
+            {!open && <span className="min-w-0 truncate text-sm leading-tight">{result}</span>}
           </button>
         ) : (
-          <span className={cn("min-w-0 break-words text-[13px] leading-5", tone)}>{result || "No output"}</span>
+          <span className={cn("min-w-0 break-words text-sm leading-5", tone)}>{result || "No output"}</span>
         )}
         <CopyButton value={result} label={`Copy ${name} result`} iconOnly className={CARD_COPY} />
       </div>
       {open && (
         <pre
           className={cn(
-            "max-h-80 overflow-auto rounded-b-[4px] border-[0.67px] border-t-0 border-border bg-muted/40 px-3 py-2 font-mono text-[12px] leading-[1.5] break-words whitespace-pre-wrap",
+            "max-h-80 overflow-auto rounded-b-sm border border-t-0 border-border bg-muted/40 px-3 py-2 font-mono text-xs leading-normal break-words whitespace-pre-wrap",
             tone,
           )}
         >
@@ -197,10 +197,10 @@ export function Section({
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((prev) => !prev)}
-        className="sticky top-0 z-sticky-pinned mb-2 flex h-10 w-full cursor-pointer items-center gap-2.5 bg-background py-1 pr-3 pl-2 text-left transition-colors duration-150 hover:bg-muted/40 motion-reduce:transition-none"
+        className="sticky top-0 z-sticky-pinned mb-2 flex h-10 w-full cursor-pointer items-center gap-2.5 bg-background px-3 text-left transition-colors duration-150 hover:bg-muted/40 motion-reduce:transition-none"
       >
         <FoldChevron open={open} className="size-3 shrink-0 text-foreground" />
-        <span className="text-[13px] leading-[1.2] font-medium tracking-[-0.26px] text-foreground">{title}</span>{" "}
+        <span className="text-sm leading-tight font-medium text-foreground">{title}</span>{" "}
         {count !== undefined && (
           <span className="text-xs font-normal text-muted-foreground">
             {count} {count === 1 ? "message" : "messages"}

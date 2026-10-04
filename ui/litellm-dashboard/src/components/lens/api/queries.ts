@@ -30,12 +30,11 @@ export const lensKeys = {
 };
 
 export const lensQueries = {
-  list(api: LensApi, demo: boolean, workerSetup: boolean) {
+  list(api: LensApi, workerSetup: boolean) {
     const options = {
       queryKey: lensKeys.list(api.scope),
       queryFn: () => api.lenses(),
       refetchInterval: (current: Query<LensList>): number | false => {
-        if (demo) return false;
         const running = current.state.data?.lenses.some((item) =>
           item.jobs.some((job) => ["queued", "running"].includes(job.status)),
         );
@@ -50,24 +49,21 @@ export const lensQueries = {
   modelDetails(api: LensApi) {
     return queryOptions({ queryKey: lensKeys.modelDetails(api.scope), queryFn: () => api.modelDetails() });
   },
-  activity(api: LensApi, loaded: boolean, demo: boolean) {
+  activity(api: LensApi, loaded: boolean) {
     const options = {
       queryKey: lensKeys.activity(api.scope),
       queryFn: () => api.activity(),
       enabled: loaded,
-      refetchInterval: demo ? (false as const) : 5000,
+      refetchInterval: 5000,
     };
     return queryOptions(options);
   },
-  history(
-    api: LensApi,
-    { lensId, historyOffset, demo }: { lensId: string | undefined; historyOffset: number; demo: boolean },
-  ) {
+  history(api: LensApi, { lensId, historyOffset }: { lensId: string | undefined; historyOffset: number }) {
     const options = {
       queryKey: lensKeys.history(api.scope, lensId, historyOffset),
       enabled: !!lensId,
       queryFn: () => api.runs(lensId as string, historyOffset),
-      refetchInterval: demo ? (false as const) : 10000,
+      refetchInterval: 10000,
     };
     return queryOptions(options);
   },

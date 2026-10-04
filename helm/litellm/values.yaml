@@ -636,6 +636,7 @@ lensWorker:
   image:
     repository: ghcr.io/berriai/litellm-lens-worker
     tag: ""
+    digest: ""
     pullPolicy: IfNotPresent
   tokenSecret:
     name: ""

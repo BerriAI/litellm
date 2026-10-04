@@ -7,8 +7,6 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { RunsTab } from "./RunsTab";
 import { InvestigationProgress } from "../InvestigationProgress";
 import { StepFeed } from "../StepFeed";
-import { RunNowDialog } from "./RunNowDialog";
-import { useState } from "react";
 import { InvestigationSummary } from "./InvestigationSummary";
 import { InvestigationFailure } from "./InvestigationFailure";
 import { scopeLabel, sourceLabels } from "../../model/format";
@@ -27,10 +25,10 @@ export function InvestigationDetail({
   busy,
   setEditing,
   setMonitoring,
+  onRunNow,
   update,
   connected,
   results,
-  agents = [],
 }: {
   lens: Lens;
   readOnly: boolean;
@@ -38,12 +36,11 @@ export function InvestigationDetail({
   busy: boolean;
   setEditing: (mode: "new" | "edit" | "duplicate") => void;
   setMonitoring: (open: boolean) => void;
+  onRunNow: () => void;
   update: (write: LensWrite) => Promise<unknown>;
   connected: boolean;
   results: ReturnType<typeof useInvestigationResults>;
-  agents?: readonly string[];
 }) {
-  const [runNow, setRunNow] = useState(false);
   const {
     active,
     job,
@@ -91,7 +88,7 @@ export function InvestigationDetail({
               setEditing={setEditing}
               setMonitoring={setMonitoring}
               update={update}
-              onRunNow={() => setRunNow(true)}
+              onRunNow={onRunNow}
             />
           )}
         </div>
@@ -110,18 +107,6 @@ export function InvestigationDetail({
           />
         )}
         {active && <StepFeed job={active} />}
-        {runNow && (
-          <RunNowDialog
-            lens={lens}
-            agents={agents}
-            busy={busy}
-            onClose={() => setRunNow(false)}
-            onRun={async (request) => {
-              await update((api) => api.startRun(lens.id, request));
-              setRunNow(false);
-            }}
-          />
-        )}
         {job?.error && <InvestigationFailure job={job} connected={connected} />}
         <Tabs value={tab} onValueChange={setTab} key={lens.id}>
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b">

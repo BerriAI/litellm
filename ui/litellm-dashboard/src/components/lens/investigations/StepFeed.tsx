@@ -11,8 +11,8 @@ import type { Job } from "../model/types";
 const STEP_MARK = { model: "✓", stage: "▸", error: "!" } as const;
 const STEP_TONE = {
   model: "text-foreground",
-  stage: "text-[#0011b3] dark:text-[#8b9bff]",
-  error: "text-[#e5484d]",
+  stage: "text-info",
+  error: "text-destructive",
 } as const;
 
 export function StepFeed({ job }: { job: Job }) {
@@ -21,7 +21,7 @@ export function StepFeed({ job }: { job: Job }) {
   const models = modelsUsed(steps);
   const calls = steps.filter((s) => s.kind === "model").length;
   return (
-    <section aria-label="Live investigation steps" className="rounded-md border bg-background font-mono text-[11px]">
+    <section aria-label="Live investigation steps" className="rounded-md border bg-background font-mono text-xs">
       <button
         type="button"
         onClick={() => setOpen(!open)}

@@ -39,6 +39,7 @@ fn map_error_ref(error: &Error) -> PyErr {
         | Error::InsertTooLarge
         | Error::ReadTooLarge => PyOverflowError::new_err(error.to_string()),
         Error::InvalidRow
+        | Error::InvalidLimit(_)
         | Error::InvalidTable
         | Error::InvalidCursor(_)
         | Error::AmbiguousTrace
@@ -59,6 +60,7 @@ fn map_error_ref(error: &Error) -> PyErr {
         Error::Cached(source) => map_error_ref(source),
         Error::Storage(source) => match source {
             StorageError::InvalidRow
+            | StorageError::InvalidLimit(_)
             | StorageError::InvalidTable
             | StorageError::InvalidSchema
             | StorageError::EmptySql
@@ -433,6 +435,13 @@ mod tests {
 
     #[rstest]
     #[case::row(Error::InvalidRow, "ValueError")]
+    #[case::insert_limit(Error::InvalidLimit("CLICKHOUSE_TRACE_MAX_INSERT_BYTES"), "ValueError")]
+    #[case::insert_timeout(
+        Error::Storage(litellm_storage_clickhouse::Error::InvalidLimit(
+            "CLICKHOUSE_INSERT_TIMEOUT_SECONDS"
+        )),
+        "ValueError"
+    )]
     #[case::insert_budget(Error::InsertTooLarge, "OverflowError")]
     #[case::scope(Error::InvalidScope, "ValueError")]
     #[case::schema(Error::SchemaFailed(503), "RuntimeError")]
@@ -482,6 +491,10 @@ mod tests {
     #[rstest]
     #[case::decode_budget(Error::Decode(litellm_traces::Error::TooLarge), "OverflowError")]
     #[case::invalid_export(Error::Decode(litellm_traces::Error::InvalidPayload), "ValueError")]
+    #[case::invalid_decode_limit(
+        Error::Decode(litellm_traces::Error::InvalidLimit("OTLP_MAX_SPANS")),
+        "ValueError"
+    )]
     #[case::cursor(Error::InvalidCursor("trace"), "ValueError")]
     #[case::ambiguous(Error::AmbiguousTrace, "ValueError")]
     #[case::changed_snapshot(Error::TraceChanged, "ValueError")]
