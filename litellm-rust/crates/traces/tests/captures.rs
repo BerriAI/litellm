@@ -172,7 +172,7 @@ fn trace_span(span: DecodedSpan) -> TraceSpansRow {
         .flatten()
         .find_map(|key| match key {
             CallKey::ProviderResponse(id) => Some(id.clone()),
-            CallKey::LiteLlmRequest(_) | CallKey::Transport => None,
+            CallKey::LiteLlmRequest(_) | CallKey::Transport | CallKey::GatewayAttempt => None,
         })
         .unwrap_or_default();
     TraceSpansRow {
@@ -359,7 +359,11 @@ fn unrelated_sibling_transport_leaves_cost_unchanged(
     let calls: Vec<_> = rows
         .iter()
         .filter(|row| {
-            row.kind == ObservationType::Llm && !row.call_keys.contains(&CallKey::Transport)
+            row.kind == ObservationType::Llm
+                && !row
+                    .call_keys
+                    .iter()
+                    .any(|key| matches!(key, CallKey::Transport | CallKey::GatewayAttempt))
         })
         .cloned()
         .collect();
@@ -408,7 +412,9 @@ fn redundant_genai_response_id_keeps_call_evidence(
                 .iter()
                 .filter_map(|key| match key {
                     CallKey::ProviderResponse(id) => Some(id.clone()),
-                    CallKey::LiteLlmRequest(_) | CallKey::Transport => None,
+                    CallKey::LiteLlmRequest(_) | CallKey::Transport | CallKey::GatewayAttempt => {
+                        None
+                    }
                 })
                 .collect();
             (!response_ids.is_empty()).then(|| {

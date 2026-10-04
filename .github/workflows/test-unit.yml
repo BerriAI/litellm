@@ -326,6 +326,7 @@ jobs:
               tests/unit/enterprise/proxy/hooks
               tests/unit/enterprise/proxy/management_endpoints
               tests/unit/enterprise/proxy/test_audit_logging_endpoints.py
+              tests/unit/enterprise/proxy/test_liteadmin.py
               tests/unit/enterprise/enterprise_callbacks/test_prometheus_logging_callbacks.py
             workers: 4
             reruns: 2

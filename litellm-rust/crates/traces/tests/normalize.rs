@@ -255,6 +255,7 @@ fn llamaindex_wrapped_responses_keep_provider_call_keys(#[case] body: &[u8]) {
 #[case::request(litellm_traces::CallKey::LiteLlmRequest("request:with:colons".to_owned()))]
 #[case::response(litellm_traces::CallKey::ProviderResponse("response:with:colons".to_owned()))]
 #[case::transport(litellm_traces::CallKey::Transport)]
+#[case::gateway_attempt(litellm_traces::CallKey::GatewayAttempt)]
 fn call_keys_round_trip_through_storage(#[case] key: litellm_traces::CallKey) {
     assert_eq!(
         key.to_string().parse::<litellm_traces::CallKey>().unwrap(),
@@ -272,6 +273,8 @@ fn call_keys_round_trip_through_storage(#[case] key: litellm_traces::CallKey) {
 #[case::missing_response("provider_response:")]
 #[case::missing_request("litellm_request:")]
 #[case::transport_id("transport:unexpected")]
+#[case::gateway_attempt_separator("gateway_attempt")]
+#[case::gateway_attempt_id("gateway_attempt:unexpected")]
 #[case::unknown("unknown:id")]
 fn malformed_call_keys_are_rejected_at_the_boundary(#[case] encoded: &str) {
     assert!(encoded.parse::<litellm_traces::CallKey>().is_err());
