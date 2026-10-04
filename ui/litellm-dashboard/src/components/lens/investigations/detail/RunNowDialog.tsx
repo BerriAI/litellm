@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +14,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
+import { lensQueries } from "../../api/queries";
+import { useLensApi } from "../../LensServices";
 import type { Lens, RunWindow } from "../../model/types";
 import { RUN_PRESETS, runRequest, type RunChoice, type RunPreset } from "../../model/runRequest";
 
@@ -21,17 +24,18 @@ const localInput = (date: Date) =>
 
 export function RunNowDialog({
   lens,
-  agents,
   busy,
   onClose,
   onRun,
 }: {
   lens: Lens;
-  agents: readonly string[];
   busy: boolean;
   onClose: () => void;
   onRun: (request: RunWindow) => Promise<void>;
 }) {
+  const api = useLensApi();
+  const agentsQuery = useQuery(lensQueries.agents(api, "traces"));
+  const agents = Array.isArray(agentsQuery.data) ? agentsQuery.data : [];
   const now = new Date();
   const [preset, setPreset] = useState<RunPreset>(null);
   const [agent, setAgent] = useState(lens.settings.agent_name ?? "");

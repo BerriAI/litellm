@@ -9,8 +9,8 @@ import { useLensApi } from "../LensServices";
 
 export type LensWrite = (api: LensApi) => Promise<unknown>;
 
-export function useLensUpdate(accessToken: string) {
-  const api = useLensApi(accessToken);
+export function useLensUpdate() {
+  const api = useLensApi();
   const client = useQueryClient();
   return useMutation({
     retry: false,
@@ -30,8 +30,8 @@ function upsertLens(list: LensList | undefined, saved: Lens): LensList | undefin
   return { ...list, lenses };
 }
 
-export function useSaveLens(accessToken: string) {
-  const api = useLensApi(accessToken);
+export function useSaveLens() {
+  const api = useLensApi();
   const client = useQueryClient();
   return useMutation({
     retry: false,
@@ -43,8 +43,8 @@ export function useSaveLens(accessToken: string) {
   });
 }
 
-export function useRevokeWorker(accessToken: string) {
-  const api = useLensApi(accessToken);
+export function useRevokeWorker() {
+  const api = useLensApi();
   const client = useQueryClient();
   return useMutation({
     retry: false,

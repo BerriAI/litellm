@@ -1,7 +1,8 @@
 import { act, fireEvent, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders as renderProviders, testQueryClient } from "@/../tests/test-utils";
+import { testQueryClient } from "@/../tests/test-utils";
+import { renderWithLens } from "@/../tests/lens-test-utils";
 import { ApiError } from "@/lib/http/client";
 import { apiClient } from "@/components/networking";
 import { lensKeys } from "../api/queries";
@@ -16,8 +17,8 @@ const withPreview = (ui: React.ReactElement, open: () => void) => (
   <LensPreviewContext.Provider value={{ target: document.body, open }}>{ui}</LensPreviewContext.Provider>
 );
 
-function renderWithProviders(ui: React.ReactElement, options?: Parameters<typeof renderProviders>[1]) {
-  return renderProviders(ui, { searchParams: window.location.search, ...options });
+function renderWithProviders(ui: React.ReactElement, options?: Parameters<typeof renderWithLens>[1]) {
+  return renderWithLens(ui, { searchParams: window.location.search, ...options });
 }
 
 vi.mock("@/components/networking", () => ({

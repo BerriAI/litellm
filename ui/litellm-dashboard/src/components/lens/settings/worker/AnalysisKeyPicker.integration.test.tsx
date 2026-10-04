@@ -2,7 +2,8 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FormProvider, useForm } from "react-hook-form";
-import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
+import { testQueryClient } from "@/../tests/test-utils";
+import { renderWithLens } from "@/../tests/lens-test-utils";
 import { apiClient } from "@/components/networking";
 import { AnalysisKeyPicker } from "./AnalysisKeyPicker";
 import type { WorkerFormInput } from "./workerSchema";
@@ -20,7 +21,7 @@ function AnalysisKeyPickerForm() {
   });
   return (
     <FormProvider {...form}>
-      <AnalysisKeyPicker accessToken="test" />
+      <AnalysisKeyPicker />
     </FormProvider>
   );
 }
@@ -44,7 +45,7 @@ describe("Lens billing key", () => {
             total_pages: 2,
           },
     );
-    renderWithProviders(<AnalysisKeyPickerForm />);
+    renderWithLens(<AnalysisKeyPickerForm />);
     await user.click(screen.getByRole("combobox", { name: "Charge analysis to" }));
     await user.click(await screen.findByRole("option", { name: "Load more keys" }));
     await user.click(await screen.findByRole("option", { name: "Second page" }));

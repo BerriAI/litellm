@@ -9,13 +9,13 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Input } from "@/components/ui/input";
 import type { WorkerFormInput } from "./workerSchema";
 
-export function AnalysisAccessFields({ accessToken }: { accessToken: string }) {
+export function AnalysisAccessFields() {
   const {
     control,
     register,
     formState: { errors },
   } = useFormContext<WorkerFormInput>();
-  const api = useLensApi(accessToken);
+  const api = useLensApi();
   const models = useQuery(lensQueries.models(api));
   return (
     <div className="space-y-5">

@@ -55,8 +55,8 @@ async function prepareWorker(api: LensApi, registration: WorkerRegistration): Pr
 }
 
 /** Registers a worker (or re-points its billing key), releasing a freshly minted key if registration fails. */
-export function usePrepareWorker(accessToken: string) {
-  const api = useLensApi(accessToken);
+export function usePrepareWorker() {
+  const api = useLensApi();
   const client = useQueryClient();
   return useMutation({
     retry: false,

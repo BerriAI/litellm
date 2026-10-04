@@ -2,12 +2,13 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { mockAllIsIntersecting, setupIntersectionMocking } from "react-intersection-observer/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
+import { testQueryClient } from "@/../tests/test-utils";
+import { renderWithLens as renderWithProviders } from "@/../tests/lens-test-utils";
 import { MonitoringDialog } from "./MonitoringDialog";
 import { InvestigationSetup } from "./InvestigationSetup";
 import { apiClient } from "@/components/networking";
 import { initialWatches, watchChecks } from "../model/watches";
-import { type Settings } from "../model/types";
+import { type AnalysisModelInfo, type Settings } from "../model/types";
 
 vi.mock("@/components/networking", () => ({ apiClient: { post: vi.fn(), get: vi.fn() } }));
 
@@ -35,11 +36,43 @@ const settings: Settings = {
 };
 
 afterEach(() => testQueryClient.clear());
+
+const analysisWorker = {
+  id: "worker",
+  name: "Worker",
+  revoked: false,
+  analysis_key_id: "a".repeat(64),
+  scope: { all_teams: true, api_key_hash: "", team_id: "" },
+  last_seen: "2026-10-01T12:00:00Z",
+};
+
+interface Gateway {
+  readonly models?: readonly string[];
+  readonly modelDetails?: readonly AnalysisModelInfo[];
+  /** Models the lone worker's analysis key may use; one model becomes the setup's default. */
+  readonly keyModels?: readonly string[];
+  readonly agents?: readonly string[];
+}
+
+function gatewayResponse(path: string, gateway: Gateway): unknown {
+  const { models = ["analysis"], modelDetails = [], keyModels = [], agents = [] } = gateway;
+  if (path === "/models") return { data: models.map((id) => ({ id })) };
+  if (path === "/model_group/info") return { data: modelDetails };
+  if (path === "/lens") return { lenses: [], workers: keyModels.length ? [analysisWorker] : [], tracing_enabled: true };
+  if (path === "/key/info") return { info: { models: keyModels, max_budget: null } };
+  if (path === "/lens/agents") return agents;
+  return [];
+}
+
+function mockGateway(gateway: Gateway = {}) {
+  vi.mocked(apiClient.get).mockImplementation(async (path) => gatewayResponse(path, gateway));
+}
+
 beforeEach(() => {
   testQueryClient.clear();
   setupIntersectionMocking(vi.fn);
   vi.mocked(apiClient.get).mockReset();
-  vi.mocked(apiClient.get).mockResolvedValue([]);
+  mockGateway();
   vi.mocked(apiClient.post).mockReset();
   vi.mocked(apiClient.post).mockResolvedValue({ eligible: 1, selected: 1, executions: [] });
 });
@@ -49,7 +82,6 @@ describe("Investigation setup", () => {
     renderWithProviders(
       <InvestigationSetup
         initial={{ ...settings, execution_ids: ["saved-run"] }}
-        models={["analysis"]}
         accessToken="test"
         onClose={vi.fn()}
         onSave={vi.fn()}
@@ -63,15 +95,7 @@ describe("Investigation setup", () => {
   it("preserves check identity and disabled state when a check is edited", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
-    renderWithProviders(
-      <InvestigationSetup
-        initial={settings}
-        models={["analysis"]}
-        accessToken="test"
-        onClose={vi.fn()}
-        onSave={save}
-      />,
-    );
+    renderWithProviders(<InvestigationSetup initial={settings} accessToken="test" onClose={vi.fn()} onSave={save} />);
     await user.click(screen.getByRole("button", { name: "Continue" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Check 1" }), {
       target: { value: "Find repetitive searches\nInclude retries that add no information" },
@@ -111,15 +135,8 @@ describe("Investigation setup", () => {
           }
         : { eligible: 0, executions: [] };
     });
-    renderWithProviders(
-      <InvestigationSetup
-        models={["analysis"]}
-        defaultModel="analysis"
-        accessToken="test"
-        onClose={vi.fn()}
-        onSave={save}
-      />,
-    );
+    mockGateway({ keyModels: ["analysis"] });
+    renderWithProviders(<InvestigationSetup accessToken="test" onClose={vi.fn()} onSave={save} />);
     fireEvent.change(screen.getByRole("textbox", { name: "Investigation name" }), {
       target: { value: "Research follow-up" },
     });
@@ -164,15 +181,8 @@ describe("Investigation setup", () => {
 
 it("walks the three steps in order, reopens a finished step from its summary, and keeps the preview beside them", async () => {
   const user = userEvent.setup();
-  renderWithProviders(
-    <InvestigationSetup
-      models={["analysis"]}
-      defaultModel="analysis"
-      accessToken="test"
-      onClose={vi.fn()}
-      onSave={vi.fn()}
-    />,
-  );
+  mockGateway({ keyModels: ["analysis"] });
+  renderWithProviders(<InvestigationSetup accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
   const steps = within(screen.getByRole("list", { name: "Investigation setup" }));
   expect(steps.getByRole("button", { name: /^Activity/ })).toHaveAttribute("aria-current", "step");
   expect(steps.getByRole("button", { name: /^Run/ })).toBeDisabled();
@@ -195,19 +205,14 @@ it("walks the three steps in order, reopens a finished step from its summary, an
 it("searches providers and saves custom history while preserving existing schedule values", async () => {
   const user = userEvent.setup();
   const save = vi.fn().mockResolvedValue(undefined);
-  renderWithProviders(
-    <InvestigationSetup
-      initial={settings}
-      models={["review", "other"]}
-      modelDetails={[
-        { model_group: "review", providers: ["OpenAI"], mode: "chat", supported_openai_params: ["response_format"] },
-        { model_group: "other", providers: ["Anthropic"], mode: "chat" },
-      ]}
-      accessToken="test"
-      onClose={vi.fn()}
-      onSave={save}
-    />,
-  );
+  mockGateway({
+    models: ["review", "other"],
+    modelDetails: [
+      { model_group: "review", providers: ["OpenAI"], mode: "chat", supported_openai_params: ["response_format"] },
+      { model_group: "other", providers: ["Anthropic"], mode: "chat" },
+    ],
+  });
+  renderWithProviders(<InvestigationSetup initial={settings} accessToken="test" onClose={vi.fn()} onSave={save} />);
   await user.selectOptions(screen.getByRole("combobox", { name: "Review the last unit" }), "1");
   fireEvent.change(screen.getByRole("spinbutton", { name: "Review the last" }), { target: { value: "3" } });
   await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -237,9 +242,7 @@ it("configures monitoring separately and rejects a zero interval", async () => {
 it("allows retrying an investigation save after a server error", async () => {
   const user = userEvent.setup();
   const save = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValue(undefined);
-  renderWithProviders(
-    <InvestigationSetup initial={settings} models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={save} />,
-  );
+  renderWithProviders(<InvestigationSetup initial={settings} accessToken="test" onClose={vi.fn()} onSave={save} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   const saveButton = screen.getByRole("button", { name: "Save changes" });
@@ -273,7 +276,6 @@ it("keeps the draft when readiness changes and blocks a run until the worker rec
   const props = {
     initial: settings,
     mode: "duplicate" as const,
-    models: ["analysis"],
     accessToken: "test",
     onClose: vi.fn(),
     onSave: save,
@@ -293,15 +295,7 @@ it.each(["empty", "error"])("allows editing saved settings when the preview is %
   if (state === "error") vi.mocked(apiClient.post).mockRejectedValue(new Error("Storage unavailable"));
   else vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
   const user = userEvent.setup();
-  renderWithProviders(
-    <InvestigationSetup
-      initial={settings}
-      models={["analysis"]}
-      accessToken="test"
-      onClose={vi.fn()}
-      onSave={vi.fn()}
-    />,
-  );
+  renderWithProviders(<InvestigationSetup initial={settings} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled();
@@ -312,17 +306,11 @@ it.each(["empty", "error"])("allows editing saved settings when the preview is %
 it.each(["loading", "error"])("saves edits with the existing model while models are %s", async (state) => {
   const user = userEvent.setup();
   const save = vi.fn().mockResolvedValue(undefined);
-  renderWithProviders(
-    <InvestigationSetup
-      initial={settings}
-      models={[]}
-      modelsLoading={state === "loading"}
-      modelsError={state === "error" ? "Temporarily unavailable" : undefined}
-      accessToken="test"
-      onClose={vi.fn()}
-      onSave={save}
-    />,
-  );
+  vi.mocked(apiClient.get).mockImplementation((path) => {
+    if (path !== "/models") return Promise.resolve(gatewayResponse(path, {}));
+    return state === "loading" ? new Promise(() => {}) : Promise.reject(new Error("Temporarily unavailable"));
+  });
+  renderWithProviders(<InvestigationSetup initial={settings} accessToken="test" onClose={vi.fn()} onSave={save} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   fireEvent.change(screen.getByRole("textbox", { name: "What should the agent be doing?" }), {
     target: { value: "Include verified sources" },
@@ -337,16 +325,13 @@ it.each(["loading", "error"])("saves edits with the existing model while models 
 it.each(["new", "duplicate"] as const)("blocks a %s investigation until its model is verified", async (mode) => {
   const user = userEvent.setup();
   const save = vi.fn();
+  vi.mocked(apiClient.get).mockImplementation((path) =>
+    path === "/models"
+      ? Promise.reject(new Error("Temporarily unavailable"))
+      : Promise.resolve(gatewayResponse(path, {})),
+  );
   renderWithProviders(
-    <InvestigationSetup
-      initial={settings}
-      mode={mode}
-      models={[]}
-      modelsError="Temporarily unavailable"
-      accessToken="test"
-      onClose={vi.fn()}
-      onSave={save}
-    />,
+    <InvestigationSetup initial={settings} mode={mode} accessToken="test" onClose={vi.fn()} onSave={save} />,
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -359,14 +344,7 @@ it("keeps a duplicated investigation's schedule off and saves the interval once 
   const user = userEvent.setup();
   const save = vi.fn().mockResolvedValue(undefined);
   renderWithProviders(
-    <InvestigationSetup
-      initial={settings}
-      mode="duplicate"
-      models={["analysis"]}
-      accessToken="test"
-      onClose={vi.fn()}
-      onSave={save}
-    />,
+    <InvestigationSetup initial={settings} mode="duplicate" accessToken="test" onClose={vi.fn()} onSave={save} />,
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -385,15 +363,8 @@ it("keeps a duplicated investigation's schedule off and saves the interval once 
 it("watches new investigations every 15 minutes by default, outside advanced options", async () => {
   const user = userEvent.setup();
   const save = vi.fn().mockResolvedValue(undefined);
-  renderWithProviders(
-    <InvestigationSetup
-      models={["analysis"]}
-      defaultModel="analysis"
-      accessToken="test"
-      onClose={vi.fn()}
-      onSave={save}
-    />,
-  );
+  mockGateway({ keyModels: ["analysis"] });
+  renderWithProviders(<InvestigationSetup accessToken="test" onClose={vi.fn()} onSave={save} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   const watching = await screen.findByRole("checkbox", { name: "Keep watching for new traces" });
@@ -421,15 +392,7 @@ it("appends the next preview page as the list scrolls near its end, then stops a
       finishSecondPage = () => resolve({ eligible: 2, selected: 2, executions: [run("two")], next_offset: null });
     });
   });
-  renderWithProviders(
-    <InvestigationSetup
-      initial={settings}
-      models={["analysis"]}
-      accessToken="test"
-      onClose={vi.fn()}
-      onSave={vi.fn()}
-    />,
-  );
+  renderWithProviders(<InvestigationSetup initial={settings} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
   expect(await screen.findByText("Run one")).toBeVisible();
   expect(screen.getByText(/Showing 1 of 2/)).toBeVisible();
   expect(screen.getByRole("status")).toHaveTextContent("2 matching runs");
@@ -465,15 +428,7 @@ it("does not silently analyze everything after individual selection is enabled",
       },
     ],
   });
-  renderWithProviders(
-    <InvestigationSetup
-      initial={settings}
-      models={["analysis"]}
-      accessToken="test"
-      onClose={vi.fn()}
-      onSave={vi.fn()}
-    />,
-  );
+  renderWithProviders(<InvestigationSetup initial={settings} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByText("Advanced options"));
@@ -488,9 +443,7 @@ it("refreshes agent suggestions when the first activity arrives", async () => {
   try {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
-    renderWithProviders(
-      <InvestigationSetup models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />,
-    );
+    renderWithProviders(<InvestigationSetup accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
     await vi.advanceTimersByTimeAsync(400);
     await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
     expect(await screen.findByText(/No matches. You can enter/)).toBeVisible();
@@ -510,7 +463,7 @@ it("refreshes agent suggestions when the first activity arrives", async () => {
         },
       ],
     });
-    vi.mocked(apiClient.get).mockResolvedValue(["support-agent"]);
+    mockGateway({ agents: ["support-agent"] });
     await vi.advanceTimersByTimeAsync(15000);
     await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
     expect(await screen.findByRole("option", { name: "support-agent" })).toBeVisible();
@@ -524,14 +477,7 @@ it.each(["empty", "error"])("blocks a new investigation when its preview is %s",
   else vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
   const user = userEvent.setup();
   renderWithProviders(
-    <InvestigationSetup
-      mode="duplicate"
-      initial={settings}
-      models={["analysis"]}
-      accessToken="test"
-      onClose={vi.fn()}
-      onSave={vi.fn()}
-    />,
+    <InvestigationSetup mode="duplicate" initial={settings} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />,
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -540,16 +486,9 @@ it.each(["empty", "error"])("blocks a new investigation when its preview is %s",
 
 it("exposes an unsupported inherited model before allowing a run", async () => {
   const user = userEvent.setup();
+  mockGateway({ modelDetails: [{ model_group: "analysis", mode: "embedding", providers: [] }] });
   renderWithProviders(
-    <InvestigationSetup
-      mode="duplicate"
-      initial={settings}
-      models={["analysis"]}
-      modelDetails={[{ model_group: "analysis", mode: "embedding", providers: [] }]}
-      accessToken="test"
-      onClose={vi.fn()}
-      onSave={vi.fn()}
-    />,
+    <InvestigationSetup mode="duplicate" initial={settings} accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />,
   );
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -559,13 +498,12 @@ it("exposes an unsupported inherited model before allowing a run", async () => {
 });
 
 it("saves a discovered agent independently of the application name", async () => {
-  vi.mocked(apiClient.get).mockResolvedValue(["research_agent", "support_agent"]);
+  mockGateway({ agents: ["research_agent", "support_agent"] });
   const user = userEvent.setup();
   const save = vi.fn();
   renderWithProviders(
     <InvestigationSetup
       initial={{ ...settings, service: "shared-service" }}
-      models={["analysis"]}
       accessToken="test"
       onClose={vi.fn()}
       onSave={save}
@@ -587,15 +525,8 @@ describe("Watch for", () => {
   it("saves exactly the presets the user toggled, by click and by number key", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
-    renderWithProviders(
-      <InvestigationSetup
-        models={["analysis"]}
-        defaultModel="analysis"
-        accessToken="test"
-        onClose={vi.fn()}
-        onSave={save}
-      />,
-    );
+    mockGateway({ keyModels: ["analysis"] });
+    renderWithProviders(<InvestigationSetup accessToken="test" onClose={vi.fn()} onSave={save} />);
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(tile("unhappy"));
     tile("unsolved").focus();
@@ -618,9 +549,7 @@ describe("Watch for", () => {
       ...settings,
       checks: [{ id: "watch_invented", instruction: "old wording", enabled: true }, settings.checks[1]],
     };
-    renderWithProviders(
-      <InvestigationSetup initial={initial} models={["analysis"]} accessToken="test" onClose={vi.fn()} onSave={save} />,
-    );
+    renderWithProviders(<InvestigationSetup initial={initial} accessToken="test" onClose={vi.fn()} onSave={save} />);
     await user.click(screen.getByRole("button", { name: "Continue" }));
     expect(tile("invented")).toHaveAttribute("aria-pressed", "true");
     expect(tile("unsolved")).toHaveAttribute("aria-pressed", "false");
@@ -636,15 +565,8 @@ describe("Watch for", () => {
 
   it("lets a run start from presets alone and blocks it once nothing is selected", async () => {
     const user = userEvent.setup();
-    renderWithProviders(
-      <InvestigationSetup
-        models={["analysis"]}
-        defaultModel="analysis"
-        accessToken="test"
-        onClose={vi.fn()}
-        onSave={vi.fn()}
-      />,
-    );
+    mockGateway({ keyModels: ["analysis"] });
+    renderWithProviders(<InvestigationSetup accessToken="test" onClose={vi.fn()} onSave={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
     expect(await screen.findByRole("button", { name: "Run and monitor" })).toBeInTheDocument();

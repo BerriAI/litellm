@@ -26,7 +26,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FindingSheet } from "./FindingSheet";
 import { TraceSheet } from "./TraceSheet";
 import { InvestigationSetup } from "../setup/InvestigationSetup";
-import { useAnalysisKeyInfo } from "../settings/worker/useAnalysisKeyInfo";
 import { InvestigationList } from "./InvestigationList";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
@@ -39,16 +38,13 @@ import { readiness } from "../model/status";
 import { type Finding, type Lens, type Settings } from "../model/types";
 
 export function InvestigationsView({ accessToken, readOnly = false }: { accessToken: string; readOnly?: boolean }) {
-  const api = useLensApi(accessToken);
+  const api = useLensApi();
   const client = useQueryClient();
-  const updateLens = useLensUpdate(accessToken);
-  const saveLens = useSaveLens(accessToken);
+  const updateLens = useLensUpdate();
+  const saveLens = useSaveLens();
   const { dialog, target: dialogTarget, openDialog, closeDialog } = useDialogRoute();
   const { issueKey, setIssueKey } = useIssueRoute();
   const query = useQuery(lensQueries.list(api));
-  const models = useQuery(lensQueries.models(api));
-  const modelDetails = useQuery(lensQueries.modelDetails(api));
-  const agents = useQuery(lensQueries.agents(api, "traces"));
   const { lensId: selected, setLensId: setSelected, setTab } = useLensRoute();
   const [skipped, setSkipped] = useState<readonly { id: string; name: string; reason: string }[]>([]);
   const busy = updateLens.isPending;
@@ -65,7 +61,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
   const setupMode = editing === "new" || targetLens ? editing : null;
   const peeked = issueKey ? findFinding(lenses, issueKey) : undefined;
   const resultsLens = peeked?.lens ?? lens;
-  const results = useInvestigationResults(accessToken, resultsLens);
+  const results = useInvestigationResults(resultsLens);
   const {
     finding,
     sampledRuns,
@@ -87,10 +83,6 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
   const setEditing = (mode: "new" | "edit" | "duplicate") => openDialog(mode);
   const setMonitoring = (open: boolean) => (open ? openDialog("monitoring") : closeDialog());
   const connected = useWorkerConnected(query.data?.workers);
-  const activeWorkers = query.data?.workers.filter((worker) => !worker.revoked) ?? [];
-  const defaultKeyId = activeWorkers.length === 1 ? activeWorkers[0].analysis_key_id : undefined;
-  const analysisAccess = useAnalysisKeyInfo(accessToken, defaultKeyId ?? undefined);
-  const defaultModel = analysisAccess.data?.models.length === 1 ? analysisAccess.data.models[0] : undefined;
   const activity = useQuery(lensQueries.activity(api, loaded));
   const { tracesReady, requestsReady, activityReady, ready } = readiness(
     activity.data,
@@ -233,12 +225,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
           ready={ready}
           mode={setupMode}
           initial={setupSettings()}
-          defaultModel={defaultModel}
           defaultSource={!tracesReady && requestsReady ? "requests" : "traces"}
-          models={models.data?.data.map((m) => m.id) ?? []}
-          modelDetails={modelDetails.data?.data ?? []}
-          modelsLoading={models.isLoading}
-          modelsError={models.error?.message}
           accessToken={accessToken}
           onClose={closeDialog}
           onSave={save}
@@ -247,7 +234,6 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
       {dialog === "run_now" && targetLens && (
         <RunNowDialog
           lens={targetLens}
-          agents={Array.isArray(agents.data) ? agents.data : []}
           busy={busy}
           onClose={closeDialog}
           onRun={async (request) => {

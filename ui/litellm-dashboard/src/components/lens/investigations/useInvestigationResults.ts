@@ -11,8 +11,8 @@ import { RESULT_PARSERS, RESULT_TABS, type ResultTab } from "../route";
 
 const isResultTab = (tab: string): tab is ResultTab => (RESULT_TABS as readonly string[]).includes(tab);
 
-export function useInvestigationResults(accessToken: string, lens: Lens | undefined) {
-  const api = useLensApi(accessToken);
+export function useInvestigationResults(lens: Lens | undefined) {
+  const api = useLensApi();
   const [params, setParams] = useQueryStates(RESULT_PARSERS);
   const { run: batchId, section: tab, finding: findingId, finding_status: filter, kind } = params;
   const [historyOffset, setHistoryOffset] = useState(0);

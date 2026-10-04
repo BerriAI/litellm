@@ -40,12 +40,10 @@ function TracingSection({ enabled, onOpenTraces }: { enabled: boolean; onOpenTra
 }
 
 export function LensSettings({
-  accessToken,
   list,
   onReady,
   onOpenTraces,
 }: {
-  accessToken: string;
   list: LensList;
   onReady?: () => void;
   onOpenTraces: () => void;
@@ -57,7 +55,7 @@ export function LensSettings({
         title="Analysis worker"
         description="Runs investigations on your server and bills model usage to an analysis key."
       >
-        <WorkerSettings accessToken={accessToken} workers={list.workers} onReady={onReady} />
+        <WorkerSettings workers={list.workers} onReady={onReady} />
       </SettingsSection>
     </div>
   );

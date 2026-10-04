@@ -23,6 +23,7 @@ import { ExpectationsFields } from "./fields/ExpectationsFields";
 import { RunFields } from "./fields/RunFields";
 import { MatchingActivityPreview } from "./MatchingActivityPreview";
 import { useMatchingActivity } from "./useMatchingActivity";
+import { useAnalysisModels } from "./fields/useAnalysisModels";
 import { TraceSheet } from "../investigations/TraceSheet";
 import { durationLabel } from "../model/format";
 import { type Settings } from "../model/types";
@@ -143,11 +144,6 @@ function SetupStepRow({
 interface SetupProps {
   initial?: Settings;
   mode?: SetupMode;
-  models: string[];
-  modelDetails?: AnalysisModelInfo[];
-  modelsLoading?: boolean;
-  modelsError?: string;
-  defaultModel?: string;
   defaultSource?: Settings["source"];
   accessToken: string;
   ready?: boolean;
@@ -172,17 +168,13 @@ export function InvestigationSetup(props: SetupProps) {
 function SetupEditor({
   initial,
   mode,
-  models,
-  modelDetails = [],
-  modelsLoading = false,
-  modelsError,
-  defaultModel,
   accessToken,
   ready = true,
   onClose,
   onSave,
   form,
 }: SetupProps & { mode: SetupMode; form: UseFormReturn<InvestigationInput, unknown, InvestigationOutput> }) {
+  const { models, modelDetails, modelsLoading, modelsError, defaultModel } = useAnalysisModels();
   const [step, setStep] = useState(0);
   const [error, setError] = useState("");
   const [trace, setTrace] = useState<{ id: string; ref?: string } | null>(null);
@@ -191,7 +183,7 @@ function SetupEditor({
     control,
     name: ["selectedModel", "repeat", "selection", "context", "watching", "questions"],
   });
-  const activity = useMatchingActivity(accessToken);
+  const activity = useMatchingActivity();
   const model = selectedModel ?? defaultModel ?? "";
   useEffect(
     () =>

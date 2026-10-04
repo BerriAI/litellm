@@ -16,12 +16,10 @@ function workerStatus(worker: Worker, now: number): { state: StatusDotProps["sta
 
 export function WorkerList({
   workers,
-  accessToken,
   editBilling,
   revoke,
 }: {
   workers: LensList["workers"];
-  accessToken: string;
   editBilling: (worker: Worker) => void;
   revoke: (id: string) => void;
 }) {
@@ -40,9 +38,7 @@ export function WorkerList({
                   <h3 className="font-medium">{worker.name}</h3>
                   <span className="text-xs text-muted-foreground">{status.label}</span>
                 </div>
-                {worker.analysis_key_id && (
-                  <AnalysisKeySummary accessToken={accessToken} keyId={worker.analysis_key_id} />
-                )}
+                {worker.analysis_key_id && <AnalysisKeySummary keyId={worker.analysis_key_id} />}
               </div>
               <div className="flex items-center gap-1">
                 <Button variant="outline" size="sm" onClick={() => editBilling(worker)}>

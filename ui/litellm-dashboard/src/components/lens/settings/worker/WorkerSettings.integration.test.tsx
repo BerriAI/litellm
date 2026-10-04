@@ -2,7 +2,8 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useQuery } from "@tanstack/react-query";
-import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
+import { testQueryClient } from "@/../tests/test-utils";
+import { renderWithLens } from "@/../tests/lens-test-utils";
 import { apiClient } from "@/components/networking";
 import { lensQueries } from "../../api/queries";
 import { useLensApi } from "../../LensServices";
@@ -29,9 +30,9 @@ const created = {
 
 /** Mirrors the workspace: the worker rows come from the cached `/lens` list, so a mutation must refetch it to update them. */
 function WorkerSettingsHost() {
-  const api = useLensApi("admin");
+  const api = useLensApi();
   const list = useQuery(lensQueries.list(api));
-  return list.data ? <WorkerSettings accessToken="admin" workers={list.data.workers} /> : null;
+  return list.data ? <WorkerSettings workers={list.data.workers} /> : null;
 }
 
 const listCalls = () => vi.mocked(apiClient.get).mock.calls.filter(([path]) => path === "/lens").length;
@@ -52,7 +53,7 @@ describe("Worker setup", () => {
   it("generates a complete command using one worker credential and the configured proxy address", async () => {
     vi.mocked(apiClient.post).mockResolvedValue(created);
     const user = userEvent.setup();
-    renderWithProviders(<WorkerSettings accessToken="admin" workers={[]} />);
+    renderWithLens(<WorkerSettings workers={[]} />, { accessToken: "admin" });
     await user.click(screen.getByText("Advanced options"));
     await user.click(screen.getByRole("switch", { name: "Use an existing virtual key" }));
     expect(screen.getByRole("textbox", { name: "LiteLLM proxy URL" })).toHaveValue("https://gateway.example/proxy");
@@ -89,7 +90,7 @@ describe("Worker setup", () => {
       workers.mockReturnValue([created.worker]);
       return created.worker;
     });
-    renderWithProviders(<WorkerSettingsHost />);
+    renderWithLens(<WorkerSettingsHost />, { accessToken: "admin" });
     expect(await screen.findByText("Billing key required")).toBeInTheDocument();
     const listedBefore = listCalls();
     await user.click(screen.getByRole("button", { name: "Edit access" }));
@@ -115,7 +116,7 @@ describe("Worker setup", () => {
       workers.mockReturnValue([{ ...created.worker, revoked: true }]);
       return true;
     });
-    renderWithProviders(<WorkerSettingsHost />);
+    renderWithLens(<WorkerSettingsHost />, { accessToken: "admin" });
     const revoke = await screen.findByRole("button", { name: "Revoke access" });
     expect(screen.queryByRole("button", { name: "Add worker" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Get install command" })).not.toBeInTheDocument();
@@ -138,7 +139,7 @@ describe("Worker setup", () => {
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({ token_id: "retry-key-id" })
       .mockResolvedValueOnce(created);
-    renderWithProviders(<WorkerSettings accessToken="admin" workers={[]} />);
+    renderWithLens(<WorkerSettings workers={[]} />, { accessToken: "admin" });
     expect(screen.getByRole("button", { name: "Get install command" })).toBeDisabled();
     expect(screen.getByRole("textbox", { name: "LiteLLM proxy URL", hidden: true })).not.toBeVisible();
     await user.click(screen.getByRole("combobox", { name: "Analysis model" }));

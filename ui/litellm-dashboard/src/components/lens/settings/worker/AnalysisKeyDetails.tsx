@@ -26,8 +26,8 @@ function modelsLabel(models: readonly string[]): string {
   return models.length ? models.join(", ") : "All models";
 }
 
-export function AnalysisKeySummary({ accessToken, keyId }: { accessToken: string; keyId: string }) {
-  const key = useAnalysisKeyInfo(accessToken, keyId);
+export function AnalysisKeySummary({ keyId }: { keyId: string }) {
+  const key = useAnalysisKeyInfo(keyId);
   if (key.isLoading) return <p className="text-xs text-muted-foreground">Loading billing key…</p>;
   if (key.error || !key.data)
     return (
@@ -53,8 +53,8 @@ export function AnalysisKeySummary({ accessToken, keyId }: { accessToken: string
   );
 }
 
-export function AnalysisKeyDetails({ accessToken, keyId }: { accessToken: string; keyId: string }) {
-  const key = useAnalysisKeyInfo(accessToken, keyId);
+export function AnalysisKeyDetails({ keyId }: { keyId: string }) {
+  const key = useAnalysisKeyInfo(keyId);
   if (key.isLoading) return <p className="text-xs text-muted-foreground">Loading key permissions…</p>;
   if (key.error || !key.data)
     return (

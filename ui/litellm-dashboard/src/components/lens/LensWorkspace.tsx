@@ -6,7 +6,7 @@ import { Aperture, ArrowUpRight } from "lucide-react";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { LensServicesProvider, useLensApi } from "./LensServices";
+import { LensServicesProvider, useLensApi, useLiveLensServices } from "./LensServices";
 import { LensPreviewContext } from "./LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
@@ -22,7 +22,16 @@ type WorkspaceProps = { accessToken: string; userRole: string; readOnly: boolean
 
 export function LensWorkspace(props: WorkspaceProps) {
   const { demo } = useLensRoute();
-  return demo ? <SampleSession /> : <LensContent {...props} />;
+  return demo ? <SampleSession /> : <LiveSession {...props} />;
+}
+
+function LiveSession(props: WorkspaceProps) {
+  const services = useLiveLensServices(props.accessToken);
+  return (
+    <LensServicesProvider services={services}>
+      <LensContent {...props} />
+    </LensServicesProvider>
+  );
 }
 
 function SampleSession() {
@@ -48,8 +57,8 @@ function DemoToggle({ demo, onChange }: { demo: boolean; onChange: (demo: boolea
 const SETUP_LABELS: Partial<Record<LensDialog, string>> = { new: "New", edit: "Editing", duplicate: "Duplicate" };
 
 /** The one always-mounted `/lens` observer; every other reader is a plain cache subscriber. */
-function useLensOverview(accessToken: string, enabled: boolean, settingsOpen: boolean) {
-  const api = useLensApi(accessToken);
+function useLensOverview(enabled: boolean, settingsOpen: boolean) {
+  const api = useLensApi();
   const { data } = useQuery({
     ...lensQueries.list(api),
     enabled,
@@ -68,7 +77,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
   const activeTab = tab ?? (lensId ? "investigations" : "traces");
   const canInvestigate = isProxyAdminTierRole(userRole);
   const canConfigure = canInvestigate && !readOnly;
-  const { activity, list } = useLensOverview(accessToken, canInvestigate, canConfigure && activeTab === "settings");
+  const { activity, list } = useLensOverview(canInvestigate, canConfigure && activeTab === "settings");
   const workers = canConfigure && list ? list.workers : null;
   const startFirstInvestigation = () => {
     setTab("investigations");
@@ -136,7 +145,6 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
           {workers && list && (
             <TabsContent value="settings" className={cn(PANEL, "p-6")}>
               <LensSettings
-                accessToken={accessToken}
                 list={list}
                 onReady={list.lenses.length === 0 ? startFirstInvestigation : undefined}
                 onOpenTraces={() => setTab("traces")}

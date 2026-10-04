@@ -77,10 +77,10 @@ function useScopeFieldOptions(api: ReturnType<typeof useLensApi>, selection: Sel
 }
 
 /** Live preview of the activity a draft selection matches, debounced so typing a filter does not spam the API. */
-export function useMatchingActivity(accessToken: string): MatchingActivity {
+export function useMatchingActivity(): MatchingActivity {
   const { control, setValue } = useFormContext<InvestigationInput>();
   const [selection, manualSelection] = useWatch({ control, name: ["selection", "manualSelection"] });
-  const api = useLensApi(accessToken);
+  const api = useLensApi();
   const client = useQueryClient();
   const [scope, setScope] = useState(selection);
   const [asOf, setAsOf] = useState(() => new Date().toISOString());

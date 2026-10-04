@@ -27,17 +27,9 @@ function defaultWorkerFormValues(): WorkerFormInput {
   };
 }
 
-export function WorkerSettings({
-  accessToken,
-  workers,
-  onReady,
-}: {
-  accessToken: string;
-  workers: LensList["workers"];
-  onReady?: () => void;
-}) {
-  const revokeWorker = useRevokeWorker(accessToken);
-  const prepareWorker = usePrepareWorker(accessToken);
+export function WorkerSettings({ workers, onReady }: { workers: LensList["workers"]; onReady?: () => void }) {
+  const revokeWorker = useRevokeWorker();
+  const prepareWorker = usePrepareWorker();
   const form = useZodForm(workerFormSchema, {
     defaultValues: defaultWorkerFormValues(),
     mode: "onChange",
@@ -104,7 +96,7 @@ export function WorkerSettings({
   if (screen === "list")
     return (
       <>
-        <WorkerList workers={workers} accessToken={accessToken} editBilling={editBilling} revoke={revoke} />
+        <WorkerList workers={workers} editBilling={editBilling} revoke={revoke} />
         {error && (
           <p role="alert" className="text-sm text-destructive">
             {error}
@@ -124,7 +116,7 @@ export function WorkerSettings({
           <h3 className="text-base font-semibold">{title}</h3>
           <p className="text-sm text-muted-foreground">{completed ? "Ready to run investigations." : description}</p>
         </header>
-        {screen === "form" && <WorkerForm accessToken={accessToken} editingWorker={editingWorker} />}
+        {screen === "form" && <WorkerForm editingWorker={editingWorker} />}
         {screen === "install" && created ? (
           <WorkerInstall
             connected={connected}

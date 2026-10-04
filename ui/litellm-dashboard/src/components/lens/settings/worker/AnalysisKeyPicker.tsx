@@ -17,10 +17,10 @@ import {
   ComboboxList,
 } from "@/components/ui/combobox";
 
-export function AnalysisKeyPicker({ accessToken }: { accessToken: string }) {
+export function AnalysisKeyPicker() {
   const { control } = useFormContext<WorkerFormInput>();
   const value = useWatch({ control, name: "analysisKey" });
-  const api = useLensApi(accessToken);
+  const api = useLensApi();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Key | null>(value ? { token: value } : null);
 
@@ -82,7 +82,7 @@ export function AnalysisKeyPicker({ accessToken }: { accessToken: string }) {
           />
         </div>
       </div>
-      {choice && <AnalysisKeyDetails accessToken={accessToken} keyId={choice.token} />}
+      {choice && <AnalysisKeyDetails keyId={choice.token} />}
       {keyPages.error && (
         <p role="alert" className="text-sm text-destructive">
           {keyPages.error.message}

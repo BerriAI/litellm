@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { apiClient } from "@/components/networking";
-import { TracesApiContext, type TracesApi } from "@/components/view_logs/TraceView/tracesApi";
+import { liveTracesApi, TracesApiContext, type TracesApi } from "@/components/view_logs/TraceView/tracesApi";
 import { liveLensApi, type LensApi } from "./api/service";
 
 export interface LensServices {
@@ -10,13 +10,20 @@ export interface LensServices {
   readonly traces: TracesApi;
 }
 
-export const LensApiContext = createContext<LensApi | null>(null);
+const LensApiContext = createContext<LensApi | null>(null);
 
-/** Without a provider, falls back to the live HTTP implementation for the caller's token. */
-export function useLensApi(accessToken: string): LensApi {
+export function liveLensServices(accessToken: string): LensServices {
+  return { lens: liveLensApi(apiClient, accessToken), traces: liveTracesApi(accessToken) };
+}
+
+export function useLensApi(): LensApi {
   const provided = useContext(LensApiContext);
-  const live = useMemo(() => liveLensApi(apiClient, accessToken), [accessToken]);
-  return provided ?? live;
+  if (!provided) throw new Error("useLensApi needs a LensServicesProvider above it");
+  return provided;
+}
+
+export function useLiveLensServices(accessToken: string): LensServices {
+  return useMemo(() => liveLensServices(accessToken), [accessToken]);
 }
 
 export function LensServicesProvider({ services, children }: { services: LensServices; children: ReactNode }) {

@@ -8,7 +8,7 @@ import { AnalysisKeyPicker } from "./AnalysisKeyPicker";
 import { AnalysisAccessFields } from "./AnalysisAccessFields";
 import type { WorkerFormInput } from "./workerSchema";
 
-export function WorkerForm({ accessToken, editingWorker }: { accessToken: string; editingWorker: string | null }) {
+export function WorkerForm({ editingWorker }: { editingWorker: string | null }) {
   const {
     control,
     register,
@@ -17,11 +17,7 @@ export function WorkerForm({ accessToken, editingWorker }: { accessToken: string
   const useExisting = useWatch({ control, name: "useExisting" });
   return (
     <div className="min-w-0 space-y-5">
-      {useExisting ? (
-        <AnalysisKeyPicker accessToken={accessToken} />
-      ) : (
-        <AnalysisAccessFields accessToken={accessToken} />
-      )}
+      {useExisting ? <AnalysisKeyPicker /> : <AnalysisAccessFields />}
       <details className="text-sm" open={editingWorker ? true : undefined}>
         <summary className="cursor-pointer font-medium">Advanced options</summary>
         <div className="mt-4 space-y-5">
