@@ -11296,3 +11296,28 @@ def test_edit_does_not_rebind_resubmitted_saved_client_to_new_issuer(monkeypatch
     assert not (staged.credentials or {}).get("client_id")
     assert not (staged.credentials or {}).get("client_secret")
     assert saved.client_id == "saved-client"
+
+
+@pytest.mark.parametrize("replacement", [
+    {"client_secret": "replacement-secret"},
+    {"client_secret": None},
+    {"dcr_issuer": "https://new.example", "dcr_server_url": "https://new.example/mcp"},
+])
+def test_staged_issuer_edit_preserves_replacement_with_same_client_id(monkeypatch, replacement):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-static", name="saved", transport="http", auth_type="oauth2",
+        url="https://old.example/mcp", issuer="https://old.example",
+        client_id="shared-client", client_secret="old-secret",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    submitted = {"client_id": "shared-client", **replacement}
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, transport="http", auth_type="oauth2",
+        url="https://new.example/mcp", issuer="https://new.example", credentials=submitted,
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert staged.credentials == submitted
+    assert saved.client_secret == "old-secret"

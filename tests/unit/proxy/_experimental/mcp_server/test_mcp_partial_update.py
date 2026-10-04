@@ -17,6 +17,7 @@ from fastapi import HTTPException
 
 from litellm.proxy._experimental.mcp_server.db import (
     create_mcp_server,
+    decrypt_credentials,
     set_mcp_server_pinned_tools,
     update_mcp_server,
 )
@@ -1335,3 +1336,30 @@ async def test_issuer_edit_does_not_rebind_resubmitted_saved_client():
     credentials = json.loads(written["credentials"])
     assert "client_id" not in credentials
     assert "client_secret" not in credentials
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement", [
+    {"client_secret": "replacement-secret"},
+    {"client_secret": None},
+    {"dcr_issuer": "https://new.example", "dcr_server_url": "https://new.example/mcp"},
+])
+async def test_issuer_edit_preserves_replacement_with_same_client_id(replacement):
+    prisma = _mock_prisma()
+    existing = models.LiteLLM_MCPServerTable.model_construct(
+        server_id="test-server", transport="http", auth_type="oauth2",
+        url="https://old.example/mcp", issuer="https://old.example",
+        credentials=json.dumps({"client_id": "shared-client", "client_secret": "old-secret"}),
+    )
+    prisma.db.litellm_mcpservertable.find_unique.return_value = existing
+    submitted = {"client_id": "shared-client", **replacement}
+    await update_mcp_server(prisma, UpdateMCPServerRequest(
+        server_id=existing.server_id, url="https://new.example/mcp", issuer="https://new.example",
+        credentials=submitted,
+    ), "admin")
+    written = prisma.db.litellm_mcpservertable.update.call_args.kwargs["data"]
+    credentials = decrypt_credentials(json.loads(written["credentials"]))
+    assert credentials["client_id"] == "shared-client"
+    assert credentials["dcr_issuer"] == "https://new.example"
+    assert credentials["dcr_server_url"] == "https://new.example/mcp"
+    assert credentials.get("client_secret") != "old-secret"

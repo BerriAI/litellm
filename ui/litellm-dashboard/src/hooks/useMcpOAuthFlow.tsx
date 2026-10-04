@@ -98,6 +98,7 @@ export const useMcpOAuthFlow = ({
     clientId?: string;
     clientSecret?: string;
     client?: McpDcrCredentials;
+    dcrCredentials?: McpDcrCredentials;
     serverId: string;
     redirectUri: string;
     flowSource?: string;
@@ -339,6 +340,7 @@ export const useMcpOAuthFlow = ({
 
       const client =
         flowState.client ??
+        flowState.dcrCredentials ??
         getRegisteredOAuthClient({ client_id: flowState.clientId, client_secret: flowState.clientSecret });
       setStatus("exchanging");
       const token = await exchangeMcpOAuthToken({

@@ -171,6 +171,19 @@ def _bind_submitted_oauth_client(
     return {**credentials, "dcr_issuer": issuer, "dcr_server_url": url}
 
 
+def is_resubmitted_oauth_client(supplied: dict[str, object], existing: dict[str, object]) -> bool:
+    """Recognize the saved client without conflating same-ID clients from different issuers."""
+    return bool(
+        supplied.get("client_id")
+        and _decrypted_credential_field(supplied, "client_id") == _decrypted_credential_field(existing, "client_id")
+        and all(
+            _decrypted_credential_field(supplied, field) == _decrypted_credential_field(existing, field)
+            for field in ("client_secret", "dcr_issuer", "dcr_server_url")
+            if field in supplied
+        )
+    )
+
+
 def oauth_credentials_for_upstream_edit(
     credentials: Mapping[str, object],
     previous_issuer: str | None,
@@ -1319,9 +1332,7 @@ async def update_mcp_server(
             existing.url if existing else None,
             issuer_changed=issuer_changed or auth_type_changed,
         )
-        if oauth_upstream_edited
-        and _decrypted_credential_field(supplied, "client_id")
-        == _decrypted_credential_field(existing_credentials, "client_id")
+        if oauth_upstream_edited and is_resubmitted_oauth_client(supplied, existing_credentials)
         else supplied
     )
     submitted_credentials: Final = (

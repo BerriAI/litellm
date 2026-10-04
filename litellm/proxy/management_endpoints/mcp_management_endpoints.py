@@ -157,6 +157,7 @@ if MCP_AVAILABLE:
         get_user_env_vars,
         get_user_env_vars_bulk,
         get_user_oauth_credential,
+        is_resubmitted_oauth_client,
         list_server_user_credentials,
         list_user_oauth_credentials,
         mcp_oauth_token_identity,
@@ -931,19 +932,17 @@ if MCP_AVAILABLE:
             payload.model_copy(update={**cleared, "oauth2_flow": payload.oauth2_flow}) if upstream_changed else payload
         )
         supplied: Final = dict(resolved_payload.credentials or {})
-        resubmitted_client: Final = bool(
-            existing_server.client_id and supplied.get("client_id") == existing_server.client_id
-        )
-        if _has_non_admin_config_credentials(resolved_payload.credentials) and not (
-            upstream_changed and resubmitted_client
-        ):
-            return resolved_payload
-
         existing_credentials: Final[dict[str, object]] = {
             credential_key: value
             for server_attr, credential_key in _INHERITED_CREDENTIAL_FIELDS
             if (value := getattr(existing_server, server_attr, None))
         }
+        resubmitted_client: Final = is_resubmitted_oauth_client(supplied, existing_credentials)
+        if _has_non_admin_config_credentials(resolved_payload.credentials) and not (
+            upstream_changed and resubmitted_client
+        ):
+            return resolved_payload
+
         bound_credentials: Final = (
             oauth_credentials_for_upstream_edit(
                 {**existing_credentials, **supplied},
