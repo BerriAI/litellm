@@ -4,6 +4,7 @@ import { useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Aperture, ArrowUpRight } from "lucide-react";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { LensServicesProvider, useLensApi, useLiveLensServices } from "./LensServices";
@@ -146,7 +147,13 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
             <TabsContent value="settings" className={cn(PANEL, "p-6")}>
               <LensSettings
                 list={list}
-                onReady={list.lenses.length === 0 ? startFirstInvestigation : undefined}
+                workerReadyAction={
+                  list.lenses.length === 0 ? (
+                    <Button className="w-full" onClick={startFirstInvestigation}>
+                      New investigation
+                    </Button>
+                  ) : undefined
+                }
                 onOpenTraces={() => setTab("traces")}
               />
             </TabsContent>

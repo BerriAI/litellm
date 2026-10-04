@@ -1,8 +1,10 @@
 "use client";
 
+import type { ComponentProps } from "react";
 import { Button } from "@/components/ui/button";
 import { useNow } from "@/hooks/useNow";
 import { StatusDot, type StatusDotProps } from "@/components/shared/StatusDot";
+import { cn } from "@/lib/cva.config";
 import { workerConnected } from "../../model/status";
 import { agoLabel } from "@/components/view_logs/TraceView/lensField";
 import { AnalysisKeySummary } from "./AnalysisKeyDetails";
@@ -14,18 +16,20 @@ function workerStatus(worker: Worker, now: number): { state: StatusDotProps["sta
   return { state: "off", label: `Not connected · last seen ${agoLabel(Date.parse(worker.last_seen), now)}` };
 }
 
-export function WorkerList({
-  workers,
-  editBilling,
-  revoke,
-}: {
+export type WorkerListProps = ComponentProps<"ul"> & {
   workers: LensList["workers"];
-  editBilling: (worker: Worker) => void;
-  revoke: (id: string) => void;
-}) {
+  onEditBilling: (worker: Worker) => void;
+  onRevoke: (id: string) => void;
+};
+
+export function WorkerList({ workers, onEditBilling, onRevoke, className, ...props }: WorkerListProps) {
   const now = useNow(5000);
   return (
-    <ul className="divide-y divide-border rounded-lg border border-border bg-card">
+    <ul
+      {...props}
+      data-slot="worker-list"
+      className={cn("divide-y divide-border rounded-lg border border-border bg-card", className)}
+    >
       {workers
         .filter((w) => !w.revoked)
         .map((worker) => {
@@ -41,14 +45,14 @@ export function WorkerList({
                 {worker.analysis_key_id && <AnalysisKeySummary keyId={worker.analysis_key_id} />}
               </div>
               <div className="flex items-center gap-1">
-                <Button variant="outline" size="sm" onClick={() => editBilling(worker)}>
+                <Button variant="outline" size="sm" onClick={() => onEditBilling(worker)}>
                   Edit access
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
                   className="text-muted-foreground hover:text-destructive"
-                  onClick={() => revoke(worker.id)}
+                  onClick={() => onRevoke(worker.id)}
                 >
                   Revoke access
                 </Button>

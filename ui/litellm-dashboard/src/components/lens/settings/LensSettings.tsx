@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { Activity, ArrowUpRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/shared/StatusDot";
@@ -11,7 +12,7 @@ const TRACING_DOCS = "https://docs.litellm.ai/docs/proxy/lens";
 
 function TracingSection({ enabled, onOpenTraces }: { enabled: boolean; onOpenTraces: () => void }) {
   return (
-    <SettingsSection title="Tracing" description="Where your agents send runs so Lens can read them.">
+    <SettingsSection heading="Tracing" description="Where your agents send runs so Lens can read them.">
       <SettingsCard className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3 text-sm">
           <Activity aria-hidden="true" className="size-4 text-muted-foreground" />
@@ -41,21 +42,22 @@ function TracingSection({ enabled, onOpenTraces }: { enabled: boolean; onOpenTra
 
 export function LensSettings({
   list,
-  onReady,
+  workerReadyAction,
   onOpenTraces,
 }: {
   list: LensList;
-  onReady?: () => void;
+  /** Replaces the worker install card's Done button once the new worker connects. */
+  workerReadyAction?: ReactNode;
   onOpenTraces: () => void;
 }) {
   return (
     <div aria-label="Settings" role="region" className="flex w-full flex-col divide-y divide-border">
       <TracingSection enabled={list.tracing_enabled} onOpenTraces={onOpenTraces} />
       <SettingsSection
-        title="Analysis worker"
+        heading="Analysis worker"
         description="Runs investigations on your server and bills model usage to an analysis key."
       >
-        <WorkerSettings workers={list.workers} onReady={onReady} />
+        <WorkerSettings workers={list.workers} readyAction={workerReadyAction} />
       </SettingsSection>
     </div>
   );
