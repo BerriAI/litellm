@@ -301,6 +301,15 @@ describe("RunView", () => {
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
+  it("loads the run on retry after a failed load", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceCall).mockRejectedValueOnce(new Error("Traces are temporarily unavailable"));
+    renderRun(research);
+
+    await user.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
+  });
+
   it("finds a step beyond a folded group's first page and reveals it after search clears", async () => {
     const user = userEvent.setup();
     const root = research.spans.find((span) => span.parent_span_id === null)!;
