@@ -1376,7 +1376,6 @@ async def pass_through_request(
             and request.method == "GET"
             and proxy_logging_obj.get_proxy_hook("managed_files") is not None
         ):
-            from litellm.proxy.auth.auth_utils import get_request_route
             from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
                 is_passthrough_list_route,
                 list_passthrough_ids_from_db,
@@ -1646,6 +1645,7 @@ async def pass_through_request(
                     response=response,
                     request_body=_parsed_body or {},
                     url_route=str(url),
+                    request_route=get_request_route(request),
                     start_time=start_time,
                     logging_obj=logging_obj,
                     custom_llm_provider=custom_llm_provider,
@@ -1733,7 +1733,6 @@ async def pass_through_request(
             )
             _passthrough_managed_hook = proxy_logging_obj.get_proxy_hook("managed_files")
             if _passthrough_managed_hook is not None:
-                from litellm.proxy.auth.auth_utils import get_request_route
                 from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
                     rewrite_response_ids,
                 )
@@ -1785,6 +1784,7 @@ async def pass_through_request(
                     httpx_response=response,
                     response_body=response_body,
                     url_route=str(url),
+                    request_route=get_request_route(request),
                     result="",
                     start_time=start_time,
                     end_time=end_time,
@@ -2870,6 +2870,7 @@ async def _relay_passthrough_response_bytes(
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: str | None,
     success_handler_kwargs: dict,
+    request_route: str | None = None,
 ) -> AsyncGenerator[bytes, None]:
     """
     Yield upstream bytes to the client without accumulating them, then fire the
@@ -2899,6 +2900,7 @@ async def _relay_passthrough_response_bytes(
                 httpx_response=response,
                 response_body=None,
                 url_route=url_route,
+                request_route=request_route,
                 result="",
                 start_time=start_time,
                 end_time=datetime.now(),

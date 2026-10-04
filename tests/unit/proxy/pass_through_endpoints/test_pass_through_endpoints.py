@@ -653,6 +653,102 @@ async def test_langfuse_passthrough_no_logging():
     assert mock_logging_obj.model_call_details["passthrough_logging_payload"] == passthrough_logging_payload
 
 
+@pytest.mark.asyncio
+async def test_langfuse_passthrough_skips_logging_on_incoming_request_route():
+    """
+    Regression for #44030: url_route is the upstream target URL
+    (LANGFUSE_HOST/api/public/...), whose path never contains "/langfuse/".
+    The skip must inspect the incoming request route instead, so a
+    langfuse pass-through whose target URL has no "/langfuse/" segment
+    still skips logging.
+    """
+    from datetime import datetime, timezone
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        PassthroughStandardLoggingPayload,
+    )
+
+    log_dispatch = AsyncMock()
+    handler = PassThroughEndpointLogging(log_dispatch=log_dispatch)
+
+    mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    mock_logging_obj.model_call_details = {}
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.text = '{"status": "success"}'
+
+    target_url = "https://langfuse.example.com/api/public/scores"
+    passthrough_logging_payload = PassthroughStandardLoggingPayload(
+        url=target_url,
+        request_body={"traceId": "abc", "name": "test", "value": 1},
+        request_method="POST",
+    )
+
+    result = await handler.pass_through_async_success_handler(
+        httpx_response=mock_response,
+        response_body={"status": "success"},
+        logging_obj=mock_logging_obj,
+        url_route=target_url,
+        request_route="/langfuse/api/public/scores",
+        result="",
+        start_time=datetime.now(timezone.utc),
+        end_time=datetime.now(timezone.utc),
+        cache_hit=False,
+        request_body={"traceId": "abc"},
+        passthrough_logging_payload=passthrough_logging_payload,
+    )
+
+    assert result is None
+    assert mock_logging_obj.model_call_details["passthrough_logging_payload"] == passthrough_logging_payload
+    log_dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_langfuse_passthrough_still_logs_without_request_route():
+    """
+    Without a request_route the handler falls back to the previous behavior:
+    a non-langfuse target URL proceeds to logging.
+    """
+    from datetime import datetime, timezone
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        PassthroughStandardLoggingPayload,
+    )
+
+    log_dispatch = AsyncMock()
+    handler = PassThroughEndpointLogging(log_dispatch=log_dispatch)
+
+    mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    mock_logging_obj.model_call_details = {}
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.text = '{"status": "success"}'
+
+    target_url = "https://langfuse.example.com/api/public/scores"
+    passthrough_logging_payload = PassthroughStandardLoggingPayload(
+        url=target_url,
+        request_body={"traceId": "abc"},
+        request_method="POST",
+    )
+
+    await handler.pass_through_async_success_handler(
+        httpx_response=mock_response,
+        response_body={"status": "success"},
+        logging_obj=mock_logging_obj,
+        url_route=target_url,
+        result="",
+        start_time=datetime.now(timezone.utc),
+        end_time=datetime.now(timezone.utc),
+        cache_hit=False,
+        request_body={"traceId": "abc"},
+        passthrough_logging_payload=passthrough_logging_payload,
+    )
+
+    log_dispatch.assert_awaited_once()
+
+
 def test_construct_target_url_with_subpath():
     """
     Test that construct_target_url_with_subpath correctly constructs target URLs

@@ -424,10 +424,12 @@ class PassThroughEndpointLogging:
         request_body: dict,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
         custom_llm_provider: str | None = None,
+        request_route: str | None = None,
         **kwargs,
     ):
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
         logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
+        langfuse_route: Final = request_route if request_route is not None else url_route
         if self.is_tinyfish_route(url_route, custom_llm_provider):
             # polls and cancels never write spend rows; run-async bills once from the background poller
             if not TinyFishPassthroughLoggingHandler.should_log_request(httpx_response.request.method, url_route):
@@ -457,7 +459,7 @@ class PassThroughEndpointLogging:
                 **kwargs,
             )
             return
-        elif self.is_langfuse_route(url_route):
+        elif self.is_langfuse_route(langfuse_route):
             # Don't log langfuse pass-through requests
             return
         elif self.is_transcribe_route(custom_llm_provider) and TranscribePassthroughLoggingHandler.is_priced_job_start(
