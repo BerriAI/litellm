@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { isTracingNotEnabled, useTraceAvailability } from "@/components/view_logs/TraceView/useAgentTraces";
+import { isTracingNotEnabled, useTraceAvailability } from "@/components/lens/traces/list/useAgentTraces";
 import { useLensAccessToken, useLensApi } from "../data/LensServices";
 import { lensQueries } from "../data/queries";
 import { readiness, type Readiness, type ReadinessInput } from "../model/readiness";

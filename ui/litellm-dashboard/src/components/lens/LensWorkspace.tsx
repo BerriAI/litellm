@@ -3,13 +3,13 @@
 import { useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Aperture, ArrowUpRight } from "lucide-react";
-import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
+import AgentTracesPage from "@/components/lens/traces/list/AgentTracesPage";
 import { Button } from "@/components/ui/button";
-import type { TraceSummary } from "@/components/view_logs/TraceView/traceTypes";
+import type { TraceSummary } from "@/components/lens/traces/types";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { LensServicesProvider, useLensAccessToken, useLensApi, useLiveLensServices } from "./data/LensServices";
-import { LensPreviewContext } from "@/components/view_logs/TraceView/LensPreviewButton";
+import { LensPreviewContext } from "@/components/lens/ui/LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
 import { LensSettings } from "./settings/LensSettings";
@@ -22,7 +22,7 @@ import { cn } from "@/lib/cva.config";
 import { useDialogRoute, useLensRoute, type LensDialog, type LensTab } from "./route";
 import { LensIntroDialog, useLensIntro } from "./onboarding/LensIntroDialog";
 import { OnboardingProvider, type Onboarding } from "./onboarding/OnboardingContext";
-import { traceRefOf, useOpenTraceRouting } from "@/components/view_logs/TraceView/traceRouting";
+import { traceRefOf, useOpenTraceRouting } from "@/components/lens/traces/routing";
 
 type WorkspaceProps = { accessToken: string; userRole: string; readOnly: boolean };
 

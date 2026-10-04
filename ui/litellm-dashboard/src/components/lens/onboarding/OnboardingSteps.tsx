@@ -3,7 +3,7 @@
 import { useId, useRef, useState, type ReactNode } from "react";
 import { ArrowRight, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { TracingSetupFields } from "@/components/view_logs/TraceView/TracingSetupCard";
+import { TracingSetupFields } from "@/components/lens/onboarding/tracing/TracingSetupCard";
 import { cn } from "@/lib/cva.config";
 import { useLensAccessToken } from "../data/LensServices";
 import type { LensReadiness } from "../hooks/useLensReadiness";

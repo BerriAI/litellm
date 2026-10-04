@@ -7,7 +7,7 @@ import LensPage from "@/app/(dashboard)/lens/page";
 
 const { auth } = vi.hoisted(() => ({ auth: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: auth }));
-vi.mock("@/components/view_logs/TraceView/AgentTracesPage", () => ({
+vi.mock("@/components/lens/traces/list/AgentTracesPage", () => ({
   default: ({ isActive }: { isActive: boolean }) => <div>Trace polling {isActive ? "active" : "paused"}</div>,
 }));
 vi.mock("./investigations/InvestigationsView", () => ({

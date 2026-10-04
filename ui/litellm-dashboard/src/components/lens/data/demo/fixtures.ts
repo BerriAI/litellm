@@ -1,4 +1,4 @@
-import type { Trace, Span, SpanDetail } from "@/components/view_logs/TraceView/traceTypes";
+import type { Trace, Span, SpanDetail } from "@/components/lens/traces/types";
 import type { Lens, Finding, Job, Settings } from "../../model/types";
 import { withReleaseCases } from "./lensDemoLongTrace";
 import { scenarios, type Scenario } from "./scenarios";

@@ -2,7 +2,7 @@ import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 
-import type { RunSelection } from "@/components/view_logs/TraceView/traceRouting";
+import type { RunSelection } from "@/components/lens/traces/routing";
 
 import { renderWithLens } from "@/../tests/lens-test-utils";
 import { Inspector } from "@/components/shared/Inspector";
@@ -11,7 +11,7 @@ import type { OwnedFinding } from "../model/inbox";
 import type { Finding, Lens } from "../model/types";
 import { FindingPanel, ownedFindingKey } from "./FindingDetails";
 
-vi.mock("@/components/view_logs/TraceView/TraceDrawer", () => ({
+vi.mock("@/components/lens/traces/detail/TraceDrawer", () => ({
   RunView: ({ traceId, selection }: { traceId: string; selection: RunSelection }) => (
     <div data-testid="run-view">
       {traceId} at {selection.spanId}
