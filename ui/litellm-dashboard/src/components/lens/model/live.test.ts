@@ -60,6 +60,13 @@ describe("provider from model", () => {
     expect(providerOf("/weird")).toBe("");
   });
 
+  it("resolves a bare model name through the model catalog", () => {
+    const catalog = { "gpt-5.6": { litellm_provider: "openai" }, "cerebras/gpt-oss-120b": { litellm_provider: "cerebras" } };
+    expect(providerOf("gpt-5.6", catalog)).toBe("openai");
+    expect(providerOf("my-alias", catalog)).toBe("");
+    expect(analysisModel(["", "gpt-5.6"], catalog)).toBe("gpt-5.6");
+  });
+
   it("prefers a model that names its provider over a bare alias", () => {
     expect(analysisModel(["analysis", "", "cerebras/gpt-oss-120b"])).toBe("cerebras/gpt-oss-120b");
     expect(analysisModel(["", "analysis"])).toBe("analysis");
@@ -342,9 +349,9 @@ describe("honest live list", () => {
 
   it("says how many traces are in flight and how many are done", () => {
     const job = (reviewed: number, selected: number) => ({ reviewed, coverage: { selected } }) as unknown as Job;
-    expect(nowLine(job(18, 30), 4)).toBe("Reviewing 4 at a time · 18 of 30 done");
-    expect(nowLine(job(30, 30), 0)).toBe("30 of 30 done");
-    expect(nowLine(job(3, 0), 1)).toBe("Reviewing 1 at a time · 3 done");
+    expect(nowLine(job(18, 30), 4)).toBe("18 of 30 · 4 in flight");
+    expect(nowLine(job(30, 30), 0)).toBe("30 of 30");
+    expect(nowLine(job(3, 0), 1)).toBe("3 done · 1 in flight");
   });
 
   it("keeps a trace as the same row from in flight to finished", () => {

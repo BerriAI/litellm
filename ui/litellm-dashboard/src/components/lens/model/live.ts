@@ -31,7 +31,11 @@ export function reviewKey(review: Pick<Review, "execution_id" | "at">): string {
   return `${review.execution_id}@${review.at}`;
 }
 
-export function providerOf(model: string): string {
+export type ProviderCatalog = Readonly<Record<string, { litellm_provider?: string } | undefined>>;
+
+export function providerOf(model: string, catalog: ProviderCatalog = {}): string {
+  const known = catalog[model]?.litellm_provider;
+  if (known) return known.toLowerCase();
   const slash = model.indexOf("/");
   return slash > 0 ? model.slice(0, slash).toLowerCase() : "";
 }
@@ -104,8 +108,8 @@ export function unseen(reviews: readonly Review[], seen: ReadonlySet<string>): R
   return reviews.filter((review) => !seen.has(reviewKey(review)));
 }
 
-export function analysisModel(candidates: readonly string[]): string {
-  return candidates.find((model) => providerOf(model)) ?? candidates.find(Boolean) ?? "";
+export function analysisModel(candidates: readonly string[], catalog: ProviderCatalog = {}): string {
+  return candidates.find((model) => providerOf(model, catalog)) ?? candidates.find(Boolean) ?? "";
 }
 
 const SHORT_LABEL = 48;
@@ -232,8 +236,8 @@ export function liveRows(reading: readonly InFlight[], reviews: readonly Review[
 
 export function nowLine(job: Pick<Job, "coverage" | "reviewed">, reading: number): string {
   const { selected } = job.coverage;
-  const done = selected ? `${Math.min(job.reviewed, selected)} of ${selected} done` : `${job.reviewed} done`;
-  return reading ? `Reviewing ${reading} at a time · ${done}` : done;
+  const done = selected ? `${Math.min(job.reviewed, selected)} of ${selected}` : `${job.reviewed} done`;
+  return reading ? `${done} · ${reading} in flight` : done;
 }
 
 export function durationLabel(ms: number): string {

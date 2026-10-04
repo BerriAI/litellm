@@ -3,6 +3,7 @@
 import { ArrowRight, PanelRight, X } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { agoLabel } from "@/components/view_logs/TraceView/lensField";
 import { Button } from "@/components/ui/button";
@@ -18,8 +19,9 @@ const MARK = { issue: "●", clear: "✓", unknown: "–" } as const;
 const LOGO = { sm: "size-3.5", md: "size-[18px]" } as const;
 
 export function ModelName({ model, size = "sm" }: { model: string; size?: keyof typeof LOGO }) {
+  const { data: catalog } = useModelCostMap();
   if (!model) return null;
-  const provider = providerOf(model);
+  const provider = providerOf(model, catalog ?? {});
   return (
     <span data-testid="live-model" className="inline-flex shrink-0 items-center gap-1.5 text-foreground">
       {provider && <ProviderLogo provider={provider} className={cn("shrink-0", LOGO[size])} />}
