@@ -59,7 +59,7 @@ from .guardrail_hooks.llm_as_a_judge import (
     initialize_guardrail as initialize_llm_as_a_judge,
 )
 from .guardrail_initializers import (
-    _configured_event_hooks,
+    configured_event_hooks,
     initialize_bedrock,
     initialize_hide_secrets,
     initialize_lakera,
@@ -578,7 +578,7 @@ def _logging_only_scope_error(
     custom_guardrail_callback: CustomGuardrail, guardrail_name: str, litellm_params: LitellmParams
 ) -> str | None:
     logging_only_scope: Final = litellm_params.logging_only_scope
-    if logging_only_scope is not None and GuardrailEventHooks.logging_only.value not in _configured_event_hooks(
+    if logging_only_scope is not None and GuardrailEventHooks.logging_only.value not in configured_event_hooks(
         litellm_params.mode
     ):
         return (
@@ -823,9 +823,9 @@ class InMemoryGuardrailHandler:
         litellm_params: Final = LitellmParams(**params) if isinstance(params, dict) else params
         guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
         for custom_guardrail_callback in self._tracked_callbacks(guardrail_id):
-            error: Final = _logging_only_scope_error(custom_guardrail_callback, guardrail_name, litellm_params)
-            if error is not None:
-                raise ValueError(error)
+            scope_error = _logging_only_scope_error(custom_guardrail_callback, guardrail_name, litellm_params)
+            if scope_error is not None:
+                raise ValueError(scope_error)
 
     def initialize_custom_guardrail(
         self,

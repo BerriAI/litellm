@@ -36,7 +36,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
 )
 from litellm.proxy.guardrails.guardrail_registry import (
     GuardrailRegistry,
-    _configured_event_hooks,
+    configured_event_hooks,
     contains_encrypted_marker,
     decrypt_guardrail_litellm_params,
     encrypt_guardrail_litellm_params,
@@ -1280,7 +1280,7 @@ async def patch_guardrail(
         clear_stored_scope: Final = (
             "logging_only_scope" not in requested_litellm_params
             and parsed_litellm_params.logging_only_scope is not None
-            and GuardrailEventHooks.logging_only.value not in _configured_event_hooks(parsed_litellm_params.mode)
+            and GuardrailEventHooks.logging_only.value not in configured_event_hooks(parsed_litellm_params.mode)
         )
         litellm_params: Final = (
             LitellmParams(**MappingProxyType({**merged_litellm_params, "logging_only_scope": None}))
