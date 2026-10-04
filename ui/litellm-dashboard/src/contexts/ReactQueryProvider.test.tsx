@@ -16,6 +16,10 @@ describe("root query retry policy", () => {
     expect(await attempts(new ApiError("forbidden", 403, null))).toBe(1);
   });
 
+  it("does not retry a malformed success response, which a retry cannot fix", async () => {
+    expect(await attempts(new ApiError("Expected JSON from /lens but the server returned text/html", 200, ""))).toBe(1);
+  });
+
   it("retries server and network errors", async () => {
     expect(await attempts(new ApiError("down", 503, null))).toBe(4);
     expect(await attempts(new TypeError("Failed to fetch"))).toBe(4);

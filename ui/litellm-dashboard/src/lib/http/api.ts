@@ -13,15 +13,26 @@ const BaseAwareRequest = function (url: string, init?: RequestInit): Request {
   return new globalThis.Request(target, init);
 } as unknown as typeof Request;
 
+const isJsonMediaType = (contentType: string): boolean => /[/+]json\b/i.test(contentType);
+
 const middleware: Middleware = {
   onRequest({ request }) {
+    if (!request.headers.has("Accept")) {
+      request.headers.set("Accept", "application/json");
+    }
     const token = getAuthToken();
     if (token && !request.headers.has(getAuthHeaderName())) {
       request.headers.set(getAuthHeaderName(), `Bearer ${token}`);
     }
   },
-  async onResponse({ response }) {
-    if (response.ok) return response;
+  async onResponse({ request, response }) {
+    if (response.ok) {
+      const contentType = response.headers.get("content-type");
+      if (contentType === null || isJsonMediaType(contentType)) return response;
+      const message = `Expected JSON from ${new URL(request.url).pathname} but the server returned ${contentType}`;
+      reportError(message);
+      throw new ApiError(message, response.status, await response.clone().text());
+    }
     const raw = await response.clone().text();
     let body: unknown = raw;
     let message: string;
@@ -43,9 +54,10 @@ const middleware: Middleware = {
  *
  * The base URL is injected, not fixed at import: every request is built against
  * whatever registerBaseUrlGetter supplies at call time (a split-origin proxy or
- * worker URL), falling back to the current origin. The middleware injects the
- * auth header and maps non-2xx responses to ApiError so query functions can just
- * read `.data`.
+ * worker URL), falling back to the current origin. The middleware sends
+ * `Accept: application/json` (the next dev rewrite routes on it), injects the
+ * auth header, and maps non-2xx responses and non-JSON success bodies to
+ * ApiError so query functions can just read `.data`.
  */
 export const fetchClient = createFetchClient<paths>({
   Request: BaseAwareRequest,
