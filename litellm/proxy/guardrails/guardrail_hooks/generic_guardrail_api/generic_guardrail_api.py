@@ -156,7 +156,7 @@ def _extract_inbound_headers(
     return None
 
 
-def _is_part_list(value: object) -> TypeIs[list[object]]:  # guard-ok: trivial isinstance narrowing
+def _is_part_list(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: trivial isinstance narrowing
     return isinstance(value, list)
 
 
@@ -177,15 +177,13 @@ def _row_as_sent(dumped: JsonValue, caller: Mapping[str, object]) -> JsonValue:
     dumped_content: Final = dumped.get("content")
     if isinstance(dumped_content, list) and len(dumped_content) == len(caller_content):
         return dumped
-    return {**dumped, "content": _as_posted_json(caller_content)}  # mutable-ok: a JsonValue object is a dict
+    return {**dumped, "content": _as_posted_json(caller_content)}
 
 
 def _rows_as_sent(dumped_rows: JsonValue, caller_rows: Sequence[Mapping[str, object]] | None) -> JsonValue:
     if caller_rows is None or not isinstance(dumped_rows, list):
         return dumped_rows
-    return [  # mutable-ok: a JsonValue array is a list
-        _row_as_sent(dumped, caller) for dumped, caller in zip(dumped_rows, caller_rows, strict=True)
-    ]
+    return [_row_as_sent(dumped, caller) for dumped, caller in zip(dumped_rows, caller_rows, strict=True)]
 
 
 def _structured_rows_to_write_back(
@@ -514,7 +512,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             # The model's list content is a lazy iterator that this dump consumes, so it cannot be read again
             dumped: Final[Mapping[str, JsonValue]] = guardrail_request.model_dump(mode="json")
             sent_messages: Final = _rows_as_sent(dumped.get("structured_messages"), structured_messages)
-            request_json: Final = {**dumped, "structured_messages": sent_messages}  # mutable-ok: post() needs a dict
+            request_json: Final = {**dumped, "structured_messages": sent_messages}
 
             response: Final = await self.async_handler.post(
                 url=self.api_base,
