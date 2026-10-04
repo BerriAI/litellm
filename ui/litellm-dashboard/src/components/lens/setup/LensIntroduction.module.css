@@ -1,5 +1,9 @@
-.swarmLight {
-  animation: swarm-flow 28s linear infinite;
+.swarmDot {
+  animation: swarm-flow 6s ease-in-out infinite;
+}
+
+.organizedDots {
+  animation: organized-flow 6s ease-in-out infinite;
 }
 
 .gatewayGlow {
@@ -75,17 +79,34 @@
 }
 
 @keyframes swarm-flow {
-  from {
-    transform: translateX(0);
+  0%,
+  100% {
+    opacity: 0.15;
   }
-  to {
-    transform: translateX(320px);
+  45% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes organized-flow {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  40%,
+  55% {
+    opacity: 1;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .swarmLight {
+  .swarmDot,
+  .organizedDots {
     animation: none;
+    opacity: 0.75;
   }
 
   .gatewayGlow,
