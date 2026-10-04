@@ -11,7 +11,9 @@ NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
 STORED: Final = Lens(
     id="lens",
     scope=Scope(team_id="alpha"),
-    settings=LensSettings(name="Swarm", model="cerebras/gpt-oss-120b", checks=(Check(id="c", instruction="Find loops"),)),
+    settings=LensSettings(
+        name="Swarm", model="cerebras/gpt-oss-120b", checks=(Check(id="c", instruction="Find loops"),)
+    ),
     created_at=NOW,
     next_run_at=NOW,
     budget_month=NOW.strftime("%Y-%m"),
