@@ -15,6 +15,19 @@ const BaseAwareRequest = function (url: string, init?: RequestInit): Request {
 
 const isJsonMediaType = (contentType: string): boolean => /[/+]json\b/i.test(contentType);
 
+const carriesJson = async (response: Response): Promise<boolean> => {
+  const contentType = response.headers.get("content-type");
+  if (contentType !== null && isJsonMediaType(contentType)) return true;
+  const text = await response.clone().text();
+  if (!text) return true;
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const middleware: Middleware = {
   onRequest({ request }) {
     if (!request.headers.has("Accept")) {
@@ -27,8 +40,8 @@ const middleware: Middleware = {
   },
   async onResponse({ request, response }) {
     if (response.ok) {
-      const contentType = response.headers.get("content-type");
-      if (contentType === null || isJsonMediaType(contentType)) return response;
+      if (await carriesJson(response)) return response;
+      const contentType = response.headers.get("content-type") ?? "an unknown content type";
       const message = `Expected JSON from ${new URL(request.url).pathname} but the server returned ${contentType}`;
       reportError(message);
       throw new ApiError(message, response.status, await response.clone().text());

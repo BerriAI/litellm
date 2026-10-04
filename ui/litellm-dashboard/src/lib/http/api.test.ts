@@ -119,6 +119,14 @@ describe("typed api client middleware", () => {
     expect(data).toEqual({ data: [] });
   });
 
+  it("accepts a JSON body served without a JSON content type", async () => {
+    const { fetch } = capturingFetch(new Response(JSON.stringify({ data: [] }), { status: 200 }));
+
+    const { data } = await fetchClient.GET("/model_group/info", { fetch });
+
+    expect(data).toEqual({ data: [] });
+  });
+
   it("omits the auth header when no token is set", async () => {
     const { fetch, requests } = capturingFetch(jsonResponse(200, { data: [] }));
 
