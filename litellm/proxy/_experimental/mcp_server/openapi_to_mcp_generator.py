@@ -183,6 +183,11 @@ def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
         import yaml
 
         class _NoMergeSafeLoader(yaml.SafeLoader):
+            def compose_node(self, parent: Any, index: Any) -> Any:
+                if self.check_event(yaml.events.AliasEvent):
+                    raise yaml.YAMLError("YAML aliases are not supported")
+                return super().compose_node(parent, index)
+
             def flatten_mapping(self, node: Any) -> None:
                 if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in node.value):
                     raise yaml.YAMLError("YAML merge keys are not supported")
