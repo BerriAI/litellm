@@ -6,6 +6,7 @@ import { ApiError } from "@/lib/http/client";
 
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import traceList from "./__fixtures__/trace_list.json";
+import { LensPreviewContext } from "@/components/lens/LensPreviewButton";
 import AgentTracesPage from "./AgentTracesPage";
 import { AgentTracesSection, type TimeControls } from "./AgentTracesSection";
 import type { TracePage, TraceSummary } from "./traceTypes";
@@ -34,15 +35,16 @@ const runs = (traceList as TracePage).data as TraceSummary[];
 
 const renderSection = () =>
   renderWithProviders(
-    <AgentTracesSection
-      accessToken="sk-test"
-      isActive
-      startTime="2026-09-29T00:00"
-      endTime="2026-09-30T00:00"
-      isCustomDate={false}
-      isLiveTail={false}
-      onDemo={vi.fn()}
-    />,
+    <LensPreviewContext.Provider value={{ target: document.body, open: vi.fn() }}>
+      <AgentTracesSection
+        accessToken="sk-test"
+        isActive
+        startTime="2026-09-29T00:00"
+        endTime="2026-09-30T00:00"
+        isCustomDate={false}
+        isLiveTail={false}
+      />
+    </LensPreviewContext.Provider>,
   );
 
 // A UTC-pinned day around the fixture runs (2026-09-30 ~06:43 UTC), so they land in the same bucket in any timezone.

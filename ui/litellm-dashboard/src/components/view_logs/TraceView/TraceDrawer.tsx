@@ -1,6 +1,5 @@
 "use client";
-import { useLensDemo } from "@/components/lens/LensDemoContext";
-import { useTracesApi } from "@/components/lens/services";
+import { type TraceHandoff, useTracesApi } from "./tracesApi";
 
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy } from "lucide-react";
@@ -12,7 +11,6 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
-import { getProxyBaseUrl } from "../../networking";
 import { DetailPane } from "./DetailPane";
 import { IdChip } from "./IdChip";
 import { formatCost } from "./AgentTracesTable";
@@ -36,13 +34,6 @@ import {
   traceDisplayName,
 } from "./traceUtils";
 import { ignoresLetterShortcut } from "../letterShortcut";
-
-/** What "Copy for agent" puts on the clipboard: a one-liner Claude Code / Codex can run. */
-export const agentHandoffText = (traceId: string, spanId?: string | null, traceRef?: string): string => {
-  const url = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${traceId}?format=md${spanId ? `&span_id=${spanId}` : ""}${traceRef ? `&trace_ref=${traceRef}` : ""}`;
-  const what = spanId ? "this step of a LiteLLM agent trace" : "this LiteLLM agent trace";
-  return `Read ${what} and explain what happened and why it failed:\ncurl -s -H "Authorization: Bearer $LITELLM_API_KEY" "${url}"`;
-};
 
 const INITIAL_STATE: SpanTreeState = {
   hideFramework: true,
@@ -86,8 +77,7 @@ const toggle = (set: ReadonlySet<string>, id: string): Set<string> => {
   return next;
 };
 
-function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: string }) {
-  const demo = useLensDemo();
+function CopyForAgent({ handoff }: { handoff: TraceHandoff }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -99,14 +89,7 @@ function CopyForAgent({ traceId, traceRef }: { traceId: string; traceRef?: strin
       variant="outline"
       size="xs"
       className="h-7 shrink-0 gap-1.5 rounded-md text-[12px] shadow-none"
-      onClick={async () =>
-        setCopied(
-          await copyToClipboard(
-            demo ? demo.copyTrace(traceId) : agentHandoffText(traceId, null, traceRef),
-            demo ? "Trace copied" : "Command copied",
-          ),
-        )
-      }
+      onClick={async () => setCopied(await copyToClipboard(handoff.text, handoff.copied))}
     >
       {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
       {copied ? "Copied" : "Copy for agent"}
@@ -142,7 +125,17 @@ function RunIcon({ summary, failed }: { summary: Trace["summary"]; failed: boole
   );
 }
 
-function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => void; embedded: boolean }) {
+function RunHeader({
+  trace,
+  handoff,
+  onBack,
+  embedded,
+}: {
+  trace: Trace;
+  handoff: TraceHandoff;
+  onBack: () => void;
+  embedded: boolean;
+}) {
   const { summary } = trace;
   const failed = summary.status === "error";
   return (
@@ -165,7 +158,7 @@ function RunHeader({ trace, onBack, embedded }: { trace: Trace; onBack: () => vo
           </TabsTrigger>
         </TabsList>
         <div className="shrink-0">
-          <CopyForAgent traceId={summary.trace_id} traceRef={summary.trace_ref} />
+          <CopyForAgent handoff={handoff} />
         </div>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
@@ -447,7 +440,12 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
       )}
       data-testid="run-view"
     >
-      <RunHeader trace={trace} onBack={onBack} embedded={embedded} />
+      <RunHeader
+        trace={trace}
+        handoff={traces.handoff(trace.summary.trace_id, null, trace.summary.trace_ref)}
+        onBack={onBack}
+        embedded={embedded}
+      />
       {(traceQuery.hasNextPage || traceQuery.isError) && (
         <div className="flex items-center justify-between gap-3 border-b px-3 py-2 text-xs" role="status">
           <span>

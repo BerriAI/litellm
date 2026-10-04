@@ -2,7 +2,6 @@
 
 import { useCallback, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useLensDemo } from "../LensDemoContext";
 import { useLensApi } from "../services";
 import { lensQueries } from "../api/queries";
 import { evidenceTarget, mergeFeedback, sortedFindings } from "../model/findings";
@@ -10,7 +9,6 @@ import type { Job, Lens } from "../model/types";
 
 export function useInvestigationResults(accessToken: string, lens: Lens | undefined) {
   const api = useLensApi(accessToken);
-  const demo = useLensDemo();
   const [batchId, setBatchId] = useState("latest");
   const [historyOffset, setHistoryOffset] = useState(0);
   const [tab, setTab] = useState("findings");
@@ -18,7 +16,7 @@ export function useInvestigationResults(accessToken: string, lens: Lens | undefi
   const [filter, setFilter] = useState("open");
   const [kind, setKind] = useState<"issue" | "pattern">("issue");
   const [evidence, setEvidence] = useState<{ id: string; span: string } | null>(null);
-  const history = useQuery(lensQueries.history(api, { lensId: lens?.id, historyOffset, demo: !!demo }));
+  const history = useQuery(lensQueries.history(api, { lensId: lens?.id, historyOffset }));
   const historical = useQuery(lensQueries.run(api, lens?.id, batchId));
   const { job, missingSnapshot, selectedOutsideHistory, batchSettings, batchFindings } = runSnapshot(
     lens,

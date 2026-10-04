@@ -1,5 +1,4 @@
 "use client";
-import { useLensDemo } from "@/components/lens/LensDemoContext";
 
 import moment from "moment";
 import { useMemo, useState } from "react";
@@ -15,6 +14,7 @@ import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
 import { ActiveDot } from "./ActiveDot";
 import { TracingSetupCard } from "./TracingSetupCard";
+import { useTracesLive } from "./tracesApi";
 import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
 
 /** Client-side search (input text or trace id) plus agent / status filters over the loaded runs. */
@@ -62,7 +62,6 @@ interface AgentTracesSectionProps {
   onRunOpenChange?: (open: boolean) => void;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
-  onDemo?: () => void;
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -104,9 +103,8 @@ export function AgentTracesSection({
   onRunOpenChange,
   readOnly = false,
   canMintTracingKey = false,
-  onDemo,
 }: AgentTracesSectionProps) {
-  const demo = useLensDemo();
+  const live = useTracesLive();
   const [openTrace, setOpenTrace] = useState<TraceSummary | null>(null);
   const [query, setQuery] = useState("");
   const [agent, setAgent] = useState(ALL_AGENTS);
@@ -164,11 +162,10 @@ export function AgentTracesSection({
     checking: traces.isFetching,
   };
 
-  if (setup.disabledDetail != null)
-    return <TracingSetupCard detail={setup.disabledDetail} onDemo={onDemo} {...setupProps} />;
+  if (setup.disabledDetail != null) return <TracingSetupCard detail={setup.disabledDetail} {...setupProps} />;
   // Onboarding only on the first, default view; an empty range the user picked keeps its controls.
   if (checkHistory && !history.error && history.data === false)
-    return <TracingSetupCard detail={null} onDemo={onDemo} {...setupProps} />;
+    return <TracingSetupCard detail={null} {...setupProps} />;
   if (showSetup) {
     return (
       <div>
@@ -201,7 +198,7 @@ export function AgentTracesSection({
         onAgentChange={setAgent}
         onStatusChange={setStatus}
       >
-        {!demo && (
+        {live && (
           <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
             <ActiveDot />
             Set up tracing
@@ -213,7 +210,7 @@ export function AgentTracesSection({
             rangeHours={timeControls.rangeHours}
             onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
             live={isLiveTail}
-            showLive={!demo}
+            showLive={live}
             onLiveChange={timeControls.onLiveChange}
             onRefresh={() => {
               setZoom(null);
@@ -247,8 +244,7 @@ export function AgentTracesSection({
 }
 
 function TracesReceived({ received }: { received: boolean }) {
-  const demo = useLensDemo();
-  if (!received || demo) return null;
+  if (!received) return null;
   return (
     <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
       Traces received. Select a run to inspect it.

@@ -13,10 +13,9 @@ import { ReadinessBanner } from "./ReadinessBanner";
 import { RequestEvidenceSheet } from "./RequestEvidenceSheet";
 import { useNow } from "@/hooks/useNow";
 
-import { useLensDemo } from "../LensDemoContext";
+import { useLensRoute } from "../route";
 
 import { useEffect, useState } from "react";
-import { parseAsString, useQueryState } from "nuqs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { FindingSheet } from "./FindingSheet";
@@ -40,15 +39,12 @@ export function InvestigationsView({
   active = true,
   accessToken,
   readOnly = false,
-  onDemo,
 }: {
   view?: "findings" | "investigations";
   active?: boolean;
   accessToken: string;
   readOnly?: boolean;
-  onDemo?: () => void;
 }) {
-  const demo = useLensDemo();
   const api = useLensApi(accessToken);
   const client = useQueryClient();
   const updateLens = useLensUpdate(accessToken);
@@ -56,15 +52,12 @@ export function InvestigationsView({
   const [workerSetup, setWorkerSetup] = useState(false);
   const [monitoring, setMonitoring] = useState(false);
   const now = useNow(2000);
-  const query = useQuery(lensQueries.list(api, !!demo, workerSetup));
+  const query = useQuery(lensQueries.list(api, workerSetup));
   const models = useQuery(lensQueries.models(api));
   const modelDetails = useQuery(lensQueries.modelDetails(api));
   const [agentsAsOf] = useState(() => new Date().toISOString());
   const agents = useQuery(lensQueries.agents(api, agentsAsOf, "traces"));
-  const [liveSelected, setLiveSelected] = useQueryState("lens", parseAsString.withOptions({ history: "push" }));
-  const [demoSelected, setDemoSelected] = useState<string | null>(null);
-  const selected = demo ? demoSelected : liveSelected;
-  const setSelected = demo ? setDemoSelected : setLiveSelected;
+  const { lensId: selected, setLensId: setSelected } = useLensRoute();
   const [editing, setEditing] = useState<"new" | "edit" | "duplicate" | null>(null);
   const [peek, setPeek] = useState(false);
   const [peeked, setPeeked] = useState<InboxRow | null>(null);
@@ -95,7 +88,7 @@ export function InvestigationsView({
     reset: resetResults,
   } = results;
   const selectLens = (id: string | null) => {
-    void setSelected(id);
+    setSelected(id);
     resetResults();
   };
   useEffect(() => {
@@ -111,7 +104,7 @@ export function InvestigationsView({
   const defaultKeyId = activeWorkers.length === 1 ? activeWorkers[0].analysis_key_id : undefined;
   const analysisAccess = useAnalysisKeyInfo(accessToken, defaultKeyId ?? undefined);
   const defaultModel = analysisAccess.data?.models.length === 1 ? analysisAccess.data.models[0] : undefined;
-  const activity = useQuery(lensQueries.activity(api, loaded, !!demo));
+  const activity = useQuery(lensQueries.activity(api, loaded));
   const { tracesReady, requestsReady, activityReady, ready } = readiness(
     activity.data,
     activity.error,
@@ -220,7 +213,7 @@ export function InvestigationsView({
           }}
           onConnect={() => setWorkerSetup(true)}
           onCreate={() => setEditing("new")}
-          onDemo={activity.isSuccess && !ready ? onDemo : undefined}
+          showPreview={activity.isSuccess && !ready}
         />
       )}
       {showReadiness && !ready && <ReadinessBanner activityReady={activityReady} className="py-2 text-xs" />}

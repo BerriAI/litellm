@@ -1,5 +1,4 @@
 "use client";
-import { useLensDemo } from "@/components/lens/LensDemoContext";
 
 import { PanelRightClose } from "lucide-react";
 import { useState } from "react";
@@ -13,7 +12,7 @@ import { DetailContent, errorHeadline, useSpanDetail } from "./DetailContent";
 import { IdChip } from "./IdChip";
 import { RequestDetail } from "./RequestDetail";
 import { SpanIcon } from "./SpanIcon";
-import { agentHandoffText } from "./TraceDrawer";
+import { useTracesApi } from "./tracesApi";
 import type { GroupRowData, TreeRow } from "./traceTree";
 import type { Span, SpanType, Trace } from "./traceTypes";
 import { fmtMs, fmtTok } from "./traceUtils";
@@ -103,7 +102,7 @@ function SpanPane({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("content");
-  const demo = useLensDemo();
+  const handoff = useTracesApi(accessToken).handoff(trace.summary.trace_id, span.span_id, trace.summary.trace_ref);
   const traceId = trace.summary.trace_id;
   const detailQuery = useSpanDetail(
     accessToken,
@@ -151,15 +150,7 @@ function SpanPane({
         </TabsContent>
       </Tabs>
       <PaneFooter>
-        <CopyButton
-          value={
-            demo
-              ? demo.copyTrace(traceId, span.span_id)
-              : agentHandoffText(traceId, span.span_id, trace.summary.trace_ref)
-          }
-          label="Copy step"
-          copiedLabel={demo ? "Step copied" : "Command copied"}
-        />
+        <CopyButton value={handoff.text} label="Copy step" copiedLabel={handoff.copied} />
         <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
           <Meta label="time" value={fmtMs(span.duration_ms)} />
           {tokens > 0 && <Meta label="tokens" value={fmtTok(tokens)} />}
@@ -179,10 +170,21 @@ function GroupMetric({ label, value }: { label: string; value: string }) {
 }
 
 /** ×N group: rollup of every invocation plus the first failure's message. */
-function GroupPane({ trace, row, onClose }: { trace: Trace; row: GroupRowData; onClose: () => void }) {
-  const demo = useLensDemo();
+function GroupPane({
+  trace,
+  row,
+  accessToken,
+  onClose,
+}: {
+  trace: Trace;
+  row: GroupRowData;
+  accessToken: string;
+  onClose: () => void;
+}) {
   const tokens = row.members.reduce((sum, m) => sum + m.input_tokens + m.output_tokens, 0);
   const firstFailure = row.members.find((m) => m.status === "error" && m.error);
+  const sample = (firstFailure ?? row.members[0]).span_id;
+  const handoff = useTracesApi(accessToken).handoff(trace.summary.trace_id, sample, trace.summary.trace_ref);
   return (
     <aside
       className="flex h-full min-w-0 animate-view-fade-in flex-col bg-background pt-4 text-[13px] text-foreground motion-reduce:animate-none"
@@ -216,14 +218,7 @@ function GroupPane({ trace, row, onClose }: { trace: Trace; row: GroupRowData; o
         )}
       </div>
       <PaneFooter>
-        <CopyButton
-          value={
-            demo
-              ? demo.copyTrace(trace.summary.trace_id, (firstFailure ?? row.members[0]).span_id)
-              : agentHandoffText(trace.summary.trace_id, (firstFailure ?? row.members[0]).span_id)
-          }
-          label="Copy group sample"
-        />
+        <CopyButton value={handoff.text} label="Copy group sample" copiedLabel={handoff.copied} />
       </PaneFooter>
     </aside>
   );
@@ -238,6 +233,7 @@ export function DetailPane({ trace, row, accessToken, onClose }: DetailPaneProps
       </div>
     );
   }
-  if (row.kind === "group") return <GroupPane key={row.id} trace={trace} row={row} onClose={onClose} />;
+  if (row.kind === "group")
+    return <GroupPane key={row.id} trace={trace} row={row} accessToken={accessToken} onClose={onClose} />;
   return <SpanPane key={row.id} trace={trace} span={row.span} accessToken={accessToken} onClose={onClose} />;
 }

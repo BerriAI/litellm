@@ -1,4 +1,4 @@
-import { useTracesApi } from "@/components/lens/services";
+import { useTracesApi } from "./tracesApi";
 import { useInfiniteQuery, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import moment from "moment";
 import { useMemo } from "react";

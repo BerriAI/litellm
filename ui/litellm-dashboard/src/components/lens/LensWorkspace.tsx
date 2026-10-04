@@ -1,38 +1,41 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Aperture } from "lucide-react";
-import { parseAsString, parseAsStringLiteral, useQueryState } from "nuqs";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
 import { DemoNotice } from "@/components/shared/DemoNotice";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { LensDemoContext, useLensDemo } from "./LensDemoContext";
-import { LensServicesContext } from "./services";
-import { LensPreviewTarget } from "./LensPreviewButton";
+import { LensServicesProvider } from "./LensServicesProvider";
+import { LensPreviewContext } from "./LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
 import { createLensDemo } from "./demo/createLensDemo";
+import { LENS_TABS, MemoryLensRoute, useLensRoute, type LensTab } from "./route";
 
-type Tab = "traces" | "findings" | "investigations";
 type WorkspaceProps = { accessToken: string; userRole: string; readOnly: boolean };
 
 export function LensWorkspace(props: WorkspaceProps) {
-  const [demoTab, setDemoTab] = useState<Tab | null>(null);
-  return demoTab ? (
-    <DemoSession initialTab={demoTab} onExit={() => setDemoTab(null)} />
+  const [sampleTab, setSampleTab] = useState<LensTab | null>(null);
+  return sampleTab ? (
+    <SampleSession initialTab={sampleTab} onExit={() => setSampleTab(null)} />
   ) : (
-    <LensContent {...props} onDemo={setDemoTab} />
+    <LensContent {...props} onPreview={setSampleTab} />
   );
 }
 
-function DemoSession({ initialTab, onExit }: { initialTab: Tab; onExit: () => void }) {
-  const [demo] = useState(createLensDemo);
+function SampleSession({ initialTab, onExit }: { initialTab: LensTab; onExit: () => void }) {
+  const [services] = useState(() => createLensDemo());
   return (
-    <LensServicesContext.Provider value={demo.services}>
-      <LensDemoContext.Provider value={demo}>
-        <LensContent accessToken="lens-demo" userRole="" readOnly initialTab={initialTab} onExit={onExit} />
-      </LensDemoContext.Provider>
-    </LensServicesContext.Provider>
+    <LensServicesProvider services={services}>
+      <MemoryLensRoute initialTab={initialTab}>
+        <LensContent
+          accessToken="lens-demo"
+          userRole="proxy_admin_viewer"
+          readOnly
+          notice={<DemoNotice onExit={onExit} />}
+        />
+      </MemoryLensRoute>
+    </LensServicesProvider>
   );
 }
 
@@ -40,78 +43,65 @@ function LensContent({
   accessToken,
   userRole,
   readOnly,
-  initialTab = "traces",
-  onDemo,
-  onExit,
-}: WorkspaceProps & { initialTab?: Tab; onDemo?: (tab: Tab) => void; onExit?: () => void }) {
-  const demo = useLensDemo();
-  const [tab, setTab] = useQueryState(
-    "tab",
-    parseAsStringLiteral(["traces", "findings", "investigations"]).withOptions({ history: "push" }),
-  );
-  const [lensId] = useQueryState("lens", parseAsString);
-  const [demoTab, setDemoTab] = useState(initialTab);
+  notice,
+  onPreview,
+}: WorkspaceProps & { notice?: ReactNode; onPreview?: (tab: LensTab) => void }) {
+  const { tab, lensId, setTab } = useLensRoute();
   const [previewTarget, setPreviewTarget] = useState<HTMLDivElement | null>(null);
-  const defaultTab = lensId ? "findings" : "traces";
-  const activeTab = demo ? demoTab : tab ?? defaultTab;
-  const openDemo = onDemo ? () => onDemo(activeTab) : undefined;
+  const activeTab = tab ?? (lensId ? "findings" : "traces");
+  const preview = (view: LensTab) => ({
+    target: previewTarget,
+    open: onPreview && activeTab === view ? () => onPreview(view) : undefined,
+  });
   return (
-    <LensPreviewTarget.Provider value={previewTarget}>
-      <main className="flex min-h-full w-full min-w-0 flex-1 flex-col gap-2 px-3 pt-2 pb-3">
-        {demo && <DemoNotice onExit={onExit} />}
-        <Tabs
-          value={activeTab}
-          onValueChange={(value) => (demo ? setDemoTab(value as Tab) : void setTab(value as Tab))}
-          className="min-h-0 flex-1 gap-2"
-        >
-          <div className="flex min-h-8 flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <h1 className="flex items-center gap-1.5 text-sm font-semibold tracking-tight">
-                <Aperture aria-hidden="true" className="size-4" strokeWidth={2} />
-                Lens
-              </h1>
-              <TabsList aria-label="Lens" className="h-8">
-                <TabsTrigger value="traces" className="px-3">
-                  Traces
+    <main className="flex min-h-full w-full min-w-0 flex-1 flex-col gap-2 px-3 pt-2 pb-3">
+      {notice}
+      <Tabs value={activeTab} onValueChange={(value) => setTab(value as LensTab)} className="min-h-0 flex-1 gap-2">
+        <div className="flex min-h-8 flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <h1 className="flex items-center gap-1.5 text-sm font-semibold tracking-tight">
+              <Aperture aria-hidden="true" className="size-4" strokeWidth={2} />
+              Lens
+            </h1>
+            <TabsList aria-label="Lens" className="h-8">
+              {Object.entries(LENS_TABS).map(([view, label]) => (
+                <TabsTrigger key={view} value={view} className="px-3">
+                  {label}
                 </TabsTrigger>
-                <TabsTrigger value="findings" className="px-3">
-                  Findings
-                </TabsTrigger>
-                <TabsTrigger value="investigations" className="px-3">
-                  Investigations
-                </TabsTrigger>
-              </TabsList>
-            </div>
-            <div ref={setPreviewTarget} />
+              ))}
+            </TabsList>
           </div>
-          <TabsContent value="traces" keepMounted className="flex min-h-0 flex-col">
+          <div ref={setPreviewTarget} />
+        </div>
+        <TabsContent value="traces" keepMounted className="flex min-h-0 flex-col overflow-y-auto">
+          <LensPreviewContext.Provider value={preview("traces")}>
             <AgentTracesPage
               accessToken={accessToken}
               isActive={activeTab === "traces"}
               readOnly={readOnly}
-              canMintTracingKey={!demo && isProxyAdminRole(userRole)}
-              onDemo={activeTab === "traces" ? openDemo : undefined}
+              canMintTracingKey={isProxyAdminRole(userRole)}
             />
-          </TabsContent>
-          {(["findings", "investigations"] as const).map((view) => (
-            <TabsContent key={view} value={view} keepMounted={!!demo} className="flex min-h-0 flex-col">
-              {demo || isProxyAdminTierRole(userRole) ? (
+          </LensPreviewContext.Provider>
+        </TabsContent>
+        {(["findings", "investigations"] as const).map((view) => (
+          <TabsContent key={view} value={view} className="flex min-h-0 flex-col overflow-y-auto">
+            <LensPreviewContext.Provider value={preview(view)}>
+              {isProxyAdminTierRole(userRole) ? (
                 <InvestigationsView
                   view={view}
                   active={activeTab === view}
                   accessToken={accessToken}
                   readOnly={readOnly || !isProxyAdminRole(userRole)}
-                  onDemo={activeTab === view ? openDemo : undefined}
                 />
               ) : (
                 <p className="py-6 text-sm text-muted-foreground">
                   Investigations require proxy administrator access. You can still view your traces.
                 </p>
               )}
-            </TabsContent>
-          ))}
-        </Tabs>
-      </main>
-    </LensPreviewTarget.Provider>
+            </LensPreviewContext.Provider>
+          </TabsContent>
+        ))}
+      </Tabs>
+    </main>
   );
 }
