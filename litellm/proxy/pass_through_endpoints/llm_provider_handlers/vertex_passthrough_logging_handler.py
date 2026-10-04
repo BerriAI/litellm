@@ -450,7 +450,7 @@ class VertexPassthroughLoggingHandler:
         standard_pass_through_response_object: Final[StandardPassThroughResponseObject] = {
             "response": json_response,
         }
-        return {  # mutable-ok: passthrough logging contract requires a concrete result dictionary
+        return {
             "result": standard_pass_through_response_object,
             "kwargs": kwargs,
         }
@@ -458,7 +458,7 @@ class VertexPassthroughLoggingHandler:
     @staticmethod
     def _is_audio_predict_response(
         model: str,
-        json_response: dict,  # mutable-ok: predicate inspects the decoded provider response dictionary without mutation
+        json_response: Mapping[str, object],
     ) -> bool:
         return (
             VertexPassthroughLoggingHandler._get_audio_prediction_count(json_response=json_response) > 0
@@ -467,7 +467,7 @@ class VertexPassthroughLoggingHandler:
 
     @staticmethod
     def _get_audio_prediction_count(
-        json_response: dict,  # mutable-ok: counter inspects the decoded provider response dictionary without mutation
+        json_response: Mapping[str, object],
     ) -> int:
         predictions: Final = json_response.get("predictions")
         if not isinstance(predictions, list):

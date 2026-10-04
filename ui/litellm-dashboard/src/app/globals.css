@@ -64,12 +64,61 @@
 }
 
 @theme inline {
+  --animate-slot-slide-in: slot-slide-in 150ms cubic-bezier(0, 0, 0.2, 1) both;
+  --animate-trace-drawer-in: trace-drawer-in 200ms cubic-bezier(0.25, 1, 0.5, 1) both;
+  --animate-trace-drawer-out: trace-drawer-out 200ms cubic-bezier(0.4, 0, 1, 1) both;
+
+  @keyframes trace-drawer-in {
+    from {
+      opacity: 0;
+      transform: translateX(2rem) scaleX(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes trace-drawer-out {
+    from {
+      opacity: 1;
+      transform: none;
+    }
+    to {
+      opacity: 0;
+      transform: translateX(2rem) scaleX(0.98);
+    }
+  }
+
+  @keyframes slot-slide-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
   @keyframes scroll-fade-reveal-e {
     from {
       --scroll-fade-e: var(--_scroll-fade-size-e, var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10))));
     }
     to {
       --scroll-fade-e: 0px;
+    }
+  }
+}
+
+@layer utilities {
+  .animate-trace-drawer-in,
+  .animate-trace-drawer-out {
+    transform-origin: right center;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-trace-drawer-in,
+    .animate-trace-drawer-out,
+    .animate-slot-slide-in {
+      animation: none !important;
     }
   }
 }
@@ -141,6 +190,38 @@
   --sidebar-ring: oklch(0.707 0.022 261.325);
   --neutral-border: #dcddeb;
   --logo-surface: oklch(1 0 0);
+  --trace-text: oklch(0.21 0.03 256);
+  --trace-text-2: oklch(0.35 0.03 256);
+  --trace-text-secondary: oklch(0.35 0.03 256);
+  --trace-duration: oklch(0.48 0.03 230);
+  --trace-key: oklch(0.55 0.03 240);
+  --trace-placeholder: oklch(0.7 0.02 240);
+  --trace-surface: oklch(1 0 0);
+  --trace-chip: oklch(0.975 0.006 220);
+  --trace-row-hover: oklch(0.975 0.008 215);
+  --trace-row-selected: oklch(0.95 0.035 200);
+  --trace-brand: oklch(0.6 0.13 195);
+  --trace-border: oklch(0.92 0.01 230);
+  --trace-line: oklch(0.88 0.03 205);
+  --trace-card-border: oklch(0.93 0.01 230);
+  --trace-dot: oklch(0.86 0.05 190);
+  --trace-tab-active: oklch(0.95 0.025 205);
+  --trace-tab-hover: oklch(0.93 0.02 215);
+  --trace-tag: oklch(0.95 0.02 205);
+  --trace-chain: oklch(0.56 0.17 255);
+  --trace-llm: oklch(0.6 0.13 215);
+  --trace-tool: oklch(0.64 0.14 165);
+  --trace-glyph: oklch(0.99 0 0);
+  --trace-human: oklch(0.5 0.15 260);
+  --trace-human-glyph: oklch(0.95 0.04 210);
+  --trace-turn: oklch(0.96 0.03 200);
+  --trace-turn-border: oklch(0.75 0.1 200);
+  --trace-ok: oklch(0.92 0.08 160);
+  --trace-ok-glyph: oklch(0.55 0.15 155);
+  --trace-called: oklch(0.93 0.06 185);
+  --trace-called-text: oklch(0.38 0.08 195);
+  --trace-shadow-md: 0 4px 6px -1px #0b1b2e1a, 0 2px 4px -1px #0b1b2e0f;
+  --trace-shadow-xs: 0 1px 2px 0 #0b1b2e0d;
 }
 
 .dark {
@@ -183,9 +264,73 @@
   --sidebar-border: oklch(0.187 0 0);
   --sidebar-ring: oklch(0.569 0 0);
   --neutral-border: var(--border);
+  --trace-text: oklch(0.96 0.005 220);
+  --trace-text-2: oklch(0.88 0.01 220);
+  --trace-text-secondary: oklch(0.88 0.01 220);
+  --trace-duration: oklch(0.78 0.03 200);
+  --trace-key: oklch(0.68 0.03 220);
+  --trace-placeholder: oklch(0.5 0.02 230);
+  --trace-surface: oklch(0.19 0.012 240);
+  --trace-chip: oklch(0.23 0.015 235);
+  --trace-row-hover: oklch(0.23 0.018 230);
+  --trace-row-selected: oklch(0.29 0.05 210);
+  --trace-brand: oklch(0.78 0.13 190);
+  --trace-border: oklch(0.3 0.02 235);
+  --trace-line: oklch(0.36 0.04 210);
+  --trace-card-border: oklch(0.27 0.02 235);
+  --trace-dot: oklch(0.45 0.06 195);
+  --trace-tab-active: oklch(0.28 0.03 215);
+  --trace-tab-hover: oklch(0.32 0.03 220);
+  --trace-tag: oklch(0.28 0.03 215);
+  --trace-chain: oklch(0.6 0.17 255);
+  --trace-llm: oklch(0.64 0.13 215);
+  --trace-tool: oklch(0.68 0.14 165);
+  --trace-glyph: oklch(0.99 0 0);
+  --trace-human: oklch(0.56 0.15 260);
+  --trace-human-glyph: oklch(0.95 0.04 210);
+  --trace-turn: oklch(0.29 0.05 210);
+  --trace-turn-border: oklch(0.5 0.09 200);
+  --trace-ok: oklch(0.35 0.07 160);
+  --trace-ok-glyph: oklch(0.82 0.15 155);
+  --trace-called: oklch(0.32 0.06 190);
+  --trace-called-text: oklch(0.88 0.08 185);
+  --trace-shadow-md: 0 4px 6px -1px #00000080, 0 2px 4px -1px #00000066;
+  --trace-shadow-xs: 0 1px 2px 0 #0000004d;
 }
 
 @theme inline {
+  --color-trace-text: var(--trace-text);
+  --color-trace-text-2: var(--trace-text-2);
+  --color-trace-text-secondary: var(--trace-text-secondary);
+  --color-trace-duration: var(--trace-duration);
+  --color-trace-key: var(--trace-key);
+  --color-trace-placeholder: var(--trace-placeholder);
+  --color-trace-surface: var(--trace-surface);
+  --color-trace-chip: var(--trace-chip);
+  --color-trace-row-hover: var(--trace-row-hover);
+  --color-trace-row-selected: var(--trace-row-selected);
+  --color-trace-brand: var(--trace-brand);
+  --color-trace-border: var(--trace-border);
+  --color-trace-line: var(--trace-line);
+  --color-trace-card-border: var(--trace-card-border);
+  --color-trace-dot: var(--trace-dot);
+  --color-trace-tab-active: var(--trace-tab-active);
+  --color-trace-tab-hover: var(--trace-tab-hover);
+  --color-trace-tag: var(--trace-tag);
+  --color-trace-chain: var(--trace-chain);
+  --color-trace-llm: var(--trace-llm);
+  --color-trace-tool: var(--trace-tool);
+  --color-trace-glyph: var(--trace-glyph);
+  --color-trace-human: var(--trace-human);
+  --color-trace-human-glyph: var(--trace-human-glyph);
+  --color-trace-turn: var(--trace-turn);
+  --color-trace-turn-border: var(--trace-turn-border);
+  --color-trace-ok: var(--trace-ok);
+  --color-trace-ok-glyph: var(--trace-ok-glyph);
+  --color-trace-called: var(--trace-called);
+  --color-trace-called-text: var(--trace-called-text);
+  --shadow-trace-md: var(--trace-shadow-md);
+  --shadow-trace-xs: var(--trace-shadow-xs);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -305,4 +450,13 @@
    showing its own edges around a differently sized child. */
 [data-slot="dialog-content"][data-nested-dialog-open] {
   visibility: hidden;
+}
+
+@keyframes lens-sweep {
+  from {
+    left: -6rem;
+  }
+  to {
+    left: 100%;
+  }
 }

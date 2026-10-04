@@ -5,8 +5,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { FieldGroup } from "@/components/ui/field";
 import { AgentCreateInfo, AgentCredentialFieldMetadata } from "@/components/networking";
 import { PasswordInput } from "@/components/shared/PasswordInput";
-import { AGENT_FORM_CONFIG } from "./agent_config";
+import { AGENT_FORM_CONFIG, applyKillSwitchToPayload } from "./agent_config";
 import CostConfigFields, { COST_FIELD_NAMES } from "./cost_config_fields";
+import KillSwitchFormFields from "./KillSwitchFormFields";
+import { KILL_SWITCH_PANEL_KEY, type KillSwitchConfig } from "./kill_switch_config";
 import {
   AgentFormField,
   AgentFormPanel,
@@ -21,8 +23,10 @@ interface DynamicAgentFormFieldsProps {
   panels: CollapsiblePanelsState;
 }
 
-export const unmountedDynamicFieldNames = (mountedPanels: readonly string[]): readonly string[] =>
-  mountedPanels.includes(AGENT_FORM_CONFIG.cost.key) ? [] : COST_FIELD_NAMES;
+export const unmountedDynamicFieldNames = (mountedPanels: readonly string[]): readonly string[] => [
+  ...(mountedPanels.includes(AGENT_FORM_CONFIG.cost.key) ? [] : COST_FIELD_NAMES),
+  ...(mountedPanels.includes(KILL_SWITCH_PANEL_KEY) ? [] : ["kill_switch"]),
+];
 
 // A field's validation_pattern is server-supplied metadata; if it's ever not a valid regex, skip
 // validation rather than throwing during render and taking the whole form down with it.
@@ -143,11 +147,18 @@ const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({ agentTy
       <AgentFormPanel panelKey={AGENT_FORM_CONFIG.cost.key} title={AGENT_FORM_CONFIG.cost.title} panels={panels}>
         <CostConfigFields />
       </AgentFormPanel>
+      <AgentFormPanel panelKey={KILL_SWITCH_PANEL_KEY} title="Kill Switch" panels={panels}>
+        <KillSwitchFormFields />
+      </AgentFormPanel>
     </div>
   </>
 );
 
-export const buildDynamicAgentData = (values: AgentFormValues, agentTypeInfo: AgentCreateInfo): AgentRequestPayload => {
+export const buildDynamicAgentData = (
+  values: AgentFormValues,
+  agentTypeInfo: AgentCreateInfo,
+  existingAgent?: { kill_switch?: KillSwitchConfig | null },
+): AgentRequestPayload => {
   const litellmParams: Record<string, unknown> = {
     ...(agentTypeInfo.litellm_params_template || {}),
   };
@@ -206,6 +217,8 @@ export const buildDynamicAgentData = (values: AgentFormValues, agentTypeInfo: Ag
   if (values.rpm_limit != null) agentData.rpm_limit = values.rpm_limit;
   if (values.session_tpm_limit != null) agentData.session_tpm_limit = values.session_tpm_limit;
   if (values.session_rpm_limit != null) agentData.session_rpm_limit = values.session_rpm_limit;
+
+  applyKillSwitchToPayload(agentData, values.kill_switch, existingAgent);
 
   return agentData;
 };

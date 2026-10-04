@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-http.workspace = true
 tokio.workspace = true
 litellm-auth-azure.workspace = true
 litellm-auth-types.workspace = true
@@ -18,7 +19,8 @@ veil.workspace = true
 percent-encoding = "2.3"
 
 [dev-dependencies]
-wiremock = "0.6.5"
+litellm-http = { workspace = true, features = ["test-support"] }
+wiremock.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

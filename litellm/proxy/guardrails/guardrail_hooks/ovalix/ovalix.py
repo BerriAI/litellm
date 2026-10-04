@@ -317,7 +317,10 @@ class OvalixGuardrail(CustomGuardrail):
             **(MappingProxyType({"oversize": True}) if oversize else _NO_METADATA),
         }
         response: Final = await self._async_handler.post(
-            f"{self._tracker_api_base}/tracking/beta/{route}", headers=self._tracker_headers, json=payload
+            f"{self._tracker_api_base}/tracking/beta/{route}",
+            headers=self._tracker_headers,
+            json=payload,
+            timeout=self.timeout,
         )
         response.raise_for_status()
         return response.json()
@@ -584,7 +587,7 @@ class OvalixGuardrail(CustomGuardrail):
             return self._app_name_regex
         url: Final = f"{self._tracker_api_base}/tracking/beta/app_name_regex"
         try:
-            response: Final = await self._async_handler.get(url, headers=self._tracker_headers)
+            response: Final = await self._async_handler.get(url, headers=self._tracker_headers, timeout=self.timeout)
             response.raise_for_status()
             compiled: Final = re.compile(response.json()["regex"])
         except Exception as e:
@@ -685,7 +688,7 @@ class OvalixGuardrail(CustomGuardrail):
         url: Final = f"{self._tracker_api_base}/tracking/beta/resolve_application"
         try:
             response: Final = await self._async_handler.post(
-                url, headers=self._tracker_headers, json={"application_name": application_name}
+                url, headers=self._tracker_headers, json={"application_name": application_name}, timeout=self.timeout
             )
             response.raise_for_status()
             body: Final = response.json()

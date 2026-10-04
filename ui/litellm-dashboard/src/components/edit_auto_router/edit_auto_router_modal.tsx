@@ -101,6 +101,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "llm_v2_config",
   "classifier_llm_config",
   "jev_classifier_config",
+  "opensource_classifier_config",
   "classifier_context_window_size",
   "classifier_context_budget_chars",
   "classifier_context_include_assistant_turns",
