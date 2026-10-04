@@ -113,13 +113,7 @@ export function InvestigationDetail({
             <TabsList variant="line">
               <TabsTrigger value="findings">Findings</TabsTrigger>
               <TabsTrigger value="checks">Criteria</TabsTrigger>
-              <TabsTrigger value="runs">
-                {
-                  { requests: "Requests", both: "Traces & requests", traces: "Traces" }[
-                    batchSettings?.source ?? "traces"
-                  ]
-                }
-              </TabsTrigger>
+              <TabsTrigger value="runs">{sourceLabels[batchSettings?.source ?? "traces"]}</TabsTrigger>
               <TabsTrigger value="activity">History</TabsTrigger>
             </TabsList>
             {tab !== "activity" && (

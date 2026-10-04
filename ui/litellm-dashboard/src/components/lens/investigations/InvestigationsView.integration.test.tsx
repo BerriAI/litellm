@@ -233,7 +233,7 @@ describe("Lens findings and runs", () => {
   it("shows the actual frozen run selection in the Runs tab", async () => {
     const user = userEvent.setup();
     renderWithProviders(<InvestigationsView accessToken="test" readOnly />);
-    await user.click(await screen.findByRole("tab", { name: "Traces" }));
+    await user.click(await screen.findByRole("tab", { name: "Agent traces" }));
     expect(screen.getByText("Release-42")).toBeInTheDocument();
     expect(screen.getByTitle("trace-42")).toHaveTextContent("Release-42");
     expect(screen.getByText(/1 selected from 1 matching runs/)).toBeInTheDocument();
@@ -403,7 +403,7 @@ it("reads request content from the beginning after its abbreviated preview", asy
   });
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView accessToken="test" readOnly />);
-  await user.click(await screen.findByRole("tab", { name: "Traces" }));
+  await user.click(await screen.findByRole("tab", { name: "Agent traces" }));
   await user.click(screen.getByRole("button", { name: /Release-42/ }));
   expect(await screen.findByText("Abbreviated preview")).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Next section" }));

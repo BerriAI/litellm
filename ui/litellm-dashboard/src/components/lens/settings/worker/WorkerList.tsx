@@ -3,14 +3,14 @@
 import { Button } from "@/components/ui/button";
 import { StatusDot, type StatusDotProps } from "@/components/shared/StatusDot";
 import { workerConnected } from "../../model/status";
-import { sinceLabel } from "../../model/format";
+import { agoLabel } from "@/components/view_logs/TraceView/lensField";
 import { AnalysisKeySummary } from "./AnalysisKeyDetails";
 import type { LensList, Worker } from "../../model/types";
 
 function workerStatus(worker: Worker, now: number): { state: StatusDotProps["state"]; label: string } {
   if (!worker.analysis_key_id) return { state: "warn", label: "Billing key required" };
   if (workerConnected(worker, now)) return { state: "ok", label: "Connected" };
-  return { state: "off", label: `Not connected · last seen ${sinceLabel(now - Date.parse(worker.last_seen))}` };
+  return { state: "off", label: `Not connected · last seen ${agoLabel(Date.parse(worker.last_seen), now)}` };
 }
 
 export function WorkerList({
