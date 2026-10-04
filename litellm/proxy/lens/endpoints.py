@@ -38,7 +38,6 @@ from litellm.proxy.lens.models import (
     RunRequest,
     Sample,
     Scope,
-    Step,
     WatchAllResult,
     WatchSkipped,
     Worker,
@@ -47,11 +46,12 @@ from litellm.proxy.lens.models import (
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
 from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
-    add_review,
-    add_step,
+    apply_progress,
     can_access,
+    cancel_job,
     claim_job,
     current_job,
+    end_job,
     merge_finding,
     next_scan_start,
     queue_job,
@@ -363,18 +363,7 @@ async def cancel_lens(lens_id: str, auth: Auth) -> Lens:
     await get_lens(lens_id, user_scope(auth, write=True))
     now: Final = datetime.now(timezone.utc)
 
-    def cancel(e: Lens) -> Lens:
-        job: Final = current_job(e)
-        if job is None:
-            return e
-        cancelled: Final = job.model_copy(
-            update=MappingProxyType({"status": "cancelled", "stage": "Cancelled", "finished_at": now})
-        )
-        return replace_job(e, cancelled).model_copy(
-            update=MappingProxyType({"next_run_at": now + timedelta(minutes=e.settings.interval_minutes)})
-        )
-
-    return required(await repository().update(lens_id, cancel))
+    return required(await repository().update(lens_id, lambda e: cancel_job(e, now)))
 
 
 @router.patch("/{lens_id}/findings/{finding_id}", response_model=Lens)
@@ -499,18 +488,7 @@ async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth
         job: Final = current_job(e)
         if job is None or job.id != job_id or job.worker_id != worker.id:
             return e
-        renewed: Final = add_review(
-            job.model_copy(
-                update=MappingProxyType(
-                    {"stage": body.stage, "coverage": body.coverage, "lease_until": now + timedelta(minutes=5)}
-                )
-            ),
-            body.review,
-        )
-        return replace_job(
-            e,
-            renewed if body.stage == job.stage else add_step(renewed, Step(at=now, kind="stage", label=body.stage)),
-        )
+        return replace_job(e, apply_progress(job, body, now))
 
     required(await repository().update(lens_id, renew))
     await repository().heartbeat(worker.id, now.isoformat())
@@ -636,12 +614,9 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
         merged_ids: Final = frozenset(f.id for f in merged)
         return replace_job(
             e,
-            active.model_copy(
+            end_job(active, "failed" if body.error else "completed", now).model_copy(
                 update=MappingProxyType(
                     {
-                        "status": "failed" if body.error else "completed",
-                        "stage": "Failed" if body.error else "Complete",
-                        "finished_at": now,
                         "coverage": active.coverage if body.error else body.coverage,
                         "error": body.error,
                         "assessments": body.assessments,
