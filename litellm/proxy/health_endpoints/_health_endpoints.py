@@ -12,6 +12,7 @@ from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -58,6 +59,7 @@ from litellm.proxy.health_check import (
     deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,
     perform_health_check,
+    resolve_health_check_mode,
     run_with_timeout,
 )
 from litellm.proxy.middleware.admission_control_middleware import (
@@ -173,6 +175,24 @@ def _config_base_for_health_check(
     return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
 
 
+def _model_info_for_mode_resolution(
+    model_info: Mapping[str, object], stored_params: Mapping[str, object], request_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    stored_model: Final = stored_params.get("model")
+    if stored_model is None or request_params.get("model") in (None, stored_model):
+        return model_info
+    return {key: value for key, value in model_info.items() if key != "mode"}
+
+
+def _string_mode_or_bad_request(params_mode: object) -> str | None:
+    if params_mode is None or isinstance(params_mode, str):
+        return params_mode
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={"error": f"litellm_params.mode must be a string, got {type(params_mode).__name__}"},
+    )
+
+
 def get_callback_identifier(callback):
     """
     Get the callback identifier string, handling both strings and objects.
@@ -203,6 +223,7 @@ def get_callback_identifier(callback):
 
 
 router: Final = APIRouter()
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 services = (
     Literal[
         "slack_budget_alerts",
@@ -2033,11 +2054,16 @@ async def test_model_connection(
         "rerank",
         "realtime",
         "responses",
+        "anthropic_messages",
         "ocr",
     ]
     | None = fastapi.Body(
         None,
-        description="The mode to test the model with. If not provided, auto-detected from model capabilities.",
+        description=(
+            "The mode to test the model with. If not provided, resolved the way /health does: the deployment's "
+            "model_info.mode (only while the request tests the deployment's own model), then the mode the "
+            "provider requires for that model, then the model cost map."
+        ),
     ),
     litellm_params: dict = fastapi.Body(
         None,
@@ -2188,8 +2214,13 @@ async def test_model_connection(
         }
 
         resolved_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
+        probe_model_info: Final = _model_info_for_mode_resolution(
+            _OBJECT_MAPPING.validate_python(resolved_model_info or {}),
+            stored_params=_OBJECT_MAPPING.validate_python(config_litellm_params),
+            request_params=_OBJECT_MAPPING.validate_python(request_litellm_params),
+        )
         litellm_params = _update_litellm_params_for_health_check(
-            model_info=resolved_model_info or {},
+            model_info=dict(probe_model_info),
             litellm_params=litellm_params,
         )
 
@@ -2204,12 +2235,17 @@ async def test_model_connection(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
-        mode = mode or litellm_params.pop("mode", None)
+        raw_params_mode: Final[object] = litellm_params.pop("mode", None)
+        probe_mode: Final = (
+            mode
+            or _string_mode_or_bad_request(raw_params_mode)
+            or resolve_health_check_mode(probe_model_info, _OBJECT_MAPPING.validate_python(litellm_params))
+        )
 
         result: Final = await run_with_timeout(
             litellm.ahealth_check(
                 model_params=litellm_params,
-                mode=mode,
+                mode=probe_mode,
                 prompt="test from litellm",
                 input=["test from litellm"],
             ),
