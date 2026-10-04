@@ -333,7 +333,9 @@ async def test_unknown_gateway_release_refuses_registration_and_claims(monkeypat
     monkeypatch.setenv("LITELLM_RELEASE_TAG", "")
     monkeypatch.setenv("LENS_WORKER_IMAGE", "registry.example/lens-worker:old")
     with pytest.raises(HTTPException) as registration_error:
-        await register_worker(WorkerName(analysis_key_id="a" * 64), UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+        await register_worker(
+            WorkerName(analysis_key_id="a" * 64), UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        )
     assert registration_error.value.status_code == 503
     assert "LITELLM_RELEASE_TAG" in registration_error.value.detail
     with pytest.raises(HTTPException) as claim_error:
