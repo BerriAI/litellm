@@ -51,7 +51,7 @@ export function TimeRangeControls({
   onLiveChange,
 }: TimeRangeControlsProps) {
   return (
-    <div className="flex items-center divide-x divide-border overflow-hidden rounded-md border border-border bg-card">
+    <div className="flex items-center divide-x divide-border overflow-hidden rounded-lg border border-border bg-card">
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Time range"
