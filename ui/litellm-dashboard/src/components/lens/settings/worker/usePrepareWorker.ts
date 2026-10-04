@@ -32,7 +32,8 @@ async function releaseUnusedKey(api: LensApi, keyId: string): Promise<void> {
 async function prepareWorker(api: LensApi, registration: WorkerRegistration): Promise<WorkerCreated | null> {
   const { address, useExisting, analysisKey, access, editingWorker } = registration;
   validateWorkerAddress(address);
-  const keyId = useExisting ? analysisKey : await createAnalysisKey(api, access);
+  if (useExisting && !analysisKey) throw new Error("Choose an existing key");
+  const keyId = useExisting && analysisKey ? analysisKey : await createAnalysisKey(api, access);
   const newKey = useExisting ? null : keyId;
   try {
     if (editingWorker) {

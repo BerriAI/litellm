@@ -11,23 +11,22 @@ import pytest
 from prisma import Json, Prisma
 from pydantic import InstanceOf, TypeAdapter
 
+from litellm.rust_bridge.trace.queries import TraceSQLResponse
 from litellm.rust_bridge.trace.storage import Tenant, span_rows
 from litellm.tracing.types import SpendLogRecord
 from scripts.seed_tracing_fixtures import (
     JSON,
     TRACE_FIXTURES,
-    TenantIdentity,
     bulk_span_rows,
     fixture_capture,
     fixture_replays,
     postgres_row,
     rebase,
     rebase_spend,
-    replay_batches,
     response_ids,
     response_pattern,
     seed_arguments,
-    seed_batch,
+    seed_copy,
     seed_id,
     spend_fixtures,
     timestamps,
@@ -196,29 +195,39 @@ def test_bulk_export_preserves_all_spans_and_disjoint_copy_ids() -> None:
 
 @pytest.mark.requires_rust_extension
 @pytest.mark.asyncio
-async def test_bulk_seed_stamps_authenticated_tenant_and_writes_both_stores() -> None:
-    from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
+async def test_first_copy_stamps_the_authenticated_tenant_and_writes_both_stores(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.rust_bridge.trace.storage import ClickHouseStorage
 
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-local")
     fixtures: Final = spend_fixtures()
     pattern: Final = response_pattern(tuple(chain.from_iterable(rows for _, rows in fixtures)))
-    replays: Final = fixture_replays(TRACE_FIXTURES, 1_800_000_000_000, "bulk", pattern)
+    replays: Final = fixture_replays(TRACE_FIXTURES, 1_800_000_000_000, "first", pattern)
     storage: Final = AsyncMock(spec=ClickHouseStorage)
+    storage.query_sql.return_value = TraceSQLResponse.model_validate(
+        {
+            "meta": (),
+            "data": [{"team_id": "local-team", "api_key": "local-hash", "user": "admin"}],
+            "rows": 1,
+            "statistics": {"elapsed": 0, "rows_read": 1, "bytes_read": 1},
+        }
+    )
     database: Final = AsyncMock(spec=Prisma, litellm_spendlogs=AsyncMock())
-    tenant: Final = TenantIdentity(team_id="local-team", api_key="local-hash", user="admin")
-    async with httpx.AsyncClient() as client:
-        result: Final = await seed_batch(client, storage, database, replays, fixtures, pattern, tenant, False)
-    assert result == tenant
-    trace_table, trace_rows = storage.insert_rows.call_args_list[0].args
-    assert trace_table == "otel_traces"
-    assert trace_rows == bulk_span_rows(replays, Tenant("local-team", "local-hash", user_id="admin"))
-    table, rows = storage.insert_rows.call_args_list[1].args
-    assert table == "spend_logs"
+    client: Final = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = httpx.Response(200, request=httpx.Request("POST", "http://proxy/v1/traces"))
+    captures: Final = await seed_copy(client, storage, database, replays, fixtures, pattern)
+    assert tuple(JSON.validate_json(call.kwargs["content"]) for call in client.post.call_args_list) == tuple(
+        replay.export for replay in replays
+    )
+    rows: Final = tuple(chain.from_iterable(rows for _, rows in captures))
+    assert {name for name, _ in captures} == {name for name, _ in fixtures}
+    assert storage.insert_rows.call_args.args == ("spend_logs", rows)
     assert len(rows) == sum(len(original) for _, original in fixtures)
     assert all((row["team_id"], row["api_key"], row["user"]) == ("local-team", "local-hash", "admin") for row in rows)
     saved: Final = database.litellm_spendlogs.create_many.call_args.kwargs["data"]
     assert tuple(row["request_id"] for row in saved) == tuple(row["request_id"] for row in rows)
     assert tuple(row["spend"] for row in saved) == tuple(row["spend"] for row in rows)
-    storage.query_sql.assert_not_called()
 
 
 def test_seed_cli_rejects_nonpositive_copies() -> None:
@@ -226,23 +235,6 @@ def test_seed_cli_rejects_nonpositive_copies() -> None:
         seed_arguments(["--copies", "0"])
     assert error.value.code == 2
     assert seed_arguments(["--profile", "large", "--copies", "5"]).copies == 5
-
-
-def test_bulk_batches_cover_every_copy_including_partial_tail() -> None:
-    batches: Final = tuple(replay_batches(8, 1_800_000_000_000, "batch", re.compile(r"(?!)"), 3))
-    assert tuple(stop for stop, _ in batches) == (4, 7, 8)
-    expected: Final = tuple(
-        tuple(fixture_replays(TRACE_FIXTURES, 1_800_000_000_000 - index * 1000, f"batch-{index}", re.compile(r"(?!)")))
-        for index in range(1, 8)
-    )
-    assert tuple(chain.from_iterable(replays for _, replays in batches)) == tuple(chain.from_iterable(expected))
-
-
-def test_seed_cli_rejects_nonpositive_batch_size() -> None:
-    with pytest.raises(SystemExit) as error:
-        seed_arguments(["--batch-copies", "0"])
-    assert error.value.code == 2
-    assert seed_arguments(["--batch-copies", "2"]).batch_copies == 2
 
 
 @pytest.mark.parametrize("timeout", ("0", "-1", "inf", "nan"))

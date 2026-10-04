@@ -64,6 +64,7 @@
     "react-json-view-lite": "2.5.0",
     "react-markdown": "9.1.0",
     "react-reconciler": "0.33.0",
+    "react-resizable-panels": "4.14.1",
     "react-syntax-highlighter": "15.6.6",
     "recharts": "3.9.2",
     "remark-gfm": "4.0.1",

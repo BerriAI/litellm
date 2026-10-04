@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildConversation, conversationSteps, newConversationMessages } from "./conversation";
-import type { Span, SpanDetail, TraceMessage } from "../types";
-import research from "../__fixtures__/research_trace.json";
+import type { Span, SpanDetail, TraceMessage } from "../../types";
+import research from "../../__fixtures__/research_trace.json";
 
 const root = { ...research.spans[0], span_id: "root", parent_span_id: null, type: "agent" } as Span;
 const user: TraceMessage = { role: "user", content: "Find my order" };

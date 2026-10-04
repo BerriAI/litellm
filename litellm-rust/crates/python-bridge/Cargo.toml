@@ -22,6 +22,7 @@ tiktoken = ["litellm-token-counter/tiktoken"]
 fancy-regex.workspace = true
 litellm-tracing.workspace = true
 litellm-traces.workspace = true
+litellm-traces-cache.workspace = true
 litellm-traces-clickhouse.workspace = true
 litellm-storage-clickhouse.workspace = true
 litellm-host.workspace = true

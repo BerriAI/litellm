@@ -3,7 +3,7 @@
  * computes lives here so it can be unit-tested directly.
  */
 import { type ErrorSource, type SpanTreeState, type TreeRow } from "./tree";
-import type { Span, TraceMessage, TraceSummary } from "./types";
+import type { Span, TraceMessage, TraceSummary, TraceToolCall } from "./types";
 
 /* ------------------------------------------------------------------ */
 /*  Formatting                                                         */
@@ -316,8 +316,41 @@ export function messageText(content: string): string {
     .join("\n\n");
 }
 
+const LANGCHAIN_ROLE: Readonly<Record<string, string>> = {
+  human: "user",
+  ai: "assistant",
+  system: "system",
+  tool: "tool",
+};
+
+const langchainToolCalls = (data: object): TraceToolCall[] | undefined => {
+  const calls: unknown = Reflect.get(data, "tool_calls");
+  if (!Array.isArray(calls) || calls.length === 0) return undefined;
+  return calls
+    .filter((call): call is object => typeof call === "object" && call !== null)
+    .map((call) => ({ name: String(Reflect.get(call, "name") ?? "tool"), args: Reflect.get(call, "args") ?? {} }));
+};
+
+/** LangChain's `dumpd` message: `{"type": "human", "data": {"content": ...}}`. */
+const parseLangchainMessage = (value: object): TraceMessage | null => {
+  const role = LANGCHAIN_ROLE[String(Reflect.get(value, "type"))];
+  const data: unknown = Reflect.get(value, "data");
+  if (!role || typeof data !== "object" || data === null) return null;
+  const content: unknown = Reflect.get(data, "content");
+  if (typeof content !== "string" && !Array.isArray(content)) return null;
+  const name: unknown = Reflect.get(data, "name");
+  const toolCalls = langchainToolCalls(data);
+  return {
+    role,
+    content: messageText(typeof content === "string" ? content : JSON.stringify(content)),
+    ...(typeof name === "string" && name ? { name } : {}),
+    ...(toolCalls ? { tool_calls: toolCalls } : {}),
+  };
+};
+
 const parseMessage = (value: unknown): TraceMessage | null => {
   if (typeof value !== "object" || value === null) return null;
+  if (!("role" in value) && "data" in value) return parseLangchainMessage(value);
   const role: unknown = Reflect.get(value, "role");
   const content: unknown = Reflect.get(value, "content") ?? Reflect.get(value, "parts");
   if (typeof role !== "string" || (typeof content !== "string" && !Array.isArray(content))) return null;

@@ -2,7 +2,7 @@ import { act, fireEvent, screen, within, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
-import { dismissLensIntro } from "@/../tests/lens-test-utils";
+import { dismissLensIntro, readRequest, requestPath } from "@/../tests/lens-test-utils";
 import { readStorage } from "@/lib/storage";
 import { LENS_INTRO_DISMISSED, LENS_INTRO_SEEN } from "./storage";
 import { LensWorkspace } from "./LensWorkspace";
@@ -23,14 +23,14 @@ const worker = () => ({
 function serve({ enabled = false, traces = false, requests = false, connected = false } = {}) {
   list.mockResolvedValue({ lenses: [], workers: connected ? [worker()] : [], tracing_enabled: enabled });
   network.mockImplementation(async (input, init) => {
-    const path = new URL(String(input), "http://localhost").pathname;
+    const { path, method, body } = await readRequest(input, init);
     if (path === "/v1/traces")
       return enabled
         ? Response.json({ data: traces ? [data.runs[0].trace.summary] : [] })
         : Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
     if (path === "/lens/activity/available") return Response.json({ traces, requests });
-    if (path === "/lens" && init?.method === "POST") {
-      const saved = { ...data.lenses[0], settings: { ...data.lenses[0].settings, ...JSON.parse(String(init.body)) } };
+    if (path === "/lens" && method === "POST") {
+      const saved = { ...data.lenses[0], settings: { ...data.lenses[0].settings, ...(body as object) } };
       list.mockResolvedValue({ lenses: [saved], workers: [worker()], tracing_enabled: true });
       return Response.json(saved);
     }
@@ -154,9 +154,7 @@ describe("Lens setup journey", () => {
       serve({ enabled: true, traces: true });
       const normal = network.getMockImplementation()!;
       network.mockImplementation((input, init) =>
-        new URL(String(input), "http://localhost").pathname === pendingPath
-          ? new Promise<Response>(() => {})
-          : normal(input, init),
+        requestPath(input) === pendingPath ? new Promise<Response>(() => {}) : normal(input, init),
       );
       renderWorkspace();
       expect(await screen.findByRole("table", { name: "Agent runs" })).toBeVisible();
@@ -171,9 +169,7 @@ describe("Lens setup journey", () => {
       list.mockResolvedValue({ lenses: data.lenses, workers: [worker()], tracing_enabled: false });
       const normal = network.getMockImplementation()!;
       network.mockImplementation((input, init) =>
-        new URL(String(input), "http://localhost").pathname === pendingPath
-          ? new Promise<Response>(() => {})
-          : normal(input, init),
+        requestPath(input) === pendingPath ? new Promise<Response>(() => {}) : normal(input, init),
       );
       renderWorkspace({ searchParams: `?lens=${data.lenses[0].id}` });
       expect(await screen.findByRole("heading", { name: data.lenses[0].settings.name })).toBeVisible();
@@ -247,7 +243,7 @@ describe("Lens setup journey", () => {
     await intro.findByRole("button", { name: "Check for traces" });
     const normal = network.getMockImplementation()!;
     network.mockImplementation(async (input, init) => {
-      const path = new URL(String(input), "http://localhost").pathname;
+      const path = requestPath(input);
       if (path === "/v1/traces") return Response.json({ detail: "Trace storage unavailable" }, { status: 503 });
       return normal(input, init);
     });
@@ -268,7 +264,7 @@ describe("Lens setup journey", () => {
     expect(await screen.findByRole("button", { name: "New investigation" })).toBeEnabled();
     const normal = network.getMockImplementation()!;
     network.mockImplementation((input, init) =>
-      new URL(String(input), "http://localhost").pathname === "/lens/activity/available"
+      requestPath(input) === "/lens/activity/available"
         ? Promise.resolve(Response.json({ detail: "Activity unavailable" }, { status: 503 }))
         : normal(input, init),
     );
@@ -288,9 +284,7 @@ describe("Lens setup journey", () => {
     const intro = within(await screen.findByRole("dialog"));
     expect(await intro.findByText(/A gateway administrator can connect a worker/)).toBeVisible();
     expect(intro.getByRole("button", { name: "Connect worker" })).toBeDisabled();
-    expect(network.mock.calls.some(([input]) => new URL(String(input), "http://localhost").pathname === "/lens")).toBe(
-      false,
-    );
+    expect(network.mock.calls.some(([input]) => requestPath(input) === "/lens")).toBe(false);
   });
 
   it.each(["traces", "requests with trace errors", "requests with pending traces", "traces with activity errors"])(
@@ -302,7 +296,7 @@ describe("Lens setup journey", () => {
       const normal = network.getMockImplementation()!;
       const failingPath = scenario === "requests with trace errors" ? "/v1/traces" : "/lens/activity/available";
       network.mockImplementation((input, init) => {
-        const path = new URL(String(input), "http://localhost").pathname;
+        const path = requestPath(input);
         if (path === "/v1/traces" && scenario === "requests with pending traces")
           return new Promise<Response>(() => {});
         if (scenario.endsWith("errors") && path === failingPath)
@@ -328,13 +322,10 @@ describe("Lens setup journey", () => {
         within(screen.getByRole("tablist", { name: "Lens" })).getByRole("tab", { name: "Investigations" }),
       ).toHaveAttribute("aria-selected", "true");
       await waitFor(() => expect(setupParam(onUrlUpdate)).toBeNull());
-      const create = network.mock.calls.find(
-        ([input, init]) => new URL(String(input), "http://localhost").pathname === "/lens" && init?.method === "POST",
-      );
+      const requests = await Promise.all(network.mock.calls.map(([input, init]) => readRequest(input, init)));
+      const create = requests.find((request) => request.path === "/lens" && request.method === "POST");
       expect(create).toBeDefined();
-      expect(JSON.parse(String(create?.[1]?.body))).toEqual(
-        expect.objectContaining({ name: "My first review", source }),
-      );
+      expect(create?.body).toEqual(expect.objectContaining({ name: "My first review", source }));
     },
   );
 });

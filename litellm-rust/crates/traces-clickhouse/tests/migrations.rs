@@ -1887,10 +1887,10 @@ async fn named_and_sql_readers_share_request_log_visibility(
     #[case] legacy_key: Option<&str>,
     #[case] expected: Vec<&str>,
 ) -> TestResult {
-    use litellm_traces_clickhouse::query::named::{
-        ReadAccessParams, SpendByResponseIds, SpendByResponseIdsParams,
+    use litellm_traces_clickhouse::{
+        QueryReaders, QueryScope,
+        query::named::{ReadAccessParams, SpendByResponseIds, SpendByResponseIdsParams},
     };
-    use litellm_traces_clickhouse::{QueryReaders, QueryScope};
 
     let database = database?;
     let writer = Connection::writer(&database.url)?;

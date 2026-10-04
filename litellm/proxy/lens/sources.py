@@ -6,10 +6,10 @@ from typing import Final, Protocol, TypeAlias
 from pydantic import TypeAdapter
 
 from litellm.proxy.lens.models import (
+    ActivitySelection,
     Evidence,
     Execution,
     ExecutionContent,
-    LensSettings,
     MetadataFilter,
     Sample,
     Scope,
@@ -73,7 +73,7 @@ class SourceReader:
     async def sample(
         self,
         scope: Scope,
-        settings: LensSettings,
+        settings: ActivitySelection,
         start: int,
         end: int,
         offset: int = 0,

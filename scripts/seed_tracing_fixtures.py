@@ -43,6 +43,9 @@ TRACE: Final = TypeAdapter(Trace)
 NANOSECOND_FIELDS: Final = frozenset({"startTimeUnixNano", "endTimeUnixNano", "timeUnixNano"})
 TRACE_ID_FIELDS: Final = frozenset({"traceId", "trace_id", "session_id"})
 SPAN_ID_FIELDS: Final = frozenset({"spanId", "parentSpanId", "span_id"})
+COPY_WINDOW_MS: Final = 24 * 60 * 60 * 1000
+LONG_SESSION_SOURCE: Final = "openai_agents_swarm"
+LONG_SESSION_REPEATS: Final = (50, 400, 4000)
 
 
 class TenantIdentity(BaseModel):
@@ -245,7 +248,6 @@ class SeedOptions(BaseModel):
     model_config = ConfigDict(frozen=True)
     profile: Literal["default", "large"]
     copies: int | None
-    batch_copies: int = 4
     timeout_seconds: float = 120
 
 
@@ -258,33 +260,23 @@ def seed_arguments(argv: Sequence[str] | None = None) -> SeedOptions:
         default=os.environ.get("LENS_DEV_SEED_COPIES"),
         help="Override fixture copies (default: 1, large: 2000; env: LENS_DEV_SEED_COPIES)",
     )
-    parser.add_argument(
-        "--batch-copies",
-        type=int,
-        default=os.environ.get("LENS_DEV_SEED_BATCH_COPIES", "4"),
-        help="Copies per bulk insert (default: 4; env: LENS_DEV_SEED_BATCH_COPIES)",
-    )
     parser.add_argument("--timeout-seconds", type=float, default=os.environ.get("LENS_DEV_SEED_TIMEOUT_SECONDS", "120"))
     arguments: Final = SeedOptions.model_validate(vars(parser.parse_args(argv)))
     if arguments.copies is not None and arguments.copies < 1:
         parser.error("--copies must be positive")
-    if arguments.batch_copies < 1:
-        parser.error("--batch-copies must be positive")
     if not math.isfinite(arguments.timeout_seconds) or arguments.timeout_seconds <= 0:
         parser.error("--timeout-seconds must be finite and positive")
     return arguments
 
 
-async def seed_batch(
+async def seed_copy(
     client: httpx.AsyncClient,
     storage: ClickHouseStorage,
     database: Prisma,
     replays: tuple[FixtureReplay, ...],
     fixtures: tuple[tuple[str, tuple[SpendLogRecord, ...]], ...],
     pattern: re.Pattern[str],
-    tenant: TenantIdentity | None,
-    verify: bool,
-) -> TenantIdentity:
+) -> tuple[tuple[str, tuple[SpendLogRecord, ...]], ...]:
     by_name: Final = MappingProxyType(dict(fixtures))
     paired: Final = tuple(
         (
@@ -294,36 +286,36 @@ async def seed_batch(
         for replay in replays
         if replay.name in by_name
     )
-    rebased_spends: Final = tuple(chain.from_iterable(rows for _, rows in paired))
-    resolved_tenant: Final = await ingest_replays(
-        client, storage, replays, fixture_capture(*next((name, rows[0]) for name, rows in paired)).trace_id, tenant
+    tenant: Final = await ingest_replays(
+        client, storage, replays, fixture_capture(*next((name, rows[0]) for name, rows in paired)).trace_id
     )
-    stamped_spends: Final[tuple[SpendLogRecord, ...]] = tuple(
-        {**row, "team_id": resolved_tenant.team_id, "api_key": resolved_tenant.api_key, "user": resolved_tenant.user}
-        for row in rebased_spends
-    )
+    stamped: Final = tuple((name, tuple(stamp(row, tenant) for row in rows)) for name, rows in paired)
+    stamped_spends: Final = tuple(chain.from_iterable(rows for _, rows in stamped))
     await storage.insert_rows("spend_logs", stamped_spends)
     await database.litellm_spendlogs.create_many(data=[postgres_row(row) for row in stamped_spends])
-    if verify:
-        verified: Final = tuple(await asyncio.gather(*(verify_capture(client, name, rows) for name, rows in paired)))
-        sys.stdout.write(json.dumps({"spend_rows": len(stamped_spends), "captures": verified}, indent=2) + "\n")
-        if not all(capture["verified"] for capture in verified):
-            raise RuntimeError("Seed spend verification failed")
-    return resolved_tenant
+    return stamped
+
+
+def stamp(row: SpendLogRecord, tenant: TenantIdentity) -> SpendLogRecord:
+    return {**row, "team_id": tenant.team_id, "api_key": tenant.api_key, "user": tenant.user}
+
+
+async def verify(
+    client: httpx.AsyncClient, captures: tuple[tuple[str, tuple[SpendLogRecord, ...]], ...], trace_salt: str
+) -> None:
+    verified: Final = tuple(
+        await asyncio.gather(*(verify_capture(client, name, rows, trace_salt) for name, rows in captures))
+    )
+    sys.stdout.write(
+        json.dumps({"spend_rows": sum(len(rows) for _, rows in captures), "captures": verified}, indent=2) + "\n"
+    )
+    if not all(capture["verified"] for capture in verified):
+        raise RuntimeError("Seed spend verification failed")
 
 
 async def ingest_replays(
-    client: httpx.AsyncClient,
-    storage: ClickHouseStorage,
-    replays: tuple[FixtureReplay, ...],
-    trace_id: str,
-    tenant: TenantIdentity | None,
+    client: httpx.AsyncClient, storage: ClickHouseStorage, replays: tuple[FixtureReplay, ...], trace_id: str
 ) -> TenantIdentity:
-    if tenant is not None:
-        await storage.insert_rows(
-            "otel_traces", bulk_span_rows(replays, Tenant(tenant.team_id, tenant.api_key, user_id=tenant.user))
-        )
-        return tenant
     for replay in replays:
         (
             await client.post(
@@ -347,24 +339,161 @@ def bulk_span_rows(replays: tuple[FixtureReplay, ...], tenant: Tenant) -> tuple[
     )
 
 
-def replay_batches(
-    count: int, now_ms: int, namespace: str, pattern: re.Pattern[str], batch_copies: int = 4
-) -> Iterator[tuple[int, tuple[FixtureReplay, ...]]]:
-    for start, stop in ((start, min(start + batch_copies, count)) for start in range(1, count, batch_copies)):
-        yield (
-            stop,
-            tuple(
-                chain.from_iterable(
-                    fixture_replays(TRACE_FIXTURES, now_ms - index * 1000, f"{namespace}-{index}", pattern)
-                    for index in range(start, stop)
-                )
-            ),
+@dataclass(frozen=True, slots=True)
+class Copies:
+    """Server-side copies of seeded traces and their spend.
+
+    Each copy `n` hashes trace ids with `session` (or `n` when empty), keeps root span ids, hashes the
+    other span ids with `n`, rewrites seeded call ids from `source` to `{target}{n}-` and moves `n * step_ms`
+    earlier. A `session` folds every copy into one trace under a single root that spans all of them.
+    """
+
+    trace_ids: tuple[str, ...]
+    request_ids: tuple[str, ...]
+    numbers: range
+    step_ms: int
+    source: str
+    target: str
+    session: str = ""
+
+
+def copied_trace_id(trace_id: str, salt: str) -> str:
+    return hashlib.sha256(f"{trace_id}:{salt}".encode()).hexdigest()[:32]
+
+
+def clickhouse_call_id(column: str) -> str:
+    target: Final = "concat({target:String}, toString(c.n), '-')"
+    return (
+        f"if(startsWith({column}, 'resp_'), concat('resp_', base64Encode(replaceAll("
+        f"tryBase64Decode(substring({column}, 6)), {{source:String}}, {target}))), "
+        f"replaceAll({column}, {{source:String}}, {target}))"
+    )
+
+
+def clickhouse_hash(column: str, salt: str, length: int) -> str:
+    return f"if({column} = '', '', substring(lower(hex(SHA256(concat({column}, ':', {salt})))), 1, {length}))"
+
+
+def clickhouse_copy_sql(database: str) -> tuple[str, str]:
+    trace_salt: Final = "if({session:String} = '', toString(c.n), {session:String})"
+    roots: Final = (
+        f"(SELECT SpanId FROM {database}.otel_traces "
+        "WHERE TraceId IN {trace_ids:Array(String)} AND ParentSpanId = '')"
+    )
+    folded_root: Final = "{session:String} != '' AND t.ParentSpanId = ''"
+    shift: Final = f"toIntervalMillisecond(if({folded_root}, {{last:UInt64}}, c.n) * {{step_ms:UInt64}})"
+    numbers: Final = "CROSS JOIN (SELECT number AS n FROM numbers({first:UInt64}, {count:UInt64})) AS c"
+    spans: Final = f"""INSERT INTO {database}.otel_traces
+SELECT t.* REPLACE (
+    t.Timestamp - {shift} AS Timestamp,
+    {clickhouse_hash("t.TraceId", trace_salt, 32)} AS TraceId,
+    if(t.ParentSpanId = '', t.SpanId, {clickhouse_hash("t.SpanId", "toString(c.n)", 16)}) AS SpanId,
+    if(t.ParentSpanId IN {roots}, t.ParentSpanId, {clickhouse_hash("t.ParentSpanId", "toString(c.n)", 16)})
+        AS ParentSpanId,
+    t.Duration + if({folded_root}, {{last:UInt64}} * {{step_ms:UInt64}} * 1000000, 0) AS Duration,
+    arrayMap(at -> at - {shift}, t.`Events.Timestamp`) AS `Events.Timestamp`,
+    mapApply((name, value) -> (name, {clickhouse_call_id("value")}), t.SpanAttributes) AS SpanAttributes,
+    {clickhouse_call_id("t.LiteLLMRequestId")} AS LiteLLMRequestId,
+    arrayMap(key -> concat(extract(key, '^[^:]*:'), {clickhouse_call_id("replaceRegexpOne(key, '^[^:]*:', '')")}),
+        t.CallKeys) AS CallKeys
+)
+FROM {database}.otel_traces AS t {numbers}
+WHERE t.TraceId IN {{trace_ids:Array(String)}}
+    AND ({{session:String}} = '' OR t.ParentSpanId != '' OR c.n = {{first:UInt64}})"""
+    spend: Final = f"""INSERT INTO {database}.spend_logs
+SELECT s.* REPLACE (
+    {clickhouse_call_id("s.request_id")} AS request_id,
+    {clickhouse_call_id("s.response_id")} AS response_id,
+    {clickhouse_call_id("s.litellm_call_id")} AS litellm_call_id,
+    {clickhouse_hash("s.trace_id", trace_salt, 32)} AS trace_id,
+    {clickhouse_hash("s.session_id", trace_salt, 32)} AS session_id,
+    if(s.span_id IN {roots}, s.span_id, {clickhouse_hash("s.span_id", "toString(c.n)", 16)}) AS span_id,
+    s.start_time - toIntervalMillisecond(c.n * {{step_ms:UInt64}}) AS start_time,
+    s.end_time - toIntervalMillisecond(c.n * {{step_ms:UInt64}}) AS end_time,
+    s.completion_start_time - toIntervalMillisecond(c.n * {{step_ms:UInt64}}) AS completion_start_time
+)
+FROM {database}.spend_logs AS s {numbers}
+WHERE s.request_id IN {{request_ids:Array(String)}}"""
+    return spans, spend
+
+
+def clickhouse_array(values: tuple[str, ...]) -> str:
+    return "[" + ",".join("'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'" for value in values) + "]"
+
+
+async def copy_clickhouse(client: httpx.AsyncClient, database: str, copies: Copies) -> None:
+    parameters: Final = {
+        "param_trace_ids": clickhouse_array(copies.trace_ids),
+        "param_request_ids": clickhouse_array(copies.request_ids),
+        "param_first": str(copies.numbers.start),
+        "param_count": str(len(copies.numbers)),
+        "param_last": str(copies.numbers.stop - 1),
+        "param_step_ms": str(copies.step_ms),
+        "param_source": copies.source,
+        "param_target": copies.target,
+        "param_session": copies.session,
+    }
+    for sql in clickhouse_copy_sql(database):
+        (await client.post("/", params=parameters, content=sql)).raise_for_status()
+
+
+POSTGRES_COPY_TARGET: Final = "($2 || c.n || '-')"
+POSTGRES_COPY_SHIFT: Final = "make_interval(secs => c.n * $6::bigint / 1000.0)"
+POSTGRES_COPY_SQL: Final = f"""INSERT INTO "LiteLLM_SpendLogs"
+SELECT (jsonb_populate_record(s, jsonb_build_object(
+    'request_id', CASE WHEN left(s.request_id, 5) = 'resp_'
+        THEN 'resp_' || translate(encode(convert_to(replace(convert_from(decode(substr(s.request_id, 6), 'base64'),
+            'UTF8'), $1, {POSTGRES_COPY_TARGET}), 'UTF8'), 'base64'), E'\\n', '')
+        ELSE replace(s.request_id, $1, {POSTGRES_COPY_TARGET}) END,
+    'session_id', CASE WHEN coalesce(s.session_id, '') = '' THEN s.session_id
+        ELSE substr(encode(sha256(convert_to(
+            s.session_id || ':' || CASE WHEN $3 = '' THEN c.n::text ELSE $3 END, 'UTF8')), 'hex'), 1, 32) END,
+    'startTime', s."startTime" - {POSTGRES_COPY_SHIFT},
+    'endTime', s."endTime" - {POSTGRES_COPY_SHIFT},
+    'completionStartTime', s."completionStartTime" - {POSTGRES_COPY_SHIFT}
+))).*
+FROM "LiteLLM_SpendLogs" AS s CROSS JOIN generate_series($4::int, $5::int) AS c(n)
+WHERE s.request_id = ANY(string_to_array($7, E'\\n'))"""
+
+
+async def copy_postgres(database: Prisma, copies: Copies) -> None:
+    await database.execute_raw(
+        POSTGRES_COPY_SQL,
+        copies.source,
+        copies.target,
+        copies.session,
+        copies.numbers.start,
+        copies.numbers.stop - 1,
+        copies.step_ms,
+        "\n".join(copies.request_ids),
+    )
+
+
+def long_sessions(
+    replays: tuple[FixtureReplay, ...],
+    captures: tuple[tuple[str, tuple[SpendLogRecord, ...]], ...],
+    source: str,
+    target: str,
+    repeats: tuple[int, ...] = LONG_SESSION_REPEATS,
+) -> tuple[Copies, ...]:
+    replay: Final = next(replay for replay in replays if replay.name == LONG_SESSION_SOURCE)
+    rows: Final = dict(captures)[LONG_SESSION_SOURCE]
+    span_ns: Final = tuple(timestamps(replay.export))
+    return tuple(
+        Copies(
+            trace_ids=(fixture_capture(LONG_SESSION_SOURCE, rows[0]).trace_id,),
+            request_ids=tuple(row["request_id"] for row in rows),
+            numbers=range(count),
+            step_ms=(max(span_ns) - min(span_ns)) // 1_000_000 + 1000,
+            source=source,
+            target=f"{target}s{count}x",
+            session=f"session{count}",
         )
+        for count in repeats
+    )
 
 
-async def seed(
-    profile: str = "default", copies: int | None = None, batch_copies: int = 4, timeout_seconds: float = 120
-) -> int:
+async def seed(profile: str = "default", copies: int | None = None, timeout_seconds: float = 120) -> int:
     from prisma import Prisma
 
     fixtures: Final = spend_fixtures()
@@ -372,29 +501,43 @@ async def seed(
     count: Final = copies if copies is not None else (2000 if profile == "large" else 1)
     namespace: Final = uuid4().hex
     now_ms: Final = time.time_ns() // 1_000_000
-    storage: Final = ClickHouseStorage(trace_storage_config({}))
+    config: Final = trace_storage_config({})
+    storage: Final = ClickHouseStorage(config)
+    replays: Final = fixture_replays(TRACE_FIXTURES, now_ms, namespace + "-0", pattern)
+    source: Final = f"seed-{namespace}-0-"
+    target: Final = f"seed-{namespace}-"
     async with (
         httpx.AsyncClient(
             base_url=os.environ.get("PROXY_BASE_URL", "http://127.0.0.1:4002"),
             headers={"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}"},
             timeout=timeout_seconds,
         ) as client,
-        Prisma() as database,
+        httpx.AsyncClient(base_url=config.url, params={"database": config.database}, timeout=600) as clickhouse,
+        Prisma(http={"timeout": httpx.Timeout(600)}) as database,
     ):
-        tenant: Final = await seed_batch(
-            client,
-            storage,
-            database,
-            fixture_replays(TRACE_FIXTURES, now_ms, namespace + "-0", pattern),
-            fixtures,
-            pattern,
-            None,
-            True,
+        captures: Final = await seed_copy(client, storage, database, replays, fixtures, pattern)
+        await verify(client, captures, "")
+        repeated: Final = Copies(
+            trace_ids=tuple(
+                sorted(frozenset(str(span["TraceId"]) for span in bulk_span_rows(replays, Tenant("", ""))))
+            ),
+            request_ids=tuple(row["request_id"] for _, rows in captures for row in rows),
+            numbers=range(1, count),
+            step_ms=COPY_WINDOW_MS // count,
+            source=source,
+            target=target,
         )
-        for stop, replays in replay_batches(count, now_ms, namespace, pattern, batch_copies):
-            await seed_batch(client, storage, database, replays, fixtures, pattern, tenant, stop == count)
-            sys.stdout.write(f"Seeded {stop}/{count} fixture copies\n")
-            sys.stdout.flush()
+        sessions: Final = long_sessions(replays, captures, source, target) if profile == "large" else ()
+        for plan in (repeated, *sessions) if count > 1 else sessions:
+            await copy_clickhouse(clickhouse, config.database, plan)
+            await copy_postgres(database, plan)
+        if count > 1:
+            await verify(client, captures, str(count - 1))
+        for plan in sessions:
+            sys.stdout.write(
+                f"Long session: {len(plan.numbers)} repeats, "
+                f"trace_id={copied_trace_id(plan.trace_ids[0], plan.session)}\n"
+            )
     sys.stdout.write(f"Seed complete: profile={profile}, copies={count}, namespace={namespace}\n")
     return 0
 
@@ -410,17 +553,18 @@ def fixture_capture(name: str, row: SpendLogRecord) -> FixtureCapture:
 
 
 async def verify_capture(
-    client: httpx.AsyncClient, name: str, rows: tuple[SpendLogRecord, ...]
+    client: httpx.AsyncClient, name: str, rows: tuple[SpendLogRecord, ...], trace_salt: str = ""
 ) -> Mapping[str, JsonValue]:
     capture: Final = fixture_capture(name, rows[0])
-    detail: Final = await client.get(f"/v1/traces/{capture.trace_id}")
+    trace_id: Final = copied_trace_id(capture.trace_id, trace_salt) if trace_salt else capture.trace_id
+    detail: Final = await client.get(f"/v1/traces/{trace_id}")
     detail.raise_for_status()
     trace: Final = TRACE.validate_json(detail.content)
     expected: Final = sum(row["spend"] or 0 for row in rows)
     actual: Final = trace["summary"]["spend"]
     return {
         "fixture": name,
-        "trace_id": capture.trace_id,
+        "trace_id": trace_id,
         "spend_rows": len(rows),
         "recorded_spend": expected,
         "trace_spend": actual,
@@ -432,6 +576,4 @@ async def verify_capture(
 
 if __name__ == "__main__":
     arguments: Final = seed_arguments()
-    raise SystemExit(
-        asyncio.run(seed(arguments.profile, arguments.copies, arguments.batch_copies, arguments.timeout_seconds))
-    )
+    raise SystemExit(asyncio.run(seed(arguments.profile, arguments.copies, arguments.timeout_seconds)))

@@ -303,6 +303,21 @@ describe("payload helpers", () => {
     expect(parseMessages('[{"role":"assistant","tool_calls":[]}]')).toBeNull();
     expect(parseMessages('[{"role":"user","content":42}]')).toBeNull();
   });
+
+  it("reads LangChain's serialized messages with their roles, names and tool calls", () => {
+    const dumped = [
+      { type: "human", data: { content: "What is an agent trace?", name: null } },
+      { type: "ai", data: { content: "", tool_calls: [{ name: "task", args: { agent: "search" }, id: "c1" }] } },
+      { type: "tool", data: { content: "found it", name: "task" } },
+    ];
+    expect(parseMessages(JSON.stringify(dumped))).toEqual([
+      { role: "user", content: "What is an agent trace?" },
+      { role: "assistant", content: "", tool_calls: [{ name: "task", args: { agent: "search" } }] },
+      { role: "tool", content: "found it", name: "task" },
+    ]);
+    expect(parseMessages('[{"type":"function","data":{"content":"x"}}]')).toBeNull();
+    expect(parseMessages('[{"type":"human","data":{"content":7}}]')).toBeNull();
+  });
 });
 
 describe("treeGuides", () => {

@@ -4,12 +4,12 @@ import { Check } from "lucide-react";
 
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 
-import { formatCost } from "../list/AgentTracesTable";
-import { errorHeadline } from "./DetailContent";
-import { SpanIcon } from "../ui/SpanIcon";
-import type { GroupRowData } from "../tree";
-import type { Span, SpanType } from "../types";
-import { fmtMs, fmtTok } from "../utils";
+import { formatCost } from "../../list/AgentTracesTable";
+import { errorHeadline } from "../content/SpanError";
+import { SpanIcon } from "../../ui/SpanIcon";
+import type { GroupRowData } from "../../tree";
+import type { Span, SpanType } from "../../types";
+import { fmtMs, fmtTok } from "../../utils";
 
 export const HOVER_OPEN_DELAY_MS = 300;
 const HOVER_CLOSE_DELAY_MS = 100;

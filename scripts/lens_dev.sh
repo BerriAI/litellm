@@ -7,7 +7,8 @@
 #                         (default: random, generated once into .lens-dev/master_key)
 #   LENS_DEV_CONFIG       proxy config to use instead of the generated one
 #   LENS_DEV_DATABASE_URL Postgres URL (default: the tracing stack's litellm DB on :15432)
-#   LENS_DEV_REBUILD_RUST=1  rebuild the Rust bridge even if it imports
+#   LENS_DEV_SEED         trace seed profile (default|large), same as --seed
+#   LENS_DEV_SEED_LOGS    request-log seed profile (default|large), same as --seed-logs
 #
 # State (master key, worker token, generated config, logs) lives in .lens-dev/ (gitignored).
 set -euo pipefail
@@ -216,36 +217,55 @@ build_dashboard() {
   ) > "$log_dir/ui-build.log" 2>&1 || die "UI build failed; see $log_dir/ui-build.log"
 }
 
+# Trace fixtures feed Lens (ClickHouse + spend rows); request logs feed the Logs page
+# (Postgres only) with rows sized to stress the log detail drawer.
 seed_data() {
   (
     proxy_env ""
-    "$py" -m scripts.seed_tracing_fixtures --profile "$seed_profile" ${seed_options[@]+"${seed_options[@]}"}
+    export LENS_DEV_UI_URL="http://localhost:$ui_port"
+    if [ -n "$seed_profile" ]; then
+      "$py" -m scripts.seed_tracing_fixtures --profile "$seed_profile" ${seed_options[@]+"${seed_options[@]}"}
+    fi
+    if [ -n "$seed_logs_profile" ]; then
+      "$py" -m scripts.seed_request_logs --profile "$seed_logs_profile"
+    fi
   )
+}
+
+# --seed and --seed-logs take an optional profile; a bare flag means default.
+seed_profile_arg() {
+  if [ "${1:-}" = default ] || [ "${1:-}" = large ]; then echo "$1"; else echo default; fi
 }
 
 parse_args() {
   seed_profile="${LENS_DEV_SEED:-}"
+  seed_logs_profile="${LENS_DEV_SEED_LOGS:-}"
   seed_only=0
   seed_options=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --seed)
-        seed_profile=default
-        if [ "${2:-}" = default ] || [ "${2:-}" = large ]; then seed_profile="$2"; shift; fi
+        seed_profile="$(seed_profile_arg "${2:-}")"
+        [ "$seed_profile" = "${2:-}" ] && shift
+        ;;
+      --seed-logs)
+        seed_logs_profile="$(seed_profile_arg "${2:-}")"
+        [ "$seed_logs_profile" = "${2:-}" ] && shift
         ;;
       --copies)
         [ "$#" -ge 2 ] && [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "--copies requires a positive integer"
         seed_options=(--copies "$2"); shift ;;
       --seed-only) seed_only=1 ;;
       --help)
-        echo "Usage: $0 [--seed [default|large]] [--copies N] [--seed-only]"
+        echo "Usage: $0 [--seed [default|large]] [--seed-logs [default|large]] [--copies N] [--seed-only]"
         exit 0 ;;
       *) die "unknown argument: $1 (use --help)" ;;
     esac
     shift
   done
-  if [ "$seed_only" = 1 ] && [ -z "$seed_profile" ]; then seed_profile=default; fi
+  if [ "$seed_only" = 1 ] && [ -z "$seed_profile" ] && [ -z "$seed_logs_profile" ]; then seed_profile=default; fi
   case "$seed_profile" in ""|default|large) ;; *) die "seed profile must be default or large" ;; esac
+  case "$seed_logs_profile" in ""|default|large) ;; *) die "seed-logs profile must be default or large" ;; esac
   [ "${#seed_options[@]}" = 0 ] || [ -n "$seed_profile" ] || die "--copies requires --seed"
 }
 
@@ -277,11 +297,14 @@ main() {
   ensure_services
   "$py" scripts/prisma_generate_if_needed.py
 
-  if [ "${LENS_DEV_REBUILD_RUST:-0}" = "1" ] || ! "$py" -c "import litellm.rust_bridge._native" >/dev/null 2>&1; then
-    echo "lens-dev: building the Rust bridge (litellm.rust_bridge._native); the ClickHouse trace store uses it"
-    VIRTUAL_ENV="$repo_root/.venv" uvx --from maturin==1.15.0 maturin develop \
-      --release --manifest-path litellm-rust/crates/python-bridge/Cargo.toml --features extension-module
-  fi
+  # cargo/maturin already fingerprint every crate's sources, so re-running this on each
+  # start is a no-op (a couple seconds) when nothing changed and only rebuilds the
+  # subset that did. An import check can't tell content-stale from content-fresh: a
+  # `.so` built from an older commit still imports fine, it just no longer matches
+  # what the current Python bindings (e.g. the trace store protocol) expect.
+  echo "lens-dev: checking the Rust bridge (litellm.rust_bridge._native) is current; the ClickHouse trace store uses it"
+  PYO3_PYTHON="$py" VIRTUAL_ENV="$repo_root/.venv" uvx --from maturin==1.15.0 maturin develop \
+    --release --manifest-path litellm-rust/crates/python-bridge/Cargo.toml --features extension-module
 
   if [ ! -x ui/litellm-dashboard/node_modules/.bin/next ]; then
     (cd ui/litellm-dashboard && "$repo_root/scripts/with_dashboard_node.sh" npm ci)
@@ -317,7 +340,7 @@ main() {
   wait_for_ui "$ui_pid"
   wait_for_proxy "$proxy_pid"
   ensure_worker_token
-  if [ -n "$seed_profile" ]; then seed_data; fi
+  if [ -n "$seed_profile" ] || [ -n "$seed_logs_profile" ]; then seed_data; fi
 
   LITELLM_RELEASE_TAG="$source_release_tag" \
     LITELLM_MODE=PRODUCTION LITELLM_URL="$proxy_url" LENS_WORKER_TOKEN="$(cat "$token_file")" \
@@ -332,6 +355,7 @@ main() {
 Lens dev is up. Ctrl-C stops everything.
   Log in:   http://localhost:$ui_port/ui/login/  (admin / $key_hint)
   Lens:     http://localhost:$ui_port/ui/lens/  (hot-reloads)
+  Logs:     http://localhost:$ui_port/ui/?page=logs
   API:      $proxy_url
   Logs:     $log_dir/proxy.log
             $log_dir/worker.log

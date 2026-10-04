@@ -1,5 +1,6 @@
-import type { Span, SpanDetail, TraceMessage, TraceToolCall, UIContent } from "../types";
-import { isFrameworkSpan, parseJson, parseMessages, prettyPayload } from "../utils";
+import type { Span, SpanDetail, TraceMessage, TraceToolCall, UIContent } from "../../types";
+import { isFrameworkSpan, parseJson, parseMessages, prettyPayload } from "../../utils";
+import { toTraceMessage } from "../content/payload";
 
 export const CONVERSATION_PAGE_SIZE = 20;
 
@@ -22,14 +23,7 @@ function contentText(value: string, content?: UIContent): string {
 }
 
 function messages(value: string, content: UIContent | undefined, role: string): TraceMessage[] {
-  if (content?.kind === "messages")
-    return content.messages.map((message) => ({
-      ...message,
-      tool_calls: message.tool_calls?.map((call) => ({
-        name: call.name,
-        args: parseJson(call.arguments) ?? call.arguments,
-      })),
-    }));
+  if (content?.kind === "messages") return content.messages.map(toTraceMessage);
   const parsed = !content ? parseMessages(value) : null;
   if (parsed) return parsed;
   const text = contentText(value, content);

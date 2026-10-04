@@ -87,7 +87,7 @@ export function LensModeSwitch({
               </span>
               <span className={cn(view === "settings" && "sr-only")}>{label}</span>
               {view === "investigations" && setup && (
-                <span className="rounded-full bg-muted px-1.5 py-0.5 text-xs leading-none font-medium text-muted-foreground animate-in fade-in-0 duration-200">
+                <span className="absolute -top-3 right-2 rounded-full border border-border bg-card px-1.5 py-0.5 text-xs leading-none font-medium text-muted-foreground animate-in fade-in-0 duration-200">
                   {setup}
                 </span>
               )}

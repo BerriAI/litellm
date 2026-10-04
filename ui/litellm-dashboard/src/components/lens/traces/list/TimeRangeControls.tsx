@@ -30,7 +30,7 @@ const fixedRangeLabel = (range: TimeWindow): string =>
 const presetLabel = (hours: number): string =>
   RANGE_PRESETS.find((preset) => preset.hours === hours)?.label ?? `Last ${hours} hours`;
 
-const SEGMENT = "inline-flex h-7 items-center gap-1.5 px-2.5 text-sm outline-none focus-visible:bg-accent";
+const SEGMENT = "inline-flex h-full items-center gap-1.5 px-3 text-sm outline-none focus-visible:bg-accent";
 
 interface TimeRangeControlsProps {
   fixedRange: TimeWindow | null;
@@ -51,7 +51,7 @@ export function TimeRangeControls({
   onLiveChange,
 }: TimeRangeControlsProps) {
   return (
-    <div className="flex items-center divide-x divide-border overflow-hidden rounded-lg border border-border bg-card">
+    <div className="flex items-stretch divide-x divide-border border-l border-border">
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Time range"

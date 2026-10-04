@@ -18,7 +18,7 @@ import {
   useZoomRouting,
 } from "../routing";
 import type { TraceSummary } from "../types";
-import { RunView } from "../detail/TraceDrawer";
+import { RunView } from "../detail/run/RunView";
 import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
 import { TracingSetupCard } from "../../onboarding/tracing/TracingSetupCard";

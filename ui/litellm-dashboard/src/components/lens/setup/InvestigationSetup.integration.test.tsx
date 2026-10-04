@@ -3,14 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { mockAllIsIntersecting, setupIntersectionMocking } from "react-intersection-observer/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testQueryClient } from "@/../tests/test-utils";
-import { renderWithLens as renderWithProviders } from "@/../tests/lens-test-utils";
+import { renderWithLens as renderWithProviders, stubGateway } from "@/../tests/lens-test-utils";
 import { MonitoringDialog } from "./MonitoringDialog";
 import { InvestigationSetup } from "./InvestigationSetup";
-import { apiClient } from "@/components/networking";
 import { initialWatches, watchChecks } from "../model/watches";
 import { type AnalysisModelInfo, type Settings } from "../model/types";
 
-vi.mock("@/components/networking", () => ({ apiClient: { post: vi.fn(), get: vi.fn() } }));
+let proxy = stubGateway();
 
 const settings: Settings = {
   lookback_hours: 24,
@@ -65,21 +64,20 @@ function gatewayResponse(path: string, gateway: Gateway): unknown {
 }
 
 function mockGateway(gateway: Gateway = {}) {
-  vi.mocked(apiClient.get).mockImplementation(async (path) => gatewayResponse(path, gateway));
+  proxy.get.mockImplementation(async (path) => gatewayResponse(path, gateway));
 }
 
 beforeEach(() => {
   testQueryClient.clear();
   setupIntersectionMocking(vi.fn);
-  vi.mocked(apiClient.get).mockReset();
+  proxy = stubGateway();
   mockGateway();
-  vi.mocked(apiClient.post).mockReset();
-  vi.mocked(apiClient.post).mockResolvedValue({ eligible: 1, selected: 1, executions: [] });
+  proxy.post.mockResolvedValue({ eligible: 1, selected: 1, executions: [] });
 });
 describe("Investigation setup", () => {
   it("preserves saved manual run selections when editing and lets the preview footer clear them", async () => {
     const user = userEvent.setup();
-    vi.mocked(apiClient.post).mockResolvedValue({
+    proxy.post.mockResolvedValue({
       eligible: 2,
       selected: 2,
       executions: [
@@ -132,9 +130,9 @@ describe("Investigation setup", () => {
   it("previews identifiable matching runs and saves the same filter selection", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
-    vi.mocked(apiClient.post).mockImplementation(async (_path, options) => {
-      const body = options?.body as { settings: Settings };
-      return body.settings.filters?.some((f) => f.key === "swarm" && f.value === "research")
+    proxy.post.mockImplementation(async (_path, options) => {
+      const body = options?.body as { selection: Settings };
+      return body.selection.filters?.some((f) => f.key === "swarm" && f.value === "research")
         ? {
             eligible: 1,
             selected: 1,
@@ -308,8 +306,8 @@ it("keeps the draft when readiness changes and blocks a run until the worker rec
 });
 
 it.each(["empty", "error"])("allows editing saved settings when the preview is %s", async (state) => {
-  if (state === "error") vi.mocked(apiClient.post).mockRejectedValue(new Error("Storage unavailable"));
-  else vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
+  if (state === "error") proxy.post.mockRejectedValue(new Error("Storage unavailable"));
+  else proxy.post.mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
   const user = userEvent.setup();
   renderWithProviders(<InvestigationSetup mode="edit" initial={settings} onClose={vi.fn()} onSave={vi.fn()} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -322,7 +320,7 @@ it.each(["empty", "error"])("allows editing saved settings when the preview is %
 it.each(["loading", "error"])("saves edits with the existing model while models are %s", async (state) => {
   const user = userEvent.setup();
   const save = vi.fn().mockResolvedValue(undefined);
-  vi.mocked(apiClient.get).mockImplementation((path) => {
+  proxy.get.mockImplementation((path) => {
     if (path !== "/models") return Promise.resolve(gatewayResponse(path, {}));
     return state === "loading" ? new Promise(() => {}) : Promise.reject(new Error("Temporarily unavailable"));
   });
@@ -341,7 +339,7 @@ it.each(["loading", "error"])("saves edits with the existing model while models 
 it.each(["new", "duplicate"] as const)("blocks a %s investigation until its model is verified", async (mode) => {
   const user = userEvent.setup();
   const save = vi.fn();
-  vi.mocked(apiClient.get).mockImplementation((path) =>
+  proxy.get.mockImplementation((path) =>
     path === "/models"
       ? Promise.reject(new Error("Temporarily unavailable"))
       : Promise.resolve(gatewayResponse(path, {})),
@@ -397,7 +395,7 @@ it("appends the next preview page as the list scrolls near its end, then stops a
     span_count: 2,
   });
   let finishSecondPage = (): void => {};
-  vi.mocked(apiClient.post).mockImplementation((_path, options) => {
+  proxy.post.mockImplementation((_path, options) => {
     const { offset } = options?.body as { offset: number };
     const firstPage = { eligible: 2, selected: 2, executions: [run("one")], next_offset: 1 };
     const secondPage = { eligible: 2, selected: 2, executions: [run("two")], next_offset: null };
@@ -411,7 +409,7 @@ it("appends the next preview page as the list scrolls near its end, then stops a
   expect(screen.getByText(/Showing 1 of 2/)).toBeVisible();
   expect(screen.getByRole("status")).toHaveTextContent("2 matching runs");
   const nextPageCalls = () =>
-    vi.mocked(apiClient.post).mock.calls.filter(([, options]) => (options?.body as { offset: number }).offset === 1);
+    proxy.post.mock.calls.filter(([, options]) => (options?.body as { offset: number }).offset === 1);
   expect(nextPageCalls()).toHaveLength(0);
   act(() => mockAllIsIntersecting(true));
   await waitFor(() => expect(nextPageCalls()).toHaveLength(1));
@@ -428,7 +426,7 @@ it("appends the next preview page as the list scrolls near its end, then stops a
 
 it("does not silently analyze everything after individual selection is enabled", async () => {
   const user = userEvent.setup();
-  vi.mocked(apiClient.post).mockResolvedValue({
+  proxy.post.mockResolvedValue({
     eligible: 1,
     selected: 1,
     executions: [
@@ -456,13 +454,13 @@ it("refreshes agent suggestions when the first activity arrives", async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   try {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
+    proxy.post.mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
     renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />);
     await vi.advanceTimersByTimeAsync(400);
     await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
     expect(await screen.findByText(/No matches. You can enter/)).toBeVisible();
     await user.keyboard("{Escape}");
-    vi.mocked(apiClient.post).mockResolvedValue({
+    proxy.post.mockResolvedValue({
       eligible: 1,
       selected: 1,
       executions: [
@@ -493,9 +491,9 @@ it("fetches one preview for two keystrokes inside the debounce window", async ()
     renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />);
     await user.click(screen.getByText("Advanced filters"));
     const previewsFor = (teamId: string) =>
-      vi
-        .mocked(apiClient.post)
-        .mock.calls.filter(([, options]) => (options?.body as { settings: Settings }).settings.team_id === teamId);
+      proxy.post.mock.calls.filter(
+        ([, options]) => (options?.body as { selection: Settings }).selection.team_id === teamId,
+      );
     await user.type(screen.getByRole("textbox", { name: "Team ID (optional)" }), "ab");
     expect(previewsFor("a")).toHaveLength(0);
     expect(previewsFor("ab")).toHaveLength(0);
@@ -510,8 +508,8 @@ it("fetches one preview for two keystrokes inside the debounce window", async ()
 });
 
 it.each(["empty", "error"])("blocks a new investigation when its preview is %s", async (state) => {
-  if (state === "error") vi.mocked(apiClient.post).mockRejectedValue(new Error("Storage unavailable"));
-  else vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
+  if (state === "error") proxy.post.mockRejectedValue(new Error("Storage unavailable"));
+  else proxy.post.mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
   const user = userEvent.setup();
   renderWithProviders(<InvestigationSetup mode="duplicate" initial={settings} onClose={vi.fn()} onSave={vi.fn()} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));

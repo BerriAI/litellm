@@ -2,9 +2,10 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { MessageCard, Section, ToolResultCard } from "./MessageCard";
+import { MessageCard, ToolResultCard } from "./Messages";
+import { Section } from "./Section";
 
-vi.mock("../ui/spanProvider", () => ({ useSpanProvider: () => null }));
+vi.mock("../../ui/spanProvider", () => ({ useSpanProvider: () => null }));
 
 const LONG_QUERY = "Find every invoice for the customer that was billed twice. ".repeat(3).trim();
 
@@ -29,7 +30,7 @@ describe("ToolResultCard", () => {
 describe("MessageCard", () => {
   it("folds the card body from the role tile and restores it", async () => {
     const user = userEvent.setup();
-    render(<MessageCard message={{ role: "user", content: "Why was I billed twice?" }} model={null} />);
+    render(<MessageCard message={{ role: "user", content: "Why was I billed twice?" }} />);
     expect(screen.getByText("Why was I billed twice?")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Collapse User" }));
     expect(screen.queryByText("Why was I billed twice?")).not.toBeInTheDocument();
@@ -46,7 +47,6 @@ describe("MessageCard", () => {
           content: "",
           tool_calls: [{ name: "search_invoices", args: { customer_id: "acme-404", query: LONG_QUERY } }],
         }}
-        model={null}
       />,
     );
     expect(screen.getByText("acme-404")).toBeInTheDocument();
@@ -58,7 +58,7 @@ describe("MessageCard", () => {
   });
 
   it("shows a tool result as one line with the tool name and its output", () => {
-    render(<MessageCard message={{ role: "tool", name: "ls", content: "No files found" }} model={null} />);
+    render(<MessageCard message={{ role: "tool", name: "ls", content: "No files found" }} />);
     expect(screen.getByText("ls")).toBeInTheDocument();
     expect(screen.getByText("No files found")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy ls result" })).toBeInTheDocument();

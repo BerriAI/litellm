@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
-import { dismissLensIntro } from "@/../tests/lens-test-utils";
+import { dismissLensIntro, readRequest, requestPath } from "@/../tests/lens-test-utils";
 import { LensWorkspace } from "./LensWorkspace";
 import { lensKeys } from "./data/queries";
 import { createLensDemoData } from "./data/demo/fixtures";
@@ -21,7 +21,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", network);
   network.mockReset();
   network.mockImplementation(async (input) => {
-    const path = new URL(String(input), "http://localhost").pathname;
+    const path = requestPath(input);
     if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
     if (path === "/lens") return Response.json({ lenses: [], workers: [], tracing_enabled: false });
     return Response.json({ data: [], traces: false, requests: false });
@@ -173,7 +173,7 @@ describe("Lens interactive demo", () => {
     const data = createLensDemoData();
     const saved = data.lenses[0];
     network.mockImplementation(async (input) => {
-      const path = new URL(String(input), "http://localhost").pathname;
+      const path = requestPath(input);
       if (path === "/lens") return Response.json({ lenses: [saved], workers: [], tracing_enabled: true });
       if (path.endsWith("/runs")) return Response.json(saved.jobs);
       if (path === "/v1/traces") return Response.json({ data: data.runs.map((run) => run.trace.summary) });
@@ -194,7 +194,7 @@ describe("Lens interactive demo", () => {
     const user = userEvent.setup();
     const saved = createLensDemoData().lenses[0];
     network.mockImplementation(async (input) => {
-      const path = new URL(String(input), "http://localhost").pathname;
+      const path = requestPath(input);
       if (path === "/lens") return Response.json({ lenses: [saved], workers: [], tracing_enabled: false });
       if (path.endsWith("/runs")) return Response.json(saved.jobs);
       if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
@@ -220,7 +220,7 @@ describe("Lens interactive demo", () => {
     });
     const lenses = vi.fn(() => [withJob("running")]);
     network.mockImplementation(async (input) => {
-      const path = new URL(String(input), "http://localhost").pathname;
+      const path = requestPath(input);
       if (path === "/lens") return Response.json({ lenses: lenses(), workers: [], tracing_enabled: false });
       if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
       return Response.json({ data: [], traces: false, requests: false });
@@ -237,7 +237,7 @@ describe("Lens interactive demo", () => {
     const user = userEvent.setup();
     const saved = createLensDemoData().lenses[0];
     network.mockImplementation(async (input) => {
-      const path = new URL(String(input), "http://localhost").pathname;
+      const path = requestPath(input);
       if (path === "/lens") return Response.json({ lenses: [saved], workers: [], tracing_enabled: true });
       if (path.endsWith("/runs")) return Response.json(saved.jobs);
       if (path === "/lens/agents") return Response.json([]);
@@ -272,7 +272,7 @@ describe("Lens interactive demo", () => {
     };
     const workers = vi.fn(() => [worker]);
     network.mockImplementation(async (input) => {
-      const path = new URL(String(input), "http://localhost").pathname;
+      const path = requestPath(input);
       if (path === "/lens") return Response.json({ lenses: [saved], workers: workers(), tracing_enabled: true });
       if (path.endsWith("/runs")) return Response.json(saved.jobs);
       if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
@@ -308,7 +308,7 @@ describe("Lens interactive demo", () => {
     const user = userEvent.setup();
     const onUrlUpdate = vi.fn();
     network.mockImplementation(async (input) => {
-      const path = new URL(String(input), "http://localhost").pathname;
+      const path = requestPath(input);
       if (path === "/lens") return Response.json({ lenses: [], workers: [], tracing_enabled: true });
       if (path === "/v1/traces") return Response.json({ data: [{}] });
       return Response.json({ data: [], traces: true, requests: false });
@@ -339,9 +339,9 @@ describe("Lens interactive demo", () => {
     };
     const workers = vi.fn((): (typeof worker)[] => []);
     network.mockImplementation(async (input, init) => {
-      const path = new URL(String(input), "http://localhost").pathname;
+      const { path, method } = await readRequest(input, init);
       if (path === "/lens") return Response.json({ lenses: [], workers: workers(), tracing_enabled: true });
-      if (path === "/lens/workers/register" && init?.method === "POST") {
+      if (path === "/lens/workers/register" && method === "POST") {
         workers.mockReturnValue([worker]);
         return Response.json({ token: "lens-test-token", image: "lens-worker:v1", worker });
       }
@@ -405,7 +405,7 @@ describe("Lens interactive demo", () => {
         last_seen: new Date().toISOString(),
       };
       network.mockImplementation(async (input) => {
-        const path = new URL(String(input), "http://localhost").pathname;
+        const path = requestPath(input);
         if (path === "/lens") return Response.json({ lenses: [saved], workers: [worker], tracing_enabled: true });
         if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
         return Response.json({ data: [], traces: true, requests: false });
@@ -434,10 +434,9 @@ describe("Lens interactive demo", () => {
         last_seen: new Date(Date.now() - 600_000).toISOString(),
       };
       const workers = vi.fn(() => [worker]);
-      const listCalls = () =>
-        network.mock.calls.filter(([input]) => new URL(String(input), "http://localhost").pathname === "/lens").length;
+      const listCalls = () => network.mock.calls.filter(([input]) => requestPath(input) === "/lens").length;
       network.mockImplementation(async (input) => {
-        const path = new URL(String(input), "http://localhost").pathname;
+        const path = requestPath(input);
         if (path === "/lens") return Response.json({ lenses: [saved], workers: workers(), tracing_enabled: true });
         if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
         return Response.json({ data: [], traces: true, requests: false });

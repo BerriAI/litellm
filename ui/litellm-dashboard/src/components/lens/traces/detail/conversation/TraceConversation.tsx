@@ -5,13 +5,14 @@ import { useState } from "react";
 import { ChevronRight, Wrench } from "lucide-react";
 import { cn } from "@/lib/cva.config";
 import CopyButton from "@/components/shared/CopyButton";
-import { useTracesApi } from "../api";
+import { useTracesApi } from "../../api";
 import { Button } from "@/components/ui/button";
 import { buildConversation, conversationSteps, CONVERSATION_PAGE_SIZE, type ConversationItem } from "./conversation";
-import { ErrorBlock } from "./DetailContent";
-import { Markdown, ToolCallBlock } from "./MessageCard";
-import type { SpanDetail, Trace, TraceMessage } from "../types";
-import { fmtMs } from "../utils";
+import { ErrorBlock } from "../content/SpanError";
+import { Markdown } from "../content/Markdown";
+import { ToolCallBlock } from "../content/Messages";
+import type { SpanDetail, Trace, TraceMessage } from "../../types";
+import { fmtMs } from "../../utils";
 
 export function TraceConversation({
   trace,

@@ -30,9 +30,9 @@ export function LensGettingStarted({ state, onStart, onExit, onDemo }: LensGetti
     setupRef.current?.focus({ preventScroll: true });
   };
   return (
-    <div className="w-full space-y-6">
+    <div className="@container w-full space-y-6">
       <LensIntroduction onStart={start} onDemo={onDemo} />
-      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_280px] xl:gap-8">
+      <div className="grid items-start gap-6 @3xl:grid-cols-[minmax(0,1fr)_280px] @3xl:gap-8">
         <OnboardingSetup
           ref={setupRef}
           tabIndex={-1}

@@ -43,7 +43,7 @@ export function LensIntroDialog({ open, onClose, ...gettingStarted }: LensIntroD
     <Dialog open={open} onOpenChange={(next) => !next && close()}>
       <DialogContent
         showCloseButton={false}
-        className="max-h-[calc(100vh-4rem)] gap-0 overflow-y-auto p-0 sm:max-w-4xl"
+        className="max-h-[calc(100vh-4rem)] gap-0 overflow-y-auto p-0 sm:max-w-4xl xl:max-w-5xl 2xl:max-w-6xl"
       >
         <div className="sticky top-0 z-raised flex items-center justify-end gap-3 bg-popover/90 px-4 py-2 backdrop-blur-sm">
           <Label htmlFor={checkboxId} className="gap-2 text-xs font-normal text-muted-foreground">
