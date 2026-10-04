@@ -1,8 +1,7 @@
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
-from aiohttp import web
-from aiohttp.test_utils import TestClient, TestServer
+from aiohttp import ClientResponse
 from pydantic import ValidationError
 
 from litellm.llms.aiohttp_openai.chat.transformation import AiohttpOpenAIChatConfig
@@ -10,24 +9,19 @@ from litellm.types.utils import ModelResponse
 
 
 async def _transform(body: object) -> ModelResponse:
-    async def chat_completions(request: web.Request) -> web.Response:
-        return web.json_response(body)
-
-    app = web.Application()
-    app.router.add_post("/chat/completions", chat_completions)
-    async with TestClient(TestServer(app)) as client:
-        raw_response = await client.post("/chat/completions")
-        return await AiohttpOpenAIChatConfig().transform_response(
-            model="gpt-4o",
-            raw_response=raw_response,
-            model_response=ModelResponse(),
-            logging_obj=Mock(),
-            request_data={},
-            messages=[{"role": "user", "content": "Hello"}],
-            optional_params={},
-            litellm_params={},
-            encoding=None,
-        )
+    raw_response = Mock(spec=ClientResponse)
+    raw_response.json = AsyncMock(return_value=body)
+    return await AiohttpOpenAIChatConfig().transform_response(
+        model="gpt-4o",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={},
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
 
 
 async def test_transform_response_copies_the_openai_body_onto_the_model_response():
