@@ -25,6 +25,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_arize_otlp_protocol_value,
     validate_langfuse_environment_value,
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
@@ -2375,6 +2376,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 validate_langfuse_environment_value(callback_vars[key])
             if key == "langfuse_span_scope":
                 validate_langfuse_span_scope_value(callback_vars[key])
+            if key == "arize_otlp_protocol":
+                validate_arize_otlp_protocol_value(callback_vars[key])
         return values
 
 

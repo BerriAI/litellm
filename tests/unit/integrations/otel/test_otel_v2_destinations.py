@@ -2435,6 +2435,126 @@ class TestBackendEndpointParity:
         assert destination.endpoint == "https://trace.wandb.ai/otel/v1/traces"
 
 
+class TestArizeOtlpProtocol:
+    @staticmethod
+    def _arize(monkeypatch, endpoint_env, **env):
+        monkeypatch.delenv("ARIZE_ENDPOINT", raising=False)
+        monkeypatch.delenv("ARIZE_HTTP_ENDPOINT", raising=False)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        return destination_for("arize", {"arize_space_id": "s", "arize_api_key": "k", **endpoint_env})
+
+    def test_http_transport_rewrites_the_grpc_endpoint_to_the_traces_path(self, monkeypatch):
+        destination = self._arize(
+            monkeypatch,
+            {"arize_otlp_protocol": "http/protobuf"},
+            ARIZE_ENDPOINT="https://arize.internal.example/v1",
+        )
+
+        assert destination.protocol == "otlp_http"
+        assert destination.endpoint == "https://arize.internal.example/v1/traces"
+
+    def test_http_transport_prefers_the_http_endpoint(self, monkeypatch):
+        destination = self._arize(
+            monkeypatch,
+            {"arize_otlp_protocol": "http/protobuf"},
+            ARIZE_ENDPOINT="https://arize.internal.example/v1",
+            ARIZE_HTTP_ENDPOINT="https://http.arize.internal.example/v1/traces",
+        )
+
+        assert destination.protocol == "otlp_http"
+        assert destination.endpoint == "https://http.arize.internal.example/v1/traces"
+
+    def test_http_transport_falls_back_to_the_arize_cloud_http_endpoint(self, monkeypatch):
+        destination = self._arize(monkeypatch, {"arize_otlp_protocol": "http/protobuf"})
+
+        assert destination.protocol == "otlp_http"
+        assert destination.endpoint == "https://otlp.arize.com/v1/traces"
+
+    def test_grpc_transport_accepts_the_http_endpoint_as_the_grpc_target(self, monkeypatch):
+        destination = self._arize(
+            monkeypatch,
+            {"arize_otlp_protocol": "grpc"},
+            ARIZE_HTTP_ENDPOINT="https://http.arize.internal.example/v1/traces",
+        )
+
+        assert destination.protocol == "otlp_grpc"
+        assert destination.endpoint == "https://http.arize.internal.example/v1/traces"
+
+    def test_no_transport_var_keeps_the_grpc_env_default(self, monkeypatch):
+        destination = self._arize(monkeypatch, {}, ARIZE_ENDPOINT="https://arize.internal.example")
+
+        assert destination.protocol == "otlp_grpc"
+        assert destination.endpoint == "https://arize.internal.example"
+
+    def test_the_http_destination_builds_an_http_exporter_on_the_traces_path(self, monkeypatch):
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter as HTTPSpanExporter,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        from litellm.integrations.otel.plumbing.providers import _destination_processor
+
+        destination = self._arize(
+            monkeypatch,
+            {"arize_otlp_protocol": "http/protobuf"},
+            ARIZE_ENDPOINT="https://arize.internal.example/v1",
+        )
+        processor = _destination_processor(destination)
+        try:
+            assert isinstance(processor, BatchSpanProcessor)
+            assert isinstance(processor.span_exporter, HTTPSpanExporter)
+            assert processor.span_exporter._endpoint == "https://arize.internal.example/v1/traces"
+        finally:
+            processor.shutdown()
+
+    def test_the_grpc_destination_builds_a_grpc_exporter(self, monkeypatch):
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter as GRPCSpanExporter,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        from litellm.integrations.otel.plumbing.providers import _destination_processor
+
+        destination = self._arize(
+            monkeypatch,
+            {"arize_otlp_protocol": "grpc"},
+            ARIZE_ENDPOINT="https://arize.internal.example",
+        )
+        processor = _destination_processor(destination)
+        try:
+            assert isinstance(processor, BatchSpanProcessor)
+            assert isinstance(processor.span_exporter, GRPCSpanExporter)
+        finally:
+            processor.shutdown()
+
+    def test_a_team_metadata_protocol_reaches_the_destination(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setenv("ARIZE_ENDPOINT", "https://arize.internal.example/v1")
+        monkeypatch.delenv("ARIZE_HTTP_ENDPOINT", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        auth = UserAPIKeyAuth(
+            team_metadata={
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "arize_space_id": "s",
+                            "arize_api_key": "k",
+                            "arize_otlp_protocol": "http/protobuf",
+                        },
+                    }
+                ]
+            }
+        )
+
+        destinations = resolve_tenant_otel_destinations(auth)
+
+        assert [d.protocol for d in destinations] == ["otlp_http"]
+        assert destinations[0].endpoint == "https://arize.internal.example/v1/traces"
+
+
 class TestIncompleteCredentials:
     """Half a credential set builds a non-empty but unusable header dict. Accepting it
     would suppress the operator's exporter and send the trace where it cannot land."""

@@ -3647,6 +3647,9 @@ OPENAI_RESPONSE_HEADERS: Final = [
 OtelSpanScope = Literal["full", "llm_only"]
 OTEL_SPAN_SCOPES: Final[frozenset[str]] = frozenset(get_args(OtelSpanScope))
 
+ArizeOtlpProtocol = Literal["grpc", "http/protobuf"]
+ARIZE_OTLP_PROTOCOLS: Final[frozenset[str]] = frozenset(get_args(ArizeOtlpProtocol))
+
 
 class StandardCallbackDynamicParams(TypedDict, total=False):
     # Langfuse dynamic params
@@ -3680,6 +3683,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     arize_space_id: str | None
     arize_success_sampling_rate: ReadOnly[float | None]
     arize_error_sampling_rate: ReadOnly[float | None]
+    arize_otlp_protocol: ReadOnly[ArizeOtlpProtocol | None]
 
     # PostHog dynamic params
     posthog_api_key: str | None
