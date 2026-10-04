@@ -138,7 +138,7 @@ def _content_block_to_part(block: _AgentEngineContentBlock) -> PartType | _Agent
                 filename=None,
                 is_image=True,
             )
-        case "file":
+        case _:
             file: Final = block["file"]
             if bool(file.get("file_data")) == bool(file.get("file_id")):
                 return _AgentEngineInputError("Agent Engine requires exactly one of file_data or file_id")

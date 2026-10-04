@@ -132,6 +132,7 @@ class TestVertexAgentEngineChunkParser:
 @pytest.mark.parametrize(
     "content, expected",
     [
+        ([], ""),
         ([{"type": "text", "text": "one"}, {"type": "text", "text": "two"}], "onetwo"),
         (
             [{"type": "image_url", "image_url": "gs://bucket/image.png"}],
@@ -239,6 +240,8 @@ def test_attachment_parts_reach_agent_engine_without_changing_text_path(
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA==", "format": "image/jpeg"}},
         {"type": "image_url", "image_url": {}},
         {"type": "image_url", "image_url": {"url": "https://[invalid/image.png"}},
+        {"type": "image_url", "image_url": {"url": "gs://bucket"}},
+        {"type": "image_url", "image_url": {"url": "https:///image.png"}},
         {"type": "file", "file": {"file_id": "file-123"}},
         {"type": "file", "file": {"file_data": "AA=="}},
         {"type": "file", "file": {"file_data": "gs://bucket/a.pdf", "file_id": "gs://bucket/b.pdf"}},
@@ -327,3 +330,41 @@ def test_text_history_keeps_the_last_message_string_path() -> None:
         model="agent_engine/123", messages=messages, optional_params={"user_id": "user"}, litellm_params={}, headers={}
     )
     assert result == {"class_method": "stream_query", "input": {"message": "last", "user_id": "user"}}
+
+
+def test_assistant_without_content_preserves_empty_string_path() -> None:
+    config: Final = VertexAgentEngineConfig()
+    messages: Final[list[AllMessageValues]] = [{"role": "assistant", "content": None}]
+    result: Final = config.transform_request(
+        model="agent_engine/123", messages=messages, optional_params={"user_id": "user"}, litellm_params={}, headers={}
+    )
+    assert result == {"class_method": "stream_query", "input": {"message": "", "user_id": "user"}}
+
+
+@pytest.mark.parametrize(
+    "messages, expected_error",
+    [
+        ([], "Agent Engine requires at least one message"),
+        (
+            [
+                {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "gs://bucket"}}]},
+                {"role": "user", "content": "next"},
+            ],
+            "Agent Engine requires a valid gs:// or https:// media URI",
+        ),
+    ],
+)
+def test_invalid_messages_fail_before_forwarding_the_last_text(
+    messages: list[AllMessageValues], expected_error: str
+) -> None:
+    config: Final = VertexAgentEngineConfig()
+    with pytest.raises(VertexAgentEngineError) as error:
+        config.transform_request(
+            model="agent_engine/123",
+            messages=messages,
+            optional_params={"user_id": "user"},
+            litellm_params={},
+            headers={},
+        )
+    assert error.value.status_code == 400
+    assert error.value.message == expected_error
