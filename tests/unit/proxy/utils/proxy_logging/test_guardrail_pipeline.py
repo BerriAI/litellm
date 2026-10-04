@@ -2966,8 +2966,11 @@ class RaisingAcloseCallback(CustomLogger):
 
 @pytest.mark.asyncio
 async def test_streaming_iterator_hook_pipeline_releases_buffered_content_when_a_callback_aclose_raises(
-    proxy_logging, make_user_api_key_auth, monkeypatch, caplog
-):
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     monkeypatch.setattr(
         litellm, "callbacks", [_rewriting_stream_guardrail(lambda inputs: {}), RaisingAcloseCallback()]
     )
@@ -2987,5 +2990,6 @@ async def test_streaming_iterator_hook_pipeline_releases_buffered_content_when_a
 
     assert [chunk.model_dump() for chunk in delivered] == [chunk.model_dump() for chunk in chunks]
     assert any(
-        "RaisingAcloseCallback" in message and "cleanup failed" in message for message in _warnings(caplog)
+        "RaisingAcloseCallback" in message and "RuntimeError" in message and "cleanup failed" not in message
+        for message in _warnings(caplog)
     )

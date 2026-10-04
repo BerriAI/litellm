@@ -2779,10 +2779,9 @@ class ProxyLogging:
                             await closing
                     except Exception as e:  # noqa: BLE001  # a finished stream must not fail on callback cleanup
                         verbose_proxy_logger.warning(
-                            "Closing the streaming iterator of %s raised %s: %s",
+                            "Closing the streaming iterator of %s raised %s",
                             getattr(callback, "guardrail_name", None) or type(callback).__name__,
                             type(e).__name__,
-                            e,
                         )
         except Exception as e:
             if e is not upstream.failure:
