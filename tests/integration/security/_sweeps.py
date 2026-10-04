@@ -141,6 +141,7 @@ NOT_FOUND_EXPECTED: Final = MappingProxyType(
         "/fallback/{model}": "answers 404 when the model has no fallbacks configured",
         "/team/{team_id}/members/me": "answers 404 when the caller is not a member, which the admin is not",
         "/guardrails/submissions/{guardrail_id}": "answers 404 for a guardrail no team submitted for review",
+        "/credentials/{credential_name:path}/jwks": "answers 404 for any credential that is not an anthropic internal_issuer credential, which the canary credential is not",
     }
 )
 
