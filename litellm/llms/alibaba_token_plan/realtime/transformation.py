@@ -2,12 +2,12 @@ import json
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # OpenAI's union omits validated provider extension events
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlencode
 
 from pydantic import JsonValue
 
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.alibaba_token_plan.common_utils import REALTIME_ENDPOINT, get_native_api_url, validate_headers
+from litellm.llms.alibaba_token_plan.common_utils import REALTIME_PATH, get_api_url, validate_headers
 from litellm.llms.base_llm.realtime.transcription_protocol import (
     RealtimeTranscriptionProtocolError,
     json_mapping,
@@ -43,19 +43,6 @@ _SESSION_KEYS: Final = frozenset(
         "turn_detection",
     )
 )
-_CLIENT_EVENTS: Final = frozenset(
-    (
-        "session.update",
-        "input_audio_buffer.append",
-        "input_audio_buffer.commit",
-        "input_audio_buffer.clear",
-        "conversation.item.create",
-        "conversation.item.delete",
-        "conversation.item.retrieve",
-        "response.create",
-        "response.cancel",
-    )
-)
 _USAGE_KEYS: Final = MappingProxyType(
     {"input_tokens_details": "input_token_details", "output_tokens_details": "output_token_details"}
 )
@@ -72,11 +59,7 @@ def _tools(value: JsonValue | None) -> Sequence[Mapping[str, JsonValue]]:
 
 
 def _tool(tool: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
-    if tool.get("type") != "function":
-        raise RealtimeTranscriptionProtocolError("Qwen Audio realtime supports function tools only")
     function: Final = json_mapping(tool.get("function"), "function") if "function" in tool else tool
-    if not isinstance(function.get("name"), str):
-        raise RealtimeTranscriptionProtocolError("Function tools require a name")
     return {"type": "function", "function": {key: value for key, value in function.items() if key != "type"}}
 
 
@@ -147,46 +130,17 @@ class AlibabaTokenPlanRealtimeConfig(BaseRealtimeConfig):
         return validate_headers(headers, api_key)
 
     def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
-        parsed: Final = urlsplit(get_native_api_url(api_base, REALTIME_ENDPOINT))
-        if parsed.scheme not in ("http", "https", "ws", "wss"):
-            raise ValueError("Token Plan realtime api_base must use http, https, ws, or wss")
-        scheme: Final = "wss" if parsed.scheme in ("https", "wss") else "ws"
-        query: Final = tuple(
-            (key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key != "model"
-        )
-        return urlunsplit((scheme, parsed.netloc, parsed.path, urlencode((*query, ("model", model))), ""))
+        url: Final = get_api_url(api_base, REALTIME_PATH)
+        return f"{url.replace('https://', 'wss://', 1).replace('http://', 'ws://', 1)}?{urlencode({'model': model})}"
 
     def _session_request(self, session: Mapping[str, JsonValue]) -> Mapping[str, object]:
         if session.get("type", "realtime") != "realtime":
             raise RealtimeTranscriptionProtocolError("Qwen Audio supports realtime conversation sessions only")
         if session.get("tool_choice", "auto") != "auto":
             raise RealtimeTranscriptionProtocolError("Qwen Audio supports automatic function tool choice only")
-        unsupported: Final = (
-            session.keys()
-            - _SESSION_KEYS
-            - {
-                "audio",
-                "type",
-                "model",
-                "output_modalities",
-                "input_audio_format",
-                "output_audio_format",
-                "tool_choice",
-            }
-        )
-        if unsupported:
-            raise RealtimeTranscriptionProtocolError(
-                f"Unsupported Qwen Audio session fields: {', '.join(sorted(unsupported))}"
-            )
         audio: Final = json_mapping(session.get("audio"), "audio")
         audio_input: Final = json_mapping(audio.get("input"), "audio.input")
         audio_output: Final = json_mapping(audio.get("output"), "audio.output")
-        if (
-            audio.keys() - {"input", "output"}
-            or audio_input.keys() - {"format", "turn_detection", "transcription"}
-            or audio_output.keys() - {"format", "voice"}
-        ):
-            raise RealtimeTranscriptionProtocolError("Unsupported Qwen Audio input or output audio settings")
         input_format: Final = audio_input.get("format", session.get("input_audio_format"))
         if input_format is not None and _audio_rate(input_format) != 16000:
             raise RealtimeTranscriptionProtocolError("Qwen Audio realtime input must be 16000 Hz PCM16")
@@ -198,8 +152,6 @@ class AlibabaTokenPlanRealtimeConfig(BaseRealtimeConfig):
             **({"turn_detection": audio_input["turn_detection"]} if "turn_detection" in audio_input else {}),
             **({"input_audio_transcription": audio_input["transcription"]} if "transcription" in audio_input else {}),
         }
-        if normalized.get("tools") and normalized.get("enable_search"):
-            raise RealtimeTranscriptionProtocolError("Qwen Audio tools and enable_search cannot be enabled together")
         result: Final = {
             **normalized,
             "input_audio_format": "pcm",
@@ -234,22 +186,14 @@ class AlibabaTokenPlanRealtimeConfig(BaseRealtimeConfig):
     ) -> Sequence[str | bytes]:
         event: Final = json_object(message)
         event_type: Final = event.get("type")
-        if not isinstance(event_type, str) or event_type not in _CLIENT_EVENTS:
-            raise RealtimeTranscriptionProtocolError(f"Unsupported Qwen Audio realtime event: {event_type}")
         if event_type == "session.update":
             return (
                 json.dumps({**event, "session": self._session_request(json_mapping(event.get("session"), "session"))}),
             )
-        if event_type == "response.cancel" and "response_id" in event:
-            raise RealtimeTranscriptionProtocolError("Qwen Audio cancels the active response only; omit response_id")
         if event_type == "conversation.item.create":
             return (json.dumps({**event, "item": self._item_request(json_mapping(event.get("item"), "item"))}),)
         if event_type == "response.create" and "response" in event:
             response: Final = json_mapping(event["response"], "response")
-            if response.keys() - {"modalities", "output_modalities", "voice"}:
-                raise RealtimeTranscriptionProtocolError(
-                    "Qwen Audio response.create supports modalities and voice overrides only"
-                )
             normalized: Final = {key: value for key, value in response.items() if key != "output_modalities"}
             modalities: Final = response.get("output_modalities", response.get("modalities"))
             return (

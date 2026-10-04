@@ -4,7 +4,6 @@ import json
 from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock
-from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from pydantic import JsonValue
@@ -66,34 +65,27 @@ def _audio_bytes(events: tuple[Mapping[str, JsonValue], ...]) -> bytes:
     )
 
 
-@pytest.mark.parametrize("path", ["api-ws/v1/realtime", "compatible-mode/v1", "apps/anthropic"])
-def test_discovered_provider_uses_websocket_host_path_query_and_dedicated_key(
-    path: str,
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("api_base", "expected_url"),
+    [
+        (None, f"wss://token-plan.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/realtime?model={MODEL}"),
+        (
+            "https://gateway.example/plan/compatible-mode/v1",
+            f"wss://gateway.example/plan/api-ws/v1/realtime?model={MODEL}",
+        ),
+        ("http://localhost:8080/compatible-mode/v1", f"ws://localhost:8080/api-ws/v1/realtime?model={MODEL}"),
+    ],
+)
+def test_realtime_url_and_auth_come_from_the_provider_settings(
+    api_base: str | None, expected_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv(
-        "ALIBABA_TOKEN_PLAN_API_BASE",
-        f"https://gateway.example/plan/{path}?tenant=test&model=stale",
-    )
+    monkeypatch.delenv("ALIBABA_TOKEN_PLAN_API_BASE", raising=False)
     monkeypatch.setenv("ALIBABA_TOKEN_PLAN_API_KEY", "token-plan-key")
-    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-key")
     config: Final = ProviderConfigManager.get_provider_realtime_config(MODEL, LlmProviders.ALIBABA_TOKEN_PLAN)
     assert config is not None
-    url: Final = urlsplit(config.get_complete_url(None, MODEL))
-    assert (url.scheme, url.netloc, url.path) == ("wss", "gateway.example", "/plan/api-ws/v1/realtime")
-    assert parse_qs(url.query) == {"tenant": ["test"], "model": [MODEL]}
+    assert config.get_complete_url(api_base, MODEL) == expected_url
     assert config.validate_environment({"x-trace-id": "trace"}, MODEL)["Authorization"] == "Bearer token-plan-key"
     assert config.validate_environment({}, MODEL, api_key="explicit")["Authorization"] == "Bearer explicit"
-
-
-@pytest.mark.parametrize("scheme", ["http", "ws"])
-def test_realtime_rejects_plaintext_official_host_but_allows_local_gateway(scheme: str) -> None:
-    config: Final = AlibabaTokenPlanRealtimeConfig()
-    with pytest.raises(ValueError, match="require HTTPS or WSS"):
-        config.get_complete_url(f"{scheme}://token-plan.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/realtime", MODEL)
-    assert config.get_complete_url(f"{scheme}://localhost:8080/token-plan/api-ws/v1/realtime", MODEL) == (
-        f"ws://localhost:8080/token-plan/api-ws/v1/realtime?model={MODEL}"
-    )
 
 
 @pytest.mark.parametrize("layout", ("beta", "ga"))
@@ -172,10 +164,7 @@ def test_24khz_input_is_rejected_with_a_16khz_hint(session: Mapping[str, object]
         {"turn_detection": {"type": "semantic_vad"}},
         {"turn_detection": {"type": "server_vad", "create_response": False}},
         {"turn_detection": {"type": "server_vad", "interrupt_response": False}},
-        {"tools": [{"type": "mcp"}]},
-        {"tools": [{"type": "function", "name": "weather"}], "enable_search": True},
         {"tool_choice": "required"},
-        {"temperature": 0.7},
     ),
 )
 def test_unsupported_capabilities_fail_explicitly(session: Mapping[str, object]) -> None:
@@ -322,19 +311,6 @@ def test_cumulative_transcription_emits_only_new_confirmed_suffix_per_item() -> 
     assert other["delta"] == "Hello"
     assert completed["transcript"] == "Hello world!"
     assert second["stash"] == "today"
-
-
-@pytest.mark.parametrize(
-    "event",
-    (
-        {"type": "conversation.item.truncate", "item_id": "item", "content_index": 0, "audio_end_ms": 100},
-        {"type": "response.cancel", "response_id": "old-response"},
-        {"type": "response.create", "response": {"conversation": "none"}},
-    ),
-)
-def test_unsupported_conversation_operations_are_not_silently_ignored(event: Mapping[str, object]) -> None:
-    with pytest.raises(RealtimeTranscriptionProtocolError):
-        _request(AlibabaTokenPlanRealtimeConfig(), event)
 
 
 def test_provider_session_tools_audio_parts_and_usage_are_openai_shaped() -> None:

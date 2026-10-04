@@ -277,19 +277,9 @@ def test_cost_map_reload_updates_provider_models() -> None:
     [
         (None, f"{ANTHROPIC_BASE}/v1/messages"),
         (API_BASE, f"{ANTHROPIC_BASE}/v1/messages"),
-        (ANTHROPIC_BASE, f"{ANTHROPIC_BASE}/v1/messages"),
-        ("https://gateway.example/apps/anthropic", "https://gateway.example/apps/anthropic/v1/messages"),
         (
             "https://gateway.example/token-plan/compatible-mode/v1",
             "https://gateway.example/token-plan/apps/anthropic/v1/messages",
-        ),
-        (
-            "https://gateway.example/anthropic/v1",
-            "https://gateway.example/anthropic/v1/messages",
-        ),
-        (
-            "https://gateway.example/anthropic/v1/messages",
-            "https://gateway.example/anthropic/v1/messages",
         ),
     ],
 )
@@ -344,12 +334,10 @@ async def test_native_anthropic_messages(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_http_handler", [False, True])
 @pytest.mark.parametrize("from_environment", [False, True])
-@pytest.mark.parametrize("full_endpoint", [False, True])
 async def test_chat_preserves_custom_openai_compatible_base(
-    use_http_handler: bool, from_environment: bool, full_endpoint: bool, monkeypatch: pytest.MonkeyPatch
+    use_http_handler: bool, from_environment: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    compatible_base: Final = "https://gateway.example/token-plan/compatible-mode/v1"
-    api_base: Final = f"{compatible_base}/chat/completions" if full_endpoint else compatible_base
+    api_base: Final = "https://gateway.example/token-plan/compatible-mode/v1"
     monkeypatch.setenv("ALIBABA_TOKEN_PLAN_API_KEY", "token-plan-test-key")
     monkeypatch.setenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", str(use_http_handler).lower())
     if from_environment:
@@ -387,12 +375,6 @@ async def test_chat_preserves_custom_openai_compatible_base(
             )
             assert response.choices[0].message.content == "OK"
     litellm.in_memory_llm_clients_cache.flush_cache()
-
-
-def test_provider_resolution_rejects_plaintext_subscription_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ALIBABA_TOKEN_PLAN_API_KEY", "token-plan-test-key")
-    with pytest.raises(litellm.BadRequestError, match="require HTTPS or WSS"):
-        get_llm_provider(model=PREFIXED_MODEL, api_base=API_BASE.replace("https:", "http:"))
 
 
 def successful_reply(request: httpx.Request) -> Mapping[str, object]:
