@@ -294,6 +294,7 @@ class ToolCall(BaseModel):
     id: str | None = None
     type: str | None = None
     function: ToolCallFunction = ToolCallFunction()
+    cache_control: CacheControl | None = None
 
 
 class ThinkingBlock(BaseModel):
@@ -1233,6 +1234,12 @@ class FineTuningJobsResponse(BaseModel):
 # ---------- model management ----------
 
 
+class CacheControlInjectionPoint(BaseModel):
+    location: Literal["message"]
+    role: str | None = None
+    index: int | None = None
+
+
 class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
     et al may be an `os.environ/FOO` reference the proxy resolves at call time.
@@ -1291,6 +1298,7 @@ class LiteLLMParamsBody(BaseModel):
     max_retries: int | None = None
     cooldown_time: float | None = None
     extra_body: DeploymentExtraBody | None = None
+    cache_control_injection_points: list[CacheControlInjectionPoint] | None = None
     tpm: int | None = None
     weight: int | None = None
     order: int | None = None

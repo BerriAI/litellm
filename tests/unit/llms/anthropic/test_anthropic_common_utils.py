@@ -4121,3 +4121,30 @@ def test_tool_changes_beta_requires_system_tool_reference(role: str, content: ob
     )
 
     assert ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER not in headers.get("anthropic-beta", "").split(",")
+
+
+@pytest.mark.parametrize(
+    ("tool_call_id", "provider_specific_fields", "rebuilt"),
+    (
+        ("srvtoolu_search", {"web_search_results": [{"tool_use_id": "srvtoolu_search"}]}, True),
+        ("srvtoolu_code", {"tool_results": [{"tool_use_id": "srvtoolu_code"}]}, True),
+        (
+            "srvtoolu_code",
+            {"web_search_results": "srvtoolu_code", "tool_results": [{"tool_use_id": "srvtoolu_code"}]},
+            True,
+        ),
+        ("srvtoolu_other", {"web_search_results": [{"tool_use_id": "srvtoolu_search"}]}, False),
+        ("call_client", {"tool_results": [{"tool_use_id": "call_client"}]}, False),
+        ("srvtoolu_search", {"web_search_results": ["srvtoolu_search"]}, False),
+        ("srvtoolu_search", {}, False),
+        ("srvtoolu_search", None, False),
+        ("srvtoolu_search", [{"tool_use_id": "srvtoolu_search"}], False),
+        (None, {"web_search_results": [{"tool_use_id": None}]}, False),
+    ),
+)
+def test_tool_call_is_rebuilt_as_server_tool_use_only_with_a_stored_result(
+    tool_call_id: object, provider_specific_fields: object, rebuilt: bool
+) -> None:
+    from litellm.llms.anthropic.common_utils import tool_call_is_rebuilt_as_server_tool_use
+
+    assert tool_call_is_rebuilt_as_server_tool_use(tool_call_id, provider_specific_fields) is rebuilt
