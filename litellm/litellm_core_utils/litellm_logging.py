@@ -22,6 +22,7 @@ from pydantic import BaseModel
 import litellm
 from litellm import (
     _custom_logger_compatible_callbacks_literal,
+    ecs_logs,
     json_logs,
     log_raw_request_response,
     turn_off_message_logging,
@@ -1333,7 +1334,7 @@ class Logging(LiteLLMLoggingBaseClass):
         Prints the RAW curl command sent from LiteLLM
         """
         if _is_debugging_on() or self.litellm_request_debug:
-            if json_logs:
+            if json_logs or ecs_logs:
                 masked_headers: Final = self._get_masked_headers(headers)
                 masked_api_base: Final = self._get_masked_api_base(str(api_base or ""))
                 if self.litellm_request_debug:

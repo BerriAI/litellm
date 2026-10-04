@@ -6486,3 +6486,33 @@ def test_get_error_information_redacts_provider_key_from_upstream_url():
     assert "REDACTED" in result["traceback"]
     assert "REDACTED" in result["error_message"]
     assert result["error_code"] == "400"
+
+
+def test_ecs_logs_keep_the_request_body_out_of_the_debug_log(logging_obj, monkeypatch):
+    import io
+    import logging
+
+    import litellm.litellm_core_utils.litellm_logging as litellm_logging_module
+    from litellm._logging import verbose_logger
+
+    monkeypatch.setattr(litellm_logging_module, "json_logs", False)
+    monkeypatch.setattr(litellm_logging_module, "ecs_logs", True)
+    logging_obj.litellm_request_debug = True
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    verbose_logger.addHandler(handler)
+    try:
+        logging_obj._print_llm_call_debugging_log(
+            api_base="https://api.example.com/v1",
+            headers={},
+            additional_args={
+                "api_base": "https://api.example.com/v1",
+                "headers": {},
+                "complete_input_dict": {"messages": [{"role": "user", "content": "my-private-prompt-text"}]},
+            },
+        )
+    finally:
+        verbose_logger.removeHandler(handler)
+
+    assert "POST Request Sent from LiteLLM" in stream.getvalue()
+    assert "my-private-prompt-text" not in stream.getvalue()
