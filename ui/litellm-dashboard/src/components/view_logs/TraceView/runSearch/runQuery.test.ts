@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { fieldValues } from "../search/evaluate";
+import { fieldValues } from "@/components/shared/search/evaluate";
 import { run, runs } from "./__fixtures__/runs";
 import { filterRuns, RUN_INDEX } from "./runQuery";
 

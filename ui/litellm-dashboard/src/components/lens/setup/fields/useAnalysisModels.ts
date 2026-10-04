@@ -1,8 +1,8 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { lensQueries } from "../../api/queries";
-import { useLensApi } from "../../LensServices";
+import { lensQueries } from "../../data/queries";
+import { useLensApi } from "../../data/LensServices";
 import type { AnalysisModelInfo } from "../../model/types";
 import { useAnalysisKeyInfo } from "../../settings/worker/useAnalysisKeyInfo";
 

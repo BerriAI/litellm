@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Check, Loader2 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { LensPreviewButton } from "../LensPreviewButton";
+import { LensPreviewButton } from "@/components/view_logs/TraceView/LensPreviewButton";
 import type { ActivityCheck, Readiness } from "../model/status";
 import { uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";

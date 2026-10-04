@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useNow } from "@/hooks/useNow";
 import { isTracingNotEnabled, useTraceAvailability } from "@/components/view_logs/TraceView/useAgentTraces";
-import { lensQueries } from "../api/queries";
+import { lensQueries } from "../data/queries";
 import { workerConnected } from "../model/status";
-import { useLensApi } from "../LensServices";
+import { useLensApi } from "../data/LensServices";
 
 function traceSetupState(traces: ReturnType<typeof useTraceAvailability>, configured: boolean) {
   const disabled = isTracingNotEnabled(traces.error);

@@ -7,9 +7,9 @@ import { ApiError } from "@/lib/http/client";
 
 import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import traceList from "./__fixtures__/trace_list.json";
-import { LensPreviewContext } from "@/components/lens/LensPreviewButton";
+import { LensPreviewContext } from "./LensPreviewButton";
 import AgentTracesPage from "./AgentTracesPage";
-import { filterRuns } from "@/components/lens/runSearch/runQuery";
+import { filterRuns } from "./runSearch/runQuery";
 import { AgentTracesSection, type TimeControls } from "./AgentTracesSection";
 import type { TracePage, TraceSummary } from "./traceTypes";
 

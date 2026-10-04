@@ -7,7 +7,7 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/compone
 import { ScanDuration } from "./JobMeta";
 import { useRunHistory } from "./useRunHistory";
 import type { Lens, Job } from "../../model/types";
-import { useRunRoute } from "../resultRoute";
+import { useRunRoute } from "../../route";
 
 import { money, when } from "../../model/format";
 

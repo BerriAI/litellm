@@ -2,19 +2,17 @@
 
 import { useId, useState, type ComponentProps } from "react";
 import { Loader2, XIcon } from "lucide-react";
-import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { storageKey, useStoredValue } from "@/lib/storage";
+import { useStoredValue } from "@/lib/storage";
+import { LENS_INTRO_DISMISSED, LENS_INTRO_SEEN } from "../storage";
 
 import { LensGettingStarted } from "./LensGettingStarted";
 
 /** "Don't show this again" outlives the tab; a plain close only rests for the session. */
-export const LENS_INTRO_DISMISSED = storageKey("local", "lens.intro.dismissed", z.boolean(), false);
-export const LENS_INTRO_SEEN = storageKey("session", "lens.intro.seen", z.boolean(), false);
 
 export interface LensIntro {
   readonly open: boolean;

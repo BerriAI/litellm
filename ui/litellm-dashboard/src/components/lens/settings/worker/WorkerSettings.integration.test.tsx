@@ -5,8 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { testQueryClient } from "@/../tests/test-utils";
 import { renderWithLens } from "@/../tests/lens-test-utils";
 import { apiClient } from "@/components/networking";
-import { lensQueries } from "../../api/queries";
-import { useLensApi } from "../../LensServices";
+import { lensQueries } from "../../data/queries";
+import { useLensApi } from "../../data/LensServices";
 import type { LensList } from "../../model/types";
 import { WorkerSettings } from "./WorkerSettings";
 

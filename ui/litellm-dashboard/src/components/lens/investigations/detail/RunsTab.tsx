@@ -10,8 +10,8 @@ import { TabsContent } from "@/components/ui/tabs";
 import { runTime } from "../../model/format";
 import { type Job, type Lens } from "../../model/types";
 import { EvidenceView } from "../Evidence";
-import { FINDING_PANEL_WIDTH_KEY } from "../FindingDetails";
-import { useRunEvidenceRoute } from "../resultRoute";
+import { FINDING_PANEL_WIDTH_KEY } from "../../storage";
+import { useRunEvidenceRoute } from "../../route";
 
 const PAGE = 50;
 

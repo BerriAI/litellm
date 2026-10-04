@@ -1,7 +1,7 @@
 "use client";
 
-import type { TraceSummary } from "@/components/view_logs/TraceView/traceTypes";
-import type { TimeWindow } from "@/components/view_logs/TraceView/TracesTimeline";
+import type { TraceSummary } from "../traceTypes";
+import type { TimeWindow } from "../TracesTimeline";
 
 import { RunSearch } from "./RunSearch";
 

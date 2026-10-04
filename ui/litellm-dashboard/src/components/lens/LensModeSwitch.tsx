@@ -8,6 +8,7 @@ import type { InvestigationActivity } from "./model/status";
 import { useWorkerConnected } from "./useWorkerConnected";
 import type { LensList } from "./model/types";
 import { LENS_TABS, type LensTab } from "./route";
+import { frameCorner, frameTab } from "./ui/frame";
 
 const MODE_ICONS = { traces: Activity, investigations: ScanSearch, settings: Settings } as const;
 
@@ -29,24 +30,8 @@ function ActivityDot({ activity }: { activity: InvestigationActivity }) {
   );
 }
 
-const FRAME = {
-  live: {
-    card: "border border-foreground/15",
-    tab: "-mb-px border-x border-t border-foreground/15",
-    corner: { left: "border-r border-b", right: "border-l border-b", tone: "border-foreground/15" },
-  },
-  demo: {
-    card: "border-2 border-info",
-    tab: "-mb-0.5 border-x-2 border-t-2 border-info",
-    corner: { left: "border-r-2 border-b-2", right: "border-l-2 border-b-2", tone: "border-info" },
-  },
-} as const;
-
-export const frameOf = (demo: boolean) => FRAME[demo ? "demo" : "live"];
-
 /** Inverted corner joining the tab's side border to the card's top border; plain CSS borders so both snap to the same pixels. */
 function NotchCorner({ side, demo }: { side: "left" | "right"; demo: boolean }) {
-  const { corner } = frameOf(demo);
   return (
     <span
       aria-hidden="true"
@@ -55,14 +40,7 @@ function NotchCorner({ side, demo }: { side: "left" | "right"; demo: boolean }) 
         side === "left" ? "-left-3" : "-right-3",
       )}
     >
-      <span
-        className={cn(
-          "block size-full shadow-[0_0_0_12px_var(--card)]",
-          side === "left" ? "rounded-br-xl" : "rounded-bl-xl",
-          corner[side],
-          corner.tone,
-        )}
-      />
+      <span className={frameCorner({ session: demo ? "demo" : "live", side })} />
     </span>
   );
 }
@@ -82,7 +60,7 @@ export function LensModeSwitch({
   const settingsTitle = connected ? "Worker connected" : "Connect worker";
   const tabs = Object.entries(LENS_TABS).filter(([view]) => view !== "settings" || workers);
   return (
-    <div className={cn("relative z-raised rounded-t-2xl bg-card", frameOf(demo).tab)}>
+    <div className={frameTab({ session: demo ? "demo" : "live" })}>
       <NotchCorner side="left" demo={demo} />
       <NotchCorner side="right" demo={demo} />
       <TabsPrimitive.List aria-label="Lens" className="relative inline-flex h-9 items-center p-1">

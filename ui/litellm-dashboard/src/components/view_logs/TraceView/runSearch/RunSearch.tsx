@@ -2,11 +2,11 @@
 
 import { useMemo } from "react";
 
-import type { TraceSummary } from "@/components/view_logs/TraceView/traceTypes";
-import type { TimeWindow } from "@/components/view_logs/TraceView/TracesTimeline";
+import type { TraceSummary } from "../traceTypes";
+import type { TimeWindow } from "../TracesTimeline";
 
-import { SearchBox } from "../search/SearchBox";
-import { itemValues } from "../search/valueSource";
+import { SearchBox } from "@/components/shared/search/SearchBox";
+import { itemValues } from "@/components/shared/search/valueSource";
 import { RUN_INDEX, RUN_QUERY } from "./runQuery";
 import { runQueryCommand } from "./runSql";
 

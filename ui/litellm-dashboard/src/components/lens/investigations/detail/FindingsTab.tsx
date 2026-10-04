@@ -12,8 +12,9 @@ import { sortedFindings } from "../../model/findings";
 import type { OwnedFinding } from "../../model/inbox";
 import { activeJob } from "../../model/status";
 import { type Lens, type Finding, type Job } from "../../model/types";
-import { FINDING_PANEL_WIDTH_KEY, ownedFindingKey } from "../FindingDetails";
-import { useFindingFilters, useFindingRoute } from "../resultRoute";
+import { ownedFindingKey } from "../FindingDetails";
+import { FINDING_PANEL_WIDTH_KEY } from "../../storage";
+import { useFindingFilters, useFindingRoute } from "../../route";
 
 const priorityColors = { high: "bg-red-500", medium: "bg-amber-500", low: "bg-slate-400" };
 function emptyFindingTitle(active: boolean, scanned: boolean, status?: string) {

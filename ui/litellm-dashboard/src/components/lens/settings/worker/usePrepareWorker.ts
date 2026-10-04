@@ -1,9 +1,9 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { lensKeys } from "../../api/queries";
-import type { LensApi } from "../../api/service";
-import { useLensApi } from "../../LensServices";
+import { lensKeys } from "../../data/queries";
+import type { LensApi } from "../../data/service";
+import { useLensApi } from "../../data/LensServices";
 import type { WorkerCreated } from "../../model/types";
 import { validateWorkerAddress, analysisAccessSchema, type AnalysisAccess } from "./workerSchema";
 

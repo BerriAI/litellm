@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
-import { LensServicesProvider, liveLensServices } from "@/components/lens/LensServices";
-import { LENS_INTRO_DISMISSED } from "@/components/lens/setup/LensIntroDialog";
+import { LensServicesProvider, liveLensServices } from "@/components/lens/data/LensServices";
+import { LENS_INTRO_DISMISSED } from "@/components/lens/storage";
 import { writeStorage } from "@/lib/storage";
 import { renderWithProviders } from "./test-utils";
 

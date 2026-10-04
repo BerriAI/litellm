@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { dismissLensIntro } from "@/../tests/lens-test-utils";
 import { LensWorkspace } from "./LensWorkspace";
-import { lensKeys } from "./api/queries";
-import { createLensDemoData } from "./demo/createLensDemo";
+import { lensKeys } from "./data/queries";
+import { createLensDemoData } from "./data/demo/createLensDemo";
 
 const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
   new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));

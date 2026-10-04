@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { fieldValues } from "../search/evaluate";
+import { fieldValues } from "@/components/shared/search/evaluate";
 import type { Job, Lens } from "../model/types";
 import { filterInvestigations, INVESTIGATION_INDEX } from "./investigationQuery";
 

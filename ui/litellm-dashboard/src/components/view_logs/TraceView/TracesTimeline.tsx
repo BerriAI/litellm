@@ -5,8 +5,8 @@ import moment from "moment";
 import { useMemo, useRef, useState, type RefObject } from "react";
 import { useResizeObserver } from "usehooks-ts";
 
-import { DotFieldCanvas, DotFieldRoot } from "@/components/lens/dotField/DotField";
-import type { DotBand, DotColumn } from "@/components/lens/dotField/dots";
+import { DotFieldCanvas, DotFieldRoot } from "@/components/shared/dotField/DotField";
+import type { DotBand, DotColumn } from "@/components/shared/dotField/dots";
 import { cn } from "@/lib/cva.config";
 
 import type { TraceSummary } from "./traceTypes";

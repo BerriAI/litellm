@@ -1,8 +1,8 @@
 import { getProxyBaseUrl } from "@/components/networking";
-import type { TimeWindow } from "@/components/view_logs/TraceView/TracesTimeline";
+import type { TimeWindow } from "../TracesTimeline";
 
-import { valueMatcher } from "../search/language";
-import type { SearchFilter, SearchQuery } from "../search/searchQuery";
+import { valueMatcher } from "@/components/shared/search/language";
+import type { SearchFilter, SearchQuery } from "@/components/shared/search/searchQuery";
 import type { RunField } from "./runQuery";
 
 const RUN_ROWS = `SELECT TraceId AS trace_id, any(RootName) AS name, any(RootInput) AS input, sum(ErrorCount) AS errors,

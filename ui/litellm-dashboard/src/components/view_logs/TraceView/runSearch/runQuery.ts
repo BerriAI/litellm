@@ -1,10 +1,10 @@
 import { Bot, Box, Braces, CircleDashed, Hash, SquareChevronRight } from "lucide-react";
 
-import type { TraceSummary } from "@/components/view_logs/TraceView/traceTypes";
-import { previewText, traceAgentNames } from "@/components/view_logs/TraceView/traceUtils";
+import type { TraceSummary } from "../traceTypes";
+import { previewText, traceAgentNames } from "../traceUtils";
 
-import { type ClientIndex, filterItems } from "../search/evaluate";
-import type { FieldSpec, QueryLanguage } from "../search/language";
+import { type ClientIndex, filterItems } from "@/components/shared/search/evaluate";
+import type { FieldSpec, QueryLanguage } from "@/components/shared/search/language";
 
 const RUN_FIELDS = {
   name: { group: "Run attributes", icon: SquareChevronRight, suggestValues: true },

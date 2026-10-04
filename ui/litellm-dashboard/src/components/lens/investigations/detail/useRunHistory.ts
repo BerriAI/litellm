@@ -2,8 +2,8 @@
 
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLensApi } from "../../LensServices";
-import { lensKeys, lensQueries } from "../../api/queries";
+import { useLensApi } from "../../data/LensServices";
+import { lensKeys, lensQueries } from "../../data/queries";
 import { activeJob } from "../../model/status";
 import type { Lens } from "../../model/types";
 

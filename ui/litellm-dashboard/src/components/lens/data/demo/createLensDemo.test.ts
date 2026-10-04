@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createLensDemo, createLensDemoData } from "./createLensDemo";
-import { evidenceTarget } from "../model/findings";
+import { evidenceTarget } from "../../model/findings";
 
 describe("Lens demo data", () => {
   it("links every finding to the quoted original step and assessed run", () => {

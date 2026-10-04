@@ -3,8 +3,8 @@
 import moment from "moment";
 import { useMemo, useState } from "react";
 
-import { filterRuns } from "@/components/lens/runSearch/runQuery";
-import { RunsToolbar } from "@/components/lens/runSearch/RunsToolbar";
+import { filterRuns } from "./runSearch/runQuery";
+import { RunsToolbar } from "./runSearch/RunsToolbar";
 import { Inspector } from "@/components/shared/Inspector";
 import { Button } from "@/components/ui/button";
 

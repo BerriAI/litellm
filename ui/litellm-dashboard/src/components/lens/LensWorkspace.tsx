@@ -8,14 +8,15 @@ import { Button } from "@/components/ui/button";
 import type { TraceSummary } from "@/components/view_logs/TraceView/traceTypes";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
-import { LensServicesProvider, useLensApi, useLiveLensServices } from "./LensServices";
-import { LensPreviewContext } from "./LensPreviewButton";
+import { LensServicesProvider, useLensApi, useLiveLensServices } from "./data/LensServices";
+import { LensPreviewContext } from "@/components/view_logs/TraceView/LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
 import { LensSettings } from "./settings/LensSettings";
-import { createLensDemo } from "./demo/createLensDemo";
-import { lensQueries } from "./api/queries";
-import { frameOf, LensModeSwitch } from "./LensModeSwitch";
+import { createLensDemo } from "./data/demo/createLensDemo";
+import { lensQueries } from "./data/queries";
+import { LensModeSwitch } from "./LensModeSwitch";
+import { frameCard } from "./ui/frame";
 import { investigationActivity, listPollInterval } from "./model/status";
 import { cn } from "@/lib/cva.config";
 import { useDialogRoute, useLensRoute, type LensDialog, type LensTab } from "./route";
@@ -153,7 +154,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
             <DemoToggle demo={demo} onChange={(next) => (next ? enterDemo() : setDemo(false))} />
           </div>
         </div>
-        <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-card", frameOf(demo).card)}>
+        <div className={frameCard({ session: demo ? "demo" : "live" })}>
           <TabsContent value="traces" keepMounted className={PANEL}>
             <LensPreviewContext.Provider value={preview("traces")}>
               <AgentTracesPage

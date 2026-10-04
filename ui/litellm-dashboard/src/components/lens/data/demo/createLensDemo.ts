@@ -1,9 +1,9 @@
 import { ApiError } from "@/lib/http/client";
 import type { TracesApi } from "@/components/view_logs/TraceView/tracesApi";
 import type { LensServices } from "../LensServices";
-import type { LensApi } from "../api/service";
+import type { LensApi } from "../service";
 import type { Trace, Span, SpanDetail } from "@/components/view_logs/TraceView/traceTypes";
-import type { Lens, Finding, Job, Settings } from "../model/types";
+import type { Lens, Finding, Job, Settings } from "../../model/types";
 import { withReleaseCases } from "./lensDemoLongTrace";
 
 import { scenarios, type Scenario } from "./scenarios";

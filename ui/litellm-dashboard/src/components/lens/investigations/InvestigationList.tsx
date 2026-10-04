@@ -25,16 +25,15 @@ import { Inspector } from "@/components/shared/Inspector";
 import { InspectorTable } from "@/components/shared/InspectorTable";
 import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import { cn } from "@/lib/cva.config";
-import { agoLabel } from "@/components/lens/model/format";
+import { agoLabel, scopeLabel } from "../model/format";
 
 import { findingAgents, findingKey, openFindings, scheduleLabel } from "../model/inbox";
 import { lensStatus } from "../model/status";
-import { scopeLabel } from "../model/format";
-import { SearchBox } from "../search/SearchBox";
-import { itemValues } from "../search/valueSource";
+import { SearchBox } from "@/components/shared/search/SearchBox";
+import { itemValues } from "@/components/shared/search/valueSource";
 import { type Finding, type Lens } from "../model/types";
 import { useListSearchRoute } from "../route";
-import { FINDING_PANEL_WIDTH_KEY } from "./FindingDetails";
+import { FINDING_PANEL_WIDTH_KEY } from "../storage";
 import { filterInvestigations, INVESTIGATION_INDEX, INVESTIGATION_QUERY } from "./investigationQuery";
 
 const PRIORITY_COLOR = { high: "text-destructive", medium: "text-amber-500", low: "text-muted-foreground" } as const;

@@ -4,9 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { dismissLensIntro } from "@/../tests/lens-test-utils";
 import { readStorage } from "@/lib/storage";
-import { LENS_INTRO_DISMISSED, LENS_INTRO_SEEN } from "./setup/LensIntroDialog";
+import { LENS_INTRO_DISMISSED, LENS_INTRO_SEEN } from "./storage";
 import { LensWorkspace } from "./LensWorkspace";
-import { createLensDemoData } from "./demo/createLensDemo";
+import { createLensDemoData } from "./data/demo/createLensDemo";
 import type { LensList } from "./model/types";
 
 const network = vi.fn<typeof fetch>();

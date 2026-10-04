@@ -1,4 +1,4 @@
-import type { TraceSummary } from "@/components/view_logs/TraceView/traceTypes";
+import type { TraceSummary } from "../../traceTypes";
 
 export const run = (overrides: Partial<TraceSummary>): TraceSummary => ({
   agent_count: 1,

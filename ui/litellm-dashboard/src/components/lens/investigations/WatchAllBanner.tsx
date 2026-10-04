@@ -1,7 +1,7 @@
 "use client";
 
 import { z } from "zod";
-import { useLensUpdate } from "../api/mutations";
+import { useLensUpdate } from "../data/mutations";
 import type { Lens } from "../model/types";
 
 const watchAllResult = z.object({

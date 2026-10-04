@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useTimeout } from "usehooks-ts";
 
 import { cn } from "@/lib/cva.config";
-import { LensPreviewButton } from "@/components/lens/LensPreviewButton";
+import { LensPreviewButton } from "./LensPreviewButton";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { copyToClipboard } from "@/utils/dataUtils";

@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useFormContext, useWatch } from "react-hook-form";
-import { lensKeys, lensQueries } from "../api/queries";
-import { useLensApi } from "../LensServices";
+import { lensKeys, lensQueries } from "../data/queries";
+import { useLensApi } from "../data/LensServices";
 import { durationLabel } from "../model/format";
 import type { Sample } from "../model/types";
 import { useDebouncedValue } from "./useDebouncedValue";

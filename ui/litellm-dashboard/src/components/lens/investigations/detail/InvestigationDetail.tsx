@@ -13,7 +13,7 @@ import type { OwnedFinding } from "../../model/inbox";
 import { activeJob } from "../../model/status";
 import { type Finding, type Lens } from "../../model/types";
 import { FindingPanel } from "../FindingDetails";
-import { useSectionRoute } from "../resultRoute";
+import { useSectionRoute } from "../../route";
 import { useRunSnapshot } from "../useRunSnapshot";
 
 import { InvestigationActions, type InvestigationIntents } from "./InvestigationActions";

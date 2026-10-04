@@ -1,6 +1,6 @@
 "use client";
 
-import { useLensUpdate, useSaveLens, type LensWrite } from "../api/mutations";
+import { useLensUpdate, useSaveLens, type LensWrite } from "../data/mutations";
 import type { Finding, Lens, RunWindow, Settings } from "../model/types";
 
 /** Every write the Investigations screens can ask for, so leaves only ever express intent. */

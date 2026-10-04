@@ -14,8 +14,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
-import { lensQueries } from "../../api/queries";
-import { useLensApi } from "../../LensServices";
+import { lensQueries } from "../../data/queries";
+import { useLensApi } from "../../data/LensServices";
 import type { Lens, RunWindow } from "../../model/types";
 import { RUN_PRESETS, runRequest, type RunChoice, type RunPreset } from "../../model/runRequest";
 

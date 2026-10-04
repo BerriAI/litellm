@@ -3,7 +3,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { apiClient } from "@/components/networking";
 import { liveTracesApi, TracesApiContext, type TracesApi } from "@/components/view_logs/TraceView/tracesApi";
-import { liveLensApi, type LensApi } from "./api/service";
+import { liveLensApi, type LensApi } from "./service";
 
 export interface LensServices {
   readonly lens: LensApi;

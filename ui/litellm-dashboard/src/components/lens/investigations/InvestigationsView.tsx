@@ -7,8 +7,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 import { useTraceAvailability } from "@/components/view_logs/TraceView/useAgentTraces";
 
-import { lensKeys, lensQueries } from "../api/queries";
-import { useLensApi } from "../LensServices";
+import { lensKeys, lensQueries } from "../data/queries";
+import { useLensApi } from "../data/LensServices";
 import { findFinding, findingKey, type OwnedFinding } from "../model/inbox";
 import { activityCheck, readiness } from "../model/status";
 import type { Finding, Lens, Settings } from "../model/types";

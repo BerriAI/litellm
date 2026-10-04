@@ -5,7 +5,7 @@ import type { Lens, LensList, Settings } from "../model/types";
 
 import type { LensApi } from "./service";
 import { lensKeys } from "./queries";
-import { useLensApi } from "../LensServices";
+import { useLensApi } from "./LensServices";
 
 export type LensWrite = (api: LensApi) => Promise<unknown>;
 

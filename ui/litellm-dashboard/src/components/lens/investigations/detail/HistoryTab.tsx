@@ -9,7 +9,7 @@ import { TabsContent } from "@/components/ui/tabs";
 import { ScanDuration } from "./JobMeta";
 import { useRunHistory } from "./useRunHistory";
 import type { Lens } from "../../model/types";
-import { useRunRoute } from "../resultRoute";
+import { useRunRoute } from "../../route";
 
 import { money, when } from "../../model/format";
 

@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { useStoredValue } from "@/lib/storage";
-import { LENS_INTRO_DISMISSED } from "../setup/LensIntroDialog";
+import { LENS_INTRO_DISMISSED } from "../storage";
 import { WorkerSettings } from "./worker/WorkerSettings";
 import { SettingsCard, SettingsSection } from "./SettingsSection";
 import type { LensList } from "../model/types";

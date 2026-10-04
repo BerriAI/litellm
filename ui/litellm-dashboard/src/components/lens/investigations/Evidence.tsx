@@ -8,10 +8,10 @@ import { Button } from "@/components/ui/button";
 import { RunView } from "@/components/view_logs/TraceView/TraceDrawer";
 import { useLocalRunSelection } from "@/components/view_logs/TraceView/traceRouting";
 
-import { lensQueries } from "../api/queries";
-import { useLensApi } from "../LensServices";
+import { lensQueries } from "../data/queries";
+import { useLensApi } from "../data/LensServices";
 import { evidenceTarget, type EvidenceTarget } from "../model/findings";
-import type { EvidenceRef } from "./resultRoute";
+import type { EvidenceRef } from "../route";
 
 const SECTION = 8000;
 

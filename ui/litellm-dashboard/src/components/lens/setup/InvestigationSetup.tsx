@@ -26,7 +26,7 @@ import { useAnalysisModels } from "./fields/useAnalysisModels";
 import { modelGate } from "./fields/analysisModels";
 import { Inspector } from "@/components/shared/Inspector";
 import { TraceEvidence } from "../investigations/Evidence";
-import { FINDING_PANEL_WIDTH_KEY } from "../investigations/FindingDetails";
+import { FINDING_PANEL_WIDTH_KEY } from "../storage";
 import type { Execution } from "./useMatchingActivity";
 import { durationLabel } from "../model/format";
 import { type Settings } from "../model/types";

@@ -1,11 +1,11 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useLensApi } from "../LensServices";
-import { lensQueries } from "../api/queries";
+import { useLensApi } from "../data/LensServices";
+import { lensQueries } from "../data/queries";
 import { mergeFeedback } from "../model/findings";
 import type { Finding, Job, Lens, Settings } from "../model/types";
-import { useRunRoute } from "./resultRoute";
+import { useRunRoute } from "../route";
 
 export interface RunSnapshot {
   readonly batchId: string;

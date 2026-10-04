@@ -13,9 +13,8 @@ import { findingAgents, findingKey, type OwnedFinding, sampledExecutions } from 
 import type { Finding, Sample } from "../model/types";
 import { EvidenceView } from "./Evidence";
 import { IssueBrief } from "./IssueBrief";
-import { type EvidenceRef, useEvidenceRoute } from "./resultRoute";
+import { type EvidenceRef, useEvidenceRoute } from "../route";
 
-export const FINDING_PANEL_WIDTH_KEY = "litellm.lens.findingPanelWidth";
 export const ownedFindingKey = (owned: OwnedFinding): string => findingKey(owned.lens, owned.finding);
 
 export interface FindingDetailsProps {

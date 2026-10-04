@@ -1,10 +1,10 @@
 "use client";
 
 import { Controller, useFormContext } from "react-hook-form";
-import { lensQueries } from "../../api/queries";
+import { lensQueries } from "../../data/queries";
 
 import { useQuery } from "@tanstack/react-query";
-import { useLensApi } from "../../LensServices";
+import { useLensApi } from "../../data/LensServices";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Input } from "@/components/ui/input";
 import type { WorkerFormInput } from "./workerSchema";
