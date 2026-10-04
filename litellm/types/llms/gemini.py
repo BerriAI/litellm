@@ -1,7 +1,8 @@
+from collections.abc import Mapping
 from enum import Enum
 from typing import Any, Literal
 
-from typing_extensions import Required, TypedDict
+from typing_extensions import TypedDict
 
 from .vertex_ai import (
     GenerationConfig,
@@ -151,7 +152,7 @@ class BidiGenerateContentSetup(TypedDict, total=False):
 
 
 # Image Generation Types
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class GeminiImageGenerationInstance(TypedDict):
@@ -231,11 +232,31 @@ class GeminiImageGenerationResponse(TypedDict):
 
 
 # Video Generation Types
-class GeminiVideoGenerationInstance(TypedDict, total=False):
-    """Instance data for Gemini video generation request"""
+class GeminiVideoReferenceImage(BaseModel):
+    """Asset reference image for Veo 3.1 video generation"""
 
-    prompt: Required[str]
-    image: dict[str, Any]
+    model_config = ConfigDict(frozen=True)
+
+    image: Mapping[str, object]
+    referenceType: str = "asset"
+
+
+class GeminiVideoGenerationInstance(BaseModel):
+    """Instance data for Gemini video generation request. All media inputs live here, not in parameters"""
+
+    model_config = ConfigDict(frozen=True)
+
+    prompt: str
+    image: Mapping[str, object] | None = None
+
+    lastFrame: Mapping[str, object] | None = None
+    """The final image for an interpolation video. Must be used with 'image'."""
+
+    referenceImages: tuple[GeminiVideoReferenceImage, ...] | None = None
+    """Up to three asset reference images. Veo 3.1 and Veo 3.1 Fast only."""
+
+    video: Mapping[str, object] | None = None
+    """Veo-generated video to extend. Veo 3.1 and Veo 3.1 Fast only."""
 
 
 class GeminiVideoGenerationParameters(BaseModel):
@@ -250,36 +271,18 @@ class GeminiVideoGenerationParameters(BaseModel):
 
     durationSeconds: int | None = None
     """
-    Length of the generated video in seconds (e.g., 4, 5, 6, 8).
-    Must be 8 when using extension/interpolation or referenceImages.
+    Length of the generated video in seconds (e.g., 4, 6, 8).
+    Must be 8 when using extension, referenceImages, or 1080p/4k resolution.
     """
 
     resolution: str | None = None
     """
-    Video resolution (e.g., '720p', '1080p').
-    '1080p' only supports 8s duration; extension only supports '720p'.
+    Video resolution (e.g., '720p', '1080p', '4k').
+    '1080p' and '4k' only support 8s duration; extension only supports '720p'.
     """
 
     negativePrompt: str | None = None
     """Text describing what not to include in the video."""
-
-    lastFrame: Any | None = None
-    """
-    The final image for interpolation video to transition.
-    Should be used with the 'image' parameter.
-    """
-
-    referenceImages: list | None = None
-    """
-    Up to three images to be used as style/content references.
-    Only supported in Veo 3.1 (list of VideoGenerationReferenceImage objects).
-    """
-
-    video: Any | None = None
-    """
-    Video to be used for video extension (Video object).
-    Only supported in Veo 3.1 & Veo 3 Fast.
-    """
 
     personGeneration: str | None = None
     """
