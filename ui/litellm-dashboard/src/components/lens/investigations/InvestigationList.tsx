@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import {
   ChevronRight,
   Circle,
@@ -21,25 +21,27 @@ import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import { cn } from "@/lib/cva.config";
 import { agoLabel } from "@/components/view_logs/TraceView/lensField";
 
-import { findingAgents, openFindings, type OwnedFinding, scheduleLabel } from "../model/inbox";
+import { findingAgents, findingKey, openFindings, scheduleLabel } from "../model/inbox";
 import { lensStatus } from "../model/status";
 import { scopeLabel } from "../model/format";
-import { type Lens } from "../model/types";
+import { type Finding, type Lens } from "../model/types";
 import { useListSearchRoute } from "../route";
-import { FINDING_PANEL_WIDTH_KEY, ownedFindingKey } from "./FindingDetails";
+import { FINDING_PANEL_WIDTH_KEY } from "./FindingDetails";
 
 const PRIORITY_COLOR = { high: "text-destructive", medium: "text-amber-500", low: "text-muted-foreground" } as const;
 const ROW =
-  "border-b border-border/60 transition-colors duration-150 hover:bg-trace-row-hover motion-reduce:transition-none";
-const SELECTED_ROW =
-  "data-[state=selected]:bg-trace-row-selected data-[state=selected]:shadow-[inset_2px_0_0_var(--trace-brand)] data-[state=selected]:hover:bg-trace-row-selected";
+  "cursor-pointer border-b border-border/60 transition-colors duration-150 hover:bg-trace-row-hover focus-visible:outline-2 focus-visible:outline-ring data-[state=selected]:bg-trace-row-selected data-[state=selected]:shadow-[inset_2px_0_0_var(--trace-brand)] data-[state=selected]:hover:bg-trace-row-selected motion-reduce:transition-none";
 const META = "truncate text-xs text-muted-foreground";
 
-function openOnRowKeyDown(event: KeyboardEvent<HTMLTableRowElement>, open: () => void) {
-  if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
-  event.preventDefault();
-  open();
-}
+/** One row of the list: an investigation, or an open finding shown under the investigation that owns it. */
+export type InvestigationRow =
+  | { readonly kind: "investigation"; readonly lens: Lens }
+  | { readonly kind: "finding"; readonly lens: Lens; readonly finding: Finding };
+
+export const investigationRowKey = (row: InvestigationRow): string =>
+  row.kind === "investigation" ? `investigation:${row.lens.id}` : `finding:${findingKey(row.lens, row.finding)}`;
+
+const ROW_LABEL = { investigation: "Investigation details", finding: "Finding details" } as const;
 
 function JobIcon({ lens }: { lens: Lens }) {
   const status = lens.jobs[0]?.status;
@@ -66,23 +68,22 @@ export interface InvestigationListProps {
   readonly lenses: readonly Lens[];
   readonly connected: boolean;
   readonly readOnly?: boolean;
-  readonly selectedFinding: OwnedFinding | null;
-  readonly onSelectFinding: (owned: OwnedFinding | null) => void;
-  readonly onOpen: (id: string) => void;
+  readonly selected: InvestigationRow | null;
+  readonly onSelect: (row: InvestigationRow | null) => void;
   readonly onEdit: (id: string) => void;
   readonly onRunNow: (id: string) => void;
   readonly actions?: ReactNode;
-  /** The finding panel, rendered inside this list's Inspector so J/K walk the visible findings. */
-  readonly children?: ReactNode;
+  /** Body of the side panel for the selected row. */
+  readonly children: (row: InvestigationRow) => ReactNode;
 }
 
+/** Investigations with their open findings; any row opens in the side panel and J/K walk the visible rows. */
 export function InvestigationList({
   lenses,
   connected,
   readOnly = false,
-  selectedFinding,
-  onSelectFinding,
-  onOpen,
+  selected,
+  onSelect,
   onEdit,
   onRunNow,
   actions,
@@ -97,23 +98,25 @@ export function InvestigationList({
       if (!next.delete(id)) next.add(id);
       return next;
     });
-  const reveal = (id: string) =>
-    setCollapsed((current) => (current.has(id) ? new Set([...current].filter((entry) => entry !== id)) : current));
   const shown = lenses.filter((lens) =>
     `${lens.settings.name} ${scopeLabel(lens.settings)}`.toLowerCase().includes(search.toLowerCase()),
   );
-  const findingItems = shown.flatMap((lens) => openFindings(lens).map((finding) => ({ lens, finding })));
-  const selectFinding = (owned: OwnedFinding | null) => {
-    if (owned) reveal(owned.lens.id);
-    onSelectFinding(owned);
-  };
+  const sections = shown.map((lens) => {
+    const findings = openFindings(lens);
+    return { lens, findings, expanded: findings.length > 0 && !collapsed.has(lens.id) };
+  });
+  const rows: readonly InvestigationRow[] = sections.flatMap(({ lens, findings, expanded }) => [
+    { kind: "investigation", lens },
+    ...(expanded ? findings.map((finding) => ({ kind: "finding", lens, finding }) as const) : []),
+  ]);
+  const noun = selected?.kind ?? "investigation";
   return (
     <Inspector.Root
-      items={findingItems}
-      itemKey={ownedFindingKey}
-      selected={selectedFinding}
-      onSelectedChange={selectFinding}
-      noun="finding"
+      items={rows}
+      itemKey={investigationRowKey}
+      selected={selected}
+      onSelectedChange={onSelect}
+      noun={noun}
       storageKey={FINDING_PANEL_WIDTH_KEY}
     >
       <div className="flex min-h-[420px] flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card">
@@ -142,21 +145,13 @@ export function InvestigationList({
               </tr>
             </thead>
             <tbody>
-              {shown.map((lens) => {
+              {sections.map(({ lens, findings, expanded }) => {
                 const latest = lens.jobs[0];
-                const findings = openFindings(lens);
-                const expanded = findings.length > 0 && !collapsed.has(lens.id);
                 return (
                   <Fragment key={lens.id}>
-                    <tr
-                      onClick={() => onOpen(lens.id)}
-                      onKeyDown={(event) => openOnRowKeyDown(event, () => onOpen(lens.id))}
-                      tabIndex={0}
-                      aria-label={lens.settings.name}
-                      className={cn(
-                        ROW,
-                        "group h-14 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring",
-                      )}
+                    <Inspector.Row
+                      item={{ kind: "investigation", lens }}
+                      render={<tr tabIndex={0} aria-label={lens.settings.name} className={cn(ROW, "group h-14")} />}
                     >
                       <td className="pl-2">
                         <span className="flex min-w-0 items-center gap-2">
@@ -243,7 +238,7 @@ export function InvestigationList({
                           </span>
                         )}
                       </td>
-                    </tr>
+                    </Inspector.Row>
                     {expanded &&
                       findings.map((finding, index) => {
                         const priority = finding.priority ?? "medium";
@@ -252,18 +247,8 @@ export function InvestigationList({
                         return (
                           <Inspector.Row
                             key={finding.id}
-                            item={{ lens, finding }}
-                            render={
-                              <tr
-                                tabIndex={0}
-                                aria-label={finding.title}
-                                className={cn(
-                                  ROW,
-                                  SELECTED_ROW,
-                                  "h-12 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring",
-                                )}
-                              />
-                            }
+                            item={{ kind: "finding", lens, finding }}
+                            render={<tr tabIndex={0} aria-label={finding.title} className={cn(ROW, "h-12")} />}
                           >
                             <td className="pl-2" title={finding.suggestion ? `Fix: ${finding.suggestion}` : undefined}>
                               <span className="flex min-w-0 items-center gap-2">
@@ -314,7 +299,9 @@ export function InvestigationList({
           {lenses.filter((l) => l.settings.enabled).length} watching
         </footer>
       </div>
-      {children}
+      <Inspector.Panel label={ROW_LABEL[noun]} testId="investigation-panel">
+        {children}
+      </Inspector.Panel>
     </Inspector.Root>
   );
 }

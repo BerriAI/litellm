@@ -246,6 +246,57 @@ describe("Inspector", () => {
     expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
   });
 
+  it("hands J, K and Escape to an open inspector nested inside its panel and takes them back when it closes", () => {
+    mockReducedMotion(true);
+    const outer = vi.fn();
+    const inner = vi.fn();
+    function Nested() {
+      const [innerNote, setInnerNote] = useState<Note | null>(notes[0]);
+      return (
+        <HotkeysProvider>
+          <Inspector.Root
+            items={notes}
+            itemKey={noteKey}
+            selected={notes[1]}
+            onSelectedChange={outer}
+            noun="note"
+            storageKey="outer"
+          >
+            <Inspector.Panel label="Outer">
+              {() => (
+                <Inspector.Root
+                  items={notes}
+                  itemKey={noteKey}
+                  selected={innerNote}
+                  onSelectedChange={(note) => {
+                    inner(note);
+                    setInnerNote(note);
+                  }}
+                  noun="reply"
+                  storageKey="inner"
+                >
+                  <Inspector.Panel label="Inner">{(note: Note) => <span>reply {note.title}</span>}</Inspector.Panel>
+                </Inspector.Root>
+              )}
+            </Inspector.Panel>
+          </Inspector.Root>
+        </HotkeysProvider>
+      );
+    }
+    render(<Nested />);
+    fireEvent.keyDown(document.body, { key: "j" });
+    expect(inner).toHaveBeenLastCalledWith(notes[1]);
+    expect(outer).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(inner).toHaveBeenLastCalledWith(null);
+    expect(screen.queryByRole("complementary", { name: "Inner" })).not.toBeInTheDocument();
+    expect(outer).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(document.body, { key: "k" });
+    expect(outer).toHaveBeenLastCalledWith(notes[0]);
+  });
+
   it("unmounts right away on close when the user prefers reduced motion", () => {
     mockReducedMotion(true);
     render(<Notes initial={notes[0]} />);

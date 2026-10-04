@@ -2,14 +2,14 @@
 
 import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 import { lensKeys, lensQueries } from "../api/queries";
 import { useLensApi } from "../LensServices";
 import { findFinding, findingKey, type OwnedFinding } from "../model/inbox";
 import { activityCheck, readiness } from "../model/status";
-import type { Finding, Settings } from "../model/types";
+import type { Finding, Lens, Settings } from "../model/types";
 import { useDialogRoute, useIssueRoute, useLensRoute } from "../route";
 import { InvestigationSetup } from "../setup/InvestigationSetup";
 import { MonitoringDialog } from "../setup/MonitoringDialog";
@@ -17,8 +17,8 @@ import { useWorkerConnected } from "../useWorkerConnected";
 
 import { InvestigationDetail } from "./detail/InvestigationDetail";
 import { RunNowDialog } from "./detail/RunNowDialog";
-import { FindingPanel } from "./FindingDetails";
-import { InvestigationList } from "./InvestigationList";
+import { FindingPanelBody } from "./FindingDetails";
+import { InvestigationList, type InvestigationRow } from "./InvestigationList";
 import { investigationScreen, type Screen, type SetupScreen } from "./investigationScreen";
 import {
   InvestigationError,
@@ -57,8 +57,16 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
   const lenses = list.data?.lenses ?? [];
   const lens = lenses.find((candidate) => candidate.id === lensId);
   const peeked = issueKey ? findFinding(lenses, issueKey) ?? null : null;
-  const selectPeeked = (owned: OwnedFinding | null) =>
-    setIssueKey(owned ? findingKey(owned.lens, owned.finding) : null);
+  const selectedRow = (open: Lens | undefined): InvestigationRow | null => {
+    if (peeked) return { kind: "finding", ...peeked };
+    return open ? { kind: "investigation", lens: open } : null;
+  };
+  const selectRow = (row: InvestigationRow | null) => {
+    if (row?.kind === "finding") setIssueKey(findingKey(row.lens, row.finding));
+    else if (row) setLensId(row.lens.id);
+    else if (peeked) setIssueKey(null);
+    else setLensId(null);
+  };
   const reviewPeeked = async (owned: OwnedFinding, status: Finding["status"], reason: string) => {
     const saved = await actions.review(owned.lens, owned.finding, status, reason);
     if (saved) setIssueKey(null);
@@ -77,7 +85,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
     if (!target) setLensId(saved.id);
   };
   const bannerError = screen.kind === "failed" ? undefined : actions.error ?? list.error;
-  const browsing = screen.kind === "list" || screen.kind === "detail";
+  const browsing = screen.kind === "list";
   const showReadiness = browsing && !readOnly && !status.ready;
 
   const content = (current: Screen): ReactNode => {
@@ -105,12 +113,11 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
       case "list":
         return (
           <InvestigationList
-            lenses={current.lenses}
+            lenses={[...current.lenses]}
             connected={connected}
             readOnly={readOnly}
-            selectedFinding={peeked}
-            onSelectFinding={selectPeeked}
-            onOpen={setLensId}
+            selected={selectedRow(current.lens)}
+            onSelect={selectRow}
             onEdit={(id) => openDialog("edit", id)}
             onRunNow={(id) => openDialog("run_now", id)}
             actions={
@@ -124,40 +131,38 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
               )
             }
           >
-            <FindingPanel
-              readOnly={readOnly}
-              busy={actions.busy}
-              accessToken={accessToken}
-              onReview={(owned, status, reason) => void reviewPeeked(owned, status, reason)}
-            />
+            {(row) =>
+              row.kind === "finding" ? (
+                <FindingPanelBody
+                  owned={row}
+                  readOnly={readOnly}
+                  busy={actions.busy}
+                  accessToken={accessToken}
+                  onReview={(owned, reviewStatus, reason) => void reviewPeeked(owned, reviewStatus, reason)}
+                />
+              ) : (
+                <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                  <InvestigationDetail
+                    lens={row.lens}
+                    readOnly={readOnly}
+                    ready={status.ready}
+                    busy={actions.busy}
+                    connected={connected}
+                    accessToken={accessToken}
+                    onEdit={() => openDialog("edit")}
+                    onDuplicate={() => openDialog("duplicate")}
+                    onPause={() => void actions.pause(row.lens)}
+                    onEnableMonitoring={() => openDialog("monitoring")}
+                    onCancelRun={() => void actions.cancelRun(row.lens)}
+                    onRunNow={() => openDialog("run_now")}
+                    onReviewFinding={(owned, reviewStatus, reason) =>
+                      void actions.review(owned.lens, owned.finding, reviewStatus, reason)
+                    }
+                  />
+                </div>
+              )
+            }
           </InvestigationList>
-        );
-      case "detail":
-        return (
-          <>
-            <header>
-              <Button variant="ghost" size="sm" className="-ml-3" onClick={() => setLensId(null)}>
-                <ArrowLeft className="size-4" /> Back
-              </Button>
-            </header>
-            <InvestigationDetail
-              lens={current.lens}
-              readOnly={readOnly}
-              ready={status.ready}
-              busy={actions.busy}
-              connected={connected}
-              accessToken={accessToken}
-              onEdit={() => openDialog("edit")}
-              onDuplicate={() => openDialog("duplicate")}
-              onPause={() => void actions.pause(current.lens)}
-              onEnableMonitoring={() => openDialog("monitoring")}
-              onCancelRun={() => void actions.cancelRun(current.lens)}
-              onRunNow={() => openDialog("run_now")}
-              onReviewFinding={(owned, status, reason) =>
-                void actions.review(owned.lens, owned.finding, status, reason)
-              }
-            />
-          </>
         );
       case "setup":
         return (

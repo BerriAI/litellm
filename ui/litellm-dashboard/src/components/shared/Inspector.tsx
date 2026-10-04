@@ -11,6 +11,7 @@ import {
   type RefObject,
   useCallback,
   useContext,
+  useEffect,
   useRef,
   useState,
 } from "react";
@@ -44,6 +45,8 @@ interface InspectorState<T> {
   readonly step: (delta: number) => void;
   readonly close: () => void;
   readonly setFullScreen: (fullScreen: boolean) => void;
+  /** Called by an open Inspector nested inside this one; returns the release. */
+  readonly claim: () => () => void;
 }
 
 const InspectorContext = createContext<unknown>(null);
@@ -82,6 +85,12 @@ function Root<T>({
   onFullScreenChange,
   children,
 }: InspectorRootProps<T>) {
+  const parent = useContext(InspectorContext) as InspectorState<never> | null;
+  const [claims, setClaims] = useState(0);
+  const claim = useCallback(() => {
+    setClaims((count) => count + 1);
+    return () => setClaims((count) => count - 1);
+  }, []);
   const [ownFullScreen, setOwnFullScreen] = useState(defaultFullScreen);
   const fullScreen = controlledFullScreen ?? ownFullScreen;
   const setFullScreen = (next: boolean) => {
@@ -91,15 +100,18 @@ function Root<T>({
   const selectedKey = selected === null ? null : itemKey(selected);
   const index = selectedKey === null ? -1 : items.findIndex((item) => itemKey(item) === selectedKey);
   const open = selected !== null;
+  const parentClaim = parent?.claim;
+  useEffect(() => (parentClaim && open ? parentClaim() : undefined), [parentClaim, open]);
+  const keys = open && claims === 0;
   const step = (delta: number) => {
     const next = items[index + delta];
     if (next !== undefined) onSelectedChange(next);
   };
   const close = () => onSelectedChange(null);
   const toggle = (item: T) => onSelectedChange(itemKey(item) === selectedKey ? null : item);
-  useShortcut("escape", close, { enabled: open, description: "close" });
-  useShortcut("j", () => step(1), { enabled: open, description: noun });
-  useShortcut("k", () => step(-1), { enabled: open, description: noun });
+  useShortcut("escape", close, { enabled: keys, description: "close" });
+  useShortcut("j", () => step(1), { enabled: keys, description: noun });
+  useShortcut("k", () => step(-1), { enabled: keys, description: noun });
   const state: InspectorState<T> = {
     itemKey,
     selected,
@@ -112,6 +124,7 @@ function Root<T>({
     step,
     close,
     setFullScreen,
+    claim,
   };
   return <InspectorContext.Provider value={state}>{children}</InspectorContext.Provider>;
 }

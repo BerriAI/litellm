@@ -155,38 +155,50 @@ export interface FindingPanelProps {
 }
 
 /**
- * The side panel for whichever finding the surrounding Inspector has open. Opening a quote's original step or
- * request stacks it over the finding, which stays mounted so a feedback draft survives the round trip.
+ * A finding in the side panel. Opening a quote's original step or request stacks it over the finding, which
+ * stays mounted so a feedback draft survives the round trip.
  */
-export function FindingPanel({ readOnly, busy, accessToken, sampledRuns, onReview }: FindingPanelProps) {
+export function FindingPanelBody({
+  owned,
+  readOnly,
+  busy,
+  accessToken,
+  sampledRuns,
+  onReview,
+}: FindingPanelProps & { readonly owned: OwnedFinding }) {
   const { evidence, setEvidence } = useEvidenceRoute();
   return (
-    <Inspector.Panel label="Finding details" testId="finding-panel">
-      {(owned: OwnedFinding) => (
-        <>
-          <div hidden={evidence !== null} className={evidence ? undefined : "flex min-h-0 flex-1 flex-col"}>
-            <FindingDetails
-              key={ownedFindingKey(owned)}
-              finding={owned.finding}
-              agents={findingAgents(owned.lens, owned.finding)}
-              sampledRuns={sampledRuns ?? sampledExecutions(owned.lens)}
-              readOnly={readOnly}
-              busy={busy}
-              onOpenEvidence={setEvidence}
-              onReview={(status, reason) => onReview(owned, status, reason)}
-            />
-          </div>
-          {evidence && (
-            <EvidenceView
-              lensId={owned.lens.id}
-              evidence={evidence}
-              accessToken={accessToken}
-              backLabel="Back to finding"
-              onBack={() => setEvidence(null)}
-            />
-          )}
-        </>
+    <>
+      <div hidden={evidence !== null} className={evidence ? undefined : "flex min-h-0 flex-1 flex-col"}>
+        <FindingDetails
+          key={ownedFindingKey(owned)}
+          finding={owned.finding}
+          agents={findingAgents(owned.lens, owned.finding)}
+          sampledRuns={sampledRuns ?? sampledExecutions(owned.lens)}
+          readOnly={readOnly}
+          busy={busy}
+          onOpenEvidence={setEvidence}
+          onReview={(status, reason) => onReview(owned, status, reason)}
+        />
+      </div>
+      {evidence && (
+        <EvidenceView
+          lensId={owned.lens.id}
+          evidence={evidence}
+          accessToken={accessToken}
+          backLabel="Back to finding"
+          onBack={() => setEvidence(null)}
+        />
       )}
+    </>
+  );
+}
+
+/** The side panel for whichever finding the surrounding Inspector has open. */
+export function FindingPanel(props: FindingPanelProps) {
+  return (
+    <Inspector.Panel label="Finding details" testId="finding-panel">
+      {(owned: OwnedFinding) => <FindingPanelBody {...props} owned={owned} />}
     </Inspector.Panel>
   );
 }

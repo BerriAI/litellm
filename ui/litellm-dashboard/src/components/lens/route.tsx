@@ -66,7 +66,7 @@ export function useLensRoute(): LensRoute {
   const [{ tab, lens, demo }, setParams] = useQueryStates(SESSION_PARSERS, { history: "push" });
   const setTab = useCallback((next: LensTab) => void setParams({ tab: next }), [setParams]);
   const setLensId = useCallback(
-    (next: string | null) => void setParams({ ...CLEARED_RESULTS, lens: next }),
+    (next: string | null) => void setParams({ ...CLEARED_RESULTS, lens: next, issue: null }),
     [setParams],
   );
   const setDemo = useCallback(
@@ -76,20 +76,15 @@ export function useLensRoute(): LensRoute {
   return { tab, lensId: lens, demo, setTab, setLensId, setDemo };
 }
 
-const ISSUE_ROUTE_PARSERS = {
-  ...ISSUE_PARSERS,
-  evidence: RESULT_PARSERS.evidence,
-  evidence_span: RESULT_PARSERS.evidence_span,
-};
+const ISSUE_ROUTE_PARSERS = { ...ISSUE_PARSERS, lens: LENS_PARSERS.lens, ...RESULT_PARSERS };
 
-/** Peeking at a finding starts from its summary, so evidence stacked over the previous one is dropped. */
+/** A peeked finding takes the panel over from any open investigation and starts from its summary. */
 export function useIssueRoute() {
   const [{ issue }, setParams] = useQueryStates(ISSUE_ROUTE_PARSERS);
   return {
     issueKey: issue,
     setIssueKey: useCallback(
-      (next: string | null) =>
-        void setParams({ issue: next, evidence: null, evidence_span: null }, { history: "push" }),
+      (next: string | null) => void setParams({ ...CLEARED_RESULTS, lens: null, issue: next }, { history: "push" }),
       [setParams],
     ),
   };

@@ -58,9 +58,10 @@ describe("investigationScreen", () => {
     });
   });
 
-  it("opens the selected investigation or reports it missing", () => {
-    expect(investigationScreen({ ...route, list: ready([older]), lensId: "older" })).toEqual({
-      kind: "detail",
+  it("keeps the list on screen with the selected investigation, or reports it missing", () => {
+    expect(investigationScreen({ ...route, list: ready([older, newer]), lensId: "older" })).toEqual({
+      kind: "list",
+      lenses: [newer, older],
       lens: older,
     });
     expect(investigationScreen({ ...route, list: ready([older]), lensId: "gone" })).toEqual({ kind: "missing" });

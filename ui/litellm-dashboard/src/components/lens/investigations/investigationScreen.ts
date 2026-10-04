@@ -18,8 +18,7 @@ export type Screen =
   | { readonly kind: "loading" }
   | { readonly kind: "failed"; readonly error: Error }
   | { readonly kind: "welcome" }
-  | { readonly kind: "list"; readonly lenses: readonly Lens[] }
-  | { readonly kind: "detail"; readonly lens: Lens }
+  | { readonly kind: "list"; readonly lenses: readonly Lens[]; readonly lens?: Lens }
   | { readonly kind: "missing" }
   | SetupScreen;
 
@@ -42,10 +41,11 @@ export function investigationScreen({ list, lensId, dialog, target }: ScreenInpu
     : undefined;
   if (setup) return setup;
   if (!list.data) return list.error ? { kind: "failed", error: list.error } : { kind: "loading" };
-  if (lensId) return selected ? { kind: "detail", lens: selected } : { kind: "missing" };
+  if (lensId && !selected) return { kind: "missing" };
   if (lenses.length === 0) return { kind: "welcome" };
   return {
     kind: "list",
     lenses: [...lenses].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)),
+    ...(selected ? { lens: selected } : {}),
   };
 }

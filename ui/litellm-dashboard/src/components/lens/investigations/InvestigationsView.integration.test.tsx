@@ -171,8 +171,9 @@ describe("Lens findings and runs", () => {
   it("separates patterns from issues and reveals original evidence only when requested", async () => {
     const user = userEvent.setup();
     renderWithProviders(<InvestigationsView accessToken="test" readOnly />);
-    expect(await screen.findByText("Review used the wrong defect rate")).toBeInTheDocument();
-    expect(screen.queryByText(pattern.title)).not.toBeInTheDocument();
+    const investigation = within(await screen.findByRole("complementary", { name: "Investigation details" }));
+    expect(investigation.getByText("Review used the wrong defect rate")).toBeInTheDocument();
+    expect(investigation.queryByText(pattern.title)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Patterns (1)" }));
     await user.click(screen.getByRole("button", { name: new RegExp(pattern.title) }));
     const detail = within(screen.getByRole("complementary", { name: "Finding details" }));
@@ -367,8 +368,9 @@ it("opens the saved results of an older batch", async () => {
   renderWithProviders(<InvestigationsView accessToken="test" readOnly />);
   await screen.findByRole("option", { name: `${runTime(older.created_at)} · completed` });
   await user.selectOptions(screen.getByRole("combobox", { name: "Investigation run" }), "older");
-  expect(await screen.findByText("Earlier batch finding")).toBeVisible();
-  expect(screen.queryByText(issue.title)).not.toBeInTheDocument();
+  const investigation = within(screen.getByRole("complementary", { name: "Investigation details" }));
+  expect(await investigation.findByText("Earlier batch finding")).toBeVisible();
+  expect(investigation.queryByText(issue.title)).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Run details" }));
   expect(screen.getByText(/Took 2m 13s/)).toBeVisible();
   expect(screen.getByText("Activity window")).toBeVisible();
@@ -518,7 +520,7 @@ it("keeps saved investigations accessible when tracing is disabled", async () =>
     return { data: [] };
   });
   renderWithProviders(<InvestigationsView accessToken="test" readOnly />);
-  expect(await screen.findByText(issue.title)).toBeVisible();
+  expect(await screen.findByRole("row", { name: issue.title })).toBeVisible();
   expect(screen.queryByRole("link", { name: "Set up traces" })).not.toBeInTheDocument();
 });
 
@@ -590,7 +592,7 @@ it("reopens a finding and a results section from shared links", async () => {
   expect(await screen.findByRole("tab", { name: "Criteria", selected: true })).toBeVisible();
 });
 
-it("steps through open findings with J and K, revealing a collapsed investigation, and closes with Escape", async () => {
+it("steps across findings and investigations with J and K, skipping hidden findings, and closes with Escape", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
   const twinIssue: Finding = { ...issue, id: "twin-issue", title: "Twin review used the wrong defect rate" };
@@ -616,21 +618,55 @@ it("steps through open findings with J and K, revealing a collapsed investigatio
 
   await user.click(screen.getByRole("row", { name: issue.title }));
   const panel = await screen.findByRole("complementary", { name: "Finding details" });
-  expect(panel).toHaveTextContent("1 / 2");
+  expect(panel).toHaveTextContent("2 / 3");
   await waitFor(() => expect(lastIssue()).toBe(findingKey(lens, issue)));
 
   await user.keyboard("j");
-  await waitFor(() => expect(lastIssue()).toBe(findingKey(twin, twinIssue)));
-  expect(await screen.findByRole("row", { name: twinIssue.title })).toHaveAttribute("aria-selected", "true");
-  expect(within(panel).getByRole("heading", { name: twinIssue.title })).toBeVisible();
-  expect(panel).toHaveTextContent("2 / 2");
-  expect(screen.getByRole("button", { name: "Next finding (J)" })).toBeDisabled();
+  await waitFor(() => expect(lastIssue()).toBeNull());
+  expect(screen.getByRole("row", { name: twin.settings.name })).toHaveAttribute("aria-selected", "true");
+  expect(screen.queryByRole("row", { name: twinIssue.title })).not.toBeInTheDocument();
+  const twinPanel = screen.getByRole("complementary", { name: "Investigation details" });
+  expect(within(twinPanel).getByRole("heading", { level: 2, name: twin.settings.name })).toBeVisible();
+  expect(twinPanel).toHaveTextContent("3 / 3");
+  expect(screen.getByRole("button", { name: "Next investigation (J)" })).toBeDisabled();
 
   await user.keyboard("k");
   await waitFor(() => expect(lastIssue()).toBe(findingKey(lens, issue)));
   await user.keyboard("{Escape}");
   await waitFor(() => expect(lastIssue()).toBeNull());
   expect(screen.getByRole("row", { name: issue.title })).toHaveAttribute("aria-selected", "false");
+});
+
+it("opens an investigation beside the list and walks from it into its findings with J and K", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [lens], tracing_enabled: true, workers: [] };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path.endsWith("/runs")) return [];
+    return { data: [] };
+  });
+  const onUrlUpdate = vi.fn();
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" />, { onUrlUpdate });
+  const lastUrl = () => new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
+  await user.click(await screen.findByRole("row", { name: lens.settings.name }));
+  const panel = await screen.findByRole("complementary", { name: "Investigation details" });
+  expect(within(panel).getByRole("heading", { level: 2, name: lens.settings.name })).toBeVisible();
+  expect(screen.getByRole("table", { name: "Investigations" })).toBeVisible();
+  expect(panel).toHaveTextContent("1 / 2");
+  await waitFor(() => expect(lastUrl().get("lens")).toBe(lens.id));
+
+  await user.keyboard("j");
+  await waitFor(() => expect(lastUrl().get("issue")).toBe(findingKey(lens, issue)));
+  expect(lastUrl().has("lens")).toBe(false);
+  expect(screen.getByRole("complementary", { name: "Finding details" })).toHaveTextContent("2 / 2");
+  expect(screen.getByRole("row", { name: issue.title })).toHaveAttribute("aria-selected", "true");
+
+  await user.keyboard("k");
+  await waitFor(() => expect(lastUrl().get("lens")).toBe(lens.id));
+  expect(lastUrl().has("issue")).toBe(false);
+  expect(screen.getByRole("complementary", { name: "Investigation details" })).toHaveTextContent("1 / 2");
 });
 
 it("lists each finding under the investigation that owns it and resolves only that copy", async () => {
@@ -695,7 +731,8 @@ it("opens investigations from the keyboard without treating nested edit keys as 
   expect(await screen.findByRole("heading", { level: 2, name: lens.settings.name })).toBeVisible();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
-  await user.click(screen.getByRole("button", { name: "Back" }));
+  expect(screen.getByRole("row", { name: lens.settings.name })).toHaveAttribute("aria-selected", "true");
+  await user.click(screen.getByRole("button", { name: "Close investigation (Esc)" }));
   const editButton = await screen.findByRole("button", { name: `Edit ${lens.settings.name}` });
   editButton.focus();
   expect(editButton).toHaveFocus();
