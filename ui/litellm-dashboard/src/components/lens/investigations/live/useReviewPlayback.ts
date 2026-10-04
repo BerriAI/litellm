@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useReducer, useState } from "react";
 
 import { playbackPhase, playbackReducer, startPlayback, type Phase, type Playback } from "../../model/live";
-import { timeline } from "../../model/spanPreview";
 import type { Review } from "../../model/types";
 
 const FRAME_MS = 40;
@@ -47,6 +46,6 @@ export function useReviewPlayback(
   const phase =
     still || !current
       ? { span: -1, typed: current?.reasoning.length ?? 0, verdict: true }
-      : playbackPhase(now - state.startedAt, state.duration, timeline(current.spans).length, current.reasoning.length);
+      : playbackPhase(now - state.startedAt, state.duration, current.spans.length, current.reasoning.length);
   return { ...state, phase, replay };
 }

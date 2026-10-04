@@ -39,47 +39,7 @@ export function ConclusionsPanel({
   if (!groups.length) return <p className="text-[12px] text-muted-foreground">Nothing concluded yet.</p>;
   return (
     <div className="flex flex-col gap-1.5">
-      {SECTIONS.map(({ issue, title }) => (
-        <GroupList
-          key={title}
-          title={title}
-          groups={groups.filter((group) => group.issue === issue)}
-          total={total}
-          selected={selected}
-          flashing={flashing}
-          onSelect={onSelect}
-        />
-      ))}
-      {scope && <p className="text-[11px] text-muted-foreground">{scope}</p>}
-    </div>
-  );
-}
-
-const SECTIONS = [
-  { issue: true, title: "Issues" },
-  { issue: false, title: "Patterns" },
-] as const;
-
-function GroupList({
-  title,
-  groups,
-  total,
-  selected,
-  flashing,
-  onSelect,
-}: {
-  title: string;
-  groups: readonly Conclusion[];
-  total: number;
-  selected: string | null;
-  flashing: ReadonlySet<string>;
-  onSelect: (key: string | null) => void;
-}) {
-  if (!groups.length) return null;
-  return (
-    <>
-      <h3 className="pt-1 text-[11px] text-muted-foreground">{title}</h3>
-      <ol aria-label={title} className="flex flex-col gap-1.5">
+      <ol aria-label="Conclusions" className="flex flex-col gap-1.5">
         {groups.map((group) => {
           const active = selected === group.key;
           return (
@@ -104,10 +64,25 @@ function GroupList({
                         group.issue ? "bg-[#e5484d]" : "bg-muted-foreground/40",
                       )}
                     />
-                    <span className="line-clamp-2 text-[13px] leading-snug text-foreground">{group.label}</span>
+                    <span className="flex min-w-0 flex-col gap-0.5">
+                      <span className="line-clamp-2 text-[13px] leading-snug font-medium text-foreground">
+                        {group.label}
+                      </span>
+                      <span className="line-clamp-1 text-[11px] text-muted-foreground">{group.latest}</span>
+                    </span>
                   </span>
-                  <span className="text-[20px] leading-none font-semibold tabular-nums text-foreground">
-                    {group.count}
+                  <span className="flex shrink-0 flex-col items-end gap-0.5">
+                    <span
+                      className={cn(
+                        "text-[20px] leading-none font-semibold tabular-nums",
+                        group.count ? "text-foreground" : "text-muted-foreground",
+                      )}
+                    >
+                      {group.count}
+                    </span>
+                    {group.noted > 0 && (
+                      <span className="text-[10px] tabular-nums text-muted-foreground">{group.noted} noted</span>
+                    )}
                   </span>
                 </span>
                 <span aria-hidden="true" className="h-1 w-full overflow-hidden rounded-full bg-muted">
@@ -124,6 +99,7 @@ function GroupList({
           );
         })}
       </ol>
-    </>
+      {scope && <p className="text-[11px] text-muted-foreground">{scope}</p>}
+    </div>
   );
 }

@@ -7,9 +7,7 @@ import {
   analysisModel,
   conclusions,
   decidedReviews,
-  focusedReview,
   issueCount,
-  reviewKey,
   shownCount,
   stripState,
 } from "../../model/live";
@@ -37,19 +35,13 @@ export function LiveRun({
   const reason = useQueueReason(job, queue);
   const [stripOpen, setStripOpen] = useStripOpen();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [pinned, setPinned] = useState<string | null>(null);
   const playback = useReviewPlayback(reviews, live);
   const withReviews = { ...job, reviews: [...reviews] };
   const model = analysisModel([...reviews.map((r) => r.model), ...modelsUsed(job.steps), job.settings.model]);
-  const { review: focused, following } = focusedReview(reviews, pinned, playback.current);
   const issues = issueCount(withReviews);
   const reviewed = live ? shownCount(job.reviewed, playback) : job.reviewed;
   const decided = decidedReviews(playback, playback.phase.verdict);
-  const pin = (review: Review) => setPinned(review === playback.current ? null : reviewKey(review));
-  const open = (review?: Review) => {
-    if (review) pin(review);
-    setDrawerOpen(true);
-  };
+  const open = () => setDrawerOpen(true);
   const waiting = reason && (
     <>
       <QueueReasonText reason={reason} onConnect={queue?.onConnect} />
@@ -89,16 +81,10 @@ export function LiveRun({
         status={job.status}
         reviewed={reviewed}
         playback={playback}
-        live={live}
-        focused={focused}
-        following={following}
-        phase={playback.phase}
         groups={conclusions(decided, job.settings.checks)}
         decided={decided.length}
         scope={job.reviewed > reviews.length ? `From the latest ${reviews.length} of ${job.reviewed} reviewed traces` : ""}
         waiting={waiting}
-        onPick={pin}
-        onFollow={() => setPinned(null)}
       />
     </>
   );
