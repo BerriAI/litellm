@@ -5716,10 +5716,21 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(litellm_anthropic_wif_latency_bucket[$__rate_interval])) by (le))",
+          "legendFormat": "anthropic_wif",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
           "expr": "histogram_quantile(0.95, sum(rate(litellm_auth_latency_bucket[$__rate_interval])) by (le))",
           "legendFormat": "auth",
           "range": true,
-          "refId": "A"
+          "refId": "B"
         },
         {
           "datasource": {
@@ -5730,7 +5741,7 @@
           "expr": "histogram_quantile(0.95, sum(rate(litellm_batch_write_to_db_latency_bucket[$__rate_interval])) by (le))",
           "legendFormat": "batch_write_to_db",
           "range": true,
-          "refId": "B"
+          "refId": "C"
         },
         {
           "datasource": {
@@ -5741,7 +5752,7 @@
           "expr": "histogram_quantile(0.95, sum(rate(litellm_postgres_latency_bucket[$__rate_interval])) by (le))",
           "legendFormat": "postgres",
           "range": true,
-          "refId": "C"
+          "refId": "D"
         },
         {
           "datasource": {
@@ -5752,7 +5763,7 @@
           "expr": "histogram_quantile(0.95, sum(rate(litellm_proxy_pre_call_latency_bucket[$__rate_interval])) by (le))",
           "legendFormat": "proxy_pre_call",
           "range": true,
-          "refId": "D"
+          "refId": "E"
         },
         {
           "datasource": {
@@ -5763,7 +5774,7 @@
           "expr": "histogram_quantile(0.95, sum(rate(litellm_redis_latency_bucket[$__rate_interval])) by (le))",
           "legendFormat": "redis",
           "range": true,
-          "refId": "E"
+          "refId": "F"
         },
         {
           "datasource": {
@@ -5774,7 +5785,7 @@
           "expr": "histogram_quantile(0.95, sum(rate(litellm_redis_daily_org_spend_update_queue_latency_bucket[$__rate_interval])) by (le))",
           "legendFormat": "redis_daily_org_spend_update_queue",
           "range": true,
-          "refId": "F"
+          "refId": "G"
         },
         {
           "datasource": {
@@ -5785,7 +5796,7 @@
           "expr": "histogram_quantile(0.95, sum(rate(litellm_redis_daily_tag_spend_update_queue_latency_bucket[$__rate_interval])) by (le))",
           "legendFormat": "redis_daily_tag_spend_update_queue",
           "range": true,
-          "refId": "G"
+          "refId": "H"
         },
         {
           "datasource": {
@@ -5796,7 +5807,7 @@
           "expr": "histogram_quantile(0.95, sum(rate(litellm_redis_daily_team_spend_update_queue_latency_bucket[$__rate_interval])) by (le))",
           "legendFormat": "redis_daily_team_spend_update_queue",
           "range": true,
-          "refId": "H"
+          "refId": "I"
         },
         {
           "datasource": {
@@ -5807,7 +5818,7 @@
           "expr": "histogram_quantile(0.95, sum(rate(litellm_redis_window_spend_update_queue_latency_bucket[$__rate_interval])) by (le))",
           "legendFormat": "redis_window_spend_update_queue",
           "range": true,
-          "refId": "I"
+          "refId": "J"
         },
         {
           "datasource": {
@@ -5818,7 +5829,7 @@
           "expr": "histogram_quantile(0.95, sum(rate(litellm_reset_budget_job_latency_bucket[$__rate_interval])) by (le))",
           "legendFormat": "reset_budget_job",
           "range": true,
-          "refId": "J"
+          "refId": "K"
         },
         {
           "datasource": {
@@ -5829,7 +5840,7 @@
           "expr": "histogram_quantile(0.95, sum(rate(litellm_router_latency_bucket[$__rate_interval])) by (le))",
           "legendFormat": "router",
           "range": true,
-          "refId": "K"
+          "refId": "L"
         },
         {
           "datasource": {
@@ -5840,7 +5851,7 @@
           "expr": "histogram_quantile(0.95, sum(rate(litellm_self_latency_bucket[$__rate_interval])) by (le))",
           "legendFormat": "self",
           "range": true,
-          "refId": "L"
+          "refId": "M"
         }
       ],
       "title": "Service latency p95 (litellm_<service>_latency)",
@@ -5894,10 +5905,32 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
+          "expr": "sum(rate(litellm_anthropic_wif_total_requests_total[$__rate_interval]))",
+          "legendFormat": "anthropic_wif",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(litellm_anthropic_wif_cache_total_requests_total[$__rate_interval]))",
+          "legendFormat": "anthropic_wif_cache",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
           "expr": "sum(rate(litellm_auth_total_requests_total[$__rate_interval]))",
           "legendFormat": "auth",
           "range": true,
-          "refId": "A"
+          "refId": "C"
         },
         {
           "datasource": {
@@ -5908,7 +5941,7 @@
           "expr": "sum(rate(litellm_batch_write_to_db_total_requests_total[$__rate_interval]))",
           "legendFormat": "batch_write_to_db",
           "range": true,
-          "refId": "B"
+          "refId": "D"
         },
         {
           "datasource": {
@@ -5919,7 +5952,7 @@
           "expr": "sum(rate(litellm_postgres_total_requests_total[$__rate_interval]))",
           "legendFormat": "postgres",
           "range": true,
-          "refId": "C"
+          "refId": "E"
         },
         {
           "datasource": {
@@ -5930,7 +5963,7 @@
           "expr": "sum(rate(litellm_proxy_pre_call_total_requests_total[$__rate_interval]))",
           "legendFormat": "proxy_pre_call",
           "range": true,
-          "refId": "D"
+          "refId": "F"
         },
         {
           "datasource": {
@@ -5941,7 +5974,7 @@
           "expr": "sum(rate(litellm_redis_total_requests_total[$__rate_interval]))",
           "legendFormat": "redis",
           "range": true,
-          "refId": "E"
+          "refId": "G"
         },
         {
           "datasource": {
@@ -5952,7 +5985,7 @@
           "expr": "sum(rate(litellm_redis_daily_org_spend_update_queue_total_requests_total[$__rate_interval]))",
           "legendFormat": "redis_daily_org_spend_update_queue",
           "range": true,
-          "refId": "F"
+          "refId": "H"
         },
         {
           "datasource": {
@@ -5963,7 +5996,7 @@
           "expr": "sum(rate(litellm_redis_daily_tag_spend_update_queue_total_requests_total[$__rate_interval]))",
           "legendFormat": "redis_daily_tag_spend_update_queue",
           "range": true,
-          "refId": "G"
+          "refId": "I"
         },
         {
           "datasource": {
@@ -5974,7 +6007,7 @@
           "expr": "sum(rate(litellm_redis_daily_team_spend_update_queue_total_requests_total[$__rate_interval]))",
           "legendFormat": "redis_daily_team_spend_update_queue",
           "range": true,
-          "refId": "H"
+          "refId": "J"
         },
         {
           "datasource": {
@@ -5985,7 +6018,7 @@
           "expr": "sum(rate(litellm_redis_window_spend_update_queue_total_requests_total[$__rate_interval]))",
           "legendFormat": "redis_window_spend_update_queue",
           "range": true,
-          "refId": "I"
+          "refId": "K"
         },
         {
           "datasource": {
@@ -5996,7 +6029,7 @@
           "expr": "sum(rate(litellm_reset_budget_job_total_requests_total[$__rate_interval]))",
           "legendFormat": "reset_budget_job",
           "range": true,
-          "refId": "J"
+          "refId": "L"
         },
         {
           "datasource": {
@@ -6007,7 +6040,7 @@
           "expr": "sum(rate(litellm_router_total_requests_total[$__rate_interval]))",
           "legendFormat": "router",
           "range": true,
-          "refId": "K"
+          "refId": "M"
         },
         {
           "datasource": {
@@ -6018,7 +6051,7 @@
           "expr": "sum(rate(litellm_self_total_requests_total[$__rate_interval]))",
           "legendFormat": "self",
           "range": true,
-          "refId": "L"
+          "refId": "N"
         }
       ],
       "title": "Service request rate (litellm_<service>_total_requests)",
@@ -6072,10 +6105,32 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
+          "expr": "sum(rate(litellm_anthropic_wif_failed_requests_total[$__rate_interval])) by (error_class)",
+          "legendFormat": "anthropic_wif / {{error_class}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(litellm_anthropic_wif_cache_failed_requests_total[$__rate_interval])) by (error_class)",
+          "legendFormat": "anthropic_wif_cache / {{error_class}}",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
           "expr": "sum(rate(litellm_auth_failed_requests_total[$__rate_interval])) by (error_class)",
           "legendFormat": "auth / {{error_class}}",
           "range": true,
-          "refId": "A"
+          "refId": "C"
         },
         {
           "datasource": {
@@ -6086,7 +6141,7 @@
           "expr": "sum(rate(litellm_batch_write_to_db_failed_requests_total[$__rate_interval])) by (error_class)",
           "legendFormat": "batch_write_to_db / {{error_class}}",
           "range": true,
-          "refId": "B"
+          "refId": "D"
         },
         {
           "datasource": {
@@ -6097,7 +6152,7 @@
           "expr": "sum(rate(litellm_postgres_failed_requests_total[$__rate_interval])) by (error_class)",
           "legendFormat": "postgres / {{error_class}}",
           "range": true,
-          "refId": "C"
+          "refId": "E"
         },
         {
           "datasource": {
@@ -6108,7 +6163,7 @@
           "expr": "sum(rate(litellm_proxy_pre_call_failed_requests_total[$__rate_interval])) by (error_class)",
           "legendFormat": "proxy_pre_call / {{error_class}}",
           "range": true,
-          "refId": "D"
+          "refId": "F"
         },
         {
           "datasource": {
@@ -6119,7 +6174,7 @@
           "expr": "sum(rate(litellm_redis_failed_requests_total[$__rate_interval])) by (error_class)",
           "legendFormat": "redis / {{error_class}}",
           "range": true,
-          "refId": "E"
+          "refId": "G"
         },
         {
           "datasource": {
@@ -6130,7 +6185,7 @@
           "expr": "sum(rate(litellm_redis_daily_org_spend_update_queue_failed_requests_total[$__rate_interval])) by (error_class)",
           "legendFormat": "redis_daily_org_spend_update_queue / {{error_class}}",
           "range": true,
-          "refId": "F"
+          "refId": "H"
         },
         {
           "datasource": {
@@ -6141,7 +6196,7 @@
           "expr": "sum(rate(litellm_redis_daily_tag_spend_update_queue_failed_requests_total[$__rate_interval])) by (error_class)",
           "legendFormat": "redis_daily_tag_spend_update_queue / {{error_class}}",
           "range": true,
-          "refId": "G"
+          "refId": "I"
         },
         {
           "datasource": {
@@ -6152,7 +6207,7 @@
           "expr": "sum(rate(litellm_redis_daily_team_spend_update_queue_failed_requests_total[$__rate_interval])) by (error_class)",
           "legendFormat": "redis_daily_team_spend_update_queue / {{error_class}}",
           "range": true,
-          "refId": "H"
+          "refId": "J"
         },
         {
           "datasource": {
@@ -6163,7 +6218,7 @@
           "expr": "sum(rate(litellm_redis_window_spend_update_queue_failed_requests_total[$__rate_interval])) by (error_class)",
           "legendFormat": "redis_window_spend_update_queue / {{error_class}}",
           "range": true,
-          "refId": "I"
+          "refId": "K"
         },
         {
           "datasource": {
@@ -6174,7 +6229,7 @@
           "expr": "sum(rate(litellm_reset_budget_job_failed_requests_total[$__rate_interval])) by (error_class)",
           "legendFormat": "reset_budget_job / {{error_class}}",
           "range": true,
-          "refId": "J"
+          "refId": "L"
         },
         {
           "datasource": {
@@ -6185,7 +6240,7 @@
           "expr": "sum(rate(litellm_router_failed_requests_total[$__rate_interval])) by (error_class)",
           "legendFormat": "router / {{error_class}}",
           "range": true,
-          "refId": "K"
+          "refId": "M"
         },
         {
           "datasource": {
@@ -6196,7 +6251,7 @@
           "expr": "sum(rate(litellm_self_failed_requests_total[$__rate_interval])) by (error_class)",
           "legendFormat": "self / {{error_class}}",
           "range": true,
-          "refId": "L"
+          "refId": "N"
         }
       ],
       "title": "Service failure rate (litellm_<service>_failed_requests)",

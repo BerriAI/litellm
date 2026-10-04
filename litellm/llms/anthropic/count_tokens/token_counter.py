@@ -2,13 +2,13 @@
 Anthropic Token Counter implementation using the CountTokens API.
 """
 
-import os
 from typing import Any, Final
 
 from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.types.utils import LlmProviders, TokenCountMessagesFormat, TokenCountResponse
@@ -51,36 +51,41 @@ class AnthropicTokenCounter(BaseTokenCounter):
         Returns:
             TokenCountResponse with token count, or None if counting fails
         """
-        from litellm.llms.anthropic.common_utils import AnthropicError
+        from litellm.llms.anthropic.common_utils import AnthropicError, AnthropicModelInfo
 
         if not messages:
             return None
 
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
-
-        api_key: Final = (
-            litellm_params.get("api_key") or litellm.anthropic_key or litellm.api_key or os.getenv("ANTHROPIC_API_KEY")
-        )
-        if not api_key:
-            return TokenCountResponse(
-                total_tokens=0,
-                request_model=request_model,
-                model_used=model_to_use,
-                tokenizer_type="anthropic_api",
-                error=True,
-                error_message=(
-                    f"No Anthropic API key is set for model {request_model or model_to_use}, so tokens can't be "
-                    "counted. Set api_key on the deployment or ANTHROPIC_API_KEY in the proxy environment."
-                ),
-                status_code=401,
-            )
+        api_base: Final = litellm_params.get("api_base")
 
         try:
+            auth_header: Final = await AnthropicModelInfo.aget_auth_header(
+                api_key=litellm_params.get("api_key") or litellm.anthropic_key or litellm.api_key,
+                api_base=api_base,
+                litellm_params=litellm_params,
+                allow_workload_identity=True,
+            )
+            if auth_header is None:
+                return TokenCountResponse(
+                    total_tokens=0,
+                    request_model=request_model,
+                    model_used=model_to_use,
+                    tokenizer_type="anthropic_api",
+                    error=True,
+                    error_message=(
+                        f"No Anthropic API key is set for model {request_model or model_to_use}, so tokens can't be "
+                        "counted. Set api_key on the deployment or ANTHROPIC_API_KEY in the proxy environment."
+                    ),
+                    status_code=401,
+                )
+
             result: Final = await anthropic_count_tokens_handler.handle_count_tokens_request(
                 model=model_to_use,
                 messages=messages,
-                api_key=api_key,
+                auth_header=auth_header,
+                api_base=api_base,
                 tools=tools,
                 system=system,
             )
@@ -93,8 +98,8 @@ class AnthropicTokenCounter(BaseTokenCounter):
                     tokenizer_type="anthropic_api",
                     original_response=result,
                 )
-        except AnthropicError as e:
-            verbose_logger.warning("Anthropic CountTokens API error: status=%s, message=%s", e.status_code, e.message)
+        except (AnthropicError, AuthenticationError) as e:
+            verbose_logger.warning("Anthropic CountTokens error: status=%s, message=%s", e.status_code, e.message)
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
