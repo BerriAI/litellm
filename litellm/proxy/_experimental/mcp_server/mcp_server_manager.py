@@ -843,7 +843,7 @@ def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serv
     )
     if may_carry and new_server.issuer is None:
         new_server.issuer = previous_server.issuer
-        new_server.authorization_response_iss_parameter_supported = (
+        new_server.authorization_response_iss_parameter_supported = (  # rebind-ok: publish on the existing rebuild object
             previous_server.authorization_response_iss_parameter_supported
         )
     if new_server.authorization_url is None and previous_server.authorization_url:
@@ -2037,18 +2037,20 @@ class MCPServerManager:
         if metadata is None:
             return server
         discovered_issuer: Final = metadata.discovered_issuer if not metadata.from_origin_fallback else None
-        resolved: Final = server.model_copy()
-        resolved.scopes = server.scopes or metadata.scopes
-        resolved.issuer = server.issuer or discovered_issuer
-        resolved.authorization_response_iss_parameter_supported = (
-            metadata.authorization_response_iss_parameter_supported
-            if discovered_issuer is not None
-            else server.authorization_response_iss_parameter_supported
+        return server.model_copy(
+            update={
+                "scopes": server.scopes or metadata.scopes,
+                "issuer": server.issuer or discovered_issuer,
+                "authorization_response_iss_parameter_supported": (
+                    metadata.authorization_response_iss_parameter_supported
+                    if discovered_issuer is not None
+                    else server.authorization_response_iss_parameter_supported
+                ),
+                "authorization_url": server.authorization_url or metadata.authorization_url,
+                "token_url": server.token_url or metadata.token_url,
+                "registration_url": server.registration_url or metadata.registration_url,
+            }
         )
-        resolved.authorization_url = server.authorization_url or metadata.authorization_url
-        resolved.token_url = server.token_url or metadata.token_url
-        resolved.registration_url = server.registration_url or metadata.registration_url
-        return resolved
 
     def _oauth_discovery_slot_is_current(self, server_id: str, generation: int) -> bool:
         slot: Final = self._oauth_discovery_slot(server_id)

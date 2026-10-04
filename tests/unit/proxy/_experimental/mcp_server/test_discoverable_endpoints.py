@@ -13077,7 +13077,7 @@ async def test_bound_client_cannot_be_sent_to_a_different_issuer(monkeypatch, op
 
 
 @pytest.mark.asyncio
-async def test_registration_replaces_mismatched_client_and_reports_persistence_failure(monkeypatch):
+async def test_failed_registration_preserves_cached_credentials(monkeypatch):
     from fastapi import Request
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
 
@@ -13103,8 +13103,8 @@ async def test_registration_replaces_mismatched_client_and_reports_persistence_f
         )
     assert error.value.status_code == 503
     assert "could not be saved" in error.value.detail
-    assert server.client_id is None
-    assert server.client_secret is None
+    assert server.client_id == "old-client"
+    assert server.client_secret == "old-secret"
     register.assert_awaited_once()
     persist.assert_awaited_once_with(server, {"client_id": "new-client"}, "https://gateway.example/callback")
 

@@ -814,7 +814,16 @@ def _dcr_bridge_relays_client_registration(mcp_server: MCPServer) -> bool:
     returns directly to the client's redirect URI without transiting the gateway. Gateway-side
     redirect trust and the ``/callback`` state relay therefore only apply to the short-circuit
     arm, where the upstream only knows the gateway's own callback."""
-    return mcp_server.is_dcr_bridge and bool(mcp_server.effective_registration_url) and not mcp_server.client_id
+    return bool(
+        mcp_server.is_dcr_bridge
+        and mcp_server.effective_registration_url
+        and not (
+            mcp_server.client_id
+            and oauth_client_registration_matches(
+                mcp_server.dcr_issuer, mcp_server.dcr_server_url, mcp_server.issuer, mcp_server.url
+            )
+        )
+    )
 
 
 def _require_s256_pkce(
@@ -1436,8 +1445,8 @@ def _apply_persisted_dcr_credentials(mcp_server: MCPServer, credentials: _Persis
     client_id: Final = _decrypt_persisted_dcr_credential(credentials.client_id, "client_id")
     if not client_id:
         return False
-    mcp_server.dcr_issuer = credentials.dcr_issuer
-    mcp_server.dcr_server_url = credentials.dcr_server_url
+    mcp_server.dcr_issuer = credentials.dcr_issuer  # rebind-ok: publish through the existing bool hydration contract
+    mcp_server.dcr_server_url = credentials.dcr_server_url  # rebind-ok: retain binding in database-free shared state
     mcp_server.client_id = client_id
     mcp_server.client_secret = _decrypt_persisted_dcr_credential(credentials.client_secret, "client_secret")
     mcp_server.token_endpoint_auth_method = credentials.token_endpoint_auth_method
@@ -1727,11 +1736,7 @@ async def _persist_dcr_client_registration(
                 server_id=mcp_server.server_id,
                 credentials=credentials,
             )
-        mcp_server.dcr_issuer = mcp_server.issuer
-        mcp_server.dcr_server_url = mcp_server.url
-        mcp_server.client_id = registration.client_id
-        mcp_server.client_secret = registration.client_secret
-        mcp_server.token_endpoint_auth_method = token_endpoint_auth_method
+        _apply_persisted_dcr_credentials(mcp_server, _PersistedDcrCredentials.model_validate(credentials))
         return "persisted"
     except Exception as exc:  # noqa: BLE001
         verbose_logger.warning(
@@ -1930,17 +1935,17 @@ async def register_client_with_server(
     }
 
     resolved_server: Final = await _server_with_oauth_endpoints(mcp_server, _register_flow_needed_endpoint)
-    if not oauth_client_registration_matches(
+    client_matches: Final = oauth_client_registration_matches(
         resolved_server.dcr_issuer, resolved_server.dcr_server_url, resolved_server.issuer, resolved_server.url
-    ):
-        resolved_server.client_id = None
-        resolved_server.client_secret = None
-        resolved_server.token_endpoint_auth_method = None
-
-    if resolved_server.client_id and not (
-        persist_credentials
-        and resolved_server.registration_url
-        and await _persisted_dcr_redirect_uri_is_stale(resolved_server, current_redirect_uri)
+    )
+    if (
+        resolved_server.client_id
+        and client_matches
+        and not (
+            persist_credentials
+            and resolved_server.registration_url
+            and await _persisted_dcr_redirect_uri_is_stale(resolved_server, current_redirect_uri)
+        )
     ):
         return dummy_return
 
