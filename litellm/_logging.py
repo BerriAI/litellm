@@ -5,8 +5,11 @@ import os
 import sys
 from datetime import datetime, timezone
 from logging import Formatter
+from types import MappingProxyType
 from typing import Any, Final, TextIO
 from urllib.parse import unquote
+
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -532,6 +535,43 @@ class CorrelationPlainFormatter(logging.Formatter):
 _ECS_RESERVED_KEYS: Final = frozenset({"@timestamp", "log", "message", "service", "ecs", "error"})
 
 
+class _ECSFile(TypedDict):
+    name: ReadOnly[str]
+    line: ReadOnly[int]
+
+
+class _ECSOrigin(TypedDict):
+    file: ReadOnly[_ECSFile]
+    function: ReadOnly[str]
+
+
+class _ECSLog(TypedDict):
+    level: ReadOnly[str]
+    logger: ReadOnly[str]
+    origin: ReadOnly[_ECSOrigin]
+
+
+class _ECSService(TypedDict):
+    name: ReadOnly[str]
+
+
+class _ECSMeta(TypedDict):
+    version: ReadOnly[str]
+
+
+class _ECSError(TypedDict):
+    type: ReadOnly[str | None]
+    message: ReadOnly[str]
+    stack_trace: ReadOnly[str]
+
+
+class _ECSRecord(TypedDict):
+    log: ReadOnly[_ECSLog]
+    message: ReadOnly[str]
+    service: ReadOnly[_ECSService]
+    ecs: ReadOnly[_ECSMeta]
+
+
 class ECSFormatter(Formatter):
     ECS_VERSION = "8.11.0"
 
@@ -544,39 +584,40 @@ class ECSFormatter(Formatter):
         return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
 
     def format(self, record: logging.LogRecord) -> str:
-        message_str: Final = record.getMessage()
-
-        ecs_record: Final[dict[str, object]] = {  # mutable-ok: one-shot, serialized immediately
-            "@timestamp": self.formatTime(record),
-            "log": {  # mutable-ok: one-shot nested structure
+        ecs_fields: Final[_ECSRecord] = {
+            "log": {
                 "level": record.levelname.lower(),
                 "logger": record.name,
-                "origin": {  # mutable-ok: one-shot nested structure
-                    "file": {  # mutable-ok: one-shot nested structure
-                        "name": record.filename,
-                        "line": record.lineno,
-                    },
-                    "function": record.funcName,
-                },
+                "origin": {"file": {"name": record.filename, "line": record.lineno}, "function": record.funcName},
             },
-            "message": message_str,
-            "service": {"name": self._service_name},  # mutable-ok: one-shot nested structure
-            "ecs": {"version": self.ECS_VERSION},  # mutable-ok: one-shot nested structure
+            "message": record.getMessage(),
+            "service": {"name": self._service_name},
+            "ecs": {"version": self.ECS_VERSION},
         }
-
-        if record.exc_info and record.exc_info[1] is not None:
-            exc_type, exc_value, _ = record.exc_info
-            ecs_record["error"] = {  # mutable-ok: one-shot, set once and never mutated further
-                "type": exc_type.__name__ if exc_type else None,
-                "message": str(exc_value),
-                "stack_trace": record.exc_text or self.formatException(record.exc_info),
+        extra_fields: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in record.__dict__.items()
+                if key not in _STANDARD_RECORD_ATTRS and key not in _ECS_RESERVED_KEYS
             }
+        )
+        return safe_dumps(
+            MappingProxyType(
+                {"@timestamp": self.formatTime(record), **ecs_fields, **self._error_fields(record), **extra_fields}
+            ),
+            value_transform=_redact_structured_value,
+        )
 
-        for key, value in record.__dict__.items():
-            if key not in _STANDARD_RECORD_ATTRS and key not in _ECS_RESERVED_KEYS:
-                ecs_record[key] = value
-
-        return safe_dumps(ecs_record, value_transform=_redact_structured_value)
+    def _error_fields(self, record: logging.LogRecord) -> MappingProxyType[str, _ECSError]:
+        exc_info: Final = record.exc_info
+        if exc_info is None or exc_info[1] is None:
+            return MappingProxyType({})
+        error: Final[_ECSError] = {
+            "type": exc_info[0].__name__ if exc_info[0] else None,
+            "message": str(exc_info[1]),
+            "stack_trace": record.exc_text or self.formatException(exc_info),
+        }
+        return MappingProxyType({"error": error})
 
 
 # Function to set up exception handlers for JSON logging
