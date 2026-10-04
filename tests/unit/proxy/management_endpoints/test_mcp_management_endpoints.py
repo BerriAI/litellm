@@ -10604,7 +10604,7 @@ class TestMCPServerResolutionCharacterization:
         effects: Final = _ResolutionEffects()
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             _cache_temporary_mcp_server_in_redis,
-            _get_cached_temporary_mcp_server_or_404,
+            _oauth_server_operation,
             _TemporaryMCPServerEntry,
         )
 
@@ -10689,11 +10689,8 @@ class TestMCPServerResolutionCharacterization:
             ):
                 if expected_status in (403, 404):
                     with pytest.raises(HTTPException) as exc_info:
-                        await _get_cached_temporary_mcp_server_or_404(
-                            server_id,
-                            auth,
-                            request=_make_mock_request(),
-                        )
+                        async with _oauth_server_operation(server_id, auth, request=_make_mock_request()):
+                            pytest.fail("Denied OAuth resolution must not enter the operation")
 
                     expected_detail: Final = (
                         {"error": f"MCP server {server_id} not found"}
@@ -10707,20 +10704,16 @@ class TestMCPServerResolutionCharacterization:
                     effects.assert_no_writes()
                     assert httpx_mock.calls.call_count == 0, f"{source}/{caller}: no upstream HTTP"
                 else:
-                    resolved: Final = await _get_cached_temporary_mcp_server_or_404(
-                        server_id,
-                        auth,
-                        request=_make_mock_request(),
-                    )
-                    expected_alias: Final = (
-                        db_server.alias
-                        if source == "temp_draft"
-                        else "LIT3974 OAuth"
-                        if source == "config"
-                        else temp_server.alias
-                    )
-                    assert resolved.server_id == server_id, f"{source}/{caller}: resolved OAuth server"
-                    assert resolved.alias == expected_alias, f"{source}/{caller}: resolved OAuth display name"
+                    async with _oauth_server_operation(server_id, auth, request=_make_mock_request()) as resolved:
+                        expected_alias: Final = (
+                            db_server.alias
+                            if source == "temp_draft"
+                            else "LIT3974 OAuth"
+                            if source == "config"
+                            else temp_server.alias
+                        )
+                        assert resolved.server_id == server_id, f"{source}/{caller}: resolved OAuth server"
+                        assert resolved.alias == expected_alias, f"{source}/{caller}: resolved OAuth display name"
         finally:
             mgmt_endpoints.litellm.cache = original_cache
 
