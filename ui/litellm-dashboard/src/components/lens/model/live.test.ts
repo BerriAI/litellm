@@ -4,6 +4,7 @@ import {
   briefReasoning,
   checkLabel,
   conclusions,
+  doneLine,
   durationLabel,
   newestFirst,
   nowLine,
@@ -368,6 +369,17 @@ describe("honest live list", () => {
     expect(inFlight(job("running"))).toEqual([item]);
     expect(inFlight(job("completed"))).toEqual([]);
     expect(inFlight({ status: "running" } as Job)).toEqual([]);
+  });
+
+  it("sums up a finished run from when reading started", () => {
+    const job = {
+      reviewed: 30,
+      created_at: "2026-10-03T16:00:00Z",
+      finished_at: "2026-10-03T16:00:41Z",
+      steps: [{ kind: "stage", label: "Reading executions", at: "2026-10-03T16:00:10Z" }],
+    } as unknown as Job;
+    expect(doneLine(job)).toBe("Reviewed 30 traces in 31s with");
+    expect(doneLine({ ...job, reviewed: 1, finished_at: null })).toBe("Reviewed 1 trace with");
   });
 
   it("formats review time", () => {

@@ -1,3 +1,4 @@
+import { durationText } from "./format";
 import type { Job, Review, ReviewVerdict, Settings } from "./types";
 
 export type Outcome = "issue" | "clear" | "unknown";
@@ -238,4 +239,11 @@ export function nowLine(job: Pick<Job, "coverage" | "reviewed">, reading: number
 export function durationLabel(ms: number): string {
   if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
   return ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
+}
+
+export function doneLine(job: Pick<Job, "reviewed" | "created_at" | "finished_at" | "steps">): string {
+  const end = job.finished_at ? Date.parse(job.finished_at) : Number.NaN;
+  const seconds = Math.round((end - Date.parse(readingStart(job))) / 1000);
+  const took = Number.isFinite(seconds) && seconds >= 0 ? ` in ${durationText(seconds)}` : "";
+  return `Reviewed ${job.reviewed} ${job.reviewed === 1 ? "trace" : "traces"}${took} with`;
 }
