@@ -3743,6 +3743,36 @@ def test_add_litellm_metadata_from_request_headers_promoted_metadata_beats_heade
     assert f"litellm_{field}" not in data
 
 
+def test_add_litellm_metadata_from_request_headers_equal_ids_still_stamp_root_fields():
+    headers = {
+        "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        "baggage": "session.id=matching-session-42",
+    }
+    data = {
+        "metadata": {"trace_id": "4bf92f3577b34da6a3ce929d0e0e4736", "session_id": "matching-session-42"},
+    }
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["litellm_session_id"] == "matching-session-42"
+    assert data["metadata"]["trace_id"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert data["metadata"]["session_id"] == "matching-session-42"
+
+
+@pytest.mark.parametrize("non_string_session_id", [4815162342, True, {"session": "nested"}])
+def test_add_litellm_metadata_from_request_headers_non_string_body_session_id_falls_back_to_baggage(
+    non_string_session_id: object,
+):
+    headers = {"baggage": "session.id=header-session-42"}
+    data = {"metadata": {"session_id": non_string_session_id}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_session_id"] == "header-session-42"
+    assert data["metadata"]["session_id"] == "header-session-42"
+
+
 def _otel_span_with_trace_id(trace_id: int) -> NonRecordingSpan:
     return NonRecordingSpan(SpanContext(trace_id=trace_id, span_id=0x00F067AA0BA902B7, is_remote=False))
 
@@ -8454,6 +8484,58 @@ async def test_missing_session_id_generate_reuses_promoted_caller_trace_id(path:
     assert _spend_log_session_id(updated, "litellm_metadata") == "caller-trace", (
         "spend log and callback session ids must agree on the caller trace id"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["generate", "reject"])
+async def test_missing_session_id_policy_promotes_caller_session_to_root_field(policy: str):
+    """A caller-supplied usable session id satisfies the missing_session_id policies on
+    litellm_metadata routes (where it is not yet the managed metadata field) and must also
+    land on the root ``litellm_session_id`` field: consumers that read the root field
+    (router fallbacks, spend logs, sandbox reuse) otherwise mint a fresh uuid4 per request."""
+    request = _request_for("/v1/responses")
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "input": "hi",
+            "litellm_trace_id": "root-trace-42",
+            "metadata": {"session_id": "caller-session-42"},
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": policy},
+    )
+
+    assert updated["litellm_trace_id"] == "root-trace-42"
+    assert updated["litellm_session_id"] == "caller-session-42"
+    assert updated["litellm_metadata"]["session_id"] == "caller-session-42"
+    assert SESSION_ID_GENERATED_METADATA_KEY not in updated["litellm_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_missing_session_id_generate_ignores_non_string_caller_session_id():
+    """A non-string session id is not a usable session: the generate policy must fall through
+    to generation instead of letting an unusable value strand the root session field."""
+    request = _request_for("/v1/responses")
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "input": "hi",
+            "litellm_trace_id": "root-trace-42",
+            "metadata": {"session_id": 4815162342},
+        },
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "generate"},
+    )
+
+    assert updated["litellm_session_id"] == "root-trace-42"
+    assert updated["litellm_metadata"]["session_id"] == "root-trace-42"
+    assert updated["litellm_metadata"][SESSION_ID_GENERATED_METADATA_KEY] is True
 
 
 @pytest.mark.asyncio
