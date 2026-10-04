@@ -27,10 +27,19 @@ from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
     SAPStreamIterator,
+    normalize_reasoning_content,
+)
+from .handler import (
+    normalize_choice as _normalize_choice_fn,
 )
 from .models import (
     ChatCompletionTool,
+    CompletionRequestConfigurationReferenceById,
+    CompletionRequestConfigurationReferenceByIdConfigRef,
+    CompletionRequestConfigurationReferenceByNameScenarioVersion,
+    CompletionRequestConfigurationReferenceByNameScenarioVersionConfigRef,
     OrchestrationRequest,
+    PartialOrchestrationConfig,
     ResponseFormat,
     ResponseFormatJSONSchema,
     SAPAssistantMessage,
@@ -212,7 +221,8 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             "extra_headers",
             "parallel_tool_calls",
             "response_format",
-            "timeout",
+            "reasoning_effort",
+            "thinking",
         ]
         # Remove response_format for providers that don't support it on SAP GenAI Hub
         if (
@@ -307,6 +317,76 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             **optional_modules,
         }
 
+    def _build_config_ref_body(
+        self,
+        config_ref: dict,
+        optional_params: dict,
+        messages: list[AllMessageValues],
+    ) -> dict:
+        """Build a config_ref request body (ById or ByNameScenarioVersion variant).
+
+        The discriminator is duck-typed from the keys present in ``config_ref``:
+
+        * ``{"id": "<uuid>"}``                         → ById variant
+        * ``{"scenario": ..., "name": ..., "version": ...}`` → ByNameScenarioVersion variant
+
+        ``optional_params`` may carry:
+        * ``placeholder_values`` (dict[str, str]) — forwarded as-is.
+        * ``messages_history``   (list of message dicts) — forwarded as-is.
+        * ``config``             (dict matching PartialOrchestrationConfig) — partial override.
+
+        Any keys not consumed here are silently ignored so that LiteLLM's standard
+        optional-params machinery does not break.
+        """
+        # --- discriminate on config_ref shape -----------------------------------
+        if "id" in config_ref:
+            validated_ref = CompletionRequestConfigurationReferenceByIdConfigRef(
+                **config_ref
+            )
+            model_cls = CompletionRequestConfigurationReferenceById
+        elif "scenario" in config_ref or "name" in config_ref or "version" in config_ref:
+            validated_ref = CompletionRequestConfigurationReferenceByNameScenarioVersionConfigRef(
+                **config_ref
+            )
+            model_cls = CompletionRequestConfigurationReferenceByNameScenarioVersion
+        else:
+            raise ValueError(
+                "config_ref must contain either 'id' (ById) or 'scenario'/'name'/'version' "
+                "(ByNameScenarioVersion)."
+            )
+
+        # --- optional fields ----------------------------------------------------
+        placeholder_values: Final = optional_params.pop("placeholder_values", None)
+        messages_history_raw: Final = optional_params.pop("messages_history", None)
+        partial_config_raw: Final = optional_params.pop("config", None)
+
+        partial_config: PartialOrchestrationConfig | None = None
+        if partial_config_raw is not None:
+            partial_config = PartialOrchestrationConfig(**partial_config_raw)
+
+        messages_history = None
+        if messages_history_raw is not None:
+            messages_history = _messages_to_sap_template(messages_history_raw)
+        elif messages:
+            # When messages are provided through the standard LiteLLM path but
+            # no explicit messages_history override was given, treat them as the
+            # history so that the caller does not have to duplicate the payload.
+            messages_history = _messages_to_sap_template(messages)
+
+        # --- assemble and validate the full body --------------------------------
+        body_kwargs: dict = {
+            "config_ref": validated_ref,
+        }
+        if partial_config is not None:
+            body_kwargs["config"] = partial_config
+        if placeholder_values is not None:
+            body_kwargs["placeholder_values"] = placeholder_values
+        if messages_history is not None:
+            body_kwargs["messages_history"] = messages_history
+
+        validated = model_cls(**body_kwargs)
+        return validated.model_dump(by_alias=True, exclude_unset=True)
+
     def transform_request(
         self,
         model: str,
@@ -317,6 +397,19 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     ) -> dict:
         optional_params = dict(optional_params)
         optional_params.pop("deployment_url", None)
+
+        # --- config_ref routing -------------------------------------------------
+        # When the caller supplies a `config_ref` key the request targets a
+        # pre-saved SAP AI Core orchestration configuration.  We build the
+        # alternative body shape and return early, bypassing the full-config path.
+        config_ref: Final = optional_params.pop("config_ref", None)
+        if config_ref is not None:
+            return self._build_config_ref_body(
+                config_ref=dict(config_ref),
+                optional_params=optional_params,
+                messages=messages,
+            )
+        # ------------------------------------------------------------------------
 
         template: Final = _messages_to_sap_template(messages)
 
@@ -386,13 +479,29 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
+        dropped_params = raw_response.headers.get("X-Orchestration-Dropped-Model-Params")
         logging_obj.post_call(
             input=messages,
             api_key=api_key,
             original_response=raw_response.text,
-            additional_args={"complete_input_dict": request_data},
+            additional_args={
+                "complete_input_dict": request_data,
+                **({
+                    "x_orchestration_dropped_model_params": dropped_params
+                } if dropped_params else {}),
+            },
         )
-        response = ModelResponse.model_validate(raw_response.json()["final_result"])
+        final_result = normalize_reasoning_content(raw_response.json()["final_result"])
+        response = ModelResponse.model_validate(final_result)
+
+        # Forward provider_specific_fields from each raw choice onto the
+        # corresponding ModelResponse choice so callers and middleware can
+        # access provider metadata that doesn't fit the OpenAI schema.
+        raw_choices: list[dict] = final_result.get("choices") or []
+        for raw_choice, model_choice in zip(raw_choices, response.choices or []):
+            psf = raw_choice.get("provider_specific_fields")
+            if psf is not None:
+                model_choice.provider_specific_fields = psf  # type: ignore[attr-defined]
 
         # Strip markdown code blocks if JSON response_format was used with Anthropic models
         # SAP GenAI Hub with Anthropic models sometimes wraps JSON in ```json ... ```
@@ -404,6 +513,20 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
                 response = self._strip_markdown_json(response)
 
         return response
+
+    @staticmethod
+    def _normalize_reasoning_content(raw: dict[str, object]) -> dict[str, object]:
+        # SAP AI Core returns reasoning tokens as a list: message.reasoning_content = [{"content": ..., "signature": ...}]
+        # ModelResponse.reasoning_content is typed Optional[str], so map the list to
+        # thinking_blocks and collapse the text into a single joined string.
+        return normalize_reasoning_content(raw)
+
+    @staticmethod
+    def _normalize_choice(choice: dict[str, object]) -> dict[str, object]:
+        # Normalize a single choice dict (message or delta shape) in isolation.
+        # Exposed as a static method so tests and callers can exercise one choice
+        # without constructing a full response envelope.
+        return _normalize_choice_fn(choice)
 
     def _strip_markdown_json(self, response: ModelResponse) -> ModelResponse:
         """Strip markdown code block wrapper from JSON content if present.
