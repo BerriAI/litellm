@@ -34,6 +34,7 @@ from litellm.proxy.lens.models import (
     ModelResult,
     Progress,
     Result,
+    Review,
     RunRequest,
     Sample,
     Scope,
@@ -55,8 +56,10 @@ from litellm.proxy.lens.state import (
     next_scan_start,
     queue_job,
     replace_job,
+    reviews_after,
     scheduled_window,
     snapshot_finding,
+    summarized,
 )
 from litellm.proxy.tracing_runtime import provide_storage
 
@@ -199,7 +202,7 @@ async def validate_workers(settings: LensSettings, scope: Scope) -> None:
 async def list_lenses(auth: Auth, storage: StorageDep) -> LensList:
     scope: Final = user_scope(auth)
     return LensList(
-        lenses=tuple(e for e in await repository().lenses() if can_access(scope, e.scope)),
+        lenses=tuple(summarized(e) for e in await repository().lenses() if can_access(scope, e.scope)),
         workers=tuple(w for w in await repository().workers() if can_access(scope, w.scope)),
         tracing_enabled=storage is not None,
     )
@@ -329,7 +332,7 @@ async def run_lens(lens_id: str, body: RunRequest, auth: Auth) -> Lens:
 
 @router.get("/{lens_id}", response_model=Lens)
 async def read_lens(lens_id: str, auth: Auth) -> Lens:
-    return await get_lens(lens_id, user_scope(auth))
+    return summarized(await get_lens(lens_id, user_scope(auth)))
 
 
 @router.get("/{lens_id}/runs", response_model=tuple[Job, ...])
@@ -348,6 +351,13 @@ async def read_run(lens_id: str, job_id: str, auth: Auth) -> Job:
     if job is None:
         raise HTTPException(404, "Investigation not found")
     return job
+
+
+@router.get("/{lens_id}/runs/{job_id}/reviews", response_model=tuple[Review, ...])
+async def read_reviews(
+    lens_id: str, job_id: str, auth: Auth, after: Annotated[AwareDatetime | None, Query()] = None
+) -> tuple[Review, ...]:
+    return reviews_after(await read_run(lens_id, job_id, auth), after)
 
 
 @router.post("/{lens_id}/cancel", response_model=Lens)
