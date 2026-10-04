@@ -6,7 +6,7 @@ Raw OTLP exports live in `crates/traces/tests/fixtures/query_*.json`. The seeded
 
 The ClickHouse round-trip test replays the `google_adk_billed_failure`, `pydantic_ai_retry`, and `deepagents_swarm` exports and checks span identities, parent links, timestamps, durations, token counts, and statuses without pinning the provider's error wording. Exported ERROR and UNSET statuses are diagnostic and do not establish a failed execution, so the test preserves incoming statuses and checks root status separately from the count of error spans, deriving both from the decoded export. Framework-specific interpretation of control-flow exceptions belongs in the instrumentation integration
 
-For a local dashboard with linked requests and traces, run `bash scripts/run_tracing_proxy_local.sh --seed` from the repository root and open `http://127.0.0.1:4002/ui/`. Log in as `admin` with password `sk-1234`, matching the UI E2E harness. The launcher keeps the proxy running until Ctrl-C and leaves the database volumes intact
+For a local dashboard with linked requests and traces, run `make lens-dev ARGS=--seed` from the repository root and open `http://localhost:3000/ui/lens/`. Log in as `admin` with the master key saved in `.lens-dev/master_key`. The launcher keeps the stack running until Ctrl-C and leaves the database volumes intact
 
 Spend rows are stored here because `traces-clickhouse` owns the spend row schema
 

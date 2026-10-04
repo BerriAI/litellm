@@ -259,7 +259,7 @@ main() {
   cd "$repo_root"
 
   if [ "$seed_only" = 1 ]; then
-    [ -s "$key_file" ] || [ -n "${LENS_DEV_MASTER_KEY:-}" ] || die "start bash scripts/lens_dev.sh before --seed-only"
+    [ -s "$key_file" ] || [ -n "${LENS_DEV_MASTER_KEY:-}" ] || die "start make lens-dev before --seed-only"
     load_master_key
     seed_data
     return
