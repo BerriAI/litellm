@@ -28,6 +28,7 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
+    LiteLLM_ObjectPermissionTable,
     LiteLLM_OrganizationTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
@@ -5330,13 +5331,16 @@ async def test_team_key_vector_store_access_when_team_cannot_be_resolved(
     request._url = URL(url="/v1/rag/query")
     database: Final = MagicMock()
     database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        side_effect=lambda where: SimpleNamespace(vector_stores=["KBSTOREA"])
+        side_effect=lambda where: LiteLLM_ObjectPermissionTable(
+            object_permission_id=where["object_permission_id"], vector_stores=["KBSTOREA"]
+        )
         if where["object_permission_id"] == "key-permission"
         else None
     )
     attrs: Final = {
         **_proxy_attrs_for_centralized_checks(),
         "prisma_client": database,
+        "proxy_logging_obj": MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock())),
         "general_settings": {"vector_store_deny_by_default": deny_by_default},
     }
     for name, value in attrs.items():
@@ -5400,11 +5404,14 @@ async def test_keyless_team_member_vector_store_access_uses_only_the_resolved_te
     }
     database: Final = MagicMock()
     database.db.litellm_objectpermissiontable.find_unique = AsyncMock(
-        side_effect=lambda where: SimpleNamespace(vector_stores=grants[where["object_permission_id"]])
+        side_effect=lambda where: LiteLLM_ObjectPermissionTable(
+            object_permission_id=where["object_permission_id"], vector_stores=grants[where["object_permission_id"]]
+        )
     )
     attrs: Final = {
         **_proxy_attrs_for_centralized_checks(),
         "prisma_client": database,
+        "proxy_logging_obj": MagicMock(service_logging_obj=MagicMock(async_service_success_hook=AsyncMock())),
         "general_settings": {"vector_store_deny_by_default": True},
     }
     for name, value in attrs.items():
