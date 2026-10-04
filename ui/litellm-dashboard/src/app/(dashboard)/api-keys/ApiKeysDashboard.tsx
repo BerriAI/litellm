@@ -1,5 +1,6 @@
 "use client";
 
+import { Page } from "@/components/shared/Page";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { KeyResponse, Team } from "@/components/key_team_helpers/key_list";
@@ -71,7 +72,7 @@ export default function ApiKeysDashboard() {
   }, [accessToken, userID, userRole]);
 
   return (
-    <main className="flex h-full flex-col p-8">
+    <Page className="h-full">
       <VirtualKeysTable
         headerActions={
           isViewOnly ? undefined : (
@@ -86,6 +87,6 @@ export default function ApiKeysDashboard() {
           )
         }
       />
-    </main>
+    </Page>
   );
 }

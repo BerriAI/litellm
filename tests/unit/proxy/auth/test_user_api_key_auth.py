@@ -124,7 +124,7 @@ async def test_check_blocked_team():
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     await user_api_key_auth(request=request, api_key="Bearer " + user_key)
@@ -162,7 +162,7 @@ async def test_team_object_has_object_permission_id():
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm.proxy.proxy_server, "prisma_client", "test-client")
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     with patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock) as mock_common_checks:
@@ -263,7 +263,7 @@ async def test_aaauser_personal_budgets(key_ownership):
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm.proxy.proxy_server, "prisma_client", _NoMembershipRowPrisma())
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     test_user_cache = getattr(litellm.proxy.proxy_server, "user_api_key_cache")
@@ -294,7 +294,7 @@ async def test_user_api_key_auth_fails_with_prohibited_params(prohibited_param):
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
 
     # Create request with prohibited parameter in body
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     async def return_body():
@@ -334,7 +334,7 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
     setattr(proxy_server, "master_key", "sk-1234")
     setattr(proxy_server, "general_settings", general_settings)
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": route, "headers": []})
     request._url = URL(url=route)
 
     if should_raise_error:
@@ -411,7 +411,7 @@ def test_ui_token_route_access(route, user_role, should_be_allowed):
     from starlette.datastructures import URL
     from fastapi import Request
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": route, "headers": []})
     request._url = URL(url=route)
 
     if should_be_allowed:
@@ -494,7 +494,7 @@ async def test_auth_not_connected_to_db():
         {"allow_requests_on_db_unavailable": True},
     )
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     valid_token = await user_api_key_auth(request=request, api_key="Bearer " + user_key)
@@ -676,7 +676,7 @@ async def test_soft_budget_alert():
     setattr(litellm.proxy.proxy_server, "prisma_client", AsyncMock())
 
     # Create request
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     # Track if budget_alerts was called
@@ -1162,7 +1162,7 @@ async def test_x_litellm_api_key():
     ignored_key = "aj12445"
 
     # Create request with headers as bytes
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     valid_token = await user_api_key_auth(
@@ -1336,7 +1336,7 @@ async def test_user_model_budget_is_enforced_through_user_api_key_auth(over_budg
         ttl=600,
     )
 
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
     request._url = URL(url="/chat/completions")
 
     async def return_body():
@@ -1440,7 +1440,11 @@ def test_jwt_path_enforces_the_user_model_budget_before_returning():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+    )
 
     def calls_before_each_return(node):
         seen_check = []
@@ -1481,7 +1485,11 @@ def test_every_jwt_branch_carries_the_user_model_budget():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+    )
 
     assignments = [
         node
@@ -1614,7 +1622,11 @@ def test_zero_cost_models_skip_the_user_budget_check_on_every_path():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+    )
 
     def guarded_by_skip(node: ast.AST, target: ast.AST) -> bool:
         for parent in ast.walk(node):
@@ -1755,7 +1767,11 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
 
     from litellm.proxy.auth import user_api_key_auth as auth_module
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder)))
+    tree = ast.parse(
+        textwrap.dedent(inspect.getsource(auth_module._user_api_key_auth_builder))
+        + "\n"
+        + textwrap.dedent(inspect.getsource(auth_module.validate_resolved_virtual_key))
+    )
 
     # Half one: the shared block copies the user row's budget onto the token.
     copies_user_row = [

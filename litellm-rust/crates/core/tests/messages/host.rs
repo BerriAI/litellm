@@ -1,7 +1,11 @@
+use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::Mutex;
 
-use litellm_core::messages::route::Messages;
-use litellm_host::event::{CallEvent, MachineEvent, RequestContext, WireRequest};
+use litellm_core::messages::{MessagesCallResponse, route::Messages};
+use litellm_host::{
+    interceptors::{ExecutionFacts, RequestContext, ResultSource, WireRequest},
+    lifecycle::CallEvent,
+};
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
 use rstest::rstest;
 
@@ -14,8 +18,10 @@ type Rewrite = Box<dyn Fn(WireRequest) -> Result<WireRequest, Error> + Send + Sy
 struct RecordingHost {
     call: LocalMessagesHost,
     rewrite: Rewrite,
-    events: Mutex<Vec<CallEvent>>,
+    events: super::support::Observations,
     optional_params: Mutex<Vec<Value>>,
+    facts: Mutex<Vec<ExecutionFacts>>,
+    reject_result: bool,
 }
 
 impl RecordingHost {
@@ -23,8 +29,10 @@ impl RecordingHost {
         Self {
             call: LocalMessagesHost::new(call),
             rewrite,
-            events: Mutex::new(Vec::new()),
+            events: super::support::Observations::default(),
             optional_params: Mutex::new(Vec::new()),
+            facts: Mutex::new(Vec::new()),
+            reject_result: false,
         }
     }
 
@@ -38,7 +46,7 @@ impl RecordingHost {
             .unwrap()
             .iter()
             .filter_map(|event| match event {
-                CallEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
+                CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
                     Some(raw.body.clone())
                 }
                 _ => None,
@@ -51,24 +59,32 @@ impl RecordingHost {
     pub fn request(&self) -> Result<MessagesCall, Error> {
         self.call.request()
     }
-    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, (), Self, ()> {
-        litellm_host::in_process::Host {
+    pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, ()> {
+        litellm_host_native::in_process::Host {
             services: &(),
-            hooks: self,
+            interceptors: self,
             stream: &(),
-            observer: Some(self),
+            observers: Some(&self.events.sender),
         }
     }
 }
 
 impl litellm_host::lifecycle::CallObserver for RecordingHost {
-    fn observe(&self, event: litellm_host::event::CallEvent) {
-        self.events.lock().unwrap().push(event.clone());
+    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
+        self.events.sender.emit(event);
     }
 }
-impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protocol>::Error>
+impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protocol::Protocol>::Error>
     for RecordingHost
 {
+    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), Error> {
+        self.facts.lock().unwrap().push(facts);
+        if self.reject_result {
+            return Err(Error::Unsupported("result rejected"));
+        }
+        Ok(())
+    }
+
     async fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -80,20 +96,107 @@ impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protoc
             .push(context.optional_params.clone());
         (self.rewrite)(wire)
     }
-    async fn on_event(
+    async fn after_provider_response(
         &self,
-        event: litellm_host::event::MachineEvent,
+        raw: litellm_host::interceptors::RawResponse,
     ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
         litellm_host::lifecycle::CallObserver::observe(
             self,
-            litellm_host::event::CallEvent::Machine(event),
+            litellm_host::lifecycle::CallEvent::Execution(
+                litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
+            ),
         );
         Ok(())
     }
 }
 
+#[rstest]
+#[case::native_unary(false, false)]
+#[case::native_stream(true, false)]
+#[case::hosted_unary(false, true)]
+#[case::hosted_stream(true, true)]
+#[tokio::test]
+async fn rejected_results_are_not_delivered_or_cached(
+    call: MessagesCall,
+    #[case] streaming: bool,
+    #[case] hosted: bool,
+) {
+    use futures_util::TryStreamExt;
+    use litellm_cache_memory::InMemoryCache;
+    use litellm_cache_response::{CacheScope, ResponseCache, ScopedCache};
+
+    let response = if streaming {
+        ResponseTemplate::new(200).set_body_raw(
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            "text/event-stream",
+        )
+    } else {
+        message_response()
+    };
+    let upstream = upstream([response.clone(), response]).await;
+    let route = messages_route(no_secrets()).with_cache(ScopedCache::new(
+        Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
+            Some(100),
+            Some(Duration::from_secs(60)),
+        )))),
+        CacheScope::Shared,
+    ));
+    for (reject, expected_requests, cached) in [
+        (true, 1, false),
+        (false, 2, false),
+        (true, 2, true),
+        (false, 2, true),
+    ] {
+        let request = authenticated(
+            with_fields(
+                MessagesCall {
+                    body: call.body.clone(),
+                    ..super::call()
+                },
+                json!({"stream": streaming}),
+            ),
+            upstream.uri(),
+        );
+        let host = RecordingHost {
+            reject_result: reject,
+            ..RecordingHost::passthrough(request)
+        };
+        let result = if hosted {
+            litellm_host_native::in_process::run_hosted(
+                route.clone().machine(host.request().unwrap(), None),
+                host.runtime(),
+            )
+            .await
+            .map(|_| ())
+        } else {
+            match route.execute(host.request().unwrap(), &host, None).await {
+                Ok(MessagesCallResponse::Complete(_)) => Ok(()),
+                Ok(MessagesCallResponse::Stream { chunks, .. }) => {
+                    chunks.try_collect::<Vec<_>>().await.map(|_| ())
+                }
+                Err(error) => Err(error),
+            }
+        };
+        assert_eq!(
+            result,
+            if reject {
+                Err(Error::Unsupported("result rejected"))
+            } else {
+                Ok(())
+            }
+        );
+        assert_eq!(received(&upstream).await.len(), expected_requests);
+        let facts = host.facts.lock().unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(
+            matches!(facts[0].source, ResultSource::Cache { .. }),
+            cached
+        );
+    }
+}
+
 async fn run_through(host: &RecordingHost) -> Result<MessagesOutput, Error> {
-    litellm_host::in_process::run_hosted(
+    litellm_host_native::in_process::run_hosted(
         machine(Arc::new(RecordingSecrets::empty()))(host.request()?),
         host.runtime(),
     )
@@ -135,6 +238,81 @@ async fn what_before_send_returns_is_what_the_provider_receives(call: MessagesCa
     assert_eq!(request.json()["system"], "added by the host");
     assert_eq!(request.header("x-host"), Some("seen"));
     assert_eq!(request.header("x-api-key"), Some("sk-ant"));
+}
+
+#[rstest]
+#[case::enable(false, json!(true), Some(true))]
+#[case::disable(true, json!(false), Some(false))]
+#[case::null(true, Value::Null, Some(false))]
+#[case::invalid(false, json!("true"), None)]
+#[tokio::test]
+async fn response_mode_follows_the_intercepted_request(
+    call: MessagesCall,
+    traces: TraceCapture,
+    #[case] original_stream: bool,
+    #[case] rewritten_stream: Value,
+    #[case] expected_stream: Option<bool>,
+) {
+    use futures_util::TryStreamExt;
+
+    let sse = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+    let response = if expected_stream == Some(true) {
+        ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
+    } else {
+        message_response()
+    };
+    let upstream = upstream([response]).await;
+    let rewrite = rewritten_stream.clone();
+    let host = RecordingHost::new(
+        authenticated(
+            with_fields(call, json!({"stream": original_stream})),
+            upstream.uri(),
+        ),
+        Box::new(move |wire| {
+            let mut body = wire.body;
+            body["stream"] = rewrite.clone();
+            Ok(WireRequest { body, ..wire })
+        }),
+    );
+    let result = traces
+        .logger()
+        .instrument(async {
+            let output = messages_route(no_secrets())
+                .execute(host.request()?, &host, None)
+                .await?;
+            match output {
+                MessagesCallResponse::Stream { chunks, .. } => {
+                    assert_eq!(expected_stream, Some(true));
+                    assert_eq!(
+                        chunks.try_collect::<Vec<_>>().await?.concat(),
+                        sse.as_bytes()
+                    );
+                }
+                MessagesCallResponse::Complete(message) => {
+                    assert_eq!(expected_stream, Some(false));
+                    assert_eq!(*message, serde_json::from_value(message_body()).unwrap());
+                }
+            }
+            Ok::<_, Error>(())
+        })
+        .await;
+
+    let summaries = traces.summaries("litellm.route");
+    assert_eq!(summaries.len(), 1);
+    let Some(expected_stream) = expected_stream else {
+        assert!(matches!(result, Err(Error::InvalidRequest(_))));
+        assert!(received(&upstream).await.is_empty());
+        assert_eq!(summaries[0]["outcome"], "failure");
+        return;
+    };
+    result.unwrap();
+    assert_eq!(
+        only_request(&upstream).await.json()["stream"],
+        rewritten_stream
+    );
+    assert_eq!(host.raw_responses().len(), usize::from(!expected_stream));
+    assert_eq!(summaries[0]["stream"], expected_stream);
+    assert_eq!(summaries[0]["outcome"], "success");
 }
 
 #[rstest]

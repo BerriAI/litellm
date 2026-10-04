@@ -2,6 +2,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import type { components } from "@/lib/http/schema";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { invalidateTeamQueries } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useQueryClient } from "@tanstack/react-query";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
@@ -47,7 +48,7 @@ import { toast } from "@/lib/toast";
 import { CheckIcon, ChevronDown, CircleMinus, CopyIcon, Info, Pencil, Plus, Save } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useFieldArray } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 import GuardrailsSelect from "./GuardrailsSelect";
 import {
   type CallerEditAccess,
@@ -915,7 +916,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const persistTeamUpdate = async (token: string, updateData: Record<string, unknown>) => {
     await teamUpdateCall(token, updateData);
-    queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+    void queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+    void invalidateTeamQueries(queryClient);
     setIsEditing(false);
   };
 

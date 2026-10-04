@@ -34,11 +34,9 @@ from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
-from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_org_admin_for_team,  # pyright: ignore[reportPrivateUsage]  # same team-admin check /user/new uses
-    _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # same team-admin check /user/new uses
-    validate_budget_duration,
-)
+from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN
+from litellm.proxy.management.teams.dependencies import get_team_access
+from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     _update_internal_new_user_params,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # /user/new defaults; result validated below
     check_if_default_team_set,
@@ -272,8 +270,8 @@ async def _existing_user_conflicts(
     if not user_ids:
         return frozenset(), frozenset()
     table: Final = _user_table(prisma_client)
-    id_filter: Final = {"user_id": {"in": user_ids}}  # mutable-ok: Prisma query filters are dict-shaped
-    email_filter: Final = {"user_email": {"in": emails, "mode": "insensitive"}}  # mutable-ok: Prisma filter
+    id_filter: Final = {"user_id": {"in": user_ids}}
+    email_filter: Final = {"user_email": {"in": emails, "mode": "insensitive"}}
     id_rows: Final = await table.find_many(where=id_filter)
     email_rows: Final = await table.find_many(where=email_filter) if emails else ()
     return (
@@ -285,18 +283,12 @@ async def _existing_user_conflicts(
 async def _load_teams(prisma_client: PrismaClient, team_ids: frozenset[str]) -> Mapping[str, LiteLLM_TeamTable]:
     if not team_ids:
         return MappingProxyType({})
-    rows: Final = await TeamRepository(prisma_client).table.find_many(
-        where={"team_id": {"in": sorted(team_ids)}}  # mutable-ok: Prisma query filters are dict-shaped
-    )
+    rows: Final = await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": sorted(team_ids)}})
     return MappingProxyType({row.team_id: LiteLLM_TeamTable.model_validate(row.model_dump()) for row in rows})
 
 
 async def _team_permission_error(team: LiteLLM_TeamTable, user_api_key_dict: UserAPIKeyAuth) -> str | None:
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
-        return None
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team):
-        return None
-    if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team):
+    if await get_team_access().allows(user_api_key_dict, team, TEAM_OR_ORG_ADMIN):
         return None
     return f"Call not allowed. User not proxy admin OR team admin. team_id={team.team_id}"
 
@@ -344,8 +336,8 @@ def _db_failure(
 
 async def _prepare_user(user: _PendingUser, prisma_client: PrismaClient) -> _PreparedUser | _RowFailure:
     try:
-        dumped: Final = user.request.model_dump(exclude={"user_id"})  # mutable-ok: pydantic IncEx takes a set
-        data: Final = {**dumped, "user_id": user.user_id}  # mutable-ok: /user/new defaults helper mutates in place
+        dumped: Final = user.request.model_dump(exclude={"user_id"})
+        data: Final = {**dumped, "user_id": user.user_id}
         data_json: Final = _JSON_OBJECT.validate_python(_update_internal_new_user_params(data, user.request))
         with_permission: Final = _JSON_OBJECT.validate_python(
             await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
@@ -441,7 +433,7 @@ async def _insert_users(
         verbose_proxy_logger.warning("/user/bulk_new: create_many failed, retrying rows individually", exc_info=True)
         outcome_unknown: Final = PrismaDBExceptionHandler.is_database_infrastructure_error(exc)
     requested: Final = frozenset(payload["user_id"] for payload in payloads)
-    landed_rows: Final = await table.find_many(where={"user_id": {"in": list(requested)}})  # mutable-ok: Prisma filter
+    landed_rows: Final = await table.find_many(where={"user_id": {"in": list(requested)}})
     landed: Final = frozenset(row.user_id for row in landed_rows)
     # create_many is one INSERT: after a lost response the full set is ours, any partial set belongs to another request
     if outcome_unknown and landed == requested:
@@ -569,7 +561,7 @@ async def _write_team_roster(
                 *(Member(user_id=m.user_id, user_email=m.user_email, role=m.role) for m in new_members),
             )
             await _team_tx_db(tx).update(
-                where={"team_id": team.team_id},  # mutable-ok: Prisma query filters are dict-shaped
+                where={"team_id": team.team_id},
                 data=_RosterData(members_with_roles=json.dumps(tuple(member.model_dump() for member in after))),
             )
         return _TeamWrite(
@@ -596,7 +588,7 @@ async def _detach_failed_teams(
     table: Final = _user_table(prisma_client)
     updates: Final = tuple(
         table.update(
-            where={"user_id": user.row.user_id},  # mutable-ok: Prisma query filters are dict-shaped
+            where={"user_id": user.row.user_id},
             data=_TeamsData(teams=landed),
         )
         for user in created
@@ -692,7 +684,7 @@ async def _add_to_organizations(
                 organization_id=organization_id,
                 member=OrgMember(user_id=prepared.row.user_id, role=LitellmUserRoles.INTERNAL_USER),
             ),
-            http_request=Request(scope={"type": "http", "path": "/user/bulk_new"}),  # mutable-ok: ASGI scopes are dicts
+            http_request=Request(scope={"type": "http", "path": "/user/bulk_new"}),
             user_api_key_dict=user_api_key_dict,
         )
 
@@ -716,7 +708,7 @@ async def _write_audit_logs(
     if not created:
         return
     created_ids: Final = sorted(user.row.user_id for user in created)
-    created_filter: Final = {"user_id": {"in": created_ids}}  # mutable-ok: Prisma query filters are dict-shaped
+    created_filter: Final = {"user_id": {"in": created_ids}}
     rows: Final = await _user_table(prisma_client).find_many(where=created_filter)
     outcomes: Final = await _bounded(
         BULK_NEW_USER_CONCURRENCY,

@@ -110,6 +110,7 @@ async fn chat_errors_come_from_core(
             timeout: None,
         },
         &(),
+        None,
     )
     .await
     .unwrap_err();

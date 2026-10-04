@@ -13,13 +13,14 @@ from uuid import uuid4
 import pytest
 
 from litellm.caching.caching import Cache
+from litellm.rust_bridge import _native
 from litellm.types.caching import LiteLLMCacheType
 from tests.test_litellm_rust.support.cache import (
-    CacheTestHandle,
     CacheTestResolver,
+    activate_native,
     assert_native_runtime,
+    native_runtime,
     request,
-    require_rust,
 )
 
 pytestmark: Final = pytest.mark.requires_rust_extension
@@ -111,13 +112,7 @@ def test_qdrant_semantic_facade_binds_native_and_shares_entries(qdrant_url: str,
         {"timestamp": time.time(), "response": json.dumps({"id": "py"})},
         messages=messages,
     )
-    handle: Final = CacheTestHandle.qdrant_semantic(
-        qdrant_url,
-        collection_name=collection,
-        similarity_threshold=0.99,
-        vector_size=8,
-    )
-    handle._bind_facade(facade)
+    activate_native(facade)
     binding: Final = CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     assert binding.kind == "native"
     assert binding.lookup(qdrant_request("python-key", messages)) == {"id": "py"}
@@ -137,13 +132,7 @@ async def test_qdrant_semantic_async_parity(qdrant_url: str, fake_embedding_endp
     messages: Final = [{"role": "user", "content": "async prompt"}]
     collection: Final = f"cache_{uuid4().hex}"
     facade: Final = qdrant_facade(qdrant_url, collection)
-    handle: Final = CacheTestHandle.qdrant_semantic(
-        qdrant_url,
-        collection_name=collection,
-        similarity_threshold=0.99,
-        vector_size=8,
-    )
-    handle._bind_facade(facade)
+    activate_native(facade)
     binding: Final = CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     await facade.cache.async_set_cache(
         "python-key",
@@ -161,13 +150,7 @@ async def test_qdrant_semantic_async_store_batch_shares_entries(qdrant_url: str,
     del fake_embedding_endpoint
     collection: Final = f"cache_{uuid4().hex}"
     facade: Final = qdrant_facade(qdrant_url, collection)
-    handle: Final = CacheTestHandle.qdrant_semantic(
-        qdrant_url,
-        collection_name=collection,
-        similarity_threshold=0.99,
-        vector_size=8,
-    )
-    handle._bind_facade(facade)
+    activate_native(facade)
     binding: Final = CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     entries: Final = [
         qdrant_request("batch-one", [{"role": "user", "content": "first batch prompt"}]),
@@ -192,13 +175,7 @@ async def test_qdrant_semantic_malformed_entries_and_unsupported_operations(
     messages: Final = [{"role": "user", "content": "malformed prompt"}]
     collection: Final = f"cache_{uuid4().hex}"
     facade: Final = qdrant_facade(qdrant_url, collection)
-    handle: Final = CacheTestHandle.qdrant_semantic(
-        qdrant_url,
-        collection_name=collection,
-        similarity_threshold=0.99,
-        vector_size=8,
-    )
-    handle._bind_facade(facade)
+    activate_native(facade)
     binding: Final = CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     key: Final = "malformed-key"
     response: Final = {
@@ -233,13 +210,7 @@ def test_qdrant_semantic_ignores_request_expiry(qdrant_url: str, fake_embedding_
     messages: Final = [{"role": "user", "content": "persistent prompt"}]
     collection: Final = f"cache_{uuid4().hex}"
     facade: Final = qdrant_facade(qdrant_url, collection)
-    handle: Final = CacheTestHandle.qdrant_semantic(
-        qdrant_url,
-        collection_name=collection,
-        similarity_threshold=0.99,
-        vector_size=8,
-    )
-    handle._bind_facade(facade)
+    activate_native(facade)
     binding: Final = CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     binding.store(qdrant_request("persistent-key", messages, ttl_seconds=1.0), {"id": "persistent"})
     time.sleep(1.2)
@@ -249,37 +220,34 @@ def test_qdrant_semantic_ignores_request_expiry(qdrant_url: str, fake_embedding_
     assert python_value["response"] == {"id": "persistent"}
 
 
-def test_qdrant_semantic_mutation_and_projection_fallback(qdrant_url: str, fake_embedding_endpoint: str) -> None:
+def test_qdrant_runtime_declines_mutation_and_unsupported_configuration(
+    qdrant_url: str, fake_embedding_endpoint: str
+) -> None:
     del fake_embedding_endpoint
     collection: Final = f"cache_{uuid4().hex}"
     facade: Final = qdrant_facade(qdrant_url, collection)
-    handle: Final = CacheTestHandle.qdrant_semantic(
-        qdrant_url,
-        collection_name=collection,
-        similarity_threshold=0.99,
-        vector_size=8,
-    )
-    handle._bind_facade(facade)
+    activate_native(facade)
     facade.cache.qdrant_api_key = "rotated"
-    assert CacheTestResolver(SimpleNamespace(cache=facade)).resolve().kind == "python_callback"
+    with pytest.raises(_native.RustBridgeDeclined):
+        CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     facade.cache.similarity_threshold = 0.5
-    assert CacheTestResolver(SimpleNamespace(cache=facade)).resolve().kind == "python_callback"
+    with pytest.raises(_native.RustBridgeDeclined):
+        CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     unsupported: Final = qdrant_facade(qdrant_url, f"cache_{uuid4().hex}")
     unsupported.cache.embedding_max_input_tokens = 100
-    with pytest.raises(TypeError, match="requires Python"):
-        handle._bind_facade(unsupported)
+    with pytest.raises(_native.RustBridgeDeclined, match="requires Python"):
+        native_runtime(unsupported)
     unsupported.cache.embedding_max_input_tokens = None
     unsupported.cache.qdrant_api_base = "http://127.0.0.1:7777"
-    with pytest.raises(TypeError, match="gRPC"):
-        handle._bind_facade(unsupported)
+    with pytest.raises(_native.RustBridgeDeclined, match="gRPC"):
+        native_runtime(unsupported)
 
 
-def test_qdrant_semantic_rust_required_rule_activates_natively(
+def test_qdrant_semantic_explicit_selection_activates_natively(
     qdrant_url: str, fake_embedding_endpoint: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     del fake_embedding_endpoint
-    require_rust(monkeypatch, LiteLLMCacheType.QDRANT_SEMANTIC)
-    facade: Final = qdrant_facade(qdrant_url, f"cache_{uuid4().hex}")
+    facade: Final = activate_native(qdrant_facade(qdrant_url, f"cache_{uuid4().hex}"))
     assert_native_runtime(facade)
     kwargs: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": "qdrant activation"}]}
     facade.add_cache({"answer": "qdrant"}, **kwargs)

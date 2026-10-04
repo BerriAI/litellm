@@ -111,9 +111,7 @@ def _with_instruction_items_folded(
     joined: Final = "\n\n".join(chunk for chunk in (instructions, *folded.values()) if chunk)
     return (
         instructions if not folded else joined or None,
-        [  # mutable-ok: the base class takes the input items as a list
-            _developer_item_as_system(item) for index, item in enumerate(items) if index not in folded
-        ],
+        [_developer_item_as_system(item) for index, item in enumerate(items) if index not in folded],
     )
 
 
@@ -136,7 +134,7 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             {"Content-Type": "application/json", **headers, "Authorization": f"Bearer {api_key}"}
         )
         pinned: Final = with_fireworks_session_affinity(authorized, _session_params(params))
-        return dict(pinned)  # mutable-ok: the HTTP handler updates the returned headers in place
+        return dict(pinned)
 
     def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         base: Final = (api_base or get_secret_str("FIREWORKS_API_BASE") or FIREWORKS_AI_DEFAULT_API_BASE).rstrip("/")
@@ -158,7 +156,7 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             else (instructions_param, _developer_items_as_system(validated_input))
         )
         instruction_entries: Final = () if instructions is None else (("instructions", instructions),)
-        folded_params: Final = {  # mutable-ok: the base class takes the optional params as a dict
+        folded_params: Final = {
             key: value
             for key, value in (
                 *((key, value) for key, value in response_api_optional_request_params.items() if key != "instructions"),

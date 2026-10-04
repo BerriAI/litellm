@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { SimpleTooltip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/http/client";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
@@ -52,15 +52,17 @@ const Metric: React.FC<{ label: string; value: string; hint?: string }> = ({ lab
   </Card>
 );
 
-const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?: boolean }> = ({
+const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?: boolean; tooltip?: string }> = ({
   label,
   value,
   hint,
   subdued,
+  tooltip,
 }) => (
   <dl className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 py-2">
     <dt className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-sm text-muted-foreground">
       {label}
+      {tooltip && <SimpleTooltip content={tooltip} />}
       {hint && <span className="text-xs">{hint}</span>}
     </dt>
     <dd
@@ -73,14 +75,15 @@ const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?
 
 const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
   const stats = view.stats;
-  const cheaper = stats.saved_spend != null && stats.saved_spend >= 0;
-  const completeCoverage = stats.savings_estimated_turns === stats.turns;
+  const cheaper = stats.saved_pct != null && stats.saved_pct >= 0;
+  const classifierCost = stats.baseline_spend == null ? null : stats.savings_estimated_classifier_cost ?? null;
+  const comparedAll = stats.savings_estimated_turns === stats.turns;
   return (
     <Card className="overflow-hidden py-0">
       <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="flex flex-col items-center justify-center gap-2 p-6">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            {completeCoverage ? "Total estimated savings" : "Estimated savings on covered turns"}
+            Total estimated savings
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
             <p className="min-w-0 break-all text-center text-4xl font-semibold tracking-tight text-foreground xl:text-6xl">
@@ -91,53 +94,58 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
                 variant="secondary"
                 className={`h-6 px-2.5 text-sm ${cheaper ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}`}
               >
-                {stats.saved_spend !== 0 && (cheaper ? "-" : "+")}
+                {stats.saved_pct !== 0 && (cheaper ? "-" : "+")}
                 {Math.abs(stats.saved_pct).toFixed(0)}%
               </Badge>
             )}
           </div>
-          <p className="text-center text-xs text-muted-foreground">
-            {stats.savings_estimated_turns.toLocaleString()} of {stats.turns.toLocaleString()} turns estimated
-          </p>
-          {!completeCoverage && (
+          {stats.baseline_spend != null && !comparedAll && (
             <p className="text-center text-xs text-muted-foreground">
-              Turns without a current estimate are excluded, including older estimates.
+              Compared on {stats.savings_estimated_turns.toLocaleString()} of {stats.turns.toLocaleString()} requests;
+              adaptive and quality routers are excluded
+            </p>
+          )}
+          {stats.unattributed_saved_spend != null && (
+            <p className="text-center text-xs text-muted-foreground">
+              Per-router records differ from recorded savings by {usd(Math.abs(stats.unattributed_saved_spend))}, for
+              example history from before per-router tracking, so the baseline comparison is unavailable
             </p>
           )}
         </div>
 
         <div className="flex flex-col justify-center border-t p-6 md:border-t-0 md:border-l">
-          <SpendRow label="Actual auto-router spend" value={usd(stats.spend)} />
+          <SpendRow
+            label="Actual auto-router spend"
+            value={stats.baseline_spend == null ? "Unavailable" : usd(stats.savings_estimated_actual_spend)}
+            tooltip="Auto-routed spend in the range, including classification costs, for complexity routers. Adaptive and quality routers are excluded. Baseline is this spend plus recorded savings."
+          />
           <div className="mb-3 border-l-2 pl-4">
             <SpendRow
               subdued
               label="LLM spend"
-              value={stats.classifier_cost == null ? "Unavailable" : usd(stats.spend - stats.classifier_cost)}
+              value={
+                classifierCost == null ? "Unavailable" : usd(stats.savings_estimated_actual_spend - classifierCost)
+              }
             />
             <SpendRow
               subdued
               label="Classification cost"
-              value={stats.classifier_cost == null ? "Unavailable" : usd(stats.classifier_cost)}
+              value={classifierCost == null ? "Unavailable" : usd(classifierCost)}
               hint={
-                stats.classifier_cost == null
+                classifierCost == null
                   ? undefined
-                  : classificationRatePer1kTurns(stats.classifier_cost, stats.turns)
+                  : classificationRatePer1kTurns(classifierCost, stats.savings_estimated_turns)
               }
             />
           </div>
-          {stats.classifier_cost == null && (
+          {stats.baseline_spend != null && classifierCost == null && (
             <p className="mb-3 text-xs text-muted-foreground">
               Breakdown unavailable because some usage predates classification-cost tracking.
             </p>
           )}
           <Separator />
-          {!completeCoverage && (
-            <SpendRow label="Actual spend on covered turns" value={usd(stats.savings_estimated_actual_spend)} />
-          )}
           <SpendRow
-            label={
-              completeCoverage ? "Estimated spend at highest-tier model" : "Estimated baseline spend on covered turns"
-            }
+            label="Estimated baseline spend"
             value={stats.baseline_spend == null ? "Unavailable" : usd(stats.baseline_spend)}
           />
         </div>
@@ -295,25 +303,34 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
 
       <TierTurnsChart view={view} autoRouters={autoRouters} />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Metric
-          label="Avg saved per session"
-          value={stats.saved_per_session == null ? "Unavailable" : usd(stats.saved_per_session)}
-          hint={`· ${stats.sessions.toLocaleString()} sessions`}
-        />
-        <Metric label="Avg turns per session" value={stats.avg_turns_per_session.toFixed(1)} />
-        <Metric label="Avg session length" value={durationLabel(stats.avg_session_seconds)} />
-        <Metric label="Avg tokens per session" value={formatNumberWithCommas(stats.avg_tokens_per_session, 1, true)} />
-      </div>
+      <p className="text-xs text-muted-foreground">
+        Savings and spend count requests on the selected UTC days. Actual spend covers every request on complexity
+        routers, including LLM classification cost. Baseline is actual spend plus recorded savings, so savings can be
+        zero or negative.
+      </p>
 
       <p className="text-xs text-muted-foreground">
-        Compares covered turns with the estimated cost of using the router&apos;s highest-tier baseline model. Estimates
-        use registered requests since tracking began, matching cache prefixes and expiry, and the actual response
-        length. Total actual spend includes every turn; savings and baseline spend include only turns with a current
-        estimate, including turns with zero savings. Savings are net of recorded LLM classification cost. Classification
-        cost per 1K turns is averaged over all auto-router turns, including those that skip classification. The range
-        counts whole sessions that overlap it, so totals can differ from savings views that group usage by UTC day.
+        Session metrics cover every session that overlaps the range, including its turns outside the range.
       </p>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Metric
+          label="Avg turns per session"
+          value={stats.avg_turns_per_session == null ? "Unavailable" : stats.avg_turns_per_session.toFixed(1)}
+          hint={`· ${stats.sessions.toLocaleString()} sessions`}
+        />
+        <Metric
+          label="Avg session length"
+          value={stats.avg_session_seconds == null ? "Unavailable" : durationLabel(stats.avg_session_seconds)}
+        />
+        <Metric
+          label="Avg tokens per session"
+          value={
+            stats.avg_tokens_per_session == null
+              ? "Unavailable"
+              : formatNumberWithCommas(stats.avg_tokens_per_session, 1, true)
+          }
+        />
+      </div>
 
       <div className="space-y-4">
         <div className="flex flex-wrap items-baseline gap-2">
