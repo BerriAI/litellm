@@ -11,18 +11,28 @@ import type { Review } from "../../model/types";
 
 const LIMIT = 200;
 const RED = "text-[#e5484d]";
-const ROW = "grid h-9 w-full grid-cols-[0.75rem_minmax(0,8rem)_minmax(0,1fr)_auto] items-center gap-2 px-2 text-left text-[12px]";
+const ROW =
+  "grid h-9 w-full grid-cols-[0.75rem_minmax(0,8rem)_minmax(0,1fr)_auto] items-center gap-2 px-2 text-left text-[12px]";
 
 function Expanded({ review }: { review: Review }) {
   const verdicts = review.verdicts.length
     ? review.verdicts
-    : [{ check_id: "", kind: "pattern" as const, summary: review.cannot_assess ? "Not enough evidence to judge" : "No issue observed" }];
+    : [
+        {
+          check_id: "",
+          kind: "pattern" as const,
+          summary: review.cannot_assess ? "Not enough evidence to judge" : "No issue observed",
+        },
+      ];
   return (
     <div className="flex flex-col gap-1.5 px-7 pt-0.5 pb-2.5 text-[12px] leading-relaxed">
       {review.reasoning && <p className="text-muted-foreground">{briefReasoning(review.reasoning)}</p>}
       <ul className="flex flex-col gap-1">
         {verdicts.map((verdict, index) => (
-          <li key={`${verdict.check_id}-${index}`} className={cn("flex gap-2", verdict.kind === "issue" ? RED : "text-foreground")}>
+          <li
+            key={`${verdict.check_id}-${index}`}
+            className={cn("flex gap-2", verdict.kind === "issue" ? RED : "text-foreground")}
+          >
             <span
               aria-hidden="true"
               className={cn(
@@ -38,7 +48,17 @@ function Expanded({ review }: { review: Review }) {
   );
 }
 
-function DoneRow({ review, now, open, onToggle }: { review: Review; now: number; open: boolean; onToggle: () => void }) {
+function DoneRow({
+  review,
+  now,
+  open,
+  onToggle,
+}: {
+  review: Review;
+  now: number;
+  open: boolean;
+  onToggle: () => void;
+}) {
   const result = outcome(review);
   return (
     <>

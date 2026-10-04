@@ -24,7 +24,12 @@ export type QueueReason =
 
 type QueuedJob = Pick<Job, "id" | "worker_id" | "created_at">;
 
-function workerTasks(job: QueuedJob, lenses: readonly Pick<Lens, "id" | "jobs" | "settings">[], workerIds: ReadonlySet<string>, now: number) {
+function workerTasks(
+  job: QueuedJob,
+  lenses: readonly Pick<Lens, "id" | "jobs" | "settings">[],
+  workerIds: ReadonlySet<string>,
+  now: number,
+) {
   return lenses.flatMap((lens) =>
     lens.jobs
       .filter((other) => other.status === "running" && other.id !== job.id && workerIds.has(other.worker_id ?? ""))

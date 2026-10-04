@@ -356,7 +356,10 @@ function demoLensApi(data: LensDemoData): LensApi {
     run: (lensId, jobId) => found(jobs(lensId)?.find((job) => job.id === jobId)),
     reviews: async (lensId, jobId, after) => {
       const job = await found(jobs(lensId)?.find((item) => item.id === jobId));
-      return { reviews: job.reviews.slice(Math.max(0, after - (job.reviewed - job.reviews.length))), reviewed: job.reviewed };
+      return {
+        reviews: job.reviews.slice(Math.max(0, after - (job.reviewed - job.reviews.length))),
+        reviewed: job.reviewed,
+      };
     },
     execution: notInDemo,
     sample: notInDemo,

@@ -11,7 +11,15 @@ import { useNow } from "@/hooks/useNow";
 import { cn } from "@/lib/cva.config";
 
 import { money } from "../../model/format";
-import { newestFirst, outcome, providerOf, reviewKey, shortVerdict, type IssueCount, type StripState } from "../../model/live";
+import {
+  newestFirst,
+  outcome,
+  providerOf,
+  reviewKey,
+  shortVerdict,
+  type IssueCount,
+  type StripState,
+} from "../../model/live";
 import type { Review } from "../../model/types";
 
 const RECENT = 3;

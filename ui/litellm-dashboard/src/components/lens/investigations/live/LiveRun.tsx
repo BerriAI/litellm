@@ -3,14 +3,7 @@
 import { useState } from "react";
 
 import { modelsUsed } from "../../model/inbox";
-import {
-  analysisModel,
-  doneLine,
-  inFlight,
-  issueCount,
-  nowLine,
-  stripState,
-} from "../../model/live";
+import { analysisModel, doneLine, inFlight, issueCount, nowLine, stripState } from "../../model/live";
 import { queueReasonText } from "../../model/status";
 import type { Job, Review } from "../../model/types";
 import { QueueReasonText, WorkerTasks } from "../QueueReasonText";
@@ -85,7 +78,9 @@ export function LiveRun({
         done={job.status === "completed" ? doneLine(job) : null}
         slots={Math.max(1, Math.min(job.settings.concurrency, MAX_LANES))}
         checks={job.settings.checks}
-        scope={job.reviewed > reviews.length ? `From the latest ${reviews.length} of ${job.reviewed} reviewed traces` : ""}
+        scope={
+          job.reviewed > reviews.length ? `From the latest ${reviews.length} of ${job.reviewed} reviewed traces` : ""
+        }
         waiting={waiting}
       />
     </>

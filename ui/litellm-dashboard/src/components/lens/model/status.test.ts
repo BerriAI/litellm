@@ -136,7 +136,11 @@ describe("Why a run is queued", () => {
     const free = { ...worker, id: "w2" };
     const elsewhere = [running("swarm", "w2", 200)];
     expect(queueReason({ ...queued, worker_id: "w1" }, elsewhere, [worker, free], now).kind).toBe("starting");
-    const self = { id: "mine", settings: job.settings, jobs: [{ ...queued, status: "running" as const, worker_id: "w1" }] };
+    const self = {
+      id: "mine",
+      settings: job.settings,
+      jobs: [{ ...queued, status: "running" as const, worker_id: "w1" }],
+    };
     expect(queueReason(queued, [self], [worker], now).kind).toBe("starting");
   });
 

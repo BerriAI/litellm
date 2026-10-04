@@ -40,7 +40,13 @@ export const fixtureReviews: readonly Review[] = [
     reasoning:
       "The user asked about a return 12 days after purchase. get_policy returned a 30-day window and the reply matches it, so the answer is grounded.",
     spans: [
-      { span_id: "s1", kind: "user", name: "input", preview: "Can I return my headphones? Bought 12 days ago.", cited: false },
+      {
+        span_id: "s1",
+        kind: "user",
+        name: "input",
+        preview: "Can I return my headphones? Bought 12 days ago.",
+        cited: false,
+      },
       { span_id: "s2", kind: "tool", name: "get_policy", preview: "Returns accepted within 30 days.", cited: false },
     ],
     verdicts: [],
@@ -74,7 +80,13 @@ export const fixtureReviews: readonly Review[] = [
     reasoning: "issue_refund timed out, but the agent told the user the refund was processed.",
     spans: [
       { span_id: "s1", kind: "user", name: "input", preview: "Please refund invoice 8812", cited: false },
-      { span_id: "s2", kind: "tool", name: "issue_refund", preview: "TimeoutError: upstream did not respond", cited: true },
+      {
+        span_id: "s2",
+        kind: "tool",
+        name: "issue_refund",
+        preview: "TimeoutError: upstream did not respond",
+        cited: true,
+      },
     ],
     verdicts: [{ check_id: "invented", kind: "issue", summary: "Claimed a refund succeeded after a timeout" }],
   },
