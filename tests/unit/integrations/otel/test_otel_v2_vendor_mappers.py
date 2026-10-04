@@ -6,6 +6,7 @@ backends, so one trace lights up every configured destination.
 """
 
 import json
+import time
 from collections.abc import Mapping
 from itertools import chain
 from typing import Final
@@ -345,6 +346,163 @@ def test_openinference_metadata_contains_only_promoted_metadata():
     )
     assert json.loads(attrs["metadata"]) == {"trace_marker": "m", "user_api_key_alias": "k"}
     assert "metadata" not in OpenInferenceMapper().map(_llm_call())
+
+
+def _long_prompt_messages(count: int) -> tuple[dict[str, str], ...]:
+    return tuple({"role": "user" if i == 0 else "assistant", "content": f"turn {i}"} for i in range(count))
+
+
+def _input_message_keys(attrs: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(key for key in attrs if key.startswith("llm.input_messages."))
+
+
+def test_openinference_metadata_does_not_displace_indexed_messages_under_budget():
+    """The ``metadata`` blob rides in reclaimed slots instead of evicting messages.
+
+    ``metadata`` competes for the OTel 128-attribute span budget, and shedding
+    happens before ``span.set_attribute``, so the SDK's dropped-attributes
+    counter stays at zero — the eviction is invisible. The fit pins the
+    metadata key behind every message group: a squeezed span keeps the message
+    attributes it would keep without the metadata blob (at whole-group
+    granularity, at most one group of headroom difference), and the metadata
+    key survives alongside them.
+    """
+    messages: Final = _long_prompt_messages(62)
+
+    def fitted(promoted: Mapping[str, str], budget: int | None = None):
+        mapped: Final = OpenInferenceMapper().map(_llm_call(messages_in=messages, promoted_metadata=promoted))
+        assert len(mapped) > 128, "fixture must squeeze the span attribute budget"
+        return fit_indexed_messages(mapped, budget if budget is not None else len(mapped) - 5)
+
+    without_metadata: Final = fitted({})
+    with_metadata: Final = fitted({"user_api_key_alias": "edge-key"})
+    assert "metadata" not in without_metadata
+    assert json.loads(with_metadata["metadata"]) == {"user_api_key_alias": "edge-key"}
+    assert _input_message_keys(with_metadata) == _input_message_keys(without_metadata)
+
+    # Against the absolute span limit the displacement is bounded by the
+    # whole-group shedding granularity: at most one message group.
+    without_at_limit: Final = fitted({}, 128)
+    with_at_limit: Final = fitted({"user_api_key_alias": "edge-key"}, 128)
+    assert len(_input_message_keys(with_at_limit)) >= len(_input_message_keys(without_at_limit)) - 2
+    assert "metadata" in with_at_limit
+
+
+def test_openinference_metadata_sheds_only_after_every_indexed_message():
+    """Metadata sheds last: only once every indexed message attribute is gone."""
+    mapped: Final = OpenInferenceMapper().map(
+        _llm_call(messages_in=_long_prompt_messages(6), promoted_metadata={"user_api_key_alias": "edge-key"})
+    )
+    message_keys: Final = frozenset(key for key in mapped if ".message." in key)
+    # Budget too small for the message family alone: everything indexed goes,
+    # and the metadata blob absorbs the residual shortfall with it.
+    starved: Final = fit_indexed_messages(mapped, len(mapped) - len(message_keys) - 1)
+    assert not any(key in starved for key in message_keys)
+    assert "metadata" not in starved
+    # One slot more and metadata survives alongside zero indexed messages.
+    last_standing: Final = fit_indexed_messages(mapped, len(mapped) - len(message_keys))
+    assert not any(key in last_standing for key in message_keys)
+    assert "metadata" in last_standing
+
+
+def test_openinference_raw_tool_arguments_fall_back_to_repr_instead_of_raising():
+    """Malformed Python tool arguments must not lose the span.
+
+    A plain ``Function()`` constructor JSON-serializes arguments, but provider
+    adapters and ``model_construct`` responses hand over raw Python objects —
+    tuple-keyed dicts and cycles that ``json.dumps`` raises on. The mapper
+    serializes them with a ``repr`` fallback instead of letting the exception
+    escape before the span is exported.
+    """
+    # rebind-ok: a self-referencing dict cannot be built in one shot — the cycle
+    # only exists once the finished dict is inserted into itself.
+    circular: dict[str, object] = {}
+    circular["self"] = circular
+    for label, raw_arguments in (("tuple-key", {(1, 2): "v"}), ("circular", circular)):
+        data: Final = _llm_call(
+            choices_out=(
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {"id": "tc1", "type": "function", "function": {"name": "f", "arguments": raw_arguments}}
+                        ],
+                    },
+                },
+            )
+        )
+        attrs: Final = OpenInferenceMapper().map(data)
+        assert (
+            attrs["llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments"] == repr(raw_arguments)
+        ), label
+        assert attrs["llm.output_messages.0.message.role"] == "assistant"
+
+
+def test_openinference_payload_tool_arguments_with_raw_objects_map_without_raising():
+    """The standard-logging payload path (provider adapter responses) survives raw argument objects too."""
+    payload: Final = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "prompt_tokens": 3,
+        "completion_tokens": 2,
+        "total_tokens": 5,
+        "stream": False,
+        "model_parameters": {},
+        "response": {
+            "id": "resp_bad",
+            "model": "gpt-4o-2024",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": "hi",
+                        "tool_calls": [
+                            {"id": "tc1", "type": "function", "function": {"name": "f", "arguments": {(1, 2): "v"}}}
+                        ],
+                    },
+                }
+            ],
+        },
+        "metadata": {"user_api_key_alias": "edge-key"},
+        "status": "success",
+        "litellm_call_id": "call_raw_args",
+        "hidden_params": {},
+    }
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        payload, capture_content=True, metadata_keys=("user_api_key_alias",)
+    )
+    attrs: Final = OpenInferenceMapper().map(data)
+    arguments: Final = attrs["llm.output_messages.0.message.tool_calls.0.tool_call.function.arguments"]
+    assert arguments == repr({(1, 2): "v"})
+    assert json.loads(attrs["metadata"]) == {"user_api_key_alias": "edge-key"}
+
+
+def test_openinference_attribute_fit_stays_linear_on_long_prompts():
+    """Attribute fitting is linear in the message count, not quadratic.
+
+    Rescanning the full group map once per message made the fit quadratic in
+    the prompt length (~1.9s of callback time at 8000 messages); indexing the
+    groups once keeps it in milliseconds. The bound sits far above the linear
+    runtime so it cannot flake on slow runners, while the quadratic path
+    exceeds it several times over.
+    """
+    messages: Final = _long_prompt_messages(4000)
+    mapped: Final = OpenInferenceMapper().map(
+        _llm_call(messages_in=messages, promoted_metadata={"user_api_key_alias": "k"})
+    )
+    started: Final = time.perf_counter()
+    fitted: Final = fit_indexed_messages(mapped, 128)
+    elapsed: Final = time.perf_counter() - started
+
+    assert elapsed < 0.25
+    assert len(fitted) <= 128
+    assert fitted["llm.input_messages.0.message.role"] == "user"
+    assert fitted["llm.input_messages.3999.message.role"] == "assistant"
 
 
 # --------------------------------------------------------------------------- #

@@ -159,7 +159,7 @@ def _message_tool_call(value: object) -> MessageToolCall | None:
     arguments: Final = (
         raw_arguments
         if isinstance(raw_arguments, str)
-        else json.dumps(raw_arguments, default=str)
+        else _stringify_tool_arguments(raw_arguments)
         if raw_arguments is not None
         else None
     )
@@ -171,3 +171,17 @@ def _message_tool_call(value: object) -> MessageToolCall | None:
         name=name if isinstance(name, str) else None,
         arguments=arguments,
     )
+
+
+def _stringify_tool_arguments(value: object) -> str:
+    """Serialize non-string tool-call arguments, falling back to ``repr``.
+
+    Arguments normally arrive as already-JSON strings, but provider adapters and
+    ``model_construct`` responses hand over raw Python objects. ``json.dumps``
+    raises on those (tuple-keyed dicts, cycles) and the escaping exception would
+    lose the whole span, so keep a readable ``repr`` instead.
+    """
+    try:
+        return json.dumps(value, default=str)
+    except (TypeError, ValueError):
+        return repr(value)
