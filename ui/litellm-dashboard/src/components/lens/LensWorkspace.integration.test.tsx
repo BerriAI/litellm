@@ -26,7 +26,8 @@ describe("Lens interactive demo", () => {
       onUrlUpdate,
     });
     expect(await screen.findByRole("heading", { name: "The gateway that helps your agents improve" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Preview sample" }));
+    expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Explore with sample data" }));
     expect(await screen.findByText("Where is order #1042?")).toBeVisible();
     expect(screen.getByText("You’re viewing demo data")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Set up tracing" })).not.toBeInTheDocument();
@@ -58,8 +59,7 @@ describe("Lens interactive demo", () => {
       searchParams: "?tab=investigations",
       onUrlUpdate,
     });
-    await screen.findByRole("button", { name: "Preview sample" });
-    await user.click(screen.getByRole("button", { name: "Preview sample" }));
+    await user.click(await screen.findByRole("button", { name: "Explore with sample data" }));
     await user.click(await screen.findByRole("tab", { name: "Findings" }));
     network.mockClear();
     await user.click(await screen.findByRole("row", { name: /Repeated lookups leave customers without an answer/ }));
@@ -111,7 +111,7 @@ describe("Lens interactive demo", () => {
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
   });
 
-  it("shows the header preview only for the active tab that still needs setup", async () => {
+  it("offers sample data in the main panel only for the active tab that needs setup", async () => {
     const user = userEvent.setup();
     const saved = createLensDemoData().lenses[0];
     network.mockImplementation(async (input) => {
@@ -122,13 +122,14 @@ describe("Lens interactive demo", () => {
       return Response.json({ data: [], traces: false, requests: false });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />);
-    expect(await screen.findByRole("button", { name: "Preview sample" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Explore with sample data" })).toBeVisible();
     const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
     await user.click(tabs.getByRole("tab", { name: "Investigations" }));
     expect(await screen.findByRole("row", { name: new RegExp(saved.settings.name) })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Explore with sample data" })).not.toBeInTheDocument();
     await user.click(tabs.getByRole("tab", { name: "Traces" }));
-    await user.click(await screen.findByRole("button", { name: "Preview sample" }));
+    await user.click(await screen.findByRole("button", { name: "Explore with sample data" }));
     expect(await screen.findByRole("table", { name: "Agent runs" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
   });

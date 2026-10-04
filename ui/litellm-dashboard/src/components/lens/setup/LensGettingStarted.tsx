@@ -9,7 +9,6 @@ import { lensQueries } from "../api/queries";
 import { useSaveLens } from "../api/mutations";
 import { useLensApi } from "../services";
 import { TraceSheet } from "../investigations/TraceSheet";
-import { LensPreviewButton } from "../LensPreviewButton";
 import { useAnalysisKeyInfo } from "./worker/AnalysisKeyDetails";
 import { WorkerDialog } from "./worker/WorkerDialog";
 import { InvestigationSetupDialog } from "./InvestigationSetupDialog";
@@ -65,8 +64,7 @@ export function LensGettingStarted({
   };
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-10 py-5 sm:space-y-12 sm:py-7">
-      {onDemo && <LensPreviewButton onClick={onDemo} />}
+    <div className="mx-auto w-full max-w-7xl space-y-8 py-3 sm:space-y-10 sm:py-4">
       <LensIntroduction onStart={start} onDemo={onDemo} />
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_280px] xl:gap-8">
         <section

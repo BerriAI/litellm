@@ -1,0 +1,18 @@
+.flow {
+  animation: gateway-flow 10s linear infinite;
+}
+
+@keyframes gateway-flow {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(240px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow {
+    animation: none;
+  }
+}
