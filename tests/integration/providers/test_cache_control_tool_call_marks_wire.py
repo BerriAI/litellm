@@ -593,9 +593,10 @@ def test_openai_sdk_sync_chat_keeps_the_capped_request_within_the_cap(gateway: G
     marker: Final = new_marker()
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
         model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
-        completion: Final = _openai_client(gateway).chat.completions.create(
-            model=model, messages=_sdk_messages(marker), tools=_SDK_TOOLS, max_tokens=64
-        )
+        with _openai_client(gateway) as client:
+            completion: Final = client.chat.completions.create(
+                model=model, messages=_sdk_messages(marker), tools=_SDK_TOOLS, max_tokens=64
+            )
         assert completion.choices[0].message.content == "sunny", completion.model_dump()
         assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
     assert gateway_injected(completion.id) is False
@@ -605,10 +606,11 @@ async def test_openai_sdk_async_chat_stream_keeps_the_capped_request_within_the_
     marker: Final = new_marker()
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
         model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
-        stream: Final = await _async_openai_client(gateway).chat.completions.create(
-            model=model, messages=_sdk_messages(marker), tools=_SDK_TOOLS, max_tokens=64, stream=True
-        )
-        chunks: Final = [chunk async for chunk in stream]
+        async with _async_openai_client(gateway) as client:
+            stream: Final = await client.chat.completions.create(
+                model=model, messages=_sdk_messages(marker), tools=_SDK_TOOLS, max_tokens=64, stream=True
+            )
+            chunks: Final = [chunk async for chunk in stream]
         assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "sunny", chunks
         assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
     assert gateway_injected(chunks[0].id) is False
@@ -630,13 +632,14 @@ def test_anthropic_sdk_sync_messages_keeps_the_capped_request_within_the_cap(gat
     marker: Final = new_marker()
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
         model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
-        message: Final = _anthropic_client(gateway).messages.create(
-            model=model,
-            max_tokens=64,
-            system=_messages_system(model, marker),
-            tools=_messages_tools(model, marker),
-            messages=_messages_turns(model, marker),
-        )
+        with _anthropic_client(gateway) as client:
+            message: Final = client.messages.create(
+                model=model,
+                max_tokens=64,
+                system=_messages_system(model, marker),
+                tools=_messages_tools(model, marker),
+                messages=_messages_turns(model, marker),
+            )
         assert message.id == f"msg_{marker}", message.model_dump()
         assert [block.text for block in message.content if block.type == "text"] == ["sunny"], message.model_dump()
         assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
@@ -647,15 +650,16 @@ async def test_anthropic_sdk_async_messages_stream_keeps_the_capped_request_with
     marker: Final = new_marker()
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
         model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
-        stream: Final = await _async_anthropic_client(gateway).messages.create(
-            model=model,
-            max_tokens=64,
-            system=_messages_system(model, marker),
-            tools=_messages_tools(model, marker),
-            messages=_messages_turns(model, marker),
-            stream=True,
-        )
-        events: Final = [event async for event in stream]
+        async with _async_anthropic_client(gateway) as client:
+            stream: Final = await client.messages.create(
+                model=model,
+                max_tokens=64,
+                system=_messages_system(model, marker),
+                tools=_messages_tools(model, marker),
+                messages=_messages_turns(model, marker),
+                stream=True,
+            )
+            events: Final = [event async for event in stream]
         assert [event.type for event in events][-1] == "message_stop", events
         starts: Final = [event for event in events if event.type == "message_start"]
         assert [start.message.id for start in starts] == [f"msg_{marker}"], events
@@ -668,13 +672,14 @@ async def test_openai_sdk_async_responses_keeps_system_and_user_marks_within_the
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
         model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
         body: Final = responses_body(model, marker)
-        response: Final = await _async_openai_client(gateway).responses.create(
-            model=model,
-            instructions=SYSTEM,
-            max_output_tokens=64,
-            tools=cast(Iterable[ResponsesToolParam], body["tools"]),
-            input=cast(ResponseInputParam, body["input"]),
-        )
+        async with _async_openai_client(gateway) as client:
+            response: Final = await client.responses.create(
+                model=model,
+                instructions=SYSTEM,
+                max_output_tokens=64,
+                tools=cast(Iterable[ResponsesToolParam], body["tools"]),
+                input=cast(ResponseInputParam, body["input"]),
+            )
         assert response.status == "completed", response.model_dump()
         assert anthropic_labels(_only_request(wire)) == [SYSTEM_LABEL, ASK_LABEL]
 
