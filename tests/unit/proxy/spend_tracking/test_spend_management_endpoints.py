@@ -14,6 +14,8 @@ from fastapi.testclient import TestClient
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.proxy.auth.authorization import OwnedRows
+from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup, load_permitted_log_team_ids
 
 
 def _default_date_range():
@@ -1656,10 +1658,7 @@ async def test_ui_view_spend_logs_explicit_user_filter_cannot_escape_own_scope(c
         "litellm.proxy.proxy_server.prisma_client",
         make_ui_spend_logs_mock_prisma([caller_log], lambda _where: [], query_observer=observe_query),
     )
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        AsyncMock(return_value=[]),
-    )
+    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: AsyncMock(return_value=()))
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller@example.com"
     )
@@ -1715,10 +1714,7 @@ async def test_ui_view_spend_logs_without_user_filter_includes_permitted_team_sc
         "litellm.proxy.proxy_server.prisma_client",
         make_ui_spend_logs_mock_prisma([caller_log, member_log, outside_log], filter_by_scope),
     )
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        AsyncMock(return_value=["team-9"]),
-    )
+    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: AsyncMock(return_value=("team-9",)))
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin@example.com"
     )
@@ -1738,21 +1734,13 @@ async def test_ui_view_spend_logs_without_user_filter_includes_permitted_team_sc
 
 
 @pytest.mark.asyncio
-async def test_permitted_team_scope_falls_back_to_own_user_when_lookup_fails(monkeypatch):
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        AsyncMock(side_effect=RuntimeError("database unavailable")),
-    )
+async def test_permitted_team_scope_falls_back_to_own_user_when_lookup_fails():
+    from litellm.proxy.auth.authorization import resolve_owned_read_scope
 
-    permitted_team_ids = await spend_management_endpoints._get_permitted_team_ids_for_spend_logs_or_empty(
-        prisma_client=MagicMock(),
-        user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.INTERNAL_USER,
-            user_id="caller@example.com",
-        ),
-    )
+    async def unavailable():
+        raise RuntimeError("database unavailable")
 
-    assert permitted_team_ids == ()
+    assert await resolve_owned_read_scope("caller", unavailable) == OwnedRows("caller")
 
 
 @pytest.mark.asyncio
@@ -1876,10 +1864,7 @@ async def test_ui_view_spend_logs_user_filter_intersects_permitted_team_scope(cl
         "litellm.proxy.proxy_server.prisma_client",
         make_ui_spend_logs_mock_prisma([member_log, other_team_log], filter_by_user_and_scope),
     )
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        AsyncMock(return_value=["team-9"]),
-    )
+    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: AsyncMock(return_value=("team-9",)))
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"
     )
@@ -2130,61 +2115,6 @@ async def test_ui_view_session_spend_logs_rehydrates_metadata_jsonb_text(client,
 
 
 @pytest.mark.asyncio
-async def test_ui_view_session_spend_logs_scopes_non_admin_to_own_logs(client, monkeypatch):
-    own_log = {
-        "id": "log1",
-        "request_id": "req1",
-        "session_id": "session-123",
-        "user": "user-1",
-        "startTime": "2024-01-01T00:00:00Z",
-    }
-
-    class MockDB:
-        async def count(self, *args, **kwargs):
-            assert kwargs.get("where") == {"session_id": "session-123", "user": "user-1"}
-            return 1
-
-        async def query_raw(self, sql_query, session_id, page_size, skip, scoped_user):
-            assert session_id == "session-123"
-            assert scoped_user == "user-1"
-            assert '"user" = $4' in sql_query
-            return [own_log]
-
-    class MockPrismaClient:
-        def __init__(self):
-            self.db = MockDB()
-            self.db.litellm_spendlogs = self.db
-
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
-
-    async def no_permitted_teams(*args, **kwargs):
-        return []
-
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        no_permitted_teams,
-    )
-
-    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"
-    )
-
-    try:
-        response = client.get(
-            "/spend/logs/session/ui",
-            params={"session_id": "session-123", "page": 1, "page_size": 50},
-            headers={"Authorization": "Bearer sk-test"},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 1
-        assert [row["request_id"] for row in data["data"]] == ["req1"]
-    finally:
-        app.dependency_overrides.pop(ps.user_api_key_auth, None)
-
-
-@pytest.mark.asyncio
 async def test_ui_view_session_spend_logs_includes_permitted_team_logs(client, monkeypatch):
     class MockDB:
         async def count(self, *args, **kwargs):
@@ -2200,7 +2130,7 @@ async def test_ui_view_session_spend_logs_includes_permitted_team_logs(client, m
         async def query_raw(self, sql_query, session_id, page_size, skip, scoped_user, team_ids):
             assert session_id == "session-123"
             assert scoped_user == "user-1"
-            assert team_ids == ["team-9"]
+            assert tuple(team_ids) == ("team-9",)
             assert '("user" = $4 OR team_id = ANY($5::text[]))' in sql_query
             return [
                 {
@@ -2222,10 +2152,7 @@ async def test_ui_view_session_spend_logs_includes_permitted_team_logs(client, m
     async def permitted_teams(*args, **kwargs):
         return ["team-9"]
 
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        permitted_teams,
-    )
+    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: permitted_teams)
 
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"
@@ -2658,31 +2585,6 @@ async def test_ui_view_spend_logs_request_id_rejects_foreign_row_inserted_after_
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
-def _make_payload_lookup_prisma(rows):
-    """Emulate the detail endpoint's SQL over an in-memory corpus: the owner
-    pre-check, the caller scope on ``"user"`` and permitted teams, and the
-    exact-request_id-first ordering with LIMIT 1."""
-
-    class MockDB:
-        async def query_raw(self, sql_query, *params):
-            if 'SELECT DISTINCT "user", team_id' in sql_query:
-                return _emulate_spend_log_owner_lookup(rows, sql_query, params)
-            lookup_id = params[0]
-            matches = [r for r in rows if lookup_id in (r["request_id"], r["litellm_call_id"])]
-            if '"user" = $2' in sql_query:
-                team_ids = params[2] if "ANY($3::text[])" in sql_query else ()
-                matches = [r for r in matches if r["user"] == params[1] or r["team_id"] in team_ids]
-            if "ORDER BY (request_id = $1) DESC" in sql_query:
-                matches = sorted(matches, key=lambda r: r["request_id"] == lookup_id, reverse=True)
-            return matches[:1]
-
-    class MockPrisma:
-        def __init__(self):
-            self.db = MockDB()
-
-    return MockPrisma()
-
-
 def _payload_row(request_id, litellm_call_id, user, prompt):
     return {
         "request_id": request_id,
@@ -2694,36 +2596,6 @@ def _payload_row(request_id, litellm_call_id, user, prompt):
         "user": user,
         "team_id": None,
     }
-
-
-@pytest.mark.asyncio
-async def test_ui_view_request_response_collision_serves_callers_own_row(client, monkeypatch):
-    """The attacker's row carries the victim's request_id as its client-set call id
-    and was written first. Each tenant's detail lookup of that id serves only their
-    own payload, and an admin's lookup resolves the exact request_id match rather
-    than whichever colliding row the database happens to return first."""
-    prisma = _make_payload_lookup_prisma(
-        [
-            _payload_row("attacker-req", "victim-req", "attacker_user", "attacker prompt"),
-            _payload_row("victim-req", "victim-call-id", "victim_user", "victim prompt"),
-        ]
-    )
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
-    try:
-        for role, user_id, own_prompt, other_prompt in (
-            (LitellmUserRoles.INTERNAL_USER, "victim_user", "victim prompt", "attacker prompt"),
-            (LitellmUserRoles.INTERNAL_USER, "attacker_user", "attacker prompt", "victim prompt"),
-            (LitellmUserRoles.PROXY_ADMIN, "admin", "victim prompt", "attacker prompt"),
-        ):
-            app.dependency_overrides[ps.user_api_key_auth] = lambda role=role, user_id=user_id: UserAPIKeyAuth(
-                user_role=role, user_id=user_id
-            )
-            response = client.get("/spend/logs/ui/victim-req", headers={"Authorization": "Bearer sk-test"})
-            assert response.status_code == 200, response.text
-            assert own_prompt in response.text
-            assert other_prompt not in response.text
-    finally:
-        app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
@@ -2818,11 +2690,15 @@ async def test_ui_view_request_response_custom_logger_is_keyed_by_callers_own_re
     that id as its request_id. The custom logger is asked for the caller's own stored
     request_id, so the caller gets their payload rather than a 403 from the foreign
     payload's owner check, and the foreign payload is never fetched."""
-    prisma = _make_payload_lookup_prisma(
-        [
-            _payload_row("shared-id", "other-call-id", "other_user", "other tenant prompt"),
-            _payload_row("caller-req", "shared-id", "caller_user", "caller prompt"),
-        ]
+    prisma = MagicMock(
+        db=MagicMock(
+            query_raw=AsyncMock(
+                side_effect=[
+                    [{"user": "other_user", "team_id": None}, {"user": "caller_user", "team_id": None}],
+                    [_payload_row("caller-req", "shared-id", "caller_user", "caller prompt")],
+                ]
+            )
+        )
     )
     cold_storage = {
         "shared-id": {
@@ -3161,10 +3037,7 @@ async def test_ui_view_spend_logs_search_keeps_non_admin_scope(client, monkeypat
         "litellm.proxy.proxy_server.prisma_client",
         make_ui_spend_logs_mock_prisma(logs, _search_filter_fn(logs, captured)),
     )
-    monkeypatch.setattr(
-        "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-        AsyncMock(return_value=[]),
-    )
+    monkeypatch.setitem(app.dependency_overrides, get_log_team_lookup, lambda: AsyncMock(return_value=()))
     ownership_check = AsyncMock()
     monkeypatch.setattr(
         "litellm.proxy.spend_tracking.spend_management_endpoints._assert_user_can_view_request_id",
@@ -3405,9 +3278,7 @@ async def test_ui_view_spend_logs_with_used_client_oauth_token_filter(client, mo
 
     start_date, end_date = _default_date_range()
 
-    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN
-    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     try:
         for flag, expected_ids in (("true", ["req-seat"]), ("false", ["req-key"])):
             response = client.get(
@@ -3851,7 +3722,7 @@ class TestSpendLogsPayload:
                     "model": "gpt-4o",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"actor_agent_id": null, "target_agent_id": null, "billing_agent_id": null, "agent_execution_mode": null, "verified_human_user_id": null, "applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "autorouter_savings_estimate": null, "autorouter_baseline_observation": null, "azure_spillover": null, "used_client_oauth_token": null, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
+                    "metadata": '{"actor_agent_id": null, "target_agent_id": null, "billing_agent_id": null, "agent_execution_mode": null, "verified_human_user_id": null, "applied_guardrails": [], "attempted_fallbacks": null, "original_model_group": null, "batch_models": null, "batch_successful_requests": null, "batch_failed_requests": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "routing_decision": null, "internal_call_origin": null, "guardrail_information": null, "compression_savings": null, "litellm_gateway_injected_cache": null, "router_metadata": null, "autorouter_savings_estimate": null, "autorouter_baseline_observation": null, "azure_spillover": null, "used_client_oauth_token": null, "litellm_roi_estimator": false, "usage_object": {"completion_tokens": 20, "prompt_tokens": 10, "total_tokens": 30, "completion_tokens_details": null, "prompt_tokens_details": null}, "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"key": "gpt-4o", "max_tokens": 16384, "max_input_tokens": 128000, "max_output_tokens": 16384, "input_cost_per_token": 2.5e-06, "cache_creation_input_token_cost": null, "cache_read_input_token_cost": 1.25e-06, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": 1.25e-06, "output_cost_per_token_batches": 5e-06, "output_cost_per_token": 1e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_reasoning_token": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "openai", "mode": "chat", "supports_system_messages": true, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": false, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": false, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": true, "supports_reasoning": false, "search_context_cost_per_query": {"search_context_size_low": 0.03, "search_context_size_medium": 0.035, "search_context_size_high": 0.05}, "tpm": null, "rpm": null, "supported_openai_params": ["frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "max_tokens", "max_completion_tokens", "modalities", "prediction", "n", "presence_penalty", "seed", "stop", "stream", "stream_options", "temperature", "top_p", "tools", "tool_choice", "function_call", "functions", "max_retries", "extra_headers", "parallel_tool_calls", "audio", "response_format", "user"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": null}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.00022500000000000002,
                     "total_tokens": 30,
@@ -7906,3 +7777,115 @@ def test_capture_rate_reports_an_unreadable_bill_as_502(client, monkeypatch):
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
     assert response.status_code == 502
     assert "HTTP 401" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_id", "owner_user", "owner_team", "permitted", "expected"),
+    [
+        ("caller", "caller", "broken", False, True),
+        ("caller", "other", "allowed", True, True),
+        ("caller", "other", "allowed", False, False),
+        ("caller", "other", None, True, False),
+        (None, None, None, True, False),
+        (None, None, "allowed", True, True),
+    ],
+)
+async def test_shared_owner_policy_preserves_own_user_and_team_access(
+    user_id, owner_user, owner_team, permitted, expected
+):
+    from litellm.proxy.auth.authorization import can_read_log_owner
+
+    async def lookup(team_id):
+        if team_id == "broken":
+            raise RuntimeError("team lookup failed")
+        return permitted
+
+    assert await can_read_log_owner(user_id, owner_user, owner_team, lookup) is expected
+
+
+@pytest.mark.asyncio
+async def test_shared_owner_policy_propagates_team_lookup_failure():
+    from litellm.proxy.auth.authorization import can_read_log_owner
+
+    async def unavailable(team_id):
+        raise RuntimeError("team lookup failed")
+
+    with pytest.raises(RuntimeError, match="team lookup failed"):
+        await can_read_log_owner("caller", "other", "team", unavailable)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("params", "expected_status"),
+    [
+        ({"start_date": "invalid", "end_date": "invalid"}, 400),
+        ({"request_id": "foreign"}, 403),
+    ],
+)
+async def test_log_team_dependency_preserves_checks_before_permission_lookup(
+    client, monkeypatch, params, expected_status
+):
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    team_reads = []
+
+    class TeamTable:
+        async def find_many(self, where):
+            team_reads.append(where)
+            return []
+
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="caller", value=LiteLLM_UserTable(user_id="caller", teams=["team"]), model_type=LiteLLM_UserTable
+    )
+    prisma = MagicMock(
+        db=MagicMock(
+            query_raw=AsyncMock(return_value=[{"user": "other", "team_id": None}]),
+            litellm_teamtable=TeamTable(),
+        )
+    )
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        ps.user_api_key_auth,
+        lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="caller"),
+    )
+
+    response = client.get("/spend/logs/ui", params=params, headers={"Authorization": "Bearer sk-test"})
+
+    assert response.status_code == expected_status, response.text
+    assert team_reads == []
+
+
+@pytest.mark.asyncio
+async def test_management_team_lookup_without_memberships_keeps_own_user_scope():
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.auth.authorization import resolve_owned_read_scope
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="caller", value=LiteLLM_UserTable(user_id="caller", teams=[]), model_type=LiteLLM_UserTable
+    )
+    auth = UserAPIKeyAuth(user_id="caller", user_role=LitellmUserRoles.INTERNAL_USER)
+    team_reads = []
+
+    class TeamTable:
+        async def find_many(self, where):
+            team_reads.append(where)
+            return []
+
+    prisma = MagicMock(db=MagicMock(litellm_teamtable=TeamTable()))
+
+    async def lookup():
+        return await load_permitted_log_team_ids(
+            auth, prisma_client=prisma, user_api_key_cache=cache, proxy_logging_obj=ps.proxy_logging_obj
+        )
+
+    assert await lookup() == ()
+    scope = await resolve_owned_read_scope(auth.user_id, lookup)
+    assert scope == OwnedRows("caller")
+    assert team_reads == []

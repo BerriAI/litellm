@@ -1,3 +1,4 @@
+import functools
 import glob
 import os
 import random
@@ -10,7 +11,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional, Union
+from urllib.parse import unquote, urlsplit
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
@@ -202,6 +204,66 @@ def _max_migration_timestamp(names) -> int:
     return max(_migration_timestamp(n) for n in names)
 
 
+_REDACTED: Final = "REDACTED"
+_PASSWORD_QUERY_KEYS: Final = frozenset(("password", "sslpassword"))
+
+
+@functools.cache
+def _secret_shape_redactor() -> Callable[[str], str]:
+    try:
+        from litellm._logging import redact_secrets
+    except ImportError:
+        return lambda text: text
+    return redact_secrets
+
+
+def _url_passwords(url: str) -> frozenset[str]:
+    try:
+        parts: Final = urlsplit(url)
+    except ValueError:
+        return frozenset()
+    query_pairs: Final = tuple(pair.partition("=") for pair in parts.query.split("&"))
+    raw_query_passwords: Final = tuple(
+        value for key, separator, value in query_pairs if separator and key.lower() in _PASSWORD_QUERY_KEYS
+    )
+    raw_passwords: Final = ((parts.password,) if parts.password else ()) + raw_query_passwords
+    return frozenset(password for password in raw_passwords + tuple(map(unquote, raw_passwords)) if password)
+
+
+def _configured_database_passwords() -> frozenset[str]:
+    database_url: Final = os.getenv("DATABASE_URL")
+    direct_url: Final = os.getenv("DIRECT_URL")
+    database_passwords: Final = _url_passwords(database_url) if database_url else frozenset()
+    direct_passwords: Final = _url_passwords(direct_url) if direct_url else frozenset()
+    return database_passwords | direct_passwords
+
+
+def _redact_credentials(text: str) -> str:
+    """Mask configured database passwords before passing the text to LiteLLM redaction."""
+    passwords: Final = sorted(_configured_database_passwords(), key=len, reverse=True)
+    alternation: Final = "|".join(re.escape(password) for password in passwords)
+    password_pattern: Final = (
+        re.compile(rf"(?P<lead>:|password=)(?:{alternation})(?=@|&|$|[\s'\"\]),])", re.IGNORECASE)
+        if passwords
+        else None
+    )
+    result: Final = password_pattern.sub(rf"\g<lead>{_REDACTED}", text) if password_pattern is not None else text
+    return _secret_shape_redactor()(result)
+
+
+def _redacted_command(command: object) -> Union[str, tuple[str, ...], list[str]]:
+    if isinstance(command, tuple):
+        return tuple(_redact_credentials(str(argument)) for argument in command)
+    if isinstance(command, list):
+        return [_redact_credentials(str(argument)) for argument in command]
+    return _redact_credentials(str(command))
+
+
+def _redact_command_error(error: subprocess.CalledProcessError) -> str:
+    redacted_command: Final = _redacted_command(error.cmd)
+    return str(subprocess.CalledProcessError(error.returncode, redacted_command))
+
+
 def _get_prisma_command() -> str:
     """Get the Prisma command to use, bypassing Python wrapper in offline mode."""
     if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
@@ -315,7 +377,8 @@ class ProxyExtrasDBManager:
             return False
         except subprocess.CalledProcessError as e:
             logger.warning(
-                f"Error creating baseline migration: {e}, {e.stderr}, {e.stdout}"
+                f"Error creating baseline migration: {_redact_command_error(e)}, "
+                f"{_redact_credentials(str(e.stderr))}, {_redact_credentials(str(e.stdout))}"
             )
             raise e
 
@@ -353,9 +416,8 @@ class ProxyExtrasDBManager:
             pass
 
     @staticmethod
-    def _failed_migration_logs(migration_name: str) -> Optional[str]:
-        """Return failed migration logs, or None if the ledger is unavailable."""
-        database_url = os.getenv("DATABASE_URL")
+    def _read_migration_ledger(query: str, params: tuple[str, ...]) -> "tuple[object, ...] | None":
+        database_url: Final = os.getenv("DATABASE_URL")
         if not database_url:
             return None
 
@@ -364,28 +426,37 @@ class ProxyExtrasDBManager:
         except ImportError:
             return None
 
-        cleaned_url = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
-        ledger_table = psycopg.sql.SQL("{}.{}").format(
-            psycopg.sql.Identifier(
-                ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"
-            ),
+        cleaned_url: Final = ProxyExtrasDBManager._strip_prisma_query_params(database_url)
+        ledger_table: Final = psycopg.sql.SQL("{}.{}").format(
+            psycopg.sql.Identifier(ProxyExtrasDBManager._prisma_schema_param(database_url) or "public"),
             psycopg.sql.Identifier("_prisma_migrations"),
         )
         try:
-            with psycopg.connect(
-                cleaned_url, connect_timeout=10, autocommit=True
-            ) as conn:
-                row = conn.execute(
-                    psycopg.sql.SQL(
-                        "SELECT logs FROM {} "
-                        "WHERE migration_name = %s AND finished_at IS NULL "
-                        "AND rolled_back_at IS NULL"
-                    ).format(ledger_table),
-                    (migration_name,),
-                ).fetchone()
+            with psycopg.connect(cleaned_url, connect_timeout=10, autocommit=True) as conn:
+                row: Final = conn.execute(psycopg.sql.SQL(query).format(ledger_table), params).fetchone()
         except (psycopg.OperationalError, psycopg.DatabaseError):
             return None
-        return (row[0] or "") if row else ""
+        return tuple(row) if row is not None else ()
+
+    @staticmethod
+    def _failed_migration_logs(migration_name: str, started_at: str) -> Optional[str]:
+        row: Final = ProxyExtrasDBManager._read_migration_ledger(
+            "SELECT logs FROM {} WHERE migration_name = %s AND started_at = %s::timestamptz "
+            "AND finished_at IS NULL AND rolled_back_at IS NULL",
+            (migration_name, started_at),
+        )
+        if row is None:
+            return None
+        return row[0] if row and isinstance(row[0], str) else ""
+
+    @staticmethod
+    def _failed_migration_recovered(migration_name: str, started_at: str) -> bool:
+        row: Final = ProxyExtrasDBManager._read_migration_ledger(
+            "SELECT 1 FROM {} WHERE migration_name = %s AND started_at = %s::timestamptz "
+            "AND (finished_at IS NOT NULL OR rolled_back_at IS NOT NULL)",
+            (migration_name, started_at),
+        )
+        return bool(row)
 
     @staticmethod
     def _resolve_specific_migration(migration_name: str):
@@ -1103,6 +1174,11 @@ class ProxyExtrasDBManager:
         return None
 
     @staticmethod
+    def _v2_failed_migration_started_at(stderr: str, migration_name: str) -> "str | None":
+        match: Final = re.search(rf"`{re.escape(migration_name)}` migration started at ([^\r\n]+?) failed", stderr)
+        return match.group(1) if match else None
+
+    @staticmethod
     def _v2_roll_back_migration_best_effort(migration_name: str) -> None:
         from litellm_proxy_extras.migration_lock import migration_environment
 
@@ -1130,8 +1206,11 @@ class ProxyExtrasDBManager:
 
         if "P3009" in stderr:
             migration_name = ProxyExtrasDBManager._v2_failed_migration_name(stderr)
-            if migration_name:
-                ledger_logs = ProxyExtrasDBManager._failed_migration_logs(migration_name)
+            started_at: Final = (
+                ProxyExtrasDBManager._v2_failed_migration_started_at(stderr, migration_name) if migration_name else None
+            )
+            if migration_name and started_at:
+                ledger_logs: Final = ProxyExtrasDBManager._failed_migration_logs(migration_name, started_at)
                 if ledger_logs and _MIGRATION_DEADLOCK_MARKER in ledger_logs:
                     logger.info(
                         "Migration %s failed in a concurrent migrate deploy "
@@ -1139,6 +1218,14 @@ class ProxyExtrasDBManager:
                         migration_name,
                     )
                     ProxyExtrasDBManager._v2_roll_back_migration_best_effort(migration_name)
+                    return budget.spend()
+                if ProxyExtrasDBManager._failed_migration_recovered(migration_name, started_at):
+                    logger.info(
+                        "Migration %s started at %s was already rolled back or completed by a concurrent "
+                        "migrate deploy, retrying",
+                        migration_name,
+                        started_at,
+                    )
                     return budget.spend()
             raise RuntimeError(
                 "Migration completion could not be verified. LiteLLM startup has stopped.\n\n"
@@ -1548,6 +1635,11 @@ class ProxyExtrasDBManager:
                                     f"Error: {stderr}"
                                 )
                                 raise
+                        else:
+                            logger.error(
+                                "prisma migrate deploy failed with an error the resolver does not handle: "
+                                f"{_redact_credentials(stderr)}"
+                            )
                 else:
                     if ProxyExtrasDBManager.spend_logs_is_partitioned():
                         raise RuntimeError(PARTITIONED_SPEND_LOGS_PUSH_ERROR)
@@ -1562,7 +1654,7 @@ class ProxyExtrasDBManager:
                     )
                     return True
             except subprocess.TimeoutExpired:
-                logger.warning(
+                logger.error(
                     "Attempt %s timed out. Raise %s if this database needs longer to apply its schema.",
                     attempt + 1,
                     PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR if use_migrate else PRISMA_COMMAND_TIMEOUT_ENV_VAR,
@@ -1575,7 +1667,12 @@ class ProxyExtrasDBManager:
                     if attempts_left > 0
                     else ""
                 )
-                logger.info(f"The process failed to execute. Details: {e}.{retry_msg}")
+                stderr_detail: Final = (
+                    f" stderr: {_redact_credentials(str(e.stderr))}" if e.stderr else ""
+                )
+                logger.error(
+                    f"The process failed to execute. Details: {_redact_command_error(e)}.{stderr_detail}{retry_msg}"
+                )
                 time.sleep(random.randrange(5, 15))
             finally:
                 os.chdir(original_dir)

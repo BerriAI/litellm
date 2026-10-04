@@ -41,7 +41,7 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
     }
     let readers = QueryReaders::new(Connection::writer(&admin_url)?, "litellm".into());
     let connection = readers
-        .connection(&client, &QueryScope::Admin, "test-secret")
+        .connection(&client, &QueryScope::All, "test-secret")
         .await?;
     let url = connection.url().to_string();
     Ok(Database {
@@ -174,7 +174,7 @@ async fn admin_sql_enforces_result_row_limit(
         matches!(
             result,
             Err(Error::Storage(
-                litellm_storage_clickhouse::Error::QueryFailed(_)
+                litellm_storage_clickhouse::Error::ResponseTooLarge
             ))
         ),
         "{result:?}"

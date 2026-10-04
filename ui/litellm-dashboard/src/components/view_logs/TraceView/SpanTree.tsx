@@ -1,19 +1,27 @@
 "use client";
 
-import { BarChart3, Clock, Coins, ListTree, MoreHorizontal, PanelRightOpen, Timer } from "lucide-react";
+import { MoreHorizontal, PanelRightOpen, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuCheckboxItem,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
 
-import { formatCost } from "./AgentTracesTable";
 import { FoldChevron } from "./Collapse";
+import { PaneBar } from "./PaneBar";
 import { groupFacts, SpanHoverCard, spanFacts } from "./SpanHoverCard";
 import { SpanIcon } from "./SpanIcon";
 import type { GroupRowData, SpanRowData, TreeRow } from "./traceTree";
 import type { TraceSummary } from "./traceTypes";
-import { fmtMs, fmtTok, type TreeGuide, treeGuides } from "./traceUtils";
+import { fmtMs, previewText, type TreeGuide, treeGuides } from "./traceUtils";
 
 interface SpanTreeProps {
   rows: TreeRow[];
@@ -28,61 +36,25 @@ interface SpanTreeProps {
   onOpenDetails?: () => void;
   /** Inside the side drawer J/K switch runs, so spans move with the arrow keys. */
   embedded?: boolean;
+  query: string;
+  onQueryChange: (query: string) => void;
+  errorsOnly: boolean;
+  onErrorsOnlyChange: (enabled: boolean) => void;
+  filtering: boolean;
+  onClearFilters: () => void;
+  onCollapseAll: () => void;
 }
 
 const rowClass = (selected: boolean): string =>
   cn(
-    "relative flex w-full items-stretch border-l-2 px-3.5 text-left outline-none transition-colors duration-150 ease-[cubic-bezier(0.4,0,0.2,1)] focus-visible:shadow-[inset_0_0_0_2px_var(--trace-brand)] motion-reduce:transition-none",
-    selected ? "border-l-trace-brand bg-trace-row-selected" : "border-l-transparent hover:bg-trace-row-hover",
+    "relative flex w-full items-stretch border-l-2 px-3.5 text-left outline-none transition-colors duration-150 ease-[cubic-bezier(0.4,0,0.2,1)] focus-visible:shadow-[inset_0_0_0_2px_var(--ring)] motion-reduce:transition-none",
+    selected ? "border-l-primary bg-accent" : "border-l-transparent hover:bg-muted/60",
   );
 
-const LINE = "border-dashed border-trace-line [border-width:0] [border-left-width:1px]";
-const ELBOW = "border-dashed border-trace-line [border-width:0] [border-left-width:1px] [border-bottom-width:1px]";
-const NAME = "truncate text-[13px] leading-[1.2] font-medium";
-const MONO_NAME = "truncate font-mono text-[12px] leading-[1.2]";
-const META = "font-mono text-[11px] leading-[14px] text-trace-duration tabular-nums";
-
-function Stat({ icon: Icon, children }: { icon: typeof Clock; children: React.ReactNode }) {
-  return (
-    <span className="inline-flex items-center gap-1">
-      <Icon className="size-3" />
-      {children}
-    </span>
-  );
-}
-
-const Slash = () => <span className="text-trace-key">/</span>;
-
-function Summary({ summary }: { summary: TraceSummary }) {
-  const tokens = summary.input_tokens + summary.output_tokens;
-  return (
-    <div className="flex flex-wrap items-center gap-2 px-4 py-2 transition-colors duration-150 hover:bg-trace-turn motion-reduce:transition-none">
-      <span className="flex items-center gap-1.5 text-[12px] leading-[13.8px] font-semibold text-trace-text">
-        <span className="grid size-5 place-items-center rounded-[4px] bg-trace-row-selected text-[var(--trace-summary-glyph,#0d3d77)]">
-          <BarChart3 className="size-3" strokeWidth={1.5} />
-        </span>
-        Summary
-      </span>
-      <span className="flex basis-full flex-wrap items-center gap-x-2 pl-6 font-mono text-[11.5px] leading-[13.8px] text-trace-text-secondary tabular-nums">
-        <Stat icon={ListTree}>{`${summary.span_count.toLocaleString()} spans`}</Stat>
-        <Slash />
-        <Stat icon={Timer}>{fmtMs(summary.duration_ms)}</Stat>
-        {tokens > 0 && (
-          <>
-            <Slash />
-            <Stat icon={Coins}>{fmtTok(tokens)}</Stat>
-          </>
-        )}
-        {summary.spend != null && (
-          <>
-            <Slash />
-            <span>{formatCost(summary.spend)}</span>
-          </>
-        )}
-      </span>
-    </div>
-  );
-}
+const LINE = "border-l border-dashed border-border";
+const ELBOW = "border-b border-l border-dashed border-border";
+const NAME = "line-clamp-2 break-words text-sm leading-tight font-medium";
+const META = "text-xs leading-4 text-muted-foreground tabular-nums";
 
 /** One 20px column per ancestor: pass-through rails for open branches, an elbow into this row's tile. */
 function Gutters({ depth, guide }: { depth: number; guide: TreeGuide }) {
@@ -119,6 +91,7 @@ interface RowProps {
   onSelect: (id: string) => void;
   onToggleSpan: (id: string) => void;
   onToggleGroup: (id: string) => void;
+  filtering: boolean;
 }
 
 function Caret({ open, onToggle, label }: { open: boolean; onToggle: () => void; label: string }) {
@@ -127,7 +100,7 @@ function Caret({ open, onToggle, label }: { open: boolean; onToggle: () => void;
       role="button"
       tabIndex={-1}
       aria-label={label}
-      className="grid size-6 shrink-0 place-items-center self-start rounded-[4px] p-0.5 text-trace-text-secondary transition-colors duration-150 hover:bg-trace-tab-active motion-reduce:transition-none"
+      className="grid size-6 shrink-0 place-items-center self-start rounded-sm p-0.5 text-muted-foreground transition-colors duration-150 hover:bg-muted motion-reduce:transition-none"
       onClick={(event) => {
         event.stopPropagation();
         onToggle();
@@ -162,7 +135,7 @@ function Waterfall({ startMs, durationMs, totalMs, tone }: WaterfallProps) {
     <span
       aria-hidden="true"
       data-testid="span-waterfall"
-      className="relative block h-[3px] w-full overflow-hidden rounded-full bg-trace-chip"
+      className="relative block h-[3px] w-full overflow-hidden rounded-full bg-muted"
     >
       <span className={cn("absolute inset-y-0 rounded-full", tone)} style={{ left: `${left}%`, width: `${width}%` }} />
     </span>
@@ -171,9 +144,9 @@ function Waterfall({ startMs, durationMs, totalMs, tone }: WaterfallProps) {
 
 const barTone = (type: string, failed: boolean): string => {
   if (failed) return "bg-destructive";
-  if (type === "tool") return "bg-trace-tool";
-  if (type === "llm") return "bg-trace-llm";
-  return "bg-trace-chain";
+  if (type === "tool") return "bg-muted-foreground/40";
+  if (type === "llm") return "bg-muted-foreground/50";
+  return "bg-muted-foreground/60";
 };
 
 function SpanRow({
@@ -184,16 +157,15 @@ function SpanRow({
   totalMs,
   onSelect,
   onToggleSpan,
+  filtering,
 }: RowProps & { row: SpanRowData }) {
   const { span } = row;
   const failed = span.status === "error";
-  const tokens = span.input_tokens + span.output_tokens;
-  const isLlm = span.type === "llm";
   const duration = <span className={cn(META, "shrink-0")}>{fmtMs(span.duration_ms)}</span>;
   const caret = row.hasChildren && (
     <Caret open={!row.collapsed} label={row.collapsed ? "Expand" : "Collapse"} onToggle={() => onToggleSpan(row.id)} />
   );
-  const leafDuration = !row.hasChildren && !isLlm && <span className="flex min-h-5 items-center">{duration}</span>;
+  const leafDuration = !row.hasChildren && <span className="flex min-h-5 items-center">{duration}</span>;
   return (
     <SpanHoverCard facts={spanFacts(span)} traceStartMs={traceStartMs}>
       <button
@@ -210,19 +182,20 @@ function SpanRow({
         <TileColumn tile={<SpanIcon type={span.type} model={span.model} error={failed} />} stem={guide.stem} />
         <RowBody trailing={caret || leafDuration}>
           <span className={cn("flex min-w-0 items-center gap-2", row.hasChildren ? "min-h-6" : "min-h-5")}>
-            <span
-              className={cn(span.type === "tool" ? MONO_NAME : NAME, failed ? "text-destructive" : "text-trace-text")}
-            >
-              {span.name}
-            </span>
-            {isLlm && span.model && (
-              <span className="h-4 max-w-[150px] shrink-0 truncate rounded-[3px] bg-trace-chip px-1 font-mono text-[11px] leading-4 text-trace-text-secondary">
-                {span.model.split("/").pop()}
-              </span>
-            )}
-            {(row.hasChildren || isLlm) && duration}
-            {isLlm && tokens > 0 && <span className={META}>{fmtTok(tokens)} tok</span>}
+            <span className={cn(NAME, failed ? "text-destructive" : "text-foreground")}>{span.name}</span>
+            {row.hasChildren && duration}
           </span>
+          {span.type === "agent" && span.parent_span_id && span.input_preview ? (
+            <span className="truncate text-xs text-muted-foreground" title={previewText(span.input_preview)}>
+              {previewText(span.input_preview)}
+            </span>
+          ) : (
+            filtering && (
+              <span className="truncate text-xs text-muted-foreground">
+                {previewText(span.input_preview) || span.agent}
+              </span>
+            )
+          )}
           <Waterfall
             startMs={span.start_offset_ms}
             durationMs={span.duration_ms}
@@ -275,18 +248,10 @@ function GroupRow({
           }
         >
           <span className="flex min-h-6 min-w-0 items-center gap-2">
-            <span
-              className={cn(
-                row.type === "tool" ? MONO_NAME : NAME,
-                row.isFailureGroup ? "text-destructive" : "text-trace-text",
-              )}
-            >
-              {row.name}
-            </span>
-            <span className={META}>×{row.members.length}</span>
-            <span className={META}>p50 {fmtMs(row.p50Duration)}</span>
-            {row.failedCount > 0 && <span className={cn(META, "text-destructive")}>{row.failedCount} failed</span>}
+            <span className={cn(NAME, row.isFailureGroup ? "text-destructive" : "text-foreground")}>{row.name}</span>
+            <span className={cn(META, "shrink-0")}>×{row.members.length}</span>
           </span>
+          {row.failedCount > 0 && <span className={cn(META, "text-destructive")}>{row.failedCount} failed</span>}
           <Waterfall
             startMs={groupStart}
             durationMs={groupEnd - groupStart}
@@ -299,7 +264,6 @@ function GroupRow({
   );
 }
 
-/** Span tree with connector lines, a run summary on top, a framework toggle and keyboard hints. */
 export function SpanTree({
   rows,
   summary,
@@ -312,6 +276,13 @@ export function SpanTree({
   onLoadMore,
   onOpenDetails,
   embedded = false,
+  query,
+  onQueryChange,
+  errorsOnly,
+  onErrorsOnlyChange,
+  filtering,
+  onClearFilters,
+  onCollapseAll,
 }: SpanTreeProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const guides = useMemo(() => treeGuides(rows.map((row) => row.depth)), [rows]);
@@ -325,26 +296,87 @@ export function SpanTree({
 
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-border bg-card" aria-label="Run spans">
-      <div className="mt-3.5 mr-2 mb-2 ml-4 flex h-8 shrink-0 items-center gap-1">
-        <span className="text-[13px] leading-[15.6px] font-semibold tracking-[-0.26px] text-trace-key">Spans</span>
-        <label className="ml-auto flex shrink-0 cursor-pointer items-center gap-2 text-[12px] text-muted-foreground">
-          Hide framework
-          <Switch
-            size="sm"
-            checked={hideFramework}
-            onCheckedChange={(checked) => onToggleHideFramework(checked)}
-            aria-label="Hide framework spans"
+      <PaneBar className="justify-between">
+        <span className="text-sm font-medium">
+          Steps{" "}
+          <span className="ml-1 text-xs font-normal text-muted-foreground">
+            {filtering && `${rows.length.toLocaleString()} of `}
+            {summary.span_count.toLocaleString()}
+          </span>
+        </span>
+        <div className="flex items-center gap-1">
+          {onOpenDetails && (
+            <Button variant="ghost" size="icon-xs" onClick={onOpenDetails} aria-label="Show details">
+              <PanelRightOpen className="size-4" />
+            </Button>
+          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label="Step display options" />}>
+              <MoreHorizontal className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuCheckboxItem checked={hideFramework} onCheckedChange={onToggleHideFramework}>
+                Hide framework spans
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={onCollapseAll}>Collapse branches</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </PaneBar>
+      <PaneBar>
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            aria-label="Search steps"
+            placeholder="Search steps"
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            className="h-7 pr-7 pl-7 text-xs shadow-none md:text-xs"
           />
-        </label>
-        {onOpenDetails && (
-          <Button variant="ghost" size="sm" onClick={onOpenDetails} className="ml-3 shrink-0 text-xs text-trace-text-2">
-            <PanelRightOpen className="size-4" />
-            Show details
-          </Button>
+          {query && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Clear step search"
+              className="absolute top-1/2 right-0.5 -translate-y-1/2"
+              onClick={() => onQueryChange("")}
+            >
+              <X className="size-3" />
+            </Button>
+          )}
+        </div>
+        <Button
+          variant={!errorsOnly ? "secondary" : "ghost"}
+          size="xs"
+          aria-pressed={!errorsOnly}
+          onClick={() => onErrorsOnlyChange(false)}
+        >
+          All
+        </Button>
+        <Button
+          variant={errorsOnly ? "secondary" : "ghost"}
+          size="xs"
+          aria-pressed={errorsOnly}
+          onClick={() => onErrorsOnlyChange(true)}
+        >
+          Errors <span className="ml-1 text-muted-foreground">{summary.error_count}</span>
+        </Button>
+        {filtering && (
+          <span role="status" className="sr-only">
+            {rows.length} found
+          </span>
         )}
-      </div>
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto pb-4">
-        <Summary summary={summary} />
+      </PaneBar>
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto py-2">
+        {rows.length === 0 && (
+          <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+            <p>No matching steps</p>
+            <Button variant="link" size="sm" onClick={onClearFilters}>
+              Clear filters
+            </Button>
+          </div>
+        )}
         <div role="tree" aria-label="Spans in time order">
           {rows.map((row, i) => {
             if (row.kind === "load-more") {
@@ -353,12 +385,12 @@ export function SpanTree({
                   key={row.id}
                   type="button"
                   onClick={() => onLoadMore(row.groupId)}
-                  className={cn(rowClass(false), "h-8 text-[13px] tracking-[-0.26px] text-trace-text-secondary")}
+                  className={cn(rowClass(false), "h-8 text-sm text-muted-foreground")}
                 >
                   <Gutters depth={row.depth} guide={guides[i]} />
                   <span className="ml-0.5 flex items-center gap-2">
                     <MoreHorizontal className="relative z-raised size-3.5" /> Load 20 more
-                    <span className="text-trace-duration">({row.remaining} remaining)</span>
+                    <span className="text-muted-foreground">({row.remaining} remaining)</span>
                   </span>
                 </button>
               );
@@ -371,6 +403,7 @@ export function SpanTree({
               onSelect,
               onToggleSpan,
               onToggleGroup,
+              filtering,
             };
             return row.kind === "group" ? (
               <GroupRow key={row.id} row={row} {...shared} />
@@ -380,25 +413,25 @@ export function SpanTree({
           })}
         </div>
       </div>
-      <div className="flex h-8 shrink-0 items-center gap-3 border-t border-border px-3.5 text-[11px] text-muted-foreground">
+      <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
         {embedded ? (
           <>
-            <span>
+            <span className="whitespace-nowrap">
               <Kbd>↑</Kbd>/<Kbd>↓</Kbd> step
             </span>
-            <span>
+            <span className="whitespace-nowrap">
               <Kbd>J</Kbd>/<Kbd>K</Kbd> trace
             </span>
           </>
         ) : (
-          <span>
+          <span className="whitespace-nowrap">
             <Kbd>J</Kbd>/<Kbd>K</Kbd> move
           </span>
         )}
-        <span>
+        <span className="whitespace-nowrap">
           <Kbd>←</Kbd>/<Kbd>→</Kbd> fold
         </span>
-        <span>
+        <span className="whitespace-nowrap">
           <Kbd>Esc</Kbd> close
         </span>
       </div>
@@ -408,7 +441,7 @@ export function SpanTree({
 
 function Kbd({ children }: { children: React.ReactNode }) {
   return (
-    <kbd className="rounded-[3px] border border-border border-b-2 bg-muted px-[3px] font-mono text-muted-foreground">
+    <kbd className="rounded-sm border border-border border-b-2 bg-muted px-[3px] font-mono text-muted-foreground">
       {children}
     </kbd>
   );

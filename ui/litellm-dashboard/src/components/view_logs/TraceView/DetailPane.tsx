@@ -1,36 +1,36 @@
 "use client";
 
 import { PanelRightClose } from "lucide-react";
-import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/cva.config";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 import { AttributesDetail } from "./AttributesDetail";
 import { CopyButton } from "./CopyButton";
 import { DetailContent, errorHeadline, useSpanDetail } from "./DetailContent";
 import { IdChip } from "./IdChip";
+import { PaneBar } from "./PaneBar";
 import { RequestDetail } from "./RequestDetail";
 import { SpanIcon } from "./SpanIcon";
-import { agentHandoffText } from "./TraceDrawer";
+import { useTracesApi } from "./tracesApi";
+import { SPAN_TABS, type SpanTab } from "./traceRouting";
 import type { GroupRowData, TreeRow } from "./traceTree";
 import type { Span, SpanType, Trace } from "./traceTypes";
 import { fmtMs, fmtTok } from "./traceUtils";
 
-interface DetailPaneProps {
+interface SpanTabProps {
+  spanTab: SpanTab;
+  onSpanTabChange: (tab: SpanTab) => void;
+}
+
+interface DetailPaneProps extends SpanTabProps {
   trace: Trace;
   row: TreeRow | undefined;
   accessToken: string;
   onClose: () => void;
 }
 
-type Tab = "content" | "request" | "attributes";
-
-const TABS: { id: Tab; label: string }[] = [
-  { id: "content", label: "Content" },
-  { id: "request", label: "Request" },
-  { id: "attributes", label: "Attributes" },
-];
+const TAB_LABELS: Record<SpanTab, string> = { content: "Content", request: "Request", attributes: "Attributes" };
 
 function PaneHeader({
   type,
@@ -48,14 +48,12 @@ function PaneHeader({
   onClose: () => void;
 }) {
   return (
-    <div className="flex h-6 shrink-0 items-center justify-between gap-4 px-7">
+    <PaneBar className="justify-between gap-3">
       <div className="flex min-w-0 items-center">
         <span className="mr-2 shrink-0">
           <SpanIcon type={type} model={model} error={failed} size="md" />
         </span>
-        <h2 className="min-w-0 truncate text-[14px] leading-5 font-medium tracking-[-0.56px] text-trace-text">
-          {title}
-        </h2>
+        <h2 className="min-w-0 truncate text-sm leading-5 font-semibold text-foreground">{title}</h2>
         {idValue && (
           <span className="ml-2 flex shrink-0">
             <IdChip value={idValue} label="Copy span ID" />
@@ -67,26 +65,22 @@ function PaneHeader({
         size="icon-xs"
         onClick={onClose}
         aria-label="Close details"
-        className="size-6 shrink-0 rounded-[4px] text-trace-text-2"
+        className="size-6 shrink-0 rounded-sm text-muted-foreground"
       >
         <PanelRightClose className="size-4" />
       </Button>
-    </div>
+    </PaneBar>
   );
 }
 
 function PaneFooter({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex h-10 shrink-0 items-center gap-2 border-t border-trace-border bg-trace-surface px-7">
-      {children}
-    </div>
-  );
+  return <div className="flex h-10 shrink-0 items-center gap-3 border-t bg-background px-3">{children}</div>;
 }
 
 function Meta({ label, value }: { label: string; value: string }) {
   return (
     <span>
-      <span className="text-trace-key">{label} </span>
+      <span className="text-muted-foreground">{label} </span>
       {value}
     </span>
   );
@@ -96,14 +90,16 @@ function SpanPane({
   trace,
   span,
   accessToken,
+  spanTab: tab,
+  onSpanTabChange,
   onClose,
-}: {
+}: SpanTabProps & {
   trace: Trace;
   span: Span;
   accessToken: string;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<Tab>("content");
+  const handoff = useTracesApi(accessToken).handoff(trace.summary.trace_id, span.span_id, trace.summary.trace_ref);
   const traceId = trace.summary.trace_id;
   const detailQuery = useSpanDetail(
     accessToken,
@@ -113,10 +109,7 @@ function SpanPane({
   );
   const tokens = span.input_tokens + span.output_tokens;
   return (
-    <aside
-      className="flex h-full min-w-0 animate-view-fade-in flex-col bg-trace-surface pt-4 text-[13px] text-trace-text motion-reduce:animate-none"
-      aria-label="Span details"
-    >
+    <aside className="flex h-full min-w-0 flex-col bg-background text-sm text-foreground" aria-label="Span details">
       <PaneHeader
         type={span.type}
         model={span.model}
@@ -125,48 +118,34 @@ function SpanPane({
         idValue={span.span_id}
         onClose={onClose}
       />
-      <div role="tablist" aria-label="Span detail sections" className="flex shrink-0 items-center gap-2 py-2 pr-2 pl-6">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.id}
-            onClick={() => setTab(t.id)}
-            className={cn(
-              "rounded-[4px] px-2 py-1 text-[13px] leading-[18px] font-medium transition-colors duration-100 focus-visible:outline-2 focus-visible:outline-trace-brand motion-reduce:transition-none",
-              tab === t.id
-                ? "bg-trace-tab-active text-trace-text hover:bg-trace-tab-hover"
-                : "text-trace-key hover:bg-trace-tab-active",
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      <div key={tab} role="tabpanel" className="min-h-0 flex-1 overflow-auto">
-        {tab === "content" && (
+      <Tabs value={tab} onValueChange={(value) => onSpanTabChange(value as SpanTab)} className="min-h-0 flex-1 gap-0">
+        <PaneBar>
+          <TabsList variant="line" aria-label="Span detail sections" className="h-full gap-4 px-0">
+            {SPAN_TABS.map((id) => (
+              <TabsTrigger key={id} value={id} className="flex-none px-0 text-xs">
+                {TAB_LABELS[id]}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </PaneBar>
+        <TabsContent value="content" className="min-h-0 overflow-auto pt-3">
           <DetailContent accessToken={accessToken} traceId={traceId} traceRef={trace.summary.trace_ref} span={span} />
-        )}
-        {tab === "request" && (
+        </TabsContent>
+        <TabsContent value="request" className="min-h-0 overflow-auto pt-3">
           <RequestDetail span={span} accessToken={accessToken} traceStartMs={Date.parse(trace.summary.start_time)} />
-        )}
-        {tab === "attributes" && (
+        </TabsContent>
+        <TabsContent value="attributes" className="min-h-0 overflow-auto pt-3">
           <AttributesDetail
             traceId={traceId}
             span={span}
             attributes={detailQuery.data?.attributes}
             isLoading={detailQuery.isLoading}
           />
-        )}
-      </div>
+        </TabsContent>
+      </Tabs>
       <PaneFooter>
-        <CopyButton
-          value={agentHandoffText(traceId, span.span_id, trace.summary.trace_ref)}
-          label="Copy step"
-          copiedLabel="Command copied"
-        />
-        <div className="ml-auto flex items-center gap-3 text-[13px] text-trace-duration tabular-nums">
+        <CopyButton value={handoff.text} label="Copy step" copiedLabel={handoff.copied} />
+        <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
           <Meta label="time" value={fmtMs(span.duration_ms)} />
           {tokens > 0 && <Meta label="tokens" value={fmtTok(tokens)} />}
         </div>
@@ -177,35 +156,44 @@ function SpanPane({
 
 function GroupMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="border-r border-b border-trace-card-border p-3">
-      <div className="text-[13px] font-medium text-trace-key">{label}</div>
-      <div className="mt-1 text-[13px] text-trace-text tabular-nums">{value}</div>
+    <div className="border-b border-border/60 py-3">
+      <div className="text-sm font-medium text-muted-foreground">{label}</div>
+      <div className="mt-1 text-sm text-foreground tabular-nums">{value}</div>
     </div>
   );
 }
 
 /** ×N group: rollup of every invocation plus the first failure's message. */
-function GroupPane({ trace, row, onClose }: { trace: Trace; row: GroupRowData; onClose: () => void }) {
+function GroupPane({
+  trace,
+  row,
+  accessToken,
+  onClose,
+}: {
+  trace: Trace;
+  row: GroupRowData;
+  accessToken: string;
+  onClose: () => void;
+}) {
   const tokens = row.members.reduce((sum, m) => sum + m.input_tokens + m.output_tokens, 0);
   const firstFailure = row.members.find((m) => m.status === "error" && m.error);
+  const sample = (firstFailure ?? row.members[0]).span_id;
+  const handoff = useTracesApi(accessToken).handoff(trace.summary.trace_id, sample, trace.summary.trace_ref);
   return (
-    <aside
-      className="flex h-full min-w-0 animate-view-fade-in flex-col bg-trace-surface pt-4 text-[13px] text-trace-text motion-reduce:animate-none"
-      aria-label="Group details"
-    >
+    <aside className="flex h-full min-w-0 flex-col bg-background text-sm text-foreground" aria-label="Group details">
       <PaneHeader
         type={row.type}
         model={row.members[0]?.model ?? null}
         failed={row.failedCount > 0}
         title={
           <>
-            {row.name} <span className="text-trace-duration">×{row.members.length}</span>
+            {row.name} <span className="text-muted-foreground">×{row.members.length}</span>
           </>
         }
         onClose={onClose}
       />
-      <div className="min-h-0 flex-1 overflow-auto px-7 py-3">
-        <div className="grid grid-cols-2 overflow-hidden rounded-[4px] border border-trace-card-border bg-trace-surface">
+      <div className="min-h-0 flex-1 overflow-auto px-3 py-3">
+        <div className="grid grid-cols-2 gap-x-5">
           <GroupMetric label="Invocations" value={row.members.length.toLocaleString()} />
           <GroupMetric label="Failed" value={row.failedCount.toLocaleString()} />
           <GroupMetric label="p50 latency" value={fmtMs(row.p50Duration)} />
@@ -214,31 +202,39 @@ function GroupPane({ trace, row, onClose }: { trace: Trace; row: GroupRowData; o
           <GroupMetric label="Type" value={row.type} />
         </div>
         {firstFailure?.error && (
-          <section className="mt-3 rounded-[4px] border border-destructive/30 px-3.5 py-3">
-            <div className="text-[12px] font-medium text-destructive">Failure pattern</div>
-            <p className="mt-2 font-mono text-[12px] leading-5 text-foreground">{errorHeadline(firstFailure.error)}</p>
+          <section className="mt-3 rounded-sm border border-destructive/30 px-3.5 py-3">
+            <div className="text-xs font-medium text-destructive">Failure pattern</div>
+            <p className="mt-2 font-mono text-xs leading-5 text-foreground">{errorHeadline(firstFailure.error)}</p>
           </section>
         )}
       </div>
       <PaneFooter>
-        <CopyButton
-          value={agentHandoffText(trace.summary.trace_id, (firstFailure ?? row.members[0]).span_id)}
-          label="Copy group sample"
-        />
+        <CopyButton value={handoff.text} label="Copy group sample" copiedLabel={handoff.copied} />
       </PaneFooter>
     </aside>
   );
 }
 
 /** Right pane of the run view: switches on the selected tree row. */
-export function DetailPane({ trace, row, accessToken, onClose }: DetailPaneProps) {
+export function DetailPane({ trace, row, accessToken, spanTab, onSpanTabChange, onClose }: DetailPaneProps) {
   if (!row || row.kind === "load-more") {
     return (
-      <div className="grid h-full place-items-center bg-trace-surface text-[13px] text-trace-duration">
+      <div className="grid h-full place-items-center bg-background text-sm text-muted-foreground">
         Select a span to inspect it.
       </div>
     );
   }
-  if (row.kind === "group") return <GroupPane key={row.id} trace={trace} row={row} onClose={onClose} />;
-  return <SpanPane key={row.id} trace={trace} span={row.span} accessToken={accessToken} onClose={onClose} />;
+  if (row.kind === "group")
+    return <GroupPane key={row.id} trace={trace} row={row} accessToken={accessToken} onClose={onClose} />;
+  return (
+    <SpanPane
+      key={row.id}
+      trace={trace}
+      span={row.span}
+      accessToken={accessToken}
+      spanTab={spanTab}
+      onSpanTabChange={onSpanTabChange}
+      onClose={onClose}
+    />
+  );
 }

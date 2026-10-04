@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Final
 from typing_extensions import TypedDict
 
 from litellm import verbose_logger
+from litellm._internal_context import service_target
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS
@@ -34,6 +35,7 @@ class CooldownCacheValue(TypedDict):
 # real remaining cooldown against Redis at least this often, so an entry that later gets
 # deleted or extended in Redis before its original deadline is still noticed promptly.
 _MAX_CORRECTED_IN_MEMORY_TTL_SECONDS: Final = 60.0
+ROUTER_COOLDOWNS_TARGET: Final = "router_cooldowns"
 
 
 class CooldownCache:
@@ -118,11 +120,12 @@ class CooldownCache:
             )
 
             # Set the cache with a TTL equal to the cooldown time
-            self.cooldown_store.set_cache(
-                value=cooldown_data,
-                key=cooldown_key,
-                ttl=_cooldown_time,
-            )
+            with service_target(ROUTER_COOLDOWNS_TARGET):
+                self.cooldown_store.set_cache(
+                    value=cooldown_data,
+                    key=cooldown_key,
+                    ttl=_cooldown_time,
+                )
         except Exception as e:
             verbose_logger.error("CooldownCache::add_deployment_to_cooldown - Exception occurred - %s", e)
             raise e
@@ -162,7 +165,10 @@ class CooldownCache:
         # Generate the keys for the deployments
         keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
 
-        results: Final = await self.cooldown_store.async_batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
+        with service_target(ROUTER_COOLDOWNS_TARGET):
+            results: Final = await self.cooldown_store.async_batch_get_cache(
+                keys=keys, parent_otel_span=parent_otel_span
+            )
         return self.active_cooldowns_from_results(model_ids, results)
 
     def active_cooldowns_from_results(
@@ -190,7 +196,8 @@ class CooldownCache:
         # Generate the keys for the deployments
         keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
         # Retrieve the values for the keys using mget
-        results: Final = self.cooldown_store.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
+        with service_target(ROUTER_COOLDOWNS_TARGET):
+            results: Final = self.cooldown_store.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
 
         active_cooldowns: Final = []
         current_time: Final = time.time()
@@ -210,7 +217,8 @@ class CooldownCache:
         keys: Final = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
-        results: Final = self.cooldown_store.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
+        with service_target(ROUTER_COOLDOWNS_TARGET):
+            results: Final = self.cooldown_store.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
 
         min_cooldown_time: float | None = None
         # Process the results
