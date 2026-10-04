@@ -549,7 +549,7 @@ async def _active_session(candidate: Gateway, key: str, model: str, peer: Respon
             turn, turn_error = await _turn_result(connection, _create(model, f"active-{uuid.uuid4().hex}"))
             remaining: Final = max(0, 75 - (time.monotonic() - started))
             close: Final = CloseResult(await _wait_for_close(connection, remaining), time.monotonic() - started)
-            provider_closed: Final = _provider_closed_within(peer, PROVIDER_MODEL, 5)
+            provider_closed: Final = await asyncio.to_thread(_provider_closed_within, peer, PROVIDER_MODEL, 5)
             return ActiveResult(turn, turn_error, close, provider_closed)
     except (ConnectionClosed, asyncio.TimeoutError) as error:
         code, reason = _auth_close(error) if isinstance(error, ConnectionClosed) else (None, None)
@@ -637,7 +637,7 @@ async def _mid_response(
     peer: ResponsesPeer,
 ) -> MidResult:
     created, turn_error, close = await _mid_session(candidate, key, stall_model)
-    provider_closed: Final = _provider_closed_within(peer, STALL_PROVIDER_MODEL, 5)
+    provider_closed: Final = await asyncio.to_thread(_provider_closed_within, peer, STALL_PROVIDER_MODEL, 5)
     fresh_completed, fresh_error = await _fresh_session(candidate, key, normal_model)
     return MidResult(created, turn_error, close, provider_closed, fresh_completed, fresh_error)
 
@@ -650,7 +650,7 @@ async def _deaf_response(
     peer: ResponsesPeer,
 ) -> MidResult:
     created, turn_error, close = await _mid_session(candidate, key, deaf_model)
-    provider_closed: Final = _provider_closed_within(peer, DEAF_PROVIDER_MODEL, 30)
+    provider_closed: Final = await asyncio.to_thread(_provider_closed_within, peer, DEAF_PROVIDER_MODEL, 30)
     fresh_completed, fresh_error = await _fresh_session(candidate, key, normal_model)
     return MidResult(created, turn_error, close, provider_closed, fresh_completed, fresh_error)
 
