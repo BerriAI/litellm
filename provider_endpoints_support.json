@@ -2215,8 +2215,8 @@
       "url": "https://docs.litellm.ai/docs/providers/coralbricks",
       "endpoints": {
         "chat_completions": true,
-        "messages": false,
-        "responses": false,
+        "messages": true,
+        "responses": true,
         "embeddings": false,
         "image_generations": false,
         "audio_transcriptions": false,

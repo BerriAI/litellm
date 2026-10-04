@@ -376,6 +376,36 @@ class TestCoralBricks:
         assert fields["api_base"]["required"] is False
         assert fields["api_base"]["placeholder"] == "https://inference.coralbricks.ai/v1"
 
+    def test_responses_requests_go_to_the_gateway_natively(self):
+        cfg = litellm.ProviderConfigManager.get_provider_responses_api_config(
+            provider=litellm.LlmProviders.CORALBRICKS, model="glm-5.3-fp4"
+        )
+        assert cfg is not None
+        url = cfg.get_complete_url(api_base="https://inference.coralbricks.ai/v1", litellm_params={})
+        assert url == "https://inference.coralbricks.ai/v1/responses"
+
+    def test_messages_requests_go_to_the_gateway_natively(self):
+        from litellm.llms.openai_like.messages.transformation import JSONProviderAnthropicMessagesConfig
+
+        cfg = litellm.ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="glm-5.3-fp4", provider=litellm.LlmProviders.CORALBRICKS
+        )
+        assert isinstance(cfg, JSONProviderAnthropicMessagesConfig)
+        url = cfg.get_complete_url(
+            api_base=None, api_key="sk-test", model="glm-5.3-fp4", optional_params={}, litellm_params={}
+        )
+        assert url == "https://inference.coralbricks.ai/v1/messages"
+
+    def test_endpoint_support_table_matches_the_declared_endpoints(self):
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        declared = set(JSONProviderRegistry.get("coralbricks").supported_endpoints)
+        with open(os.path.join(workspace_path, "provider_endpoints_support.json")) as fh:
+            endpoints = json.load(fh)["providers"]["coralbricks"]["endpoints"]
+        assert endpoints["chat_completions"] is ("/v1/chat/completions" in declared)
+        assert endpoints["responses"] is ("/v1/responses" in declared)
+        assert endpoints["messages"] is ("/v1/messages" in declared)
+
 
 def _coralbricks_rows(file_name: str) -> dict:
     with open(os.path.join(workspace_path, file_name)) as fh:

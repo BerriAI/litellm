@@ -127,6 +127,7 @@
     "base_url": "https://inference.coralbricks.ai/v1",
     "api_key_env": "CORALBRICKS_API_KEY",
     "api_base_env": "CORALBRICKS_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"],
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
