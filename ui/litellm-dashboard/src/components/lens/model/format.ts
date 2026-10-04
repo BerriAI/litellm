@@ -17,6 +17,15 @@ export function durationText(seconds: number): string {
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
 }
 
+export function sinceLabel(elapsedMs: number): string {
+  const minutes = Math.floor(Math.max(elapsedMs, 0) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
 export function durationLabel(value: number, base: "minutes" | "hours" = "minutes"): string {
   const minutes = base === "hours" ? value * 60 : value;
   if (minutes >= 1440) {

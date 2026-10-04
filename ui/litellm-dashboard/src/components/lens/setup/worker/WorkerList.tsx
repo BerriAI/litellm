@@ -1,16 +1,16 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-
-import { CheckCircle2 } from "lucide-react";
+import { StatusDot, type StatusDotProps } from "@/components/shared/StatusDot";
 import { workerConnected } from "../../model/status";
-import { AnalysisKeyDetails } from "./AnalysisKeyDetails";
-import { SettingsCard } from "../SettingsLayout";
-import type { LensList } from "../../model/types";
+import { sinceLabel } from "../../model/format";
+import { AnalysisKeySummary } from "./AnalysisKeyDetails";
+import type { LensList, Worker } from "../../model/types";
 
-function workerStatus(worker: LensList["workers"][number], now: number): string {
-  if (!worker.analysis_key_id) return "Billing key required";
-  return workerConnected(worker, now) ? "Connected" : "Not connected";
+function workerStatus(worker: Worker, now: number): { state: StatusDotProps["state"]; label: string } {
+  if (!worker.analysis_key_id) return { state: "warn", label: "Billing key required" };
+  if (workerConnected(worker, now)) return { state: "ok", label: "Connected" };
+  return { state: "off", label: `Not connected · last seen ${sinceLabel(now - Date.parse(worker.last_seen))}` };
 }
 
 export function WorkerList({
@@ -23,41 +23,43 @@ export function WorkerList({
   workers: LensList["workers"];
   now: number;
   accessToken: string;
-  editBilling: (worker: LensList["workers"][number]) => void;
+  editBilling: (worker: Worker) => void;
   revoke: (id: string) => Promise<void>;
 }) {
   return (
-    <>
+    <ul className="divide-y divide-border rounded-lg border border-border bg-card">
       {workers
         .filter((w) => !w.revoked)
         .map((worker) => {
-          const connected = workerConnected(worker, now);
+          const status = workerStatus(worker, now);
           return (
-            <SettingsCard key={worker.id} className="space-y-4 text-sm">
-              <div className="flex items-center justify-between gap-3">
-                <h3 className="font-medium">{worker.name}</h3>
-                <span
-                  data-state={connected ? "active" : "inactive"}
-                  className="flex items-center gap-2 text-muted-foreground data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-400"
-                >
-                  {connected && <CheckCircle2 className="size-4" />}
-                  {workerStatus(worker, now)}
-                </span>
+            <li key={worker.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-sm">
+              <StatusDot state={status.state} className="shrink-0" />
+              <div className="min-w-0 flex-1 space-y-0.5">
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <h3 className="font-medium">{worker.name}</h3>
+                  <span className="text-xs text-muted-foreground">{status.label}</span>
+                </div>
+                {worker.analysis_key_id && (
+                  <AnalysisKeySummary accessToken={accessToken} keyId={worker.analysis_key_id} />
+                )}
               </div>
-              {worker.analysis_key_id && (
-                <AnalysisKeyDetails accessToken={accessToken} keyId={worker.analysis_key_id} showName />
-              )}
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+              <div className="flex items-center gap-1">
                 <Button variant="outline" size="sm" onClick={() => editBilling(worker)}>
                   Edit access
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => revoke(worker.id)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground hover:text-destructive"
+                  onClick={() => revoke(worker.id)}
+                >
                   Revoke access
                 </Button>
               </div>
-            </SettingsCard>
+            </li>
           );
         })}
-    </>
+    </ul>
   );
 }

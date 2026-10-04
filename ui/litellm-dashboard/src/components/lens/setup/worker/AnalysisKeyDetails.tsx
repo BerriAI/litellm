@@ -30,15 +30,38 @@ export function useAnalysisKeyInfo(accessToken: string, keyId?: string) {
   return useQuery(analysisKeyInfoQuery(api, keyId));
 }
 
-export function AnalysisKeyDetails({
-  accessToken,
-  keyId,
-  showName = false,
-}: {
-  accessToken: string;
-  keyId: string;
-  showName?: boolean;
-}) {
+function modelsLabel(models: readonly string[]): string {
+  return models.length ? models.join(", ") : "All models";
+}
+
+export function AnalysisKeySummary({ accessToken, keyId }: { accessToken: string; keyId: string }) {
+  const key = useAnalysisKeyInfo(accessToken, keyId);
+  if (key.isLoading) return <p className="text-xs text-muted-foreground">Loading billing key…</p>;
+  if (key.error || !key.data)
+    return (
+      <p role="alert" className="flex items-center gap-2 text-xs text-destructive">
+        Could not load billing key
+        <Button variant="link" size="xs" className="h-auto p-0" onClick={() => void key.refetch()}>
+          Retry
+        </Button>
+      </p>
+    );
+  const info = key.data;
+  const summary = [
+    `Bills to ${info.key_alias || "an assigned virtual key"}`,
+    modelsLabel(info.models),
+    budgetLabel(info.max_budget, info.budget_duration),
+  ].join(" · ");
+  const inactive = info.status && info.status !== "active";
+  return (
+    <p className="truncate text-xs text-muted-foreground">
+      {summary}
+      {inactive && <span className="text-destructive"> · Key {info.status}</span>}
+    </p>
+  );
+}
+
+export function AnalysisKeyDetails({ accessToken, keyId }: { accessToken: string; keyId: string }) {
   const key = useAnalysisKeyInfo(accessToken, keyId);
   if (key.isLoading) return <p className="text-xs text-muted-foreground">Loading key permissions…</p>;
   if (key.error || !key.data)
@@ -54,14 +77,8 @@ export function AnalysisKeyDetails({
   return (
     <div className="space-y-2 text-sm">
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-2">
-        {showName && (
-          <>
-            <dt className="text-muted-foreground">Billing key</dt>
-            <dd className="break-words">{info.key_alias || "Assigned virtual key"}</dd>
-          </>
-        )}
         <dt className="text-muted-foreground">Models</dt>
-        <dd className="break-words">{info.models.length ? info.models.join(", ") : "All models"}</dd>
+        <dd className="break-words">{modelsLabel(info.models)}</dd>
         <dt className="text-muted-foreground">Key limit</dt>
         <dd>{budgetLabel(info.max_budget, info.budget_duration)}</dd>
       </dl>
