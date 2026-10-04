@@ -21,6 +21,13 @@ def test_private_registry_override_keeps_its_exact_digest(monkeypatch: pytest.Mo
     assert worker_image() == image
 
 
+def test_source_build_uses_the_separate_development_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    tag: Final = "sha-" + "a" * 40
+    monkeypatch.setenv("LITELLM_RELEASE_TAG", tag)
+    monkeypatch.delenv("LENS_WORKER_IMAGE", raising=False)
+    assert worker_image() == f"ghcr.io/berriai/litellm-lens-worker-dev:{tag}"
+
+
 @pytest.mark.parametrize(
     "installed,expected",
     (("1.2.3", "v1.2.3"), ("1.2.3rc4", "v1.2.3-rc.4"), ("1.2.3.dev5", "v1.2.3-dev.5")),
