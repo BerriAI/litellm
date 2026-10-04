@@ -275,6 +275,6 @@ function needsSetup(
   if (requested) return true;
   if (!state.missingTraces) return false;
   if (tab === "traces") return true;
-  const hasActivity = state.hasInvestigations || state.requestsReady || selected;
+  const hasActivity = state.hasInvestigations || state.hasRequests || selected;
   return canInvestigate && !hasActivity;
 }

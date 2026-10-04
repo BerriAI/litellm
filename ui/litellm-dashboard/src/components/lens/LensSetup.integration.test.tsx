@@ -1,4 +1,4 @@
-import { fireEvent, screen, within, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
@@ -185,6 +185,29 @@ describe("Lens setup journey", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("button", { name: "Continue to worker" })).toBeEnabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("keeps request-only users in investigations when an activity refresh fails", async () => {
+    serve({ requests: true, connected: true });
+    const user = userEvent.setup();
+    renderWithProviders(<LensWorkspace accessToken="setup-token" userRole="Admin" readOnly={false} />, {
+      searchParams: "?tab=investigations",
+    });
+    expect(await screen.findByText("Request logs received")).toBeVisible();
+    const normal = network.getMockImplementation()!;
+    network.mockImplementation((input, init) =>
+      new URL(String(input), "http://localhost").pathname === "/lens/activity/available"
+        ? Promise.resolve(Response.json({ detail: "Activity unavailable" }, { status: 503 }))
+        : normal(input, init),
+    );
+    await act(() => testQueryClient.refetchQueries());
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not check recorded activity");
+    expect(screen.queryByRole("heading", { name: "Get Lens running" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New investigation" })).toBeDisabled();
+    network.mockImplementation(normal);
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Request logs received")).toBeVisible();
+    expect(screen.getByRole("button", { name: "New investigation" })).toBeEnabled();
   });
 
   it("keeps administrator-only setup unavailable to trace viewers", async () => {

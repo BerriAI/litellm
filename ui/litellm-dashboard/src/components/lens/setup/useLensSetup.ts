@@ -23,7 +23,8 @@ export function useLensSetup(accessToken: string, enabled: boolean, canInvestiga
   const activity = useQuery(lensQueries.activity(api, enabled && canInvestigate && list.isSuccess));
   const data = list.data ?? { lenses: [], workers: [], tracing_enabled: false };
   const traceState = traceSetupState(traces, data.tracing_enabled);
-  const requestsReady = activity.data?.requests === true && !activity.error;
+  const hasRequests = activity.data?.requests === true;
+  const requestsReady = hasRequests && !activity.error;
   const connected = data.workers.some((worker) => workerConnected(worker, now));
   const hasInvestigations = data.lenses.length > 0;
   const activityReady = traceState.tracesReady || requestsReady;
@@ -42,6 +43,7 @@ export function useLensSetup(accessToken: string, enabled: boolean, canInvestiga
     tracingEnabled: traceState.tracingEnabled,
     tracesReady: traceState.tracesReady,
     requestsReady,
+    hasRequests,
     connected,
     hasInvestigations,
     missingTraces: traceState.missingTraces,
