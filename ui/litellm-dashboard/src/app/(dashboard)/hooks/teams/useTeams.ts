@@ -1,4 +1,11 @@
-import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient, UseQueryResult } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  QueryClient,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+  UseQueryResult,
+} from "@tanstack/react-query";
 import { Team } from "@/components/key_team_helpers/key_list";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchTeams } from "@/app/(dashboard)/networking";
@@ -110,7 +117,7 @@ export const useTeamsTable = (
   });
 };
 
-const teamKeys = createQueryKeys("teams");
+export const teamKeys = createQueryKeys("teams");
 export const useTeams = (): UseQueryResult<Team[]> => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<Team[]>({
@@ -163,7 +170,8 @@ export const useTeam = (teamId?: string) => {
         throw new Error("Missing auth or teamId");
       }
 
-      return teamInfoCall(accessToken, teamId);
+      const { team_info } = (await teamInfoCall(accessToken, teamId)) as { team_info: Team };
+      return team_info;
     },
 
     initialData: () => {
@@ -177,6 +185,11 @@ export const useTeam = (teamId?: string) => {
 };
 
 const infiniteTeamKeys = createQueryKeys("infiniteTeams");
+
+export const invalidateTeamQueries = (queryClient: QueryClient) =>
+  Promise.all(
+    [teamsTableKeys, teamKeys, infiniteTeamKeys].map((keys) => queryClient.invalidateQueries({ queryKey: keys.all })),
+  );
 
 export const useInfiniteTeams = (pageSize: number = 50, search?: string, organizationId?: string | null) => {
   const { accessToken, userId, userRole } = useAuthorized();

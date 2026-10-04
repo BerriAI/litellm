@@ -10,9 +10,11 @@ from pydantic import Field
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
+from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs, safe_divide_seconds
+from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
@@ -57,7 +59,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
 
+    @with_service_target("router_usage")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update latency usage on success
@@ -178,10 +183,13 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
+    @with_service_target("router_usage")
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
         Check if Timeout Error, if timeout set deployment latency -> 100
         """
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             metadata_field: Final = self._select_metadata_field(kwargs)
             _exception: Final = kwargs.get("exception", None)
@@ -235,7 +243,10 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
+    @with_service_target("router_usage")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update latency usage on success
@@ -490,6 +501,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             request_kwargs[metadata_field]["_latency_per_deployment"] = _latency_per_deployment
         return deployment
 
+    @with_service_target("router_usage")
     async def async_get_available_deployments(
         self,
         model_group: str,
@@ -515,6 +527,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             request_count_dict,
         )
 
+    @with_service_target("router_usage")
     def get_available_deployments(
         self,
         model_group: str,

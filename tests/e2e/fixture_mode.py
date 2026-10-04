@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Generator
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Final, Literal, assert_never
 
+import pytest
 from fixture_bundle import (
     FreshBundle,
     StaleBundle,
@@ -26,6 +29,7 @@ from fixture_bundle import (
     check_freshness,
     format_age,
 )
+from fixture_profile import match_profile
 
 type FixtureMode = Literal["live", "record", "replay"]
 
@@ -58,6 +62,31 @@ def current_test_key() -> str:
     return raw.rsplit(" (", 1)[0]
 
 
+REGISTRATION_OWNER: Final[ContextVar[str | None]] = ContextVar("registration_owner", default=None)
+
+
+def registration_owner() -> str:
+    """The pytest node that owns a deployment registered right now. While a
+    fixture is being set up that is the node the fixture is scoped to: the module
+    or class for a fixture its tests share, and ``session`` for a session- or
+    package-scoped one, which every xdist worker sets up and no node can own.
+    Anywhere else it is the running test."""
+    owner = REGISTRATION_OWNER.get()
+    return current_test_key() if owner is None else owner
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_fixture_setup(request: pytest.FixtureRequest) -> Generator[None, object, object]:
+    node: Final = request.node  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # pytest: untyped
+    assert isinstance(node, pytest.Item | pytest.Collector)
+    owner: Final = SESSION_TEST_KEY if request.scope in ("session", "package") else node.nodeid
+    token: Final = REGISTRATION_OWNER.set(owner)
+    try:
+        return (yield)
+    finally:
+        REGISTRATION_OWNER.reset(token)
+
+
 class ReplayMiss(AssertionError):
     """Replay had no recorded interaction for a provider call the proxy made.
     The suite drifted from the bundle (or the bundle from the suite): re-record."""
@@ -82,6 +111,7 @@ def fixture_mode_collection_error(mode_raw: str, bundle_dir: Path, *, now: datet
     Called at collection time (conftest pytest_sessionstart) so a stale or missing
     bundle fails the whole run up front, naming the bundle age, instead of failing
     every test individually."""
+    match_profile()
     mode = parse_fixture_mode(mode_raw)
     match mode:
         case InvalidFixtureMode(value=value):
@@ -89,7 +119,7 @@ def fixture_mode_collection_error(mode_raw: str, bundle_dir: Path, *, now: datet
         case "live" | "record":
             return None
         case "replay":
-            freshness = check_freshness(bundle_dir, now=now)
+            freshness = check_freshness(bundle_dir, now=now, profile=match_profile())
             match freshness:
                 case FreshBundle():
                     return None
@@ -110,6 +140,7 @@ def fixture_mode_collection_error(mode_raw: str, bundle_dir: Path, *, now: datet
 def fixture_report_lines(mode_raw: str, bundle_dir: Path, *, now: datetime) -> list[str]:
     """pytest report-header lines; empty in live mode so an unset
     E2E_FIXTURE_MODE keeps today's output byte-identical."""
+    match_profile()
     mode = parse_fixture_mode(mode_raw)
     match mode:
         case InvalidFixtureMode() | "live":
@@ -117,7 +148,7 @@ def fixture_report_lines(mode_raw: str, bundle_dir: Path, *, now: datetime) -> l
         case "record":
             return [f"e2e fixture mode: record -> {bundle_dir}"]
         case "replay":
-            freshness = check_freshness(bundle_dir, now=now)
+            freshness = check_freshness(bundle_dir, now=now, profile=match_profile())
             match freshness:
                 case FreshBundle(manifest=manifest):
                     return [

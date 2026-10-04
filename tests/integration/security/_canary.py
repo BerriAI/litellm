@@ -1,0 +1,197 @@
+"""Canary values and the canary search used by every credential sweep.
+
+A canary is a unique fake credential planted in one slot (one place the proxy can hold a
+credential). Its value is ``<field prefix>lkc-<slot id>-<32 lowercase hex core>``; the slot id
+names the source when a sweep finds it, and the random core is what every sweep searches for.
+
+API:
+
+- ``SLOTS``: slot id -> ``Slot(identity, description, prefix)``. Stacked suites add their slots
+  here. ``MARKER`` is not a credential; it is the sensitivity marker sent in message content to
+  prove that a sweep can see the surface it walks.
+- ``canary(slot_id) -> Canary``: a fresh value per call. Call it inside the test (or the fixture
+  that owns the config holding it), never at import time, so leftovers from earlier runs cannot
+  match.
+- ``find_canary(blob, canaries, *, budget_bytes=DECODE_BUDGET_BYTES) -> tuple[Match, ...]``:
+  every canary whose core occurs in ``blob`` either raw, inside any base64-looking run after
+  decoding it (standard and URL-safe alphabets, padded or not, at every 4-character alignment),
+  or inside a gzip member wherever it starts in the blob. Decoding is applied recursively, so a
+  gzip body carrying a ``Basic`` header value is still searched. JSON and URL encoding leave a
+  hex core unchanged, so the raw search covers them. A properly masked value such as
+  ``sk-...e71b`` is not a match. The search is bounded (three nested layers and ``budget_bytes``
+  of decoded output per blob) and raises ``DecodeBudgetExceeded`` rather than returning a
+  partial result.
+"""
+
+from __future__ import annotations
+
+import binascii
+import re
+import uuid
+import zlib
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final
+
+_BASE64_RUN: Final = re.compile(rb"[A-Za-z0-9+/_-]{24,}={0,2}")
+_GZIP_MAGIC: Final = b"\x1f\x8b"
+_TO_STANDARD: Final = bytes.maketrans(b"-_", b"+/")
+_MAX_DEPTH: Final = 3
+DECODE_BUDGET_BYTES: Final = 512 * 1024 * 1024
+
+
+class DecodeBudgetExceeded(AssertionError):
+    """A blob needs more decoded bytes than the search budget; the sweep cannot vouch for it."""
+
+
+@dataclass(slots=True)
+class _Budget:
+    remaining: int
+
+    def spend(self, size: int) -> None:
+        self.remaining -= size
+        if self.remaining < 0:
+            raise DecodeBudgetExceeded("find_canary needed more decoded bytes than its budget for one blob")
+
+
+@dataclass(frozen=True, slots=True)
+class Slot:
+    identity: str
+    description: str
+    prefix: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Canary:
+    slot: str
+    core: str
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class Match:
+    slot: str
+    encoding: str
+
+
+MARKER: Final = "M0"
+
+SLOTS: Final = MappingProxyType(
+    {
+        MARKER: Slot(MARKER, "Sensitivity marker in message content; must appear where prompts are stored"),
+        "A1": Slot("A1", "Virtual key raw value, set as a custom key through /key/generate", prefix="sk-"),
+        "A2": Slot("A2", "Proxy master key from the LITELLM_MASTER_KEY environment variable", prefix="sk-"),
+        "B1": Slot("B1", "Deployment api_key declared in the proxy config.yaml model_list"),
+        "G1d": Slot("G1d", "Logging sink credential read from the proxy environment (DD_API_KEY)"),
+        "C1": Slot(
+            "C1", "Team callback langfuse_secret_key (team callback API, config team settings, callback_settings)"
+        ),
+        "C2": Slot("C2", "Key-level callback langfuse_secret_key in key metadata.logging"),
+        "C3": Slot("C3", "Team callback dd_api_key for the Datadog sink"),
+        "D5": Slot("D5", "Request-supplied langfuse_secret_key in the request body"),
+        "B2": Slot("B2", "Deployment api_key added through /model/new and stored encrypted"),
+        "B3": Slot("B3", "Credentials table api_key referenced by a deployment's litellm_credential_name"),
+        "B4": Slot("B4", "Deployment aws_secret_access_key added through /model/new"),
+        "B4v": Slot("B4v", "Vertex service-account JSON added through /model/new, traced by its private_key_id"),
+        "B4t": Slot("B4t", "Vertex access token the token endpoint mints for that service account"),
+        "B5": Slot("B5", "Credentials table api_key applied by a team model_config credential override"),
+        "E1": Slot("E1", "Guardrail api_key declared in the proxy config.yaml guardrails"),
+        "G1": Slot("G1", "generic_api sink bearer token from the GENERIC_LOGGER_HEADERS environment variable"),
+        "G1b": Slot("G1b", "Langfuse sink secret key from the LANGFUSE_SECRET_KEY environment variable"),
+        "F1": Slot("F1", "MCP server static auth_value registered through /v1/mcp/server"),
+        "F2": Slot("F2", "Per-user MCP OAuth access token from the authorization-code flow"),
+        "F2E": Slot("F2E", "Per-user MCP env var value stored through /v1/mcp/server/{server_id}/user-env-vars"),
+        "F3": Slot("F3", "Client x-mcp-<server>-authorization request header"),
+        "H1": Slot("H1", "Pass-through endpoint credential header resolved from os.environ"),
+        "H2": Slot("H2", "Vector store api_key declared in the proxy config.yaml vector_store_registry"),
+        "H2S": Slot("H2S", "Search tool api_key declared in the proxy config.yaml search_tools"),
+        "D1": Slot("D1", "Client-side api_key in the request body"),
+        "D2": Slot("D2", "Client x-api-key header forwarded as the provider key"),
+        "D3": Slot("D3", "Client x- header forwarded to the provider"),
+        "D4": Slot("D4", "Anthropic OAuth token in the client Authorization header", prefix="sk-ant-oat01-"),
+    }
+)
+
+
+def canary(slot_id: str) -> Canary:
+    slot: Final = SLOTS[slot_id]
+    core: Final = uuid.uuid4().hex
+    return Canary(slot_id, core, f"{slot.prefix}lkc-{slot_id}-{core}")
+
+
+def _decoded_runs(blob: bytes) -> Iterable[tuple[str, bytes]]:
+    for text in dict.fromkeys(run.group().rstrip(b"=") for run in _BASE64_RUN.finditer(blob)):
+        for offset in range(4):
+            aligned = text[offset:]
+            aligned = aligned[: len(aligned) - len(aligned) % 4] if len(aligned) % 4 == 1 else aligned
+            padded = aligned + b"=" * (-len(aligned) % 4)
+            alphabets = (("base64", b"+/"), ("base64url", b"-_"))
+            for name, extra in alphabets if any(char in aligned for char in b"+/-_") else alphabets[:1]:
+                try:
+                    yield (
+                        name,
+                        binascii.a2b_base64(
+                            padded.translate(_TO_STANDARD) if extra == b"-_" else padded, strict_mode=False
+                        ),
+                    )
+                except (binascii.Error, ValueError):
+                    continue
+
+
+def _gunzipped(blob: bytes, budget: _Budget) -> Iterable[bytes]:
+    """Inflate every gzip member in ``blob``, wherever it starts, ignoring trailing bytes."""
+    start = blob.find(_GZIP_MAGIC)
+    while start != -1:
+        inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        try:
+            inflated = inflater.decompress(blob[start:], budget.remaining + 1)
+        except zlib.error:
+            inflated = b""
+        budget.spend(len(inflated))
+        if inflated:
+            yield inflated
+        start = blob.find(_GZIP_MAGIC, start + 1)
+
+
+def _matches(blob: bytes, canaries: Sequence[Canary], encoding: str, depth: int, budget: _Budget) -> Iterable[Match]:
+    lowered: Final = blob.lower()
+    for candidate in canaries:
+        if candidate.core.encode() in lowered:
+            yield Match(candidate.slot, encoding)
+    if depth >= _MAX_DEPTH:
+        return
+    for inflated in _gunzipped(blob, budget):
+        yield from _matches(inflated, canaries, f"{encoding}>gzip" if encoding != "raw" else "gzip", depth + 1, budget)
+    for name, decoded in _decoded_runs(blob):
+        budget.spend(len(decoded))
+        label = f"{encoding}>{name}" if encoding != "raw" else name
+        if _worth_descending(decoded):
+            yield from _matches(decoded, canaries, label, depth + 1, budget)
+        else:
+            lowered_decoded = decoded.lower()
+            yield from (Match(c.slot, label) for c in canaries if c.core.encode() in lowered_decoded)
+
+
+def _worth_descending(decoded: bytes) -> bool:
+    """Recursion can only find something through a gzip member or another base64 run.
+
+    Skipping the rest is exact, not a heuristic: the core check has already run on ``decoded``.
+    """
+    return _GZIP_MAGIC in decoded or _BASE64_RUN.search(decoded) is not None
+
+
+def find_canary(
+    blob: bytes | str, canaries: Sequence[Canary], *, budget_bytes: int = DECODE_BUDGET_BYTES
+) -> tuple[Match, ...]:
+    """Every canary found in ``blob``, one ``Match`` per slot with the shallowest encoding seen.
+
+    Decoding is bounded: at most ``_MAX_DEPTH`` nested layers and ``DECODE_BUDGET_BYTES`` decoded or
+    inflated bytes per call (``budget_bytes``). Exceeding the byte budget raises ``DecodeBudgetExceeded`` (an
+    ``AssertionError``) instead of returning a partial, possibly clean, result.
+    """
+    data: Final = blob.encode() if isinstance(blob, str) else blob
+    found: Final[dict[str, Match]] = {}  # mutable-ok: first (shallowest) encoding per slot wins
+    for match in _matches(data, canaries, "raw", 0, _Budget(budget_bytes)):
+        found.setdefault(match.slot, match)
+    return tuple(found.values())

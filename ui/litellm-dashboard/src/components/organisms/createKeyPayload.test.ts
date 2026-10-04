@@ -45,6 +45,7 @@ const DROPPED_AT_SERIALISATION = [
   "rpm_limit",
   "tags",
   "throttle_on_budget_exceeded",
+  "tpd_limit",
   "tpm_limit",
 ];
 
@@ -64,6 +65,7 @@ const OPTIONAL_SETTINGS_VALUES = {
   tpm_limit_type: "key",
   rpm_limit: undefined,
   rpm_limit_type: "key",
+  tpd_limit: undefined,
   throttle_on_budget_exceeded: undefined,
   enable_prompt_caching: undefined,
   guardrails: undefined,
@@ -456,6 +458,18 @@ describe("budget duration", () => {
   });
 });
 
+describe("tpd_limit", () => {
+  it("forwards the daily batch token budget alongside the minute limits", () => {
+    expect(payloadOf(build({ key_alias: "my-key", tpd_limit: 250000, rpm_limit: 5 }))).toStrictEqual(
+      aliasOnly({ tpd_limit: 250000, rpm_limit: 5 }),
+    );
+  });
+
+  it("keeps a zero tpd_limit rather than treating it as unset", () => {
+    expect(payloadOf(build({ key_alias: "my-key", tpd_limit: 0 }))).toStrictEqual(aliasOnly({ tpd_limit: 0 }));
+  });
+});
+
 describe("purity", () => {
   it("leaves the submitted form values untouched", () => {
     const values = {
@@ -499,9 +513,9 @@ describe("serialised wire shape", () => {
     expect(payloadOf(build({ ...CLOSED_SECTIONS_VALUES, team_id: "team-1" })).team_id).toBe("team-1");
   });
 
-  it("adds fifteen keys to the object and only the two limit types to the wire when Optional Settings opens", () => {
+  it("adds sixteen keys to the object and only the two limit types to the wire when Optional Settings opens", () => {
     const payload = payloadOf(build(OPTIONAL_SETTINGS_VALUES));
-    expect(Object.keys(payload)).toHaveLength(23);
+    expect(Object.keys(payload)).toHaveLength(24);
     expect(wireKeys(payload)).toStrictEqual([
       "team_id",
       "key_alias",

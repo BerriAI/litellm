@@ -1,3 +1,4 @@
+import { expectUnrestrictedDashboard, setInvitedUserPassword } from "../../helpers/userOnboarding";
 import { test, expect, type Browser, type BrowserContext, type Page as PlaywrightPage } from "@playwright/test";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup, clickTeamId } from "../../helpers/navigation";
@@ -24,7 +25,7 @@ async function signIn(browser: Browser, email: string): Promise<BrowserContext> 
   await page.getByPlaceholder("Enter your username").fill(email);
   await page.getByPlaceholder("Enter your password").fill(PASSWORD);
   await page.getByRole("button", { name: "Login", exact: true }).click();
-  await expect(page.locator("a", { hasText: "Virtual Keys" })).toBeVisible({ timeout: 30_000 });
+  await expectUnrestrictedDashboard(page);
   await dismissFeedbackPopup(page);
   return context;
 }
@@ -49,11 +50,7 @@ test.describe("Team Admin - Member permissions", () => {
         data: { user_id: userId, user_email: email, user_role: "internal_user", auto_create_key: false },
       });
       expect(created.ok(), `POST /user/new for ${userId} (${created.status()}): ${await created.text()}`).toBe(true);
-      const password = await request.post("/user/update", {
-        headers: auth(),
-        data: { user_id: userId, password: PASSWORD },
-      });
-      expect(password.ok(), `POST /user/update for ${userId} (${password.status()})`).toBe(true);
+      await setInvitedUserPassword(request, userId, PASSWORD);
     };
 
     let teamId = "";

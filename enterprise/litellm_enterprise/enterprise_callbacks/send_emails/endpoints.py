@@ -17,6 +17,7 @@ from litellm_enterprise.types.enterprise_callbacks.send_emails import (
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.db_span import db_span
 
 router = APIRouter()
 
@@ -60,6 +61,11 @@ async def _get_email_settings(prisma_client) -> Dict[str, bool]:
 
 async def _save_email_settings(prisma_client, settings: Dict[str, bool]):
     """Helper function to save email settings to general_settings in db"""
+    from litellm.proxy.proxy_server import proxy_config
+
+    proxy_config.reject_config_owned_writes(
+        section_name="general_settings", changed_keys={"email_settings": settings}
+    )
     try:
         verbose_proxy_logger.debug(
             f"Saving email settings to general_settings: {settings}"
@@ -89,16 +95,17 @@ async def _save_email_settings(prisma_client, settings: Dict[str, bool]):
         json_settings = json.dumps(general_settings, default=str)
 
         # Save updated general settings
-        await prisma_client.db.litellm_config.upsert(
-            where={"param_name": "general_settings"},
-            data={
-                "create": {
-                    "param_name": "general_settings",
-                    "param_value": json_settings,
+        async with db_span("save_email_settings", "LiteLLM_Config"):
+            await prisma_client.db.litellm_config.upsert(
+                where={"param_name": "general_settings"},
+                data={
+                    "create": {
+                        "param_name": "general_settings",
+                        "param_value": json_settings,
+                    },
+                    "update": {"param_value": json_settings},
                 },
-                "update": {"param_value": json_settings},
-            },
-        )
+            )
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -168,6 +175,8 @@ async def update_event_settings(
         await _save_email_settings(prisma_client, settings_dict)
 
         return {"message": "Email event settings updated successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error updating email settings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -197,6 +206,8 @@ async def reset_event_settings(
         await _save_email_settings(prisma_client, default_settings)
 
         return {"message": "Email event settings reset to defaults"}
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error resetting email settings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
