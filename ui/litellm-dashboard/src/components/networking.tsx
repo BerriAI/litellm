@@ -117,7 +117,7 @@ import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
-import type { SpanDetail, SpanErrorPage, Trace, TracePage } from "./view_logs/TraceView/traceTypes";
+import type { SpanDetail, SpanErrorPage, Trace, TracePage } from "./lens/traces/types";
 import {
   createApiClient,
   deriveErrorMessage,
