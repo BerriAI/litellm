@@ -12,8 +12,10 @@ import {
   investigationDefaults,
   investigationSettings,
   investigationStepFields,
+  SETUP_STEPS,
   type InvestigationInput,
   type InvestigationOutput,
+  type SetupStep,
 } from "./investigationSchema";
 import { ScopeFields } from "./fields/ScopeFields";
 import { SampleFields } from "./fields/SampleFields";
@@ -35,11 +37,11 @@ const TITLES: Record<SetupMode, string> = {
   duplicate: "Duplicate investigation",
 };
 
-const STEPS = [
-  { title: "Activity", description: "Which traces or requests to review" },
-  { title: "Criteria", description: "What the agent should do and what to watch for" },
-  { title: "Run", description: "Schedule, analysis model, and budget" },
-] as const;
+const STEPS: Readonly<Record<SetupStep, { title: string; description: string }>> = {
+  activity: { title: "Activity", description: "Which traces or requests to review" },
+  criteria: { title: "Criteria", description: "What the agent should do and what to watch for" },
+  run: { title: "Run", description: "Schedule, analysis model, and budget" },
+};
 
 interface ModelGate {
   readonly modelValid: boolean;
@@ -92,21 +94,23 @@ const STEP_BADGE: Record<StepState, string> = {
 };
 
 /** One row of the vertical stepper: finished steps collapse to a summary and reopen on click. */
-function SetupStep({
+function SetupStepRow({
+  step,
   index,
   state,
   summary,
   onOpen,
   children,
 }: {
+  step: SetupStep;
   index: number;
   state: StepState;
   summary: string;
   onOpen: () => void;
   children: ReactNode;
 }) {
-  const { title, description } = STEPS[index];
-  const last = index === STEPS.length - 1;
+  const { title, description } = STEPS[step];
+  const last = index === SETUP_STEPS.length - 1;
   return (
     <li className={cn("relative flex gap-4", !last && "pb-8")}>
       {!last && <span aria-hidden="true" className="absolute top-7 bottom-0 left-3.5 w-px bg-border" />}
@@ -208,7 +212,7 @@ function SetupEditor({
     [setValue, subscribe],
   );
   const next = async () => {
-    if (await trigger(investigationStepFields[step])) setStep(step + 1);
+    if (await trigger(investigationStepFields[SETUP_STEPS[step]])) setStep(step + 1);
   };
   const save = form.handleSubmit(async (values) => {
     setError("");
@@ -230,8 +234,8 @@ function SetupEditor({
     if (index < step) return "done";
     return index === step ? "current" : "upcoming";
   };
-  const stepContent = (index: number) => {
-    if (index === 0)
+  const stepContent = (key: SetupStep) => {
+    if (key === "activity")
       return (
         <>
           <label className="grid gap-2 text-sm font-medium">
@@ -242,7 +246,7 @@ function SetupEditor({
           <SampleFields />
         </>
       );
-    if (index === 1) return <ExpectationsFields />;
+    if (key === "criteria") return <ExpectationsFields />;
     return (
       <RunFields
         modelValid={gate.modelValid}
@@ -287,22 +291,23 @@ function SetupEditor({
       )}
       <div className="grid min-w-0 gap-8 lg:grid-cols-2">
         <ol aria-label="Investigation setup" className="min-w-0">
-          {STEPS.map((_, index) => (
-            <SetupStep
-              key={index}
+          {SETUP_STEPS.map((key, index) => (
+            <SetupStepRow
+              key={key}
+              step={key}
               index={index}
               state={stateOf(index)}
               summary={summaries[index]}
               onOpen={() => setStep(index)}
             >
-              {stepContent(index)}
-              {error && index === STEPS.length - 1 && (
+              {stepContent(key)}
+              {error && key === "run" && (
                 <p role="alert" className="text-sm text-destructive">
                   {error}
                 </p>
               )}
               <div className="flex justify-end pt-1">
-                {index < STEPS.length - 1 ? (
+                {key !== "run" ? (
                   <Button onClick={() => void next()}>Continue</Button>
                 ) : (
                   <Button disabled={!canSave} onClick={() => void save()}>
@@ -310,7 +315,7 @@ function SetupEditor({
                   </Button>
                 )}
               </div>
-            </SetupStep>
+            </SetupStepRow>
           ))}
         </ol>
         <div className="min-w-0 space-y-3 lg:sticky lg:top-0 lg:self-start">

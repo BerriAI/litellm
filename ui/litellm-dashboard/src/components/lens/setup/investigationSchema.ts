@@ -1,5 +1,4 @@
 import { z } from "zod";
-import type { FieldPath } from "react-hook-form";
 import type { Settings } from "../model/types";
 import { normalizeFilters } from "./filters";
 import { initialWatches, isWatch, watchChecks } from "./watches";
@@ -147,29 +146,41 @@ export const investigationSchema = draftSchema
 export type InvestigationInput = z.input<typeof investigationSchema>;
 export type InvestigationOutput = z.output<typeof investigationSchema>;
 
-/** Fields validated when leaving each setup step: activity filter, criteria, then run details. */
-export const investigationStepFields: readonly (readonly FieldPath<InvestigationInput>[])[] = [
-  [
-    "name",
-    "selection.source",
-    "selection.service",
-    "selection.agent_name",
-    "selection.filters",
-    "selection.team_id",
-    "selection.lookback_hours",
-    "selection.sample_percent",
-  ],
-  ["context", "questions", "watching"],
-  [
-    "selection.execution_ids",
-    "selection.sample_size",
-    "selectedModel",
-    "budget",
-    "interval",
-    "repeat",
-    "manualSelection",
-  ],
-];
+export const SETUP_STEPS = ["activity", "criteria", "run"] as const;
+export type SetupStep = (typeof SETUP_STEPS)[number];
+
+type SelectionField = `selection.${keyof InvestigationInput["selection"]}`;
+export type InvestigationField = Exclude<keyof InvestigationInput, "selection"> | SelectionField;
+
+/** Every form field belongs to exactly one setup step; adding a schema field without a step fails to type-check. */
+const stepOfField = {
+  name: "activity",
+  "selection.source": "activity",
+  "selection.service": "activity",
+  "selection.agent_name": "activity",
+  "selection.filters": "activity",
+  "selection.team_id": "activity",
+  "selection.lookback_hours": "activity",
+  "selection.sample_percent": "activity",
+  context: "criteria",
+  questions: "criteria",
+  watching: "criteria",
+  "selection.execution_ids": "run",
+  "selection.sample_size": "run",
+  selectedModel: "run",
+  budget: "run",
+  interval: "run",
+  repeat: "run",
+  manualSelection: "run",
+} as const satisfies Record<InvestigationField, SetupStep>;
+
+const fields = Object.keys(stepOfField) as readonly InvestigationField[];
+
+export const investigationStepFields: Readonly<Record<SetupStep, readonly InvestigationField[]>> = {
+  activity: fields.filter((field) => stepOfField[field] === "activity"),
+  criteria: fields.filter((field) => stepOfField[field] === "criteria"),
+  run: fields.filter((field) => stepOfField[field] === "run"),
+};
 
 function activitySelectionDefaults(
   initial: Settings | undefined,
