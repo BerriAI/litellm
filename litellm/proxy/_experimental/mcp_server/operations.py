@@ -81,6 +81,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     outcome_wire_value,
 )
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    ListedToolsCaller,
     MCPServerManager,
     _caller_authorization_fans_out,
     _client_forwarded_authorization_headers,
@@ -1133,6 +1134,7 @@ async def _get_tools_from_mcp_servers(
             try:
                 from litellm.proxy.proxy_server import proxy_logging_obj
 
+                listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
                 tools: Final = await global_mcp_server_manager._get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
@@ -1152,6 +1154,21 @@ async def _get_tools_from_mcp_servers(
                     tools=filtered_tools,
                     server_id=server.server_id,
                     user_api_key_auth=user_api_key_auth,
+                )
+                global_mcp_server_manager.record_listed_tools(
+                    server,
+                    [
+                        tool.model_copy(update={"name": strip_known_server_prefix(tool.name, server)})
+                        for tool in filtered_tools
+                    ],
+                    ListedToolsCaller(
+                        user_api_key_auth=user_api_key_auth,
+                        mcp_auth_header=catalog_auth_header,
+                        raw_headers=raw_headers,
+                        oauth2_headers=oauth2_headers,
+                    ),
+                    listed_generation,
+                    record_listing=record_listing,
                 )
 
                 if mcp_proxy_mode:

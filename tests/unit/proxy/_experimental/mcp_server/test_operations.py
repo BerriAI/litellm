@@ -1,16 +1,99 @@
 import asyncio
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from mcp.types import GetPromptRequest, GetPromptRequestParams, GetPromptResult
 from mcp.types import Tool as MCPTool
 
+import litellm
+from litellm.caching.dual_cache import DualCache
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._experimental.mcp_server import operations
+from litellm.proxy._experimental.mcp_server import rest_endpoints
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
 from litellm.proxy._experimental.mcp_server.operations import GatewayOperations, prepare_context
+from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+class _CatalogHookCapture(CustomLogger):
+    data: dict[str, object] | None = None
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+    ) -> None:
+        if call_type == "call_mcp_tool":
+            self.data = data.copy()
+
+
+async def _served_catalog_tool() -> str:
+    return "ok"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["mcp", "rest"])
+@pytest.mark.parametrize("restriction", ["key", "server"])
+async def test_listing_records_only_tools_the_caller_received(
+    monkeypatch: pytest.MonkeyPatch, surface: str, restriction: str
+) -> None:
+    manager: Final = operations.global_mcp_server_manager
+    server: Final = MCPServer(
+        server_id="served-catalog", name="served-catalog", transport=MCPTransport.http,
+        spec_path="/catalog.yaml", allow_all_keys=True,
+        allowed_tools=["echo"] if restriction == "server" else None,
+    )
+    auth: Final = UserAPIKeyAuth(
+        api_key="sk-served-catalog", user_id="lister",
+        object_permission={
+            "object_permission_id": "served-permission",
+            "mcp_servers": [server.server_id],
+            "mcp_tool_permissions": {server.server_id: ["echo"]} if restriction == "key" else None,
+        },
+    )
+    monkeypatch.setitem(manager.registry, server.server_id, server)
+    monkeypatch.setitem(manager.tool_name_to_mcp_server_name_mapping, "status", server.server_id)
+    monkeypatch.setitem(manager.tool_name_to_mcp_server_name_mapping, "served-catalog-status", server.server_id)
+    capture: Final = _CatalogHookCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    for name in ("echo", "status"):
+        global_mcp_tool_registry.register_tool(
+            name=f"served-catalog-{name}", description=f"{name} description",
+            input_schema={"type": "object"}, handler=_served_catalog_tool,
+        )
+    try:
+        if surface == "mcp":
+            listing: Final = await operations._list_mcp_tools(
+                user_api_key_auth=auth, mcp_servers=[server.server_id], record_listing=True,
+            )
+            assert [tool.name for tool in listing.tools] == ["served-catalog-echo"]
+        else:
+            rest_listing: Final = await rest_endpoints._get_tools_for_single_server(
+                server, None, user_api_key_auth=auth,
+            )
+            assert [tool.name for tool in rest_listing] == ["echo"]
+        granted: Final = auth.model_copy(update={"object_permission": None})
+        caller: Final = ListedToolsCaller(user_api_key_auth=granted)
+        assert manager.get_listed_tool(server, "status", caller) is None
+        served: Final = manager.get_listed_tool(server, "echo", caller)
+        assert served is not None
+        assert (served.description, served.input_schema) == ("echo description", {"type": "object"})
+        server.allowed_tools = None
+        result: Final = await manager.call_tool(
+            server_name=server.server_id, name="status", arguments={}, user_api_key_auth=granted,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+        )
+        assert result.is_error is False
+        assert capture.data is not None
+        assert capture.data["messages"] == [{"role": "user", "content": "Tool: status\nArguments: {}"}]
+        assert (capture.data.get("mcp_tool_description"), capture.data.get("mcp_input_schema")) == (None, None)
+    finally:
+        manager._drop_listed_tools(server.server_id)
+        global_mcp_tool_registry.unregister_tools_with_prefix("served-catalog-")
 
 
 @pytest.mark.asyncio
@@ -139,7 +222,7 @@ async def test_prompt_sampling_receives_explicit_operation_caller_headers_and_ip
     sampling = AsyncMock()
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[upstream])),
-        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient", return_value=client) as factory,
+        patch("litellm.proxy._experimental.mcp_server.upstream.MCPClient", return_value=client) as factory,
         patch("litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message", sampling),
     ):
         result = await GatewayOperations().execute(

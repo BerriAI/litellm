@@ -1,17 +1,21 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 
 from fastapi import HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import litellm
+from litellm.exceptions import ModelNotMappedError
 from litellm.integrations.clickhouse.context import lens_analysis
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
+from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.proxy.lens.billing import complete, validate_key
-from litellm.proxy.lens.models import Job, Lens, ModelRequest, ModelResult, Worker
+from litellm.proxy.lens.models import Job, Lens, ModelRequest, ModelResult, Step, Worker
 from litellm.proxy.lens.repository import LensRepository
-from litellm.proxy.lens.state import current_job, renew_budget, replace_job
+from litellm.proxy.lens.state import add_step, current_job, renew_budget, replace_job
 from litellm.types.utils import CostPerToken, ModelResponse
 
 
@@ -20,11 +24,19 @@ class DeploymentParams(BaseModel):
     model: str
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    max_tokens: int | None = Field(default=None, gt=0)
+    max_completion_tokens: int | None = Field(default=None, gt=0)
+
+
+class ModelCapacity(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    max_output_tokens: int | None = Field(default=None, gt=0)
 
 
 class Deployment(BaseModel):
     model_config = ConfigDict(extra="ignore")
     litellm_params: DeploymentParams
+    model_info: ModelCapacity = ModelCapacity()
 
 
 class Message(BaseModel):
@@ -35,6 +47,7 @@ class Message(BaseModel):
 class Choice(BaseModel):
     model_config = ConfigDict(extra="ignore")
     message: Message
+    finish_reason: str | None = None
 
 
 class Completion(BaseModel):
@@ -59,6 +72,17 @@ class Prices(BaseModel):
     input_cost_per_token_above_128k_tokens: float = 0
     output_cost_per_token_above_128k_tokens: float = 0
 
+    @field_validator(
+        "input_cost_per_token_above_200k_tokens",
+        "output_cost_per_token_above_200k_tokens",
+        "input_cost_per_token_above_128k_tokens",
+        "output_cost_per_token_above_128k_tokens",
+        mode="before",
+    )
+    @classmethod
+    def missing_tier_rate(cls, value: object) -> object:
+        return 0 if value is None else value
+
 
 def deployment_prices(deployment: Deployment) -> Prices:
     params: Final = deployment.litellm_params
@@ -66,7 +90,44 @@ def deployment_prices(deployment: Deployment) -> Prices:
         return Prices(
             input_cost_per_token=params.input_cost_per_token, output_cost_per_token=params.output_cost_per_token
         )
-    return Prices.model_validate(litellm.get_model_info(model=params.model))
+    try:
+        return Prices.model_validate(litellm.get_model_info(model=params.model))
+    except (ModelNotMappedError, ValueError) as exc:
+        raise HTTPException(
+            400,
+            f"Pricing is not configured for {params.model}. Set input_cost_per_token and output_cost_per_token "
+            "on its deployment before running an investigation.",
+        ) from exc
+
+
+def catalog_capacity(model: str) -> ModelCapacity:
+    try:
+        return ModelCapacity.model_validate(litellm.get_model_info(model=model))
+    except (ModelNotMappedError, ValueError):
+        return ModelCapacity()
+
+
+def output_tokens(deployment: Deployment, prompt: str | None = None) -> int:
+    params: Final = deployment.litellm_params
+    configured: Final = params.max_completion_tokens or params.max_tokens or deployment.model_info.max_output_tokens
+    capacity: Final = configured or catalog_capacity(params.model).max_output_tokens
+    if capacity is None:
+        raise HTTPException(
+            400,
+            f"Output capacity is unknown for {params.model}. Set model_info.max_output_tokens to the model's "
+            "supported output capacity or configure max_tokens on its deployment.",
+        )
+    if prompt is None:
+        return capacity
+    adjusted: Final = get_modified_max_tokens(
+        model=params.model,
+        base_model=params.model,
+        messages=[{"role": "system", "content": _SYSTEM}, {"role": "user", "content": prompt}],
+        user_max_tokens=capacity,
+        buffer_perc=0,
+        buffer_num=0,
+    )
+    return adjusted if adjusted is not None else capacity
 
 
 def quote(deployments: tuple[Deployment, ...], prompt: str) -> float:
@@ -83,7 +144,15 @@ def quote(deployments: tuple[Deployment, ...], prompt: str) -> float:
         )
         for p in prices
     )
-    return ((len((prompt + _SYSTEM).encode()) + 1024) * input_rate + 4096 * output_rate) * 2
+    output: Final = min(output_tokens(d, prompt) for d in deployments)
+    input_tokens: Final = max(
+        litellm.token_counter(
+            model=d.litellm_params.model,
+            messages=[{"role": "system", "content": _SYSTEM}, {"role": "user", "content": prompt}],
+        )
+        for d in deployments
+    )
+    return input_tokens * input_rate + output * output_rate
 
 
 async def analyze(
@@ -123,9 +192,27 @@ async def analyze(
             current, active.model_copy(update=MappingProxyType({"cost": active.cost + estimate}))
         ).model_copy(update=MappingProxyType({"spent": current.spent + estimate}))
 
-    async def reserve_budget() -> None:
+    def settle(e: Lens, cost: float, step: Step | None) -> Lens:
+        charged: Final = next((j for j in e.jobs if j.id == job.id), None)
+        adjusted: Final = (
+            e.model_copy(update=MappingProxyType({"spent": max(0, e.spent - estimate + cost)}))
+            if e.budget_month == now.strftime("%Y-%m")
+            else e
+        )
+        if charged is None:
+            return adjusted
+        refunded: Final = charged.model_copy(update=MappingProxyType({"cost": max(0, charged.cost - estimate + cost)}))
+        return replace_job(adjusted, add_step(refunded, step) if step is not None else refunded)
+
+    @asynccontextmanager
+    async def reserve_budget() -> AsyncIterator[None]:
         if await repo.update(lens.id, reserve) is None:
             raise HTTPException(409, "Could not reserve analysis budget")
+        try:
+            yield
+        except BaseException:
+            await repo.update(lens.id, lambda e: settle(e, 0, None))
+            raise
 
     data: Final[dict[str, object]] = {  # mutable-ok: proxy processing enriches request data
         "model": job.settings.model,
@@ -133,9 +220,8 @@ async def analyze(
             {"role": "system", "content": _SYSTEM},
             {"role": "user", "content": body.prompt},
         ],
-        "max_tokens": 4096,
+        "max_tokens": min(output_tokens(d, body.prompt) for d in deployments),
         "stream": False,
-        "timeout": 120,
         "num_retries": 0,
         "disable_fallbacks": True,
         "response_format": {"type": "json_object"},
@@ -150,26 +236,50 @@ async def analyze(
 
     with lens_analysis(), inherit_message_logging_privacy(True):
         response, billed_cost = await complete(worker.analysis_key_id, data, reserve_budget, request)
-    parsed: Final = Completion.model_validate_json(response.model_dump_json())
     cost: Final = billed_cost if billed_cost is not None else completion_charge(deployments, response, estimate)
 
-    def settle(e: Lens) -> Lens:
-        charged: Final = next((j for j in e.jobs if j.id == job.id), None)
-        adjusted: Final = (
-            e.model_copy(update=MappingProxyType({"spent": max(0, e.spent - estimate + cost)}))
-            if e.budget_month == now.strftime("%Y-%m")
-            else e
-        )
-        return (
-            replace_job(
-                adjusted, charged.model_copy(update=MappingProxyType({"cost": max(0, charged.cost - estimate + cost)}))
-            )
-            if charged
-            else adjusted
-        )
+    step: Final = model_step(response, body, job.settings.model, cost)
+    await repo.update(lens.id, lambda e: settle(e, cost, step))
+    parsed: Final = Completion.model_validate_json(response.model_dump_json())
+    choice: Final = parsed.choices[0]
+    return ModelResult(
+        content=choice.message.content or "",
+        cost=cost,
+        finish_reason="length"
+        if choice.finish_reason == "length"
+        else ("content_filter" if choice.finish_reason == "content_filter" else None),
+    )
 
-    await repo.update(lens.id, settle)
-    return ModelResult(content=parsed.choices[0].message.content or "{}", cost=cost)
+
+class Usage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+
+class UsageEnvelope(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    model: str | None = None
+    usage: Usage | None = None
+
+
+_PURPOSE_LABELS: Final = MappingProxyType(
+    {"extract": "Reviewed a run", "cluster": "Compared observations", "investigate": "Checked a pattern"}
+)
+
+
+def model_step(response: ModelResponse, body: ModelRequest, requested: str, cost: float) -> Step:
+    envelope: Final = UsageEnvelope.model_validate_json(response.model_dump_json())
+    return Step(
+        at=datetime.now(timezone.utc),
+        kind="model",
+        label=_PURPOSE_LABELS[body.purpose],
+        model=envelope.model or requested,
+        purpose=body.purpose,
+        prompt_tokens=(envelope.usage.prompt_tokens if envelope.usage else None) or 0,
+        completion_tokens=(envelope.usage.completion_tokens if envelope.usage else None) or 0,
+        cost=cost,
+    )
 
 
 def completion_charge(deployments: tuple[Deployment, ...], response: ModelResponse, estimate: float) -> float:

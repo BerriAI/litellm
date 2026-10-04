@@ -4,9 +4,10 @@ import moment from "moment";
 import { useMemo, useState } from "react";
 
 import { AgentTracesSection } from "./AgentTracesSection";
+import { useTracesLive } from "./tracesApi";
+import { useRangeHoursRouting } from "./traceRouting";
 
-const DEFAULT_RANGE_HOURS = 24;
-const TIME_FORMAT = "YYYY-MM-DDTHH:mm";
+const TIME_FORMAT = "YYYY-MM-DDTHH:mm:ss";
 
 export default function AgentTracesPage({
   accessToken,
@@ -19,7 +20,8 @@ export default function AgentTracesPage({
   readOnly?: boolean;
   canMintTracingKey?: boolean;
 }) {
-  const [rangeHours, setRangeHours] = useState(DEFAULT_RANGE_HOURS);
+  const sourceLive = useTracesLive();
+  const [rangeHours, setRangeHours] = useRangeHoursRouting();
   const [live, setLive] = useState(true);
   const [anchor, setAnchor] = useState(() => moment());
   const { startTime, endTime } = useMemo(
@@ -30,23 +32,30 @@ export default function AgentTracesPage({
     [anchor, rangeHours],
   );
 
+  const isLiveTail = live && sourceLive;
+
   const changeRange = (hours: number) => {
     setRangeHours(hours);
     setAnchor(moment());
   };
 
+  const changeLive = (next: boolean) => {
+    setLive(next);
+    setAnchor(moment());
+  };
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col pt-3">
+    <div className="flex min-h-0 flex-1 flex-col">
       <AgentTracesSection
         accessToken={accessToken}
         isActive={isActive}
         startTime={startTime}
         endTime={endTime}
-        isCustomDate={false}
-        isLiveTail={live}
+        isCustomDate={!isLiveTail}
+        isLiveTail={isLiveTail}
         readOnly={readOnly}
         canMintTracingKey={canMintTracingKey}
-        timeControls={{ rangeHours, onRangeHoursChange: changeRange, onLiveChange: setLive }}
+        timeControls={{ rangeHours, onRangeHoursChange: changeRange, onLiveChange: changeLive }}
       />
     </div>
   );

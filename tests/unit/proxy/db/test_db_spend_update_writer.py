@@ -3,8 +3,6 @@ import copy
 import json
 import logging
 import re
-
-
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -20,13 +18,14 @@ from redis.exceptions import DataError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._service_logger import ServiceTypes
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
     DBSpendUpdateWriter,
-    _SpendTableName,
     _spend_tables_left_to_send,
+    _SpendTableName,
 )
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
@@ -34,6 +33,7 @@ from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdate
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
 @pytest.mark.asyncio
@@ -287,6 +287,65 @@ async def test_update_database_skips_tool_usage_when_spend_logs_disabled():
         await asyncio.sleep(0)
 
     assert prisma.tool_usage_transactions == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_spend_logs", [True, False])
+@pytest.mark.parametrize("session_id", ["session-1", None])
+async def test_a_routed_request_reaches_the_auto_router_rollup_whether_or_not_spend_logs_are_kept(
+    disable_spend_logs: bool, session_id: str | None
+) -> None:
+    db_writer = DBSpendUpdateWriter()
+    db_writer._insert_spend_log_to_db = AsyncMock()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _tool_usage_prisma()
+    prisma.autorouter_turn_transactions = []
+    prisma._autorouter_turn_transactions_lock = asyncio.Lock()
+    routed_payload: Final = {
+        **_minimal_spend_payload(),
+        "status": "success",
+        "api_key": "hashed-key",
+        "user": "u1",
+        "session_id": session_id,
+        "model": "claude-haiku-4-5",
+        "model_group": "smart-router",
+        "spend": 0.25,
+        "startTime": "2026-07-25T10:00:00+00:00",
+        "metadata": json.dumps(
+            {
+                "routing_decision": {"router_model_name": "smart-router", "router_type": "complexity"},
+                "autorouter_savings": 1.5,
+            }
+        ),
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", disable_spend_logs),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),
+        patch(
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=routed_payload,
+        ),
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="u1",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={"model": "smart-router"},
+            completion_response=_tool_call_response("get_weather"),
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=0.25,
+        )
+
+    (turn,) = prisma.autorouter_turn_transactions
+    stored_session: Final = session_id if session_id and not disable_spend_logs else ""
+    assert (turn.router_name, turn.router_type, turn.session_id) == ("smart-router", "complexity", stored_session)
+    assert (turn.spend, turn.saved_spend) == (0.25, 1.5)
+    assert (prisma.tool_usage_transactions == []) is disable_spend_logs
 
 
 Statement = tuple[str, tuple[object, ...]]
@@ -1083,6 +1142,50 @@ async def test_org_spend_increments_organization_membership_row_for_the_calling_
         where={"organization_id": "org-abc", "user_id": "user-xyz"},
         data={"spend": {"increment": 0.75}},
     )
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_reports_one_db_event_per_table_it_wrote():
+    """The spend flush is the proxy's main Postgres write path. Each per-table
+    transaction must surface as a ``ServiceTypes.DB`` event naming the table,
+    so the trace shows ``postgres.update LiteLLM_UserTable`` and friends instead
+    of nothing at all."""
+    db_writer: Final = DBSpendUpdateWriter()
+    await db_writer._update_org_db(
+        response_cost=0.75,
+        org_id="org-abc",
+        user_id="user-xyz",
+        prisma_client=MagicMock(),
+    )
+    transactions: Final = await db_writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    transactions["user_list_transactions"] = {"user-xyz": 0.75}
+    transactions["key_list_transactions"] = {"hash": 0.75}
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(MagicMock()))
+    proxy_logging: Final = MagicMock()
+    proxy_logging.call_details = {}
+    success_hook: Final = AsyncMock()
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        MagicMock(service_logging_obj=MagicMock(async_service_success_hook=success_hook)),
+    ):
+        await db_writer._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=0,
+            proxy_logging_obj=proxy_logging,
+            db_spend_update_transactions=transactions,
+        )
+        await asyncio.sleep(0)
+
+    events: Final = [c.kwargs for c in success_hook.await_args_list if c.kwargs["service"] == ServiceTypes.DB]
+    assert sorted((e["call_type"], e["event_metadata"]["table_name"]) for e in events) == [
+        ("commit_spend_updates", "LiteLLM_OrganizationMembership"),
+        ("commit_spend_updates", "LiteLLM_OrganizationTable"),
+        ("commit_spend_updates", "LiteLLM_UserTable"),
+        ("commit_spend_updates", "LiteLLM_VerificationToken"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -3714,8 +3817,8 @@ def _empty_spend_transactions(**overrides):
 def _good_tx(mock_batcher):
     tx = AsyncMock()
     tx.__aenter__ = AsyncMock(return_value=tx)
-    tx.__aexit__ = AsyncMock(return_value=False)
-    tx.query_raw = AsyncMock(return_value=[])
+    tx.__aexit__ = engine_call(False)
+    tx.query_raw = engine_call([])
     tx.batch_ = MagicMock(
         return_value=AsyncMock(
             __aenter__=AsyncMock(return_value=mock_batcher),

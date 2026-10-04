@@ -494,7 +494,8 @@ async def test_daily_rows_selects_the_table_and_applies_filters_and_pagination(
 
     expected_where: Final = {
         "date": {"gte": "2026-01-01", "lte": "2026-01-31"},
-        entity_field: {"in": ["entity-1"], "not": {"in": ["excluded-1"]}},
+        entity_field: {"in": ["entity-1"]},
+        "OR": [{entity_field: None}, {entity_field: {"not": {"in": ["excluded-1"]}}}],
         "model": "model-1",
         "api_key": {"in": ["key-1"]},
     }
@@ -514,6 +515,22 @@ async def test_daily_rows_selects_the_table_and_applies_filters_and_pagination(
     assert selected_table.find_many_calls == [expected_where]
     assert selected_table.pagination_calls == [(4, 2, ({"date": "desc"}, {"id": "asc"}))]
     assert sum(len(daily_table.find_many_calls) for daily_table in tables.values()) == 1
+
+
+@pytest.mark.asyncio
+async def test_daily_rows_exclusion_without_entity_filter_keeps_null_entity_rows() -> None:
+    database = _FakeDatabase()
+    repository, _ = _repository(database)
+    scope = _scope(table=DailyActivityTable.TEAM, entity_ids=None, exclude_entity_ids=("litellm-dashboard",))
+
+    await repository.daily_rows(scope, page=1, page_size=10)
+
+    expected_where: Final = {
+        "date": {"gte": "2026-01-01", "lte": "2026-01-31"},
+        "OR": [{"team_id": None}, {"team_id": {"not": {"in": ["litellm-dashboard"]}}}],
+    }
+    assert database.litellm_dailyteamspend.count_calls == [expected_where]
+    assert database.litellm_dailyteamspend.find_many_calls == [expected_where]
 
 
 @pytest.mark.asyncio
