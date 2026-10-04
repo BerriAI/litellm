@@ -24,13 +24,16 @@ export const RANGE_PRESETS = [
 
 const RANGE_LABEL_FORMAT = "MMM D, h:mm A";
 
-export const rangeLabel = (range: TimeWindow): string =>
+const fixedRangeLabel = (range: TimeWindow): string =>
   `${moment(range.startMs).format(RANGE_LABEL_FORMAT)} to ${moment(range.endMs).format(RANGE_LABEL_FORMAT)}`;
+
+const presetLabel = (hours: number): string =>
+  RANGE_PRESETS.find((preset) => preset.hours === hours)?.label ?? `Last ${hours} hours`;
 
 const SEGMENT = "inline-flex h-7 items-center gap-1.5 px-2.5 text-sm outline-none focus-visible:bg-accent";
 
 interface TimeRangeControlsProps {
-  range: TimeWindow;
+  fixedRange: TimeWindow | null;
   rangeHours: number;
   onRangeHoursChange: (hours: number) => void;
   live: boolean;
@@ -38,9 +41,9 @@ interface TimeRangeControlsProps {
   onLiveChange: (live: boolean) => void;
 }
 
-/** Joined control group: the actual time range (opens presets) and Live. */
+/** Joined control group: the time range (opens presets) and Live. */
 export function TimeRangeControls({
-  range,
+  fixedRange,
   rangeHours,
   onRangeHoursChange,
   live,
@@ -55,7 +58,7 @@ export function TimeRangeControls({
           className={cn(SEGMENT, "text-foreground hover:bg-muted/60")}
           data-testid="time-range-trigger"
         >
-          <span className="tabular-nums">{rangeLabel(range)}</span>
+          <span className="tabular-nums">{fixedRange ? fixedRangeLabel(fixedRange) : presetLabel(rangeHours)}</span>
           <ChevronDown className="size-3.5 text-muted-foreground" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-auto min-w-44">

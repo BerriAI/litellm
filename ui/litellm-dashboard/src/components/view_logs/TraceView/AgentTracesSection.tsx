@@ -187,7 +187,7 @@ export function AgentTracesSection({
         <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces}>
           {timeControls && (
             <TimeRangeControls
-              range={zoom ?? range}
+              fixedRange={zoom ?? (isLiveTail ? null : range)}
               rangeHours={timeControls.rangeHours}
               onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
               live={isLiveTail}

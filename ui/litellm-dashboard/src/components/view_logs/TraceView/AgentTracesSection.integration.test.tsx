@@ -598,25 +598,36 @@ describe("AgentTracesPage", () => {
     vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
   });
 
-  it("shows the actual range, switches presets from the popover, and toggles Live", async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("names the rolling preset while Live and pins the actual range once paused", async () => {
+    const pausedAt = Date.parse("2026-10-03T12:00:00.500");
+    vi.useFakeTimers({ toFake: ["Date"], now: pausedAt });
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     renderWithProviders(<AgentTracesPage accessToken="sk-test" />);
     await screen.findByTestId("runs-table");
 
     const trigger = screen.getByRole("button", { name: "Time range" });
-    expect(trigger).toHaveTextContent(/ to /);
+    const live = screen.getByRole("button", { name: "Live" });
+    expect(live).toHaveAttribute("aria-pressed", "true");
+    expect(trigger).toHaveTextContent("Last 24 hours");
 
     fireEvent.click(trigger);
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last 7 days" }));
+    expect(trigger).toHaveTextContent("Last 7 days");
     await waitFor(() => {
       const last = vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0];
       expect((last?.endMs ?? 0) - (last?.startMs ?? 0)).toBeGreaterThanOrEqual(7 * 24 * 3600 * 1000 - 60_000);
     });
 
-    const live = screen.getByRole("button", { name: "Live" });
-    expect(live).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(live);
     expect(live).toHaveAttribute("aria-pressed", "false");
+    expect(trigger).toHaveTextContent(/ to /);
+    expect(trigger).not.toHaveTextContent("Last 7 days");
+
+    await waitFor(() => expect(vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0].endMs).toBe(pausedAt - 500));
   });
 
   it("keeps the time controls on an empty range the user picked, instead of showing onboarding", async () => {
