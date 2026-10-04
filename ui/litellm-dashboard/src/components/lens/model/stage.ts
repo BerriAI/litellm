@@ -31,7 +31,11 @@ const LANE_CHARS = 220;
 const LANE_SENTENCES = 2;
 
 export function laneText(reasoning: string): string {
-  const brief = reasoning.trim().split(/(?<=[.!?])\s+/).slice(0, LANE_SENTENCES).join(" ");
+  const brief = reasoning
+    .trim()
+    .split(/(?<=[.!?])\s+/)
+    .slice(0, LANE_SENTENCES)
+    .join(" ");
   return brief.length > LANE_CHARS ? `${brief.slice(0, LANE_CHARS - 1).trimEnd()}…` : brief;
 }
 
@@ -51,7 +55,7 @@ export function startStage(reviews: readonly Review[]): Stage {
 function settle(lane: Lane, reviews: ReadonlyMap<string, Review>, live: ReadonlySet<string>, now: number): Lane {
   const review = lane.review ?? reviews.get(lane.key) ?? null;
   const landedAt = lane.landedAt ?? (review ? now : null);
-  const goneAt = review || live.has(lane.key) ? null : (lane.goneAt ?? now);
+  const goneAt = review || live.has(lane.key) ? null : lane.goneAt ?? now;
   if (review === lane.review && landedAt === lane.landedAt && goneAt === lane.goneAt) return lane;
   return { ...lane, review, landedAt, goneAt };
 }
@@ -104,10 +108,11 @@ export function stepStage(stage: Stage, input: StageInput): Stage {
   const room = free - landing.length;
   const waiting = input.reading.filter((item) => !taken.has(item.execution_id) && !reviews.has(item.execution_id));
   const starting = room > 0 ? waiting.slice(0, room) : [];
-  const unchanged =
-    !done.length && !fresh.length && !starting.length && settled.every((lane, n) => lane === stage.lanes[n]);
-  if (unchanged) return stage;
-  const releasedNow = [...done.filter((lane) => lane.review), ...overflow].map((item) => ("key" in item ? item.key : item.execution_id));
+  const nothingMoved = !done.length && !fresh.length && !starting.length;
+  if (nothingMoved && settled.every((lane, n) => lane === stage.lanes[n])) return stage;
+  const releasedNow = [...done.filter((lane) => lane.review), ...overflow].map((item) =>
+    "key" in item ? item.key : item.execution_id,
+  );
   return {
     lanes: [...kept, ...landing.map((review) => landedLane(review, now)), ...starting.map(readingLane)],
     released: releasedNow.length ? new Set([...stage.released, ...releasedNow]) : stage.released,

@@ -8,6 +8,11 @@ import { ModelName } from "./LiveStrip";
 
 const RED = "text-[#e5484d]";
 
+function dotTone(reading: boolean, issueShown: boolean): string {
+  if (reading) return "bg-foreground motion-safe:animate-pulse";
+  return issueShown ? "bg-[#e5484d]" : "bg-foreground/50";
+}
+
 function LaneRow({ lane, now, charMs }: { lane: Lane; now: number; charMs: number }) {
   const { review } = lane;
   const text = review ? laneText(review.reasoning) : "";
@@ -17,13 +22,7 @@ function LaneRow({ lane, now, charMs }: { lane: Lane; now: number; charMs: numbe
   return (
     <li className="flex flex-col gap-1 rounded-lg bg-background/70 px-2.5 py-2 text-[12px] ring-1 ring-border/60 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-200">
       <div className="flex items-center gap-2">
-        <span
-          aria-hidden="true"
-          className={cn(
-            "size-1.5 shrink-0 rounded-full",
-            !review ? "bg-foreground motion-safe:animate-pulse" : issue && !typing ? "bg-[#e5484d]" : "bg-foreground/50",
-          )}
-        />
+        <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", dotTone(!review, issue && !typing))} />
         <span className="truncate font-medium text-foreground">{lane.agent || "trace"}</span>
         <span className="truncate font-mono text-[11px] text-muted-foreground">{lane.traceId.slice(0, 8)}</span>
         <span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground">
@@ -38,10 +37,17 @@ function LaneRow({ lane, now, charMs }: { lane: Lane; now: number; charMs: numbe
         <>
           <p className="min-h-[1.25rem] leading-relaxed text-muted-foreground">
             {text.slice(0, typed)}
-            {typing && <span aria-hidden="true" className="ml-px inline-block h-3 w-px translate-y-0.5 bg-foreground" />}
+            {typing && (
+              <span aria-hidden="true" className="ml-px inline-block h-3 w-px translate-y-0.5 bg-foreground" />
+            )}
           </p>
           {!typing && (
-            <p className={cn("truncate font-medium motion-safe:animate-in motion-safe:fade-in", issue ? RED : "text-foreground")}>
+            <p
+              className={cn(
+                "truncate font-medium motion-safe:animate-in motion-safe:fade-in",
+                issue ? RED : "text-foreground",
+              )}
+            >
               {shortVerdict(review)}
             </p>
           )}

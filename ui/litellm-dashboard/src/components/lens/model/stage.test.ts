@@ -19,7 +19,12 @@ function review(id: string, reasoning = "Checked the tool output. It matched."):
   };
 }
 
-const reading = (id: string) => ({ execution_id: id, trace_id: `trace-${id}`, agent: "bot", started_at: "2026-10-03T16:00:00Z" });
+const reading = (id: string) => ({
+  execution_id: id,
+  trace_id: `trace-${id}`,
+  agent: "bot",
+  started_at: "2026-10-03T16:00:00Z",
+});
 const input = (overrides: Partial<StageInput>): StageInput => ({
   reading: [],
   reviews: [],
