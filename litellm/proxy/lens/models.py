@@ -235,6 +235,11 @@ class Review(Record):
     at: datetime
 
 
+class ReviewPage(Record):
+    reviews: tuple[Review, ...]
+    reviewed: int
+
+
 class Job(Record):
     id: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
