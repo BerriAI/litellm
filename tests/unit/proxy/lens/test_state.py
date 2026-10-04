@@ -411,8 +411,20 @@ def test_summary_drops_reviews_and_run_attributes_but_keeps_counts_and_run_ident
     assert listed.model_copy(update={"reviews": job.reviews, "sample": job.sample}) == job
 
 
-def test_review_polling_returns_only_reviews_newer_than_the_cursor() -> None:
-    job: Final = reviewed_job()
-    assert reviews_after(job, None) == job.reviews
-    assert [r.execution_id for r in reviews_after(job, NOW)] == ["run-1", "run-2"]
-    assert reviews_after(job, job.reviews[-1].at) == ()
+def test_review_polling_returns_only_reviews_after_the_cursor_even_when_they_finished_out_of_order() -> None:
+    job: Final = reduce(add_review, (review(5).model_copy(update={"at": NOW - timedelta(hours=1)}),), reviewed_job())
+    assert reviews_after(job, 0).reviews == job.reviews
+    assert [r.execution_id for r in reviews_after(job, 2).reviews] == ["run-2", "run-5"]
+    assert reviews_after(job, 4).reviews == ()
+    assert reviews_after(job, 4).reviewed == 4
+
+
+def test_review_polling_after_the_window_moved_on_returns_what_is_still_kept() -> None:
+    job: Final = reduce(add_review, tuple(review(i) for i in range(MAX_REVIEWS + 10)), reviewed_job())
+    page: Final = reviews_after(job, 5)
+    assert page.reviews == job.reviews
+    assert page.reviewed == MAX_REVIEWS + 13
+    assert [r.execution_id for r in reviews_after(job, page.reviewed - 2).reviews] == [
+        f"run-{MAX_REVIEWS + 8}",
+        f"run-{MAX_REVIEWS + 9}",
+    ]
