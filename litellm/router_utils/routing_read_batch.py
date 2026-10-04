@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # router deployments reach this untyped, see the cast-ok notes below
+from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # deployments arrive untyped
 
 from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger

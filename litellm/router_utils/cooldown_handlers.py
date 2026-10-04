@@ -11,7 +11,7 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # one narrowing of a model_info mapping, see _as_str_mapping
+from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # narrows a model_info mapping
 
 import litellm
 from litellm._internal_context import service_target
