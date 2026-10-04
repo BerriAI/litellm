@@ -3,9 +3,9 @@
 import { Tabs as TabsPrimitive } from "@base-ui/react/tabs";
 import { Activity, ScanSearch, Settings } from "lucide-react";
 import { StatusDot } from "@/components/shared/StatusDot";
-import { useNow } from "@/hooks/useNow";
 import { cn } from "@/lib/cva.config";
-import { workerConnected, type InvestigationActivity } from "./model/status";
+import type { InvestigationActivity } from "./model/status";
+import { useWorkerConnected } from "./useWorkerConnected";
 import type { LensList } from "./model/types";
 import { LENS_TABS, type LensTab } from "./route";
 
@@ -67,8 +67,6 @@ function NotchCorner({ side, demo }: { side: "left" | "right"; demo: boolean }) 
   );
 }
 
-const HEARTBEAT_TICK_MS = 10000;
-
 export function LensModeSwitch({
   activity,
   demo,
@@ -80,8 +78,7 @@ export function LensModeSwitch({
   workers: LensList["workers"] | null;
   setup?: string;
 }) {
-  const now = useNow(HEARTBEAT_TICK_MS);
-  const connected = workers?.some((candidate) => workerConnected(candidate, now)) ?? false;
+  const connected = useWorkerConnected(workers);
   const settingsTitle = connected ? "Worker connected" : "Connect worker";
   const tabs = Object.entries(LENS_TABS).filter(([view]) => view !== "settings" || workers);
   return (

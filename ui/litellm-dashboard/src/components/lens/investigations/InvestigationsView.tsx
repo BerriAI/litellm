@@ -16,7 +16,7 @@ import { useLensApi } from "../LensServices";
 import { InvestigationDetail } from "./detail/InvestigationDetail";
 import { ReadinessBanner } from "./ReadinessBanner";
 import { RequestEvidenceSheet } from "./RequestEvidenceSheet";
-import { useNow } from "@/hooks/useNow";
+import { useWorkerConnected } from "../useWorkerConnected";
 
 import { useDialogRoute, useIssueRoute, useLensRoute } from "../route";
 
@@ -35,7 +35,7 @@ import { findFinding, findingAgents, findingKey, sampledExecutions } from "../mo
 import { WatchAllBanner } from "./WatchAllBanner";
 import { MonitoringDialog } from "../setup/MonitoringDialog";
 import { InvestigationsWelcome } from "./InvestigationsWelcome";
-import { workerConnected, readiness } from "../model/status";
+import { readiness } from "../model/status";
 import { type Finding, type Lens, type Settings } from "../model/types";
 
 export function InvestigationsView({ accessToken, readOnly = false }: { accessToken: string; readOnly?: boolean }) {
@@ -45,16 +45,14 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
   const saveLens = useSaveLens(accessToken);
   const { dialog, target: dialogTarget, openDialog, closeDialog } = useDialogRoute();
   const { issueKey, setIssueKey } = useIssueRoute();
-  const now = useNow(2000);
-  const query = useQuery(lensQueries.list(api, false));
+  const query = useQuery(lensQueries.list(api));
   const models = useQuery(lensQueries.models(api));
   const modelDetails = useQuery(lensQueries.modelDetails(api));
-  const [agentsAsOf] = useState(() => new Date().toISOString());
-  const agents = useQuery(lensQueries.agents(api, agentsAsOf, "traces"));
+  const agents = useQuery(lensQueries.agents(api, "traces"));
   const { lensId: selected, setLensId: setSelected, setTab } = useLensRoute();
   const [skipped, setSkipped] = useState<readonly { id: string; name: string; reason: string }[]>([]);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const busy = updateLens.isPending;
+  const error = updateLens.error?.message ?? "";
   const lenses = [...(query.data?.lenses ?? [])].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
   const showEmpty = !query.isLoading && !query.error && lenses.length === 0;
   const loaded = !query.isLoading && !query.error;
@@ -88,7 +86,7 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
   };
   const setEditing = (mode: "new" | "edit" | "duplicate") => openDialog(mode);
   const setMonitoring = (open: boolean) => (open ? openDialog("monitoring") : closeDialog());
-  const connected = query.data?.workers?.some((w) => workerConnected(w, now)) ?? false;
+  const connected = useWorkerConnected(query.data?.workers);
   const activeWorkers = query.data?.workers.filter((worker) => !worker.revoked) ?? [];
   const defaultKeyId = activeWorkers.length === 1 ? activeWorkers[0].analysis_key_id : undefined;
   const analysisAccess = useAnalysisKeyInfo(accessToken, defaultKeyId ?? undefined);
@@ -107,21 +105,16 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
     return targetLens?.settings;
   };
   const refresh = () => {
+    updateLens.reset();
     void client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
     void client.invalidateQueries({ queryKey: lensKeys.histories() });
   };
   const update = async (write: LensWrite): Promise<boolean> => {
-    setBusy(true);
-    setError("");
     try {
       await updateLens.mutateAsync(write);
       return true;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not update lens");
+    } catch {
       return false;
-    } finally {
-      await client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
-      setBusy(false);
     }
   };
   const save = async (settings: Settings) => {
@@ -131,7 +124,6 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
     const saved = await saveLens.mutateAsync({ id: editing === "edit" ? targetLens?.id : undefined, settings });
     closeDialog();
     if (!dialogTarget) selectLens(saved.id);
-    refresh();
   };
   const openFinding = (owner: Lens, picked: Finding) => setIssueKey(findingKey(owner, picked));
   const closeFinding = () => {
@@ -271,7 +263,6 @@ export function InvestigationsView({ accessToken, readOnly = false }: { accessTo
           onClose={closeDialog}
           onSave={async (settings) => {
             await saveLens.mutateAsync({ id: lens.id, settings });
-            refresh();
           }}
         />
       )}

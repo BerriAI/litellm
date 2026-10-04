@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { useNow } from "@/hooks/useNow";
 import { StatusDot, type StatusDotProps } from "@/components/shared/StatusDot";
 import { workerConnected } from "../../model/status";
 import { agoLabel } from "@/components/view_logs/TraceView/lensField";
@@ -15,17 +16,16 @@ function workerStatus(worker: Worker, now: number): { state: StatusDotProps["sta
 
 export function WorkerList({
   workers,
-  now,
   accessToken,
   editBilling,
   revoke,
 }: {
   workers: LensList["workers"];
-  now: number;
   accessToken: string;
   editBilling: (worker: Worker) => void;
-  revoke: (id: string) => Promise<void>;
+  revoke: (id: string) => void;
 }) {
+  const now = useNow(5000);
   return (
     <ul className="divide-y divide-border rounded-lg border border-border bg-card">
       {workers

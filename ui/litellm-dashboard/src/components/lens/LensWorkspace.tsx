@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Aperture, ArrowUpRight } from "lucide-react";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
 import { Switch } from "@/components/ui/switch";
@@ -12,9 +12,9 @@ import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
 import { LensSettings } from "./settings/LensSettings";
 import { createLensDemo } from "./demo/createLensDemo";
-import { lensKeys, lensQueries } from "./api/queries";
+import { lensQueries } from "./api/queries";
 import { frameOf, LensModeSwitch } from "./LensModeSwitch";
-import { investigationActivity } from "./model/status";
+import { investigationActivity, listPollInterval } from "./model/status";
 import { cn } from "@/lib/cva.config";
 import { useDialogRoute, useLensRoute, type LensDialog, type LensTab } from "./route";
 
@@ -47,15 +47,15 @@ function DemoToggle({ demo, onChange }: { demo: boolean; onChange: (demo: boolea
 /** The inline investigation editor marks the tab so the notch says where you are, not just which tab is open. */
 const SETUP_LABELS: Partial<Record<LensDialog, string>> = { new: "New", edit: "Editing", duplicate: "Duplicate" };
 
+/** The one always-mounted `/lens` observer; every other reader is a plain cache subscriber. */
 function useLensOverview(accessToken: string, enabled: boolean, settingsOpen: boolean) {
   const api = useLensApi(accessToken);
-  const client = useQueryClient();
-  const { data } = useQuery({ ...lensQueries.list(api, settingsOpen), enabled });
-  return {
-    activity: investigationActivity(data?.lenses ?? []),
-    list: data,
-    refresh: () => void client.invalidateQueries({ queryKey: lensKeys.list(api.scope) }),
-  };
+  const { data } = useQuery({
+    ...lensQueries.list(api),
+    enabled,
+    refetchInterval: (query) => listPollInterval(query.state.data, settingsOpen, Date.now()),
+  });
+  return { activity: investigationActivity(data?.lenses ?? []), list: data };
 }
 
 const PANEL =
@@ -68,11 +68,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
   const activeTab = tab ?? (lensId ? "investigations" : "traces");
   const canInvestigate = isProxyAdminTierRole(userRole);
   const canConfigure = canInvestigate && !readOnly;
-  const { activity, list, refresh } = useLensOverview(
-    accessToken,
-    canInvestigate,
-    canConfigure && activeTab === "settings",
-  );
+  const { activity, list } = useLensOverview(accessToken, canInvestigate, canConfigure && activeTab === "settings");
   const workers = canConfigure && list ? list.workers : null;
   const startFirstInvestigation = () => {
     setTab("investigations");
@@ -142,7 +138,6 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
               <LensSettings
                 accessToken={accessToken}
                 list={list}
-                onChanged={refresh}
                 onReady={list.lenses.length === 0 ? startFirstInvestigation : undefined}
                 onOpenTraces={() => setTab("traces")}
               />

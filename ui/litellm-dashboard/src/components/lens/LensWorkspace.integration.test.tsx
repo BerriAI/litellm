@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { LensWorkspace } from "./LensWorkspace";
+import { lensKeys } from "./api/queries";
 import { createLensDemoData } from "./demo/createLensDemo";
 
 const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
@@ -219,7 +220,7 @@ describe("Lens interactive demo", () => {
     const tab = within(screen.getByRole("tablist", { name: "Lens" })).getByRole("tab", { name: "Investigations" });
     await waitFor(() => expect(tab).toHaveAccessibleDescription("An investigation is running"));
     lenses.mockReturnValue([withJob("completed")]);
-    await testQueryClient.refetchQueries({ queryKey: ["lens", "list"] });
+    await testQueryClient.refetchQueries({ queryKey: lensKeys.lists() });
     await waitFor(() => expect(tab).toHaveAccessibleDescription(""));
   });
 
@@ -285,7 +286,7 @@ describe("Lens interactive demo", () => {
     await user.click(panel.getByRole("button", { name: "Cancel" }));
     expect(panel.getByRole("heading", { name: "Analysis worker" })).toBeVisible();
     workers.mockReturnValue([{ ...worker, revoked: true }]);
-    await testQueryClient.refetchQueries({ queryKey: ["lens", "list"] });
+    await testQueryClient.refetchQueries({ queryKey: lensKeys.lists() });
     await waitFor(() => expect(settings).toHaveAttribute("title", "Connect worker"));
     expect(panel.getByRole("heading", { name: "Connect a worker" })).toBeVisible();
     expect(panel.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
@@ -346,6 +347,46 @@ describe("Lens interactive demo", () => {
       expect(settings).toHaveAttribute("title", "Worker connected");
       await vi.advanceTimersByTimeAsync(130000);
       await waitFor(() => expect(settings).toHaveAttribute("title", "Connect worker"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("polls /lens every 2s while Settings waits for a worker, then drops to the 10s cadence once it connects", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const saved = createLensDemoData().lenses[0];
+      const worker = {
+        id: "worker",
+        name: "Worker",
+        revoked: false,
+        analysis_key_id: "a".repeat(64),
+        scope: saved.scope,
+        last_seen: new Date(Date.now() - 600_000).toISOString(),
+      };
+      const workers = vi.fn(() => [worker]);
+      const listCalls = () =>
+        network.mock.calls.filter(([input]) => new URL(String(input), "http://localhost").pathname === "/lens").length;
+      network.mockImplementation(async (input) => {
+        const path = new URL(String(input), "http://localhost").pathname;
+        if (path === "/lens") return Response.json({ lenses: [saved], workers: workers(), tracing_enabled: true });
+        if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
+        return Response.json({ data: [], traces: true, requests: false });
+      });
+      renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
+        searchParams: "?tab=settings",
+      });
+      expect(await screen.findByRole("region", { name: "Settings" })).toBeVisible();
+      const initial = listCalls();
+      await vi.advanceTimersByTimeAsync(2000);
+      await waitFor(() => expect(listCalls()).toBe(initial + 1));
+      workers.mockReturnValue([{ ...worker, last_seen: new Date().toISOString() }]);
+      await vi.advanceTimersByTimeAsync(2000);
+      await waitFor(() => expect(listCalls()).toBe(initial + 2));
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(listCalls()).toBe(initial + 2);
+      await vi.advanceTimersByTimeAsync(8000);
+      await waitFor(() => expect(listCalls()).toBe(initial + 3));
     } finally {
       vi.useRealTimers();
     }

@@ -1,5 +1,6 @@
-import { infiniteQueryOptions, queryOptions, type Query } from "@tanstack/react-query";
-import type { LensList, Sample, Settings, ActivitySelection } from "../model/types";
+import { infiniteQueryOptions, keepPreviousData, queryOptions } from "@tanstack/react-query";
+import { hasActiveJob } from "../model/status";
+import type { Sample, Settings, ActivitySelection } from "../model/types";
 import type { KeyPage, LensApi } from "./service";
 
 export type { Key } from "./service";
@@ -19,29 +20,20 @@ export const lensKeys = {
   models: (scope: string) => [...lensKeys.all, "models", { scope }] as const,
   modelDetails: (scope: string) => [...lensKeys.all, "model-details", { scope }] as const,
   activity: (scope: string) => [...lensKeys.all, "activity-available", { scope }] as const,
-  discovery: (scope: string, source: Settings["source"], hours: number | undefined, asOf: string) =>
-    [...lensKeys.all, "discovery", { scope, source, hours, asOf }] as const,
+  discoveries: () => [...lensKeys.all, "discovery"] as const,
+  discovery: (scope: string, source: Settings["source"], hours: number | undefined) =>
+    [...lensKeys.discoveries(), { scope, source, hours }] as const,
   preview: (scope: string, selection: ActivitySelection, asOf: string) =>
     [...lensKeys.all, "preview", { scope, selection, asOf }] as const,
-  agents: (scope: string, asOf: string) => [...lensKeys.all, "agents", { scope, asOf }] as const,
+  agents: (scope: string) => [...lensKeys.all, "agents", { scope }] as const,
   analysisKeys: (scope: string, query: string) => [...lensKeys.all, "analysis-keys", { scope, query }] as const,
   analysisKeyInfo: (scope: string, keyId: string | undefined) =>
     [...lensKeys.all, "analysis-key-info", { scope, keyId }] as const,
 };
 
 export const lensQueries = {
-  list(api: LensApi, workerSetup: boolean) {
-    const options = {
-      queryKey: lensKeys.list(api.scope),
-      queryFn: () => api.lenses(),
-      refetchInterval: (current: Query<LensList>): number | false => {
-        const running = current.state.data?.lenses.some((item) =>
-          item.jobs.some((job) => ["queued", "running"].includes(job.status)),
-        );
-        return workerSetup || running ? 2000 : 10000;
-      },
-    };
-    return queryOptions(options);
+  list(api: LensApi) {
+    return queryOptions({ queryKey: lensKeys.list(api.scope), queryFn: () => api.lenses(), staleTime: 5000 });
   },
   models(api: LensApi) {
     return queryOptions({ queryKey: lensKeys.models(api.scope), queryFn: () => api.models() });
@@ -50,22 +42,20 @@ export const lensQueries = {
     return queryOptions({ queryKey: lensKeys.modelDetails(api.scope), queryFn: () => api.modelDetails() });
   },
   activity(api: LensApi, loaded: boolean) {
-    const options = {
+    return queryOptions({
       queryKey: lensKeys.activity(api.scope),
       queryFn: () => api.activity(),
       enabled: loaded,
-      refetchInterval: 5000,
-    };
-    return queryOptions(options);
+      refetchInterval: (query) => (query.state.data?.traces && query.state.data.requests ? false : 5000),
+    });
   },
   history(api: LensApi, { lensId, historyOffset }: { lensId: string | undefined; historyOffset: number }) {
-    const options = {
+    return queryOptions({
       queryKey: lensKeys.history(api.scope, lensId, historyOffset),
       enabled: !!lensId,
       queryFn: () => api.runs(lensId as string, historyOffset),
-      refetchInterval: 10000,
-    };
-    return queryOptions(options);
+      refetchInterval: (query) => (query.state.data && hasActiveJob(query.state.data) ? 10000 : false),
+    });
   },
   run(api: LensApi, lensId: string | undefined, batchId: string) {
     const options = {
@@ -96,11 +86,11 @@ export const lensQueries = {
     };
     return queryOptions(options);
   },
-  discovery(api: LensApi, { value, asOf, enabled }: { value: ActivitySelection; asOf: string; enabled: boolean }) {
+  discovery(api: LensApi, { value, enabled }: { value: ActivitySelection; enabled: boolean }) {
     const unfiltered = { source: value.source, service: "", filters: [], lookback_hours: value.lookback_hours };
     const options = {
-      queryKey: lensKeys.discovery(api.scope, value.source, value.lookback_hours, asOf),
-      queryFn: () => api.sample(unfiltered, 0, asOf),
+      queryKey: lensKeys.discovery(api.scope, value.source, value.lookback_hours),
+      queryFn: () => api.sample(unfiltered, 0, new Date().toISOString()),
       staleTime: 60000,
       enabled,
     };
@@ -114,12 +104,14 @@ export const lensQueries = {
       getNextPageParam: (lastPage: Sample) => lastPage.next_offset ?? undefined,
       enabled,
       staleTime: 30000,
+      gcTime: 60_000,
+      placeholderData: keepPreviousData,
     };
     return infiniteQueryOptions(options);
   },
-  agents(api: LensApi, asOf: string, source: Settings["source"]) {
+  agents(api: LensApi, source: Settings["source"]) {
     const options = {
-      queryKey: lensKeys.agents(api.scope, asOf),
+      queryKey: lensKeys.agents(api.scope),
       queryFn: () => api.agents(),
       enabled: source !== "requests",
       staleTime: 60000,

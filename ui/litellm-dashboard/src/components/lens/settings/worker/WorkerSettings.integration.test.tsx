@@ -1,8 +1,12 @@
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useQuery } from "@tanstack/react-query";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { apiClient } from "@/components/networking";
+import { lensQueries } from "../../api/queries";
+import { useLensApi } from "../../LensServices";
+import type { LensList } from "../../model/types";
 import { WorkerSettings } from "./WorkerSettings";
 
 vi.mock("@/components/networking", () => ({
@@ -23,6 +27,15 @@ const created = {
   },
 };
 
+/** Mirrors the workspace: the worker rows come from the cached `/lens` list, so a mutation must refetch it to update them. */
+function WorkerSettingsHost() {
+  const api = useLensApi("admin");
+  const list = useQuery(lensQueries.list(api));
+  return list.data ? <WorkerSettings accessToken="admin" workers={list.data.workers} /> : null;
+}
+
+const listCalls = () => vi.mocked(apiClient.get).mock.calls.filter(([path]) => path === "/lens").length;
+
 describe("Worker setup", () => {
   beforeEach(() => {
     testQueryClient.clear();
@@ -39,7 +52,7 @@ describe("Worker setup", () => {
   it("generates a complete command using one worker credential and the configured proxy address", async () => {
     vi.mocked(apiClient.post).mockResolvedValue(created);
     const user = userEvent.setup();
-    renderWithProviders(<WorkerSettings accessToken="admin" workers={[]} onChanged={vi.fn()} />);
+    renderWithProviders(<WorkerSettings accessToken="admin" workers={[]} />);
     await user.click(screen.getByText("Advanced options"));
     await user.click(screen.getByRole("switch", { name: "Use an existing virtual key" }));
     expect(screen.getByRole("textbox", { name: "LiteLLM proxy URL" })).toHaveValue("https://gateway.example/proxy");
@@ -66,16 +79,19 @@ describe("Worker setup", () => {
   });
   it("assigns billing to an existing worker without replacing its access token", async () => {
     const user = userEvent.setup();
-    const changed = vi.fn();
-    vi.mocked(apiClient.put).mockResolvedValue(created.worker);
-    renderWithProviders(
-      <WorkerSettings
-        accessToken="admin"
-        workers={[{ ...created.worker, analysis_key_id: null }]}
-        onChanged={changed}
-      />,
-    );
-    expect(screen.getByText("Billing key required")).toBeInTheDocument();
+    const workers = vi.fn((): LensList["workers"] => [{ ...created.worker, analysis_key_id: null }]);
+    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+      if (path === "/lens") return { lenses: [], workers: workers(), tracing_enabled: true };
+      if (path === "/key/info") return { info: { models: ["analysis-model"], max_budget: 15, budget_duration: "1mo" } };
+      return { keys: [{ token: "b".repeat(64), key_alias: "Analysis" }], total_pages: 1 };
+    });
+    vi.mocked(apiClient.put).mockImplementation(async () => {
+      workers.mockReturnValue([created.worker]);
+      return created.worker;
+    });
+    renderWithProviders(<WorkerSettingsHost />);
+    expect(await screen.findByText("Billing key required")).toBeInTheDocument();
+    const listedBefore = listCalls();
     await user.click(screen.getByRole("button", { name: "Edit access" }));
     await user.click(screen.getByRole("combobox", { name: "Charge analysis to" }));
     await user.click(await screen.findByRole("option", { name: "Analysis" }));
@@ -84,23 +100,30 @@ describe("Worker setup", () => {
       accessToken: "admin",
       body: { analysis_key_id: "b".repeat(64) },
     });
-    expect(changed).toHaveBeenCalledOnce();
+    expect(await screen.findByText(/Not connected/)).toBeVisible();
+    expect(screen.queryByText("Billing key required")).not.toBeInTheDocument();
+    expect(listCalls()).toBe(listedBefore + 1);
     expect(apiClient.post).not.toHaveBeenCalled();
   });
   it("requires revoking the current worker before setting up a replacement", async () => {
     const user = userEvent.setup();
-    const changed = vi.fn();
-    vi.mocked(apiClient.delete).mockResolvedValue(true);
-    const props = { accessToken: "admin", onChanged: changed };
-    const view = renderWithProviders(<WorkerSettings {...props} workers={[created.worker]} />);
+    const workers = vi.fn((): LensList["workers"] => [created.worker]);
+    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+      path === "/lens" ? { lenses: [], workers: workers(), tracing_enabled: true } : { data: [] },
+    );
+    vi.mocked(apiClient.delete).mockImplementation(async () => {
+      workers.mockReturnValue([{ ...created.worker, revoked: true }]);
+      return true;
+    });
+    renderWithProviders(<WorkerSettingsHost />);
+    const revoke = await screen.findByRole("button", { name: "Revoke access" });
     expect(screen.queryByRole("button", { name: "Add worker" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Get install command" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Revoke access" }));
+    await user.click(revoke);
     expect(apiClient.delete).toHaveBeenCalledWith("/lens/workers/worker", { accessToken: "admin" });
-    expect(changed).toHaveBeenCalledOnce();
-    view.rerender(<WorkerSettings {...props} workers={[{ ...created.worker, revoked: true }]} />);
-    expect(screen.getByRole("button", { name: "Get install command" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Get install command" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Analysis model" })).toBeVisible();
+    expect(listCalls()).toBe(2);
   });
   it("cleans up a newly created key when registration fails before retrying", async () => {
     const user = userEvent.setup();
@@ -115,7 +138,7 @@ describe("Worker setup", () => {
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({ token_id: "retry-key-id" })
       .mockResolvedValueOnce(created);
-    renderWithProviders(<WorkerSettings accessToken="admin" workers={[]} onChanged={vi.fn()} />);
+    renderWithProviders(<WorkerSettings accessToken="admin" workers={[]} />);
     expect(screen.getByRole("button", { name: "Get install command" })).toBeDisabled();
     expect(screen.getByRole("textbox", { name: "LiteLLM proxy URL", hidden: true })).not.toBeVisible();
     await user.click(screen.getByRole("combobox", { name: "Analysis model" }));

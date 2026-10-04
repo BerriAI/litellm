@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useId, useState, type ComponentProps } from "react";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useId, useState, type ComponentProps } from "react";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useFormContext, useWatch } from "react-hook-form";
-import { lensQueries } from "../api/queries";
+import { lensKeys, lensQueries } from "../api/queries";
 import { useLensApi } from "../LensServices";
 import { durationLabel } from "../model/format";
 import type { Sample } from "../model/types";
@@ -58,10 +58,10 @@ function manualSelectedCount(selection: Selection): number {
   return Math.min(sampled, selection.sample_size ?? Infinity);
 }
 
-function useScopeFieldOptions(api: ReturnType<typeof useLensApi>, selection: Selection, asOf: string) {
+function useScopeFieldOptions(api: ReturnType<typeof useLensApi>, selection: Selection) {
   const windowValid = validWindow(selection);
-  const discovery = useQuery(lensQueries.discovery(api, { value: selection, asOf, enabled: windowValid }));
-  const agents = useQuery(lensQueries.agents(api, asOf, selection.source));
+  const discovery = useQuery(lensQueries.discovery(api, { value: selection, enabled: windowValid }));
+  const agents = useQuery(lensQueries.agents(api, selection.source));
   const runs = discovery.data?.executions ?? [];
   const services = [...new Set(runs.map((r) => r.service).filter(Boolean))].sort();
   const attributes = runs.flatMap((r) => r.metadata ?? []);
@@ -81,6 +81,7 @@ export function useMatchingActivity(accessToken: string): MatchingActivity {
   const { control, setValue } = useFormContext<InvestigationInput>();
   const [selection, manualSelection] = useWatch({ control, name: ["selection", "manualSelection"] });
   const api = useLensApi(accessToken);
+  const client = useQueryClient();
   const [scope, setScope] = useState(selection);
   const [asOf, setAsOf] = useState(() => new Date().toISOString());
   const serialized = JSON.stringify({ ...selection, execution_ids: [] });
@@ -93,17 +94,21 @@ export function useMatchingActivity(accessToken: string): MatchingActivity {
   }, [serialized]);
   const windowValid = validWindow(selection);
   const valid = windowValid && validScope(scope);
-  const scopeFields = useScopeFieldOptions(api, selection, asOf);
+  const scopeFields = useScopeFieldOptions(api, selection);
   const preview = useInfiniteQuery(lensQueries.preview(api, { scope, asOf, enabled: valid }));
   const firstPage = preview.data?.pages[0];
   const executions = preview.data?.pages.flatMap((page) => page.executions) ?? [];
   const empty = firstPage?.eligible === 0;
+  const refreshPreview = useCallback(() => {
+    setAsOf(new Date().toISOString());
+    void client.invalidateQueries({ queryKey: lensKeys.discoveries() });
+    void client.invalidateQueries({ queryKey: lensKeys.agents(api.scope) });
+  }, [api.scope, client]);
   useEffect(() => {
     if (!empty || !valid) return;
-    const timer = window.setTimeout(() => setAsOf(new Date().toISOString()), 15000);
+    const timer = window.setTimeout(refreshPreview, 15000);
     return () => window.clearTimeout(timer);
-  }, [empty, valid, asOf]);
-  const refreshPreview = () => setAsOf(new Date().toISOString());
+  }, [empty, valid, asOf, refreshPreview]);
   const pending = serialized !== JSON.stringify(scope) || (preview.isFetching && !preview.isFetchingNextPage);
   const ready = !pending && valid;
   const hasSelection = !manualSelection || !!selection.execution_ids.length;

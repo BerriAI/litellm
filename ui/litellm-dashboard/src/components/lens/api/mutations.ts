@@ -1,27 +1,54 @@
 "use client";
 
-import { useMutation } from "@tanstack/react-query";
-import type { Lens, Settings } from "../model/types";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { Lens, LensList, Settings } from "../model/types";
 
 import type { LensApi } from "./service";
+import { lensKeys } from "./queries";
 import { useLensApi } from "../LensServices";
 
 export type LensWrite = (api: LensApi) => Promise<unknown>;
 
 export function useLensUpdate(accessToken: string) {
   const api = useLensApi(accessToken);
-  return useMutation({ retry: false, mutationFn: (write: LensWrite) => write(api) });
+  const client = useQueryClient();
+  return useMutation({
+    retry: false,
+    mutationFn: (write: LensWrite) => write(api),
+    onSettled: () =>
+      Promise.all([
+        client.invalidateQueries({ queryKey: lensKeys.list(api.scope) }),
+        client.invalidateQueries({ queryKey: lensKeys.histories() }),
+      ]),
+  });
+}
+
+function upsertLens(list: LensList | undefined, saved: Lens): LensList | undefined {
+  if (!list) return list;
+  const known = list.lenses.some((lens) => lens.id === saved.id);
+  const lenses = known ? list.lenses.map((lens) => (lens.id === saved.id ? saved : lens)) : [...list.lenses, saved];
+  return { ...list, lenses };
 }
 
 export function useSaveLens(accessToken: string) {
   const api = useLensApi(accessToken);
+  const client = useQueryClient();
   return useMutation({
     retry: false,
     mutationFn: ({ id, settings }: { id?: string; settings: Settings }): Promise<Lens> => api.saveLens(id, settings),
+    onSuccess: (saved) => {
+      client.setQueryData<LensList>(lensKeys.list(api.scope), (current) => upsertLens(current, saved));
+      return client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
+    },
   });
 }
 
 export function useRevokeWorker(accessToken: string) {
   const api = useLensApi(accessToken);
-  return useMutation({ retry: false, mutationFn: (id: string) => api.revokeWorker(id) });
+  const client = useQueryClient();
+  return useMutation({
+    retry: false,
+    mutationFn: (id: string) => api.revokeWorker(id),
+    onSettled: () => client.invalidateQueries({ queryKey: lensKeys.list(api.scope) }),
+  });
 }

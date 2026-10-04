@@ -1,8 +1,8 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { mockAllIsIntersecting, setupIntersectionMocking } from "react-intersection-observer/test-utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "@/../tests/test-utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { MonitoringDialog } from "./MonitoringDialog";
 import { InvestigationSetup } from "./InvestigationSetup";
 import { apiClient } from "@/components/networking";
@@ -34,7 +34,9 @@ const settings: Settings = {
   ],
 };
 
+afterEach(() => testQueryClient.clear());
 beforeEach(() => {
+  testQueryClient.clear();
   setupIntersectionMocking(vi.fn);
   vi.mocked(apiClient.get).mockReset();
   vi.mocked(apiClient.get).mockResolvedValue([]);

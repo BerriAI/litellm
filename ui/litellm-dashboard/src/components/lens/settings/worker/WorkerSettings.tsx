@@ -7,15 +7,13 @@ import { usePrepareWorker } from "./usePrepareWorker";
 import { WorkerInstall } from "./WorkerInstall";
 import { WorkerForm } from "./WorkerForm";
 
-import { useNow } from "@/hooks/useNow";
-
 import { FormProvider } from "react-hook-form";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2 } from "lucide-react";
-import { workerConnected } from "../../model/status";
+import { useWorkerConnected } from "../../useWorkerConnected";
 import { workerFormSchema, type WorkerFormInput } from "./workerSchema";
-import type { LensList, WorkerCreated } from "../../model/types";
+import type { LensList } from "../../model/types";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { cn } from "@/lib/cva.config";
 import { SettingsCard } from "../SettingsSection";
@@ -32,16 +30,14 @@ function defaultWorkerFormValues(): WorkerFormInput {
 export function WorkerSettings({
   accessToken,
   workers,
-  onChanged,
   onReady,
 }: {
   accessToken: string;
   workers: LensList["workers"];
-  onChanged: () => void;
   onReady?: () => void;
 }) {
   const revokeWorker = useRevokeWorker(accessToken);
-  const now = useNow(2000);
+  const prepareWorker = usePrepareWorker(accessToken);
   const form = useZodForm(workerFormSchema, {
     defaultValues: defaultWorkerFormValues(),
     mode: "onChange",
@@ -49,12 +45,11 @@ export function WorkerSettings({
   const { formState, reset, setValue } = form;
   const [editingWorker, setEditingWorker] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [created, setCreated] = useState<WorkerCreated | null>(null);
-  const [error, setError] = useState("");
+  const [clipboardError, setClipboardError] = useState("");
+  const created = prepareWorker.data ?? null;
+  const error = prepareWorker.error?.message ?? revokeWorker.error?.message ?? clipboardError;
   const hasActiveWorker = workers.some((w) => !w.revoked);
-  const connected = created
-    ? workers.some((w) => w.id === created.worker.id && workerConnected(w, now))
-    : workers.some((w) => workerConnected(w, now));
+  const connected = useWorkerConnected(created ? workers.filter((w) => w.id === created.worker.id) : workers);
   const formVisible = !hasActiveWorker || !!editingWorker;
   const uninstalledScreen = formVisible ? "form" : "list";
   const screen = created ? "install" : uninstalledScreen;
@@ -72,42 +67,33 @@ export function WorkerSettings({
       useExisting: true,
       analysisKey: worker.analysis_key_id ?? null,
     });
-    setCreated(null);
+    prepareWorker.reset();
     setEditingWorker(worker.id);
   };
-  const onPrepared = (created: WorkerCreated | null) => {
-    if (created) setCreated(created);
-    else {
-      setEditingWorker(null);
-      setValue("analysisKey", null);
-    }
-  };
-  const prepareWorker = usePrepareWorker(accessToken, { onChanged, onPrepared });
-  const createWorker = form.handleSubmit(async (values) => {
-    setError("");
-    try {
-      const registration = {
-        address: values.address,
-        useExisting: values.useExisting,
-        analysisKey: values.analysisKey,
-        access: values.access,
-        editingWorker,
-      };
-      await prepareWorker.mutateAsync(registration);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not create credential");
-    }
+  const createWorker = form.handleSubmit((values) => {
+    const registration = {
+      address: values.address,
+      useExisting: values.useExisting,
+      analysisKey: values.analysisKey,
+      access: values.access,
+      editingWorker,
+    };
+    prepareWorker.mutate(registration, {
+      onSuccess: (result) => {
+        if (result) return;
+        setEditingWorker(null);
+        setValue("analysisKey", null);
+      },
+    });
   });
-  const revoke = async (id: string) => {
-    try {
-      await revokeWorker.mutateAsync(id);
-      setValue("analysisKey", null);
-      setValue("useExisting", false);
-      onChanged();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not revoke worker");
-    }
-  };
+  const revoke = (id: string) =>
+    revokeWorker.mutate(id, {
+      onSuccess: () => {
+        setValue("analysisKey", null);
+        setValue("useExisting", false);
+      },
+    });
+  const busy = prepareWorker.isPending;
   const setupDescription = created
     ? "Run this command on a server with Docker."
     : "Deploy the worker on your server to run investigations.";
@@ -118,7 +104,7 @@ export function WorkerSettings({
   if (screen === "list")
     return (
       <>
-        <WorkerList workers={workers} now={now} accessToken={accessToken} editBilling={editBilling} revoke={revoke} />
+        <WorkerList workers={workers} accessToken={accessToken} editBilling={editBilling} revoke={revoke} />
         {error && (
           <p role="alert" className="text-sm text-destructive">
             {error}
@@ -146,20 +132,20 @@ export function WorkerSettings({
             created={created}
             copied={copied}
             setCopied={setCopied}
-            setError={setError}
+            setError={setClipboardError}
             onReady={onReady}
-            onClose={() => setCreated(null)}
+            onClose={prepareWorker.reset}
           />
         ) : null}
         {screen === "form" && (
           <div className="flex justify-end gap-2">
             {hasActiveWorker && (
-              <Button variant="outline" disabled={formState.isSubmitting} onClick={cancelForm}>
+              <Button variant="outline" disabled={busy} onClick={cancelForm}>
                 Cancel
               </Button>
             )}
-            <Button disabled={!formState.isValid || formState.isSubmitting} onClick={() => void createWorker()}>
-              {formState.isSubmitting ? "Preparing…" : actionLabel}
+            <Button disabled={!formState.isValid || busy} onClick={() => void createWorker()}>
+              {busy ? "Preparing…" : actionLabel}
             </Button>
           </div>
         )}

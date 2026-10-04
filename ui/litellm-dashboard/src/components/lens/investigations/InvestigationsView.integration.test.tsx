@@ -588,6 +588,7 @@ it("lists each finding under the investigation that owns it and resolves only th
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
     if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path.endsWith("/runs")) return [];
     return { data: [] };
   });
   vi.mocked(apiClient.patch).mockResolvedValue(undefined);
@@ -710,6 +711,7 @@ it("keeps a finding open to retry when its update fails", async () => {
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
     if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path.endsWith("/runs")) return [];
     return { data: [] };
   });
   vi.mocked(apiClient.patch).mockReset();

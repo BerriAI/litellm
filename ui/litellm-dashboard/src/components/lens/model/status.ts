@@ -1,8 +1,19 @@
 import { formatActivityTimestamp } from "@/utils/activityTimestamp";
-import type { Lens, LensList } from "./types";
+import type { Job, Lens, LensList } from "./types";
 
 export function workerConnected(worker: LensList["workers"][number], now = Date.now()): boolean {
   return !worker.revoked && !!worker.analysis_key_id && now - Date.parse(worker.last_seen) < 120000;
+}
+
+export function hasActiveJob(jobs: readonly Job[]): boolean {
+  return jobs.some((job) => job.status === "queued" || job.status === "running");
+}
+
+/** One observer polls `/lens`: fast while work is in flight or a worker is being connected, slow otherwise. */
+export function listPollInterval(list: LensList | undefined, settingsOpen: boolean, now: number): number {
+  const running = list?.lenses.some((lens) => hasActiveJob(lens.jobs)) ?? false;
+  const connected = list?.workers.some((worker) => workerConnected(worker, now)) ?? false;
+  return running || (settingsOpen && !connected) ? 2000 : 10000;
 }
 
 export function lensStatus(lens: Lens, connected: boolean): string {
