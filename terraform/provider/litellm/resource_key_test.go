@@ -429,19 +429,23 @@ func TestResourceKeyUpdateSendsConfiguredAllowedRoutes(t *testing.T) {
 // /key/generate replaces declared routes with the key_type preset while
 // /key/update stores them verbatim, so create must re-assert the declared
 // list when the proxy overrode it. A generate that already honored the
-// declared routes must not trigger the follow-up update.
+// declared routes must not trigger the follow-up update, and a restore the
+// proxy rejects must delete the just-created key so a retried apply does not
+// orphan it.
 func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 	cases := map[string]struct {
 		generateRoutes []interface{}
+		restoreFails   bool
 		wantUpdate     bool
 	}{
 		"preset overwrote declared": {generateRoutes: []interface{}{"llm_api_routes"}, wantUpdate: true},
 		"generate honored declared": {generateRoutes: []interface{}{"/v1/models"}, wantUpdate: false},
+		"restore update rejected":   {generateRoutes: []interface{}{"llm_api_routes"}, restoreFails: true, wantUpdate: true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			var generateBody, updateBody map[string]interface{}
-			updateCalled := false
+			var generateBody, updateBody, deleteBody map[string]interface{}
+			updateCalled, deleteCalled := false, false
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
 				w.Header().Set("Content-Type", "application/json")
@@ -452,7 +456,16 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 				case "/key/update":
 					updateCalled = true
 					json.Unmarshal(body, &updateBody)
+					if tc.restoreFails {
+						w.WriteHeader(http.StatusBadRequest)
+						w.Write([]byte(`{"error":{"message":"rejected"}}`))
+						return
+					}
 					w.Write([]byte(`{"key": "hash-1"}`))
+				case "/key/delete":
+					deleteCalled = true
+					json.Unmarshal(body, &deleteBody)
+					w.Write([]byte(`{}`))
 				default:
 					w.Write([]byte(`{"key":"hash-1","info":{"key_alias":"typed","key_type":"llm_api","allowed_routes":["/v1/models"]}}`))
 				}
@@ -465,6 +478,21 @@ func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
 				"allowed_routes": []interface{}{"/v1/models"},
 			})
 			diags := resourceKeyCreate(context.Background(), d, NewClient(srv.URL, "test-key", true))
+			if tc.restoreFails {
+				if !diags.HasError() {
+					t.Fatal("create succeeded although the restore update was rejected")
+				}
+				if !deleteCalled {
+					t.Fatal("failed restore did not delete the created key; a retried apply would orphan it")
+				}
+				if keys, _ := deleteBody["keys"].([]interface{}); len(keys) != 1 || keys[0] != "hash-1" {
+					t.Errorf("delete payload keys = %v, want [hash-1]", deleteBody["keys"])
+				}
+				if d.Id() != "" {
+					t.Errorf("state recorded id %q for a key the provider deleted", d.Id())
+				}
+				return
+			}
 			if diags.HasError() {
 				t.Fatalf("create failed: %+v", diags)
 			}

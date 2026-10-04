@@ -315,7 +315,15 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 		restore := *key
 		restore.Key = createdKey.TokenID
 		if _, err := c.UpdateKey(&restore); err != nil {
-			return diag.FromErr(fmt.Errorf("error restoring allowed_routes over the key_type preset: %s", err))
+			// The key already exists server-side; nothing is in state yet, so
+			// returning without cleanup would orphan an active key terraform
+			// cannot see or delete, and a retried apply would mint another
+			// one. Delete it so the retry starts clean; if even that fails,
+			// name the key so an operator can remove it manually.
+			if delErr := c.DeleteKey(createdKey.TokenID); delErr != nil {
+				return diag.FromErr(fmt.Errorf("error restoring allowed_routes over the key_type preset: %s; cleanup failed too, key %s must be deleted manually: %s", err, createdKey.TokenID, delErr))
+			}
+			return diag.FromErr(fmt.Errorf("error restoring allowed_routes over the key_type preset (created key deleted, retry the apply): %s", err))
 		}
 	}
 
