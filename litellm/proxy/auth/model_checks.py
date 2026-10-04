@@ -46,10 +46,6 @@ def get_provider_models(provider: str, litellm_params: LiteLLM_Params | None = N
         provider_models: Final = get_valid_models(custom_llm_provider=provider, litellm_params=litellm_params)
         return provider_models
 
-    # Providers with no static catalog (litellm_proxy, hosted_vllm, ollama, ...) are absent
-    # from models_by_provider by design: their model list only exists behind the provider's
-    # own endpoint. ProviderConfigManager still knows about them, so admit them here instead
-    # of returning None before endpoint discovery is ever attempted.
     try:
         llm_provider: Final = LlmProviders(provider)
     except ValueError:
