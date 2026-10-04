@@ -19,7 +19,7 @@ import { Inspector } from "@/components/shared/Inspector";
 import { Input } from "@/components/ui/input";
 import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import { cn } from "@/lib/cva.config";
-import { agoLabel } from "@/components/view_logs/TraceView/lensField";
+import { agoLabel } from "@/components/lens/model/format";
 
 import { findingAgents, findingKey, openFindings, scheduleLabel } from "../model/inbox";
 import { lensStatus } from "../model/status";

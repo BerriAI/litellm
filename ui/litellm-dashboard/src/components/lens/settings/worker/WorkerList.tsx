@@ -6,7 +6,7 @@ import { useNow } from "@/hooks/useNow";
 import { StatusDot, type StatusDotProps } from "@/components/shared/StatusDot";
 import { cn } from "@/lib/cva.config";
 import { workerConnected } from "../../model/status";
-import { agoLabel } from "@/components/view_logs/TraceView/lensField";
+import { agoLabel } from "@/components/lens/model/format";
 import { AnalysisKeySummary } from "./AnalysisKeyDetails";
 import type { LensList, Worker } from "../../model/types";
 

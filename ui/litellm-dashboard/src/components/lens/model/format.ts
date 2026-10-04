@@ -28,6 +28,15 @@ export function durationLabel(value: number, base: "minutes" | "hours" = "minute
   return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
 
+export function agoLabel(thenMs: number, nowMs: number): string {
+  const seconds = Math.max(0, Math.floor((nowMs - thenMs) / 1000));
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
 export const money = (n: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 3 }).format(n);
 export const when = (value?: string | null) => (value ? runTime(value) : "Not yet");
