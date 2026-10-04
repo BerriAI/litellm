@@ -73,30 +73,33 @@ pub enum CacheScope {
     Isolated(String),
 }
 
-#[derive(Clone)]
-pub struct CacheOptions {
+#[derive(Clone, Copy, Default)]
+pub struct CachePolicy {
     pub caching: Option<bool>,
     pub no_cache: bool,
     pub no_store: bool,
     pub ttl: Option<Duration>,
     pub max_age: Option<Duration>,
+}
+
+impl CachePolicy {
+    pub fn enabled(&self) -> bool {
+        self.caching != Some(false) && !(self.no_cache && self.no_store)
+    }
+}
+
+#[derive(Clone)]
+pub struct CacheOptions {
+    pub policy: CachePolicy,
     pub scope: CacheScope,
 }
 
 impl CacheOptions {
     pub fn new(scope: CacheScope) -> Self {
         Self {
-            caching: None,
-            no_cache: false,
-            no_store: false,
-            ttl: None,
-            max_age: None,
+            policy: CachePolicy::default(),
             scope,
         }
-    }
-
-    pub fn enabled(&self) -> bool {
-        self.caching != Some(false) && !(self.no_cache && self.no_store)
     }
 
     pub fn request(self, namespace: &str, surface: &str, mut input: Value) -> ResponseCacheRequest {
@@ -128,13 +131,15 @@ impl CacheOptions {
                 supported_call_type: true,
                 native_backend: true,
                 default_on: true,
-                caching: self.caching,
-                no_cache: self.no_cache,
-                no_store: self.no_store,
+                caching: self.policy.caching,
+                no_cache: self.policy.no_cache,
+                no_store: self.policy.no_store,
                 ..Default::default()
             },
-            context: ExactCacheContext { ttl: self.ttl },
-            max_age: self.max_age,
+            context: ExactCacheContext {
+                ttl: self.policy.ttl,
+            },
+            max_age: self.policy.max_age,
         }
     }
 }
@@ -171,7 +176,10 @@ impl ScopedCache {
         Self { service, scope }
     }
 
-    pub fn options(&self, overrides: Option<CacheOptions>) -> CacheOptions {
-        overrides.unwrap_or_else(|| CacheOptions::new(self.scope.clone()))
+    pub fn options(&self, policy: Option<CachePolicy>) -> CacheOptions {
+        CacheOptions {
+            policy: policy.unwrap_or_default(),
+            scope: self.scope.clone(),
+        }
     }
 }

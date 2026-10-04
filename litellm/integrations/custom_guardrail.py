@@ -8,6 +8,9 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
 
+import httpx
+
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -52,6 +55,8 @@ from litellm.exceptions import (
     ModifyResponseException,
     SensitiveDataRouteException,
 )
+
+GUARDRAIL_SESSIONS_TARGET: Final = "guardrail_sessions"
 
 # Per-process secret tagging each recorded marker. The deployment hook only
 # honors markers carrying this token, so a caller cannot forge the metadata
@@ -176,6 +181,8 @@ class CustomGuardrail(CustomLogger):
 
     records_own_guardrail_information: ClassVar[bool] = False
 
+    timeout: float | httpx.Timeout | None = None
+
     def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks
         super().__init_subclass__(**kwargs)
         own_apply_guardrail: Final[object] = cls.__dict__.get("apply_guardrail")
@@ -201,6 +208,7 @@ class CustomGuardrail(CustomLogger):
         run_in_parallel: bool = False,
         scan_raw_request: bool = False,
         only_scan_new_messages: bool = False,
+        timeout: float | None = None,
         **kwargs,
     ):
         """
@@ -229,6 +237,8 @@ class CustomGuardrail(CustomLogger):
                 guardrails: any data this guardrail returns is discarded, matching run_in_parallel's
                 contract, since applying its mutations on top of a stale snapshot would silently
                 undo whatever later guardrails already did to the live request.
+            timeout: Per-request timeout in seconds for the guardrail provider's API call. When
+                None, the guardrail keeps whatever default its HTTP handler or SDK already uses.
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -246,6 +256,8 @@ class CustomGuardrail(CustomLogger):
         self.run_in_parallel: bool = run_in_parallel
         self.scan_raw_request: bool = scan_raw_request
         self.only_scan_new_messages: bool = only_scan_new_messages
+        if timeout is not None:
+            self.timeout = timeout
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
@@ -363,7 +375,7 @@ class CustomGuardrail(CustomLogger):
             land and degrade to blocking instead of silently letting the
             flagged request through unmodified.
         """
-        advisory_message: Final = {"role": "system", "content": message}  # mutable-ok: plain dict for live request
+        advisory_message: Final = {"role": "system", "content": message}
         existing_messages: Final = data.get("messages")
         existing_input: Final = data.get("input")
         existing_instructions: Final = data.get("instructions")
@@ -374,7 +386,7 @@ class CustomGuardrail(CustomLogger):
             # model to disregard a trailing warning. Prefer it over "input"
             # whenever present.
             if isinstance(existing_messages, list):
-                messages_with_instructions_note: Final = [  # mutable-ok: fresh list
+                messages_with_instructions_note: Final = [
                     *existing_messages,
                     advisory_message,
                 ]
@@ -386,7 +398,7 @@ class CustomGuardrail(CustomLogger):
             # real, read field (e.g. a chat-completions call carrying a stray
             # "input"), so write to both when both are present.
             if isinstance(existing_messages, list):
-                messages_with_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
+                messages_with_input_note: Final = [*existing_messages, advisory_message]
                 data["messages"] = messages_with_input_note  # rebind-ok: mutates caller's dict by design
             # The Responses API reads "input", not "messages" -- appending only to
             # "messages" would leave the advisory unreachable for that endpoint.
@@ -400,10 +412,10 @@ class CustomGuardrail(CustomLogger):
             # non-delivery so the caller degrades to blocking.
             return False
         if isinstance(existing_messages, list):
-            messages_without_input_note: Final = [*existing_messages, advisory_message]  # mutable-ok: fresh list
+            messages_without_input_note: Final = [*existing_messages, advisory_message]
             data["messages"] = messages_without_input_note  # rebind-ok: mutates caller's dict by design
             return True
-        sole_message: Final = [advisory_message]  # mutable-ok: plain list for the live JSON request
+        sole_message: Final = [advisory_message]
         data["messages"] = sole_message  # rebind-ok: mutates caller's dict by design
         return True
 
@@ -465,6 +477,7 @@ class CustomGuardrail(CustomLogger):
     def _scanned_texts_cache_key(self, session_id: str) -> str:
         return f"guardrail_scanned_texts:{self.guardrail_name}:{session_id}"
 
+    @with_service_target(GUARDRAIL_SESSIONS_TARGET)
     async def filter_new_texts_for_session(
         self,
         texts: list[str] | None,
@@ -509,6 +522,7 @@ class CustomGuardrail(CustomLogger):
         seen: Final[set[str]] = {str(h) for h in cached} if isinstance(cached, list) else set()
         return [text for text in texts if self._scanned_text_hash(text) not in seen]
 
+    @with_service_target(GUARDRAIL_SESSIONS_TARGET)
     async def mark_texts_scanned(
         self,
         texts: list[str] | None,

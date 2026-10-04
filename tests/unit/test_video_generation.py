@@ -1109,6 +1109,7 @@ def test_video_content_handler_passes_variant_to_url():
     mock_client = MagicMock(spec=HTTPHandler)
     mock_response = MagicMock()
     mock_response.content = b"thumbnail-bytes"
+    mock_response.status_code = 200
     mock_client.get.return_value = mock_response
 
     with patch(
@@ -1154,6 +1155,7 @@ def test_video_content_handler_uses_get_for_openai():
     mock_client = MagicMock(spec=HTTPHandler)
     mock_response = MagicMock()
     mock_response.content = b"mp4-bytes"
+    mock_response.status_code = 200
     mock_client.get.return_value = mock_response
 
     # Patch _get_httpx_client to ensure no real HTTP client is created

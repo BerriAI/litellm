@@ -1,5 +1,7 @@
 use super::{native, python};
-use litellm_cache_response::{CacheOptions, CacheScope, ResponseCacheService, ScopedCache};
+use litellm_cache_response::{
+    CacheOptions, CachePolicy, CacheScope, ResponseCacheService, ScopedCache,
+};
 use litellm_host::{
     machine::{HostServices, MachineFault},
     protocol::Protocol,
@@ -154,8 +156,11 @@ pub(crate) fn configure(
             .map(|value| value.unwrap_or(false))
     };
     let options = CacheOptions {
-        no_cache: boolean("no-cache")?,
-        no_store: boolean("no-store")?,
+        policy: CachePolicy {
+            no_cache: boolean("no-cache")?,
+            no_store: boolean("no-store")?,
+            ..CachePolicy::default()
+        },
         ..CacheOptions::new(CacheScope::Shared)
     };
     let namespace = cache

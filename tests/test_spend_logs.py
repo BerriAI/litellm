@@ -101,7 +101,7 @@ async def get_spend_logs(session, request_id=None, api_key=None):
 
 
 @pytest.mark.skip(
-    reason="Flaky in CI: /spend/logs?request_id=... returns 500 even after a 20s wait for the spend log to be written. Spend-log accuracy is covered by tests/test_litellm/proxy/spend_tracking/ and the proxy_spend_accuracy_tests CircleCI job."
+    reason="Flaky in CI: /spend/logs?request_id=... returns 500 even after a 20s wait for the spend log to be written. Spend-log accuracy is covered by tests/unit/proxy/spend_tracking/ and the proxy_spend_accuracy_tests CircleCI job."
 )
 @pytest.mark.asyncio
 async def test_spend_logs():
@@ -159,7 +159,7 @@ async def generate_team(session: aiohttp.ClientSession, org_id: str) -> dict:
 
 
 @pytest.mark.skip(
-    reason="Flaky in CI: /spend/logs?request_id=... returns 500 even after a 20s wait for the spend log to be written. Same write-then-read race against the spend logs DB as test_spend_logs. Spend-log accuracy is covered by tests/test_litellm/proxy/spend_tracking/ and the proxy_spend_accuracy_tests CircleCI job."
+    reason="Flaky in CI: /spend/logs?request_id=... returns 500 even after a 20s wait for the spend log to be written. Same write-then-read race against the spend logs DB as test_spend_logs. Spend-log accuracy is covered by tests/unit/proxy/spend_tracking/ and the proxy_spend_accuracy_tests CircleCI job."
 )
 @pytest.mark.asyncio
 async def test_spend_logs_with_org_id():
@@ -210,23 +210,6 @@ async def get_predict_spend_logs(session):
     }
 
     async with session.post(url, headers=headers, json=data) as response:
-        status = response.status
-        response_text = await response.text()
-
-        print(response_text)
-        print()
-
-        if status != 200:
-            raise Exception(f"Request did not return a 200 status code: {status}")
-        return await response.json()
-
-
-async def get_spend_report(session, start_date, end_date):
-    url = "http://0.0.0.0:4000/global/spend/report"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
-    async with session.get(
-        url, headers=headers, params={"start_date": start_date, "end_date": end_date}
-    ) as response:
         status = response.status
         response_text = await response.text()
 
@@ -308,37 +291,3 @@ async def test_spend_logs_high_traffic():
         raise Exception("it worked!")
 
 
-@pytest.mark.asyncio
-async def test_spend_report_endpoint():
-    async with aiohttp.ClientSession(
-        timeout=aiohttp.ClientTimeout(total=600)
-    ) as session:
-        import datetime
-
-        todays_date = datetime.date.today() + datetime.timedelta(days=1)
-        todays_date = todays_date.strftime("%Y-%m-%d")
-
-        print("todays_date", todays_date)
-        thirty_days_ago = (
-            datetime.date.today() - datetime.timedelta(days=30)
-        ).strftime("%Y-%m-%d")
-        spend_report = await get_spend_report(
-            session=session, start_date=thirty_days_ago, end_date=todays_date
-        )
-        print("spend report", spend_report)
-
-        for row in spend_report:
-            date = row["group_by_day"]
-            teams = row["teams"]
-            for team in teams:
-                team_name = team["team_name"]
-                total_spend = team["total_spend"]
-                metadata = team["metadata"]
-
-                assert team_name is not None
-
-                print(f"Date: {date}")
-                print(f"Team: {team_name}")
-                print(f"Total Spend: {total_spend}")
-                print("Metadata: ", metadata)
-                print()

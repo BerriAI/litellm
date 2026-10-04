@@ -117,6 +117,7 @@ export function AuditLogsTable({
 
   return (
     <DataTable
+      fillHeight
       data={data}
       columns={columns}
       getRowId={(row) => row.id}

@@ -1,3 +1,5 @@
+import functools
+import itertools
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Final
@@ -12,6 +14,7 @@ from litellm.proxy.db.model_insights_tasks import load_model_insight_tasks
 from litellm.repositories.table_repositories import DailyModelUsageRepository
 from litellm.types.model_insights import (
     ModelInsightDailyMetric,
+    ModelInsightDailyTotal,
     ModelInsightMetric,
     ModelInsightsMetric,
     ModelInsightsResponse,
@@ -43,12 +46,18 @@ class _GroupedDaily(_GroupedModel):
     date: str
 
 
+class _GroupedDate(BaseModel):
+    date: str
+    sums: _Sums = Field(alias="_sum")
+
+
 class _GroupedTask(_GroupedModel):
     task_type: str
 
 
 _MODEL_ROWS: Final = TypeAdapter(list[_GroupedModel])
 _DAILY_ROWS: Final = TypeAdapter(list[_GroupedDaily])
+_DATE_ROWS: Final = TypeAdapter(list[_GroupedDate])
 _TASK_ROWS: Final = TypeAdapter(list[_GroupedTask])
 _UNCATEGORIZED_TASK: Final = ModelInsightTask(
     task_type=MODEL_INSIGHTS_DEFAULT_TASK, label="Uncategorized", category="General"
@@ -109,16 +118,32 @@ def _daily_metric(row: _GroupedDaily) -> ModelInsightDailyMetric:
     return ModelInsightDailyMetric(date=row.date, **_metric(row).model_dump())
 
 
+def _daily_total(row: _GroupedDate) -> ModelInsightDailyTotal:
+    return ModelInsightDailyTotal(
+        date=row.date,
+        spend=row.sums.spend,
+        prompt_tokens=row.sums.prompt_tokens,
+        completion_tokens=row.sums.completion_tokens,
+        requests=row.sums.request_count,
+    )
+
+
 def _summarize_tasks(rows: list[_GroupedTask], metric: ModelInsightsMetric) -> list[ModelInsightTaskSummary]:
     catalog: Final = load_model_insight_tasks()
-    totals: Final[dict[str, float]] = {}
-    leaders: Final[dict[str, _GroupedTask]] = {}
-    for row in rows:
-        value = _rank_value(row, metric)
-        totals[row.task_type] = totals.get(row.task_type, 0.0) + value
-        leader = leaders.get(row.task_type)
-        if leader is None or value > _rank_value(leader, metric):
-            leaders[row.task_type] = row
+    first_seen: Final = {task: index for index, task in enumerate(dict.fromkeys(row.task_type for row in rows))}
+    by_task: Final = {
+        task: tuple(group)
+        for task, group in itertools.groupby(
+            sorted(rows, key=lambda row: first_seen[row.task_type]), key=lambda row: row.task_type
+        )
+    }
+    totals: Final = {
+        task: functools.reduce(lambda total, row: total + _rank_value(row, metric), task_rows, 0.0)
+        for task, task_rows in by_task.items()
+    }
+    leaders: Final = {
+        task: max(task_rows, key=lambda row: _rank_value(row, metric)) for task, task_rows in by_task.items()
+    }
     grand: Final = sum(totals.values())
     return [
         ModelInsightTaskSummary(
@@ -185,11 +210,20 @@ async def get_model_insights(
         if model_rows
         else []
     )
+    date_rows: Final = _DATE_ROWS.validate_python(
+        await table.group_by(
+            by=["date"],  # mutable-ok: prisma group_by requires a list of fields
+            sum=_SUM_FIELDS,
+            where=date_window,
+            order={"date": "asc"},  # mutable-ok: prisma order clause must be a dict
+        )
+    )
     return ModelInsightsResponse(
         start_date=start_day.isoformat(),
         end_date=end_day.isoformat(),
         top_models=[_metric(row) for row in model_rows],
         daily=[_daily_metric(row) for row in daily_rows],
+        daily_totals=tuple(_daily_total(row) for row in date_rows),
     )
 
 
