@@ -1,23 +1,36 @@
 import { useId } from "react";
 import styles from "./LensIntroduction.module.css";
 
-const streams = [
-  {
-    id: "runs",
-    color: "text-sky-500 dark:text-sky-400",
-    path: "M -32 66 C 24 66 32 22 96 22 S 192 86 256 86 S 368 28 422 28 C 464 28 472 54 500 54 C 558 54 584 86 646 86 S 756 22 818 22 S 924 86 986 86 S 1040 54 1056 54",
-  },
-  {
-    id: "steps",
-    color: "text-violet-500 dark:text-violet-400",
-    path: "M -32 30 C 40 30 58 78 120 78 S 218 24 284 24 S 390 76 444 76 C 470 76 480 54 503 54",
-  },
-  {
-    id: "tools",
-    color: "text-amber-500 dark:text-amber-400",
-    path: "M -32 54 C 26 54 68 68 128 68 S 230 38 288 38 S 396 62 448 62 C 474 62 484 54 503 54",
-  },
+const dotColors = [
+  "fill-sky-400 dark:fill-sky-300",
+  "fill-violet-400 dark:fill-violet-300",
+  "fill-amber-400 dark:fill-amber-300",
+  "fill-cyan-400 dark:fill-cyan-300",
+  "fill-rose-400 dark:fill-rose-300",
 ];
+
+const gridDots = Array.from({ length: 96 }, (_, index) => {
+  const variation = (index * 73 + index * index * 19) % 101;
+  return {
+    x: 5 + (index % 12) * 10,
+    y: 4 + Math.floor(index / 12) * 10,
+    color: dotColors[variation % dotColors.length],
+    opacity: 0.25 + variation * 0.0075,
+  };
+});
+
+const organizedDots = Array.from({ length: 30 }, (_, index) => ({
+  x: 5 + (index % 6) * 10,
+  y: 34 + Math.floor(index / 6) * 10,
+}));
+
+const lightWaves = [0, 2.1, 4.2].map((phase) =>
+  Array.from({ length: 83 }, (_, point) => {
+    const x = point * 20 - 320;
+    const y = 54 + Math.sin((x / 320) * Math.PI * 2 + phase) * 22;
+    return `${point === 0 ? "M" : "L"} ${x} ${y.toFixed(2)}`;
+  }).join(" "),
+);
 
 export function GatewayFlow() {
   const id = useId();
@@ -44,9 +57,67 @@ export function GatewayFlow() {
         focusable="false"
       >
         <defs>
-          <pattern id={`${id}-field`} width="12" height="12" patternUnits="userSpaceOnUse">
-            <circle cx="6" cy="6" r="1.15" className="fill-muted-foreground/15" />
+          <pattern id={`${id}-grid`} width="10" height="10" patternUnits="userSpaceOnUse">
+            <circle cx="5" cy="4" r="1" className="fill-muted-foreground/15" />
           </pattern>
+          <pattern id={`${id}-swarm`} width="120" height="80" patternUnits="userSpaceOnUse">
+            {gridDots.map((dot, index) => (
+              <circle key={index} cx={dot.x} cy={dot.y} r="1.8" className={dot.color} opacity={dot.opacity} />
+            ))}
+          </pattern>
+          <pattern id={`${id}-processed`} x="500" width="80" height="108" patternUnits="userSpaceOnUse">
+            {organizedDots.map((dot, index) => (
+              <circle key={index} cx={dot.x} cy={dot.y} r="1.8" className="fill-indigo-500 dark:fill-indigo-400" />
+            ))}
+          </pattern>
+          <linearGradient id={`${id}-incoming`} x1="480" x2="530" y1="0" y2="0" gradientUnits="userSpaceOnUse">
+            <stop stopColor="white" />
+            <stop offset="1" stopColor="black" />
+          </linearGradient>
+          <mask id={`${id}-before-gate`}>
+            <rect width="1000" height="108" fill={`url(#${id}-incoming)`} />
+          </mask>
+          <mask id={`${id}-swarm-shape`}>
+            <path
+              d="M 0 5 C 200 5 270 8 380 30 S 465 39 500 39 C 620 39 730 18 1000 12 L 1000 96 C 730 90 620 69 500 69 C 465 69 440 69 380 78 S 200 103 0 103 Z"
+              fill="white"
+            />
+          </mask>
+          <filter id={`${id}-soft-light`} x="-10%" y="-100%" width="120%" height="300%">
+            <feGaussianBlur stdDeviation="6" />
+          </filter>
+          <mask id={`${id}-illumination`} maskUnits="userSpaceOnUse" x="0" y="0" width="530" height="108">
+            <rect width="530" height="108" fill="white" opacity="0.35" />
+            <g filter={`url(#${id}-soft-light)`}>
+              <g fill="none" stroke="white" strokeWidth="26">
+                {lightWaves.map((path, index) => (
+                  <path
+                    key={index}
+                    d={path}
+                    opacity={0.9 - index * 0.2}
+                    className={styles.swarmLight}
+                    style={{ animationDuration: `${20 + index * 5}s`, animationDelay: `${index * -9}s` }}
+                  />
+                ))}
+              </g>
+            </g>
+          </mask>
+          <linearGradient
+            id={`${id}-rhythm`}
+            x1="0"
+            x2="160"
+            y1="0"
+            y2="0"
+            gradientUnits="userSpaceOnUse"
+            spreadMethod="repeat"
+          >
+            <stop stopColor="white" stopOpacity="0.5" />
+            <stop offset="0.5" stopColor="white" stopOpacity="0.95" />
+            <stop offset="1" stopColor="white" stopOpacity="0.5" />
+          </linearGradient>
+          <mask id={`${id}-organized-light`} maskUnits="userSpaceOnUse" x="500" y="0" width="500" height="108">
+            <rect x="180" width="1140" height="108" fill={`url(#${id}-rhythm)`} className={styles.swarmLight} />
+          </mask>
           <linearGradient id={`${id}-fade`}>
             <stop offset="0" stopColor="white" stopOpacity="0" />
             <stop offset="0.06" stopColor="white" />
@@ -65,32 +136,16 @@ export function GatewayFlow() {
             <stop offset="0.5" stopColor="currentColor" className="text-indigo-500 dark:text-indigo-300" />
             <stop offset="1" stopColor="currentColor" className="text-violet-400" />
           </linearGradient>
-          {streams.map((stream) => (
-            <linearGradient
-              key={stream.id}
-              id={`${id}-${stream.id}`}
-              x1="470"
-              x2="530"
-              y1="0"
-              y2="0"
-              gradientUnits="userSpaceOnUse"
-              className={stream.color}
-            >
-              <stop stopColor="currentColor" />
-              <stop offset="1" stopColor="currentColor" className="text-indigo-500 dark:text-indigo-400" />
-            </linearGradient>
-          ))}
         </defs>
         <g mask={`url(#${id}-edges)`}>
-          <rect width="1000" height="108" fill={`url(#${id}-field)`} />
+          <rect width="1000" height="108" fill={`url(#${id}-grid)`} />
           <ellipse cx="500" cy="54" rx="58" ry="54" fill={`url(#${id}-glow)`} className={styles.gatewayGlow} />
-          {streams.map((stream) => (
-            <g key={stream.id} fill="none" stroke={`url(#${id}-${stream.id})`} strokeLinecap="round">
-              <path d={stream.path} strokeWidth="1" opacity="0.13" />
-              <path d={stream.path} strokeWidth="2.4" className={styles.trails} />
-              <path d={stream.path} strokeWidth="3.6" className={styles.packets} />
+          <rect x="500" width="500" height="108" fill={`url(#${id}-processed)`} mask={`url(#${id}-organized-light)`} />
+          <g mask={`url(#${id}-swarm-shape)`}>
+            <g mask={`url(#${id}-illumination)`}>
+              <rect width="530" height="108" fill={`url(#${id}-swarm)`} mask={`url(#${id}-before-gate)`} />
             </g>
-          ))}
+          </g>
         </g>
         <rect x="497" y="10" width="6" height="88" rx="3" className="fill-background/90" />
         <path

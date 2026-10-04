@@ -1,13 +1,5 @@
-.packets {
-  stroke-dasharray: 0 16;
-  animation: signal-flow 14s linear infinite;
-}
-
-.trails {
-  stroke-dasharray: 6 42;
-  stroke-dashoffset: -10;
-  opacity: 0.3;
-  animation: signal-trails 14s linear infinite;
+.swarmLight {
+  animation: swarm-flow 28s linear infinite;
 }
 
 .gatewayGlow {
@@ -82,27 +74,17 @@
   }
 }
 
-@keyframes signal-flow {
+@keyframes swarm-flow {
   from {
-    stroke-dashoffset: 0;
+    transform: translateX(0);
   }
   to {
-    stroke-dashoffset: -144;
-  }
-}
-
-@keyframes signal-trails {
-  from {
-    stroke-dashoffset: -10;
-  }
-  to {
-    stroke-dashoffset: -154;
+    transform: translateX(320px);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .packets,
-  .trails {
+  .swarmLight {
     animation: none;
   }
 
