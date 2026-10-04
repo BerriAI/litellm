@@ -460,6 +460,15 @@ class TestCoralBricksPricing:
         assert abs(completion_cost(completion_response=resp) - expected) < 1e-12
         assert expected > generated * row["output_cost_per_token"]
 
+    @pytest.mark.parametrize("model", sorted(CORALBRICKS_ROWS))
+    def test_every_row_offers_the_endpoints_the_provider_declares(self, model):
+        """get_model_info serves these rows, so a client reading model metadata
+        discovers the same endpoints the provider entry routes natively."""
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        declared = JSONProviderRegistry.get("coralbricks").supported_endpoints
+        assert CORALBRICKS_ROWS[model]["supported_endpoints"] == list(declared)
+
     def test_the_rows_land_in_the_coralbricks_provider_model_set(self):
         assert set(CORALBRICKS_ROWS) <= litellm.coralbricks_models
         assert litellm.models_by_provider["coralbricks"] is litellm.coralbricks_models
