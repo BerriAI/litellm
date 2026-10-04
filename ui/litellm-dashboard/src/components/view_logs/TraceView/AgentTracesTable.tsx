@@ -3,7 +3,7 @@
 import { ArrowDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { formatActivityTimestamp } from "@/utils/activityTimestamp";
+import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation } from "@/utils/activityTimestamp";
 import { cn } from "@/lib/cva.config";
 
 import { StatusMark } from "./StatusMark";
@@ -67,9 +67,12 @@ export function AgentTracesTable({
       <table aria-label="Agent runs" className="w-full min-w-[900px] table-fixed border-collapse text-left">
         <thead className="sticky top-0 z-sticky bg-muted/40 backdrop-blur">
           <tr className="h-8 border-b border-border text-[10px] tracking-[0.08em] text-muted-foreground uppercase">
-            <th className={`w-[190px] ${TH}`}>
-              <span className="inline-flex items-center gap-1">
+            <th className={`w-[170px] ${TH}`}>
+              <span className="inline-flex items-center gap-1 whitespace-nowrap">
                 Time <ArrowDown className="size-2.5" />
+                <span className="font-normal normal-case tracking-normal text-muted-foreground/70">
+                  {localTimeZoneAbbreviation()}
+                </span>
               </span>
             </th>
             <th className={`w-[160px] ${TH}`}>Agent</th>
@@ -97,10 +100,10 @@ export function AgentTracesTable({
               )}
             >
               <td
-                className="px-3 font-mono text-[11px] tabular-nums text-muted-foreground"
+                className="px-3 font-mono text-[11px] whitespace-nowrap tabular-nums text-muted-foreground"
                 title={formatActivityTimestamp(run.start_time)}
               >
-                {formatActivityTimestamp(run.start_time)}
+                {formatRunTimestamp(run.start_time)}
               </td>
               <AgentCell run={run} />
               <td className="px-3">
