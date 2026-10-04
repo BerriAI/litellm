@@ -1923,6 +1923,7 @@ class MCPServerManager:
             "gmail_send_email": "zapier_mcp_server",
         }
         """
+        self._tool_mapping_warmup_locks: dict[str, asyncio.Lock] = {}
         self._upstream_initialize_instructions_by_server_id: dict[str, str] = {}
         # Per-server monotonic timestamp of last upstream prefetch attempt (success,
         # empty result, or failure). Used to throttle re-probes for servers that do
@@ -2849,19 +2850,6 @@ class MCPServerManager:
         return frozenset(
             normalize_server_name(value) for value in (*iter_known_server_prefixes(server), server.name) if value
         )
-
-    def _has_mapped_tools(self, server: MCPServer) -> bool:
-        owned = self._owned_mapping_values(server)
-
-        return any(
-            normalize_server_name(owner) in owned for owner in self.tool_name_to_mcp_server_name_mapping.values()
-        )
-
-    async def _ensure_tool_mapping_for_server(self, server: MCPServer) -> None:
-        if self._has_mapped_tools(server):
-            return
-
-        await self._get_tools_from_server(server)
 
     def server_exposes_tool(self, server: MCPServer, tool_name: str) -> bool:
         owned: Final = self._owned_mapping_values(server)
@@ -6088,6 +6076,44 @@ class MCPServerManager:
 
         return mcp_server
 
+    def _tool_mapping_contains_server_tool(self, server: MCPServer, tool_name: str) -> bool:
+        known_server_prefixes: Final = self._owned_mapping_values(server)
+        mapped_server = self.tool_name_to_mcp_server_name_mapping.get(tool_name)
+        if mapped_server and normalize_server_name(mapped_server) in known_server_prefixes:
+            return True
+        for known_prefix in iter_known_server_prefixes(server):
+            mapped_server = self.tool_name_to_mcp_server_name_mapping.get(
+                add_server_prefix_to_name(tool_name, known_prefix)
+            )
+            if mapped_server and normalize_server_name(mapped_server) in known_server_prefixes:
+                return True
+        return False
+
+    async def _ensure_tool_mapping_for_tool_call(
+        self,
+        server: MCPServer,
+        tool_name: str,
+        mcp_auth_header: str | dict[str, str] | None,
+        extra_headers: dict[str, str] | None,
+        raw_headers: dict[str, str] | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        oauth2_headers: dict[str, str] | None,
+    ) -> None:
+        if self._tool_mapping_contains_server_tool(server, tool_name):
+            return
+        lock = self._tool_mapping_warmup_locks.setdefault(server.server_id, asyncio.Lock())
+        async with lock:
+            if self._tool_mapping_contains_server_tool(server, tool_name):
+                return
+            await self._get_tools_from_server(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
+                oauth2_headers=oauth2_headers,
+            )
+
     async def has_user_oauth_token(self, server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None) -> bool:
         """Whether the v2 resolver can produce a per-user token for this server right now.
 
@@ -6276,11 +6302,12 @@ class MCPServerManager:
         start_time: Final = datetime.datetime.now()
 
         candidate_server = self._get_server_for_tool_call(server_name, name)
-
-        if candidate_server is not None:
-            await self._ensure_tool_mapping_for_server(candidate_server)
-
-        mcp_server: Final = self._resolve_mcp_server_for_tool_call(server_name, name)
+        if candidate_server is None:
+            mcp_server = self.get_mcp_server_by_name(server_name) if server_name else None
+            if mcp_server is None:
+                mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
+        else:
+            mcp_server = candidate_server
 
         # Resolved before any hook runs so a missing BYOK credential (401) never
         # leaves during-hook side effects (audit logging, rate-limit bookkeeping)
@@ -6290,6 +6317,18 @@ class MCPServerManager:
             user_api_key_auth,
             mcp_auth_header,
         )
+        caller_oauth2_headers: Final = oauth2_headers
+        oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(mcp_server, oauth2_headers, user_api_key_auth)
+        await self._ensure_tool_mapping_for_tool_call(
+            server=mcp_server,
+            tool_name=name,
+            mcp_auth_header=mcp_auth_header,
+            extra_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            user_api_key_auth=user_api_key_auth,
+            oauth2_headers=caller_oauth2_headers,
+        )
+        mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
 
         #########################################################
         # Pre MCP Tool Call Hook
@@ -6324,9 +6363,6 @@ class MCPServerManager:
                 guardrail_context=guardrail_context,
             )
             tasks.append(during_hook_task)
-
-        caller_oauth2_headers: Final = oauth2_headers
-        oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(mcp_server, oauth2_headers, user_api_key_auth)
 
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
