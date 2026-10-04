@@ -547,12 +547,13 @@ def test_lens_reads_from_the_lifespan_storage() -> None:
     with TestClient(app) as client:
         response: Final = client.post(
             "/lens/preview/sample",
-            json={"settings": {"name": "Review", "model": "analysis", "context": "Find failed executions"}},
+            json={"selection": {"source": "requests", "service": "checkout"}},
         )
     assert response.status_code == 200, response.text
     assert response.json()["executions"] == []
     storage.lens_sample.assert_awaited_once()
-    assert storage.lens_sample.await_args.args[0].all_teams == 1
+    params: Final = storage.lens_sample.await_args.args[0]
+    assert (params.all_teams, params.source, params.service, params.preview) == (1, "requests", "checkout", 1)
 
 
 def test_lens_reads_from_injected_storage_without_receiver() -> None:
@@ -569,12 +570,14 @@ def test_lens_reads_from_injected_storage_without_receiver() -> None:
     with TestClient(app) as client:
         response: Final = client.post(
             "/lens/preview/sample",
-            json={"settings": {"name": "Review", "model": "analysis", "context": "Find failed executions"}},
+            json={"selection": {"source": "requests", "service": "checkout"}},
         )
 
     assert response.status_code == 200, response.text
     assert response.json()["executions"] == []
     storage.lens_sample.assert_awaited_once()
+    params: Final = storage.lens_sample.await_args.args[0]
+    assert (params.source, params.service, params.preview) == ("requests", "checkout", 1)
 
 
 @pytest.mark.parametrize(
