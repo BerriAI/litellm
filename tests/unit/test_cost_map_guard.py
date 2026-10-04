@@ -175,6 +175,75 @@ def test_bot_may_not_change_special_root_keys() -> None:
     assert _failures(head) == ("bot PRs may not change fallback_generalizations",)
 
 
+def _bedrock_entry(**capabilities: bool) -> dict[str, object]:
+    return _entry(litellm_provider="bedrock_converse", **capabilities)
+
+
+BEDROCK_REGIONAL_ROWS: Final = (
+    ("us-gov.nvidia.nemotron-nano-3-30b", "nvidia.nemotron-nano-3-30b"),
+    ("jp.anthropic.claude-opus-4-7", "anthropic.claude-opus-4-7"),
+    ("bedrock/ap-northeast-1/deepseek.v3.2", "bedrock/deepseek.v3.2"),
+    ("bedrock/*/1-month-commitment/cohere.command-text-v14", "bedrock/cohere.command-text-v14"),
+)
+
+
+@pytest.mark.parametrize(("regional_key", "base_key"), BEDROCK_REGIONAL_ROWS)
+def test_bedrock_regional_row_missing_a_base_capability_is_reported(regional_key: str, base_key: str) -> None:
+    head = _snapshot(
+        {
+            **BASE_MAP,
+            base_key: _bedrock_entry(supports_audio_input=False, supports_vision=False),
+            regional_key: _bedrock_entry(supports_vision=False),
+        }
+    )
+    assert _failures(head, bot=False) == (
+        f"{regional_key} lacks supports_audio_input (false) carried by its base row {base_key}; "
+        f"{guard.BEDROCK_PARITY_RULE}",
+    )
+
+
+def test_bedrock_cross_region_row_contradicting_its_base_is_reported() -> None:
+    head = _snapshot(
+        {
+            **BASE_MAP,
+            "anthropic.claude-mythos-preview": _bedrock_entry(supports_prompt_caching=False),
+            "us.anthropic.claude-mythos-preview": _bedrock_entry(supports_prompt_caching=True),
+        }
+    )
+    assert _failures(head, bot=False) == (
+        "us.anthropic.claude-mythos-preview.supports_prompt_caching is true but "
+        f"anthropic.claude-mythos-preview.supports_prompt_caching is false; {guard.BEDROCK_PARITY_RULE}",
+    )
+
+
+def test_bedrock_parity_is_checked_for_bots_too() -> None:
+    head = _snapshot(
+        {
+            **BASE_MAP,
+            "deepseek.v3.2": _bedrock_entry(supports_vision=False),
+            "us.deepseek.v3.2": _bedrock_entry(),
+        }
+    )
+    assert _failures(head, bot=True) == (
+        f"us.deepseek.v3.2 lacks supports_vision (false) carried by its base row deepseek.v3.2; "
+        f"{guard.BEDROCK_PARITY_RULE}",
+    )
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        pytest.param({"us.deepseek.v3.2": _bedrock_entry(supports_vision=False, supports_pdf_input=True)}, id="extra"),
+        pytest.param({"bedrock/invoke/deepseek.v3.2": _bedrock_entry()}, id="invoke"),
+        pytest.param({"eu.orphan.model": _bedrock_entry()}, id="no-base"),
+        pytest.param({"openrouter/us.deepseek.v3.2": _entry()}, id="other-provider"),
+    ],
+)
+def test_bedrock_rows_in_parity_or_outside_the_rule_pass(rows: dict[str, dict[str, object]]) -> None:
+    head = _snapshot({**BASE_MAP, "deepseek.v3.2": _bedrock_entry(supports_vision=False), **rows})
+    assert _failures(head, bot=False) == ()
+
+
 def _commit(repo: Path, cost_map: dict[str, object], message: str) -> str:
     text = _serialize(cost_map)
     (repo / guard.COST_MAP_PATH).write_text(text)
