@@ -33060,6 +33060,20 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** InFlight */
+        InFlight: {
+            /** Agent */
+            agent: string;
+            /** Execution Id */
+            execution_id: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Trace Id */
+            trace_id: string;
+        };
         /**
          * IncompleteDetails
          * @description Details about why the response is incomplete.
@@ -33368,6 +33382,11 @@ export interface components {
             id: string;
             /** Lease Until */
             lease_until?: string | null;
+            /**
+             * Reading
+             * @default []
+             */
+            reading: components["schemas"]["InFlight"][];
             /**
              * Reviewed
              * @default 0
@@ -40926,6 +40945,8 @@ export interface components {
              *     }
              */
             coverage: components["schemas"]["Coverage"];
+            /** Reading */
+            reading?: components["schemas"]["InFlight"][] | null;
             review?: components["schemas"]["Review"] | null;
             /** Stage */
             stage: string;
