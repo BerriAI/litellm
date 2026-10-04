@@ -4,6 +4,7 @@ import { ArrowDown, ChevronRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useInView } from "react-intersection-observer";
 
+import { PANEL_TRIGGER } from "@/components/shared/SidePanel";
 import { Button } from "@/components/ui/button";
 import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation } from "@/utils/activityTimestamp";
 import { cn } from "@/lib/cva.config";
@@ -123,6 +124,7 @@ export function AgentTracesTable({
             <tr
               key={run.trace_ref || run.trace_id}
               data-testid="agent-trace-row"
+              {...PANEL_TRIGGER}
               onClick={() => onOpenTrace(run)}
               aria-selected={selectedKey === (run.trace_ref || run.trace_id)}
               className={cn(

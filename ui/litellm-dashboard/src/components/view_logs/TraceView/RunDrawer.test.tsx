@@ -2,7 +2,8 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "../../../../tests/test-utils";
-import { clampDrawerWidth, RunDrawer } from "./RunDrawer";
+import { clampDrawerWidth, PANEL_TRIGGER } from "@/components/shared/SidePanel";
+import { RunDrawer } from "./RunDrawer";
 import { type RunSelection, traceRefOf, useOpenTraceRouting } from "./traceRouting";
 import type { TraceSummary } from "./traceTypes";
 
@@ -62,11 +63,15 @@ const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
   new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
 
 const mockReducedMotion = (reduce: boolean) =>
-  vi
-    .spyOn(window, "matchMedia")
-    .mockImplementation(
-      (query: string) => ({ matches: reduce && query.includes("reduce"), media: query }) as MediaQueryList,
-    );
+  vi.spyOn(window, "matchMedia").mockImplementation(
+    (query: string) =>
+      ({
+        matches: reduce && query.includes("reduce"),
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }) as unknown as MediaQueryList,
+  );
 
 describe("clampDrawerWidth", () => {
   it("keeps at least 700px and a 100px strip of list on wide screens", () => {
@@ -153,6 +158,40 @@ describe("RunDrawer", () => {
       />,
     );
     fireEvent.keyDown(window, { key: "Escape" });
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(null);
+  });
+
+  it("closes on a press outside the panel but not inside it, on a trigger row, or in a dialog", () => {
+    const runs = [run("a")];
+    const onSelect = vi.fn();
+    renderWithProviders(
+      <>
+        <button type="button">outside</button>
+        <table>
+          <tbody>
+            <tr {...PANEL_TRIGGER}>
+              <td>row</td>
+            </tr>
+          </tbody>
+        </table>
+        <div role="dialog">dialog</div>
+        <RunDrawer
+          trace={traceRefOf(runs[0])}
+          runs={runs}
+          accessToken="sk"
+          selection={selection}
+          onSelect={onSelect}
+          fullScreen={false}
+          onFullScreenChange={vi.fn()}
+        />
+      </>,
+    );
+    fireEvent.mouseDown(screen.getByTestId("run-view"));
+    fireEvent.mouseDown(screen.getByText("row"));
+    fireEvent.mouseDown(screen.getByText("dialog"));
+    fireEvent.mouseDown(screen.getByText("outside"), { button: 2 });
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.mouseDown(screen.getByText("outside"));
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(null);
   });
 

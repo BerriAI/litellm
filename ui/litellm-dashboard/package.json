@@ -61,6 +61,7 @@
     "remark-gfm": "4.0.1",
     "sonner": "2.0.8",
     "tailwind-merge": "3.4.0",
+    "usehooks-ts": "3.1.1",
     "uuid": "14.0.0",
     "zod": "4.6.5"
   },
