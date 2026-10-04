@@ -1653,6 +1653,32 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             non_default_params=non_default_params, optional_params=optional_params
         )
 
+        thinking: Final = optional_params.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") == "enabled" and "budget_tokens" in thinking:
+            max_tokens: Final = optional_params.get("max_tokens")
+            if isinstance(max_tokens, int):
+                capped_thinking: Final = AnthropicConfig.cap_thinking_budget_to_max_tokens(
+                    thinking=cast(AnthropicThinkingParam, thinking),
+                    max_tokens=max_tokens,
+                )
+                if capped_thinking is None:
+                    if drop_params:
+                        litellm.verbose_logger.warning(
+                            "Dropping thinking for model=%s: max_tokens (%s) is too small to fit the minimum thinking budget (%s).",
+                            model,
+                            max_tokens,
+                            ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+                        )
+                        optional_params.pop("thinking", None)
+                elif capped_thinking != thinking:
+                    litellm.verbose_logger.warning(
+                        "Capped thinking.budget_tokens from %s to %s to satisfy max_tokens > budget_tokens for model=%s.",
+                        thinking.get("budget_tokens"),
+                        capped_thinking.get("budget_tokens"),
+                        model,
+                    )
+                    optional_params["thinking"] = capped_thinking
+
         return optional_params
 
     def _create_json_tool_call_for_response_format(
@@ -1947,6 +1973,32 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             optional_params=optional_params,
             custom_llm_provider=self._resolved_provider,
         )
+
+        thinking: Final = optional_params.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") == "enabled" and "budget_tokens" in thinking:
+            max_tokens: Final = optional_params.get("max_tokens")
+            if isinstance(max_tokens, int):
+                capped_thinking: Final = AnthropicConfig.cap_thinking_budget_to_max_tokens(
+                    thinking=cast(AnthropicThinkingParam, thinking),
+                    max_tokens=max_tokens,
+                )
+                if capped_thinking is None:
+                    if litellm.drop_params or litellm_params.get("drop_params") is True:
+                        litellm.verbose_logger.warning(
+                            "Dropping thinking for model=%s: max_tokens (%s) is too small to fit the minimum thinking budget (%s).",
+                            model,
+                            max_tokens,
+                            ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+                        )
+                        optional_params.pop("thinking", None)
+                elif capped_thinking != thinking:
+                    litellm.verbose_logger.warning(
+                        "Capped thinking.budget_tokens from %s to %s to satisfy max_tokens > budget_tokens for model=%s.",
+                        thinking.get("budget_tokens"),
+                        capped_thinking.get("budget_tokens"),
+                        model,
+                    )
+                    optional_params["thinking"] = capped_thinking
 
         # === Tool-name sanitization (single chokepoint) ===
         # Anthropic enforces ^[a-zA-Z0-9_-]{1,128}$ on every tool name. We

@@ -1183,7 +1183,7 @@ class AmazonConverseConfig(BaseConfig):
         # Nova 2 handles token budgeting differently through reasoningConfig
         if "gpt-oss" not in model and not self._is_nova_2_model(model):
             self.update_optional_params_with_thinking_tokens(
-                non_default_params=non_default_params, optional_params=optional_params
+                non_default_params=non_default_params, optional_params=optional_params, drop_params=drop_params
             )
 
         final_is_thinking_enabled: Final = self.is_thinking_enabled(optional_params)
@@ -1303,7 +1303,9 @@ class AmazonConverseConfig(BaseConfig):
         optional_params["json_mode"] = True
         return optional_params
 
-    def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict):
+    def update_optional_params_with_thinking_tokens(
+        self, non_default_params: dict, optional_params: dict, drop_params: bool = False
+    ):
         """
         Handles scenario where max tokens is not specified. For anthropic models (anthropic api/bedrock/vertex ai), this requires having the max tokens being set and being greater than the thinking token budget.
 
@@ -1327,6 +1329,26 @@ class AmazonConverseConfig(BaseConfig):
             )
             if thinking_token_budget is not None:
                 optional_params["maxTokens"] = thinking_token_budget + DEFAULT_MAX_TOKENS
+        elif is_thinking_enabled and is_max_tokens_in_request:
+            max_tokens: Final = optional_params.get("maxTokens")
+            thinking_value: Final = optional_params.get("thinking")
+            if isinstance(max_tokens, int) and isinstance(thinking_value, dict):
+                budget: Final = thinking_value.get("budget_tokens")
+                if isinstance(budget, int):
+                    if max_tokens <= BEDROCK_MIN_THINKING_BUDGET_TOKENS:
+                        if drop_params:
+                            verbose_logger.warning(
+                                "Dropping thinking for Bedrock: maxTokens (%s) is too small to fit the minimum thinking budget (%s).",
+                                max_tokens,
+                                BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+                            )
+                            optional_params.pop("thinking", None)
+                    elif budget >= max_tokens:
+                        thinking_value["budget_tokens"] = max_tokens - 1
+                        verbose_logger.warning(
+                            "Capped thinking.budget_tokens to %s to satisfy maxTokens > budget_tokens for Bedrock.",
+                            max_tokens - 1,
+                        )
 
     @overload
     def get_cache_point_block(
