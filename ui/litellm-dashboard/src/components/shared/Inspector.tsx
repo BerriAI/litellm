@@ -24,7 +24,8 @@ const MIN_LEFT_GAP = 100;
 const DEFAULT_FRACTION = 0.56;
 const KEY_STEP = 32;
 const ROW_SLOT = "inspector-row";
-const KEEPS_PANEL_OPEN = `[data-slot='${ROW_SLOT}'], [role='dialog'], [role='menu'], [role='listbox'], [data-radix-popper-content-wrapper]`;
+const OVERLAYS = "[data-slot='sheet-overlay'], [data-slot='dialog-overlay'], [data-slot='alert-dialog-overlay']";
+const KEEPS_PANEL_OPEN = `[data-slot='${ROW_SLOT}'], [role='dialog'], [role='menu'], [role='listbox'], [data-radix-popper-content-wrapper], ${OVERLAYS}`;
 
 export const clampPanelWidth = (width: number, viewport: number): number => {
   const max = Math.max(Math.min(MIN_WIDTH, viewport), viewport - MIN_LEFT_GAP);

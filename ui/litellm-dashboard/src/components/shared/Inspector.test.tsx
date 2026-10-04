@@ -181,7 +181,7 @@ describe("Inspector", () => {
     expect(onSelectedChange).toHaveBeenCalledExactlyOnceWith(notes[2]);
   });
 
-  it("closes on a press outside the panel but not inside it, on a row, or in a dialog", () => {
+  it("closes on a press outside the panel but not inside it, on a row, in a dialog, or on its overlay", () => {
     const onSelectedChange = vi.fn();
     render(
       <Notes
@@ -191,6 +191,7 @@ describe("Inspector", () => {
           <>
             <button type="button">outside</button>
             <div role="dialog">dialog</div>
+            <div data-slot="sheet-overlay">overlay</div>
           </>
         }
       />,
@@ -198,6 +199,7 @@ describe("Inspector", () => {
     fireEvent.mouseDown(screen.getByTestId("note-body"));
     fireEvent.mouseDown(within(row("second")).getByText("second"));
     fireEvent.mouseDown(screen.getByText("dialog"));
+    fireEvent.mouseDown(screen.getByText("overlay"));
     fireEvent.mouseDown(screen.getByText("outside"), { button: 2 });
     expect(onSelectedChange).not.toHaveBeenCalled();
     fireEvent.mouseDown(screen.getByText("outside"));

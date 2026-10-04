@@ -4,10 +4,10 @@ import "./globals.css";
 
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { ThemeProvider } from "next-themes";
-import { HotkeysProvider } from "react-hotkeys-hook";
 
 import { AuthProvider } from "@/contexts/AuthContext";
 import ReactQueryProvider from "@/contexts/ReactQueryProvider";
+import HotkeysProvider from "@/contexts/HotkeysProvider";
 import { Toaster } from "@/components/ui/sonner";
 
 const inter = Inter({ subsets: ["latin"] });
