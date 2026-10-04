@@ -23,6 +23,7 @@ func resourceKey() *schema.Resource {
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
+		CustomizeDiff: rejectRoutesWithPresetKeyType,
 		SchemaVersion: 1,
 		Schema: map[string]*schema.Schema{
 			"key": {
@@ -394,6 +395,25 @@ func changedMap(d *schema.ResourceData, name string) map[string]interface{} {
 func allowedRoutesNotConfigured(d *schema.ResourceData) bool {
 	raw, diags := d.GetRawConfigAt(cty.GetAttrPath("allowed_routes"))
 	return !diags.HasError() && raw.IsNull()
+}
+
+// The proxy derives allowed_routes from the key_type preset and overwrites
+// whatever the request declared, so a config that sets both can never match
+// what gets stored: the key would come back with the preset routes and drift
+// against the declared list forever. Reject the combination at plan time
+// instead. key_type "default" keeps declared routes (the server does not
+// preset them), and the raw-config check mirrors allowedRoutesNotConfigured:
+// d.Get alone cannot tell a declared list from server-derived state.
+func rejectRoutesWithPresetKeyType(ctx context.Context, d *schema.ResourceDiff, m interface{}) error {
+	keyType := d.Get("key_type").(string)
+	if keyType == "" || keyType == "default" {
+		return nil
+	}
+	raw, diags := d.GetRawConfigAt(cty.GetAttrPath("allowed_routes"))
+	if diags.HasError() || raw.IsNull() {
+		return nil
+	}
+	return fmt.Errorf("allowed_routes cannot be combined with key_type %q: the proxy derives the routes from the key type and would overwrite the declared list; use key_type = \"default\" or remove allowed_routes", keyType)
 }
 
 // Reads copy the server's routes into state so drift on them stays visible,

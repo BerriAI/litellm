@@ -333,17 +333,9 @@ func TestAllowedRoutesUnconfiguredDoesNotDriftWithRawConfig(t *testing.T) {
 
 func keyRawConfig(t *testing.T, routes []string) cty.Value {
 	t.Helper()
-	routesVal := cty.NullVal(cty.List(cty.String))
-	if routes != nil {
-		vals := make([]cty.Value, len(routes))
-		for i, r := range routes {
-			vals[i] = cty.StringVal(r)
-		}
-		routesVal = cty.ListVal(vals)
-	}
 	return cty.ObjectVal(map[string]cty.Value{
 		"key_alias":      cty.StringVal("example"),
-		"allowed_routes": routesVal,
+		"allowed_routes": keyRawConfigRoutes(t, routes),
 	})
 }
 
@@ -432,6 +424,88 @@ func TestResourceKeyUpdateSendsConfiguredAllowedRoutes(t *testing.T) {
 	if !ok || len(routes) != 1 || routes[0] != "/v1/models" {
 		t.Fatalf("update payload allowed_routes = %v, want [/v1/models]", captured["allowed_routes"])
 	}
+}
+
+// A presetting key_type owns allowed_routes on the proxy (it overwrites the
+// declared list with the preset), so the combination must fail at plan time
+// instead of creating a key that instantly drifts against its configuration.
+// "default" presets nothing and keeps declared routes.
+func TestAllowedRoutesRejectedWithPresetKeyType(t *testing.T) {
+	cases := []struct {
+		name    string
+		keyType string
+		routes  []string
+		update  bool
+		wantErr bool
+	}{
+		{"llm_api with routes", "llm_api", []string{"/v1/models"}, false, true},
+		{"management with routes", "management", []string{"/v1/models"}, false, true},
+		{"read_only with routes", "read_only", []string{"/v1/models"}, false, true},
+		{"llm_api without routes", "llm_api", nil, false, false},
+		{"default with routes", "default", []string{"/v1/models"}, false, false},
+		{"no key type with routes", "", []string{"/v1/models"}, false, false},
+		{"existing typed key gains routes", "llm_api", []string{"/v1/models"}, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := resourceKey()
+			var prior *terraform.InstanceState
+			if tc.update {
+				priorData := newKeyResourceData(t, map[string]interface{}{"key_type": tc.keyType})
+				priorData.SetId("hash-1")
+				prior = priorData.State()
+			} else {
+				prior = &terraform.InstanceState{}
+			}
+			prior.RawConfig = keyTypeRawConfig(t, tc.keyType, tc.routes)
+			cfg := map[string]interface{}{}
+			if tc.keyType != "" {
+				cfg["key_type"] = tc.keyType
+			}
+			if tc.routes != nil {
+				cfgRoutes := make([]interface{}, len(tc.routes))
+				for i, r := range tc.routes {
+					cfgRoutes[i] = r
+				}
+				cfg["allowed_routes"] = cfgRoutes
+			}
+			_, err := res.Diff(context.Background(), prior, terraform.NewResourceConfigRaw(cfg), nil)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "cannot be combined with key_type") {
+					t.Fatalf("want plan error for %s + routes, got %v", tc.keyType, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected plan error: %v", err)
+			}
+		})
+	}
+}
+
+func keyTypeRawConfig(t *testing.T, keyType string, routes []string) cty.Value {
+	t.Helper()
+	keyTypeVal := cty.NullVal(cty.String)
+	if keyType != "" {
+		keyTypeVal = cty.StringVal(keyType)
+	}
+	return cty.ObjectVal(map[string]cty.Value{
+		"key_alias":      cty.StringVal("example"),
+		"key_type":       keyTypeVal,
+		"allowed_routes": keyRawConfigRoutes(t, routes),
+	})
+}
+
+func keyRawConfigRoutes(t *testing.T, routes []string) cty.Value {
+	t.Helper()
+	if routes == nil {
+		return cty.NullVal(cty.List(cty.String))
+	}
+	vals := make([]cty.Value, len(routes))
+	for i, r := range routes {
+		vals[i] = cty.StringVal(r)
+	}
+	return cty.ListVal(vals)
 }
 
 // The proxy validates each model_max_budget entry as a BudgetConfig object and
