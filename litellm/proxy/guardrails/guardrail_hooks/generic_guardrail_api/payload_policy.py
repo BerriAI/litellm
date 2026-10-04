@@ -4,16 +4,17 @@ Shaping is lossy, so every shaped payload carries a ``PayloadLoss``. Caller cont
 guardrail did not see in full is never replaced by the guardrail's response.
 """
 
+import json
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
 from itertools import accumulate, chain
 from types import MappingProxyType
-from typing import Final, Literal, assert_never
+from typing import Final, Literal
 
 import regex
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue, PositiveInt, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -21,7 +22,6 @@ from litellm.constants import (
     GENERIC_GUARDRAIL_UNAPPLIABLE_REWRITE,
     GenericGuardrailUnappliableRewrite,
 )
-from litellm.exceptions import GuardrailRaisedException
 from litellm.llms.base_llm.guardrail_translation.utils import (
     message_slot_texts,
     message_with_slot_texts,
@@ -42,6 +42,7 @@ PROTECTED_PAYLOAD_FIELDS: Final = frozenset({"input_type", "litellm_call_id"})
 _BOOL: Final = TypeAdapter(bool)
 _PARTS: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_POSITIVE_INT: Final[TypeAdapter[int]] = TypeAdapter(PositiveInt)
 
 MAX_STRIP_SUBSTITUTIONS: Final = 64
 
@@ -118,7 +119,7 @@ def resolve_payload_policy(
     exclude_payload_fields: object,
     max_messages: object,
     max_text_chars: object,
-    strip_patterns: Sequence[str] | None,
+    strip_patterns: object,
     guardrail_name: str | None,
 ) -> PayloadPolicy:
     policy: Final = PayloadPolicy(
@@ -129,8 +130,8 @@ def resolve_payload_policy(
             ),
             guardrail_name=guardrail_name,
         ),
-        max_messages=_positive_int(max_messages, option_name="max_messages"),
-        max_text_chars=_positive_int(max_text_chars, option_name="max_text_chars"),
+        max_messages=_positive_int(max_messages, option_name="max_messages", fallback="Every message is sent"),
+        max_text_chars=_positive_int(max_text_chars, option_name="max_text_chars", fallback="Texts are sent in full"),
         strip_patterns=_compile_strip_patterns(strip_patterns),
     )
     if policy.is_lossy:
@@ -143,28 +144,44 @@ def resolve_payload_policy(
     return policy
 
 
-def _positive_int(value: object, *, option_name: str) -> int | None:
-    match value:
-        case None:
-            return None
-        case bool():
-            raise ValueError(f"{option_name} must be an int, got {value!r}")
-        case int() if value >= 1:
-            return value
-        case int():
-            raise ValueError(f"{option_name} must be >= 1 (got {value})")
-        case _:
-            raise ValueError(f"{option_name} must be an int, got {value!r}")
-
-
-def _compile_strip_patterns(raw: Sequence[str] | None) -> tuple[regex.Pattern[str], ...]:
+def _parsed_positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
     try:
-        return tuple(
-            regex.compile(pattern)
-            for pattern in config_strings(raw, option_name="strip_patterns", fallback="Nothing is stripped")
+        return _POSITIVE_INT.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _positive_int(value: object, *, option_name: str, fallback: str) -> int | None:
+    if value is None:
+        return None
+    parsed: Final = _parsed_positive_int(value)
+    if parsed is None:
+        verbose_proxy_logger.warning(
+            "Ignoring %s=%r, expected a whole number of at least 1. %s", option_name, value, fallback
         )
-    except regex.error as e:
-        raise ValueError(f"strip_patterns contains an invalid regex: {e}") from e
+    return parsed
+
+
+def _compiled_pattern(pattern: str) -> regex.Pattern[str] | None:
+    try:
+        return regex.compile(pattern)
+    except regex.error as error:
+        verbose_proxy_logger.warning(
+            "Ignoring strip_patterns entry %r, it is not a valid regex: %s. The other patterns still apply",
+            pattern,
+            error,
+        )
+        return None
+
+
+def _compile_strip_patterns(raw: object) -> tuple[regex.Pattern[str], ...]:
+    compiled: Final = tuple(
+        _compiled_pattern(pattern)
+        for pattern in config_strings(raw, option_name="strip_patterns", fallback="Nothing is stripped")
+    )
+    return tuple(pattern for pattern in compiled if pattern is not None)
 
 
 def _send_images(value: object) -> bool:
@@ -313,7 +330,7 @@ def shape_payload(
         {
             **dumped,
             "structured_messages": sent_messages,
-            "texts": None if dumped_texts is None else list(sent_texts),  # mutable-ok: JSON texts is an array
+            "texts": None if dumped_texts is None else list(sent_texts),
         }
     )
     return ShapedPayload(
@@ -332,12 +349,15 @@ def shape_payload(
     )
 
 
+def _null_free_object(pairs: Sequence[tuple[str, object]]) -> Mapping[str, object]:
+    return MappingProxyType({key: item for key, item in pairs if item is not None})
+
+
 def _without_nulls(value: object) -> object:
-    if isinstance(value, dict):
-        return {key: _without_nulls(item) for key, item in value.items() if item is not None}  # mutable-ok: JSON
-    if isinstance(value, (list, tuple)):
-        return [_without_nulls(item) for item in value]  # mutable-ok: JSON array
-    return value
+    normalized: Final[object] = json.loads(  # pyright: ignore[reportAny]  # stdlib parse of our own json.dumps output
+        json.dumps(value), object_pairs_hook=_null_free_object
+    )
+    return normalized
 
 
 def _rewrites(response: GenericGuardrailAPIResponse, body: Mapping[str, JsonValue]) -> bool:
@@ -347,9 +367,7 @@ def _rewrites(response: GenericGuardrailAPIResponse, body: Mapping[str, JsonValu
         ("images", response.images),
         ("tools", response.tools),
     )
-    return response.action == "GUARDRAIL_INTERVENED" or any(
-        value and _without_nulls(value) != _without_nulls(body.get(field)) for field, value in returned
-    )
+    return any(value and _without_nulls(value) != _without_nulls(body.get(field)) for field, value in returned)
 
 
 def block_only_response(
@@ -371,17 +389,7 @@ def block_only_response(
         input_type,
         input_type,
     )
-    match input_type:
-        case "request":
-            raise unappliable_request_rewrite(guardrail_name)
-        case "response":
-            raise GuardrailRaisedException(
-                guardrail_name=guardrail_name,
-                message=f"Guardrail '{guardrail_name}' returned a rewrite that cannot be applied to this response",
-                should_wrap_with_default_message=False,
-            )
-        case _:
-            assert_never(input_type)
+    raise unappliable_request_rewrite(guardrail_name, input_type=input_type)
 
 
 def _log_refused(field: str, detail: str, guardrail_name: str | None) -> None:

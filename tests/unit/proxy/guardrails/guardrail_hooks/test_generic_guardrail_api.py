@@ -2538,14 +2538,20 @@ class TestFailOnError:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("placement", ["top_level", "optional_params"])
-async def test_initialize_guardrail_forwards_send_images_and_exclude_payload_fields(placement):
+async def test_initialize_guardrail_forwards_every_payload_option(placement):
     received: Final[list[Mapping[str, JsonValue]]] = []
 
     def serve(request: httpx.Request) -> httpx.Response:
         received.append(json.loads(request.content))
         return httpx.Response(200, json={"action": "NONE"})
 
-    options: Final = {"send_images": False, "exclude_payload_fields": ["request_headers"]}
+    options: Final = {
+        "send_images": False,
+        "exclude_payload_fields": ["request_headers"],
+        "max_messages": 1,
+        "max_text_chars": 2,
+        "strip_patterns": ["x"],
+    }
     litellm_params: Final = LitellmParams(
         guardrail="generic_guardrail_api",
         mode="pre_call",
@@ -2560,7 +2566,11 @@ async def test_initialize_guardrail_forwards_send_images_and_exclude_payload_fie
     )
     try:
         await guardrail.apply_guardrail(
-            inputs={"texts": ["hi"], "images": ["data:image/png;base64,SECRETPIXELS"]},
+            inputs={
+                "texts": ["old", "xhello"],
+                "images": ["data:image/png;base64,SECRETPIXELS"],
+                "structured_messages": [{"role": "user", "content": "old"}, {"role": "user", "content": "xhello"}],
+            },
             request_data={"proxy_server_request": {"headers": {"user-agent": "curl/8"}}},
             input_type="request",
         )
@@ -2569,3 +2579,5 @@ async def test_initialize_guardrail_forwards_send_images_and_exclude_payload_fie
 
     assert len(received) == 1
     assert set(GenericGuardrailAPIRequest.model_fields) - set(received[0]) == {"images", "request_headers"}
+    assert received[0]["texts"] == ["he"]
+    assert [row["content"] for row in received[0]["structured_messages"]] == ["he"]

@@ -563,14 +563,17 @@ def test_get_guardrails_list_response_includes_guardrail_id():
     assert response.guardrails[0].guardrail_id == "stable-config-id"
 
 
-def test_exclude_payload_fields_stays_out_of_the_form_but_still_validates():
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("exclude_payload_fields", ["request_headers"]), ("strip_patterns", [r"<ts>\d+</ts>"])],
+    ids=["exclude_payload_fields", "strip_patterns"],
+)
+def test_a_config_only_list_option_stays_out_of_the_form_but_still_validates(field, value):
     form_fields: Final = _get_fields_from_model(GenericGuardrailAPIOptionalParams)
 
-    assert "exclude_payload_fields" not in form_fields
-    assert "send_images" in form_fields
-    assert GenericGuardrailAPIOptionalParams(exclude_payload_fields=["request_headers"]).exclude_payload_fields == (
-        "request_headers",
-    )
+    assert field not in form_fields
+    assert {"send_images", "max_messages", "max_text_chars"} <= set(form_fields)
+    assert getattr(GenericGuardrailAPIOptionalParams(**{field: value}), field) == tuple(value)
 
 
 def test_get_provider_specific_params():
