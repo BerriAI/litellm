@@ -3,12 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useEffect, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  NOTE_INDEX,
-  type NoteField,
-  NOTE_QUERY,
-  notes,
-} from "./__fixtures__/notes";
+import { NOTE_INDEX, type NoteField, NOTE_QUERY, notes } from "./__fixtures__/notes";
 import { SearchBox } from "./SearchBox";
 import { itemValues, type ValueSource } from "./valueSource";
 
@@ -22,13 +17,7 @@ function NoteSearch({
   values?: ValueSource<NoteField>;
 }) {
   return (
-    <SearchBox.Root
-      language={NOTE_QUERY}
-      values={values}
-      value={value}
-      onValueChange={onChange}
-      label="Search notes"
-    >
+    <SearchBox.Root language={NOTE_QUERY} values={values} value={value} onValueChange={onChange} label="Search notes">
       <SearchBox.Input placeholder="Search notes" />
       <SearchBox.Suggestions />
     </SearchBox.Root>
@@ -53,10 +42,7 @@ function LaggingHarness() {
   const [queue, setQueue] = useState<string[]>([]);
   return (
     <>
-      <NoteSearch
-        value={value}
-        onChange={(next) => setQueue((q) => [...q, next])}
-      />
+      <NoteSearch value={value} onChange={(next) => setQueue((q) => [...q, next])} />
       <output aria-label="undelivered">{queue.join("|")}</output>
       <button
         type="button"
@@ -73,8 +59,7 @@ function LaggingHarness() {
 
 const box = () => screen.getByRole("combobox", { name: "Search notes" });
 const undelivered = () => screen.getByRole("status", { name: "undelivered" });
-const listbox = () =>
-  screen.getByRole("listbox", { name: "Search suggestions" });
+const listbox = () => screen.getByRole("listbox", { name: "Search suggestions" });
 
 describe("SearchBox", () => {
   it("builds a filter from the keyboard: field, then value", async () => {
@@ -112,15 +97,11 @@ describe("SearchBox", () => {
     render(<Harness />);
     await user.click(box());
     await user.keyboard("{ArrowUp}");
-    expect(
-      within(listbox()).getByRole("option", { name: "id" }),
-    ).toHaveAttribute("aria-selected", "true");
+    expect(within(listbox()).getByRole("option", { name: "id" })).toHaveAttribute("aria-selected", "true");
     await user.keyboard("{ArrowDown}{ArrowDown}{Tab}");
     expect(box()).toHaveTextContent(/^tag:$/, { normalizeWhitespace: false });
     await user.keyboard("{ArrowDown}{ArrowDown}e");
-    expect(
-      within(listbox()).getByRole("option", { name: "researcher" }),
-    ).toHaveAttribute("aria-selected", "true");
+    expect(within(listbox()).getByRole("option", { name: "researcher" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("picks a suggestion with the mouse without losing focus", async () => {
@@ -128,9 +109,7 @@ describe("SearchBox", () => {
     render(<Harness />);
     await user.click(box());
     await user.keyboard("tag:");
-    await user.click(
-      within(listbox()).getByRole("option", { name: "researcher" }),
-    );
+    await user.click(within(listbox()).getByRole("option", { name: "researcher" }));
     expect(box()).toHaveTextContent(/^tag:researcher $/, {
       normalizeWhitespace: false,
     });
@@ -205,24 +184,17 @@ describe("SearchBox", () => {
           if (field === null) return;
           asked.push(`${field}:${prefix}`);
           setAnswer(null);
-          const timer = setTimeout(
-            () => setAnswer(["remote-researcher", "remote-review"]),
-            20,
-          );
+          const timer = setTimeout(() => setAnswer(["remote-researcher", "remote-review"]), 20);
           return () => clearTimeout(timer);
         }, [field, prefix]);
         if (field === null) return { values: [], loading: false };
-        return answer
-          ? { values: answer, loading: false }
-          : { values: [], loading: true };
+        return answer ? { values: answer, loading: false } : { values: [], loading: true };
       },
     };
     render(<NoteSearch value="" onChange={vi.fn()} values={facets} />);
     await user.click(box());
     await user.keyboard("body:x tag:re");
-    expect(within(listbox()).getByRole("status")).toHaveTextContent(
-      "Loading values…",
-    );
+    expect(within(listbox()).getByRole("status")).toHaveTextContent("Loading values…");
     const option = await within(listbox()).findByRole("option", {
       name: "remote-researcher",
     });
