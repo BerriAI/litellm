@@ -280,6 +280,45 @@ it("runs with saved settings from Run now without opening setup, then accepts an
   });
 });
 
+it("lists recorded agents in Run now and runs the one picked from the list", async () => {
+  testQueryClient.clear();
+  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    if (path === "/lens")
+      return {
+        lenses: [lens],
+        tracing_enabled: true,
+        workers: [
+          {
+            id: "worker",
+            name: "Worker",
+            revoked: false,
+            analysis_key_id: "a".repeat(64),
+            scope: lens.scope,
+            last_seen: new Date().toISOString(),
+          },
+        ],
+      };
+    if (path === "/lens/lens/runs") return lens.jobs;
+    if (path === "/lens/agents") return ["billing-agent", "support-bot"];
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    return { data: [] };
+  });
+  vi.mocked(apiClient.post).mockResolvedValue(lens);
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" />);
+  await user.click(await screen.findByRole("button", { name: "Run now" }));
+  const dialog = within(await screen.findByRole("dialog", { name: "Run now" }));
+  await user.click(dialog.getByRole("combobox", { name: "Agent" }));
+  expect(await screen.findByRole("option", { name: "support-bot" })).toBeVisible();
+  await user.click(await screen.findByRole("option", { name: "billing-agent" }));
+  expect(dialog.getByRole("combobox", { name: "Agent" })).toHaveValue("billing-agent");
+  await user.click(dialog.getByRole("button", { name: "Run now" }));
+  expect(apiClient.post).toHaveBeenCalledWith("/lens/lens/runs", {
+    accessToken: "test",
+    body: { agent_name: "billing-agent" },
+  });
+});
+
 it("offers the interactive demo without starting an investigation", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
