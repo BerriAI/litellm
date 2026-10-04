@@ -64,37 +64,47 @@ function ActivityDot({ activity }: { activity: InvestigationActivity }) {
   );
 }
 
-const frameBorder = (demo: boolean): string => (demo ? "border-info" : "border-foreground/15");
+const FRAME = {
+  live: {
+    card: "border border-foreground/15",
+    tab: "-mb-px border-x border-t border-foreground/15",
+    corner: { left: "border-r border-b", right: "border-l border-b", tone: "border-foreground/15" },
+  },
+  demo: {
+    card: "border-2 border-info",
+    tab: "-mb-0.5 border-x-2 border-t-2 border-info",
+    corner: { left: "border-r-2 border-b-2", right: "border-l-2 border-b-2", tone: "border-info" },
+  },
+} as const;
 
+const frameOf = (demo: boolean) => FRAME[demo ? "demo" : "live"];
+
+/** Inverted corner joining the tab's side border to the card's top border; plain CSS borders so both snap to the same pixels. */
 function NotchCorner({ side, demo }: { side: "left" | "right"; demo: boolean }) {
+  const { corner } = frameOf(demo);
   return (
-    <svg
+    <span
       aria-hidden="true"
-      width="13"
-      height="12"
-      viewBox="0 0 13 12"
       className={cn(
-        "pointer-events-none absolute bottom-0 overflow-visible",
-        side === "left" ? "-left-3" : "-right-3 -scale-x-100",
+        "pointer-events-none absolute bottom-0 size-3 overflow-hidden",
+        side === "left" ? "-left-3" : "-right-3",
       )}
     >
-      <path d="M0 11.5 A11.5 11.5 0 0 0 11.5 0 H13 V12 H0 Z" className="fill-card" />
-      <path
-        d="M0 11.5 A11.5 11.5 0 0 0 11.5 0"
-        className={cn("fill-none", demo ? "stroke-info" : "stroke-foreground/15")}
+      <span
+        className={cn(
+          "block size-full shadow-[0_0_0_12px_var(--card)]",
+          side === "left" ? "rounded-br-xl" : "rounded-bl-xl",
+          corner[side],
+          corner.tone,
+        )}
       />
-    </svg>
+    </span>
   );
 }
 
 function LensModeSwitch({ activity, demo }: { activity: InvestigationActivity; demo: boolean }) {
   return (
-    <div
-      className={cn(
-        "relative z-raised -mb-px rounded-t-2xl border-x border-t bg-card px-1.5 pt-1.5 pb-[7px]",
-        frameBorder(demo),
-      )}
-    >
+    <div className={cn("relative z-raised rounded-t-2xl bg-card px-1.5 pt-1.5 pb-[7px]", frameOf(demo).tab)}>
       <NotchCorner side="left" demo={demo} />
       <NotchCorner side="right" demo={demo} />
       <TabsPrimitive.List
@@ -171,9 +181,7 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
             <DemoToggle demo={demo} onChange={setDemo} />
           </div>
         </div>
-        <div
-          className={cn("flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-card", frameBorder(demo))}
-        >
+        <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-card", frameOf(demo).card)}>
           <TabsContent value="traces" keepMounted className={PANEL}>
             <LensPreviewContext.Provider value={preview("traces")}>
               <AgentTracesPage
