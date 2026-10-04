@@ -6175,7 +6175,7 @@ class TestMCPServerManager:
 
         assert resolved is server
 
-    @pytest.mark.asyncioc
+    @pytest.mark.asyncio
     async def test_ensure_tool_mapping_for_server_skips_warm_mapping(self):
         manager = MCPServerManager()
 
