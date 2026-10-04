@@ -22,11 +22,6 @@ class MessageToolCall:
     arguments: str | None
 
     def to_openai_dict(self) -> Mapping[str, object]:
-        """The OpenAI wire shape of this tool call.
-
-        The runtime object is a plain dict (it is only ever JSON-serialized);
-        the ``Mapping`` return type marks it read-only to callers.
-        """
         return {
             "id": self.id,
             "type": self.type,
