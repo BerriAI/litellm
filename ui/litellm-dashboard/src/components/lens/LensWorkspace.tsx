@@ -111,17 +111,14 @@ type WorkerStatus = { connected: boolean } | null;
 
 const workerTitle = (worker: WorkerStatus) => (worker?.connected ? "Worker connected" : "Connect worker");
 
-/** Settings is a quieter third tab: icon only until selected, carrying worker health as a corner dot. */
 function LensModeSwitch({
   activity,
   demo,
-  activeTab,
   worker,
   setup,
 }: {
   activity: InvestigationActivity;
   demo: boolean;
-  activeTab: LensTab;
   worker: WorkerStatus;
   setup?: string;
 }) {
@@ -137,7 +134,6 @@ function LensModeSwitch({
         <TabsPrimitive.Indicator className="absolute top-1 bottom-1 left-(--active-tab-left) w-(--active-tab-width) rounded-full bg-background shadow-sm ring-1 ring-border transition-[left,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none" />
         {tabs.map(([view, label]) => {
           const Icon = MODE_ICONS[view as LensTab];
-          const quiet = view === "settings" && activeTab !== "settings";
           return (
             <TabsPrimitive.Tab
               key={view}
@@ -146,10 +142,7 @@ function LensModeSwitch({
               aria-description={
                 view === "investigations" && activity !== "idle" ? ACTIVITY_DOT[activity].label : undefined
               }
-              className={cn(
-                "relative z-raised inline-flex h-full items-center gap-2 rounded-full text-sm font-medium text-muted-foreground outline-none transition-colors duration-200 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-active:text-foreground",
-                quiet ? "px-2.5" : "px-4",
-              )}
+              className="relative z-raised inline-flex h-full items-center gap-2 rounded-full px-4 text-sm font-medium text-muted-foreground outline-none transition-colors duration-200 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-active:text-foreground"
             >
               <span className="relative inline-flex">
                 <Icon aria-hidden="true" className="size-4" />
@@ -160,7 +153,7 @@ function LensModeSwitch({
                   />
                 )}
               </span>
-              <span className={cn(quiet && "sr-only")}>{label}</span>
+              <span>{label}</span>
               {view === "investigations" && setup && (
                 <span className="rounded-full bg-muted px-1.5 py-0.5 text-xs leading-none font-medium text-muted-foreground animate-in fade-in-0 duration-200">
                   {setup}
@@ -236,7 +229,6 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
           <LensModeSwitch
             activity={activity}
             demo={demo}
-            activeTab={activeTab}
             worker={worker}
             setup={activeTab === "investigations" && dialog ? SETUP_LABELS[dialog] : undefined}
           />
