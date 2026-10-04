@@ -36,7 +36,7 @@ class DeepAgentsOptions:
 
 @dataclass(frozen=True)
 class ToolLoopOptions:
-    completion_kwargs: Mapping[str, Any] = field(default_factory=dict)
+    completion_kwargs: Mapping[str, object] = field(default_factory=dict)
 
 
 HarnessOptions = ClaudeCodeOptions | CodexOptions | OpenCodeOptions | DeepAgentsOptions | ToolLoopOptions

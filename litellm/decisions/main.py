@@ -59,7 +59,7 @@ def _resolve_provider_model(model: str, custom_llm_provider: str | None) -> tupl
             model=model,
             llm_provider=provider,
         )
-    upstream_model: Final = model.removeprefix(f"{provider}/") if model.startswith(f"{provider}/") else model
+    upstream_model: Final = model.removeprefix(f"{provider}/")
     if not upstream_model:
         raise litellm.BadRequestError(
             message="A model name is required for the Decisions API",

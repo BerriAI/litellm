@@ -267,11 +267,8 @@ class ToolLoopHandler(BaseHarnessHandler):
             tool_specs: list[ChatCompletionToolParam] = copy.deepcopy(  # mutable-ok: acompletion takes tool list
                 list(self._tool_specs)
             )
-            request_kwargs: dict[str, object] = {  # mutable-ok: acompletion takes keyword arguments
-                key: value for key, value in self._completion_kwargs.items() if key not in {"messages", "tools"}
-            }
             kwargs: dict[str, object] = {  # mutable-ok: acompletion takes keyword arguments
-                **request_kwargs,
+                **{key: value for key, value in self._completion_kwargs.items() if key not in {"messages", "tools"}},
                 "messages": messages,
                 **({"tools": tool_specs} if tool_specs else {}),
             }
@@ -287,8 +284,7 @@ class ToolLoopHandler(BaseHarnessHandler):
                 yield Text(content)
             tool_calls = message.tool_calls or ()
             if not tool_calls:
-                final_text = content or ""
-                ctx.final_text = final_text  # rebind-ok: SessionContext is the runtime's per-turn result sink
+                ctx.final_text = content or ""  # rebind-ok: SessionContext is the runtime's per-turn result sink
                 ctx.output_json = content if ctx.output is not None else None  # rebind-ok: per-turn output sink
                 final_message: ChatCompletionMessageParam = {
                     "role": "assistant",

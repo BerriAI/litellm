@@ -125,13 +125,12 @@ class AnthropicFilesConfig(BaseFilesConfig):
         return self._finalize_headers(headers, auth_header)
 
     @staticmethod
-    def _resolve_params(
-        litellm_params: dict, api_base: str | None
-    ) -> tuple[dict | None, str | None]:  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    def _resolve_params(litellm_params: dict, api_base: str | None) -> tuple[Mapping[str, object] | None, str | None]:
         params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
-        if api_base is None and params_mapping is not None:
-            api_base = params_mapping.get("api_base")
-        return params_mapping, api_base
+        resolved_api_base: Final = (
+            api_base if api_base is not None or params_mapping is None else params_mapping.get("api_base")
+        )
+        return params_mapping, resolved_api_base
 
     @staticmethod
     def _finalize_headers(headers: dict, auth_header: Mapping[str, str] | None) -> dict:  # mutable-ok: out-param
