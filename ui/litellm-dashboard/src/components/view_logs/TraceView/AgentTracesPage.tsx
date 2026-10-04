@@ -5,8 +5,8 @@ import { useMemo, useState } from "react";
 
 import { AgentTracesSection } from "./AgentTracesSection";
 import { useTracesLive } from "./tracesApi";
+import { useRangeHoursRouting } from "./traceRouting";
 
-const DEFAULT_RANGE_HOURS = 24;
 const TIME_FORMAT = "YYYY-MM-DDTHH:mm";
 
 export default function AgentTracesPage({
@@ -21,7 +21,7 @@ export default function AgentTracesPage({
   canMintTracingKey?: boolean;
 }) {
   const sourceLive = useTracesLive();
-  const [rangeHours, setRangeHours] = useState(DEFAULT_RANGE_HOURS);
+  const [rangeHours, setRangeHours] = useRangeHoursRouting();
   const [live, setLive] = useState(true);
   const [anchor, setAnchor] = useState(() => moment());
   const { startTime, endTime } = useMemo(

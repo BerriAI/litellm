@@ -1,39 +1,49 @@
 "use client";
 
-import { createContext, useContext, useState, type ReactNode } from "react";
-import { parseAsString, parseAsStringLiteral, useQueryState } from "nuqs";
+import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
+import { useCallback } from "react";
+import { OPEN_TRACE_PARSERS, RUN_FILTER_PARSERS } from "@/components/view_logs/TraceView/traceRouting";
 
 export const LENS_TABS = { traces: "Traces", findings: "Findings", investigations: "Investigations" } as const;
 export type LensTab = keyof typeof LENS_TABS;
 const lensTabs = Object.keys(LENS_TABS) as LensTab[];
 
+const LENS_PARSERS = {
+  tab: parseAsStringLiteral(lensTabs),
+  lens: parseAsString,
+  demo: parseAsBoolean.withDefault(false),
+};
+
+/** Every Lens-owned key. Leaving the sample session clears them so sample ids never point at live data. */
+const SESSION_PARSERS = { ...LENS_PARSERS, ...OPEN_TRACE_PARSERS, ...RUN_FILTER_PARSERS };
+const CLEARED_SESSION = {
+  lens: null,
+  demo: null,
+  trace: null,
+  trace_ref: null,
+  span: null,
+  view: null,
+  span_tab: null,
+  q: null,
+  agent: null,
+  status: null,
+  hours: null,
+} satisfies Record<Exclude<keyof typeof SESSION_PARSERS, "tab">, null>;
+
 export interface LensRoute {
   readonly tab: LensTab | null;
   readonly lensId: string | null;
+  readonly demo: boolean;
   setTab(tab: LensTab): void;
   setLensId(lensId: string | null): void;
+  setDemo(demo: boolean): void;
 }
 
-const LensRouteContext = createContext<LensRoute | null>(null);
-
-/** Keeps navigation out of the URL, e.g. for a sample session that must not leave links behind. */
-export function MemoryLensRoute({ initialTab, children }: { initialTab: LensTab; children: ReactNode }) {
-  const [tab, setTab] = useState<LensTab | null>(initialTab);
-  const [lensId, setLensId] = useState<string | null>(null);
-  return <LensRouteContext.Provider value={{ tab, lensId, setTab, setLensId }}>{children}</LensRouteContext.Provider>;
-}
-
-/** Without a provider, navigation lives in the URL. */
+/** Lens navigation lives in the URL, sample session included, so any view is a shareable link. */
 export function useLensRoute(): LensRoute {
-  const provided = useContext(LensRouteContext);
-  const [tab, setTab] = useQueryState("tab", parseAsStringLiteral(lensTabs).withOptions({ history: "push" }));
-  const [lensId, setLensId] = useQueryState("lens", parseAsString.withOptions({ history: "push" }));
-  return (
-    provided ?? {
-      tab,
-      lensId,
-      setTab: (next) => void setTab(next),
-      setLensId: (next) => void setLensId(next),
-    }
-  );
+  const [{ tab, lens, demo }, setParams] = useQueryStates(SESSION_PARSERS, { history: "push" });
+  const setTab = useCallback((next: LensTab) => void setParams({ tab: next }), [setParams]);
+  const setLensId = useCallback((next: string | null) => void setParams({ lens: next }), [setParams]);
+  const setDemo = useCallback((next: boolean) => void setParams(next ? { demo: true } : CLEARED_SESSION), [setParams]);
+  return { tab, lensId: lens, demo, setTab, setLensId, setDemo };
 }

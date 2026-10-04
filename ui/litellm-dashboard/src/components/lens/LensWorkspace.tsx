@@ -1,61 +1,55 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useId, useState } from "react";
 import { Aperture } from "lucide-react";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
 import { DemoNotice } from "@/components/shared/DemoNotice";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LensServicesProvider } from "./LensServicesProvider";
 import { LensPreviewContext } from "./LensPreviewButton";
 import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 import { InvestigationsView } from "./investigations/InvestigationsView";
 import { createLensDemo } from "./demo/createLensDemo";
-import { LENS_TABS, MemoryLensRoute, useLensRoute, type LensTab } from "./route";
+import { LENS_TABS, useLensRoute, type LensTab } from "./route";
 
 type WorkspaceProps = { accessToken: string; userRole: string; readOnly: boolean };
 
 export function LensWorkspace(props: WorkspaceProps) {
-  const [sampleTab, setSampleTab] = useState<LensTab | null>(null);
-  return sampleTab ? (
-    <SampleSession initialTab={sampleTab} onExit={() => setSampleTab(null)} />
-  ) : (
-    <LensContent {...props} onPreview={setSampleTab} />
-  );
+  const { demo } = useLensRoute();
+  return demo ? <SampleSession /> : <LensContent {...props} />;
 }
 
-function SampleSession({ initialTab, onExit }: { initialTab: LensTab; onExit: () => void }) {
+function SampleSession() {
   const [services] = useState(() => createLensDemo());
   return (
     <LensServicesProvider services={services}>
-      <MemoryLensRoute initialTab={initialTab}>
-        <LensContent
-          accessToken="lens-demo"
-          userRole="proxy_admin_viewer"
-          readOnly
-          notice={<DemoNotice onExit={onExit} />}
-        />
-      </MemoryLensRoute>
+      <LensContent accessToken="lens-demo" userRole="proxy_admin_viewer" readOnly />
     </LensServicesProvider>
   );
 }
 
-function LensContent({
-  accessToken,
-  userRole,
-  readOnly,
-  notice,
-  onPreview,
-}: WorkspaceProps & { notice?: ReactNode; onPreview?: (tab: LensTab) => void }) {
-  const { tab, lensId, setTab } = useLensRoute();
+function DemoToggle({ demo, onChange }: { demo: boolean; onChange: (demo: boolean) => void }) {
+  const id = useId();
+  return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      <label htmlFor={id}>Demo data</label>
+      <Switch id={id} size="sm" checked={demo} onCheckedChange={onChange} />
+    </div>
+  );
+}
+
+function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
+  const { tab, lensId, demo, setTab, setDemo } = useLensRoute();
   const [previewTarget, setPreviewTarget] = useState<HTMLDivElement | null>(null);
   const activeTab = tab ?? (lensId ? "findings" : "traces");
   const preview = (view: LensTab) => ({
     target: previewTarget,
-    open: onPreview && activeTab === view ? () => onPreview(view) : undefined,
+    open: !demo && activeTab === view ? () => setDemo(true) : undefined,
   });
   return (
-    <main className="flex min-h-full w-full min-w-0 flex-1 flex-col gap-2 px-3 pt-2 pb-3">
-      {notice}
+    <main className="flex h-full w-full min-w-0 flex-1 flex-col gap-2 px-3 pt-2 pb-3">
+      {demo && <DemoNotice onExit={() => setDemo(false)} />}
       <Tabs value={activeTab} onValueChange={(value) => setTab(value as LensTab)} className="min-h-0 flex-1 gap-2">
         <div className="flex min-h-8 flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -71,7 +65,10 @@ function LensContent({
               ))}
             </TabsList>
           </div>
-          <div ref={setPreviewTarget} />
+          <div className="flex items-center gap-3">
+            <div ref={setPreviewTarget} />
+            <DemoToggle demo={demo} onChange={setDemo} />
+          </div>
         </div>
         <TabsContent value="traces" keepMounted className="flex min-h-0 flex-col overflow-y-auto">
           <LensPreviewContext.Provider value={preview("traces")}>

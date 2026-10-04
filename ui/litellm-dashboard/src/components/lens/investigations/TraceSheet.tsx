@@ -1,4 +1,5 @@
 import { RunView } from "@/components/view_logs/TraceView/TraceDrawer";
+import { useLocalRunSelection } from "@/components/view_logs/TraceView/traceRouting";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 
 export function TraceSheet({
@@ -16,6 +17,7 @@ export function TraceSheet({
   accessToken: string;
   onClose: () => void;
 }) {
+  const selection = useLocalRunSelection(initialSpanId ?? null);
   return (
     <Sheet
       open={open}
@@ -33,7 +35,7 @@ export function TraceSheet({
             key={`${traceId}:${traceRef}:${initialSpanId}`}
             traceId={traceId}
             traceRef={traceRef}
-            initialSpanId={initialSpanId}
+            selection={selection}
             accessToken={accessToken}
             onBack={onClose}
           />

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { AgentTracesTable } from "./AgentTracesTable";
 import { RunDrawer } from "./RunDrawer";
 import { ALL_AGENTS, RunsToolbar, type RunStatusFilter } from "./RunsToolbar";
+import { type TraceRef, traceKey, traceRefOf, useOpenTraceRouting, useRunFilterRouting } from "./traceRouting";
 import type { TraceSummary } from "./traceTypes";
 import { previewText, traceAgentNames } from "./traceUtils";
 import { TimeRangeControls } from "./TimeRangeControls";
@@ -35,8 +36,6 @@ export function filterRuns(
   });
 }
 
-const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
-
 const filterByWindow = (runs: TraceSummary[], range: TimeWindow): TraceSummary[] =>
   runs.filter((run) => {
     const t = moment(run.start_time).valueOf();
@@ -58,8 +57,6 @@ interface AgentTracesSectionProps {
   isLiveTail: boolean;
   /** Page-owned time range + live state; when given, the toolbar shows the range / Live control group. */
   timeControls?: TimeControls;
-  /** Called when a run opens / closes, so the page can hide its own header while a run fills the view. */
-  onRunOpenChange?: (open: boolean) => void;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
 }
@@ -100,15 +97,12 @@ export function AgentTracesSection({
   isCustomDate,
   isLiveTail,
   timeControls,
-  onRunOpenChange,
   readOnly = false,
   canMintTracingKey = false,
 }: AgentTracesSectionProps) {
   const live = useTracesLive();
-  const [openTrace, setOpenTrace] = useState<TraceSummary | null>(null);
-  const [query, setQuery] = useState("");
-  const [agent, setAgent] = useState(ALL_AGENTS);
-  const [status, setStatus] = useState<RunStatusFilter>("all");
+  const { trace: openTrace, openTrace: openRun, selection } = useOpenTraceRouting();
+  const { query, agent, status, setQuery, setAgent, setStatus } = useRunFilterRouting();
   const [showSetup, setShowSetup] = useState(false);
   const [zoom, setZoom] = useState<TimeWindow | null>(null);
   const [rangeChanged, setRangeChanged] = useState(false);
@@ -142,16 +136,11 @@ export function AgentTracesSection({
     apply(hours);
   };
 
-  const openRun = (trace: TraceSummary | null) => {
-    setOpenTrace(trace);
-    onRunOpenChange?.(trace !== null);
-  };
-
   const openSentTrace = (trace: TraceSummary) => {
     setShowSetup(false);
     setRangeChanged(true);
     checkTraces();
-    openRun(trace);
+    openRun(traceRefOf(trace));
   };
   const setupProps = {
     accessToken,
@@ -181,14 +170,16 @@ export function AgentTracesSection({
     );
   }
 
-  const toggleRun = (trace: TraceSummary | null) =>
-    openRun(trace !== null && openTrace !== null && runKey(trace) === runKey(openTrace) ? null : trace);
+  const toggleRun = (trace: TraceSummary | null) => {
+    const ref: TraceRef | null = trace && traceRefOf(trace);
+    openRun(ref !== null && openTrace !== null && traceKey(ref) === traceKey(openTrace) ? null : ref);
+  };
 
   return (
     <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
       {checkHistory && <TraceHistoryError history={history} />}
       <TracesReceived received={setup.received} />
-      <RunDrawer trace={openTrace} runs={runs} accessToken={accessToken} onSelect={openRun} />
+      <RunDrawer trace={openTrace} runs={runs} accessToken={accessToken} selection={selection} onSelect={openRun} />
       <RunsToolbar
         query={query}
         agent={agent}
@@ -230,7 +221,7 @@ export function AgentTracesSection({
         onRetry={traces.hasMore ? traces.loadMore : traces.refetch}
         onLoadMore={traces.loadMore}
         onOpenTrace={toggleRun}
-        selectedKey={openTrace === null ? null : runKey(openTrace)}
+        selectedKey={openTrace === null ? null : traceKey(openTrace)}
       />
       <RunsFooter
         count={runs.length}

@@ -1,7 +1,6 @@
 "use client";
 
 import { PanelRightClose } from "lucide-react";
-import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -13,24 +12,24 @@ import { IdChip } from "./IdChip";
 import { RequestDetail } from "./RequestDetail";
 import { SpanIcon } from "./SpanIcon";
 import { useTracesApi } from "./tracesApi";
+import { SPAN_TABS, type SpanTab } from "./traceRouting";
 import type { GroupRowData, TreeRow } from "./traceTree";
 import type { Span, SpanType, Trace } from "./traceTypes";
 import { fmtMs, fmtTok } from "./traceUtils";
 
-interface DetailPaneProps {
+interface SpanTabProps {
+  spanTab: SpanTab;
+  onSpanTabChange: (tab: SpanTab) => void;
+}
+
+interface DetailPaneProps extends SpanTabProps {
   trace: Trace;
   row: TreeRow | undefined;
   accessToken: string;
   onClose: () => void;
 }
 
-type Tab = "content" | "request" | "attributes";
-
-const TABS: { id: Tab; label: string }[] = [
-  { id: "content", label: "Content" },
-  { id: "request", label: "Request" },
-  { id: "attributes", label: "Attributes" },
-];
+const TAB_LABELS: Record<SpanTab, string> = { content: "Content", request: "Request", attributes: "Attributes" };
 
 function PaneHeader({
   type,
@@ -94,14 +93,15 @@ function SpanPane({
   trace,
   span,
   accessToken,
+  spanTab: tab,
+  onSpanTabChange,
   onClose,
-}: {
+}: SpanTabProps & {
   trace: Trace;
   span: Span;
   accessToken: string;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<Tab>("content");
   const handoff = useTracesApi(accessToken).handoff(trace.summary.trace_id, span.span_id, trace.summary.trace_ref);
   const traceId = trace.summary.trace_id;
   const detailQuery = useSpanDetail(
@@ -124,12 +124,12 @@ function SpanPane({
         idValue={span.span_id}
         onClose={onClose}
       />
-      <Tabs value={tab} onValueChange={(value) => setTab(value as Tab)} className="min-h-0 flex-1 gap-0">
+      <Tabs value={tab} onValueChange={(value) => onSpanTabChange(value as SpanTab)} className="min-h-0 flex-1 gap-0">
         <div className="shrink-0 border-b px-5">
           <TabsList variant="line" aria-label="Span detail sections" className="h-10 gap-4 px-0">
-            {TABS.map((t) => (
-              <TabsTrigger key={t.id} value={t.id} className="flex-none px-0 text-xs">
-                {t.label}
+            {SPAN_TABS.map((id) => (
+              <TabsTrigger key={id} value={id} className="flex-none px-0 text-xs">
+                {TAB_LABELS[id]}
               </TabsTrigger>
             ))}
           </TabsList>
@@ -225,7 +225,7 @@ function GroupPane({
 }
 
 /** Right pane of the run view: switches on the selected tree row. */
-export function DetailPane({ trace, row, accessToken, onClose }: DetailPaneProps) {
+export function DetailPane({ trace, row, accessToken, spanTab, onSpanTabChange, onClose }: DetailPaneProps) {
   if (!row || row.kind === "load-more") {
     return (
       <div className="grid h-full place-items-center bg-background text-[13px] text-muted-foreground">
@@ -235,5 +235,15 @@ export function DetailPane({ trace, row, accessToken, onClose }: DetailPaneProps
   }
   if (row.kind === "group")
     return <GroupPane key={row.id} trace={trace} row={row} accessToken={accessToken} onClose={onClose} />;
-  return <SpanPane key={row.id} trace={trace} span={row.span} accessToken={accessToken} onClose={onClose} />;
+  return (
+    <SpanPane
+      key={row.id}
+      trace={trace}
+      span={row.span}
+      accessToken={accessToken}
+      spanTab={spanTab}
+      onSpanTabChange={onSpanTabChange}
+      onClose={onClose}
+    />
+  );
 }

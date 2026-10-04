@@ -18,6 +18,7 @@ import { SpanIcon } from "./SpanIcon";
 import { SpanTree } from "./SpanTree";
 import { TraceConversation } from "./TraceConversation";
 import { FrameworkLogo, traceFramework } from "./TraceFramework";
+import type { RunSelection } from "./traceRouting";
 import type { SpanTreeState, TreeRow } from "./traceTree";
 import type { Trace } from "./traceTypes";
 import {
@@ -186,22 +187,19 @@ function ignoreStepKey(event: KeyboardEvent): boolean {
   return event.defaultPrevented || ignoresLetterShortcut(event) || Boolean(control);
 }
 
-type TraceView = "steps" | "conversation";
-
 interface RunBodyProps {
   trace: Trace;
   accessToken: string;
-  initialSpanId?: string;
+  selection: RunSelection;
   embedded: boolean;
-  view: TraceView;
-  onViewChange: (view: TraceView) => void;
 }
 
-function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChange }: RunBodyProps) {
+function RunBody({ trace, accessToken, selection, embedded }: RunBodyProps) {
   const spanKeys = embedded ? EMBEDDED_SPAN_KEYS : SPAN_KEYS;
-  const initial = useMemo(() => initialRunSelection(trace, initialSpanId), [trace, initialSpanId]);
+  const { view, selectSpan, setView } = selection;
+  const [initial] = useState(() => initialRunSelection(trace, selection.spanId ?? undefined));
   const [state, setState] = useState<SpanTreeState>(initial.state);
-  const [selectedId, setSelectedId] = useState<string>(initial.selectedId);
+  const selectedId = selection.spanId ?? initial.selectedId;
   const [detailOpen, setDetailOpen] = useState(true);
   const [query, setQuery] = useState("");
   const [errorsOnly, setErrorsOnly] = useState(false);
@@ -227,11 +225,11 @@ function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChan
 
   const select = useCallback(
     (id: string) => {
-      setSelectedId(id);
+      selectSpan(id);
       setDetailOpen(true);
       setState((prev) => revealSpanInState(trace.spans, prev, id));
     },
-    [trace.spans],
+    [trace.spans, selectSpan],
   );
   const toggleSpan = useCallback(
     (id: string) => setState((prev) => ({ ...prev, collapsedSpanIds: toggle(prev.collapsedSpanIds, id) })),
@@ -295,7 +293,7 @@ function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChan
           accessToken={accessToken}
           onOpenStep={(id) => {
             select(id);
-            onViewChange("steps");
+            setView("steps");
           }}
         />
       </TabsContent>
@@ -344,7 +342,14 @@ function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChan
       />
       {detailOpen && (
         <div className="min-h-0 min-w-0 animate-slide-left motion-reduce:animate-none">
-          <DetailPane trace={trace} row={selectedRow} accessToken={accessToken} onClose={() => setDetailOpen(false)} />
+          <DetailPane
+            trace={trace}
+            row={selectedRow}
+            accessToken={accessToken}
+            spanTab={selection.spanTab}
+            onSpanTabChange={selection.setSpanTab}
+            onClose={() => setDetailOpen(false)}
+          />
         </div>
       )}
     </TabsContent>
@@ -354,21 +359,20 @@ function RunBody({ trace, accessToken, initialSpanId, embedded, view, onViewChan
 interface RunViewProps {
   traceId: string;
   traceRef?: string;
-  initialSpanId?: string;
+  selection: RunSelection;
   accessToken: string;
   onBack: () => void;
   /** Rendered inside the side drawer: the drawer owns closing and sizing. */
   embedded?: boolean;
 }
 
-function initialSpanMissing(trace: Trace | undefined, spanId?: string): boolean {
+function selectedSpanMissing(trace: Trace | undefined, spanId: string | null): boolean {
   return Boolean(spanId && trace && !trace.spans.some((span) => span.span_id === spanId));
 }
 
-export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack, embedded = false }: RunViewProps) {
+export function RunView({ traceId, traceRef, selection, accessToken, onBack, embedded = false }: RunViewProps) {
   const traces = useTracesApi(accessToken);
   const queryClient = useQueryClient();
-  const [view, setView] = useState<TraceView>("steps");
   const traceQueryOptions = {
     queryKey: ["agentTrace", traceId, traceRef, accessToken],
     queryFn: ({ pageParam }: { pageParam: string | null }) => traces.trace(traceId, traceRef, pageParam),
@@ -387,7 +391,7 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
     if (!pages?.length) return undefined;
     return { ...pages[0], spans: pages.flatMap((page) => page.spans) };
   }, [traceQuery.data]);
-  const seekingSpan = initialSpanMissing(trace, initialSpanId);
+  const seekingSpan = selectedSpanMissing(trace, selection.spanId);
   const { hasNextPage, isFetching, isError, fetchNextPage } = traceQuery;
   const canSeek = seekingSpan && hasNextPage;
   useEffect(() => {
@@ -432,8 +436,8 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
   }
   return (
     <Tabs
-      value={view}
-      onValueChange={(value) => setView(value as TraceView)}
+      value={selection.view}
+      onValueChange={(value) => selection.setView(value as RunSelection["view"])}
       className={cn(
         "@container/trace flex flex-1 flex-col gap-0 overflow-hidden bg-background",
         embedded ? "min-h-0 animate-view-fade-in motion-reduce:animate-none" : "min-h-[560px] border-y border-border",
@@ -469,13 +473,11 @@ export function RunView({ traceId, traceRef, initialSpanId, accessToken, onBack,
         </div>
       )}
       <RunBody
-        key={`${trace.summary.trace_ref || trace.summary.trace_id}:${initialSpanId && !seekingSpan ? initialSpanId : "root"}`}
+        key={seekingSpan ? "seeking" : "loaded"}
         trace={trace}
         accessToken={accessToken}
-        initialSpanId={initialSpanId}
+        selection={selection}
         embedded={embedded}
-        view={view}
-        onViewChange={setView}
       />
     </Tabs>
   );

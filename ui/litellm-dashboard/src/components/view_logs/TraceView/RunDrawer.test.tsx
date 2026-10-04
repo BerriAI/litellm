@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "../../../../tests/test-utils";
 import { clampDrawerWidth, RunDrawer } from "./RunDrawer";
+import { type RunSelection, traceRefOf } from "./traceRouting";
 import type { TraceSummary } from "./traceTypes";
 
 vi.mock("./TraceDrawer", () => ({
@@ -28,6 +29,15 @@ const run = (trace_id: string): TraceSummary => ({
   models: [],
   spend: null,
 });
+
+const selection: RunSelection = {
+  spanId: null,
+  view: "steps",
+  spanTab: "content",
+  selectSpan: vi.fn(),
+  setView: vi.fn(),
+  setSpanTab: vi.fn(),
+};
 
 const mockReducedMotion = (reduce: boolean) =>
   vi
@@ -60,7 +70,7 @@ describe("RunDrawer", () => {
     const runs = [run("a"), run("b")];
     const onSelect = vi.fn();
     const { rerender } = renderWithProviders(
-      <RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={onSelect} />,
+      <RunDrawer trace={traceRefOf(runs[0])} runs={runs} accessToken="sk" selection={selection} onSelect={onSelect} />,
     );
     const drawer = screen.getByRole("complementary", { name: "Trace details" });
     fireEvent.keyDown(screen.getByRole("separator", { name: "Resize trace panel" }), { key: "ArrowLeft" });
@@ -71,8 +81,10 @@ describe("RunDrawer", () => {
     expect(drawer).toHaveStyle({ width: "100%" });
     expect(screen.queryByRole("separator", { name: "Resize trace panel" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Next trace (J)" }));
-    expect(onSelect).toHaveBeenCalledWith(runs[1]);
-    rerender(<RunDrawer trace={runs[1]} runs={runs} accessToken="sk" onSelect={onSelect} />);
+    expect(onSelect).toHaveBeenCalledWith(traceRefOf(runs[1]));
+    rerender(
+      <RunDrawer trace={traceRefOf(runs[1])} runs={runs} accessToken="sk" selection={selection} onSelect={onSelect} />,
+    );
     expect(drawer).toHaveStyle({ width: "100%" });
     expect(screen.getByTestId("run-view")).toHaveTextContent("run b");
 
@@ -87,13 +99,15 @@ describe("RunDrawer", () => {
     const runs = [run("a"), run("b")];
     const onSelect = vi.fn();
     const { rerender } = renderWithProviders(
-      <RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={onSelect} />,
+      <RunDrawer trace={traceRefOf(runs[0])} runs={runs} accessToken="sk" selection={selection} onSelect={onSelect} />,
     );
     fireEvent.keyDown(screen.getByRole("separator", { name: "Resize trace panel" }), { key: "ArrowLeft" });
     const savedWidth = screen.getByRole("complementary", { name: "Trace details" }).style.width;
     fireEvent.click(screen.getByRole("button", { name: "Enter full screen" }));
-    rerender(<RunDrawer trace={null} runs={runs} accessToken="sk" onSelect={onSelect} />);
-    rerender(<RunDrawer trace={runs[1]} runs={runs} accessToken="sk" onSelect={onSelect} />);
+    rerender(<RunDrawer trace={null} runs={runs} accessToken="sk" selection={selection} onSelect={onSelect} />);
+    rerender(
+      <RunDrawer trace={traceRefOf(runs[1])} runs={runs} accessToken="sk" selection={selection} onSelect={onSelect} />,
+    );
     expect(screen.getByRole("complementary", { name: "Trace details" })).toHaveStyle({ width: savedWidth });
     expect(screen.getByRole("button", { name: "Enter full screen" })).toBeVisible();
     expect(screen.getByRole("separator", { name: "Resize trace panel" })).toBeVisible();
@@ -102,7 +116,9 @@ describe("RunDrawer", () => {
   it.each(["Close (Esc)", "Close trace (Esc)"])("closes a full-screen trace using %s", (name) => {
     const runs = [run("a")];
     const onSelect = vi.fn();
-    renderWithProviders(<RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={onSelect} />);
+    renderWithProviders(
+      <RunDrawer trace={traceRefOf(runs[0])} runs={runs} accessToken="sk" selection={selection} onSelect={onSelect} />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Enter full screen" }));
     fireEvent.click(screen.getByRole("button", { name }));
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(null);
@@ -111,7 +127,9 @@ describe("RunDrawer", () => {
   it("keeps Escape available to close a full-screen trace", () => {
     const runs = [run("a")];
     const onSelect = vi.fn();
-    renderWithProviders(<RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={onSelect} />);
+    renderWithProviders(
+      <RunDrawer trace={traceRefOf(runs[0])} runs={runs} accessToken="sk" selection={selection} onSelect={onSelect} />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Enter full screen" }));
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(null);
@@ -121,10 +139,10 @@ describe("RunDrawer", () => {
     mockReducedMotion(true);
     const runs = [run("a")];
     const { rerender } = renderWithProviders(
-      <RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={vi.fn()} />,
+      <RunDrawer trace={traceRefOf(runs[0])} runs={runs} accessToken="sk" selection={selection} onSelect={vi.fn()} />,
     );
     expect(screen.getByRole("complementary", { name: "Trace details" })).toBeInTheDocument();
-    rerender(<RunDrawer trace={null} runs={runs} accessToken="sk" onSelect={vi.fn()} />);
+    rerender(<RunDrawer trace={null} runs={runs} accessToken="sk" selection={selection} onSelect={vi.fn()} />);
     expect(screen.queryByRole("complementary", { name: "Trace details" })).not.toBeInTheDocument();
   });
 
@@ -132,9 +150,9 @@ describe("RunDrawer", () => {
     mockReducedMotion(false);
     const runs = [run("a")];
     const { rerender } = renderWithProviders(
-      <RunDrawer trace={runs[0]} runs={runs} accessToken="sk" onSelect={vi.fn()} />,
+      <RunDrawer trace={traceRefOf(runs[0])} runs={runs} accessToken="sk" selection={selection} onSelect={vi.fn()} />,
     );
-    rerender(<RunDrawer trace={null} runs={runs} accessToken="sk" onSelect={vi.fn()} />);
+    rerender(<RunDrawer trace={null} runs={runs} accessToken="sk" selection={selection} onSelect={vi.fn()} />);
     expect(screen.getByRole("complementary", { name: "Trace details" })).toHaveClass("animate-trace-drawer-out");
   });
 });
