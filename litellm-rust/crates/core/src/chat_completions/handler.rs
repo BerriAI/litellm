@@ -1,16 +1,14 @@
+use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
 use std::time::Duration;
 
 use litellm_auth::AuthServices;
-use litellm_host::{
-    event::{MachineEvent, RawResponse, RequestContext, WireRequest},
-    hooks::RouteHooks,
-};
+use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
 use litellm_http::{Client, outbound::OutboundRequest, request::truncate_error_body};
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     chat::transformation::ProviderChatResponseData,
 };
-use litellm_types::utils::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use serde_json::Value;
 
 use super::Error;
@@ -23,7 +21,10 @@ pub(super) async fn execute(
     http: &Client,
     auth: &AuthServices,
     request: ProviderChatCompletionsRequest,
-    hooks: &impl RouteHooks<Error>,
+    cache: Option<litellm_cache_response::ScopedCache>,
+    cache_options: Option<litellm_cache_response::CachePolicy>,
+    interceptors: &impl Interceptors<Error>,
+    observers: Option<&ObservationSender>,
 ) -> Result<ChatCompletionsResponse, Error> {
     let ProviderChatCompletionsRequest {
         model,
@@ -45,7 +46,11 @@ pub(super) async fn execute(
         api_key,
     };
     let authenticated = resolve_auth(auth, environment, &|key| secrets.get(key)).await?;
-    let wire = hooks
+    let identity = litellm_host::interceptors::ProviderIdentity {
+        model: context.model.clone(),
+        provider: context.custom_llm_provider.clone(),
+    };
+    let wire = interceptors
         .before_provider_request(
             WireRequest {
                 url,
@@ -55,55 +60,72 @@ pub(super) async fn execute(
             context,
         )
         .await?;
-    let outbound = outbound_request(
-        Authenticated {
-            headers: wire.headers,
-            signer: authenticated.signer,
+    let cache = cache.filter(|_| authenticated.signer.is_none());
+    let cache_request =
+        crate::caching::CacheRequest::from_wire(identity, cache.as_ref().map(|_| &wire));
+    crate::caching::execute_unary::<super::route::ChatCompletions, _, _>(
+        cache_request,
+        cache.as_ref().map(|cache| cache.service.clone()),
+        cache.as_ref().map(|cache| cache.options(cache_options)),
+        interceptors,
+        observers,
+        || async move {
+            let outbound = outbound_request(
+                Authenticated {
+                    headers: wire.headers,
+                    signer: authenticated.signer,
+                },
+                wire.url,
+                &wire.body,
+                timeout,
+            )?;
+
+            let response = crate::outbound::send(outbound, http).await.map_err(|err| {
+                // Failing to establish the connection means the request never went out,
+                // so the host can still serve it. Everything else here, a timeout
+                // above all, may have reached the provider and been answered.
+                if err.is_connect() || err.is_builder() {
+                    Error::Transport(litellm_http::transport::Error::Connect(err.to_string()))
+                } else {
+                    Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
+                }
+            })?;
+
+            let status = response.status();
+            let text = response.text().await.map_err(|err| {
+                Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
+            })?;
+
+            if !status.is_success() {
+                return Err(Error::Transport(litellm_http::transport::Error::Http {
+                    status: status.as_u16(),
+                    body: truncate_error_body(&text),
+                }));
+            }
+            let raw = RawResponse { body: text.clone() };
+            if let Some(observers) = observers {
+                observers.emit(litellm_host::lifecycle::CallEvent::Execution(
+                    ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
+                ));
+            }
+            interceptors
+                .after_provider_response(raw)
+                .await
+                .map_err(Error::post_call)?;
+
+            let body: Value = serde_json::from_str(&text).map_err(|err| {
+                Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+                    "chat completions response JSON",
+                    err,
+                ))
+            })?;
+            config
+                .transform_response(&model, ProviderChatResponseData { body })
+                .map_err(Error::from)
+                .map_err(as_response_error)
         },
-        wire.url,
-        &wire.body,
-        timeout,
-    )?;
-
-    let response = crate::outbound::send(outbound, http).await.map_err(|err| {
-        // Failing to establish the connection means the request never went out,
-        // so the host can still serve it. Everything else here, a timeout
-        // above all, may have reached the provider and been answered.
-        if err.is_connect() || err.is_builder() {
-            Error::Transport(litellm_http::transport::Error::Connect(err.to_string()))
-        } else {
-            Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
-        }
-    })?;
-
-    let status = response.status();
-    let text = response.text().await.map_err(|err| {
-        Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
-    })?;
-
-    if !status.is_success() {
-        return Err(Error::Transport(litellm_http::transport::Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
-        }));
-    }
-    hooks
-        .on_event(MachineEvent::ResponseReceived {
-            raw: RawResponse { body: text.clone() },
-        })
-        .await
-        .map_err(Error::post_call)?;
-
-    let body: Value = serde_json::from_str(&text).map_err(|err| {
-        Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
-            "chat completions response JSON",
-            err,
-        ))
-    })?;
-    config
-        .transform_response(&model, ProviderChatResponseData { body })
-        .map_err(Error::from)
-        .map_err(as_response_error)
+    )
+    .await
 }
 
 /// Re-tag an error raised while normalizing a response the provider already
@@ -168,7 +190,7 @@ mod tests {
         raw: Mutex<Vec<String>>,
     }
 
-    impl RouteHooks<Error> for RecordingHooks {
+    impl Interceptors<Error> for RecordingHooks {
         async fn before_provider_request(
             &self,
             wire: WireRequest,
@@ -188,8 +210,7 @@ mod tests {
             })
         }
 
-        async fn on_event(&self, event: MachineEvent) -> Result<(), Error> {
-            let MachineEvent::ResponseReceived { raw } = event;
+        async fn after_provider_response(&self, raw: RawResponse) -> Result<(), Error> {
             self.raw.lock().unwrap().push(raw.body);
             Ok(())
         }
@@ -223,13 +244,16 @@ mod tests {
             )
             .mount(&upstream)
             .await;
-        let hooks = RecordingHooks::default();
+        let interceptors = RecordingHooks::default();
 
         execute(
             &Client::plain_for_test(),
             &AuthServices::default(),
             prepared(&upstream.uri()),
-            &hooks,
+            None,
+            None,
+            &interceptors,
+            None,
         )
         .await
         .expect("chat completions call succeeds");
@@ -240,14 +264,17 @@ mod tests {
         assert_eq!(sent["system"], "added by the host");
         assert_eq!(request.headers["x-host"], "seen");
         assert_eq!(request.headers["x-api-key"], "sk-test");
-        let [context] = <[RequestContext; 1]>::try_from(hooks.contexts.into_inner().unwrap())
-            .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
+        let [context] =
+            <[RequestContext; 1]>::try_from(interceptors.contexts.into_inner().unwrap())
+                .unwrap_or_else(|seen| {
+                    panic!("before_provider_request runs once, saw {}", seen.len())
+                });
         assert_eq!(
             (context.model.as_str(), context.custom_llm_provider.as_str()),
             ("claude-sonnet-4-5", "anthropic")
         );
         assert_eq!(context.optional_params, json!({"max_tokens": 16}));
-        assert_eq!(hooks.raw.into_inner().unwrap(), [ANTHROPIC_MESSAGE]);
+        assert_eq!(interceptors.raw.into_inner().unwrap(), [ANTHROPIC_MESSAGE]);
     }
 
     #[rstest]
@@ -258,13 +285,16 @@ mod tests {
             .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
             .mount(&upstream)
             .await;
-        let hooks = RecordingHooks::default();
+        let interceptors = RecordingHooks::default();
 
         let error = execute(
             &Client::plain_for_test(),
             &AuthServices::default(),
             prepared(&upstream.uri()),
-            &hooks,
+            None,
+            None,
+            &interceptors,
+            None,
         )
         .await
         .expect_err("the upstream failure fails the call");
@@ -273,7 +303,7 @@ mod tests {
             error,
             Error::Transport(litellm_http::transport::Error::Http { status: 500, .. })
         ));
-        assert!(hooks.raw.into_inner().unwrap().is_empty());
+        assert!(interceptors.raw.into_inner().unwrap().is_empty());
     }
 
     #[rstest::rstest]

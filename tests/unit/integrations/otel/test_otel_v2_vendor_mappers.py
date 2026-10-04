@@ -137,6 +137,74 @@ def test_langfuse_mapper_observation_attrs():
     assert attrs["langfuse.trace.metadata.team_id"] == "t1"
 
 
+def _langfuse_usage_details(usage_object: Mapping[str, object]) -> dict[str, object]:
+    payload: Final = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "prompt_tokens": usage_object["prompt_tokens"],
+        "completion_tokens": usage_object["completion_tokens"],
+        "total_tokens": usage_object["total_tokens"],
+        "metadata": {"usage_object": usage_object},
+    }
+    attrs: Final = LangfuseMapper().map(LLMCallSpanData.from_standard_logging_payload(payload))
+    return json.loads(attrs["langfuse.observation.usage_details"])
+
+
+def test_langfuse_usage_details_split_openai_cached_and_reasoning_tokens():
+    usage: Final = _langfuse_usage_details(
+        {
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+            "prompt_tokens_details": {"cached_tokens": 60},
+            "completion_tokens_details": {"reasoning_tokens": 30},
+        }
+    )
+    assert usage == {
+        "input": 40,
+        "input_cached_tokens": 60,
+        "output": 20,
+        "output_reasoning_tokens": 30,
+        "total": 150,
+    }
+
+
+def test_langfuse_usage_details_split_anthropic_cache_read_and_creation_tokens():
+    usage: Final = _langfuse_usage_details(
+        {
+            "prompt_tokens": 1000,
+            "completion_tokens": 40,
+            "total_tokens": 1040,
+            "cache_read_input_tokens": 800,
+            "cache_creation_input_tokens": 150,
+            "prompt_tokens_details": {"cached_tokens": 800, "cache_creation_tokens": 150},
+        }
+    )
+    assert usage == {
+        "input": 50,
+        "input_cached_tokens": 800,
+        "input_cache_creation": 150,
+        "output": 40,
+        "total": 1040,
+    }
+
+
+def test_langfuse_usage_details_omit_zero_cache_and_reasoning_counts():
+    usage: Final = _langfuse_usage_details(
+        {
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "total_tokens": 20,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "prompt_tokens_details": {"cached_tokens": 0},
+            "completion_tokens_details": {"reasoning_tokens": 0},
+        }
+    )
+    assert usage == {"input": 12, "output": 8, "total": 20}
+
+
 def test_langfuse_mapper_names_the_trace_from_the_caller():
     named = LangfuseMapper().map(_llm_call(trace=TraceControls(name="nightly-eval")))
     assert named["langfuse.trace.name"] == "nightly-eval"

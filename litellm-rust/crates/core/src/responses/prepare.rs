@@ -1,4 +1,4 @@
-use litellm_host::event::RequestContext;
+use litellm_host::interceptors::RequestContext;
 use litellm_llms::{
     base_llm::responses::transformation::BaseResponsesApiConfig,
     openai::responses::transformation::OpenAiResponsesApiConfig,
@@ -16,14 +16,9 @@ pub(super) async fn prepare(
     call: ResponsesCall,
     secrets: &dyn SecretSource,
 ) -> Result<ProviderResponsesRequest, Error> {
-    let provider = call.custom_llm_provider.as_deref().unwrap_or("openai");
-    if provider != "openai" {
-        return Err(Error::Unsupported("native HTTP responses provider"));
-    }
-    let model = call.model.strip_prefix("openai/").unwrap_or(&call.model);
-    if model.is_empty() || model.contains('/') {
-        return Err(Error::InvalidProvider(call.model));
-    }
+    let identity = resolve_provider(&call.model, call.custom_llm_provider.as_deref())?;
+    let provider = identity.provider.as_str();
+    let model = identity.model.as_str();
     let config: &'static dyn BaseResponsesApiConfig = &OpenAiResponsesApiConfig;
     let snapshot = secrets
         .resolve(config.secret_names(call.api_key.as_deref(), call.api_base.as_deref()))
@@ -54,5 +49,23 @@ pub(super) async fn prepare(
         body,
         context,
         timeout: call.timeout,
+    })
+}
+
+pub(super) fn resolve_provider(
+    model: &str,
+    custom_llm_provider: Option<&str>,
+) -> Result<litellm_host::interceptors::ProviderIdentity, Error> {
+    let provider = custom_llm_provider.unwrap_or("openai");
+    if provider != "openai" {
+        return Err(Error::Unsupported("native HTTP responses provider"));
+    }
+    let resolved = model.strip_prefix("openai/").unwrap_or(model);
+    if resolved.is_empty() || resolved.contains('/') {
+        return Err(Error::InvalidProvider(model.into()));
+    }
+    Ok(litellm_host::interceptors::ProviderIdentity {
+        model: resolved.into(),
+        provider: provider.into(),
     })
 }
