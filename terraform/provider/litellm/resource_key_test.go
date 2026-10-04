@@ -426,81 +426,70 @@ func TestResourceKeyUpdateSendsConfiguredAllowedRoutes(t *testing.T) {
 	}
 }
 
-// A presetting key_type owns allowed_routes at create time on the proxy (it
-// overwrites the declared list with the preset), so the combination must fail
-// at plan time instead of creating a key that instantly drifts against its
-// configuration. Existing typed keys keep managing routes in place because
-// /key/update stores an explicit list verbatim; only create-shaped plans
-// (fresh keys, or a key_type change forcing replacement) are rejected.
-func TestAllowedRoutesRejectedWithPresetKeyType(t *testing.T) {
-	cases := []struct {
-		name       string
-		priorType  string
-		keyType    string
-		routes     []string
-		priorState bool
-		wantErr    bool
+// /key/generate replaces declared routes with the key_type preset while
+// /key/update stores them verbatim, so create must re-assert the declared
+// list when the proxy overrode it. A generate that already honored the
+// declared routes must not trigger the follow-up update.
+func TestCreateKeyRestoresDeclaredRoutesOverPreset(t *testing.T) {
+	cases := map[string]struct {
+		generateRoutes []interface{}
+		wantUpdate     bool
 	}{
-		{"llm_api with routes", "", "llm_api", []string{"/v1/models"}, false, true},
-		{"management with routes", "", "management", []string{"/v1/models"}, false, true},
-		{"read_only with routes", "", "read_only", []string{"/v1/models"}, false, true},
-		{"llm_api without routes", "", "llm_api", nil, false, false},
-		{"default with routes", "", "default", []string{"/v1/models"}, false, false},
-		{"no key type with routes", "", "", []string{"/v1/models"}, false, false},
-		{"existing typed key gains routes", "llm_api", "llm_api", []string{"/v1/models"}, true, false},
-		{"existing untyped key gains type and routes", "", "llm_api", []string{"/v1/models"}, true, true},
+		"preset overwrote declared": {generateRoutes: []interface{}{"llm_api_routes"}, wantUpdate: true},
+		"generate honored declared": {generateRoutes: []interface{}{"/v1/models"}, wantUpdate: false},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			res := resourceKey()
-			var prior *terraform.InstanceState
-			if tc.priorState {
-				priorData := newKeyResourceData(t, map[string]interface{}{"key_alias": "prior"})
-				if tc.priorType != "" {
-					priorData.Set("key_type", tc.priorType)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var generateBody, updateBody map[string]interface{}
+			updateCalled := false
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/key/generate":
+					json.Unmarshal(body, &generateBody)
+					w.Write([]byte(`{"key": "sk-new", "token_id": "hash-1", "allowed_routes": ["` + tc.generateRoutes[0].(string) + `"]}`))
+				case "/key/update":
+					updateCalled = true
+					json.Unmarshal(body, &updateBody)
+					w.Write([]byte(`{"key": "hash-1"}`))
+				default:
+					w.Write([]byte(`{"key":"hash-1","info":{"key_alias":"typed","key_type":"llm_api","allowed_routes":["/v1/models"]}}`))
 				}
-				priorData.SetId("hash-1")
-				prior = priorData.State()
-			} else {
-				prior = &terraform.InstanceState{}
+			}))
+			defer srv.Close()
+
+			d := newKeyResourceData(t, map[string]interface{}{
+				"key_alias":      "typed",
+				"key_type":       "llm_api",
+				"allowed_routes": []interface{}{"/v1/models"},
+			})
+			diags := resourceKeyCreate(context.Background(), d, NewClient(srv.URL, "test-key", true))
+			if diags.HasError() {
+				t.Fatalf("create failed: %+v", diags)
 			}
-			prior.RawConfig = keyTypeRawConfig(t, tc.keyType, tc.routes)
-			cfg := map[string]interface{}{"key_alias": "next"}
-			if tc.keyType != "" {
-				cfg["key_type"] = tc.keyType
+			if generateBody["key_type"] != "llm_api" {
+				t.Errorf("generate payload key_type = %v, want llm_api", generateBody["key_type"])
 			}
-			if tc.routes != nil {
-				cfgRoutes := make([]interface{}, len(tc.routes))
-				for i, r := range tc.routes {
-					cfgRoutes[i] = r
+			if tc.wantUpdate {
+				if !updateCalled {
+					t.Fatal("create did not re-assert declared allowed_routes after the preset overwrote them")
 				}
-				cfg["allowed_routes"] = cfgRoutes
-			}
-			_, err := res.Diff(context.Background(), prior, terraform.NewResourceConfigRaw(cfg), nil)
-			if tc.wantErr {
-				if err == nil || !strings.Contains(err.Error(), "cannot be set on a new key with key_type") {
-					t.Fatalf("want plan error for %s + routes, got %v", tc.keyType, err)
+				if updateBody["key"] != "hash-1" {
+					t.Errorf("update payload key = %v, want hash-1", updateBody["key"])
 				}
-				return
+				got, _ := updateBody["allowed_routes"].([]interface{})
+				if len(got) != 1 || got[0] != "/v1/models" {
+					t.Errorf("update payload allowed_routes = %v, want [/v1/models]", updateBody["allowed_routes"])
+				}
+			} else if updateCalled {
+				t.Fatal("create re-asserted routes although the generate already stored the declared list")
 			}
-			if err != nil {
-				t.Fatalf("unexpected plan error: %v", err)
+			if got := d.Get("allowed_routes").([]interface{}); len(got) != 1 || got[0] != "/v1/models" {
+				t.Errorf("state allowed_routes = %v, want [/v1/models]", got)
 			}
 		})
 	}
-}
-
-func keyTypeRawConfig(t *testing.T, keyType string, routes []string) cty.Value {
-	t.Helper()
-	keyTypeVal := cty.NullVal(cty.String)
-	if keyType != "" {
-		keyTypeVal = cty.StringVal(keyType)
-	}
-	return cty.ObjectVal(map[string]cty.Value{
-		"key_alias":      cty.StringVal("example"),
-		"key_type":       keyTypeVal,
-		"allowed_routes": keyRawConfigRoutes(t, routes),
-	})
 }
 
 func keyRawConfigRoutes(t *testing.T, routes []string) cty.Value {

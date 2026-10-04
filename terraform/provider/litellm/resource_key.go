@@ -23,7 +23,6 @@ func resourceKey() *schema.Resource {
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
-		CustomizeDiff: rejectRoutesWithPresetKeyType,
 		SchemaVersion: 1,
 		Schema: map[string]*schema.Schema{
 			"key": {
@@ -301,6 +300,25 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 		return diag.FromErr(fmt.Errorf("error creating key: %s", err))
 	}
 
+	// /key/generate replaces a declared allowed_routes with the key_type
+	// preset, while /key/update stores the list verbatim. Re-assert the
+	// declared routes right after create so the first apply already leaves
+	// the key with the routes the config asks for (a replacement forced by
+	// any ForceNew attribute would otherwise hand out the preset until a
+	// second apply).
+	if keyTypePresetsRoutes(key.KeyType) && len(key.AllowedRoutes) > 0 &&
+		!slices.Equal(createdKey.AllowedRoutes, key.AllowedRoutes) {
+		// Re-send the full create payload (minus the key value, plus the
+		// stored hash as the update target): /key/update validates the base
+		// fields (permissions, model_max_budget, ...) as non-null, which a
+		// minimal body would trip.
+		restore := *key
+		restore.Key = createdKey.TokenID
+		if _, err := c.UpdateKey(&restore); err != nil {
+			return diag.FromErr(fmt.Errorf("error restoring allowed_routes over the key_type preset: %s", err))
+		}
+	}
+
 	d.SetId(createdKey.TokenID)
 	// Set the write-only key value so it's available during this apply
 	// but will not be persisted to state.
@@ -397,28 +415,15 @@ func allowedRoutesNotConfigured(d *schema.ResourceData) bool {
 	return !diags.HasError() && raw.IsNull()
 }
 
-// The proxy derives allowed_routes from the key_type preset and overwrites
-// whatever the request declared, but only on create: /key/update stores an
-// explicit allowed_routes verbatim without reapplying the preset. Reject the
-// combination for plans that create a key (fresh, or a replacement that
-// changes key_type), where it can never be honored: the key would come back
-// with the preset routes instead of the declared list. Existing typed keys
-// may keep managing their routes, and a replacement forced by another
-// ForceNew attribute converges on the next apply, which re-sends the declared
-// routes. key_type "default" presets nothing and is never rejected.
-func rejectRoutesWithPresetKeyType(ctx context.Context, d *schema.ResourceDiff, m interface{}) error {
-	keyType := d.Get("key_type").(string)
-	if keyType == "" || keyType == "default" {
-		return nil
+// keyTypePresetsRoutes reports whether the proxy derives allowed_routes from
+// this key_type at create time, overwriting whatever the request declared.
+// "default" (and an unset type) preset nothing.
+func keyTypePresetsRoutes(keyType string) bool {
+	switch keyType {
+	case "llm_api", "management", "read_only":
+		return true
 	}
-	raw, diags := d.GetRawConfigAt(cty.GetAttrPath("allowed_routes"))
-	if diags.HasError() || raw.IsNull() {
-		return nil
-	}
-	if d.Id() != "" && !d.HasChange("key_type") {
-		return nil
-	}
-	return fmt.Errorf("allowed_routes cannot be set on a new key with key_type %q: the proxy derives the routes from the key type and would overwrite the declared list; use key_type = \"default\", or create the key first and add allowed_routes afterwards", keyType)
+	return false
 }
 
 // Reads copy the server's routes into state so drift on them stays visible,
