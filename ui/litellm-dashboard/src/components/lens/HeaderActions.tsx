@@ -3,7 +3,7 @@
 import { useContext, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-import { LensPreviewContext } from "../LensPreviewButton";
+import { LensPreviewContext } from "./LensPreviewButton";
 
 export function HeaderActions({ children }: { children: ReactNode }) {
   const preview = useContext(LensPreviewContext);

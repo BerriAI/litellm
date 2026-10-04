@@ -1,9 +1,8 @@
 "use client";
 
 import { useId, useState } from "react";
-import { Aperture } from "lucide-react";
+import { Aperture, Info } from "lucide-react";
 import AgentTracesPage from "@/components/view_logs/TraceView/AgentTracesPage";
-import { DemoNotice } from "@/components/shared/DemoNotice";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { LensServicesProvider } from "./LensServicesProvider";
@@ -33,6 +32,12 @@ function DemoToggle({ demo, onChange }: { demo: boolean; onChange: (demo: boolea
   const id = useId();
   return (
     <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      {demo && (
+        <p role="status" className="flex items-center gap-1.5 font-medium text-info">
+          <Info aria-hidden="true" className="size-3.5 shrink-0" />
+          You’re viewing demo data
+        </p>
+      )}
       <label htmlFor={id}>Demo data</label>
       <Switch id={id} size="sm" checked={demo} onCheckedChange={onChange} />
     </div>
@@ -49,7 +54,6 @@ function LensContent({ accessToken, userRole, readOnly }: WorkspaceProps) {
   });
   return (
     <main className="flex h-full w-full min-w-0 flex-1 flex-col gap-2 px-3 pt-2 pb-3">
-      {demo && <DemoNotice onExit={() => setDemo(false)} />}
       <Tabs value={activeTab} onValueChange={(value) => setTab(value as LensTab)} className="min-h-0 flex-1 gap-2">
         <div className="flex min-h-8 flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">

@@ -53,7 +53,7 @@ describe("Lens interactive demo", () => {
     expect(await screen.findByRole("row", { name: /Support quality/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: "New investigation" })).not.toBeInTheDocument();
     expect(network).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Exit demo" }));
+    await user.click(screen.getByRole("switch", { name: "Demo data" }));
     expect(await screen.findByText(/Investigations require proxy administrator access/)).toBeVisible();
     expect(screen.queryByText("You’re viewing demo data")).not.toBeInTheDocument();
     expect(screen.queryByText("Can I return my headphones?")).not.toBeInTheDocument();
@@ -138,7 +138,7 @@ describe("Lens interactive demo", () => {
     expect(network).not.toHaveBeenCalled();
     await expectUrl(onUrlUpdate, (url) => expect(url.get("demo")).toBe("true"));
     await expectUrl(onUrlUpdate, (url) => expect(url.has("span")).toBe(false));
-    await user.click(screen.getByRole("button", { name: "Exit demo" }));
+    await user.click(screen.getByRole("switch", { name: "Demo data" }));
     expect(await screen.findByRole("heading", { name: "Find what needs attention" })).toBeVisible();
   });
 

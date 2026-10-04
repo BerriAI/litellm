@@ -3,6 +3,7 @@
 import moment from "moment";
 import { useMemo, useState } from "react";
 
+import { HeaderActions } from "@/components/lens/HeaderActions";
 import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
@@ -186,6 +187,14 @@ export function AgentTracesSection({
     <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
       {checkHistory && <TraceHistoryError history={history} />}
       <TracesReceived received={setup.received} />
+      {live && isActive && (
+        <HeaderActions>
+          <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
+            <ActiveDot />
+            Set up tracing
+          </Button>
+        </HeaderActions>
+      )}
       <RunDrawer
         trace={openTrace}
         runs={runs}
@@ -204,12 +213,6 @@ export function AgentTracesSection({
         onAgentChange={setAgent}
         onStatusChange={setStatus}
       >
-        {live && (
-          <Button variant="outline" size="sm" onClick={() => setShowSetup(true)} className="shrink-0 gap-1.5">
-            <ActiveDot />
-            Set up tracing
-          </Button>
-        )}
         {timeControls && (
           <TimeRangeControls
             range={zoom ?? range}

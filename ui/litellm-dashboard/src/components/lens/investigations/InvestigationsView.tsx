@@ -24,7 +24,7 @@ import { InvestigationSetupDialog } from "../setup/InvestigationSetupDialog";
 import { WorkerDialog } from "../setup/worker/WorkerDialog";
 import { useAnalysisKeyInfo } from "../setup/worker/AnalysisKeyDetails";
 import { InvestigationList } from "./InvestigationList";
-import { HeaderActions } from "./HeaderActions";
+import { HeaderActions } from "../HeaderActions";
 import { RunNowDialog } from "./detail/RunNowDialog";
 import { FindingsInbox } from "./FindingsInbox";
 import { findingAgents, inboxRows, sampledExecutions, type InboxRow } from "../model/inbox";
