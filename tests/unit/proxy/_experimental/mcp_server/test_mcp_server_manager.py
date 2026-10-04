@@ -16990,3 +16990,44 @@ async def test_upstream_preparation_honors_case_sensitive_extra_command(monkeypa
     client: Final = await MCPServerManager()._create_mcp_client(server)
     assert client.stdio_config is not None
     assert client.stdio_config["command"] == "/opt/tools/CustomRunner"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("overlap", [False, True])
+async def test_catalog_cached_revision_retains_newly_discovered_tool_routes(monkeypatch, overlap):
+    from mcp.types import Tool
+
+    read_rows = AsyncMock(return_value=[])
+    _catalog_database(monkeypatch, read_rows, AsyncMock(return_value=_revision_row(7)))
+    manager = MCPServerManager()
+    first = MCPServer(server_id="first", name="first", transport=MCPTransport.http)
+    second = MCPServer(server_id="second", name="second", transport=MCPTransport.http)
+    manager.config_mcp_servers = {server.server_id: server for server in (first, second)}
+    manager.published_tool_routes = {"search": "first"}
+    ready = asyncio.Event()
+    release = asyncio.Event()
+
+    async def read_catalog():
+        async with manager.catalog.operation():
+            assert manager._get_mcp_server_from_tool_name("search").server_id == "first"
+            ready.set()
+            await release.wait()
+
+    reader = asyncio.create_task(read_catalog()) if overlap else None
+    try:
+        if reader is not None:
+            await asyncio.wait_for(ready.wait(), 2)
+        async with manager.catalog.operation():
+            manager._create_prefixed_tools([Tool(name="search", input_schema={})], second)
+        assert manager.published_tool_routes["search"] == "second"
+        release.set()
+        if reader is not None:
+            await asyncio.wait_for(reader, 2)
+        async with manager.catalog.operation():
+            assert manager._get_mcp_server_from_tool_name("search").server_id == "second"
+        assert manager.published_tool_routes["search"] == "second"
+        read_rows.assert_awaited_once()
+    finally:
+        if reader is not None:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)

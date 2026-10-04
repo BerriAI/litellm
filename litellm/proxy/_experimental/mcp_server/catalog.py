@@ -167,10 +167,11 @@ class TargetCatalog:
         from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 
         shared: Final = await self._fresh_snapshot()
+        initial_routing: Final = self._unchanged_routing(shared.servers, self.manager.published_tool_routes)
         snapshot: Final = replace(
             shared,
             servers=MappingProxyType({key: value.model_copy(deep=True) for key, value in shared.servers.items()}),
-            routing=dict(shared.routing),
+            routing=dict(initial_routing),
         )
         closed: Final = asyncio.Event()
         token: Final = self._operation.set((snapshot, closed))
@@ -180,11 +181,12 @@ class TargetCatalog:
         finally:
             closed.set()
             self._operation.reset(token)
-            self._retain_discovered_routing(snapshot)
+            self._retain_discovered_routing(snapshot, initial_routing)
 
-    def _retain_discovered_routing(self, snapshot: CatalogSnapshot) -> None:
+    def _retain_discovered_routing(self, snapshot: CatalogSnapshot, initial_routing: Mapping[str, str]) -> None:
         self.manager.published_tool_routes = self.manager.published_tool_routes | self._unchanged_routing(
-            snapshot.servers, snapshot.routing
+            snapshot.servers,
+            {name: owner for name, owner in snapshot.routing.items() if initial_routing.get(name) != owner},
         )
 
     def _unchanged_routing(

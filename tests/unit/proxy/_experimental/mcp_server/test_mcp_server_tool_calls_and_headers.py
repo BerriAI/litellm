@@ -7735,8 +7735,8 @@ async def test_execute_mcp_tool_rest_server_id_injects_requested_server_credenti
         ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "get_registry",
-            return_value={
+            "registry",
+            {
                 requested_server.server_id: requested_server,
                 collision_server.server_id: collision_server,
             },
