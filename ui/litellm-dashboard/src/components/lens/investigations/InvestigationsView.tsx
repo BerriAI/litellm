@@ -1,5 +1,10 @@
 "use client";
-import { InvestigationMissing, InvestigationsLoading, InvestigationError } from "./InvestigationStatus";
+import {
+  InvestigationMissing,
+  InvestigationsLoadFailed,
+  InvestigationsLoading,
+  InvestigationError,
+} from "./InvestigationStatus";
 
 import { InvestigationNavigation } from "./InvestigationNavigation";
 import { useInvestigationResults } from "./useInvestigationResults";
@@ -175,7 +180,11 @@ export function InvestigationsView({
           setEditing={setEditing}
         />
       )}
-      {(error || query.error) && <InvestigationError error={error} queryError={query.error} refresh={refresh} />}
+      {query.error && !query.data ? (
+        <InvestigationsLoadFailed queryError={query.error} refresh={refresh} />
+      ) : (
+        (error || query.error) && <InvestigationError message={error || query.error?.message || ""} refresh={refresh} />
+      )}
       {query.isLoading && <InvestigationsLoading />}
       {loaded && showEmpty && (
         <InvestigationsWelcome

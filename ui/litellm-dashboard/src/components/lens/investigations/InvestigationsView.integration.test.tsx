@@ -482,6 +482,24 @@ it("allows retrying a failed trace readiness check without treating it as an emp
   expect(await screen.findByRole("link", { name: "Set up traces" })).toBeVisible();
 });
 
+it("shows a centered failure with a retry when investigations cannot load, then recovers", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  const list = vi
+    .fn()
+    .mockRejectedValueOnce(new ApiError("Proxy timed out", 504, {}))
+    .mockResolvedValue({ lenses: [], workers: [], tracing_enabled: true });
+  vi.mocked(apiClient.get).mockImplementation(async (path) => (path === "/lens" ? list() : { data: [] }));
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView accessToken="test" />);
+  const alert = await screen.findByRole("alert");
+  expect(alert).toHaveTextContent("Couldn't load investigations");
+  expect(alert).toHaveTextContent("Proxy timed out");
+  await user.click(within(alert).getByRole("button", { name: "Try again" }));
+  expect(await screen.findByRole("heading", { name: "Find what needs attention" })).toBeVisible();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 it("keeps saved investigations accessible when tracing is disabled", async () => {
   testQueryClient.clear();
   vi.mocked(apiClient.get).mockImplementation(async (path) => {
