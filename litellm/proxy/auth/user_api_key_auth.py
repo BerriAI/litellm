@@ -3874,7 +3874,7 @@ async def _enforce_end_user_model_max_budget_checks(
     if (
         end_user_mmb is None
         or not isinstance(end_user_mmb, dict)
-        or len(end_user_mmb) == 0
+        or not end_user_mmb
         or valid_token.end_user_id is None
     ):
         return
@@ -3892,7 +3892,7 @@ async def _enforce_end_user_model_max_budget_checks(
     for model_name in current_models:
         await model_max_budget_limiter.is_end_user_within_model_budget(
             end_user_id=valid_token.end_user_id,
-            end_user_model_max_budget=end_user_mmb,
+            end_user_model_max_budget=cast(Mapping[str, object], end_user_mmb),
             model=model_name,
         )
 
