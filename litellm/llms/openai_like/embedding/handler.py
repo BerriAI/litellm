@@ -95,6 +95,12 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         custom_endpoint: bool | None = None,
         headers: dict | None = None,
     ) -> EmbeddingResponse:
+        extra_headers = optional_params.pop("extra_headers", None)
+        if extra_headers and isinstance(extra_headers, dict):
+            if headers is None:
+                headers = {}
+            headers = {**headers, **extra_headers}
+
         api_base, headers = self._validate_environment(
             api_base=api_base,
             api_key=api_key,
