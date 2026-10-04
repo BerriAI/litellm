@@ -8,7 +8,14 @@ import { Button } from "@/components/ui/button";
 import { AgentTracesTable } from "./AgentTracesTable";
 import { RunDrawer } from "./RunDrawer";
 import { ALL_AGENTS, RunsToolbar, type RunStatusFilter } from "./RunsToolbar";
-import { type TraceRef, traceKey, traceRefOf, useOpenTraceRouting, useRunFilterRouting } from "./traceRouting";
+import {
+  type TraceRef,
+  traceKey,
+  traceRefOf,
+  useOpenTraceRouting,
+  useRunFilterRouting,
+  useZoomRouting,
+} from "./traceRouting";
 import type { TraceSummary } from "./traceTypes";
 import { previewText, traceAgentNames } from "./traceUtils";
 import { TimeRangeControls } from "./TimeRangeControls";
@@ -101,10 +108,10 @@ export function AgentTracesSection({
   canMintTracingKey = false,
 }: AgentTracesSectionProps) {
   const live = useTracesLive();
-  const { trace: openTrace, openTrace: openRun, selection } = useOpenTraceRouting();
+  const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
   const { query, agent, status, setQuery, setAgent, setStatus } = useRunFilterRouting();
   const [showSetup, setShowSetup] = useState(false);
-  const [zoom, setZoom] = useState<TimeWindow | null>(null);
+  const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
   const traceQuery = { accessToken, startTime, endTime, isCustomDate, isLiveTail, enabled: isActive };
   const traces = useAgentTraces(traceQuery);
@@ -179,7 +186,15 @@ export function AgentTracesSection({
     <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden border-y border-border bg-card">
       {checkHistory && <TraceHistoryError history={history} />}
       <TracesReceived received={setup.received} />
-      <RunDrawer trace={openTrace} runs={runs} accessToken={accessToken} selection={selection} onSelect={openRun} />
+      <RunDrawer
+        trace={openTrace}
+        runs={runs}
+        accessToken={accessToken}
+        selection={selection}
+        onSelect={openRun}
+        fullScreen={fullScreen}
+        onFullScreenChange={setFullScreen}
+      />
       <RunsToolbar
         query={query}
         agent={agent}

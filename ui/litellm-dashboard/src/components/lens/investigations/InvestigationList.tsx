@@ -1,7 +1,6 @@
 "use client";
 
 import { Pencil, Play, Search } from "lucide-react";
-import { useState } from "react";
 
 import { useNow } from "@/hooks/useNow";
 import { Input } from "@/components/ui/input";
@@ -13,6 +12,7 @@ import { scheduleLabel } from "../model/inbox";
 import { lensStatus } from "../model/status";
 import { scopeLabel } from "../model/format";
 import { type Lens } from "../model/types";
+import { useListSearchRoute } from "../route";
 
 const TH = "px-3 font-medium";
 const TH_NUM = "px-3 text-right font-medium";
@@ -30,7 +30,7 @@ export function InvestigationList({
   onEdit: (id: string) => void;
   onRunNow: (id: string) => void;
 }) {
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useListSearchRoute();
   const now = useNow(15000);
   const shown = lenses.filter((lens) =>
     `${lens.settings.name} ${scopeLabel(lens.settings)}`.toLowerCase().includes(search.toLowerCase()),

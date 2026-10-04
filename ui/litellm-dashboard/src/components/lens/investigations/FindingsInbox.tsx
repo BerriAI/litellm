@@ -1,7 +1,6 @@
 "use client";
 
 import { ChevronRight } from "lucide-react";
-import { useState } from "react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useNow } from "@/hooks/useNow";
@@ -11,6 +10,7 @@ import { cn } from "@/lib/cva.config";
 
 import { ALL_AGENTS, filterInbox, inboxAgents, inboxRows, type InboxRow, type Priority } from "../model/inbox";
 import type { Lens } from "../model/types";
+import { useInboxRoute } from "../route";
 
 const PRIORITY_DOT = { high: "bg-[#e5484d]", medium: "bg-amber-500", low: "bg-muted-foreground/50" } as const;
 const PRIORITY_ITEMS: { value: Priority | "all"; label: string }[] = [
@@ -53,8 +53,7 @@ function FilterSelect<T extends string>({
 }
 
 export function FindingsInbox({ lenses, onOpen }: { lenses: readonly Lens[]; onOpen: (row: InboxRow) => void }) {
-  const [agent, setAgent] = useState(ALL_AGENTS);
-  const [priority, setPriority] = useState<Priority | "all">("all");
+  const { agent, setAgent, priority, setPriority } = useInboxRoute();
   const now = useNow(30000);
   const all = inboxRows(lenses);
   const rows = filterInbox(all, { agent, priority });

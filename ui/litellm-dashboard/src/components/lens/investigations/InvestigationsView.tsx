@@ -13,9 +13,9 @@ import { ReadinessBanner } from "./ReadinessBanner";
 import { RequestEvidenceSheet } from "./RequestEvidenceSheet";
 import { useNow } from "@/hooks/useNow";
 
-import { useLensRoute } from "../route";
+import { useDialogRoute, useInboxRoute, useLensRoute } from "../route";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { FindingSheet } from "./FindingSheet";
@@ -27,7 +27,7 @@ import { InvestigationList } from "./InvestigationList";
 import { HeaderActions } from "./HeaderActions";
 import { RunNowDialog } from "./detail/RunNowDialog";
 import { FindingsInbox } from "./FindingsInbox";
-import { findingAgents, sampledExecutions, type InboxRow } from "../model/inbox";
+import { findingAgents, inboxRows, sampledExecutions, type InboxRow } from "../model/inbox";
 import { WatchAllBanner } from "./WatchAllBanner";
 import { MonitoringDialog } from "../setup/MonitoringDialog";
 import { InvestigationsWelcome } from "./InvestigationsWelcome";
@@ -49,8 +49,9 @@ export function InvestigationsView({
   const client = useQueryClient();
   const updateLens = useLensUpdate(accessToken);
   const saveLens = useSaveLens(accessToken);
-  const [workerSetup, setWorkerSetup] = useState(false);
-  const [monitoring, setMonitoring] = useState(false);
+  const { dialog, target: dialogTarget, openDialog, closeDialog } = useDialogRoute();
+  const { issueKey, setIssueKey } = useInboxRoute();
+  const workerSetup = dialog === "workers";
   const now = useNow(2000);
   const query = useQuery(lensQueries.list(api, workerSetup));
   const models = useQuery(lensQueries.models(api));
@@ -58,10 +59,6 @@ export function InvestigationsView({
   const [agentsAsOf] = useState(() => new Date().toISOString());
   const agents = useQuery(lensQueries.agents(api, agentsAsOf, "traces"));
   const { lensId: selected, setLensId: setSelected } = useLensRoute();
-  const [editing, setEditing] = useState<"new" | "edit" | "duplicate" | null>(null);
-  const [peek, setPeek] = useState(false);
-  const [peeked, setPeeked] = useState<InboxRow | null>(null);
-  const [runNowId, setRunNowId] = useState<string | null>(null);
   const [skipped, setSkipped] = useState<readonly { id: string; name: string; reason: string }[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -72,7 +69,10 @@ export function InvestigationsView({
   const showReadiness = loaded && !showEmpty && !readOnly;
   const missingSelection = !!selected && loaded;
   const lens = lenses.find((e) => e.id === selected);
-  const results = useInvestigationResults(accessToken, lens);
+  const targetLens = dialogTarget ? lenses.find((e) => e.id === dialogTarget) : lens;
+  const editing = dialog === "new" || dialog === "edit" || dialog === "duplicate" ? dialog : null;
+  const peeked = issueKey ? inboxRows(lenses).find((row) => row.key === issueKey) : undefined;
+  const results = useInvestigationResults(accessToken, peeked?.sources[0].lens ?? lens);
   const {
     finding,
     sampledRuns,
@@ -91,14 +91,9 @@ export function InvestigationsView({
     setSelected(id);
     resetResults();
   };
-  useEffect(() => {
-    const restoreLocation = () => {
-      setEditing(null);
-      resetResults();
-    };
-    window.addEventListener("popstate", restoreLocation);
-    return () => window.removeEventListener("popstate", restoreLocation);
-  }, [resetResults]);
+  const setEditing = (mode: "new" | "edit" | "duplicate") => openDialog(mode);
+  const setWorkerSetup = (open: boolean) => (open ? openDialog("workers") : closeDialog());
+  const setMonitoring = (open: boolean) => (open ? openDialog("monitoring") : closeDialog());
   const connected = query.data?.workers?.some((w) => workerConnected(w, now)) ?? false;
   const activeWorkers = query.data?.workers.filter((worker) => !worker.revoked) ?? [];
   const defaultKeyId = activeWorkers.length === 1 ? activeWorkers[0].analysis_key_id : undefined;
@@ -113,9 +108,9 @@ export function InvestigationsView({
   );
   const setupSettings = () => {
     if (editing === "new") return undefined;
-    if (editing === "duplicate" && lens)
-      return { ...lens.settings, name: `${lens.settings.name} copy`, enabled: false };
-    return lens?.settings;
+    if (editing === "duplicate" && targetLens)
+      return { ...targetLens.settings, name: `${targetLens.settings.name} copy`, enabled: false };
+    return targetLens?.settings;
   };
   const refresh = () => {
     void client.invalidateQueries({ queryKey: lensKeys.list(api.scope) });
@@ -136,32 +131,18 @@ export function InvestigationsView({
     }
   };
   const save = async (settings: Settings) => {
-    if (editing === "edit" && (!lens || lens.id !== selected))
-      throw new Error("Reopen the investigation to edit its settings");
+    if (editing === "edit" && !targetLens) throw new Error("Reopen the investigation to edit its settings");
     if (editing !== "edit" && !ready)
       throw new Error("Wait for recorded activity and a connected worker before starting an investigation");
-    const saved = await saveLens.mutateAsync({ id: editing === "edit" ? lens?.id : undefined, settings });
-    selectLens(peek ? null : saved.id);
-    setPeek(false);
-    setEditing(null);
+    const saved = await saveLens.mutateAsync({ id: editing === "edit" ? targetLens?.id : undefined, settings });
+    closeDialog();
+    if (!dialogTarget) selectLens(saved.id);
     refresh();
   };
-  const editFromTable = (id: string) => {
-    setPeek(true);
-    selectLens(id);
-    setEditing("edit");
-  };
-  const openFinding = (row: InboxRow) => {
-    setPeek(true);
-    setPeeked(row);
-    selectLens(row.sources[0].lens.id);
-  };
+  const openFinding = (row: InboxRow) => setIssueKey(row.key);
   const closeFinding = () => {
     setFindingId(null);
-    setPeeked(null);
-    if (!peek) return;
-    setPeek(false);
-    selectLens(null);
+    setIssueKey(null);
   };
   const changeFinding = async (status: Finding["status"], reason: string) => {
     if (peeked) {
@@ -179,10 +160,10 @@ export function InvestigationsView({
   const detailAgents = lens && finding ? findingAgents(lens, finding) : [];
   const sheetAgents = peeked ? peeked.agents : detailAgents;
 
-  const onDetail = !!selected && !peek;
+  const onDetail = !!selected;
   const showDetailNav = onDetail && !showEmpty;
   const showTables = !onDetail && lenses.length > 0;
-  const showMissing = missingSelection && !lens && !peek;
+  const showMissing = missingSelection && !lens;
   return (
     <section aria-label="Investigations" className="flex w-full min-w-0 flex-1 flex-col gap-3">
       {showDetailNav && (
@@ -253,14 +234,14 @@ export function InvestigationsView({
               lenses={lenses}
               connected={connected}
               readOnly={readOnly}
-              onEdit={editFromTable}
-              onRunNow={(id) => setRunNowId(id)}
+              onEdit={(id) => openDialog("edit", id)}
+              onRunNow={(id) => openDialog("run_now", id)}
             />
           )}
         </div>
       )}
       {showMissing && <InvestigationMissing selectLens={selectLens} />}
-      {lens && !peek && (
+      {lens && (
         <InvestigationDetail
           lens={lens}
           readOnly={readOnly}
@@ -268,10 +249,10 @@ export function InvestigationsView({
           busy={busy}
           setEditing={setEditing}
           setMonitoring={setMonitoring}
+          onRunNow={() => openDialog("run_now")}
           update={update}
           connected={connected}
           results={results}
-          agents={Array.isArray(agents.data) ? agents.data : []}
         />
       )}
       {editing && (
@@ -286,25 +267,19 @@ export function InvestigationsView({
           modelsLoading={models.isLoading}
           modelsError={models.error?.message}
           accessToken={accessToken}
-          onClose={() => {
-            setEditing(null);
-            if (peek) {
-              setPeek(false);
-              selectLens(null);
-            }
-          }}
+          onClose={closeDialog}
           onSave={save}
         />
       )}
-      {runNowId && (
+      {dialog === "run_now" && targetLens && (
         <RunNowDialog
-          lens={lenses.find((l) => l.id === runNowId) ?? lenses[0]}
+          lens={targetLens}
           agents={Array.isArray(agents.data) ? agents.data : []}
           busy={busy}
-          onClose={() => setRunNowId(null)}
+          onClose={closeDialog}
           onRun={async (request) => {
-            await update((api) => api.startRun(runNowId, request));
-            setRunNowId(null);
+            await update((api) => api.startRun(targetLens.id, request));
+            closeDialog();
           }}
         />
       )}
@@ -312,23 +287,16 @@ export function InvestigationsView({
         <WorkerDialog
           accessToken={accessToken}
           workers={query.data?.workers ?? []}
-          onClose={() => setWorkerSetup(false)}
+          onClose={closeDialog}
           onChanged={refresh}
-          onReady={
-            ready && showEmpty
-              ? () => {
-                  setWorkerSetup(false);
-                  setEditing("new");
-                }
-              : undefined
-          }
+          onReady={ready && showEmpty ? () => openDialog("new") : undefined}
         />
       )}
-      {monitoring && lens && (
+      {dialog === "monitoring" && lens && (
         <MonitoringDialog
           settings={lens.settings}
           ready={ready}
-          onClose={() => setMonitoring(false)}
+          onClose={closeDialog}
           onSave={async (settings) => {
             await saveLens.mutateAsync({ id: lens.id, settings });
             refresh();

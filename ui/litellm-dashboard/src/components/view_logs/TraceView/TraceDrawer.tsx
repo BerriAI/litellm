@@ -196,13 +196,11 @@ interface RunBodyProps {
 
 function RunBody({ trace, accessToken, selection, embedded }: RunBodyProps) {
   const spanKeys = embedded ? EMBEDDED_SPAN_KEYS : SPAN_KEYS;
-  const { view, selectSpan, setView } = selection;
+  const { view, selectSpan, setView, stepQuery: query, setStepQuery: setQuery, errorsOnly, setErrorsOnly } = selection;
   const [initial] = useState(() => initialRunSelection(trace, selection.spanId ?? undefined));
   const [state, setState] = useState<SpanTreeState>(initial.state);
   const selectedId = selection.spanId ?? initial.selectedId;
   const [detailOpen, setDetailOpen] = useState(true);
-  const [query, setQuery] = useState("");
-  const [errorsOnly, setErrorsOnly] = useState(false);
   const filtering = Boolean(query.trim()) || errorsOnly;
 
   const treeRows = useMemo(() => buildTreeRows(trace.spans, state), [trace, state]);

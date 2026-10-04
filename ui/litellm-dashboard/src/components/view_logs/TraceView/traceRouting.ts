@@ -1,8 +1,17 @@
-import { parseAsNumberLiteral, parseAsString, parseAsStringLiteral, useQueryState, useQueryStates } from "nuqs";
+import {
+  parseAsBoolean,
+  parseAsInteger,
+  parseAsNumberLiteral,
+  parseAsString,
+  parseAsStringLiteral,
+  useQueryState,
+  useQueryStates,
+} from "nuqs";
 import { useCallback, useState } from "react";
 
 import { ALL_AGENTS, type RunStatusFilter } from "./RunsToolbar";
 import { RANGE_PRESETS } from "./TimeRangeControls";
+import type { TimeWindow } from "./TracesTimeline";
 import type { TraceSummary } from "./traceTypes";
 
 export const TRACE_VIEWS = ["steps", "conversation"] as const;
@@ -30,9 +39,13 @@ export interface RunSelection {
   spanId: string | null;
   view: TraceView;
   spanTab: SpanTab;
+  stepQuery: string;
+  errorsOnly: boolean;
   selectSpan: (id: string) => void;
   setView: (view: TraceView) => void;
   setSpanTab: (tab: SpanTab) => void;
+  setStepQuery: (query: string) => void;
+  setErrorsOnly: (errorsOnly: boolean) => void;
 }
 
 export const OPEN_TRACE_PARSERS = {
@@ -41,6 +54,9 @@ export const OPEN_TRACE_PARSERS = {
   span: parseAsString,
   view: parseAsStringLiteral(TRACE_VIEWS).withDefault("steps"),
   span_tab: parseAsStringLiteral(SPAN_TABS).withDefault("content"),
+  steps_q: parseAsString.withDefault(""),
+  errors: parseAsBoolean.withDefault(false),
+  fullscreen: parseAsBoolean.withDefault(false),
 };
 
 export const RUN_FILTER_PARSERS = {
@@ -48,22 +64,31 @@ export const RUN_FILTER_PARSERS = {
   agent: parseAsString.withDefault(ALL_AGENTS),
   status: parseAsStringLiteral(STATUS_FILTERS).withDefault("all"),
   hours: parseAsNumberLiteral(RANGE_HOURS).withDefault(DEFAULT_RANGE_HOURS),
+  from: parseAsInteger,
+  to: parseAsInteger,
 };
 
 export interface OpenTraceRouting {
   trace: TraceRef | null;
   openTrace: (ref: TraceRef | null) => void;
   selection: RunSelection;
+  fullScreen: boolean;
+  setFullScreen: (fullScreen: boolean) => void;
 }
 
-const CLOSED_RUN = { trace: null, trace_ref: null, span: null, view: null, span_tab: null };
+const FRESH_RUN = { span: null, view: null, span_tab: null, steps_q: null, errors: null };
 
 /** The open run is a history entry; moving within it (step, view, section) replaces the current one. */
 export function useOpenTraceRouting(): OpenTraceRouting {
   const [params, setParams] = useQueryStates(OPEN_TRACE_PARSERS, { history: "push" });
   const openTrace = useCallback(
     (ref: TraceRef | null) => {
-      void setParams({ ...CLOSED_RUN, trace: ref?.traceId ?? null, trace_ref: ref?.traceRef || null });
+      void setParams({
+        ...FRESH_RUN,
+        trace: ref?.traceId ?? null,
+        trace_ref: ref?.traceRef || null,
+        ...(ref === null && { fullscreen: null }),
+      });
     },
     [setParams],
   );
@@ -76,10 +101,35 @@ export function useOpenTraceRouting(): OpenTraceRouting {
     (span_tab: SpanTab) => void setParams({ span_tab }, { history: "replace" }),
     [setParams],
   );
+  const setStepQuery = useCallback(
+    (steps_q: string) => void setParams({ steps_q }, { history: "replace" }),
+    [setParams],
+  );
+  const setErrorsOnly = useCallback(
+    (errors: boolean) => void setParams({ errors }, { history: "replace" }),
+    [setParams],
+  );
+  const setFullScreen = useCallback(
+    (fullscreen: boolean) => void setParams({ fullscreen }, { history: "replace" }),
+    [setParams],
+  );
   return {
     trace: params.trace === null ? null : { traceId: params.trace, traceRef: params.trace_ref ?? undefined },
     openTrace,
-    selection: { spanId: params.span, view: params.view, spanTab: params.span_tab, selectSpan, setView, setSpanTab },
+    selection: {
+      spanId: params.span,
+      view: params.view,
+      spanTab: params.span_tab,
+      stepQuery: params.steps_q,
+      errorsOnly: params.errors,
+      selectSpan,
+      setView,
+      setSpanTab,
+      setStepQuery,
+      setErrorsOnly,
+    },
+    fullScreen: params.fullscreen,
+    setFullScreen,
   };
 }
 
@@ -88,11 +138,13 @@ export function useLocalRunSelection(initialSpanId: string | null): RunSelection
   const [spanId, setSpanId] = useState(initialSpanId);
   const [view, setView] = useState<TraceView>("steps");
   const [spanTab, setSpanTab] = useState<SpanTab>("content");
+  const [stepQuery, setStepQuery] = useState("");
+  const [errorsOnly, setErrorsOnly] = useState(false);
   const selectSpan = useCallback((id: string) => {
     setSpanId(id);
     setSpanTab("content");
   }, []);
-  return { spanId, view, spanTab, selectSpan, setView, setSpanTab };
+  return { spanId, view, spanTab, stepQuery, errorsOnly, selectSpan, setView, setSpanTab, setStepQuery, setErrorsOnly };
 }
 
 export interface RunFilterRouting {
@@ -120,4 +172,14 @@ export function useRangeHoursRouting(): [number, (hours: number) => void] {
   const [hours, setHours] = useQueryState("hours", RUN_FILTER_PARSERS.hours);
   const setRangeHours = useCallback((next: number) => void (isRangeHours(next) && setHours(next)), [setHours]);
   return [hours, setRangeHours];
+}
+
+/** A timeline brush narrows the list to a window inside the range; it is dropped whenever the range changes. */
+export function useZoomRouting(): [TimeWindow | null, (zoom: TimeWindow | null) => void] {
+  const [{ from, to }, setParams] = useQueryStates({ from: RUN_FILTER_PARSERS.from, to: RUN_FILTER_PARSERS.to });
+  const setZoom = useCallback(
+    (zoom: TimeWindow | null) => void setParams({ from: zoom?.startMs ?? null, to: zoom?.endMs ?? null }),
+    [setParams],
+  );
+  return [from !== null && to !== null && from < to ? { startMs: from, endMs: to } : null, setZoom];
 }

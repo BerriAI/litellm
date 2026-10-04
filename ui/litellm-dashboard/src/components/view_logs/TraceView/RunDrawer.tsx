@@ -145,13 +145,21 @@ interface RunDrawerProps {
   accessToken: string;
   selection: RunSelection;
   onSelect: (trace: TraceRef | null) => void;
+  fullScreen: boolean;
+  onFullScreenChange: (fullScreen: boolean) => void;
 }
 
 /** Right-side drawer over the runs list: resizable, keeps the list clickable, swaps runs in place. */
-export function RunDrawer({ trace, runs, accessToken, selection, onSelect }: RunDrawerProps) {
+export function RunDrawer({
+  trace,
+  runs,
+  accessToken,
+  selection,
+  onSelect,
+  fullScreen,
+  onFullScreenChange,
+}: RunDrawerProps) {
   const [width, setWidth] = useDrawerWidth();
-  const [fullScreen, setFullScreen] = useState(false);
-  if (trace === null && fullScreen) setFullScreen(false);
   const [lastShown, setLastShown] = useState<TraceRef | null>(trace);
   const [exitedKey, setExitedKey] = useState<string | null>(null);
   if (trace !== null && trace !== lastShown) setLastShown(trace);
@@ -220,7 +228,7 @@ export function RunDrawer({ trace, runs, accessToken, selection, onSelect }: Run
           </span>
         )}
         <div className="ml-auto flex items-center gap-1">
-          <FullScreenButton fullScreen={fullScreen} onToggle={() => setFullScreen((current) => !current)} />
+          <FullScreenButton fullScreen={fullScreen} onToggle={() => onFullScreenChange(!fullScreen)} />
           <HeaderButton label="Close trace (Esc)" onClick={() => onSelect(null)}>
             <X className="size-4" />
           </HeaderButton>
