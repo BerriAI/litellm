@@ -3,11 +3,12 @@
 import moment from "moment";
 import { useMemo, useState } from "react";
 
+import { filterRuns } from "@/components/lens/runSearch/runQuery";
+import { RunsToolbar } from "@/components/lens/runSearch/RunsToolbar";
 import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
 import { RunDrawer } from "./RunDrawer";
-import { ALL_AGENTS, RunsToolbar, type RunStatusFilter } from "./RunsToolbar";
 import {
   type TraceRef,
   traceKey,
@@ -17,30 +18,11 @@ import {
   useZoomRouting,
 } from "./traceRouting";
 import type { TraceSummary } from "./traceTypes";
-import { previewText, traceAgentNames } from "./traceUtils";
 import { TimeRangeControls } from "./TimeRangeControls";
 import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
 import { TracingSetupCard } from "./TracingSetupCard";
 import { useTracesLive } from "./tracesApi";
 import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
-
-/** Client-side search (input text or trace id) plus agent / status filters over the loaded runs. */
-export function filterRuns(
-  runs: TraceSummary[],
-  query: string,
-  agent: string,
-  status: RunStatusFilter,
-): TraceSummary[] {
-  const q = query.trim().toLowerCase();
-  return runs.filter((run) => {
-    const haystack = [run.trace_id, previewText(run.input_preview), run.name].map((s) => s.toLowerCase());
-    const matchesQuery = !q || haystack.some((text) => text.includes(q));
-    const matchesAgent = agent === ALL_AGENTS || traceAgentNames(run).includes(agent);
-    const failed = run.error_count > 0;
-    const matchesStatus = status === "all" || (status === "error" ? failed : !failed);
-    return matchesQuery && matchesAgent && matchesStatus;
-  });
-}
 
 const filterByWindow = (runs: TraceSummary[], range: TimeWindow): TraceSummary[] =>
   runs.filter((run) => {
@@ -108,7 +90,7 @@ export function AgentTracesSection({
 }: AgentTracesSectionProps) {
   const live = useTracesLive();
   const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
-  const { query, agent, status, setQuery, setAgent, setStatus } = useRunFilterRouting();
+  const { query, setQuery } = useRunFilterRouting();
   const [showSetup, setShowSetup] = useState(false);
   const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
@@ -123,17 +105,13 @@ export function AgentTracesSection({
     if (setup.disabledDetail == null) void history.refetch();
   };
 
-  const agents = useMemo(() => Array.from(new Set(traces.traces.flatMap(traceAgentNames))).sort(), [traces.traces]);
   // Relative ranges end "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
   const endMs = isCustomDate ? moment(endTime).valueOf() : moment().endOf("minute").valueOf();
   const range = useMemo(
     () => ({ startMs: traceWindowStartMs(startTime, endTime, isCustomDate, endMs), endMs }),
     [startTime, endTime, isCustomDate, endMs],
   );
-  const filtered = useMemo(
-    () => filterRuns(traces.traces, query, agent, status),
-    [traces.traces, query, agent, status],
-  );
+  const filtered = useMemo(() => filterRuns(traces.traces, query), [traces.traces, query]);
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
 
   const changeRange = (hours: number, apply: (hours: number) => void) => {
@@ -194,15 +172,7 @@ export function AgentTracesSection({
         fullScreen={fullScreen}
         onFullScreenChange={setFullScreen}
       />
-      <RunsToolbar
-        query={query}
-        agent={agent}
-        status={status}
-        agents={agents}
-        onQueryChange={setQuery}
-        onAgentChange={setAgent}
-        onStatusChange={setStatus}
-      >
+      <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces}>
         {timeControls && (
           <TimeRangeControls
             range={zoom ?? range}

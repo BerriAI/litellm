@@ -227,3 +227,24 @@ if (typeof window !== "undefined") {
     disconnect() {}
   };
 }
+
+// jsdom lacks the layout and input APIs ProseMirror editors use. Browsers report the selection as an edit's
+// target range; layout calls only need a value of the right shape, since tests do not assert on positions.
+if (typeof InputEvent !== "undefined" && !("getTargetRanges" in InputEvent.prototype)) {
+  Object.defineProperty(InputEvent.prototype, "getTargetRanges", {
+    configurable: true,
+    value: () => {
+      const selection = document.getSelection();
+      return selection && selection.rangeCount > 0 ? [selection.getRangeAt(0)] : [];
+    },
+  });
+}
+if (typeof Range !== "undefined" && !("getClientRects" in Range.prototype)) {
+  Object.defineProperties(Range.prototype, {
+    getClientRects: { configurable: true, value: () => [] },
+    getBoundingClientRect: { configurable: true, value: () => new DOMRect() },
+  });
+}
+if (typeof document !== "undefined" && !("elementFromPoint" in document)) {
+  Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => null });
+}

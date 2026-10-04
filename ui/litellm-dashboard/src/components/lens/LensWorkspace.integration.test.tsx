@@ -1,7 +1,7 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { LensWorkspace } from "./LensWorkspace";
 import { createLensDemoData } from "./demo/createLensDemo";
 
@@ -39,15 +39,15 @@ describe("Lens interactive demo", () => {
     network.mockClear();
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     expect(screen.getByText("Where is order #1042?")).toBeVisible();
-    fireEvent.change(screen.getByPlaceholderText("Search input or trace ID"), { target: { value: "headphones" } });
+    const search = screen.getByRole("combobox", { name: "Search runs" });
+    await user.type(search, "headphones");
+    await waitFor(() => expect(screen.queryByText("Where is order #1042?")).not.toBeInTheDocument());
     expect(screen.getByText("Can I return my headphones?")).toBeVisible();
-    expect(screen.queryByText("Where is order #1042?")).not.toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: "Search runs" }), { target: { value: "" } });
-    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Filter by agent" }), "support_agent");
-    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Filter by status" }), "Failed");
-    expect(within(screen.getByRole("table", { name: "Agent runs" })).getAllByRole("row")).toHaveLength(4);
-    await expectUrl(onUrlUpdate, (url) => expect(url.get("agent")).toBe("support_agent"));
-    await expectUrl(onUrlUpdate, (url) => expect(url.get("status")).toBe("error"));
+    await user.clear(search);
+    await user.type(search, "agent:support_agent status:error");
+    const table = screen.getByRole("table", { name: "Agent runs" });
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(4));
+    await expectUrl(onUrlUpdate, (url) => expect(url.get("q")).toBe("agent:support_agent status:error"));
     await user.click(screen.getByRole("tab", { name: "Investigations" }));
     expect(await screen.findByRole("row", { name: /Support quality/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: "New investigation" })).not.toBeInTheDocument();
