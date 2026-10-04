@@ -178,7 +178,7 @@ def is_resubmitted_oauth_client(supplied: dict[str, object], existing: dict[str,
         and _decrypted_credential_field(supplied, "client_id") == _decrypted_credential_field(existing, "client_id")
         and all(
             _decrypted_credential_field(supplied, field) == _decrypted_credential_field(existing, field)
-            for field in ("client_secret", "dcr_issuer", "dcr_server_url")
+            for field in ("client_secret", "token_endpoint_auth_method", "dcr_issuer", "dcr_server_url")
             if field in supplied
         )
     )

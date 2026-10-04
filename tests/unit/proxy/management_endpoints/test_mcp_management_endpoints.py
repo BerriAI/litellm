@@ -11300,6 +11300,7 @@ def test_edit_does_not_rebind_resubmitted_saved_client_to_new_issuer(monkeypatch
 
 @pytest.mark.parametrize("replacement", [
     {"client_secret": "replacement-secret"},
+    {"client_secret": "old-secret", "token_endpoint_auth_method": "client_secret_basic"},
     {"client_secret": None},
     {"dcr_issuer": "https://new.example", "dcr_server_url": "https://new.example/mcp"},
 ])

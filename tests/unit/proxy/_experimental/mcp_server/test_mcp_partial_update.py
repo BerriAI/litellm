@@ -1341,6 +1341,7 @@ async def test_issuer_edit_does_not_rebind_resubmitted_saved_client():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("replacement", [
     {"client_secret": "replacement-secret"},
+    {"client_secret": "old-secret", "token_endpoint_auth_method": "client_secret_basic"},
     {"client_secret": None},
     {"dcr_issuer": "https://new.example", "dcr_server_url": "https://new.example/mcp"},
 ])
@@ -1362,4 +1363,5 @@ async def test_issuer_edit_preserves_replacement_with_same_client_id(replacement
     assert credentials["client_id"] == "shared-client"
     assert credentials["dcr_issuer"] == "https://new.example"
     assert credentials["dcr_server_url"] == "https://new.example/mcp"
-    assert credentials.get("client_secret") != "old-secret"
+    assert credentials.get("client_secret") == replacement.get("client_secret")
+    assert credentials.get("token_endpoint_auth_method") == replacement.get("token_endpoint_auth_method")
