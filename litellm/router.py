@@ -4263,7 +4263,7 @@ class Router:
                         )
                     )
             responses: Final = await asyncio.gather(*_tasks)
-            final_responses: Final[list[list[Any]]] = [[] for _ in range(len(messages))]
+            final_responses: Final[list[list[object]]] = [[] for _ in range(len(messages))]
             for response in responses:
                 if isinstance(response, tuple):
                     final_responses[response[1]].append(response[0])

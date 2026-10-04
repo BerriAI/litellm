@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -2896,6 +2896,11 @@ def _persist_return_to_cookie(response: Response, return_to: str | None, request
         )
 
 
+_USERINFO_PAYLOAD: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(
+    dict[str, object] | None, config=ConfigDict(strict=True)
+)
+
+
 class SSOAuthenticationHandler:
     """
     Handler for SSO Authentication across all SSO providers
@@ -4183,7 +4188,7 @@ class SSOAuthenticationHandler:
                 )
                 if resp.status_code == 200:
                     try:
-                        userinfo_raw: Final[dict[str, object] | None] = resp.json()
+                        userinfo_raw: Final = _USERINFO_PAYLOAD.validate_python(resp.json())
                         if not userinfo_raw:
                             # JSON null (None) or empty dict ({}) — no identity claims.
                             # Treat as failure so id_token fallback can be attempted.
