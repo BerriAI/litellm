@@ -57,15 +57,15 @@ export function LensModeSwitch({
   setup?: string;
 }) {
   const connected = useWorkerConnected(workers);
-  const settingsTitle = connected ? "Worker connected" : "Connect worker";
-  const tabs = Object.entries(LENS_TABS).filter(([view]) => view !== "settings" || workers);
+  const workerTitle = connected ? "Worker connected" : "Connect worker";
+  const settingsTitle = workers === null ? LENS_TABS.settings : workerTitle;
   return (
     <div className={frameTab({ session: demo ? "demo" : "live" })}>
       <NotchCorner side="left" demo={demo} />
       <NotchCorner side="right" demo={demo} />
       <TabsPrimitive.List aria-label="Lens" className="relative inline-flex h-9 items-center p-1">
         <TabsPrimitive.Indicator className="absolute top-1 bottom-1 left-(--active-tab-left) w-(--active-tab-width) rounded-full bg-muted transition-[left,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none" />
-        {tabs.map(([view, label]) => {
+        {Object.entries(LENS_TABS).map(([view, label]) => {
           const Icon = MODE_ICONS[view as LensTab];
           const workerDisconnected = view === "settings" && workers !== null && !connected;
           return (

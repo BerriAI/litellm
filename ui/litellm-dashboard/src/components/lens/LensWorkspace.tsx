@@ -86,7 +86,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
   const isAdmin = isProxyAdminRole(userRole);
   const canConfigure = canViewInvestigations && !readOnly;
   const defaultTab = lensId ? "investigations" : "traces";
-  const activeTab = tab === "settings" && !canConfigure ? defaultTab : tab ?? defaultTab;
+  const activeTab = tab ?? defaultTab;
   const intro = useLensIntro({ demo, settingUp });
   const { activity, list } = useLensOverview(
     canViewInvestigations,
@@ -192,21 +192,20 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                 )}
               </LensPreviewContext.Provider>
             </TabsContent>
-            {workers && list && (
-              <TabsContent value="settings" keepMounted className={cn(PANEL, "p-6")}>
-                <LensSettings
-                  list={list}
-                  workerReadyAction={
-                    list.lenses.length === 0 ? (
-                      <Button className="w-full" onClick={startFirstInvestigation}>
-                        New investigation
-                      </Button>
-                    ) : undefined
-                  }
-                  onOpenTraces={() => setTab("traces")}
-                />
-              </TabsContent>
-            )}
+            <TabsContent value="settings" keepMounted className={cn(PANEL, "p-6")}>
+              <LensSettings
+                tracingEnabled={list?.tracing_enabled}
+                workers={workers}
+                workerReadyAction={
+                  list?.lenses.length === 0 ? (
+                    <Button className="w-full" onClick={startFirstInvestigation}>
+                      New investigation
+                    </Button>
+                  ) : undefined
+                }
+                onOpenTraces={() => setTab("traces")}
+              />
+            </TabsContent>
           </div>
         </Tabs>
         <LensIntroDialog
