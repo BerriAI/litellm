@@ -2627,7 +2627,9 @@ class TestProxyLoggingBudgetAlerts:
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging.alerting = ["slack"]
-        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.slack_alerting_instance = AsyncMock(
+            alerting_args=proxy_logging.slack_alerting_instance.alerting_args
+        )
 
         user_info = MagicMock()
 
@@ -2675,7 +2677,9 @@ class TestProxyLoggingBudgetAlerts:
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging.alerting = ["slack", "email"]
-        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.slack_alerting_instance = AsyncMock(
+            alerting_args=proxy_logging.slack_alerting_instance.alerting_args
+        )
         proxy_logging.email_logging_instance = AsyncMock()
 
         user_info = MagicMock()
@@ -2708,7 +2712,9 @@ class TestProxyLoggingBudgetAlerts:
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging.alerting = ["slack", "email"]
-        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.slack_alerting_instance = AsyncMock(
+            alerting_args=proxy_logging.slack_alerting_instance.alerting_args
+        )
         proxy_logging.email_logging_instance = AsyncMock()
 
         user_info = MagicMock()
@@ -2736,7 +2742,9 @@ class TestProxyLoggingBudgetAlerts:
 
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
         proxy_logging.alerting = None  # Global alerting is disabled
-        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.slack_alerting_instance = AsyncMock(
+            alerting_args=proxy_logging.slack_alerting_instance.alerting_args
+        )
         proxy_logging.email_logging_instance = AsyncMock()
 
         # Create CallInfo with alert_emails set (simulating team metadata extraction)

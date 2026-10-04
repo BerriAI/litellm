@@ -3106,11 +3106,14 @@ class ProxyLogging:
         should_send_email = (self.alerting is not None and "email" in self.alerting) or is_soft_budget_with_alert_emails
 
         if should_send_email and self.email_logging_instance is not None:
-            await self.email_logging_instance.budget_alerts(
-                type=type,
-                user_info=user_info,
-                budget_alert_thresholds=(tuple(configured_thresholds) if configured_thresholds is not None else None),
-            )
+            if configured_thresholds is None:
+                await self.email_logging_instance.budget_alerts(type=type, user_info=user_info)
+            else:
+                await self.email_logging_instance.budget_alerts(
+                    type=type,
+                    user_info=user_info,
+                    budget_alert_thresholds=tuple(configured_thresholds),
+                )
 
     async def alerting_handler(
         self,
