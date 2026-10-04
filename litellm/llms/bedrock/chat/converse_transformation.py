@@ -613,18 +613,16 @@ class AmazonConverseConfig(BaseConfig):
 
         Bedrock returns a 400 error if budget_tokens < 1024.
         """
-        thinking: Final = optional_params.get("thinking")
+        thinking: object = optional_params.get("thinking")
         if isinstance(thinking, dict):
-            budget: Final = thinking.get("budget_tokens")
+            budget: object = thinking.get("budget_tokens")
             if isinstance(budget, int) and budget < BEDROCK_MIN_THINKING_BUDGET_TOKENS:
                 verbose_logger.debug(
                     "Bedrock requires thinking.budget_tokens >= %d, got %d. Clamping to minimum.",
                     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
                     budget,
                 )
-                thinking_copy = copy.deepcopy(thinking)
-                thinking_copy["budget_tokens"] = BEDROCK_MIN_THINKING_BUDGET_TOKENS
-                optional_params["thinking"] = thinking_copy
+                optional_params["thinking"] = {**thinking, "budget_tokens": BEDROCK_MIN_THINKING_BUDGET_TOKENS}
 
     def _is_deepseek_model(self, model: str, base_model: str) -> bool:
         return "deepseek" in model or "deepseek" in base_model
@@ -1185,7 +1183,7 @@ class AmazonConverseConfig(BaseConfig):
         # Nova 2 handles token budgeting differently through reasoningConfig
         if "gpt-oss" not in model and not self._is_nova_2_model(model):
             self.update_optional_params_with_thinking_tokens(
-                non_default_params=non_default_params, optional_params=optional_params, drop_params=drop_params
+                non_default_params=non_default_params, optional_params=optional_params
             )
 
         final_is_thinking_enabled: Final = self.is_thinking_enabled(optional_params)
@@ -1305,9 +1303,7 @@ class AmazonConverseConfig(BaseConfig):
         optional_params["json_mode"] = True
         return optional_params
 
-    def update_optional_params_with_thinking_tokens(
-        self, non_default_params: dict, optional_params: dict, drop_params: bool = False
-    ):
+    def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict) -> None:
         """
         Handles scenario where max tokens is not specified. For anthropic models (anthropic api/bedrock/vertex ai), this requires having the max tokens being set and being greater than the thinking token budget.
 
@@ -1322,27 +1318,32 @@ class AmazonConverseConfig(BaseConfig):
 
         self._clamp_thinking_budget_tokens(optional_params)
 
+        typed_optional_params = cast(dict[str, object], optional_params)
         is_thinking_enabled: Final = self.is_thinking_enabled(optional_params)
         is_max_tokens_in_request: Final = self.is_max_tokens_in_request(non_default_params)
         if is_thinking_enabled and not is_max_tokens_in_request:
-            thinking_value: Final = optional_params.get("thinking")
-            thinking_token_budget: Final = (
-                thinking_value.get("budget_tokens") if isinstance(thinking_value, dict) else None
+            raw_thinking_no_max = typed_optional_params.get("thinking")
+            thinking_token_budget = (
+                cast(dict[str, object], raw_thinking_no_max).get("budget_tokens")
+                if isinstance(raw_thinking_no_max, dict)
+                else None
             )
-            if thinking_token_budget is not None:
+            if isinstance(thinking_token_budget, int):
                 optional_params["maxTokens"] = thinking_token_budget + DEFAULT_MAX_TOKENS
         elif is_thinking_enabled and is_max_tokens_in_request:
-            max_tokens: Final = optional_params.get("maxTokens")
-            thinking_value: Final = optional_params.get("thinking")
-            if isinstance(max_tokens, int) and isinstance(thinking_value, dict):
-                budget: Final = thinking_value.get("budget_tokens")
-                if isinstance(budget, int) and max_tokens > BEDROCK_MIN_THINKING_BUDGET_TOKENS and budget >= max_tokens:
-                    thinking_copy = copy.deepcopy(thinking_value)
-                    thinking_copy["budget_tokens"] = max_tokens - 1
-                    optional_params["thinking"] = thinking_copy
+            raw_max_tokens = typed_optional_params.get("maxTokens")
+            raw_thinking_with_max = typed_optional_params.get("thinking")
+            if isinstance(raw_max_tokens, int) and isinstance(raw_thinking_with_max, dict):
+                budget = cast(dict[str, object], raw_thinking_with_max).get("budget_tokens")
+                if (
+                    isinstance(budget, int)
+                    and raw_max_tokens > BEDROCK_MIN_THINKING_BUDGET_TOKENS
+                    and budget >= raw_max_tokens
+                ):
+                    optional_params["thinking"] = {**raw_thinking_with_max, "budget_tokens": raw_max_tokens - 1}
                     verbose_logger.warning(
                         "Capped thinking.budget_tokens to %s to satisfy maxTokens > budget_tokens for Bedrock.",
-                        max_tokens - 1,
+                        str(raw_max_tokens - 1),
                     )
 
     @overload
@@ -1952,33 +1953,39 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         # Handle thinking budget and dropping for Bedrock Converse
-        thinking: Final = optional_params.get("thinking")
-        if isinstance(thinking, dict) and thinking.get("type") == "enabled":
-            max_tokens: Final = optional_params.get("maxTokens")
-            if isinstance(max_tokens, int):
-                if max_tokens <= BEDROCK_MIN_THINKING_BUDGET_TOKENS:
-                    # maxTokens <= BEDROCK_MIN_THINKING_BUDGET_TOKENS
-                    # Only drop thinking if NO assistant message in history contains thinking blocks.
-                    # If history contains thinking blocks, Bedrock requires thinking to remain enabled.
-                    should_drop = drop_params or (
-                        litellm_params is not None and litellm_params.get("drop_params") is True
-                    )
-                    has_thinking_history = messages is not None and any_assistant_message_has_thinking_blocks(messages)
-                    if should_drop and not has_thinking_history:
-                        verbose_logger.warning(
-                            "Dropping thinking for Bedrock: maxTokens (%s) is too small to fit the minimum thinking budget (%s).",
-                            max_tokens,
-                            BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+        typed_optional_params = cast(dict[str, object], optional_params)
+        raw_thinking_obj = typed_optional_params.get("thinking")
+        if isinstance(raw_thinking_obj, dict):
+            raw_thinking_dict = cast(dict[str, object], raw_thinking_obj)
+            if raw_thinking_dict.get("type") == "enabled":
+                raw_max_tokens_obj = typed_optional_params.get("maxTokens")
+                if isinstance(raw_max_tokens_obj, int):
+                    if raw_max_tokens_obj <= BEDROCK_MIN_THINKING_BUDGET_TOKENS:
+                        # maxTokens <= BEDROCK_MIN_THINKING_BUDGET_TOKENS
+                        # Only drop thinking if NO assistant message in history contains thinking blocks.
+                        # If history contains thinking blocks, Bedrock requires thinking to remain enabled.
+                        should_drop: bool = bool(
+                            drop_params or (litellm_params is not None and litellm_params.get("drop_params") is True)
                         )
-                        optional_params.pop("thinking", None)
-                elif isinstance(thinking.get("budget_tokens"), int) and thinking["budget_tokens"] >= max_tokens:
-                    thinking_copy = copy.deepcopy(thinking)
-                    thinking_copy["budget_tokens"] = max_tokens - 1
-                    optional_params["thinking"] = thinking_copy
-                    verbose_logger.warning(
-                        "Capped thinking.budget_tokens to %s to satisfy maxTokens > budget_tokens for Bedrock.",
-                        max_tokens - 1,
-                    )
+                        has_thinking_history: bool = bool(
+                            messages is not None and any_assistant_message_has_thinking_blocks(messages)
+                        )
+                        if should_drop and not has_thinking_history:
+                            verbose_logger.warning(
+                                "Dropping thinking for Bedrock: maxTokens (%s) is too small to fit the minimum thinking budget (%s).",
+                                str(raw_max_tokens_obj),
+                                str(BEDROCK_MIN_THINKING_BUDGET_TOKENS),
+                            )
+                            optional_params.pop("thinking", None)
+                    elif (
+                        isinstance(raw_thinking_dict.get("budget_tokens"), int)
+                        and cast(int, raw_thinking_dict["budget_tokens"]) >= raw_max_tokens_obj
+                    ):
+                        optional_params["thinking"] = {**raw_thinking_dict, "budget_tokens": raw_max_tokens_obj - 1}
+                        verbose_logger.warning(
+                            "Capped thinking.budget_tokens to %s to satisfy maxTokens > budget_tokens for Bedrock.",
+                            str(raw_max_tokens_obj - 1),
+                        )
 
         # Prepare and separate parameters
         (
