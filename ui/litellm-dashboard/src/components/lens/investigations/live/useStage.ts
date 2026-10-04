@@ -22,7 +22,8 @@ export function useStage(
   const [charMs] = useState(() => (prefersReducedMotion() ? 0 : CHAR_MS));
   const [stage, setStage] = useState(() => startStage(reviews));
   const [now, setNow] = useState(Date.now);
-  const next = stepStage(stage, { reading, reviews, now, slots, running, charMs });
+  const input = { reading, reviews, now, slots, running, charMs };
+  const next = stepStage(stage, input);
   if (next !== stage) setStage(next);
   const busy = running || next.lanes.length > 0;
   useEffect(() => {

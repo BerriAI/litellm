@@ -23,7 +23,6 @@ import {
   outcome,
   providerOf,
   rateLabel,
-  reviewKey,
   secondsToFinishReading,
   tokenLabel,
 } from "./live";
@@ -61,7 +60,10 @@ describe("provider from model", () => {
   });
 
   it("resolves a bare model name through the model catalog", () => {
-    const catalog = { "gpt-5.6": { litellm_provider: "openai" }, "cerebras/gpt-oss-120b": { litellm_provider: "cerebras" } };
+    const catalog = {
+      "gpt-5.6": { litellm_provider: "openai" },
+      "cerebras/gpt-oss-120b": { litellm_provider: "cerebras" },
+    };
     expect(providerOf("gpt-5.6", catalog)).toBe("openai");
     expect(providerOf("my-alias", catalog)).toBe("");
     expect(analysisModel(["", "gpt-5.6"], catalog)).toBe("gpt-5.6");
@@ -72,7 +74,6 @@ describe("provider from model", () => {
     expect(analysisModel(["", "analysis"])).toBe("analysis");
     expect(analysisModel([])).toBe("");
   });
-
 });
 
 describe("review outcome", () => {
@@ -155,7 +156,6 @@ describe("conclusions", () => {
     expect(share(5, 0)).toBe(0);
     expect(share(9, 4)).toBe(1);
   });
-
 });
 
 describe("which job the live run shows", () => {
@@ -189,7 +189,10 @@ describe("strip state", () => {
   const MODEL = "cerebras/gpt-oss-120b";
 
   it("says what is happening before the first review instead of a silent spinner", () => {
-    expect(stripState(base, MODEL)).toEqual({ kind: "waiting", message: "Reading 328 traces with cerebras/gpt-oss-120b…" });
+    expect(stripState(base, MODEL)).toEqual({
+      kind: "waiting",
+      message: "Reading 328 traces with cerebras/gpt-oss-120b…",
+    });
     expect(stripState({ ...base, stage: "Grouping observations" }, "")).toEqual({
       kind: "waiting",
       message: "Grouping observations…",
@@ -205,7 +208,10 @@ describe("strip state", () => {
       kind: "failed",
       message: "Anthropic: credit balance too low",
     });
-    expect(stripState({ ...base, status: "failed" }, MODEL)).toEqual({ kind: "failed", message: "The investigation failed" });
+    expect(stripState({ ...base, status: "failed" }, MODEL)).toEqual({
+      kind: "failed",
+      message: "The investigation failed",
+    });
   });
 
   it("surfaces a model error step while still running with nothing reviewed", () => {
@@ -228,16 +234,15 @@ describe("issue count", () => {
 
   it("uses the job's issue findings once the run completes", () => {
     const findings = [{ kind: "issue" }, { kind: "pattern" }, { kind: "issue" }] as Job["findings"];
-    expect(issueCount({ status: "completed", findings, reviews: [issueReview], reviewed: 328 })).toEqual({
-      count: 2,
-      scope: "findings",
-    });
+    const completed = { status: "completed" as const, findings, reviews: [issueReview], reviewed: 328 };
+    expect(issueCount(completed)).toEqual({ count: 2, scope: "findings" });
   });
 
   it("labels counts honestly when only the last reviews are kept", () => {
     const reviews = [issueReview, review("y"), issueReview];
-    expect(issueCount({ status: "running", findings: null, reviews, reviewed: 3 })).toEqual({ count: 2, scope: "" });
-    expect(issueCount({ status: "running", findings: null, reviews, reviewed: 120 })).toEqual({
+    const running = { status: "running" as const, findings: null, reviews };
+    expect(issueCount({ ...running, reviewed: 3 })).toEqual({ count: 2, scope: "" });
+    expect(issueCount({ ...running, reviewed: 120 })).toEqual({
       count: 2,
       scope: "in last 3 reviewed",
     });
@@ -303,12 +308,36 @@ describe("live stats", () => {
     created_at: "2026-10-03T16:00:00Z",
     finished_at: null,
     steps: [
-      { at: "2026-10-03T16:00:05Z", kind: "stage", label: "Reading executions", model: "", purpose: "", cost: 0,
-        prompt_tokens: 0, completion_tokens: 0 },
-      { at: "2026-10-03T16:00:06Z", kind: "model", label: "extract", model: "m", purpose: "extract", cost: 0.01,
-        prompt_tokens: 1200, completion_tokens: 300 },
-      { at: "2026-10-03T16:00:07Z", kind: "model", label: "extract", model: "m", purpose: "extract", cost: 0.01,
-        prompt_tokens: 800, completion_tokens: 200 },
+      {
+        at: "2026-10-03T16:00:05Z",
+        kind: "stage",
+        label: "Reading executions",
+        model: "",
+        purpose: "",
+        cost: 0,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+      },
+      {
+        at: "2026-10-03T16:00:06Z",
+        kind: "model",
+        label: "extract",
+        model: "m",
+        purpose: "extract",
+        cost: 0.01,
+        prompt_tokens: 1200,
+        completion_tokens: 300,
+      },
+      {
+        at: "2026-10-03T16:00:07Z",
+        kind: "model",
+        label: "extract",
+        model: "m",
+        purpose: "extract",
+        cost: 0.01,
+        prompt_tokens: 800,
+        completion_tokens: 200,
+      },
     ],
   } as unknown as Job;
 
@@ -341,7 +370,11 @@ describe("live stats", () => {
 
 describe("honest live list", () => {
   it("lists completed reviews newest first in the order they finished, never re-sorted by time", () => {
-    const reviews = [review("a", { at: "2026-10-03T16:05:00Z" }), review("b", { at: "2026-10-03T16:01:00Z" }), review("c")];
+    const reviews = [
+      review("a", { at: "2026-10-03T16:05:00Z" }),
+      review("b", { at: "2026-10-03T16:01:00Z" }),
+      review("c"),
+    ];
     expect(newestFirst(reviews, 10).map((r) => r.execution_id)).toEqual(["c", "b", "a"]);
     expect(newestFirst(reviews, 2).map((r) => r.execution_id)).toEqual(["c", "b"]);
     expect(reviews.map((r) => r.execution_id)).toEqual(["a", "b", "c"]);
@@ -355,7 +388,12 @@ describe("honest live list", () => {
   });
 
   it("keeps a trace as the same row from in flight to finished", () => {
-    const reading = (id: string) => ({ execution_id: id, trace_id: `t-${id}`, agent: "bot", started_at: "2026-10-03T16:00:00Z" });
+    const reading = (id: string) => ({
+      execution_id: id,
+      trace_id: `t-${id}`,
+      agent: "bot",
+      started_at: "2026-10-03T16:00:00Z",
+    });
     const before = liveRows([reading("x"), reading("y")], [review("a")], 10);
     expect(before.map((row) => [row.kind, row.key])).toEqual([
       ["reading", "x"],

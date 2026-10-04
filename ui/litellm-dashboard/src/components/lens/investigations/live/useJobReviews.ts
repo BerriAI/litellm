@@ -11,7 +11,8 @@ import type { Job, Review } from "../../model/types";
 export function useJobReviews(api: LensApi, lensId: string, job: Pick<Job, "id" | "status">): readonly Review[] {
   const [feed, setFeed] = useState<ReviewFeed>(EMPTY_FEED);
   const live = job.status === "queued" || job.status === "running";
-  const { data } = useQuery(lensQueries.reviews(api, { lensId, jobId: job.id, after: feed.cursor, live }));
+  const page = { lensId, jobId: job.id, after: feed.cursor, live };
+  const { data } = useQuery(lensQueries.reviews(api, page));
   const next = data ? appendPage(feed, data) : feed;
   if (next !== feed) setFeed(next);
   return next.reviews;

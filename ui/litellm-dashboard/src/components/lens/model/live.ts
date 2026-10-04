@@ -134,7 +134,7 @@ export function conclusions(reviews: readonly Review[], checks: Settings["checks
     return [...verdictsByCheck(review).values()].reduce((next, verdict) => {
       const prior = next.get(verdict.check_id);
       const issue = verdict.kind === "issue";
-      return new Map(next).set(verdict.check_id, {
+      const merged: Conclusion = {
         key: verdict.check_id,
         checkId: verdict.check_id,
         label: checkLabel(verdict.check_id, instructions.get(verdict.check_id)),
@@ -142,7 +142,8 @@ export function conclusions(reviews: readonly Review[], checks: Settings["checks
         count: (prior?.count ?? 0) + Number(issue),
         noted: (prior?.noted ?? 0) + Number(!issue),
         issue: (prior?.issue ?? false) || issue,
-      });
+      };
+      return new Map(next).set(verdict.check_id, merged);
     }, groups);
   }, new Map<string, Conclusion>());
   return [...grouped.values()].sort((a, b) => b.count - a.count || b.noted - a.noted);
@@ -162,7 +163,6 @@ export function briefReasoning(reasoning: string): string {
   const sentences = reasoning.trim().split(/(?<=[.!?])\s+/);
   return sentences.slice(0, BRIEF_SENTENCES).join(" ").trim();
 }
-
 
 export function grownGroups(before: readonly Conclusion[], after: readonly Conclusion[]): Set<string> {
   const prior = new Map(before.map((group) => [group.key, group.count + group.noted]));
@@ -220,7 +220,7 @@ export interface InFlight {
 
 export function inFlight(job: Job): readonly InFlight[] {
   const reading = (job as Job & { reading?: readonly InFlight[] }).reading;
-  return job.status === "running" ? (reading ?? []) : [];
+  return job.status === "running" ? reading ?? [] : [];
 }
 
 export type LiveRow = { kind: "reading"; key: string; item: InFlight } | { kind: "done"; key: string; review: Review };
@@ -242,7 +242,9 @@ export function nowLine(job: Pick<Job, "coverage" | "reviewed">, reading: number
 
 export function durationLabel(ms: number): string {
   if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
-  return ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
+  return ms < 60_000
+    ? `${(ms / 1000).toFixed(1)}s`
+    : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 }
 
 export function doneLine(job: Pick<Job, "reviewed" | "created_at" | "finished_at" | "steps">): string {
