@@ -757,16 +757,20 @@ if MCP_AVAILABLE:
             if apply_tool_filters and user_api_key_auth
             else server_filtered
         )
-        global_mcp_server_manager.record_listed_tools(
-            server,
-            served_tools,
-            ListedToolsCaller(
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=server_auth_header,
-                raw_headers=raw_headers,
-            ),
-            listed_generation,
-        )
+        if apply_tool_filters:
+            # Only a listing shaped for the caller's runtime view may set their
+            # listed-tools slot; the admin-only unfiltered configuration view
+            # must not warm it.
+            global_mcp_server_manager.record_listed_tools(
+                server,
+                served_tools,
+                ListedToolsCaller(
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=server_auth_header,
+                    raw_headers=raw_headers,
+                ),
+                listed_generation,
+            )
 
         return _create_tool_response_objects(served_tools, server)
 

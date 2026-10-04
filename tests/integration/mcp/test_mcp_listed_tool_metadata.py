@@ -491,3 +491,41 @@ def test_a_server_keeps_the_newest_256_caller_catalogs_and_evicts_the_oldest(rig
         observed: Final = peer.drain()
         assert _forwarded_tenants(observed) == frozenset(tenant.encode() for tenant in tenants), len(observed)
         assert tool_calls(observed) == ()
+
+
+def test_an_admin_include_disabled_tools_listing_does_not_warm_the_runtime_catalog(rig: Gateway) -> None:
+    """``include_disabled_tools=true`` is the admin-only configuration view, not a listing the caller
+    runs against: recording it would warm tools/call metadata no runtime listing ever served."""
+    tool: Final = _lookup_tool()
+    with scripted_peer(tool) as peer, rig.scenario() as scenario:
+        alias: Final = "adminview" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias)
+        admin: Final = rig.key
+        caller: Final = McpCaller(rig, admin, "rest")
+        name: Final = eventually(
+            lambda: caller.call(f"{alias}-lookup", {"probe": _PROBE}, server_id=identity),
+            lambda value: value.error is not None and _ECHO in value.raw,
+        )
+        assert _echoed(name.raw) == _COLD, "before any listing the call is cold"
+
+        view: Final = eventually(
+            lambda: rig.client.get(
+                "/mcp-rest/tools/list",
+                params={"server_id": identity, "include_disabled_tools": "true"},
+                headers={"x-litellm-api-key": admin},
+            ),
+            lambda response: response.status_code == 200
+            and any(entry["name"].endswith("lookup") for entry in response.json()["tools"]),
+        )
+        assert view.status_code == 200, view.text
+
+        after_view: Final = _probe(caller, f"{alias}-lookup", identity)
+        assert after_view == _COLD, (
+            "the admin-only include_disabled_tools view must not record the caller's listed-tools slot"
+        )
+
+        runtime: Final = caller.list_tools(server_id=identity)
+        assert runtime.ok, runtime.raw
+        assert _probe(caller, f"{alias}-lookup", identity)[0] == "Look up one record", (
+            "a genuine runtime listing still warms the slot"
+        )
