@@ -398,12 +398,14 @@ func allowedRoutesNotConfigured(d *schema.ResourceData) bool {
 }
 
 // The proxy derives allowed_routes from the key_type preset and overwrites
-// whatever the request declared, so a config that sets both can never match
-// what gets stored: the key would come back with the preset routes and drift
-// against the declared list forever. Reject the combination at plan time
-// instead. key_type "default" keeps declared routes (the server does not
-// preset them), and the raw-config check mirrors allowedRoutesNotConfigured:
-// d.Get alone cannot tell a declared list from server-derived state.
+// whatever the request declared, but only on create: /key/update stores an
+// explicit allowed_routes verbatim without reapplying the preset. Reject the
+// combination for plans that create a key (fresh, or a replacement that
+// changes key_type), where it can never be honored: the key would come back
+// with the preset routes instead of the declared list. Existing typed keys
+// may keep managing their routes, and a replacement forced by another
+// ForceNew attribute converges on the next apply, which re-sends the declared
+// routes. key_type "default" presets nothing and is never rejected.
 func rejectRoutesWithPresetKeyType(ctx context.Context, d *schema.ResourceDiff, m interface{}) error {
 	keyType := d.Get("key_type").(string)
 	if keyType == "" || keyType == "default" {
@@ -413,7 +415,10 @@ func rejectRoutesWithPresetKeyType(ctx context.Context, d *schema.ResourceDiff, 
 	if diags.HasError() || raw.IsNull() {
 		return nil
 	}
-	return fmt.Errorf("allowed_routes cannot be combined with key_type %q: the proxy derives the routes from the key type and would overwrite the declared list; use key_type = \"default\" or remove allowed_routes", keyType)
+	if d.Id() != "" && !d.HasChange("key_type") {
+		return nil
+	}
+	return fmt.Errorf("allowed_routes cannot be set on a new key with key_type %q: the proxy derives the routes from the key type and would overwrite the declared list; use key_type = \"default\", or create the key first and add allowed_routes afterwards", keyType)
 }
 
 // Reads copy the server's routes into state so drift on them stays visible,

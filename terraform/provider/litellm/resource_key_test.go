@@ -426,39 +426,46 @@ func TestResourceKeyUpdateSendsConfiguredAllowedRoutes(t *testing.T) {
 	}
 }
 
-// A presetting key_type owns allowed_routes on the proxy (it overwrites the
-// declared list with the preset), so the combination must fail at plan time
-// instead of creating a key that instantly drifts against its configuration.
-// "default" presets nothing and keeps declared routes.
+// A presetting key_type owns allowed_routes at create time on the proxy (it
+// overwrites the declared list with the preset), so the combination must fail
+// at plan time instead of creating a key that instantly drifts against its
+// configuration. Existing typed keys keep managing routes in place because
+// /key/update stores an explicit list verbatim; only create-shaped plans
+// (fresh keys, or a key_type change forcing replacement) are rejected.
 func TestAllowedRoutesRejectedWithPresetKeyType(t *testing.T) {
 	cases := []struct {
-		name    string
-		keyType string
-		routes  []string
-		update  bool
-		wantErr bool
+		name       string
+		priorType  string
+		keyType    string
+		routes     []string
+		priorState bool
+		wantErr    bool
 	}{
-		{"llm_api with routes", "llm_api", []string{"/v1/models"}, false, true},
-		{"management with routes", "management", []string{"/v1/models"}, false, true},
-		{"read_only with routes", "read_only", []string{"/v1/models"}, false, true},
-		{"llm_api without routes", "llm_api", nil, false, false},
-		{"default with routes", "default", []string{"/v1/models"}, false, false},
-		{"no key type with routes", "", []string{"/v1/models"}, false, false},
-		{"existing typed key gains routes", "llm_api", []string{"/v1/models"}, true, true},
+		{"llm_api with routes", "", "llm_api", []string{"/v1/models"}, false, true},
+		{"management with routes", "", "management", []string{"/v1/models"}, false, true},
+		{"read_only with routes", "", "read_only", []string{"/v1/models"}, false, true},
+		{"llm_api without routes", "", "llm_api", nil, false, false},
+		{"default with routes", "", "default", []string{"/v1/models"}, false, false},
+		{"no key type with routes", "", "", []string{"/v1/models"}, false, false},
+		{"existing typed key gains routes", "llm_api", "llm_api", []string{"/v1/models"}, true, false},
+		{"existing untyped key gains type and routes", "", "llm_api", []string{"/v1/models"}, true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			res := resourceKey()
 			var prior *terraform.InstanceState
-			if tc.update {
-				priorData := newKeyResourceData(t, map[string]interface{}{"key_type": tc.keyType})
+			if tc.priorState {
+				priorData := newKeyResourceData(t, map[string]interface{}{"key_alias": "prior"})
+				if tc.priorType != "" {
+					priorData.Set("key_type", tc.priorType)
+				}
 				priorData.SetId("hash-1")
 				prior = priorData.State()
 			} else {
 				prior = &terraform.InstanceState{}
 			}
 			prior.RawConfig = keyTypeRawConfig(t, tc.keyType, tc.routes)
-			cfg := map[string]interface{}{}
+			cfg := map[string]interface{}{"key_alias": "next"}
 			if tc.keyType != "" {
 				cfg["key_type"] = tc.keyType
 			}
@@ -471,7 +478,7 @@ func TestAllowedRoutesRejectedWithPresetKeyType(t *testing.T) {
 			}
 			_, err := res.Diff(context.Background(), prior, terraform.NewResourceConfigRaw(cfg), nil)
 			if tc.wantErr {
-				if err == nil || !strings.Contains(err.Error(), "cannot be combined with key_type") {
+				if err == nil || !strings.Contains(err.Error(), "cannot be set on a new key with key_type") {
 					t.Fatalf("want plan error for %s + routes, got %v", tc.keyType, err)
 				}
 				return
