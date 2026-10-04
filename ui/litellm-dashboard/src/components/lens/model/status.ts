@@ -54,13 +54,17 @@ export interface Readiness {
   readonly ready: boolean;
 }
 
-export function readiness(
-  activity: { traces: boolean; requests: boolean } | undefined,
-  activityError: unknown,
-  connected: boolean,
-  listError: unknown,
-): Readiness {
-  const tracesReady = activity?.traces === true && !activityError;
+export interface ReadinessInput {
+  readonly activity: { traces: boolean; requests: boolean } | undefined;
+  readonly activityError: unknown;
+  /** Traces confirmed straight from trace storage count as recorded activity even if the activity check fails. */
+  readonly tracesSeen: boolean;
+  readonly connected: boolean;
+  readonly listError: unknown;
+}
+
+export function readiness({ activity, activityError, tracesSeen, connected, listError }: ReadinessInput): Readiness {
+  const tracesReady = tracesSeen || (activity?.traces === true && !activityError);
   const requestsReady = activity?.requests === true && !activityError;
   const activityReady = tracesReady || requestsReady;
   const ready = activityReady && connected && !listError;

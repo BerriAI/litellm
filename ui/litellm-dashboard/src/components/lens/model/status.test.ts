@@ -4,6 +4,7 @@ import {
   investigationActivity,
   listPollInterval,
   nextCheckStatus,
+  readiness,
   workerConnected,
 } from "./status";
 import { describe, expect, it } from "vitest";
@@ -174,5 +175,22 @@ describe("activeJob", () => {
     expect(activeJob([done, job])).toBe(job);
     expect(activeJob([done, { ...job, status: "queued" }])?.status).toBe("queued");
     expect(activeJob([done])).toBeUndefined();
+  });
+});
+
+describe("readiness", () => {
+  const base = { activity: undefined, activityError: null, tracesSeen: false, connected: true, listError: null };
+
+  it("counts traces confirmed from storage as recorded activity even when the activity check fails", () => {
+    const failing = { ...base, activityError: new Error("Activity unavailable") };
+    expect(readiness(failing).ready).toBe(false);
+    expect(readiness({ ...failing, tracesSeen: true })).toMatchObject({ tracesReady: true, ready: true });
+  });
+
+  it("needs a connected worker and a healthy list on top of recorded activity", () => {
+    const active = { ...base, activity: { traces: false, requests: true } };
+    expect(readiness(active)).toMatchObject({ requestsReady: true, ready: true });
+    expect(readiness({ ...active, connected: false }).ready).toBe(false);
+    expect(readiness({ ...active, listError: new Error("down") }).ready).toBe(false);
   });
 });

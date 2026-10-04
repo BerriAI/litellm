@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useTraceAvailability } from "@/components/view_logs/TraceView/useAgentTraces";
 
 import { lensKeys, lensQueries } from "../api/queries";
 import { useLensApi } from "../LensServices";
@@ -46,12 +47,19 @@ export function InvestigationsView({ accessToken, readOnly = false }: Investigat
   const actions = useInvestigationActions();
   const { dialog, target, openDialog, closeDialog } = useDialogRoute();
   const { issueKey, setIssueKey } = useIssueRoute();
-  const { lensId, setLensId, setTab } = useLensRoute();
+  const { lensId, demo, setLensId, setTab } = useLensRoute();
   const list = useQuery(lensQueries.list(api));
   const loaded = !list.isLoading && !list.error;
   const connected = useWorkerConnected(list.data?.workers);
   const activity = useQuery(lensQueries.activity(api, loaded));
-  const status = readiness(activity.data, activity.error, connected, list.error);
+  const traces = useTraceAvailability(accessToken, !demo);
+  const status = readiness({
+    activity: activity.data,
+    activityError: activity.error,
+    tracesSeen: traces.data === true && !traces.error,
+    connected,
+    listError: list.error,
+  });
   const screenInput = { list, lensId, dialog, target };
   const screen = investigationScreen(screenInput);
   const lenses = list.data?.lenses ?? [];
