@@ -82,8 +82,8 @@ function NotchCorner({ side }: { side: "left" | "right" }) {
         side === "left" ? "-left-3" : "-right-3 -scale-x-100",
       )}
     >
-      <path d="M0 11 A12.5 11 0 0 0 12.5 0 H13 V12 H0 Z" className="fill-card" />
-      <path d="M0 11.5 A12.5 11.5 0 0 0 12.5 0" className="fill-none stroke-foreground/15" />
+      <path d="M0 11.5 A11.5 11.5 0 0 0 11.5 0 H13 V12 H0 Z" className="fill-card" />
+      <path d="M0 11.5 A11.5 11.5 0 0 0 11.5 0" className="fill-none stroke-foreground/15" />
     </svg>
   );
 }
