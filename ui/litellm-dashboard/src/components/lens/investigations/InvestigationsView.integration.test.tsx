@@ -303,12 +303,10 @@ it("guides a first-time administrator into worker connection and lens setup", as
   });
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView accessToken="test" onDemo={vi.fn()} />);
-  const guide = within(await screen.findByRole("region", { name: "Find what needs attention" }));
+  const guide = within(await screen.findByRole("region", { name: "Run your first investigation" }));
   expect(apiClient.get).toHaveBeenCalledWith("/lens/activity/available", { accessToken: "test" });
-  expect(await guide.findByRole("link", { name: "View traces" })).toHaveAttribute(
-    "href",
-    expect.stringMatching(/^\/ui\/lens\/?\?tab=traces$/),
-  );
+  expect(guide.getByText("Traces received")).toBeVisible();
+  expect(guide.queryByRole("link", { name: "View traces" })).not.toBeInTheDocument();
   expect(await guide.findByRole("button", { name: "Preview sample" })).toBeVisible();
   await user.click(guide.getByRole("button", { name: "Connect worker" }));
   const connection = within(await screen.findByRole("dialog", { name: "Connect a worker" }));

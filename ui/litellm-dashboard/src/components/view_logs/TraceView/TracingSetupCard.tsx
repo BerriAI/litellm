@@ -645,17 +645,7 @@ function ConnectAgent({
   );
 }
 
-export function TracingSetupCard({
-  detail,
-  accessToken,
-  onOpenTrace,
-  connected = false,
-  onCheck,
-  checking = false,
-  readOnly = false,
-  canMintTracingKey = false,
-  onDemo,
-}: {
+type TracingSetupProps = {
   detail: string | null;
   accessToken: string;
   onOpenTrace: (trace: TraceSummary) => void;
@@ -664,20 +654,47 @@ export function TracingSetupCard({
   checking?: boolean;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
-  onDemo?: () => void;
-}) {
+};
+
+export function TracingSetupFields({
+  detail,
+  accessToken,
+  onOpenTrace,
+  connected = false,
+  onCheck,
+  checking = false,
+  readOnly = false,
+  canMintTracingKey = false,
+}: TracingSetupProps) {
   const [checked, setChecked] = useState(false);
-  const enabled = detail === null;
   const check = () => {
     setChecked(true);
     onCheck?.();
   };
+  return detail === null ? (
+    <ConnectAgent
+      accessToken={accessToken}
+      onOpenTrace={onOpenTrace}
+      connected={connected}
+      checked={checked}
+      checking={checking}
+      onCheck={check}
+      readOnly={readOnly}
+      canMintTracingKey={canMintTracingKey}
+    />
+  ) : (
+    <EnableTracing checked={checked} checking={checking} onCheck={check} />
+  );
+}
+
+export function TracingSetupCard({ onDemo, ...props }: TracingSetupProps & { onDemo?: () => void }) {
+  const enabled = props.detail === null;
 
   return (
     <div className="w-full max-w-3xl pb-8" data-testid="tracing-setup-card">
       {onDemo && <LensPreviewButton onClick={onDemo} />}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <h2 className="text-xl font-semibold tracking-tight">{setupTitle(enabled, connected)}</h2>
+        <h2 className="text-xl font-semibold tracking-tight">{setupTitle(enabled, props.connected ?? false)}</h2>
         <span role="status" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
           {enabled ? (
             <ActiveDot />
@@ -700,20 +717,7 @@ export function TracingSetupCard({
           ? "Send your agent’s runs to LiteLLM to see its inputs, outputs, and tool calls."
           : "Tracing needs ClickHouse and a small update to your LiteLLM proxy configuration."}
       </p>
-      {enabled ? (
-        <ConnectAgent
-          accessToken={accessToken}
-          onOpenTrace={onOpenTrace}
-          connected={connected}
-          checked={checked}
-          checking={checking}
-          onCheck={check}
-          readOnly={readOnly}
-          canMintTracingKey={canMintTracingKey}
-        />
-      ) : (
-        <EnableTracing checked={checked} checking={checking} onCheck={check} />
-      )}
+      <TracingSetupFields {...props} />
     </div>
   );
 }

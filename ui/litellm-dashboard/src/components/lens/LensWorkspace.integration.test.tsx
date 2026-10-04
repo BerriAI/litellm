@@ -25,7 +25,7 @@ describe("Lens interactive demo", () => {
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Internal User" readOnly={false} />, {
       onUrlUpdate,
     });
-    expect(await screen.findByText("Enable tracing")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "The gateway that helps your agents improve" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Preview sample" }));
     expect(await screen.findByText("Where is order #1042?")).toBeVisible();
     expect(screen.getByText("You’re viewing demo data")).toBeVisible();
@@ -46,7 +46,7 @@ describe("Lens interactive demo", () => {
     expect(network).not.toHaveBeenCalled();
     expect(onUrlUpdate).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Exit demo" }));
-    expect(await screen.findByText("Enable tracing")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "The gateway that helps your agents improve" })).toBeVisible();
     expect(screen.queryByText("You’re viewing demo data")).not.toBeInTheDocument();
     expect(screen.queryByText("Can I return my headphones?")).not.toBeInTheDocument();
   });
@@ -84,7 +84,7 @@ describe("Lens interactive demo", () => {
     expect(network).not.toHaveBeenCalled();
     expect(onUrlUpdate).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Exit demo" }));
-    expect(await screen.findByRole("heading", { name: "Find what needs attention" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "The gateway that helps your agents improve" })).toBeVisible();
   });
 
   it("has no demo entry for existing investigations, populated traces, or connecting another agent", async () => {
