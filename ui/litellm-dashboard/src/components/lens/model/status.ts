@@ -43,3 +43,12 @@ export function readiness(
   const ready = activityReady && connected && !listError;
   return { tracesReady, requestsReady, activityReady, ready };
 }
+
+export type InvestigationActivity = "running" | "queued" | "idle";
+
+export function investigationActivity(lenses: readonly Lens[]): InvestigationActivity {
+  const statuses = new Set(lenses.flatMap((lens) => lens.jobs.map((job) => job.status)));
+  if (statuses.has("running")) return "running";
+  if (statuses.has("queued")) return "queued";
+  return "idle";
+}

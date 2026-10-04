@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+worker_image() {
+  env -u LENS_WORKER_IMAGE -u LITELLM_VERSION \
+    LITELLM_URL=http://litellm:4000 LENS_WORKER_TOKEN=config-test "$@" \
+    docker compose --env-file /dev/null -f deploy/lens/compose.yaml config --images
+}
+[[ "$(worker_image LENS_WORKER_IMAGE=registry.example/lens:source)" == registry.example/lens:source ]]
+[[ "$(worker_image LITELLM_VERSION=1.2.3)" == ghcr.io/berriai/litellm-lens-worker:v1.2.3 ]]
+[[ "$(worker_image LENS_WORKER_IMAGE=registry.example/lens:source LITELLM_VERSION=1.2.3)" == registry.example/lens:source ]]
+if worker_image > /dev/null 2>&1; then
+  printf 'Worker Compose accepted neither an image nor a release version\n' >&2
+  exit 1
+fi
+
 qa_dir=$(mktemp -d)
 master_key="sk-$(openssl rand -hex 32)"
 compose=(docker compose -p lens-compose-ci --env-file "$qa_dir/env" -f deploy/lens/stack.yaml)

@@ -1,9 +1,11 @@
 "use client";
 import { type TraceHandoff, useTracesApi } from "./tracesApi";
 
-import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { QueryErrorResetBoundary, useQueryClient, useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import { ArrowLeft, Check, Copy } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { ErrorBoundary } from "react-error-boundary";
+import { useEventListener, useTimeout } from "usehooks-ts";
 
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -18,7 +20,7 @@ import { SpanIcon } from "./SpanIcon";
 import { SpanTree } from "./SpanTree";
 import { TraceConversation } from "./TraceConversation";
 import { FrameworkLogo, traceFramework } from "./TraceFramework";
-import type { RunSelection } from "./traceRouting";
+import { type RunSelection, traceKey } from "./traceRouting";
 import type { SpanTreeState, TreeRow } from "./traceTree";
 import type { Trace } from "./traceTypes";
 import {
@@ -80,16 +82,12 @@ const toggle = (set: ReadonlySet<string>, id: string): Set<string> => {
 
 function CopyForAgent({ handoff }: { handoff: TraceHandoff }) {
   const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const timeout = window.setTimeout(() => setCopied(false), 1600);
-    return () => window.clearTimeout(timeout);
-  }, [copied]);
+  useTimeout(() => setCopied(false), copied ? 1600 : null);
   return (
     <Button
       variant="outline"
       size="xs"
-      className="h-7 shrink-0 gap-1.5 rounded-md text-[12px] shadow-none"
+      className="h-7 shrink-0 gap-1.5 rounded-md text-xs shadow-none"
       onClick={async () => setCopied(await copyToClipboard(handoff.text, handoff.copied))}
     >
       {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
@@ -192,9 +190,10 @@ interface RunBodyProps {
   accessToken: string;
   selection: RunSelection;
   embedded: boolean;
+  stale: boolean;
 }
 
-function RunBody({ trace, accessToken, selection, embedded }: RunBodyProps) {
+function RunBody({ trace, accessToken, selection, embedded, stale }: RunBodyProps) {
   const spanKeys = embedded ? EMBEDDED_SPAN_KEYS : SPAN_KEYS;
   const { view, selectSpan, setView, stepQuery: query, setStepQuery: setQuery, errorsOnly, setErrorsOnly } = selection;
   const [initial] = useState(() => initialRunSelection(trace, selection.spanId ?? undefined));
@@ -249,14 +248,14 @@ function RunBody({ trace, accessToken, selection, embedded }: RunBodyProps) {
     [],
   );
 
-  useEffect(() => {
-    if (view !== "steps") return;
-    const setRowExpanded = (row: TreeRow, expand: boolean) => {
-      if (row.kind === "span" && row.hasChildren && row.collapsed === expand) toggleSpan(row.id);
-      if (row.kind === "group" && row.expanded !== expand) toggleGroup(row.id);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (ignoreStepKey(event)) return;
+  const setRowExpanded = (row: TreeRow, expand: boolean) => {
+    if (row.kind === "span" && row.hasChildren && row.collapsed === expand) toggleSpan(row.id);
+    if (row.kind === "group" && row.expanded !== expand) toggleGroup(row.id);
+  };
+  useEventListener(
+    "keydown",
+    (event) => {
+      if (stale || view !== "steps" || ignoreStepKey(event)) return;
       const index = rows.findIndex((row) => row.id === selectedRow?.id);
       const row = rows[index];
       if (event.key === "Escape" && detailOpen) {
@@ -278,10 +277,10 @@ function RunBody({ trace, accessToken, selection, embedded }: RunBodyProps) {
       } else if (event.key === "ArrowRight" && row) {
         setRowExpanded(row, true);
       }
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [rows, selectedRow, detailOpen, select, toggleSpan, toggleGroup, spanKeys, view]);
+    },
+    undefined,
+    true,
+  );
 
   if (view === "conversation")
     return (
@@ -364,15 +363,86 @@ interface RunViewProps {
   embedded?: boolean;
 }
 
-function selectedSpanMissing(trace: Trace | undefined, spanId: string | null): boolean {
-  return Boolean(spanId && trace && !trace.spans.some((span) => span.span_id === spanId));
+function selectedSpanMissing(trace: Trace, spanId: string | null): boolean {
+  return Boolean(spanId && !trace.spans.some((span) => span.span_id === spanId));
 }
 
-export function RunView({ traceId, traceRef, selection, accessToken, onBack, embedded = false }: RunViewProps) {
+function RunLoading({ embedded }: { embedded: boolean }) {
+  return (
+    <div
+      role="status"
+      aria-label="Loading trace"
+      className={embedded ? "flex flex-col gap-3 p-4" : "flex h-[60vh] items-center justify-center"}
+    >
+      {embedded ? (
+        [72, 48, 88, 60, 80].map((w) => (
+          <div key={w} className="h-4 animate-pulse rounded bg-trace-row-hover" style={{ width: `${w}%` }} />
+        ))
+      ) : (
+        <UiLoadingSpinner className="size-6 text-muted-foreground" />
+      )}
+    </div>
+  );
+}
+
+function RunLoadError({ error, onBack, onRetry }: { error: unknown; onBack: () => void; onRetry: () => void }) {
+  return (
+    <div className="p-6 text-xs" data-testid="run-view-error">
+      <button
+        type="button"
+        onClick={onBack}
+        className="mb-4 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="size-3.5" /> Back to traces
+      </button>
+      <h1 className="mb-2 text-sm font-medium">Could not load trace</h1>
+      <span className="text-muted-foreground">{error instanceof Error ? error.message : "Unknown error"}</span>
+      <Button variant="outline" size="sm" className="ml-3" onClick={onRetry}>
+        Retry
+      </Button>
+    </div>
+  );
+}
+
+/** Keeps the shown run on screen, inert, while the next one loads. */
+export function RunView(props: RunViewProps) {
+  const traceId = useDeferredValue(props.traceId);
+  const traceRef = useDeferredValue(props.traceRef);
+  const switching = traceId !== props.traceId || traceRef !== props.traceRef;
+  const shownKey = traceKey({ traceId, traceRef });
+  return (
+    <QueryErrorResetBoundary>
+      {({ reset }) => (
+        <ErrorBoundary
+          onReset={reset}
+          resetKeys={[shownKey]}
+          fallbackRender={({ error, resetErrorBoundary }) => (
+            <RunLoadError error={error} onBack={props.onBack} onRetry={resetErrorBoundary} />
+          )}
+        >
+          <Suspense fallback={<RunLoading embedded={props.embedded ?? false} />}>
+            <LoadedRun key={shownKey} {...props} traceId={traceId} traceRef={traceRef} switching={switching} />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+    </QueryErrorResetBoundary>
+  );
+}
+
+function LoadedRun({
+  traceId,
+  traceRef,
+  selection,
+  accessToken,
+  onBack,
+  embedded = false,
+  switching,
+}: RunViewProps & { switching: boolean }) {
   const traces = useTracesApi(accessToken);
   const queryClient = useQueryClient();
+  const queryKey = ["agentTrace", traceId, traceRef, accessToken];
   const traceQueryOptions = {
-    queryKey: ["agentTrace", traceId, traceRef, accessToken],
+    queryKey,
     queryFn: ({ pageParam }: { pageParam: string | null }) => traces.trace(traceId, traceRef, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage: Trace) => lastPage.next_cursor ?? undefined,
@@ -382,14 +452,13 @@ export function RunView({ traceId, traceRef, selection, accessToken, onBack, emb
     refetchOnMount: false,
     retry: false,
   };
-  const traceQuery = useInfiniteQuery(traceQueryOptions);
-  const refreshTrace = () => queryClient.resetQueries({ queryKey: traceQueryOptions.queryKey, exact: true });
+  const traceQuery = useSuspenseInfiniteQuery(traceQueryOptions);
+  const refreshTrace = () => queryClient.resetQueries({ queryKey, exact: true });
   const trace = useMemo(() => {
-    const pages = traceQuery.data?.pages;
-    if (!pages?.length) return undefined;
-    return { ...pages[0], spans: pages.flatMap((page) => page.spans) };
+    const [first, ...rest] = traceQuery.data.pages;
+    return { ...first, spans: [first, ...rest].flatMap((page) => page.spans) };
   }, [traceQuery.data]);
-  const seekingSpan = selectedSpanMissing(trace, selection.spanId);
+  const seekingSpan = !switching && selectedSpanMissing(trace, selection.spanId);
   const { hasNextPage, isFetching, isError, fetchNextPage } = traceQuery;
   const canSeek = seekingSpan && hasNextPage;
   useEffect(() => {
@@ -397,41 +466,6 @@ export function RunView({ traceId, traceRef, selection, accessToken, onBack, emb
   }, [canSeek, isFetching, isError, fetchNextPage]);
   const pageAction = isError ? "Retry" : "Load more steps";
 
-  if (traceQuery.isLoading) {
-    return (
-      <div
-        role="status"
-        aria-label="Loading trace"
-        className={embedded ? "flex flex-col gap-3 p-4" : "flex h-[60vh] items-center justify-center"}
-      >
-        {embedded ? (
-          [72, 48, 88, 60, 80].map((w) => (
-            <div key={w} className="h-4 animate-pulse rounded bg-trace-row-hover" style={{ width: `${w}%` }} />
-          ))
-        ) : (
-          <UiLoadingSpinner className="size-6 text-muted-foreground" />
-        )}
-      </div>
-    );
-  }
-  if (!trace) {
-    return (
-      <div className="p-6 text-[12px]" data-testid="run-view-error">
-        <button
-          type="button"
-          onClick={onBack}
-          className="mb-4 inline-flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="size-3.5" /> Back to traces
-        </button>
-        <h1 className="mb-2 text-[13px] font-medium">Could not load trace</h1>
-        <span className="text-muted-foreground">{traceQuery.error?.message ?? "Unknown error"}</span>
-        <Button variant="outline" size="sm" className="ml-3" onClick={() => void refreshTrace()}>
-          Retry
-        </Button>
-      </div>
-    );
-  }
   return (
     <Tabs
       value={selection.view}
@@ -439,7 +473,10 @@ export function RunView({ traceId, traceRef, selection, accessToken, onBack, emb
       className={cn(
         "@container/trace flex flex-1 flex-col gap-0 overflow-hidden bg-background",
         embedded ? "min-h-0" : "min-h-[560px] border-y border-border",
+        switching && "opacity-60 transition-opacity delay-150 duration-150 motion-reduce:transition-none",
       )}
+      aria-busy={switching}
+      inert={switching}
       data-testid="run-view"
     >
       <RunHeader
@@ -476,6 +513,7 @@ export function RunView({ traceId, traceRef, selection, accessToken, onBack, emb
         accessToken={accessToken}
         selection={selection}
         embedded={embedded}
+        stale={switching}
       />
     </Tabs>
   );

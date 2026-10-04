@@ -1,11 +1,13 @@
 "use client";
 
+import { X } from "lucide-react";
 import moment from "moment";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useMediaQuery, useResizeObserver } from "usehooks-ts";
 
 import { cn } from "@/lib/cva.config";
 
-import { FIELD_COLS, FIELD_ROWS, agentDotColor, agoLabel, columnDots, isReceiving } from "./lensField";
+import { FIELD_COLS, FIELD_ROWS, columnDots } from "./lensField";
 import type { TraceSummary } from "./traceTypes";
 import { traceAgentNames } from "./traceUtils";
 
@@ -136,9 +138,10 @@ function drawField(canvas: HTMLCanvasElement, { buckets, max, band, hover, progr
 }
 
 function useRiseIn(): number {
+  const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const [progress, setProgress] = useState(0);
   useEffect(() => {
-    if (typeof window.matchMedia !== "function" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (reduceMotion) {
       setProgress(1);
       return;
     }
@@ -149,7 +152,7 @@ function useRiseIn(): number {
       if (t < 1) frame = requestAnimationFrame(rise);
     });
     return () => cancelAnimationFrame(frame);
-  }, []);
+  }, [reduceMotion]);
   return progress;
 }
 
@@ -166,17 +169,13 @@ function DotField({
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const progress = useRiseIn();
+  const { width, height } = useResizeObserver({ ref: canvas as RefObject<HTMLCanvasElement> });
   useEffect(() => {
-    const node = canvas.current;
-    if (!node) return;
-    const frame: FieldFrame = { buckets, max, band, hover, progress };
-    const paint = () => drawField(node, frame);
-    paint();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(paint);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [buckets, max, band, hover, progress]);
+    if (canvas.current) {
+      const fieldFrame = { buckets, max, band, hover, progress };
+      drawField(canvas.current, fieldFrame);
+    }
+  }, [buckets, max, band, hover, progress, width, height]);
   return (
     <canvas
       ref={canvas}
@@ -189,74 +188,6 @@ function DotField({
 
 function BucketBar({ bucket }: { bucket: Bucket }) {
   return <div className="pointer-events-none h-full flex-1" data-testid="timeline-bucket" data-runs={bucket.runs} />;
-}
-
-function useNow(intervalMs: number): number {
-  const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), intervalMs);
-    return () => window.clearInterval(timer);
-  }, [intervalMs]);
-  return now;
-}
-
-function LivePulse({ live }: { live: boolean }) {
-  return (
-    <span aria-hidden="true" className="relative flex size-2">
-      {live && (
-        <span className="absolute inline-flex size-full rounded-full bg-[#3b5bfd] opacity-60 motion-safe:animate-ping" />
-      )}
-      <span
-        className={cn("relative inline-flex size-2 rounded-full", live ? "bg-[#3b5bfd]" : "bg-muted-foreground/50")}
-      />
-    </span>
-  );
-}
-
-function latestStart(runs: readonly TraceSummary[]): number | null {
-  return runs.reduce<number | null>((latest, run) => {
-    const t = moment(run.start_time).valueOf();
-    return latest === null || t > latest ? t : latest;
-  }, null);
-}
-
-function FieldHeader({ runs, range }: { runs: readonly TraceSummary[]; range: TimeWindow }) {
-  const now = useNow(1000);
-  const agents = Array.from(new Set(runs.flatMap(traceAgentNames)));
-  const failed = runs.filter((run) => run.error_count > 0).length;
-  const lastMs = latestStart(runs);
-  const live = isReceiving(lastMs, now);
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 font-mono text-[11px] leading-none">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground tabular-nums">
-        <span className="flex items-center gap-2" role="status" data-testid="traces-last-seen">
-          <LivePulse live={live} />
-          <span className={cn("font-semibold", live ? "text-[#0011b3] dark:text-[#8b9bff]" : "text-foreground")}>
-            {live ? "receiving" : "idle"}
-          </span>
-          {lastMs !== null && <span>last trace {agoLabel(lastMs, now)}</span>}
-        </span>
-        <span>
-          <span className="font-semibold text-foreground">{runs.length.toLocaleString()}</span>{" "}
-          {runs.length === 1 ? "run" : "runs"} from{" "}
-          <span className="font-semibold text-foreground">{agents.length}</span>{" "}
-          {agents.length === 1 ? "agent" : "agents"}
-          {failed > 0 && <span className="text-[#e5484d]"> · {failed} failed</span>}
-        </span>
-      </div>
-      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-muted-foreground">
-        {agents.slice(0, 6).map((agent) => (
-          <span key={agent} className="flex items-center gap-1.5">
-            <span className="size-[6px] rounded-full" style={{ backgroundColor: agentDotColor(agent) }} />
-            {agent}
-          </span>
-        ))}
-        <span className="rounded border border-border bg-muted/50 px-1.5 py-px">
-          Total {formatSpan(range.endMs - range.startMs)}
-        </span>
-      </div>
-    </div>
-  );
 }
 
 function NowEdge() {
@@ -277,7 +208,7 @@ function NowEdge() {
 function BucketTooltip({ bucket, index }: { bucket: Bucket; index: number }) {
   return (
     <div
-      className="pointer-events-none absolute top-full z-floating mt-1 rounded-md border border-border bg-popover px-2.5 py-1.5 font-mono text-[11px] text-popover-foreground shadow-md"
+      className="pointer-events-none absolute top-full z-floating mt-1 rounded-md border border-border bg-popover px-2.5 py-1.5 font-mono text-xs text-popover-foreground shadow-md"
       style={{ left: pct(Math.min(0.8, index / BUCKETS)) }}
       role="tooltip"
     >
@@ -288,7 +219,7 @@ function BucketTooltip({ bucket, index }: { bucket: Bucket; index: number }) {
         {bucket.runs} {bucket.runs === 1 ? "run" : "runs"}
         {bucket.failed > 0 && `, ${bucket.failed} failed`}
       </div>
-      <div className="text-[#0011b3] dark:text-[#8b9bff]">drag to zoom</div>
+      <div className="text-info">drag to zoom</div>
     </div>
   );
 }
@@ -351,8 +282,7 @@ function SelectionBracket({
   const handle = "absolute inset-y-0 w-[2px] cursor-ew-resize bg-[#0011b3] dark:bg-[#8b9bff]";
   const tick =
     "before:absolute before:top-0 before:h-[2px] before:w-2 before:bg-inherit after:absolute after:bottom-0 after:h-[2px] after:w-2 after:bg-inherit";
-  const edgeLabel =
-    "pointer-events-none absolute -bottom-5 font-mono text-[10px] whitespace-nowrap text-[#0011b3] tabular-nums dark:text-[#8b9bff]";
+  const edgeLabel = "pointer-events-none absolute -bottom-5 font-mono text-xs whitespace-nowrap text-info tabular-nums";
   return (
     <>
       <div
@@ -372,7 +302,7 @@ function SelectionBracket({
           onPointerDown={onHandleDown("resize-hi")}
         />
         {widthPx >= MIN_DURATION_LABEL_PX && (
-          <span className="pointer-events-none absolute inset-x-0 top-2 text-center font-mono text-[11px] font-semibold text-[#0011b3] dark:text-[#8b9bff]">
+          <span className="pointer-events-none absolute inset-x-0 top-2 text-center font-mono text-xs font-semibold text-info">
             {formatSpan(window.endMs - window.startMs)}
           </span>
         )}
@@ -404,7 +334,7 @@ function TickAxis({ range }: { range: TimeWindow }) {
           style={{ left: pct(t), transform: tickShift(t) }}
         >
           <span className="h-1 w-px bg-border" />
-          <span className="font-mono text-[10px] whitespace-nowrap text-muted-foreground tabular-nums">
+          <span className="font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums">
             {moment(range.startMs + (range.endMs - range.startMs) * t).format(format)}
           </span>
         </div>
@@ -421,18 +351,10 @@ export function TracesTimeline({ runs, range, selection, onSelect }: TracesTimel
   const [drag, setDrag] = useState<DragState | null>(null);
   const [draft, setDraft] = useState<Band | null>(null);
   const areaRef = useRef<HTMLDivElement>(null);
-  const [stripWidth, setStripWidth] = useState(0);
-
-  useEffect(() => {
-    const el = areaRef.current;
-    if (!el) return;
-    const measure = () => setStripWidth(el.getBoundingClientRect().width);
-    measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+  const { width: stripWidth = 0 } = useResizeObserver({
+    ref: areaRef as RefObject<HTMLDivElement>,
+    box: "border-box",
+  });
 
   const committed = bandForWindow(buckets, selection);
   const band = drag ? draft : committed;
@@ -486,12 +408,11 @@ export function TracesTimeline({ runs, range, selection, onSelect }: TracesTimel
       tabIndex={0}
       onKeyDown={onKeyDown}
     >
-      <FieldHeader runs={runs} range={range} />
       <div
         ref={areaRef}
         role="presentation"
         data-testid="timeline-area"
-        className="relative mt-2 flex cursor-crosshair touch-none items-end"
+        className="relative flex cursor-crosshair touch-none items-end"
         style={{ height: FIELD_HEIGHT }}
         onPointerDown={(e) => begin("select", e)}
         onPointerMove={onMove}
@@ -525,6 +446,16 @@ export function TracesTimeline({ runs, range, selection, onSelect }: TracesTimel
         <TickAxis range={range} />
       </div>
       {hover !== null && !drag && <BucketTooltip bucket={buckets[hover]} index={hover} />}
+      {selection && (
+        <button
+          type="button"
+          onClick={() => onSelect(null)}
+          aria-label="Clear time zoom"
+          className="absolute top-1 right-3 inline-flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <X className="size-3" />
+        </button>
+      )}
     </div>
   );
 }

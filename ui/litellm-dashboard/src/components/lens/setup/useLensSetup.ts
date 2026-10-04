@@ -26,9 +26,10 @@ export function useLensSetup(accessToken: string, enabled: boolean, canInvestiga
   const requestsReady = activity.data?.requests === true && !activity.error;
   const connected = data.workers.some((worker) => workerConnected(worker, now));
   const hasInvestigations = data.lenses.length > 0;
-  const error = traceState.error || list.error || activity.error;
   const activityReady = traceState.tracesReady || requestsReady;
-  const loadingActivity = list.isSuccess && activity.isPending;
+  const activityError = activityReady ? null : traceState.error || activity.error;
+  const error = list.error || activityError;
+  const loadingActivity = !activityReady && list.isSuccess && activity.isPending;
   const loadingInvestigations = canInvestigate && (list.isPending || loadingActivity);
   const refresh = () => {
     void traces.refetch();
@@ -44,7 +45,7 @@ export function useLensSetup(accessToken: string, enabled: boolean, canInvestiga
     connected,
     hasInvestigations,
     missingTraces: traceState.missingTraces,
-    loading: traces.isPending || loadingInvestigations,
+    loading: (!activityReady && traces.isPending) || loadingInvestigations,
     checking: traces.isFetching || list.isFetching || activity.isFetching,
     ready: activityReady && connected && !error,
     workers: data.workers,

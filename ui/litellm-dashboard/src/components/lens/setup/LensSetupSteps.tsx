@@ -18,22 +18,24 @@ type StepProps = {
 };
 
 export function initialSetupStep(state: LensSetupState) {
-  if (!state.tracingEnabled) return 0;
-  if (!state.tracesReady) return 1;
-  return state.connected ? 3 : 2;
+  if (state.tracesReady || state.requestsReady) return state.connected ? 3 : 2;
+  return state.tracingEnabled ? 1 : 0;
 }
 
 function StorageStep({ state, onStep, ...props }: StepProps) {
   if (!state.tracingEnabled)
     return (
-      <TracingSetupFields
-        detail="Tracing is not enabled"
-        accessToken={props.accessToken}
-        onOpenTrace={props.onTrace}
-        onCheck={state.refresh}
-        checking={state.checking}
-        readOnly={props.readOnly}
-      />
+      <>
+        <TracingSetupFields
+          detail="Tracing is not enabled"
+          accessToken={props.accessToken}
+          onOpenTrace={props.onTrace}
+          onCheck={state.refresh}
+          checking={state.checking}
+          readOnly={props.readOnly}
+        />
+        <ActivityContinuation state={state} {...props} />
+      </>
     );
   return (
     <div className="space-y-4">
@@ -43,6 +45,7 @@ function StorageStep({ state, onStep, ...props }: StepProps) {
       <Button onClick={() => onStep(1)}>
         Continue to your agent <ArrowRight aria-hidden="true" className="size-4" />
       </Button>
+      <ActivityContinuation state={state} {...props} />
     </div>
   );
 }
@@ -52,10 +55,37 @@ function continuationLabel(state: LensSetupState) {
   return state.tracesReady ? "Continue to worker" : "Continue with request logs";
 }
 
-function AgentStep({ state, onConnect, onCreate, ...props }: StepProps) {
+function ActivityContinuation({
+  state,
+  onConnect,
+  onCreate,
+  readOnly,
+  canInvestigate,
+}: Pick<StepProps, "state" | "onConnect" | "onCreate" | "readOnly" | "canInvestigate">) {
+  if (!state.tracesReady && !state.requestsReady) return null;
+  return (
+    <div className="mt-4">
+      <Button onClick={state.connected ? onCreate : onConnect} disabled={readOnly || !canInvestigate}>
+        {continuationLabel(state)}
+        <ArrowRight aria-hidden="true" className="size-4" />
+      </Button>
+      {state.requestsReady && !state.tracesReady && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Request logs are already available. You can investigate them now and add agent traces later.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function AgentStep({ state, ...props }: StepProps) {
   if (!state.tracingEnabled)
-    return <p className="text-sm text-muted-foreground">Connect trace storage in step 1 before sending a trace.</p>;
-  const activityReady = state.tracesReady || state.requestsReady;
+    return (
+      <>
+        <p className="text-sm text-muted-foreground">Connect trace storage in step 1 before sending a trace.</p>
+        <ActivityContinuation state={state} {...props} />
+      </>
+    );
   return (
     <>
       <div hidden={state.tracesReady}>
@@ -77,19 +107,7 @@ function AgentStep({ state, onConnect, onCreate, ...props }: StepProps) {
           Your first trace is ready. Continue setup so Lens can investigate your agent’s behavior.
         </p>
       )}
-      {activityReady && (
-        <div className="mt-4">
-          <Button onClick={state.connected ? onCreate : onConnect} disabled={props.readOnly || !props.canInvestigate}>
-            {continuationLabel(state)}
-            <ArrowRight aria-hidden="true" className="size-4" />
-          </Button>
-          {state.requestsReady && !state.tracesReady && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              Request logs are already available. You can investigate them now and add agent traces later.
-            </p>
-          )}
-        </div>
-      )}
+      <ActivityContinuation state={state} {...props} />
     </>
   );
 }

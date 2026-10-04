@@ -9,6 +9,7 @@ import { AttributesDetail } from "./AttributesDetail";
 import { CopyButton } from "./CopyButton";
 import { DetailContent, errorHeadline, useSpanDetail } from "./DetailContent";
 import { IdChip } from "./IdChip";
+import { PaneBar } from "./PaneBar";
 import { RequestDetail } from "./RequestDetail";
 import { SpanIcon } from "./SpanIcon";
 import { useTracesApi } from "./tracesApi";
@@ -47,7 +48,7 @@ function PaneHeader({
   onClose: () => void;
 }) {
   return (
-    <div className="flex h-7 shrink-0 items-center justify-between gap-3 px-5">
+    <PaneBar className="justify-between gap-3">
       <div className="flex min-w-0 items-center">
         <span className="mr-2 shrink-0">
           <SpanIcon type={type} model={model} error={failed} size="md" />
@@ -64,20 +65,16 @@ function PaneHeader({
         size="icon-xs"
         onClick={onClose}
         aria-label="Close details"
-        className="size-6 shrink-0 rounded-[4px] text-muted-foreground"
+        className="size-6 shrink-0 rounded-sm text-muted-foreground"
       >
         <PanelRightClose className="size-4" />
       </Button>
-    </div>
+    </PaneBar>
   );
 }
 
 function PaneFooter({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t bg-background px-5 py-2">
-      {children}
-    </div>
-  );
+  return <div className="flex h-10 shrink-0 items-center gap-3 border-t bg-background px-3">{children}</div>;
 }
 
 function Meta({ label, value }: { label: string; value: string }) {
@@ -112,10 +109,7 @@ function SpanPane({
   );
   const tokens = span.input_tokens + span.output_tokens;
   return (
-    <aside
-      className="flex h-full min-w-0 flex-col bg-background pt-4 text-[13px] text-foreground"
-      aria-label="Span details"
-    >
+    <aside className="flex h-full min-w-0 flex-col bg-background text-sm text-foreground" aria-label="Span details">
       <PaneHeader
         type={span.type}
         model={span.model}
@@ -125,15 +119,15 @@ function SpanPane({
         onClose={onClose}
       />
       <Tabs value={tab} onValueChange={(value) => onSpanTabChange(value as SpanTab)} className="min-h-0 flex-1 gap-0">
-        <div className="shrink-0 border-b px-5">
-          <TabsList variant="line" aria-label="Span detail sections" className="h-10 gap-4 px-0">
+        <PaneBar>
+          <TabsList variant="line" aria-label="Span detail sections" className="h-full gap-4 px-0">
             {SPAN_TABS.map((id) => (
               <TabsTrigger key={id} value={id} className="flex-none px-0 text-xs">
                 {TAB_LABELS[id]}
               </TabsTrigger>
             ))}
           </TabsList>
-        </div>
+        </PaneBar>
         <TabsContent value="content" className="min-h-0 overflow-auto pt-3">
           <DetailContent accessToken={accessToken} traceId={traceId} traceRef={trace.summary.trace_ref} span={span} />
         </TabsContent>
@@ -163,8 +157,8 @@ function SpanPane({
 function GroupMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="border-b border-border/60 py-3">
-      <div className="text-[13px] font-medium text-muted-foreground">{label}</div>
-      <div className="mt-1 text-[13px] text-foreground tabular-nums">{value}</div>
+      <div className="text-sm font-medium text-muted-foreground">{label}</div>
+      <div className="mt-1 text-sm text-foreground tabular-nums">{value}</div>
     </div>
   );
 }
@@ -186,10 +180,7 @@ function GroupPane({
   const sample = (firstFailure ?? row.members[0]).span_id;
   const handoff = useTracesApi(accessToken).handoff(trace.summary.trace_id, sample, trace.summary.trace_ref);
   return (
-    <aside
-      className="flex h-full min-w-0 flex-col bg-background pt-4 text-[13px] text-foreground"
-      aria-label="Group details"
-    >
+    <aside className="flex h-full min-w-0 flex-col bg-background text-sm text-foreground" aria-label="Group details">
       <PaneHeader
         type={row.type}
         model={row.members[0]?.model ?? null}
@@ -201,7 +192,7 @@ function GroupPane({
         }
         onClose={onClose}
       />
-      <div className="min-h-0 flex-1 overflow-auto px-5 py-3">
+      <div className="min-h-0 flex-1 overflow-auto px-3 py-3">
         <div className="grid grid-cols-2 gap-x-5">
           <GroupMetric label="Invocations" value={row.members.length.toLocaleString()} />
           <GroupMetric label="Failed" value={row.failedCount.toLocaleString()} />
@@ -211,9 +202,9 @@ function GroupPane({
           <GroupMetric label="Type" value={row.type} />
         </div>
         {firstFailure?.error && (
-          <section className="mt-3 rounded-[4px] border border-destructive/30 px-3.5 py-3">
-            <div className="text-[12px] font-medium text-destructive">Failure pattern</div>
-            <p className="mt-2 font-mono text-[12px] leading-5 text-foreground">{errorHeadline(firstFailure.error)}</p>
+          <section className="mt-3 rounded-sm border border-destructive/30 px-3.5 py-3">
+            <div className="text-xs font-medium text-destructive">Failure pattern</div>
+            <p className="mt-2 font-mono text-xs leading-5 text-foreground">{errorHeadline(firstFailure.error)}</p>
           </section>
         )}
       </div>
@@ -228,7 +219,7 @@ function GroupPane({
 export function DetailPane({ trace, row, accessToken, spanTab, onSpanTabChange, onClose }: DetailPaneProps) {
   if (!row || row.kind === "load-more") {
     return (
-      <div className="grid h-full place-items-center bg-background text-[13px] text-muted-foreground">
+      <div className="grid h-full place-items-center bg-background text-sm text-muted-foreground">
         Select a span to inspect it.
       </div>
     );

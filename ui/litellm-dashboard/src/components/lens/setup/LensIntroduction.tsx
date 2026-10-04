@@ -29,7 +29,7 @@ function TraceExample({ highlighted, onHighlight }: EvidenceProps) {
         </h3>
         <p className="text-xs text-muted-foreground">Sample trace · 14.2s</p>
       </div>
-      <ol className="mt-3 space-y-1.5 text-xs leading-5 sm:text-[13px]" aria-label="Sample trace timeline">
+      <ol className="mt-3 space-y-1.5 text-xs leading-5 sm:text-sm" aria-label="Sample trace timeline">
         {traceSteps.map((item, index) => {
           const linked = item.failed || item.name === "answer";
           const rowClass =
@@ -80,11 +80,11 @@ function TraceExample({ highlighted, onHighlight }: EvidenceProps) {
       <div className="mt-3 grid gap-3 border-t pt-3 sm:grid-cols-2">
         <div id="lens-benchmark-output" className={`${styles.evidenceOutput} rounded-lg bg-muted/60 p-2.5`}>
           <p className="text-xs text-muted-foreground">run_benchmark · output</p>
-          <p className="mt-1.5 text-[13px] leading-[18px]">Error: benchmark runner unavailable (503)</p>
+          <p className="mt-1.5 text-sm leading-4.5">Error: benchmark runner unavailable (503)</p>
         </div>
         <div id="lens-answer-output" className={`${styles.evidenceOutput} rounded-lg bg-muted/60 p-2.5`}>
           <p className="text-xs text-muted-foreground">answer · output</p>
-          <p className="mt-1.5 text-[13px] leading-[18px]">“{sampleAnswer}”</p>
+          <p className="mt-1.5 text-sm leading-4.5">“{sampleAnswer}”</p>
         </div>
       </div>
     </section>
@@ -118,7 +118,7 @@ function FindingExamples({ highlighted, onHighlight }: EvidenceProps) {
               Claims numbers it never measured
             </button>
           </h4>
-          <div className="ml-4 mt-1.5 space-y-1.5 text-[13px] leading-[18px]">
+          <div className="ml-4 mt-1.5 space-y-1.5 text-sm leading-4.5">
             <p className="text-muted-foreground">Reports a speedup even though the benchmark failed.</p>
             <blockquote className="border-l-2 pl-3 italic">
               “…40% faster than the row store for your workload.”
@@ -135,7 +135,7 @@ function FindingExamples({ highlighted, onHighlight }: EvidenceProps) {
             <span aria-hidden="true" className="mt-1.5 size-2 shrink-0 rounded-full bg-amber-500" />
             Promises to follow up, then stops
           </h4>
-          <div className="ml-4 mt-1.5 space-y-1.5 text-[13px] leading-[18px] text-muted-foreground">
+          <div className="ml-4 mt-1.5 space-y-1.5 text-sm leading-4.5 text-muted-foreground">
             <p>After an order lookup times out, the agent promises to check and ends the run.</p>
             <p className="text-xs">12 linked runs · Medium priority</p>
           </div>
@@ -153,10 +153,7 @@ export function LensIntroduction({ onStart, onDemo }: { onStart: () => void; onD
       aria-labelledby="lens-introduction"
       className="rounded-2xl border bg-card p-5 sm:px-6 sm:py-5 xl:px-7 xl:py-6"
     >
-      <h2
-        id="lens-introduction"
-        className="text-2xl leading-tight font-semibold tracking-[-0.03em] sm:text-[30px] xl:text-[32px]"
-      >
+      <h2 id="lens-introduction" className="text-2xl leading-tight font-semibold tracking-tight sm:text-3xl">
         The gateway that helps your agents improve
       </h2>
       <p className="mt-3 max-w-[780px] text-sm leading-6 text-muted-foreground">
