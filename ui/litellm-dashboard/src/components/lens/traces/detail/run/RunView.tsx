@@ -10,7 +10,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { cn } from "@/lib/cva.config";
 
 import { useTracesApi } from "../../api";
-import { LoadingState } from "../../../ui/LoadingState";
+import { LoadingState } from "@/components/shared/LoadingState";
 import { classifyTraceReadFailure, traceReadRetry, traceReadRetryDelay } from "../../list/traceReadFailure";
 import { type RunSelection, traceKey } from "../../routing";
 import type { Trace } from "../../types";

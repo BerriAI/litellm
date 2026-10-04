@@ -15,13 +15,14 @@ import { useZoomRouting } from "@/components/shared/timeRange/routing";
 import { type RelativeRange, timeWindow } from "@/components/shared/timeRange/timeRange";
 import { TimeRangeControls } from "@/components/shared/timeRange/TimeRangeControls";
 import type { RelativeRangeState } from "@/components/shared/timeRange/useRelativeRange";
-import { TracesTimeline } from "./TracesTimeline";
+import { Timeline } from "@/components/shared/timeline/Timeline";
 import { TracingSetupCard } from "../../onboarding/tracing/TracingSetupCard";
 import { useTracesLive } from "../api";
 import { type AgentTracesResult, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
 import { useTraceHistogram } from "./useTraceHistogram";
 
 const DRAWER_WIDTH_KEY = "litellm.agentTraces.drawerWidth";
+const RUN_NOUN = { singular: "run", plural: "runs" };
 
 export type TimeControls = Pick<RelativeRangeState, "setHours" | "setLive">;
 
@@ -173,12 +174,13 @@ export function AgentTracesSection({
             />
           )}
         </RunsToolbar>
-        <TracesTimeline
+        <Timeline
           buckets={histogram.buckets}
           loading={histogram.isLoading}
           range={window}
           selection={zoom}
           onSelect={setZoom}
+          noun={RUN_NOUN}
         />
         <AgentTracesTable
           traces={runs}

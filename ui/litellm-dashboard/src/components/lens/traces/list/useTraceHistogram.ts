@@ -3,10 +3,10 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 import { useTracesApi } from "../api";
 import type { TraceHistogram } from "../types";
-import { BUCKETS, type Bucket } from "./TracesTimeline";
+import { BUCKETS, type TimeBucket } from "@/components/shared/timeline/Timeline";
 
 /** The dot field draws one series entry per successful run. */
-export const toBuckets = (histogram: TraceHistogram): Bucket[] =>
+export const toBuckets = (histogram: TraceHistogram): TimeBucket[] =>
   histogram.buckets.map((bucket) => ({
     startMs: bucket.start_ms,
     endMs: bucket.end_ms,
@@ -15,7 +15,7 @@ export const toBuckets = (histogram: TraceHistogram): Bucket[] =>
     series: bucket.agents.flatMap(({ agent, runs }) => Array<string>(runs).fill(agent)),
   }));
 
-const emptyBuckets = (range: TimeWindow): Bucket[] => {
+const emptyBuckets = (range: TimeWindow): TimeBucket[] => {
   const width = (range.endMs - range.startMs) / BUCKETS;
   return Array.from({ length: BUCKETS }, (_, i) => ({
     startMs: range.startMs + i * width,
@@ -27,7 +27,7 @@ const emptyBuckets = (range: TimeWindow): Bucket[] => {
 };
 
 export interface TraceHistogramResult {
-  buckets: Bucket[];
+  buckets: TimeBucket[];
   /** True until the first histogram for this scope arrives; a range change keeps the previous one instead. */
   isLoading: boolean;
 }

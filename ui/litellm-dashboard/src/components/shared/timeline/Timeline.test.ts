@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { bandForWindow, type Bucket, dragUpdate, formatSpan } from "./TracesTimeline";
+import { bandForWindow, dragUpdate, formatSpan } from "./Timeline";
 
 const HOUR = 3600 * 1000;
 const START = Date.UTC(2026, 8, 30, 0, 0, 0);

@@ -84,7 +84,7 @@ const renderWindowed = (timeControls?: TimeControls) =>
   );
 
 const bucketRunCounts = () =>
-  screen.getAllByTestId("timeline-bucket").map((bucket) => Number(bucket.getAttribute("data-runs")));
+  screen.getAllByTestId("timeline-bucket").map((bucket) => Number(bucket.getAttribute("data-total")));
 
 describe("AgentTracesSection", () => {
   afterEach(() => {
@@ -523,10 +523,10 @@ describe("AgentTracesSection", () => {
   it("plots every loaded run on the timeline", async () => {
     serve(runs);
     renderWindowed();
-    expect(screen.getByTestId("traces-timeline")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByTestId("timeline")).toHaveAttribute("aria-busy", "true");
     await screen.findAllByTestId("agent-trace-row");
 
-    await waitFor(() => expect(screen.getByTestId("traces-timeline")).toHaveAttribute("aria-busy", "false"));
+    await waitFor(() => expect(screen.getByTestId("timeline")).toHaveAttribute("aria-busy", "false"));
     const counts = bucketRunCounts();
     expect(counts).toHaveLength(60);
     expect(counts.reduce((a, b) => a + b, 0)).toBe(runs.length);
@@ -562,7 +562,7 @@ describe("AgentTracesSection", () => {
     drag(screen.getByTestId("timeline-selection"), 0, 59);
     await waitFor(() => expect(rowCount()).toBe(0));
 
-    fireEvent.keyDown(screen.getByTestId("traces-timeline"), { key: "Escape" });
+    fireEvent.keyDown(screen.getByTestId("timeline"), { key: "Escape" });
     expect(screen.queryByTestId("timeline-selection")).not.toBeInTheDocument();
     await waitFor(() => expect(rowCount()).toBe(runs.length));
   });

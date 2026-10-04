@@ -19,10 +19,13 @@ const SKELETON_COLUMNS = skeletonColumns(BUCKETS);
 
 import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 
-export interface Bucket extends DotColumn {
+export interface TimeBucket extends DotColumn {
   startMs: number;
   endMs: number;
 }
+
+/** What one counted item is called in the tooltip: "run", "request". */
+export type ItemNoun = { readonly singular: string; readonly plural: string };
 
 /** Compact window length, Logfire-style: "45m", "6h 12m", "7d", "152d 23h". */
 export function formatSpan(ms: number): string {
@@ -46,17 +49,18 @@ const tickShift = (t: number): string => {
   return "translateX(-50%)";
 };
 
-interface TracesTimelineProps {
-  buckets: readonly Bucket[];
+interface TimelineProps {
+  buckets: readonly TimeBucket[];
   range: TimeWindow;
   selection: TimeWindow | null;
   onSelect: (selection: TimeWindow | null) => void;
+  noun: ItemNoun;
   /** Paint a muted placeholder profile until the first histogram arrives. */
   loading?: boolean;
 }
 
-function BucketBar({ bucket }: { bucket: Bucket }) {
-  return <div className="pointer-events-none h-full flex-1" data-testid="timeline-bucket" data-runs={bucket.total} />;
+function BucketBar({ bucket }: { bucket: TimeBucket }) {
+  return <div className="pointer-events-none h-full flex-1" data-testid="timeline-bucket" data-total={bucket.total} />;
 }
 
 function NowEdge() {
@@ -64,7 +68,7 @@ function NowEdge() {
     <>
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0 w-24 bg-gradient-to-r from-transparent via-[#3b5bfd]/[0.08] to-transparent motion-safe:animate-[lens-sweep_6s_linear_infinite] motion-reduce:hidden"
+        className="pointer-events-none absolute inset-y-0 w-24 bg-gradient-to-r from-transparent via-[#3b5bfd]/[0.08] to-transparent motion-safe:animate-[timeline-sweep_6s_linear_infinite] motion-reduce:hidden"
       />
       <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0">
         <span className="absolute inset-y-0 right-0 w-px bg-[#3b5bfd]/50" />
@@ -74,7 +78,7 @@ function NowEdge() {
   );
 }
 
-function BucketTooltip({ bucket, index }: { bucket: Bucket; index: number }) {
+function BucketTooltip({ bucket, index, noun }: { bucket: TimeBucket; index: number; noun: ItemNoun }) {
   return (
     <div
       className="pointer-events-none absolute top-full z-floating mt-1 rounded-md border border-border bg-popover px-2.5 py-1.5 font-mono text-xs text-popover-foreground shadow-md"
@@ -85,7 +89,7 @@ function BucketTooltip({ bucket, index }: { bucket: Bucket; index: number }) {
         {moment(bucket.startMs).format(EDGE_FORMAT)} to {moment(bucket.endMs).format("HH:mm")}
       </div>
       <div>
-        {bucket.total} {bucket.total === 1 ? "run" : "runs"}
+        {bucket.total} {bucket.total === 1 ? noun.singular : noun.plural}
         {bucket.failed > 0 && `, ${bucket.failed} failed`}
       </div>
       <div className="text-info">drag to zoom</div>
@@ -119,7 +123,7 @@ export function dragUpdate(drag: DragState, at: number, buckets = BUCKETS): Band
 }
 
 /** Bucket band covered by a selected window, or null when nothing is selected. */
-export function bandForWindow(buckets: readonly Bucket[], selection: TimeWindow | null): Band | null {
+export function bandForWindow(buckets: readonly TimeBucket[], selection: TimeWindow | null): Band | null {
   if (selection === null) return null;
   const inside = buckets.flatMap((b, i) => (b.startMs >= selection.startMs && b.endMs <= selection.endMs ? [i] : []));
   return inside.length > 0 ? { lo: inside[0], hi: inside[inside.length - 1] } : null;
@@ -208,8 +212,8 @@ function TickAxis({ range }: { range: TimeWindow }) {
   );
 }
 
-/** Histogram of runs over the window. Drag to select; drag the bracket or its edges to adjust; Esc clears. */
-export function TracesTimeline({ buckets, range, selection, onSelect, loading = false }: TracesTimelineProps) {
+/** Histogram over the window. Drag to select; drag the bracket or its edges to adjust; Esc clears. */
+export function Timeline({ buckets, range, selection, onSelect, noun, loading = false }: TimelineProps) {
   const [hover, setHover] = useState<number | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [draft, setDraft] = useState<Band | null>(null);
@@ -268,7 +272,7 @@ export function TracesTimeline({ buckets, range, selection, onSelect, loading = 
   return (
     <div
       className="relative shrink-0 border-b border-border bg-card px-3 pt-2 pb-1 outline-none select-none"
-      data-testid="traces-timeline"
+      data-testid="timeline"
       aria-busy={loading}
       tabIndex={0}
       onKeyDown={onKeyDown}
@@ -312,7 +316,7 @@ export function TracesTimeline({ buckets, range, selection, onSelect, loading = 
       <div className="mt-1">
         <TickAxis range={range} />
       </div>
-      {showTooltip && <BucketTooltip bucket={buckets[hover]} index={hover} />}
+      {showTooltip && <BucketTooltip bucket={buckets[hover]} index={hover} noun={noun} />}
       {selection && (
         <button
           type="button"

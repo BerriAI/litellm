@@ -461,7 +461,7 @@
   visibility: hidden;
 }
 
-@keyframes lens-sweep {
+@keyframes timeline-sweep {
   from {
     left: -6rem;
   }

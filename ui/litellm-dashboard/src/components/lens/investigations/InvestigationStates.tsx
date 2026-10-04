@@ -2,8 +2,8 @@
 
 import { ArrowUpRight, SearchX, TriangleAlert } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { LoadingState } from "../ui/LoadingState";
-import { StateMessage } from "../ui/StateMessage";
+import { LoadingState } from "@/components/shared/LoadingState";
+import { StateMessage } from "@/components/shared/StateMessage";
 
 import { ApiError } from "@/lib/http/client";
 
