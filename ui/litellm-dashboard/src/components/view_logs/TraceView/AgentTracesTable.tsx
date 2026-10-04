@@ -26,7 +26,7 @@ interface AgentTracesTableProps {
   onOpenTrace: (trace: TraceSummary) => void;
   selectedKey?: string | null;
   rangeEmpty?: boolean;
-  onSetUpTracing?: () => void;
+  onSetUpTracing: () => void;
 }
 
 export const formatCost = (cost: number): string => {
@@ -73,9 +73,16 @@ function PlaceholderRow({ rowRef }: { rowRef?: (node: Element | null) => void })
   );
 }
 
-function EmptyRuns({ onSetUpTracing }: { onSetUpTracing?: () => void }) {
-  if (!onSetUpTracing)
-    return <div className="py-16 text-center text-xs text-muted-foreground">No runs match these filters.</div>;
+function EmptyRuns({ rangeEmpty, onSetUpTracing }: { rangeEmpty: boolean; onSetUpTracing: () => void }) {
+  if (!rangeEmpty)
+    return (
+      <div className="flex items-center justify-center gap-3 py-16 text-xs text-muted-foreground">
+        <span>No runs match these filters.</span>
+        <Button size="xs" variant="outline" onClick={onSetUpTracing}>
+          Set up tracing
+        </Button>
+      </div>
+    );
   return (
     <div className="flex flex-col items-center gap-1 py-16 text-center">
       <p className="text-sm font-medium">No runs in this time range</p>
@@ -221,7 +228,7 @@ export function AgentTracesTable({
           </Button>
         </div>
       )}
-      {isEmpty && <EmptyRuns onSetUpTracing={rangeEmpty ? onSetUpTracing : undefined} />}
+      {isEmpty && <EmptyRuns rangeEmpty={rangeEmpty} onSetUpTracing={onSetUpTracing} />}
     </div>
   );
 }
