@@ -6,7 +6,7 @@ import { useRef, useState, type RefObject } from "react";
 import { useResizeObserver } from "usehooks-ts";
 
 import { DotFieldCanvas, DotFieldRoot } from "@/components/shared/dotField/DotField";
-import type { DotBand, DotColumn } from "@/components/shared/dotField/dots";
+import { type DotBand, type DotColumn, skeletonColumns } from "@/components/shared/dotField/dots";
 import { cn } from "@/lib/cva.config";
 
 export const BUCKETS = 60;
@@ -15,6 +15,7 @@ const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 const EDGE_FORMAT = "MMM DD, HH:mm";
+const SKELETON_COLUMNS = skeletonColumns(BUCKETS);
 
 import type { TimeRange as TimeWindow } from "../api";
 
@@ -52,6 +53,8 @@ interface TracesTimelineProps {
   range: TimeWindow;
   selection: TimeWindow | null;
   onSelect: (selection: TimeWindow | null) => void;
+  /** Paint a muted placeholder profile until the first histogram arrives. */
+  loading?: boolean;
 }
 
 function BucketBar({ bucket }: { bucket: Bucket }) {
@@ -208,7 +211,7 @@ function TickAxis({ range }: { range: TimeWindow }) {
 }
 
 /** Histogram of runs over the window. Drag to select; drag the bracket or its edges to adjust; Esc clears. */
-export function TracesTimeline({ buckets, range, selection, onSelect }: TracesTimelineProps) {
+export function TracesTimeline({ buckets, range, selection, onSelect, loading = false }: TracesTimelineProps) {
   const [hover, setHover] = useState<number | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [draft, setDraft] = useState<Band | null>(null);
@@ -262,17 +265,19 @@ export function TracesTimeline({ buckets, range, selection, onSelect }: TracesTi
   };
 
   const labelFormat = edgeFormat(range);
+  const showTooltip = hover !== null && !drag && !loading;
 
   return (
     <div
       className="relative shrink-0 border-b border-border bg-card px-3 pt-2 pb-1 outline-none select-none"
       data-testid="traces-timeline"
+      aria-busy={loading}
       tabIndex={0}
       onKeyDown={onKeyDown}
     >
       <DotFieldRoot
         ref={areaRef}
-        columns={buckets}
+        columns={loading ? SKELETON_COLUMNS : buckets}
         band={band}
         hover={hover}
         role="presentation"
@@ -291,7 +296,7 @@ export function TracesTimeline({ buckets, range, selection, onSelect }: TracesTi
             data-testid="timeline-cursor"
           />
         )}
-        <DotFieldCanvas />
+        <DotFieldCanvas className={loading ? "animate-pulse motion-reduce:animate-none" : undefined} />
         <NowEdge />
         {buckets.map((b) => (
           <BucketBar key={b.startMs} bucket={b} />
@@ -309,7 +314,7 @@ export function TracesTimeline({ buckets, range, selection, onSelect }: TracesTi
       <div className="mt-1">
         <TickAxis range={range} />
       </div>
-      {hover !== null && !drag && <BucketTooltip bucket={buckets[hover]} index={hover} />}
+      {showTooltip && <BucketTooltip bucket={buckets[hover]} index={hover} />}
       {selection && (
         <button
           type="button"

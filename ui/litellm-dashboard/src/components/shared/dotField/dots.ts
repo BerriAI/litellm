@@ -24,6 +24,18 @@ export interface DotBand {
 
 const hash = (seed: number, value: number): number => Math.imul(seed ^ Math.imul(value, 0x9e3779b1), 0x85ebca6b) >>> 0;
 
+const SKELETON_OPACITY = 0.35;
+
+/** Muted placeholder columns to paint while the real ones load: a gentle swell with per-column jitter. */
+export function skeletonColumns(count: number): readonly DotColumn[] {
+  return Array.from({ length: count }, (_, i) => ({
+    total: 1 + Math.round(3 * (1 + Math.sin(i / 3.5))) + (hash(29, i) % 3),
+    failed: 0,
+    series: [],
+    opacity: SKELETON_OPACITY,
+  }));
+}
+
 export function seriesColor(name: string): string {
   if (!name) return NEUTRAL_COLOR;
   const code = Array.from(name).reduce((total, char) => hash(total, char.charCodeAt(0)), 7);

@@ -7,12 +7,12 @@ import { useInView } from "react-intersection-observer";
 
 import { InspectorTable, useInspectorTable } from "@/components/shared/InspectorTable";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation } from "@/utils/activityTimestamp";
 
 import { SpanIcon } from "../ui/SpanIcon";
 import { StatusMark } from "../ui/StatusMark";
 import { FrameworkLogo, traceFramework } from "../ui/TraceFramework";
-import { LoadingState } from "../../ui/LoadingState";
 import type { TraceSummary } from "../types";
 import { traceRefOf } from "../routing";
 import { fmtMs, previewText, traceDisplayName, traceAgentNames } from "../utils";
@@ -40,6 +40,7 @@ const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
 
 const PREFETCH_MARGIN = "0px 0px 480px 0px";
 const PLACEHOLDER_ROWS = [0, 1, 2];
+const SKELETON_ROWS = Array.from({ length: 12 }, (_, i) => i);
 const ROW_HEIGHT = 36;
 const MUTED_NUM = "font-mono text-muted-foreground";
 const NUM = "font-mono text-foreground";
@@ -93,9 +94,25 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
         {formatRunTimestamp(row.original.start_time)}
       </span>
     ),
-    meta: { className: "font-mono tabular-nums text-muted-foreground" },
+    meta: {
+      className: "font-mono tabular-nums text-muted-foreground",
+      renderSkeleton: () => <Skeleton className="h-3 w-24" />,
+    },
   },
-  { id: "agent", size: 160, header: "Agent", cell: ({ row }) => <AgentCell run={row.original} /> },
+  {
+    id: "agent",
+    size: 160,
+    header: "Agent",
+    cell: ({ row }) => <AgentCell run={row.original} />,
+    meta: {
+      renderSkeleton: () => (
+        <div className="flex items-center gap-1.5">
+          <Skeleton className="size-3.5 rounded-full" />
+          <Skeleton className="h-3 w-20" />
+        </div>
+      ),
+    },
+  },
   { id: "input", header: "Input", cell: ({ row }) => <InputCell run={row.original} /> },
   {
     id: "agents",
@@ -142,24 +159,12 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
     size: 32,
     header: "",
     cell: () => <ChevronRight className="size-3 text-muted-foreground/60" />,
-    meta: { className: "px-0" },
+    meta: { className: "px-0", renderSkeleton: () => null },
   },
 ];
 
-function PlaceholderRow({ rowRef }: { rowRef?: (node: Element | null) => void }) {
-  return (
-    <tr ref={rowRef} aria-hidden data-testid="runs-placeholder" className="h-9 border-b border-border/60">
-      <td className="px-3">
-        <div className="h-2.5 w-28 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
-      </td>
-      <td className="px-3">
-        <div className="h-2.5 w-24 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
-      </td>
-      <td className="px-3" colSpan={7}>
-        <div className="h-2.5 w-2/5 animate-pulse rounded-sm bg-muted motion-reduce:animate-none" />
-      </td>
-    </tr>
-  );
+function PlaceholderRow({ index, rowRef }: { index: number; rowRef?: (node: Element | null) => void }) {
+  return <InspectorTable.SkeletonRow ref={rowRef} index={index} data-testid="runs-placeholder" className="h-9" />;
 }
 
 function LoadMoreRows({ isFetching, onLoadMore }: { isFetching: boolean; onLoadMore: () => void }) {
@@ -168,7 +173,9 @@ function LoadMoreRows({ isFetching, onLoadMore }: { isFetching: boolean; onLoadM
   useEffect(() => {
     if (nearTail && !isFetching) onLoadMore();
   }, [nearTail, isFetching, onLoadMore]);
-  return PLACEHOLDER_ROWS.map((row) => <PlaceholderRow key={row} rowRef={row === 0 ? tailRef : undefined} />);
+  return PLACEHOLDER_ROWS.map((row) => (
+    <PlaceholderRow key={row} index={row} rowRef={row === 0 ? tailRef : undefined} />
+  ));
 }
 
 function EmptyRuns({ rangeEmpty, onSetUpTracing }: { rangeEmpty: boolean; onSetUpTracing: () => void }) {
@@ -216,12 +223,17 @@ export function AgentTracesTable({
   };
   const table = useReactTable(tableOptions);
   return (
-    <InspectorTable.Root table={table} data-testid="runs-table" className="flex flex-col">
+    <InspectorTable.Root table={table} data-testid="runs-table">
       <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">
         <InspectorTable.Header />
         <InspectorTable.Body<TraceSummary>
           rowHeight={() => ROW_HEIGHT}
-          after={autoContinue && <LoadMoreRows isFetching={isFetching} onLoadMore={onLoadMore} />}
+          after={
+            <>
+              {isLoading && SKELETON_ROWS.map((row) => <PlaceholderRow key={row} index={row} />)}
+              {autoContinue && <LoadMoreRows isFetching={isFetching} onLoadMore={onLoadMore} />}
+            </>
+          }
         >
           {(row) => (
             <InspectorTable.Row
@@ -233,7 +245,11 @@ export function AgentTracesTable({
           )}
         </InspectorTable.Body>
       </InspectorTable.Grid>
-      {isLoading && <LoadingState title="Loading runs…" description="Fetching agent runs for this time range." />}
+      {isLoading && (
+        <p role="status" className="sr-only">
+          Loading runs…
+        </p>
+      )}
       {error && (
         <div role="alert" className="flex items-center justify-center gap-3 py-6 text-xs text-muted-foreground">
           <span>

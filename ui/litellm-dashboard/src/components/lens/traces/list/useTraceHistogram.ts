@@ -26,8 +26,19 @@ const emptyBuckets = (range: TimeRange): Bucket[] => {
   }));
 };
 
+export interface TraceHistogramResult {
+  buckets: Bucket[];
+  /** True until the first histogram for this scope arrives; a range change keeps the previous one instead. */
+  isLoading: boolean;
+}
+
 /** Matching runs per bucket across the whole range, counted by the server so every run is plotted, not just loaded ones. */
-export function useTraceHistogram(accessToken: string, range: TimeRange, q: string, enabled: boolean): Bucket[] {
+export function useTraceHistogram(
+  accessToken: string,
+  range: TimeRange,
+  q: string,
+  enabled: boolean,
+): TraceHistogramResult {
   const traces = useTracesApi(accessToken);
   const histogram = useQuery({
     queryKey: ["agentTraceHistogram", traces.scope, range.startMs, range.endMs, q],
@@ -36,5 +47,5 @@ export function useTraceHistogram(accessToken: string, range: TimeRange, q: stri
     placeholderData: keepPreviousData,
     select: toBuckets,
   });
-  return histogram.data ?? emptyBuckets(range);
+  return { buckets: histogram.data ?? emptyBuckets(range), isLoading: histogram.isLoading };
 }

@@ -109,7 +109,7 @@ export function AgentTracesSection({
     () => ({ startMs: traceWindowStartMs(startTime, endTime, isCustomDate, endMs), endMs }),
     [startTime, endTime, isCustomDate, endMs],
   );
-  const buckets = useTraceHistogram(accessToken, range, query, isActive);
+  const histogram = useTraceHistogram(accessToken, range, query, isActive);
   const runs = traces.traces;
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
 
@@ -191,7 +191,13 @@ export function AgentTracesSection({
             />
           )}
         </RunsToolbar>
-        <TracesTimeline buckets={buckets} range={range} selection={zoom} onSelect={setZoom} />
+        <TracesTimeline
+          buckets={histogram.buckets}
+          loading={histogram.isLoading}
+          range={range}
+          selection={zoom}
+          onSelect={setZoom}
+        />
         <AgentTracesTable
           traces={runs}
           isLoading={traces.isLoading || (checkHistory && history.isLoading)}

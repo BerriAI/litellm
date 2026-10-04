@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { DOT_COLS, DOT_ROWS, NEUTRAL_COLOR, SERIES_COLORS, columnDots, litDots, seriesColor } from "./dots";
+import {
+  DOT_COLS,
+  DOT_ROWS,
+  NEUTRAL_COLOR,
+  SERIES_COLORS,
+  columnDots,
+  litDots,
+  seriesColor,
+  skeletonColumns,
+} from "./dots";
 
 const capacity = DOT_ROWS * DOT_COLS;
 const column = (total: number, failed = 0, series: string[] = []) => ({ total, failed, series });
@@ -64,5 +73,22 @@ describe("seriesColor", () => {
   it("keeps an unnamed series neutral so it never looks like a named one", () => {
     expect(seriesColor("")).toBe(NEUTRAL_COLOR);
     expect(SERIES_COLORS).not.toContain(seriesColor(""));
+  });
+});
+
+describe("skeletonColumns", () => {
+  it("fills every column with muted, varied, failure-free placeholders", () => {
+    const columns = skeletonColumns(60);
+    expect(columns).toHaveLength(60);
+    expect(columns.every((column) => column.total > 0 && column.failed === 0)).toBe(true);
+    expect(new Set(columns.map((column) => column.total)).size).toBeGreaterThan(3);
+    const max = Math.max(...columns.map((column) => column.total));
+    const dots = columnDots(columns[0], max, 0);
+    expect(dots.filter((dot) => dot.kind === "series").every((dot) => dot.color === NEUTRAL_COLOR)).toBe(true);
+    expect(columns.every((column) => (column.opacity ?? 1) < 1)).toBe(true);
+  });
+
+  it("is deterministic so the placeholder does not jump between renders", () => {
+    expect(skeletonColumns(60)).toEqual(skeletonColumns(60));
   });
 });

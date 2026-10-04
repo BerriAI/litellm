@@ -581,9 +581,10 @@ describe("AgentTracesSection", () => {
   it("plots every loaded run on the timeline", async () => {
     serve(runs);
     renderWindowed();
+    expect(screen.getByTestId("traces-timeline")).toHaveAttribute("aria-busy", "true");
     await screen.findAllByTestId("agent-trace-row");
 
-    expect(screen.getByTestId("traces-timeline")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("traces-timeline")).toHaveAttribute("aria-busy", "false"));
     const counts = bucketRunCounts();
     expect(counts).toHaveLength(60);
     expect(counts.reduce((a, b) => a + b, 0)).toBe(runs.length);

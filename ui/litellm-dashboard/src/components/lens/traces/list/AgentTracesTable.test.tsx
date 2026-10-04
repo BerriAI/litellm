@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "../../../../../tests/test-utils";
@@ -52,7 +52,7 @@ describe("AgentTracesTable empty state", () => {
 });
 
 describe("AgentTracesTable loading state", () => {
-  it("announces the first page load instead of an empty table", () => {
+  it("fills the first page load with skeleton rows instead of an empty table", () => {
     render(
       inList(
         <AgentTracesTable
@@ -66,7 +66,11 @@ describe("AgentTracesTable loading state", () => {
         />,
       ),
     );
-    expect(screen.getByRole("status", { name: "Loading runs…" })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading runs…");
+    const placeholders = screen.getAllByTestId("runs-placeholder");
+    expect(placeholders.length).toBeGreaterThanOrEqual(8);
+    const columnCount = screen.getAllByRole("columnheader").length;
+    expect(within(placeholders[0]).getAllByRole("cell", { hidden: true })).toHaveLength(columnCount);
     expect(screen.queryByText(/No runs/)).not.toBeInTheDocument();
   });
 });
