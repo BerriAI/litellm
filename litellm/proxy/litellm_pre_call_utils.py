@@ -856,10 +856,8 @@ def apply_missing_session_id_policy(
         return
     caller_session_id: Final = _caller_trace_field(data, _metadata_variable_name, "session_id")
     if caller_session_id is not None:
-        # The caller supplied a usable session id, so generate/reject must not
-        # fire. Surface it on the root field as well: consumers that read
-        # ``litellm_session_id`` (router fallbacks, spend logs, sandbox reuse)
-        # otherwise see no session at all and mint a fresh uuid4 per request.
+        # Consumers that read the root field (router fallbacks, spend logs,
+        # sandbox reuse) otherwise see no session and mint a uuid4 per request.
         if not data.get("litellm_session_id"):
             data["litellm_session_id"] = caller_session_id  # rebind-ok: data is an out-param
         return
