@@ -1,14 +1,18 @@
 import { useTracesApi } from "../api";
 import { keepPreviousData, useInfiniteQuery, useQuery, type UseQueryOptions } from "@tanstack/react-query";
-import moment from "moment";
 import { useMemo } from "react";
 
 import { ApiError } from "@/lib/http/client";
+import {
+  isLive,
+  LIVE_TAIL_INTERVAL_MS,
+  type RelativeRange,
+  type TimeWindow,
+  timeWindow,
+} from "@/components/shared/timeRange/timeRange";
 
 import type { TracePage, TraceSummary } from "../types";
-import type { TimeRange, TraceWindow } from "../api";
-
-const LIVE_TAIL_INTERVAL_MS = 15000;
+import type { TraceWindow } from "../api";
 
 interface LoadedTracePage extends TracePage {
   window: TraceWindow;
@@ -36,15 +40,12 @@ const displayError = (error: Error | null): Error | null => {
 
 interface UseAgentTracesOptions {
   accessToken: string;
-  startTime: string;
-  endTime: string;
-  isCustomDate: boolean;
-  isLiveTail: boolean;
+  range: RelativeRange;
   enabled: boolean;
   /** The search the server applies before paging. */
   q: string;
   /** A window inside the range that replaces it for the list. */
-  zoom: TimeRange | null;
+  zoom: TimeWindow | null;
 }
 
 export interface AgentTracesResult {
@@ -59,36 +60,19 @@ export interface AgentTracesResult {
   refetch: () => void;
 }
 
-/** Start of the fetch window: a preset range rolls with "now", so live tail keeps a fixed-length window. */
-export const traceWindowStartMs = (startTime: string, endTime: string, isCustomDate: boolean, nowMs: number): number =>
-  isCustomDate ? moment(startTime).valueOf() : nowMs - (moment(endTime).valueOf() - moment(startTime).valueOf());
-
 /**
- * GET /v1/traces for the Logs page time range (or the zoom inside it) and search, cursor-paginated as the runs
- * list scrolls. Preset ranges roll on refresh; subsequent pages keep the first page's window.
+ * GET /v1/traces for the range (or the zoom inside it) and search, cursor-paginated as the runs list scrolls.
+ * A live range rolls on refresh; subsequent pages keep the first page's window.
  */
-export function useAgentTraces({
-  accessToken,
-  startTime,
-  endTime,
-  isCustomDate,
-  isLiveTail,
-  enabled,
-  q,
-  zoom,
-}: UseAgentTracesOptions): AgentTracesResult {
+export function useAgentTraces({ accessToken, range, enabled, q, zoom }: UseAgentTracesOptions): AgentTracesResult {
   const traces = useTracesApi(accessToken);
+  const isLiveTail = isLive(range);
   const fetchPage = async (pageParam: unknown): Promise<LoadedTracePage> => {
-    const nowMs = Date.now();
-    const window = (pageParam as TraceWindow | null) ??
-      zoom ?? {
-        startMs: traceWindowStartMs(startTime, endTime, isCustomDate, nowMs),
-        endMs: isCustomDate ? moment(endTime).valueOf() : nowMs,
-      };
+    const window = (pageParam as TraceWindow | null) ?? zoom ?? timeWindow(range, Date.now());
     return { ...(await traces.list({ ...window, q })), window };
   };
   const queryOptions: Parameters<typeof useInfiniteQuery<LoadedTracePage, Error>>[0] = {
-    queryKey: ["agentTraces", traces.scope, startTime, endTime, isCustomDate, q, zoom],
+    queryKey: ["agentTraces", traces.scope, range.hours, range.anchorMs, q, zoom],
     placeholderData: keepPreviousData,
     queryFn: ({ pageParam }) => fetchPage(pageParam),
     initialPageParam: null,

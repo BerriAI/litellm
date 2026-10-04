@@ -9,14 +9,10 @@ import {
   apiClient,
   getProxyBaseUrl,
 } from "../../networking";
+import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 import type { RunField, SpanDetail, SpanErrorPage, Trace, TraceHistogram, TracePage } from "./types";
 
-export interface TimeRange {
-  readonly startMs: number;
-  readonly endMs: number;
-}
-
-export interface TraceWindow extends TimeRange {
+export interface TraceWindow extends TimeWindow {
   readonly cursor?: string | null;
 }
 
@@ -37,8 +33,8 @@ export interface TracesApi {
   readonly live: boolean;
   handoff(traceId: string, spanId?: string | null, traceRef?: string): TraceHandoff;
   list(request: RunListRequest): Promise<TracePage>;
-  histogram(range: TimeRange, q: string, buckets: number): Promise<TraceHistogram>;
-  values(field: RunField, contains: string, range: TimeRange): Promise<readonly string[]>;
+  histogram(range: TimeWindow, q: string, buckets: number): Promise<TraceHistogram>;
+  values(field: RunField, contains: string, range: TimeWindow): Promise<readonly string[]>;
   anyRecorded(): Promise<boolean>;
   trace(traceId: string, traceRef?: string, cursor?: string | null): Promise<Trace>;
   span(traceId: string, spanId: string, traceRef?: string): Promise<SpanDetail>;

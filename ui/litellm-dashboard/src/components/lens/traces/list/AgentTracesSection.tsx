@@ -8,39 +8,28 @@ import { Inspector } from "@/components/shared/Inspector";
 import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
-import {
-  type TraceRef,
-  traceKey,
-  traceRefOf,
-  useOpenTraceRouting,
-  useRunFilterRouting,
-  useZoomRouting,
-} from "../routing";
+import { type TraceRef, traceKey, traceRefOf, useOpenTraceRouting, useRunFilterRouting } from "../routing";
 import type { TraceSummary } from "../types";
 import { RunView } from "../detail/run/RunView";
-import { TimeRangeControls } from "./TimeRangeControls";
+import { useZoomRouting } from "@/components/shared/timeRange/routing";
+import { type RelativeRange, timeWindow } from "@/components/shared/timeRange/timeRange";
+import { TimeRangeControls } from "@/components/shared/timeRange/TimeRangeControls";
+import type { RelativeRangeState } from "@/components/shared/timeRange/useRelativeRange";
 import { TracesTimeline } from "./TracesTimeline";
 import { TracingSetupCard } from "../../onboarding/tracing/TracingSetupCard";
 import { useTracesLive } from "../api";
-import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
+import { type AgentTracesResult, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
 import { useTraceHistogram } from "./useTraceHistogram";
 
 const DRAWER_WIDTH_KEY = "litellm.agentTraces.drawerWidth";
 
-export interface TimeControls {
-  rangeHours: number;
-  onRangeHoursChange: (hours: number) => void;
-  onLiveChange: (live: boolean) => void;
-}
+export type TimeControls = Pick<RelativeRangeState, "setHours" | "setLive">;
 
 interface AgentTracesSectionProps {
   accessToken: string;
   isActive: boolean;
-  startTime: string;
-  endTime: string;
-  isCustomDate: boolean;
-  isLiveTail: boolean;
-  /** Page-owned time range + live state; when given, the toolbar shows the range / Live control group. */
+  range: RelativeRange;
+  /** Page-owned range setters; when given, the toolbar shows the range / Live control group. */
   timeControls?: TimeControls;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
@@ -77,10 +66,7 @@ function TraceHistoryError({ history }: { history: ReturnType<typeof useTraceAva
 export function AgentTracesSection({
   accessToken,
   isActive,
-  startTime,
-  endTime,
-  isCustomDate,
-  isLiveTail,
+  range,
   timeControls,
   readOnly = false,
   canMintTracingKey = false,
@@ -91,7 +77,7 @@ export function AgentTracesSection({
   const [showSetup, setShowSetup] = useState(false);
   const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
-  const traceQuery = { accessToken, startTime, endTime, isCustomDate, isLiveTail, enabled: isActive, q: query, zoom };
+  const traceQuery = { accessToken, range, enabled: isActive, q: query, zoom };
   const traces = useAgentTraces(traceQuery);
   const narrowed = rangeChanged || zoom !== null || query.trim() !== "";
   const setup = useTracingSetup(traces, isActive, narrowed);
@@ -103,17 +89,14 @@ export function AgentTracesSection({
     if (setup.disabledDetail == null) void history.refetch();
   };
 
-  // Relative ranges end "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
-  const endMs = isCustomDate ? moment(endTime).valueOf() : moment().endOf("minute").valueOf();
-  const range = useMemo(
-    () => ({ startMs: traceWindowStartMs(startTime, endTime, isCustomDate, endMs), endMs }),
-    [startTime, endTime, isCustomDate, endMs],
-  );
-  const histogram = useTraceHistogram(accessToken, range, query, isActive);
+  // A live range ends "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
+  const minuteEndMs = moment().endOf("minute").valueOf();
+  const window = useMemo(() => timeWindow(range, minuteEndMs), [range, minuteEndMs]);
+  const histogram = useTraceHistogram(accessToken, window, query, isActive);
   const runs = traces.traces;
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
 
-  const changeRange = (hours: number, apply: (hours: number) => void) => {
+  const changeHours = (hours: number, apply: (hours: number) => void) => {
     setZoom(null);
     setRangeChanged(true);
     apply(hours);
@@ -179,22 +162,21 @@ export function AgentTracesSection({
             />
           )}
         </Inspector.Panel>
-        <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces} range={zoom ?? range}>
+        <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces} range={zoom ?? window}>
           {timeControls && (
             <TimeRangeControls
-              fixedRange={zoom ?? (isLiveTail ? null : range)}
-              rangeHours={timeControls.rangeHours}
-              onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
-              live={isLiveTail}
+              range={range}
+              zoom={zoom}
+              onHoursChange={(hours) => changeHours(hours, timeControls.setHours)}
               showLive={live}
-              onLiveChange={timeControls.onLiveChange}
+              onLiveChange={timeControls.setLive}
             />
           )}
         </RunsToolbar>
         <TracesTimeline
           buckets={histogram.buckets}
           loading={histogram.isLoading}
-          range={range}
+          range={window}
           selection={zoom}
           onSelect={setZoom}
         />

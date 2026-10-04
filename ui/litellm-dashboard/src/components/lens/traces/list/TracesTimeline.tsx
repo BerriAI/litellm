@@ -17,9 +17,7 @@ const DAY_MS = 24 * HOUR_MS;
 const EDGE_FORMAT = "MMM DD, HH:mm";
 const SKELETON_COLUMNS = skeletonColumns(BUCKETS);
 
-import type { TimeRange as TimeWindow } from "../api";
-
-export type { TimeWindow };
+import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 
 export interface Bucket extends DotColumn {
   startMs: number;

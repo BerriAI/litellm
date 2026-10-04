@@ -1,5 +1,6 @@
 import { ApiError } from "@/lib/http/client";
-import type { TimeRange, TracesApi } from "@/components/lens/traces/api";
+import type { TracesApi } from "@/components/lens/traces/api";
+import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 import { filterRuns, RUN_INDEX } from "@/components/lens/traces/list/runSearch/runQuery";
 import type { TraceHistogram, TraceSummary } from "@/components/lens/traces/types";
 import { traceAgentNames } from "@/components/lens/traces/utils";
@@ -41,13 +42,13 @@ function demoLensApi(data: LensDemoData): LensApi {
   };
 }
 
-const startedWithin = (run: TraceSummary, range: TimeRange): boolean => {
+const startedWithin = (run: TraceSummary, range: TimeWindow): boolean => {
   const startMs = Date.parse(run.start_time);
   return startMs >= range.startMs && startMs < range.endMs;
 };
 
 /** Runs per equal-width slice of the window, the shape the server's histogram returns. */
-export function demoHistogram(runs: readonly TraceSummary[], range: TimeRange, buckets: number): TraceHistogram {
+export function demoHistogram(runs: readonly TraceSummary[], range: TimeWindow, buckets: number): TraceHistogram {
   const width = (range.endMs - range.startMs) / buckets;
   const placed = runs.map((run) => ({
     index: Math.floor((Date.parse(run.start_time) - range.startMs) / width),
@@ -75,7 +76,7 @@ export function demoHistogram(runs: readonly TraceSummary[], range: TimeRange, b
 function demoTracesApi(data: LensDemoData): TracesApi {
   const run = (traceId: string) => data.runs.find(({ trace }) => trace.summary.trace_id === traceId);
   const summaries = data.runs.map((item) => item.trace.summary);
-  const matching = (range: TimeRange, q: string) =>
+  const matching = (range: TimeWindow, q: string) =>
     filterRuns(
       summaries.filter((summary) => startedWithin(summary, range)),
       q,

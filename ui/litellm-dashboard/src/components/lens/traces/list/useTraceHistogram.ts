@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
-import type { TimeRange } from "../api";
+import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 import { useTracesApi } from "../api";
 import type { TraceHistogram } from "../types";
 import { BUCKETS, type Bucket } from "./TracesTimeline";
@@ -15,7 +15,7 @@ export const toBuckets = (histogram: TraceHistogram): Bucket[] =>
     series: bucket.agents.flatMap(({ agent, runs }) => Array<string>(runs).fill(agent)),
   }));
 
-const emptyBuckets = (range: TimeRange): Bucket[] => {
+const emptyBuckets = (range: TimeWindow): Bucket[] => {
   const width = (range.endMs - range.startMs) / BUCKETS;
   return Array.from({ length: BUCKETS }, (_, i) => ({
     startMs: range.startMs + i * width,
@@ -35,7 +35,7 @@ export interface TraceHistogramResult {
 /** Matching runs per bucket across the whole range, counted by the server so every run is plotted, not just loaded ones. */
 export function useTraceHistogram(
   accessToken: string,
-  range: TimeRange,
+  range: TimeWindow,
   q: string,
   enabled: boolean,
 ): TraceHistogramResult {

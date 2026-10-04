@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 
 import type { TraceSummary } from "../../types";
-import type { TimeWindow } from "../TracesTimeline";
+import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 
 import { SearchBox } from "@/components/shared/search/SearchBox";
 import { itemValues } from "@/components/shared/search/valueSource";
