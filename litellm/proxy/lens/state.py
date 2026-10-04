@@ -11,6 +11,7 @@ from litellm.proxy.lens.models import (
     Job,
     Lens,
     LensSettings,
+    Progress,
     Review,
     ReviewPage,
     Sample,
@@ -86,6 +87,37 @@ def add_step(job: Job, step: Step) -> Job:
     return job.model_copy(update=MappingProxyType({"steps": (*job.steps, step)[-MAX_STEPS:]}))
 
 
+def end_job(job: Job, status: Literal["completed", "failed", "cancelled"], now: datetime) -> Job:
+    stage: Final = {"completed": "Complete", "failed": "Failed", "cancelled": "Cancelled"}[status]
+    return job.model_copy(
+        update=MappingProxyType({"status": status, "stage": stage, "finished_at": now, "reading": ()})
+    )
+
+
+def cancel_job(lens: Lens, now: datetime) -> Lens:
+    job: Final = current_job(lens)
+    if job is None:
+        return lens
+    return replace_job(lens, end_job(job, "cancelled", now)).model_copy(
+        update=MappingProxyType({"next_run_at": now + timedelta(minutes=lens.settings.interval_minutes)})
+    )
+
+
+def apply_progress(job: Job, progress: Progress, now: datetime) -> Job:
+    updates: Final = MappingProxyType(
+        {
+            "stage": progress.stage,
+            "coverage": progress.coverage,
+            "lease_until": now + timedelta(minutes=5),
+            "reading": job.reading if progress.reading is None else progress.reading,
+        }
+    )
+    renewed: Final = add_review(job.model_copy(update=updates), progress.review)
+    if progress.stage == job.stage:
+        return renewed
+    return add_step(renewed, Step(at=now, kind="stage", label=progress.stage))
+
+
 def add_review(job: Job, review: Review | None) -> Job:
     if review is None:
         return job
@@ -103,15 +135,8 @@ def claim_job(lens: Lens, worker: Worker, now: datetime) -> Lens:
     if job.attempts >= 3:
         return replace_job(
             lens,
-            job.model_copy(
-                update=MappingProxyType(
-                    {
-                        "status": "failed",
-                        "stage": "Failed",
-                        "error": "Worker disconnected repeatedly",
-                        "finished_at": now,
-                    }
-                )
+            end_job(job, "failed", now).model_copy(
+                update=MappingProxyType({"error": "Worker disconnected repeatedly"})
             ),
         ).model_copy(update=MappingProxyType({"next_run_at": now + timedelta(minutes=lens.settings.interval_minutes)}))
     return replace_job(
