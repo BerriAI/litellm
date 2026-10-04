@@ -3934,15 +3934,31 @@ class TestEnsureOutputItemContentPartAdded:
 
     def _make_iterator(self):
         """Create a minimal LiteLLMCompletionStreamingIterator for testing."""
-        from unittest.mock import MagicMock
+        from datetime import datetime
 
+        from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.responses.litellm_completion_transformation.streaming_iterator import (
             LiteLLMCompletionStreamingIterator,
         )
 
         return LiteLLMCompletionStreamingIterator(
             model="test-model",
-            litellm_custom_stream_wrapper=MagicMock(),
+            litellm_custom_stream_wrapper=litellm.CustomStreamWrapper(
+                completion_stream=iter(()),
+                model="test-model",
+                custom_llm_provider="cached_response",
+                logging_obj=Logging(
+                    model="test-model",
+                    messages=[],
+                    stream=True,
+                    call_type="completion",
+                    start_time=datetime(2025, 1, 1),
+                    litellm_call_id="test-call",
+                    function_id="test-function",
+                    litellm_trace_id="test-trace",
+                    supports_correlation_logging=False,
+                ),
+            ),
             request_input="test",
             responses_api_request={},
         )

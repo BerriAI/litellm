@@ -1527,3 +1527,148 @@ async def test_signed_tool_response_has_no_unannounced_empty_message(resume_reas
     for event in events:
         if event["type"] == "response.output_item.done":
             assert completed[event["output_index"]]["id"] == event["item"]["id"]
+
+
+@pytest.mark.parametrize("with_answer", [False, True])
+@pytest.mark.asyncio
+async def test_unsigned_thinking_without_reasoning_content_does_not_announce_an_item(with_answer: bool) -> None:
+    pending: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        model="test-model",
+        choices=[
+            StreamingChoices(index=0, delta=Delta(thinking_blocks=[{"type": "thinking", "thinking": "unverified"}]))
+        ],
+    )
+    iterator: Final = _build_iterator([pending, _chunk("answer" if with_answer else "", finish_reason="stop")])
+    events: Final = [json.loads(event.model_dump_json(exclude_none=True)) async for event in iterator]
+    assert all(event.get("item", {}).get("type") != "reasoning" for event in events)
+    completed: Final = events[-1]["response"]["output"]
+    assert all(item["type"] != "reasoning" for item in completed)
+    for event in events:
+        if event["type"] == "response.output_item.done":
+            assert completed[event["output_index"]]["id"] == event["item"]["id"]
+
+
+@pytest.mark.parametrize("include_tool", [False, True])
+@pytest.mark.asyncio
+async def test_resumed_reasoning_preserves_message_chronology(include_tool: bool) -> None:
+    iterator: Final = _build_iterator(
+        [
+            _reasoning_block_chunk(
+                ChatCompletionThinkingBlock(type="thinking", thinking="first", signature="sig-first")
+            ),
+            _chunk("interim"),
+            *([_tool_call_chunk()] if include_tool else []),
+            _reasoning_block_chunk(
+                ChatCompletionThinkingBlock(type="thinking", thinking="second", signature="sig-second")
+            ),
+            _chunk("answer", finish_reason="stop"),
+        ]
+    )
+    events: Final = [json.loads(event.model_dump_json(exclude_none=True)) async for event in iterator]
+    output: Final = events[-1]["response"]["output"]
+    assert [item["type"] for item in output] == ["reasoning", "message"] + (
+        ["function_call"] if include_tool else []
+    ) + ["reasoning", "message"]
+    assert [item["content"][0]["text"] for item in output if item["type"] == "message"] == ["interim", "answer"]
+    for event in events:
+        if event["type"] == "response.output_item.done":
+            assert output[event["output_index"]]["id"] == event["item"]["id"]
+            if event["item"]["type"] == "message":
+                assert output[event["output_index"]]["content"] == event["item"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_message_segments_survive_tool_calls_without_reasoning() -> None:
+    iterator: Final = _build_iterator([_chunk("interim"), _tool_call_chunk(), _chunk("answer", finish_reason="stop")])
+    events: Final = [json.loads(event.model_dump_json(exclude_none=True)) async for event in iterator]
+    output: Final = events[-1]["response"]["output"]
+    assert [item["type"] for item in output] == ["message", "function_call", "message"]
+    assert [item["content"][0]["text"] for item in output if item["type"] == "message"] == ["interim", "answer"]
+
+
+@pytest.mark.asyncio
+async def test_mixed_reasoning_and_text_chunk_preserves_both_segments() -> None:
+    mixed: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        model="test-model",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content="answer",
+                    reasoning_content="analysis",
+                    thinking_blocks=[{"type": "thinking", "thinking": "analysis", "signature": "sig"}],
+                ),
+                finish_reason="stop",
+            )
+        ],
+    )
+    iterator: Final = _build_iterator([_chunk("interim"), mixed])
+    events: Final = [json.loads(event.model_dump_json(exclude_none=True)) async for event in iterator]
+    output: Final = events[-1]["response"]["output"]
+    assert [item["type"] for item in output] == ["message", "reasoning", "message"]
+    assert [item["content"][0]["text"] for item in output if item["type"] == "message"] == ["interim", "answer"]
+
+
+@pytest.mark.asyncio
+async def test_message_annotations_are_relative_to_each_segment() -> None:
+    intro: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        model="test-model",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content="intro",
+                    annotations=[
+                        {
+                            "type": "url_citation",
+                            "url_citation": {
+                                "start_index": 0,
+                                "end_index": 5,
+                                "title": "first",
+                                "url": "https://example.com/first",
+                            },
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+    answer: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        model="test-model",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content="answer",
+                    annotations=[
+                        {
+                            "type": "url_citation",
+                            "url_citation": {
+                                "start_index": 5,
+                                "end_index": 11,
+                                "title": "second",
+                                "url": "https://example.com/second",
+                            },
+                        }
+                    ],
+                ),
+                finish_reason="stop",
+            )
+        ],
+    )
+    iterator: Final = _build_iterator(
+        [
+            intro,
+            _reasoning_block_chunk(ChatCompletionThinkingBlock(type="thinking", thinking="analysis", signature="sig")),
+            answer,
+        ]
+    )
+    events: Final = [json.loads(event.model_dump_json(exclude_none=True)) async for event in iterator]
+    messages: Final = [item for item in events[-1]["response"]["output"] if item["type"] == "message"]
+    assert [item["content"][0]["text"] for item in messages] == ["intro", "answer"]
+    assert [item["content"][0]["annotations"][0]["start_index"] for item in messages] == [0, 0]
+    assert [item["content"][0]["annotations"][0]["end_index"] for item in messages] == [5, 6]

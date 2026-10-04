@@ -55,6 +55,7 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import (
     CustomToolCallOutputItem,
     GenericResponseOutputItem,
+    GenericResponseOutputItemContentAnnotation,
     OutputFunctionToolCall,
     OutputText,
 )
@@ -89,7 +90,7 @@ def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str |
 
 def _delta_has_thinking_block(delta: object) -> bool:
     blocks: Final = getattr(delta, "thinking_blocks", None) or ()
-    return any(isinstance(b, dict) and (b.get("thinking") or b.get("signature") or b.get("data")) for b in blocks)
+    return any(isinstance(b, dict) and (b.get("signature") or b.get("data")) for b in blocks)
 
 
 class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
@@ -156,6 +157,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_output_index: int = 0
         self._reasoning_start_chunk_index: int = 0
         self._completed_reasoning_items: tuple[tuple[int, ResponseReasoningItem], ...] = ()
+        self._pending_thinking_start_index: int | None = None
+        self._message_active: bool = False
+        self._message_start_chunk_index: int = 0
+        self._closed_message_text_length: int = 0
+        self._completed_message_items: tuple[tuple[int, GenericResponseOutputItem], ...] = ()
+        self._pending_annotation_events: list[BaseLiteLLMOpenAIResponseObject] = []
         self._accumulated_reasoning_content_parts: list[str] = []
         self._accumulated_provider_specific_fields: dict[str, object] = {}
         self._custom_tool_names: set[str] = extract_custom_tool_names(self.responses_api_request.get("tools"))
@@ -632,15 +639,29 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         return event
 
     def _queue_message_item_added_events(self) -> None:
-        if self._cached_item_id is None:
+        if self._cached_item_id is None or self._completed_message_items:
             self._cached_item_id = f"msg_{uuid.uuid4()}"
+        self._message_active = True
+        self.sent_output_text_done_event = False
+        self.sent_output_content_part_done_event = False
+        self.sent_output_item_done_event = False
         self.sent_message_item_added_event = True
         self.sent_content_part_added_event = True
-        if self._cached_reasoning_item_id is not None or 0 in self._tool_output_index_by_call_id.values():
+        if (
+            self._cached_reasoning_item_id is not None
+            or self._completed_message_items
+            or 0 in self._tool_output_index_by_call_id.values()
+        ):
             self._message_output_index = self._next_tool_output_index
             self._next_tool_output_index += 1
+            self._pending_response_events.extend(self._pending_tool_events)
+            self._pending_tool_events.clear()
         else:
             self._message_output_index = 0
+        self._pending_annotation_events = [
+            event.model_copy(update={"item_id": self._cached_item_id, "output_index": self._message_output_index})
+            for event in self._pending_annotation_events
+        ]
         self._sequence_number += 1
         event: Final = OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -799,7 +820,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         text: Final = getattr(litellm_complete_object.choices[0].message, "content", "") or ""
         annotations: Final = getattr(litellm_complete_object.choices[0].message, "annotations", None)
 
-        response_annotations: Final = (
+        response_annotations: Final = self._message_annotations(
             LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
                 annotations=annotations
             )
@@ -823,10 +844,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self._cached_item_id is None:
             self._cached_item_id = f"msg_{uuid.uuid4()}"
 
-        text: Final = self.litellm_model_response.choices[0].message.content or ""
-        annotations = getattr(self.litellm_model_response.choices[0].message, "annotations", None)
+        text: Final = litellm_complete_object.choices[0].message.content or ""
+        annotations = getattr(litellm_complete_object.choices[0].message, "annotations", None)
 
-        response_annotations: Final = (
+        response_annotations: Final = self._message_annotations(
             LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
                 annotations=annotations
             )
@@ -838,7 +859,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
                     "id": self._cached_item_id,
-                    "status": "completed",
+                    "status": LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                        litellm_complete_object.choices[0].finish_reason or "stop"
+                    ),
                     "type": "message",
                     "role": "assistant",
                     "content": [
@@ -851,6 +874,51 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 }
             ),
         )
+
+    def _message_annotations(
+        self, annotations: list[GenericResponseOutputItemContentAnnotation]
+    ) -> list[GenericResponseOutputItemContentAnnotation]:
+        return [
+            annotation.model_copy(
+                update={
+                    key: value - self._closed_message_text_length
+                    for key, value in (("start_index", annotation.start_index), ("end_index", annotation.end_index))
+                    if value is not None
+                }
+            )
+            for annotation in annotations
+            if annotation.start_index is None or annotation.start_index >= self._closed_message_text_length
+        ]
+
+    def _queue_message_done_events(self) -> None:
+        snapshot: Final = self.create_litellm_model_response(chunk_start=self._message_start_chunk_index)
+        if snapshot is None:
+            return
+        self._sequence_number += 1
+        text_done: Final = self.create_output_text_done_event(snapshot).model_copy(
+            update={"sequence_number": self._sequence_number}
+        )
+        self._sequence_number += 1
+        part_done: Final = self.create_output_content_part_done_event(snapshot).model_copy(
+            update={"sequence_number": self._sequence_number}
+        )
+        self._sequence_number += 1
+        item_done: Final = self.create_output_item_done_event(snapshot).model_copy(
+            update={"sequence_number": self._sequence_number}
+        )
+        self._completed_message_items += (
+            (self._message_output_index, GenericResponseOutputItem.model_validate(item_done.item.model_dump())),
+        )
+        self._pending_response_events.extend(self._pending_annotation_events)
+        self._pending_annotation_events.clear()
+        self._pending_response_events.extend((text_done, part_done, item_done))
+        self._closed_message_text_length += len(text_done.text)
+        self._message_start_chunk_index = len(self.collected_chat_completion_chunks)
+        self._message_active = False
+        self.sent_annotation_events = False
+        self.sent_output_text_done_event = True
+        self.sent_output_content_part_done_event = True
+        self.sent_output_item_done_event = True
 
     def create_reasoning_output_item_done_event(
         self,
@@ -920,8 +988,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_active = False
 
     def return_default_done_events(
-        self, litellm_complete_object: ModelResponse
+        self, litellm_complete_object: ModelResponse, *, store_message: bool = False
     ) -> BaseLiteLLMOpenAIResponseObject | None:
+        if store_message and self._message_active:
+            self._queue_message_done_events()
+            if self._pending_response_events:
+                return self._pending_response_events.pop(0)
+        if store_message and self._completed_message_items:
+            return None
         if self.sent_message_item_added_event is False:
             final_content: Final = litellm_complete_object.choices[0].message.content or ""
             if not final_content:
@@ -972,7 +1046,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if self._pending_tool_events:
                 return self._pending_tool_events.pop(0)
 
-            done_event: Final = self.return_default_done_events(self.litellm_model_response)
+            done_event: Final = self.return_default_done_events(
+                self.litellm_model_response, store_message=not sync_mode
+            )
             if done_event:
                 return done_event
         else:
@@ -1004,6 +1080,23 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return
         delta: Final = chunk.choices[0].delta
 
+        if allow_reasoning_resumption and not (
+            getattr(delta, "reasoning_content", None) or _delta_has_thinking_block(delta)
+        ):
+            if (
+                getattr(delta, "thinking_blocks", None)
+                and not delta.content
+                and not delta.tool_calls
+                and chunk.choices[0].finish_reason is None
+            ):
+                self._pending_thinking_start_index = (
+                    len(self.collected_chat_completion_chunks)
+                    if self._pending_thinking_start_index is None
+                    else self._pending_thinking_start_index
+                )
+                return
+            self._pending_thinking_start_index = None
+
         # Reasoning-first
         if (hasattr(delta, "reasoning_content") and delta.reasoning_content) or _delta_has_thinking_block(delta):
             if self._reasoning_active:
@@ -1015,7 +1108,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 self._next_tool_output_index += 1
             self._reasoning_active = True
             self._reasoning_done_emitted = False
-            self._reasoning_start_chunk_index = len(self.collected_chat_completion_chunks)
+            self._reasoning_start_chunk_index = (
+                self._pending_thinking_start_index
+                if self._pending_thinking_start_index is not None
+                else len(self.collected_chat_completion_chunks)
+            )
+            self._pending_thinking_start_index = None
             self._accumulated_reasoning_content_parts = []
             self._cached_reasoning_item_id = mint_reasoning_item_id()
             self._reasoning_item_id = self._cached_reasoning_item_id
@@ -1081,6 +1179,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     if chunk is not None:
                         chunk = cast(ModelResponseStream, chunk)
                         if (
+                            self._message_active
+                            and chunk.choices
+                            and (
+                                chunk.choices[0].delta.tool_calls
+                                or getattr(chunk.choices[0].delta, "reasoning_content", None)
+                                or _delta_has_thinking_block(chunk.choices[0].delta)
+                            )
+                        ):
+                            self._queue_message_done_events()
+                        if (
                             not self.sent_output_item_added_event
                             and chunk.choices
                             and chunk.choices[0].delta.tool_calls
@@ -1114,7 +1222,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             if self._is_reasoning_end(chunk):
                                 self._queue_reasoning_done_events()
 
-                        response_api_chunk = self._transform_chat_completion_chunk_to_response_api_chunk(chunk)
+                        response_api_chunk = self._transform_chat_completion_chunk_to_response_api_chunk(
+                            chunk, allow_reasoning_resumption=True
+                        )
                         if response_api_chunk:
                             self._pending_response_events.append(response_api_chunk)
 
@@ -1193,7 +1303,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             raise e
 
     def _transform_chat_completion_chunk_to_response_api_chunk(
-        self, chunk: ModelResponseStream
+        self, chunk: ModelResponseStream, *, allow_reasoning_resumption: bool = False
     ) -> ResponsesAPIStreamingResponse | None:
         """
         Transform a chat completion chunk to a response API chunk.
@@ -1211,26 +1321,25 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if chunk.choices and hasattr(chunk.choices[0].delta, "annotations"):
             annotations: Final = chunk.choices[0].delta.annotations
             if annotations and self.sent_annotation_events is False:
-                self.sent_annotation_events = True
                 # Store annotation events to emit them one by one
-                if not hasattr(self, "_pending_annotation_events"):
-                    response_annotations = LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
+                response_annotations = self._message_annotations(
+                    LiteLLMCompletionResponsesConfig.transform_chat_completion_annotations_to_response_output_annotations(
                         annotations=annotations
                     )
-                    self._pending_annotation_events = []
-                    for idx, annotation in enumerate(response_annotations):
-                        annotation_dict = (
-                            annotation.model_dump() if hasattr(annotation, "model_dump") else dict(annotation)
-                        )
-                        event = OutputTextAnnotationAddedEvent(
-                            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
-                            item_id=item_id,
-                            output_index=self._message_output_index,
-                            content_index=0,
-                            annotation_index=idx,
-                            annotation=annotation_dict,
-                        )
-                        self._pending_annotation_events.append(event)
+                )
+                self.sent_annotation_events = bool(response_annotations)
+                self._pending_annotation_events = []
+                for idx, annotation in enumerate(response_annotations):
+                    annotation_dict = annotation.model_dump() if hasattr(annotation, "model_dump") else dict(annotation)
+                    event = OutputTextAnnotationAddedEvent(
+                        type=ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
+                        item_id=item_id,
+                        output_index=self._message_output_index,
+                        content_index=0,
+                        annotation_index=idx,
+                        annotation=annotation_dict,
+                    )
+                    self._pending_annotation_events.append(event)
         # Priority 1: Handle reasoning content (highest priority)
         if (
             chunk.choices
@@ -1242,22 +1351,27 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             if self._cached_reasoning_item_id is None:
                 self._cached_reasoning_item_id = mint_reasoning_item_id()
 
-            return ReasoningSummaryTextDeltaEvent(
+            reasoning_event: Final = ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
                 item_id=self._cached_reasoning_item_id,
                 output_index=self._reasoning_output_index,
                 delta=reasoning_content,
             )
+            if not allow_reasoning_resumption or not self._get_delta_string_from_streaming_choices(chunk.choices):
+                return reasoning_event
+            self._pending_response_events.append(reasoning_event)
 
         # Priority 2: Handle text deltas
         delta_content: Final = self._get_delta_string_from_streaming_choices(chunk.choices)
         if delta_content:
-            if not self.sent_message_item_added_event:
+            if allow_reasoning_resumption and self._reasoning_active:
+                self._queue_reasoning_done_events()
+            if not self.sent_message_item_added_event or (self._completed_message_items and not self._message_active):
                 self._queue_message_item_added_events()
             self._sequence_number += 1
             text_delta_event: Final = OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
-                item_id=item_id,
+                item_id=self._cached_item_id or item_id,
                 output_index=self._message_output_index,
                 content_index=0,
                 delta=delta_content,
@@ -1275,7 +1389,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
         # Priority 4: If we have pending annotation events, emit the next one
         # This happens when the current chunk has no text/reasoning content
-        if hasattr(self, "_pending_annotation_events") and self._pending_annotation_events:
+        if self._message_active and self._pending_annotation_events:
             event = self._pending_annotation_events.pop(0)
             return event
 
@@ -1331,29 +1445,56 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             ),
             None,
         )
-        if self._completed_reasoning_items and template is not None:
+        message_template: Final = next(
+            (
+                item
+                for item in streamed_output
+                if isinstance(item, GenericResponseOutputItem) and item.type == "message"
+            ),
+            None,
+        )
+        if (self._completed_reasoning_items and template is not None) or self._completed_message_items:
             indexed: Final = (
+                *(
+                    tuple(
+                        (
+                            index,
+                            template.model_copy(
+                                update={
+                                    "id": item.id,
+                                    "encrypted_content": item.encrypted_content,
+                                    "content": [
+                                        OutputText(type="output_text", text=part.text, annotations=[])
+                                        for part in item.summary
+                                        if part.text
+                                    ],
+                                }
+                            ),
+                        )
+                        for index, item in self._completed_reasoning_items
+                    )
+                    if template is not None
+                    else ()
+                ),
                 *(
                     (
                         index,
-                        template.model_copy(
-                            update={
-                                "id": item.id,
-                                "encrypted_content": item.encrypted_content,
-                                "content": [
-                                    OutputText(type="output_text", text=part.text, annotations=[])
-                                    for part in item.summary
-                                    if part.text
-                                ],
-                            }
+                        (message_template or item).model_copy(
+                            update={"id": item.id, "content": item.content, "status": item.status}
                         ),
                     )
-                    for index, item in self._completed_reasoning_items
+                    for index, item in self._completed_message_items
                 ),
                 *(
                     (self._streamed_output_index(item), item)
                     for item in streamed_output
-                    if not (isinstance(item, GenericResponseOutputItem) and item.type == "reasoning")
+                    if not (
+                        isinstance(item, GenericResponseOutputItem)
+                        and (
+                            (item.type == "reasoning" and self._completed_reasoning_items)
+                            or (item.type == "message" and self._completed_message_items)
+                        )
+                    )
                 ),
             )
             return tuple(item for _, item in sorted(indexed, key=lambda entry: entry[0]))
