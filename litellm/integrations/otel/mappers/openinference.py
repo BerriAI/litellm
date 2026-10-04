@@ -114,7 +114,7 @@ def _tool_call_groups_by_message(
     return MappingProxyType(
         {
             message: tuple(reversed(tuple(message_tool_groups)))
-            for message, message_tool_groups in groupby(ordered, key=lambda group: group[:2])
+            for message, message_tool_groups in groupby(ordered, key=lambda group: (group[0], group[1]))
         }
     )
 
