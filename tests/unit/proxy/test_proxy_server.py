@@ -3020,6 +3020,26 @@ def test_non_root_ui_path_logic(monkeypatch, tmp_path, ui_exists, ui_has_content
         assert mock_logger.info.call_count == 0
 
 
+@pytest.mark.parametrize("server_root_path", ["/foo", "/litellm", "/foo/litellm"])
+def test_server_root_path_ui_rewrite_is_stable_across_restarts(tmp_path, server_root_path):
+    from litellm.proxy.proxy_server import _apply_server_root_path_to_ui
+
+    chunk = tmp_path / "_next" / "static" / "chunks" / "app.js"
+    chunk.parent.mkdir(parents=True)
+    chunk.write_text(
+        'fetch(`${g}/litellm/.well-known/litellm-ui-config`);const u={url:"/litellm/.well-known/litellm-ui-config"}',
+        encoding="utf-8",
+    )
+
+    for _ in range(3):
+        _apply_server_root_path_to_ui(str(tmp_path), server_root_path)
+
+    assert chunk.read_text(encoding="utf-8") == (
+        f"fetch(`${{g}}{server_root_path}/.well-known/litellm-ui-config`);"
+        f'const u={{url:"{server_root_path}/.well-known/litellm-ui-config"}}'
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_config_callbacks_with_all_types(client_no_auth):
     """

@@ -2432,6 +2432,44 @@ try:
             for part in content.split(ui_config_path)
         )
 
+    def _apply_server_root_path_to_ui(ui_dir: str, server_root_path: str) -> None:
+        for root, dirs, files in os.walk(ui_dir):
+            for filename in files:
+                file_path = os.path.join(root, filename)
+                # Skip binary files and files that don't need path replacement
+                if filename.endswith(
+                    (
+                        ".png",
+                        ".jpg",
+                        ".jpeg",
+                        ".gif",
+                        ".ico",
+                        ".woff",
+                        ".woff2",
+                        ".ttf",
+                        ".eot",
+                    )
+                ):
+                    continue
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+
+                    # Replace the asset prefix with the server root path
+                    modified_content = content.replace(
+                        f"{litellm_asset_prefix}",
+                        f"{server_root_path}",
+                    )
+
+                    # Replace the /.well-known/litellm-ui-config with the server root path
+                    modified_content = _rewrite_ui_config_path(modified_content, server_root_path)
+
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(modified_content)
+                except (UnicodeDecodeError, PermissionError, OSError):
+                    # Skip binary files or files we can't write to
+                    continue
+
     # Use a writable runtime UI directory whenever possible.
     # This prevents mutating the packaged UI directory (e.g. site-packages or the repo checkout)
     # and ensures extensionless routes like /ui/login work via <route>/index.html.
@@ -2517,43 +2555,7 @@ try:
                 ui_path,
             )
         else:
-            # Iterate through files in the UI directory
-            for root, dirs, files in os.walk(ui_path):
-                for filename in files:
-                    file_path = os.path.join(root, filename)
-                    # Skip binary files and files that don't need path replacement
-                    if filename.endswith(
-                        (
-                            ".png",
-                            ".jpg",
-                            ".jpeg",
-                            ".gif",
-                            ".ico",
-                            ".woff",
-                            ".woff2",
-                            ".ttf",
-                            ".eot",
-                        )
-                    ):
-                        continue
-                    try:
-                        with open(file_path, "r", encoding="utf-8") as f:
-                            content = f.read()
-
-                        # Replace the asset prefix with the server root path
-                        modified_content = content.replace(
-                            f"{litellm_asset_prefix}",
-                            f"{server_root_path}",
-                        )
-
-                        # Replace the /.well-known/litellm-ui-config with the server root path
-                        modified_content = _rewrite_ui_config_path(modified_content, server_root_path)
-
-                        with open(file_path, "w", encoding="utf-8") as f:
-                            f.write(modified_content)
-                    except (UnicodeDecodeError, PermissionError, OSError):
-                        # Skip binary files or files we can't write to
-                        continue
+            _apply_server_root_path_to_ui(ui_path, server_root_path)
 
     # # Mount the _next directory at the root level
     app.mount(
