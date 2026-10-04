@@ -303,3 +303,74 @@ async def test_failed_page_cancels_and_drains_other_upstream_requests(monkeypatc
     with pytest.raises(ValueError, match="upstream unavailable"):
         await listing(fetch)
     assert pending_closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_gateway_tools_continuation_rejects_an_upstream_failure(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from mcp.types import PaginatedRequestParams
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListOk, classify_list_exception
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "catalog-failure-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    server = MCPServer(server_id="pages", name="pages", transport=MCPTransport.http)
+    monkeypatch.setattr(operations.global_mcp_server_manager, "registry", {server.server_id: server})
+    fetch = AsyncMock(side_effect=[
+        (page("first", "next"), ServerListOk(tool_count=1)),
+        (ListToolsResult(tools=[]), classify_list_exception(TimeoutError("upstream secret"))),
+    ])
+    monkeypatch.setattr(catalog, "get_filtered_server_tools", fetch)
+    context = operations.prepare_context()
+    first = await catalog.aggregate_gateway_tools(context, PaginatedRequestParams(), [server], {})
+    assert first.next_cursor and [tool.name for tool in first.tools] == ["first"]
+    with pytest.raises(MCPError, match="Upstream continuation failed; start a fresh listing") as denied:
+        await catalog.aggregate_gateway_tools(context, PaginatedRequestParams(cursor=first.next_cursor), [server], {})
+    assert "upstream secret" not in str(denied.value)
+    assert fetch.await_count == 2
+    assert fetch.await_args.kwargs["params"].cursor == "next"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_name,result_name,field", [
+    ("ListPromptsRequest", "ListPromptsResult", "prompts"),
+    ("ListResourcesRequest", "ListResourcesResult", "resources"),
+    ("ListResourceTemplatesRequest", "ListResourceTemplatesResult", "resource_templates"),
+])
+async def test_optional_gateway_catalog_reports_initial_failure_and_rejects_failed_continuation(monkeypatch, request_name, result_name, field):
+    from unittest.mock import AsyncMock
+
+    from mcp import types
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import SERVER_OUTCOMES_META_KEY
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "catalog-failure-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    server = MCPServer(server_id="pages", name="pages", transport=MCPTransport.http)
+    monkeypatch.setattr(operations.global_mcp_server_manager, "registry", {server.server_id: server})
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server]))
+    fetch = AsyncMock(side_effect=TimeoutError("upstream secret"))
+    monkeypatch.setattr(catalog, "fetch_optional_catalog_page", fetch)
+    context = operations.prepare_context()
+    request = getattr(types, request_name)
+    failed = await catalog.list_gateway_catalog(context, request())
+    assert getattr(failed, field) == [] and failed.next_cursor is None
+    assert next(iter(failed.meta[SERVER_OUTCOMES_META_KEY].values()))["status"] == "timeout"
+    assert "upstream secret" not in failed.model_dump_json()
+    fetch.side_effect = [getattr(types, result_name)(**{field: [], "next_cursor": "next"}), TimeoutError("upstream secret")]
+    first = await catalog.list_gateway_catalog(context, request())
+    assert first.next_cursor
+    with pytest.raises(MCPError, match="Upstream continuation failed; start a fresh listing") as denied:
+        await catalog.list_gateway_catalog(context, request(params=types.PaginatedRequestParams(cursor=first.next_cursor)))
+    assert "upstream secret" not in str(denied.value)
+    assert fetch.await_count == 3
+    assert fetch.await_args.args[-1] == "next"
