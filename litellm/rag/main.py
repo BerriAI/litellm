@@ -18,6 +18,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._internal_context import is_internal_call
@@ -69,6 +70,13 @@ _FORWARDABLE_RETRIEVAL_CONFIG_KEYS: Final = frozenset(
 _SEARCH_ARGS_SET_BY_PIPELINE: Final = frozenset(
     {"vector_store_id", "query", "max_num_results", "custom_llm_provider", "router"}
 )
+
+
+_VECTOR_STORE_OPTIONS: Final = TypeAdapter(Mapping[object, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _vector_store_provider(ingest_options: Mapping[str, object]) -> object:
+    return _VECTOR_STORE_OPTIONS.validate_python(ingest_options.get("vector_store", {})).get("custom_llm_provider")
 
 
 def get_ingestion_class(provider: str) -> type[BaseRAGIngestion]:
@@ -137,7 +145,7 @@ async def _execute_ingest_pipeline(
 
 @client
 async def aingest(
-    ingest_options: dict[str, Any],
+    ingest_options: Mapping[str, object],
     file_data: tuple[str, bytes, str] | None = None,
     file: dict[str, str] | None = None,
     file_url: str | None = None,
@@ -197,7 +205,7 @@ async def aingest(
     except Exception as e:
         raise litellm.exception_type(
             model=None,
-            custom_llm_provider=ingest_options.get("vector_store", {}).get("custom_llm_provider"),
+            custom_llm_provider=_vector_store_provider(ingest_options),
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
@@ -226,7 +234,7 @@ def _suppressed_sub_call_billing() -> Iterator[None]:
 async def _execute_query_pipeline(
     model: str,
     messages: list[AllMessageValues],
-    retrieval_config: dict[str, Any],
+    retrieval_config: Mapping[str, object],
     rerank: dict[str, Any] | None = None,
     stream: bool = False,
     vector_store_params: Mapping[str, object] | None = None,
@@ -276,12 +284,16 @@ async def _execute_query_pipeline(
 
     search_provider: Final = retrieval_config.get("custom_llm_provider", "openai")
     try:
-        search_cost = sum(
-            vector_store_search_cost(
-                model=search_provider if "/" in search_provider else None,
-                custom_llm_provider=search_provider,
-                response=search_response,
+        search_cost = (
+            sum(
+                vector_store_search_cost(
+                    model=search_provider if "/" in search_provider else None,
+                    custom_llm_provider=search_provider,
+                    response=search_response,
+                )
             )
+            if isinstance(search_provider, str)
+            else 0.0
         )
     except Exception:  # noqa: BLE001 - cost accounting must never break the query path
         search_cost = 0.0
@@ -354,7 +366,7 @@ async def _execute_query_pipeline(
 async def aquery(
     model: str,
     messages: list[AllMessageValues],
-    retrieval_config: dict[str, Any],
+    retrieval_config: Mapping[str, object],
     rerank: dict[str, Any] | None = None,
     stream: bool = False,
     vector_store_params: Mapping[str, object] | None = None,
@@ -403,7 +415,7 @@ async def aquery(
 def query(
     model: str,
     messages: list[AllMessageValues],
-    retrieval_config: dict[str, Any],
+    retrieval_config: Mapping[str, object],
     rerank: dict[str, Any] | None = None,
     stream: bool = False,
     vector_store_params: Mapping[str, object] | None = None,
@@ -450,7 +462,7 @@ def query(
 
 @client
 def ingest(
-    ingest_options: dict[str, Any],
+    ingest_options: Mapping[str, object],
     file_data: tuple[str, bytes, str] | None = None,
     file: dict[str, str] | None = None,
     file_url: str | None = None,
@@ -517,7 +529,7 @@ def ingest(
     except Exception as e:
         raise litellm.exception_type(
             model=None,
-            custom_llm_provider=ingest_options.get("vector_store", {}).get("custom_llm_provider"),
+            custom_llm_provider=_vector_store_provider(ingest_options),
             original_exception=e,
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,

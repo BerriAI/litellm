@@ -9,7 +9,7 @@ import {
   apiClient,
   getProxyBaseUrl,
 } from "../../networking";
-import type { SpanDetail, SpanErrorPage, Trace, TracePage } from "./types";
+import type { SpanDetail, SpanErrorPage, Trace, TraceListQuery, TracePage } from "./types";
 
 export interface TraceWindow {
   readonly startMs: number;
@@ -53,7 +53,10 @@ export function liveTracesApi(accessToken: string): TracesApi {
     }),
     list: (window) => agentTraceListCall({ accessToken, ...window }),
     anyRecorded: async () => {
-      const page = await apiClient.get<TracePage>("/v1/traces", { accessToken, query: { start_ms: 0 } });
+      const page = await apiClient.get<TracePage>("/v1/traces", {
+        accessToken,
+        query: { start_ms: 0 } satisfies TraceListQuery,
+      });
       return page.data.length > 0;
     },
     trace: (traceId, traceRef, cursor) => agentTraceCall(accessToken, traceId, traceRef, cursor),

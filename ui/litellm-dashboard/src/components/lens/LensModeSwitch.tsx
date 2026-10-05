@@ -30,13 +30,12 @@ function ActivityDot({ activity }: { activity: InvestigationActivity }) {
   );
 }
 
-/** Inverted corner joining the tab's side border to the card's top border; plain CSS borders so both snap to the same pixels. */
 function NotchCorner({ side, demo }: { side: "left" | "right"; demo: boolean }) {
   return (
     <span
       aria-hidden="true"
       className={cn(
-        "pointer-events-none absolute bottom-0 size-3 overflow-hidden",
+        "pointer-events-none absolute bottom-0 hidden size-3 overflow-hidden @min-[24rem]/lens-frame:block",
         side === "left" ? "-left-3" : "-right-3",
       )}
     >
@@ -63,7 +62,10 @@ export function LensModeSwitch({
     <div className={frameTab({ session: demo ? "demo" : "live" })}>
       <NotchCorner side="left" demo={demo} />
       <NotchCorner side="right" demo={demo} />
-      <TabsPrimitive.List aria-label="Lens" className="relative inline-flex h-9 items-center p-1">
+      <TabsPrimitive.List
+        aria-label="Lens"
+        className="relative flex h-9 items-center justify-center p-1 @min-[24rem]/lens-frame:justify-start"
+      >
         <TabsPrimitive.Indicator className="absolute top-1 bottom-1 left-(--active-tab-left) w-(--active-tab-width) rounded-full bg-muted transition-[left,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none" />
         {tabs.map(([view, label]) => {
           const Icon = MODE_ICONS[view as LensTab];
@@ -78,7 +80,7 @@ export function LensModeSwitch({
               }
               className={cn(
                 "relative z-raised inline-flex h-full items-center gap-2 rounded-full text-sm font-medium text-muted-foreground outline-none transition-colors duration-200 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-active:text-foreground",
-                view === "settings" ? "px-2.5" : "px-4",
+                view === "settings" ? "px-2.5" : "px-3 sm:px-4",
               )}
             >
               <span className="relative inline-flex">

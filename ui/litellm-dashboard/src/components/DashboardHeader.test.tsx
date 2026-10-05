@@ -8,6 +8,7 @@ const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
     plugins: [] as { name: string; display_name: string; url: string }[],
     enableChatUI: false,
     pathname: "/ui/logs",
+    isDesktop: false,
   };
   return {
     state,
@@ -19,6 +20,7 @@ const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
 vi.mock("@/contexts/PluginModeContext", () => ({ usePluginMode: mockUsePluginMode }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({ useUISettings: mockUseUISettings }));
 vi.mock("next/navigation", () => ({ usePathname: () => state.pathname }));
+vi.mock("usehooks-ts", () => ({ useMediaQuery: () => state.isDesktop }));
 vi.mock("@/hooks/useWorker", () => ({ useWorker: () => ({ isControlPlane: false, selectedWorker: null }) }));
 vi.mock("@/app/(dashboard)/hooks/useDisableShowPrompts", () => ({ useDisableShowPrompts: () => false }));
 vi.mock("@/components/Navbar/BlogDropdown/BlogDropdown", () => ({ BlogDropdown: () => null }));
@@ -34,6 +36,7 @@ describe("DashboardHeader breadcrumb", () => {
     state.plugins = [];
     state.enableChatUI = false;
     state.pathname = "/ui/logs";
+    state.isDesktop = false;
   });
 
   it("titles the breadcrumb from the current route, not from a sidebar page id", () => {
@@ -98,5 +101,28 @@ describe("DashboardHeader breadcrumb", () => {
     expect(liteAdmin.compareDocumentPosition(screen.getByRole("link", { name: "Docs" }))).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
+  });
+
+  it("keeps the gateway selector and tools available from the compact header menu", async () => {
+    render(<DashboardHeader />);
+    fireEvent.click(screen.getByRole("button", { name: "More options" }));
+    const tools = await screen.findByRole("dialog", { name: "Gateway tools" });
+    expect(within(tools).getByRole("button", { name: "AI Gateway" })).toBeInTheDocument();
+    expect(within(tools).getByRole("link", { name: "Docs" })).toBeInTheDocument();
+    expect(within(tools).getByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
+  });
+
+  it("closes mobile tools when switching to desktop and keeps them closed when returning", async () => {
+    const { rerender } = render(<DashboardHeader />);
+    fireEvent.click(screen.getByRole("button", { name: "More options" }));
+    expect(await screen.findByRole("dialog", { name: "Gateway tools" })).toBeInTheDocument();
+
+    state.isDesktop = true;
+    rerender(<DashboardHeader />);
+    expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();
+
+    state.isDesktop = false;
+    rerender(<DashboardHeader />);
+    expect(screen.queryByRole("dialog", { name: "Gateway tools" })).not.toBeInTheDocument();
   });
 });
