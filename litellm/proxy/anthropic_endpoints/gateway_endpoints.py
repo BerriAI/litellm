@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
@@ -37,6 +38,7 @@ from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 from litellm.proxy.anthropic_endpoints.endpoints import anthropic_response, count_tokens
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _safe_set_request_parsed_body
+from litellm.proxy.management_endpoints.sso_helper_utils import CLI_SSO_SESSIONS_TARGET
 from litellm.proxy.management_endpoints.ui_sso import CliSsoTeamDetail
 
 GATEWAY_PREFIX: Final = "/claude_code_gateway"
@@ -271,6 +273,7 @@ def _mint_access_token(login: _GatewayLogin) -> str:
     )
 
 
+@with_service_target(CLI_SSO_SESSIONS_TARGET)
 async def _claim_device_code(login_id: str, cache: DualCache) -> bool:
     from litellm.proxy.management_endpoints.ui_sso import (
         _get_cli_sso_flow_cache_key,  # pyright: ignore[reportPrivateUsage]  # shared device-flow helper
@@ -284,6 +287,7 @@ async def _claim_device_code(login_id: str, cache: DualCache) -> bool:
     return claims == 1
 
 
+@with_service_target(CLI_SSO_SESSIONS_TARGET)
 async def _handle_device_code_grant(device_code: str | None) -> JSONResponse:
     from fastapi import HTTPException
 

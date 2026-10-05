@@ -6167,3 +6167,203 @@ async def test_merge_placeholder_refuses_rows_that_are_not_a_lone_placeholder(
     assert reason in str(exc_info.value.message)
     team_member_add_mock.assert_not_awaited()
     prisma_client.db.litellm_usertable.delete.assert_not_awaited()
+
+
+class _PatchedTeamRow:
+    def __init__(self, team: LiteLLM_TeamTable) -> None:
+        self.team = team
+        self.written: dict[str, object] = {}
+
+    async def find_unique(self, *, where: dict[str, object]) -> LiteLLM_TeamTable:
+        return self.team
+
+    async def update(self, *, where: dict[str, object], data: dict[str, object]) -> LiteLLM_TeamTable:
+        self.written = data
+        self.team = LiteLLM_TeamTable(**{**self.team.model_dump(), **data, "metadata": json.loads(str(data["metadata"]))})
+        return self.team
+
+
+@pytest.mark.asyncio
+async def test_patch_group_pathless_replace_applies_attributes_and_drops_empty_key(mocker, monkeypatch):
+    """Okta Push Groups renames a group with a path-less ``replace`` whose value is a
+    partial Group resource. Each attribute must apply as if sent with its own path and
+    the resource must land in the ``scim_data`` snapshot, never whole under an empty
+    metadata key, and an empty key an earlier push left behind must be dropped so the
+    team saves from the Admin UI again."""
+    from litellm.proxy import proxy_server
+
+    group_id = "team-1"
+    existing_team = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="okta-push-group",
+        members=[],
+        members_with_roles=[Member(user_id="user1", role="user")],
+        metadata={
+            "": {"id": group_id, "displayName": "okta-push-group-stale"},
+            "scim_managed": True,
+            "scim_data": {"id": group_id, "displayName": "okta-push-group", "externalId": "ext-1"},
+        },
+    )
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                value={"id": group_id, "displayName": "okta-push-group-renamed", "externalId": "ext-2"},
+            )
+        ],
+    )
+
+    team_rows = _PatchedTeamRow(existing_team)
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = team_rows
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=mocker.MagicMock())
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=())
+
+    monkeypatch.setattr(proxy_server, "prisma_client", mock_prisma_client)
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership", AsyncMock())
+    mocker.patch("litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles", AsyncMock())
+
+    response = await patch_group(group_id=group_id, patch_ops=patch_ops)
+
+    assert response.id == group_id
+    assert response.displayName == "okta-push-group-renamed"
+    written = team_rows.written
+    assert written["team_alias"] == "okta-push-group-renamed"
+    written_metadata = json.loads(written["metadata"])
+    assert "" not in written_metadata
+    assert written_metadata["externalId"] == "ext-2"
+    assert written_metadata["scim_data"] == {
+        "id": group_id,
+        "displayName": "okta-push-group-renamed",
+        "externalId": "ext-2",
+    }
+    assert written_metadata["scim_managed"] is True
+
+
+@pytest.mark.asyncio
+async def test_process_group_patch_operations_pathless_replace_members_is_absolute(mocker, monkeypatch):
+    """A path-less ``replace`` carrying ``members`` declares the whole roster exactly like
+    ``replace`` with path ``members``, so it must be reported as the replace target, and the
+    read-only ``id`` it carries must never become a metadata key."""
+
+    async def mock_get_config():
+        return {"litellm_settings": {"scim_upsert_user": True}}
+
+    from litellm.proxy.proxy_server import proxy_config
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    existing_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Team One",
+        members=[],
+        members_with_roles=[Member(user_id="old-user", role="user")],
+    )
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="replace", value={"id": "team-1", "members": [{"value": "new-user"}]})],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=(mocker.MagicMock(user_id="new-user"),))
+
+    update_data, final_members, replace_target = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert final_members == {"new-user"}
+    assert replace_target == {"new-user"}
+    assert "id" not in update_data["metadata"]
+    assert "" not in update_data["metadata"]
+    assert update_data["metadata"]["scim_data"] == {"id": "team-1"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("later_op", "expected_alias", "expected_external_id", "expected_snapshot"),
+    [
+        (
+            SCIMPatchOperation(op="replace", path="displayName", value="path-wins"),
+            "path-wins",
+            "ext-pathless",
+            {"id": "team-1", "displayName": "path-wins", "externalId": "ext-pathless"},
+        ),
+        (
+            SCIMPatchOperation(op="remove", path="displayName"),
+            None,
+            "ext-pathless",
+            {"id": "team-1", "externalId": "ext-pathless"},
+        ),
+        (
+            SCIMPatchOperation(op="replace", path="externalId", value="ext-path-wins"),
+            "pathless-name",
+            "ext-path-wins",
+            {"id": "team-1", "displayName": "pathless-name", "externalId": "ext-path-wins"},
+        ),
+    ],
+)
+async def test_process_group_patch_operations_later_path_op_wins_over_pathless_snapshot(
+    mocker, later_op, expected_alias, expected_external_id, expected_snapshot
+):
+    """Operations apply in order (RFC 7644 Section 3.5.2), so a path op after a path-less one
+    decides both the team's value and the ``scim_data`` snapshot; the snapshot must never keep
+    the path-less value the later op replaced or removed."""
+    existing_team = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Team One",
+        members=[],
+        members_with_roles=[],
+        metadata={"scim_managed": True, "scim_data": {"id": "team-1", "displayName": "Team One"}},
+    )
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[
+            SCIMPatchOperation(
+                op="replace",
+                value={"id": "team-1", "displayName": "pathless-name", "externalId": "ext-pathless"},
+            ),
+            later_op,
+        ],
+    )
+
+    update_data, _, _ = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=mocker.MagicMock(),
+    )
+
+    assert update_data["team_alias"] == expected_alias
+    assert update_data["metadata"].get("externalId") == expected_external_id
+    assert update_data["metadata"]["scim_data"] == expected_snapshot
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("op", "value"),
+    [("remove", {"displayName": "okta-push-group"}), ("replace", "okta-push-group-renamed")],
+)
+async def test_process_group_patch_operations_rejects_pathless_op_it_cannot_apply(mocker, op, value):
+    """A path-less ``remove`` has no target and a path-less ``add``/``replace`` needs an
+    object value (RFC 7644 Section 3.5.2); neither may fall through to a metadata write
+    under an empty key."""
+    existing_team = LiteLLM_TeamTable(team_id="team-1", team_alias="Team One", members=[], members_with_roles=[])
+    patch_ops = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op=op, value=value)],
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _process_group_patch_operations(
+            patch_ops=patch_ops,
+            existing_team=existing_team,
+            prisma_client=mocker.MagicMock(),
+        )
+
+    assert exc.value.status_code == 400

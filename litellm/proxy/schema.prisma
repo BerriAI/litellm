@@ -1144,6 +1144,7 @@ model LiteLLM_ManagedFileTable {
   updated_by String?
 
   @@index([unified_file_id])
+  @@index([flat_model_file_ids], type: Gin)
   @@index([team_id, created_at(sort: Desc)])
 }
 
@@ -1744,6 +1745,27 @@ model LiteLLM_AutoRouterUserSession {
   @@index([user_id, last_turn_at], map: "idx_autorouter_user_session_user_last_turn")
 }
 
+// Auto-routed requests per UTC request day and router: the selected-day money behind the
+// auto-router usage view. Written in the same statement as the session rollup, so a day row
+// and its session row never disagree; corrected in the same transaction as late baselines.
+model LiteLLM_AutoRouterDailySpend {
+  date                           String
+  api_key                        String
+  user_id                        String
+  router_name                    String
+  router_type                    String
+  turns                          Int      @default(0)
+  spend                          Float    @default(0)
+  saved_spend                    Float    @default(0)
+  savings_estimated_turns        Int      @default(0)
+  savings_estimated_actual_spend Float    @default(0)
+  savings_estimated_saved_spend  Float    @default(0)
+  classifier_cost                Float    @default(0)
+  classifier_cost_recorded_turns Int      @default(0)
+
+  @@id([date, api_key, user_id, router_name, router_type])
+}
+
 // Shadow eval: evaluation of an auto-router against one or more keys' live traffic, in
 // either direction. forward duplicates the requests the keys did not route through the
 // router through it, answering whether they should adopt it; reverse duplicates the
@@ -1893,6 +1915,22 @@ model LiteLLM_WorkflowMessage {
 
   @@unique([run_id, sequence_number])
   @@index([run_id])
+}
+
+// Pending billing settlements for background interactions, keyed by the
+// interaction id so any replica can settle one that another replica created.
+// `claimed_at` is the exactly-once gate: the first conditional update wins.
+model LiteLLM_BackgroundInteractionSettlement {
+  interaction_id      String    @id
+  custom_llm_provider String
+  create_context      Json
+  created_at          DateTime  @default(now())
+  claimed_at          DateTime?
+  claimed_by          String?
+  settled_at          DateTime?
+  outcome             String?
+
+  @@index([claimed_at], map: "idx_background_interaction_settlement_claimed_at")
 }
 
 model LiteLLM_Lens {
