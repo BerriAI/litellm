@@ -171,7 +171,6 @@ describe("Investigation setup", () => {
     await user.type(screen.getByRole("textbox", { name: "Check 1" }), "Find incomplete reports");
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Run and monitor" })).toBeEnabled());
-    expect(screen.getByText("1 matching run")).toBeInTheDocument();
     expect(screen.getByText("Research report")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Run and monitor" }));
     expect(save).toHaveBeenCalledWith(
@@ -340,9 +339,9 @@ it.each(["new", "duplicate"] as const)("blocks a %s investigation until its mode
       : Promise.resolve(gatewayResponse(path, {})),
   );
   renderWithProviders(<InvestigationSetup initial={settings} mode={mode} onClose={vi.fn()} onSave={save} />);
+  expect(await screen.findByText("100% of 1")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  expect(await screen.findByText("1 matching run")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: mode === "new" ? "Run and monitor" : "Run investigation" })).toBeDisabled();
   expect(save).not.toHaveBeenCalled();
 });
@@ -393,14 +392,14 @@ it("appends the next preview page as the list scrolls near its end, then stops a
   renderWithProviders(<InvestigationSetup mode="edit" initial={settings} onClose={vi.fn()} onSave={vi.fn()} />);
   expect(await screen.findByText("Run one")).toBeVisible();
   expect(screen.getByText(/Showing 1 of 2/)).toBeVisible();
-  expect(screen.getByRole("status")).toHaveTextContent("2 matching runs");
+  expect(screen.getByText("100% of 2")).toBeVisible();
   const nextPageCalls = () =>
     proxy.post.mock.calls.filter(([, options]) => (options?.body as { cursor: string }).cursor === "next");
   expect(nextPageCalls()).toHaveLength(0);
   act(() => mockAllIsIntersecting(true));
   await waitFor(() => expect(nextPageCalls()).toHaveLength(1));
   expect(screen.getByText("Run one")).toBeVisible();
-  expect(screen.getByRole("status")).toHaveTextContent("2 matching runs");
+  expect(screen.getByText("100% of 2")).toBeVisible();
   act(() => finishSecondPage());
   expect(await screen.findByText("Run two")).toBeVisible();
   expect(screen.getByText("Run one")).toBeVisible();
@@ -423,7 +422,7 @@ it("fetches one preview for two keystrokes inside the debounce window", async ()
     await vi.advanceTimersByTimeAsync(1000);
     await waitFor(() => expect(previewsFor("ab")).toHaveLength(1));
     expect(previewsFor("a")).toHaveLength(0);
-    expect(await screen.findByText("1 matching run")).toBeVisible();
+    expect(await screen.findByText(/% of 1$/)).toBeVisible();
   } finally {
     vi.useRealTimers();
   }

@@ -163,7 +163,7 @@ function SetupEditor({
   const saveLabel = saveLabelFor(mode, repeat);
   const offline = !ready && mode !== "edit";
   return (
-    <section aria-label={TITLES[mode]} className="flex min-w-0 flex-1 flex-col">
+    <section aria-label={TITLES[mode]} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex items-center gap-1 border-b pb-3">
         <Button
           variant="ghost"
@@ -194,8 +194,13 @@ function SetupEditor({
           The worker or trace storage is unavailable. Your draft is safe; you can start when it reconnects.
         </p>
       )}
-      <div className="grid min-w-0 flex-1 items-start gap-8 pt-6 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] xl:gap-10">
-        <SetupSteps aria-label="Investigation setup" current={step} onOpen={setStep}>
+      <div className="grid min-h-0 min-w-0 flex-1 items-start gap-8 pt-6 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] xl:gap-10">
+        <SetupSteps
+          aria-label="Investigation setup"
+          current={step}
+          onOpen={setStep}
+          className="lg:-m-1 lg:max-h-full lg:overflow-y-auto lg:p-1"
+        >
           <SetupStep id="activity" heading="Activity" description="Which runs to review" summary={<ActivitySummary />}>
             <ScopeFields {...activity.scope} />
             <SampleFields eligible={activity.preview.page.eligible} />
@@ -232,7 +237,7 @@ function SetupEditor({
           noun="run"
           storageKey={FINDING_PANEL_WIDTH_KEY}
         >
-          <MatchingActivityPreview {...activity.preview} className="min-w-0 lg:sticky lg:top-0" />
+          <MatchingActivityPreview {...activity.preview} className="min-w-0 lg:max-h-full" />
           <Inspector.Panel label="Run details" testId="run-panel">
             {(run: TraceRef) => (
               <TraceEvidence

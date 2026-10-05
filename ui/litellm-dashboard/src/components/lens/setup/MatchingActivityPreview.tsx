@@ -1,7 +1,6 @@
 "use client";
 
 import { memo, useMemo, type ComponentProps } from "react";
-import { RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 
@@ -72,31 +71,14 @@ export function MatchingActivityPreview({
     [pickedIds, togglePick],
   );
   const shown = status.ready || status.stale;
+  const showTable = status.loading || (shown && !status.error && runs.length > 0);
   return (
     <section
       aria-label="Matching activity"
       data-slot="matching-activity-preview"
-      className={cn("self-start overflow-hidden rounded-lg border bg-card", className)}
+      className={cn("flex flex-col self-start overflow-hidden rounded-lg border bg-card", className)}
       {...props}
     >
-      <header className="flex items-start justify-between gap-3 border-b px-4 py-3">
-        <div className="grid min-w-0 gap-0.5">
-          <p className="text-sm font-semibold tabular-nums" role="status">
-            {status.title}
-          </p>
-          <p className="text-xs text-muted-foreground">{status.windowLabel} · Previewing is free</p>
-        </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="-mr-1.5 text-muted-foreground"
-          aria-label="Refresh matching activity"
-          onClick={status.refresh}
-          disabled={!status.ready}
-        >
-          <RotateCw className={cn("size-3.5", (status.loading || status.stale) && "motion-safe:animate-spin")} />
-        </Button>
-      </header>
       {status.ready && status.error && (
         <p role="alert" className="px-4 py-3 text-sm text-destructive">
           {status.error.message}{" "}
@@ -113,8 +95,8 @@ export function MatchingActivityPreview({
           </p>
         </div>
       )}
-      {(status.loading || (shown && !status.error && runs.length > 0)) && (
-        <div className="flex max-h-[calc(100dvh-16rem)] min-h-0 flex-col">
+      {showTable && (
+        <div className="flex max-h-[calc(100dvh-16rem)] min-h-0 flex-1 flex-col lg:max-h-none">
           <PreviewTable
             traces={runs}
             isLoading={status.loading}

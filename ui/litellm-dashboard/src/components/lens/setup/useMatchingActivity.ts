@@ -5,7 +5,6 @@ import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useFormContext, useWatch } from "react-hook-form";
 import { lensKeys, lensQueries } from "../data/queries";
 import { useLensApi } from "../data/LensServices";
-import { durationLabel } from "../model/format";
 import type { Execution, Sample } from "../model/types";
 import type { TraceSummary } from "../traces/types";
 import { useDebouncedValue } from "./useDebouncedValue";
@@ -26,8 +25,6 @@ export interface ScopeOptions {
 }
 
 export interface PreviewStatus {
-  readonly title: string;
-  readonly windowLabel: string;
   readonly ready: boolean;
   /** No results yet for any search: the table shows skeleton rows. */
   readonly loading: boolean;
@@ -79,25 +76,9 @@ function validScope(scope: Selection): boolean {
   return validWindow(scope) && validSampling;
 }
 
-function previewTitle(
-  state: { pending: boolean; validWindow: boolean; valid: boolean },
-  data: PreviewPageData | undefined,
-): string {
-  if (!state.validWindow) return "Choose a history window between 1 hour and 365 days";
-  if (!state.valid) return "Complete your sampling settings to preview matches";
-  if (state.pending) return "Finding matching runs…";
-  if (!data) return "Preview unavailable";
-  return `${data.eligible.toLocaleString()} matching run${data.eligible === 1 ? "" : "s"}`;
-}
-
 function manualSelectedCount(selection: Selection): number {
   const sampled = Math.ceil((selection.execution_ids.length * (selection.sample_percent ?? 100)) / 100);
   return Math.min(sampled, selection.sample_size ?? Infinity);
-}
-
-function windowLabel(selection: Selection): string {
-  if (!validWindow(selection)) return "Choose a valid history window";
-  return `Last ${durationLabel(selection.lookback_hours ?? 24, "hours")}`;
 }
 
 function scopeOptions(selection: Selection, asOf: string, executions: readonly Execution[]): ScopeOptions {
@@ -161,8 +142,6 @@ export function useMatchingActivity(): MatchingActivity {
     scope: scopeOptions(selection, asOf, executions),
     preview: {
       status: {
-        title: previewTitle({ pending, validWindow: windowValid, valid }, firstPage),
-        windowLabel: windowLabel(selection),
         ready,
         loading,
         stale,
