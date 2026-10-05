@@ -18,14 +18,9 @@ _LIVE_GAUGE_PID: Final = re.compile(r"gauge_live[a-z]*_(\d+)\.db$")
 
 
 def wipe_directory(directory: str) -> None:
-    """Delete all .db files and admitted-series files in the directory. Called once before workers fork."""
+    """Delete all .db files and admitted-series files in the directory. Called once at boot, before any worker
+    starts, so a restart frees every capped slot and drops the samples of the workers that exited."""
     _remove(directory, (*glob.glob(os.path.join(directory, "*.db")), *_admitted_series_files(directory)))
-
-
-def wipe_admitted_series(directory: str) -> None:
-    """Drop only litellm's own admitted-series files, so a restart that keeps an operator-managed directory
-    (one worker, no separate metrics server) still starts the series cap from an empty set."""
-    _remove(directory, _admitted_series_files(directory))
 
 
 def _admitted_series_files(directory: str) -> tuple[str, ...]:

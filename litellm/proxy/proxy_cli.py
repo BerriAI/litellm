@@ -684,14 +684,14 @@ class ProxyInitializationHelpers:
         """
         import tempfile
 
-        from litellm.proxy.prometheus_cleanup import wipe_admitted_series, wipe_directory
+        from litellm.proxy.prometheus_cleanup import wipe_directory
 
         configured_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get("prometheus_multiproc_dir")
         if prometheus_metrics_port is None and (
             num_workers <= 1 or not ProxyInitializationHelpers._prometheus_callback_configured(litellm_settings)
         ):
             if configured_dir:
-                wipe_admitted_series(configured_dir)
+                wipe_directory(configured_dir)
             return None
 
         multiproc_dir: Final = configured_dir or os.path.join(tempfile.gettempdir(), "litellm_prometheus_multiproc")

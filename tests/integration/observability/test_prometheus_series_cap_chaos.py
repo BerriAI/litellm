@@ -307,17 +307,17 @@ def test_restart_with_two_workers_starts_the_cap_over(tmp_path: Path) -> None:
 
 def test_restart_with_one_worker_and_an_operator_directory_starts_the_cap_over(tmp_path: Path) -> None:
     """C5: one worker, no metrics port, PROMETHEUS_MULTIPROC_DIR set by the operator and kept across a restart:
-    the second boot's three keys get their series and a fourth lands on `other`, because the admitted series
-    files are dropped at boot even though the operator's sample files are left alone."""
+    the directory is wiped at boot the way the multi-worker path wipes it, so the merged scrape shows only the
+    second boot's three keys and a fourth lands on `other`."""
     operator_dir: Final = tmp_path / "prom-operator"
     settings: Final = {"prometheus_metrics_max_series_per_metric": CAP}
     with series_cap_rig(tmp_path, settings, workers=1, warm_keys=3, multiproc_dir=operator_dir) as first_boot:
         old_aliases: Final = first_boot.warm_aliases
         assert alias_values(scrape(first_boot.gateway), REQUESTS) == old_aliases
-    old_pids: Final = frozenset(sample.pid for sample in worker_samples(operator_dir, REQUESTS))
     with series_cap_rig(tmp_path, settings, workers=1, warm_keys=3, multiproc_dir=operator_dir) as second_boot:
-        fresh: Final = tuple(sample for sample in worker_samples(operator_dir, REQUESTS) if sample.pid not in old_pids)
-        assert len(fresh) == 1 and fresh[0].aliases == second_boot.warm_aliases, fresh
+        samples: Final = scrape(second_boot.gateway)
+        assert alias_values(samples, REQUESTS) == second_boot.warm_aliases
+        assert not old_aliases & label_values(samples)
         extra: Final = second_boot.key("c5")
         before: Final = scrape(second_boot.gateway)
         assert second_boot.chat(extra, Call.new()).status_code == 200

@@ -237,9 +237,10 @@ class TestMaybeSetupPrometheusMultiprocDir:
             assert result_dir == str(tmp_path)
             assert os.environ["PROMETHEUS_MULTIPROC_DIR"] == str(tmp_path)
 
-    def test_single_worker_restart_with_an_operator_set_dir_starts_the_series_cap_over(self, tmp_path: Path) -> None:
-        """One worker and no metrics server leave the operator's directory alone, except for litellm's own
-        admitted-series files: the docs promise a restart frees every capped slot."""
+    def test_single_worker_restart_with_an_operator_set_dir_wipes_it(self, tmp_path: Path) -> None:
+        """One worker and no metrics server still wipe the operator's directory at boot: the docs promise a
+        restart frees every capped slot, and the exited worker's samples would otherwise keep the merged scrape
+        past the cap."""
         admitted: Final = tmp_path / f"{PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX}litellm_requests_metric"
         admitted.write_text('\n["user-a"]\n')
         samples: Final = tmp_path / "counter_123.db"
@@ -255,4 +256,4 @@ class TestMaybeSetupPrometheusMultiprocDir:
             assert result_dir is None
             assert os.environ["PROMETHEUS_MULTIPROC_DIR"] == str(tmp_path)
         assert not admitted.exists()
-        assert samples.read_bytes() == b"operator-owned samples"
+        assert not samples.exists()
