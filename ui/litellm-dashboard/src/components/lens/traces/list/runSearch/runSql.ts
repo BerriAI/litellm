@@ -1,5 +1,6 @@
 import { getProxyBaseUrl } from "@/components/networking";
 import type { TimeWindow } from "@/components/shared/timeline/Timeline";
+import type { TraceQueryBody } from "../../types";
 
 import { valueMatcher } from "@/components/shared/search/language";
 import type { SearchFilter, SearchQuery } from "@/components/shared/search/searchQuery";
@@ -71,7 +72,7 @@ export const traceQueryCommand = (sql: string): string =>
   [
     `curl -s "${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/query" \\`,
     `  -H "Authorization: Bearer $LITELLM_API_KEY" -H "Content-Type: application/json" -d @- <<'EOF'`,
-    JSON.stringify({ sql }),
+    JSON.stringify({ sql } satisfies TraceQueryBody),
     "EOF",
   ].join("\n");
 
