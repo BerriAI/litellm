@@ -467,6 +467,26 @@ async def test_invalid_model_output_has_only_one_repair_attempt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_validation_source_failure_propagates_without_a_model_repair() -> None:
+    from litellm.proxy.lens.analysis import Extraction, structured_response
+
+    calls: Final = SimpleQueue[ModelRequest]()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        calls.put(request)
+        return ModelResult(content=Extraction().model_dump_json(), cost=0)
+
+    async def validate(_result: Extraction) -> str | None:
+        raise ValueError("Evidence source is unavailable")
+
+    with pytest.raises(ValueError, match="Evidence source is unavailable"):
+        await structured_response(
+            ModelRequest(purpose="extract", prompt="Extract observations"), Extraction, model, validate
+        )
+    assert calls.qsize() == 1
+
+
+@pytest.mark.asyncio
 async def test_conversation_repair_appends_raw_response_and_correction_without_changing_the_prefix() -> None:
     from litellm.proxy.lens.analysis import Extraction, structured_response_with_history
 

@@ -1,17 +1,25 @@
-from contextlib import aclosing
-from itertools import chain
+import json
+from collections.abc import AsyncGenerator
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import Field
 
-from .analysis import ReadContent, concurrent_results, evidence_valid
+from .analysis import ReadContent
 from .models import Evidence, Execution, ExecutionContent, Record, Sample, TracePart
+from .python_tool import PythonInputError
 
 
 class SessionContent(Record):
     execution: Execution
-    parts: tuple[TracePart, ...]
+    parts: tuple[TracePart, ...] = ()
+    partial: bool
+
+
+class SessionSummary(Record):
+    characters: int | None
+    span_count: int
     partial: bool
 
 
@@ -35,16 +43,11 @@ class PythonRequest(Record):
     span_ids: tuple[str, ...] = ()
 
 
-class PythonData(Record):
-    sessions: tuple[SessionContent, ...]
-    reviews: tuple["ReviewRecord", ...]
-
-
 class CatalogEntry(Record):
     execution: Execution
-    spans: tuple[tuple[str, str, str, str, int], ...]
+    spans: tuple[tuple[str, str, str, str, int | None], ...]
     partial: bool
-    characters: int
+    characters: int | None
 
 
 class ReviewRecord(Record):
@@ -68,62 +71,217 @@ class EvidenceReply(Record):
     reviews: tuple[ReviewRecord, ...] = ()
 
 
-class EvidenceWorkspace(Record):
-    sessions: tuple[SessionContent, ...] = Field(default=())
+@dataclass(frozen=True, slots=True)
+class SourcePart:
+    execution: Execution
+    cursor: str
+    part: TracePart
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceWorkspace:
+    sessions: tuple[SessionContent, ...] = ()
     reviews: tuple[ReviewRecord, ...] = ()
+    read: ReadContent | None = None
+    partial_sessions: set[str] = field(  # mutable-ok: retain source-reported incompleteness across concurrent reads
+        default_factory=set
+    )
 
-    @property
-    def parts(self) -> tuple[TracePart, ...]:
-        return tuple(chain.from_iterable(session.parts for session in self.sessions))
+    def with_reviews(self, records: tuple[ReviewRecord, ...]) -> "EvidenceWorkspace":
+        return replace(self, reviews=records)
 
-    @property
-    def catalog(self) -> tuple[CatalogEntry, ...]:
-        return tuple(
-            CatalogEntry(
-                execution=session.execution,
-                spans=tuple((p.span_id, p.parent_span_id, p.name, p.kind, len(p.content)) for p in session.parts),
-                partial=session.partial,
-                characters=sum(len(part.content) for part in session.parts),
+    async def summary(self, execution_id: str) -> SessionSummary:
+        session: Final = next(session for session in self.sessions if session.execution.id == execution_id)
+        return SessionSummary(
+            characters=None if self.read is not None else sum(len(part.content) for part in session.parts),
+            span_count=session.execution.span_count if self.read is not None else len(session.parts),
+            partial=session.partial or execution_id in self.partial_sessions,
+        )
+
+    async def _page(self, execution: Execution, cursor: str, offset: int) -> ExecutionContent:
+        assert self.read is not None
+        page: Final = await self.read(execution.id, cursor, offset)
+        if page.partial and not any(part.truncated for part in page.parts):
+            self.partial_sessions.add(execution.id)
+        return page
+
+    async def _sources(
+        self, session: SessionContent, span_ids: tuple[str, ...] = ()
+    ) -> AsyncGenerator[SourcePart, None]:
+        if self.read is None:
+            for part in session.parts:
+                if not span_ids or part.span_id in span_ids:
+                    yield SourcePart(session.execution, "", part)
+            return
+        cursor = ""  # rebind-ok: advance the gateway's source cursor without retaining content pages
+        seen: frozenset[str] = frozenset(("",))  # rebind-ok: detect broken cursor cycles without a scan quota
+        missing = frozenset(span_ids)  # rebind-ok: stop targeted reads when every requested span is found
+        while True:
+            page: ExecutionContent = await self._page(session.execution, cursor, 1)
+            for part in page.parts:
+                if not span_ids or part.span_id in span_ids:
+                    yield SourcePart(session.execution, cursor, part)
+                    missing = missing - frozenset((part.span_id,))
+            if page.next_cursor is None or (span_ids and not missing):
+                return
+            if page.next_cursor in seen:
+                raise ValueError("Original trace content repeated a pagination cursor before completion")
+            cursor = page.next_cursor
+            seen = seen | frozenset((cursor,))
+
+    async def _chunks(self, source: SourcePart, start: int = 0) -> AsyncGenerator[TracePart, None]:
+        if self.read is None:
+            yield source.part.model_copy(
+                update=MappingProxyType({"content": source.part.content[start:], "truncated": False})
             )
-            for session in self.sessions
+            return
+        initial: Final = await self._page(source.execution, source.cursor, start + 1) if start else None
+        first: Final = (
+            next((part for part in initial.parts if part.span_id == source.part.span_id), None)
+            if initial is not None
+            else source.part
+        )
+        if first is None:
+            raise ValueError("Original trace span disappeared while reading its character range")
+        yield first
+        pending = first.truncated  # rebind-ok: follow complete character pages for this span
+        offset = start + 8001  # rebind-ok: gateway character offsets are one-based
+        while pending:
+            page: ExecutionContent = await self._page(source.execution, source.cursor, offset)
+            if (
+                part := next((part for part in page.parts if part.span_id == source.part.span_id), None)
+            ) is None or not part.content:
+                raise ValueError("Original trace content ended before all truncated spans were read")
+            yield part
+            pending = part.truncated
+            offset += 8000
+
+    async def _complete(self, source: SourcePart) -> TracePart:
+        chunks: Final = tuple([chunk.content async for chunk in self._chunks(source)])
+        return source.part.model_copy(update=MappingProxyType({"content": "".join(chunks), "truncated": False}))
+
+    async def _ranged(self, source: SourcePart, request: EvidenceRequest) -> TracePart:
+        chunks: tuple[str, ...] = ()  # rebind-ok: retain only the explicitly requested character range
+        offset = request.char_start  # rebind-ok: track source position without assembling the full span
+        beyond = False  # rebind-ok: distinguish an exact complete read from a range ending before source EOF
+        async for piece in self._chunks(source, request.char_start):
+            chunk: str = piece.content
+            left: int = max(0, request.char_start - offset)
+            right: int = len(chunk) if request.char_end is None else max(0, request.char_end - offset)
+            if fragment := chunk[left:right]:
+                chunks = (*chunks, fragment)
+            offset += len(chunk)
+            if request.char_end is not None and offset >= request.char_end:
+                beyond = offset > request.char_end or piece.truncated
+                break
+        return source.part.model_copy(
+            update=MappingProxyType(
+                {
+                    "content": "".join(chunks),
+                    "truncated": request.char_start > 0 or beyond,
+                }
+            )
         )
 
-    def python_data(self, request: PythonRequest) -> PythonData | str:
-        sessions: Final = tuple(
-            session
-            for session in self.sessions
-            if not request.execution_ids or session.execution.id in request.execution_ids
-        )
-        missing_sessions: Final = frozenset(request.execution_ids) - frozenset(s.execution.id for s in sessions)
-        if missing_sessions:
-            return "Unknown execution IDs: " + ", ".join(sorted(missing_sessions))
-        selected: Final = tuple(
-            session.model_copy(
-                update=MappingProxyType(
-                    {
-                        "parts": tuple(
-                            part for part in session.parts if not request.span_ids or part.span_id in request.span_ids
+    async def _contains(self, source: SourcePart, query: str, *, literal_quote: bool = False) -> bool:
+        if not query:
+            return True
+        needle: Final = query if literal_quote else query.casefold()
+        marker: Final = "\n[... content omitted ...]\n"
+        delay: Final = len(marker) - 1 if literal_quote else 0
+        retained: Final = len(needle) - 1 + delay
+        tail = ""  # rebind-ok: retain only enough text to match across source chunks
+        async for piece in self._chunks(source):
+            chunk: str = piece.content
+            segments: tuple[str, ...] = (
+                tuple((tail + chunk).split(marker)) if literal_quote else (tail + chunk.casefold(),)
+            )
+            if any(needle in segment for segment in segments[:-1]):
+                return True
+            if needle in (segments[-1][:-delay] if delay else segments[-1]):
+                return True
+            tail = segments[-1][-retained:] if retained else ""
+        return needle in tail
+
+    async def get_parts(
+        self, execution_ids: tuple[str, ...] = (), span_ids: tuple[str, ...] = ()
+    ) -> tuple[TracePart, ...]:
+        parts: tuple[TracePart, ...] = ()  # rebind-ok: explicit reads return every selected original span
+        for session in self.sessions:
+            if execution_ids and session.execution.id not in execution_ids:
+                continue
+            async for source in self._sources(session, span_ids):
+                parts = (*parts, await self._complete(source))
+        return parts
+
+    async def cited_parts(self, evidence: tuple[Evidence, ...], *, preview: bool = False) -> tuple[TracePart, ...]:
+        parts: tuple[TracePart, ...] = ()  # rebind-ok: retain only cited execution/span pairs
+        for session in self.sessions:
+            spans: tuple[str, ...] = tuple(
+                dict.fromkeys(quote.span_id for quote in evidence if quote.execution_id == session.execution.id)
+            )
+            if spans:
+                async for source in self._sources(session, spans):
+                    content: str = "\n[... content omitted ...]\n".join(
+                        dict.fromkeys(
+                            quote.quote
+                            for quote in evidence
+                            if quote.execution_id == session.execution.id and quote.span_id == source.part.span_id
                         )
-                    }
-                )
-            )
-            for session in sessions
-        )
-        known_spans: Final = frozenset(part.span_id for part in chain.from_iterable(s.parts for s in selected))
-        missing_spans: Final = frozenset(request.span_ids) - known_spans
-        if missing_spans:
-            return "Unknown span IDs: " + ", ".join(sorted(missing_spans))
-        return PythonData(
-            sessions=selected,
-            reviews=tuple(
-                review
-                for review in self.reviews
-                if not request.execution_ids or review.execution_id in request.execution_ids
-            ),
-        )
+                    )
+                    parts = (
+                        *parts,
+                        source.part.model_copy(update=MappingProxyType({"content": content, "truncated": True}))
+                        if preview
+                        else await self._complete(source),
+                    )
+        return parts
 
-    def valid(self, evidence: Evidence) -> bool:
-        return evidence_valid(evidence, self.parts)
+    async def valid(self, evidence: Evidence) -> bool:
+        for session in self.sessions:
+            if session.execution.id != evidence.execution_id:
+                continue
+            async for source in self._sources(session, (evidence.span_id,)):
+                if await self._contains(source, evidence.quote, literal_quote=True):
+                    return True
+        return False
+
+    def python_data(self, request: PythonRequest) -> AsyncGenerator[str, None] | str:
+        missing: Final = frozenset(request.execution_ids) - frozenset(session.execution.id for session in self.sessions)
+        if missing:
+            return "Unknown execution IDs: " + ", ".join(sorted(missing))
+        return self._python_chunks(request)
+
+    async def _python_chunks(self, request: PythonRequest) -> AsyncGenerator[str, None]:
+        yield '{"sessions":['
+        separator = ""  # rebind-ok: JSON array separators require no materialized selected corpus
+        missing = frozenset(request.span_ids)  # rebind-ok: validate span selectors before finishing the input document
+        for session in self.sessions:
+            if request.execution_ids and session.execution.id not in request.execution_ids:
+                continue
+            yield separator + '{"execution":' + session.execution.model_dump_json() + ',"parts":['
+            separator = ","
+            part_separator = ""
+            async for source in self._sources(session, request.span_ids):
+                metadata: str = source.part.model_copy(update=MappingProxyType({"truncated": False})).model_dump_json(
+                    exclude={"content"}
+                )
+                yield part_separator + metadata[:-1] + ',"content":"'
+                part_separator = ","
+                async for chunk in self._chunks(source):
+                    yield json.dumps(chunk.content, ensure_ascii=False)[1:-1]
+                yield '"}'
+                missing = missing - frozenset((source.part.span_id,))
+            yield '],"partial":' + json.dumps((await self.summary(session.execution.id)).partial) + "}"
+        if missing:
+            raise PythonInputError("Unknown span IDs: " + ", ".join(sorted(missing)))
+        yield '],"reviews":['
+        review_separator = ""  # rebind-ok: stream reviewer records in their original order
+        for review in self.reviews:
+            if not request.execution_ids or review.execution_id in request.execution_ids:
+                yield review_separator + review.model_dump_json()
+                review_separator = ","
+        yield "]}"
 
     def review_reply(self, request: EvidenceRequest) -> EvidenceReply:
         records: Final = tuple(
@@ -156,7 +314,7 @@ class EvidenceWorkspace(Record):
             ),
         )
 
-    def respond(self, request: EvidenceRequest) -> EvidenceReply:
+    async def respond(self, request: EvidenceRequest) -> EvidenceReply:
         if request.char_end is not None and request.char_end < request.char_start:
             return EvidenceReply(request=request, error="char_end must be at least char_start.")
         if request.action in ("review_catalog", "read_reviews", "search_reviews"):
@@ -168,95 +326,57 @@ class EvidenceWorkspace(Record):
         )
         if request.execution_id is not None and not sessions:
             return EvidenceReply(request=request, error="Unknown execution_id. Use the supplied catalog.")
-        if request.action == "catalog":
-            catalog: Final = EvidenceWorkspace(sessions=sessions).catalog
-            return EvidenceReply(
-                request=request,
-                catalog=tuple(
-                    entry.model_copy(update=MappingProxyType({"spans": ()})) if request.execution_id is None else entry
-                    for entry in catalog
-                ),
-            )
         if request.action == "search" and not request.query:
             return EvidenceReply(request=request, error="Search requires a nonempty literal text query.")
-        parts: Final = tuple(chain.from_iterable(session.parts for session in sessions))
-        selected: Final = tuple(p for p in parts if not request.span_ids or p.span_id in request.span_ids)
-        matches: Final = (
-            tuple(p for p in selected if request.query.casefold() in p.content.casefold())
-            if request.action == "search"
-            else selected
-        )
-        missing: Final = frozenset(request.span_ids) - frozenset(p.span_id for p in selected)
+        catalog: tuple[CatalogEntry, ...] = ()  # rebind-ok: explicit catalog requests retain metadata only
+        parts: tuple[TracePart, ...] = ()  # rebind-ok: preserve unrestricted explicit read/search results
+        missing = frozenset(request.span_ids)  # rebind-ok: report unknown selectors after traversing selected sessions
+        for session in sessions:
+            if request.action == "catalog":
+                metadata: tuple[tuple[str, str, str, str, int | None], ...] = (
+                    tuple(
+                        [
+                            (
+                                source.part.span_id,
+                                source.part.parent_span_id,
+                                source.part.name,
+                                source.part.kind,
+                                None if source.part.truncated else len(source.part.content),
+                            )
+                            async for source in self._sources(session)
+                        ]
+                    )
+                    if request.execution_id is not None
+                    else ()
+                )
+                summary: SessionSummary = await self.summary(session.execution.id)
+                catalog = (
+                    *catalog,
+                    CatalogEntry(
+                        execution=session.execution,
+                        spans=metadata,
+                        partial=summary.partial,
+                        characters=summary.characters,
+                    ),
+                )
+                continue
+            async for source in self._sources(session, request.span_ids):
+                missing = missing - frozenset((source.part.span_id,))
+                if request.action == "search" and not await self._contains(source, request.query):
+                    continue
+                parts = (*parts, await self._ranged(source, request))
         return EvidenceReply(
             request=request,
-            parts=tuple(
-                part.model_copy(
-                    update=MappingProxyType(
-                        {
-                            "content": part.content[request.char_start : request.char_end],
-                            "truncated": request.char_start > 0
-                            or (request.char_end is not None and request.char_end < len(part.content)),
-                        }
-                    )
-                )
-                for part in matches
-            ),
-            error="Unknown span IDs: " + ", ".join(sorted(missing)) if missing else "",
+            catalog=catalog,
+            parts=parts,
+            error="Unknown span IDs: " + ", ".join(sorted(missing)) if missing and request.action != "catalog" else "",
         )
 
 
-async def complete_page(execution: Execution, cursor: str, read: ReadContent) -> ExecutionContent:
-    initial: Final = await read(execution.id, cursor, 1)
-    pages: tuple[ExecutionContent, ...] = (initial,)  # rebind-ok: retain every source chunk until complete
-    offset = 8001  # rebind-ok: source pages use one-based character offsets
-    pending = frozenset(p.span_id for p in initial.parts if p.truncated)  # rebind-ok: track unfinished source spans
-    while pending:
-        page: ExecutionContent = await read(execution.id, cursor, offset)
-        received: tuple[TracePart, ...] = tuple(p for p in page.parts if p.span_id in pending and p.content)
-        if frozenset(p.span_id for p in received) != pending:
-            raise ValueError("Original trace content ended before all truncated spans were read")
-        pages = (*pages, page.model_copy(update=MappingProxyType({"parts": received})))
-        pending = frozenset(p.span_id for p in received if p.truncated)
-        offset += 8000
-    chunks: Final = tuple(chain.from_iterable(page.parts for page in pages))
-    assembled: Final = tuple(
-        part.model_copy(
-            update=MappingProxyType(
-                {"content": "".join(p.content for p in chunks if p.span_id == part.span_id), "truncated": False}
-            )
-        )
-        for part in initial.parts
+async def load_workspace(sample: Sample, read: ReadContent, _concurrency: int) -> EvidenceWorkspace:
+    return EvidenceWorkspace(
+        sessions=tuple(
+            SessionContent(execution=execution, partial=not execution.root_seen) for execution in sample.executions
+        ),
+        read=read,
     )
-    partial: Final = not execution.root_seen or any(
-        page.partial and not any(part.truncated for part in page.parts) for page in pages
-    )
-    return initial.model_copy(update=MappingProxyType({"parts": assembled, "partial": partial}))
-
-
-async def load_session(execution: Execution, read: ReadContent) -> SessionContent:
-    cursor = ""  # rebind-ok: source cursor advances through every span page
-    pages: tuple[ExecutionContent, ...] = ()  # rebind-ok: preserve source pages without discarding content
-    seen: frozenset[str] = frozenset(("",))  # rebind-ok: detect a broken source cursor without imposing a read quota
-    while True:
-        page: ExecutionContent = await complete_page(execution, cursor, read)
-        pages = (*pages, page)
-        if page.next_cursor is None:
-            return SessionContent(
-                execution=execution,
-                parts=tuple(chain.from_iterable(p.parts for p in pages)),
-                partial=any(p.partial for p in pages),
-            )
-        if page.next_cursor in seen:
-            raise ValueError("Original trace content repeated a pagination cursor before completion")
-        cursor = page.next_cursor
-        seen = seen | frozenset((cursor,))
-
-
-async def load_workspace(sample: Sample, read: ReadContent, concurrency: int) -> EvidenceWorkspace:
-    async def load(execution: Execution) -> SessionContent:
-        return await load_session(execution, read)
-
-    async with aclosing(concurrent_results(sample.executions, load, concurrency)) as results:
-        sessions: Final = tuple([session async for session in results])
-    indexed: Final = MappingProxyType({session.execution.id: session for session in sessions})
-    return EvidenceWorkspace(sessions=tuple(indexed[execution.id] for execution in sample.executions))

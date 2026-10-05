@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
+from inspect import isawaitable
 from types import MappingProxyType
 from typing import Final, Generic, Literal, TypeVar
 
@@ -113,7 +114,7 @@ async def run_agent(
     schema: type[ResponseT],
     initial_evidence: tuple[TracePart, ...] = (),
     supplied: str = "",
-    validate: Callable[[ResponseT], str | None] = lambda _: None,
+    validate: Callable[[ResponseT], str | None | Awaitable[str | None]] = lambda _: None,
     enable_python: bool = False,
     activity: ActivityTracker | None = None,
 ) -> ResponseT:
@@ -121,21 +122,22 @@ async def run_agent(
     journal: tuple[DialogueTurn, ...] = ()  # rebind-ok: preserve every turn even when active context is replaced
     response_schema: Final = PythonAgentTurn[schema] if enable_python else AgentTurn[schema]
 
-    def valid_turn(turn: AgentTurn[ResponseT] | PythonAgentTurn[ResponseT]) -> str | None:
+    async def valid_turn(turn: AgentTurn[ResponseT] | PythonAgentTurn[ResponseT]) -> str | None:
         if bool(turn.tools or turn.checkpoint) == (turn.result is not None):
             return "Return tools and/or a checkpoint with result=null, or a final result without tools or checkpoint."
-        return validate(turn.result) if turn.result is not None else None
+        validation: Final = validate(turn.result) if turn.result is not None else None
+        return await validation if isawaitable(validation) else validation
 
     async def tool_result(request: EvidenceRequest | PythonRequest) -> str:
         if isinstance(request, PythonRequest):
             data: Final = workspace.python_data(request)
             if isinstance(data, str):
                 return json.dumps({"request": request.model_dump(), "error": data})
-            output: Final = await execute_python(request.code, data.model_dump_json())
+            output: Final = await execute_python(request.code, data)
             return json.dumps({"request": request.model_dump(), "output": json.loads(output)}, ensure_ascii=False)
         if request.action == "history":
             return history_reply(request, initial, journal).model_dump_json()
-        return workspace.respond(request).model_dump_json()
+        return (await workspace.respond(request)).model_dump_json()
 
     async def respond(request: EvidenceRequest | PythonRequest) -> str:
         async with observe_operation(activity, request.action):
@@ -154,8 +156,9 @@ async def run_agent(
                 "Omit execution_id for the whole sample; omit span_ids for all spans in the selected scope. "
                 "Optional char_start and char_end select a zero-based character range without default truncation. "
                 "Search performs literal case-insensitive search and returns every matching original span. "
-                "Catalog without execution_id lists all sessions and their total character sizes; with execution_id "
-                "it shows that session's span IDs, parents, names, kinds, character lengths, and partial flag. "
+                "Catalog without execution_id lists all sessions without reading their content; with execution_id "
+                "it reads that session's span IDs, parents, names, kinds, character lengths, and partial flag. "
+                "Unknown character sizes are null, not zero. "
                 "Review_catalog lists every reviewer record with phase, execution_id, and character size. "
                 "Read_reviews retrieves complete reviewer records; search_reviews searches their literal text. "
                 "Use execution_id and review_phase (initial or revisited) to select records, or omit either for all. "
@@ -181,9 +184,11 @@ async def run_agent(
                 "has execution (metadata), parts (execution_id, span_id, parent_span_id, name, kind, content, "
                 "truncated), and partial. Each review has execution_id, phase, content. Select execution_ids "
                 "and/or span_ids to load only that evidence into Python; omitted selectors mean all. The full "
-                "selected content is available in data without being inserted into this conversation. "
+                "selected content is fetched from the gateway on demand and available in data without being "
+                "inserted into this conversation. "
                 "Print what you want to examine; Python returns stdout, stderr and exit_code. Execution has "
-                "CPU, memory, elapsed-time, output and scratch-storage limits. An explicit error reports a "
+                "CPU, memory, computation elapsed-time, output and scratch-storage limits. Gateway input fetching "
+                "is separate from the computation wall limit. An explicit error reports a "
                 "limit failure and captured output is marked incomplete. Choose smaller evidence scopes or "
                 "narrower printed results after a limit failure. Each call starts fresh with the standard "
                 "library and its own temporary scratch directory; networking and new processes are unavailable. "

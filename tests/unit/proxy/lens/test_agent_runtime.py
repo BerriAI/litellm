@@ -157,11 +157,11 @@ async def test_initial_session_review_does_not_eagerly_embed_other_session_span_
             schema=Extraction,
             initial_evidence=(root,),
         )
-        assert workspace.respond(EvidenceRequest(action="read", execution_id=other.id)).parts == parts
-        assert all(not row.spans for row in workspace.respond(EvidenceRequest(action="catalog")).catalog)
-        assert len(workspace.respond(EvidenceRequest(action="catalog", execution_id=other.id)).catalog[0].spans) == len(
-            parts
-        )
+        assert (await workspace.respond(EvidenceRequest(action="read", execution_id=other.id))).parts == parts
+        assert all(not row.spans for row in (await workspace.respond(EvidenceRequest(action="catalog"))).catalog)
+        assert len(
+            (await workspace.respond(EvidenceRequest(action="catalog", execution_id=other.id))).catalog[0].spans
+        ) == len(parts)
     assert prompts.get_nowait() == prompts.get_nowait()
 
 

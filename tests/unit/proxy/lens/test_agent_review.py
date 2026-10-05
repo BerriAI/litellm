@@ -1,3 +1,4 @@
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -18,22 +19,26 @@ from tests.unit.proxy.lens.test_state import NOW, lens
 async def test_context_review_reads_and_cites_original_evidence_with_optional_initial_injection(
     inject_evidence: bool,
 ) -> None:
+    quote: Final = "unique original failure"
     part: Final = TracePart(
         execution_id="run",
         span_id="child",
         parent_span_id="parent",
         name="child",
         kind="tool",
-        content="unique original failure",
+        content="original prefix " * 2000 + quote + " original suffix" * 2000,
     )
-    session: Final = SessionContent(execution=execution("run"), parts=(part,), partial=False)
+    unrelated: Final = TracePart(
+        execution_id="run", span_id="root", name="root", kind="agent", content="unrequested root content " * 5000
+    )
+    session: Final = SessionContent(execution=execution("run"), parts=(unrelated, part), partial=False)
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     expected: Final = Extraction(
         observations=(
             Observation(
                 check_id=claim.job.settings.analysis_checks[0].id,
                 summary="Recorded failure",
-                evidence=(Evidence(execution_id="run", span_id="child", quote=part.content),),
+                evidence=(Evidence(execution_id="run", span_id="child", quote=quote),),
             ),
         )
     )
@@ -43,7 +48,7 @@ async def test_context_review_reads_and_cites_original_evidence_with_optional_in
         payload: Final = InitialPrompt.model_validate_json(request.messages[1].content)
         if next(turns) == 0:
             assert any(part.content in message.content for message in request.messages) is inject_evidence
-            assert payload.initial_evidence == ((part,) if inject_evidence else ())
+            assert payload.initial_evidence == (session.parts if inject_evidence else ())
             return ModelResult(
                 content=AgentTurn[Extraction](
                     tools=(
@@ -68,7 +73,7 @@ async def test_context_review_reads_and_cites_original_evidence_with_optional_in
         inject_evidence=inject_evidence,
     )
     assert result.observations == expected.observations
-    assert result.parts == (part,)
+    assert result.parts == (part.model_copy(update=MappingProxyType({"content": quote, "truncated": True})),)
 
 
 @pytest.mark.asyncio
@@ -92,7 +97,10 @@ async def test_cross_session_citations_keep_original_provenance_and_do_not_appea
             Observation(
                 check_id="retries",
                 summary="Related failure",
-                evidence=(Evidence(execution_id=other.id, span_id=related.span_id, quote=related.content),),
+                evidence=(
+                    Evidence(execution_id=other.id, span_id=related.span_id, quote=related.content),
+                    Evidence(execution_id=assigned.id, span_id=root.span_id, quote=root.content, role="counterexample"),
+                ),
             ),
         ),
     )
@@ -102,8 +110,41 @@ async def test_cross_session_citations_keep_original_provenance_and_do_not_appea
 
     examined: Final = await review_context(claim, session, workspace, model)
     review: Final = review_of(examined, claim.job.settings.model, 0, NOW)
-    assert examined.parts == (root, related)
+    assert frozenset(examined.parts) == frozenset(
+        part.model_copy(update=MappingProxyType({"truncated": True})) for part in (root, related)
+    )
     assert examined.observations == result.observations
     assert review.execution_id == assigned.id and review.trace_id == assigned.trace_id
     assert tuple(span.span_id for span in review.spans) == (root.span_id,)
     assert review.reasoning == result.reasoning
+    assert review.verdicts == ()
+
+
+@pytest.mark.asyncio
+async def test_observation_with_only_counterexamples_requires_supporting_evidence() -> None:
+    part: Final = TracePart(execution_id="run", span_id="span", name="tool", kind="tool", content="recorded behavior")
+    session: Final = SessionContent(execution=execution("run"), parts=(part,), partial=False)
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    roles: Final = iter(("counterexample", "support"))
+
+    async def model(request: ModelRequest) -> ModelResult:
+        role: Final = next(roles)
+        if role == "support":
+            assert "requires supporting original evidence" in request.messages[-1].content
+        return ModelResult(
+            content=AgentTurn[Extraction](
+                result=Extraction(
+                    observations=(
+                        Observation(
+                            check_id="retries",
+                            summary="Recorded behavior",
+                            evidence=(Evidence(execution_id="run", span_id="span", quote=part.content, role=role),),
+                        ),
+                    )
+                )
+            ).model_dump_json(),
+            cost=0,
+        )
+
+    result: Final = await review_context(claim, session, EvidenceWorkspace(sessions=(session,)), model)
+    assert result.observations[0].evidence == (Evidence(execution_id="run", span_id="span", quote=part.content),)

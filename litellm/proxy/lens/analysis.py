@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import aclosing
 from datetime import datetime, timezone
 from functools import reduce
+from inspect import isawaitable
 from itertools import chain, islice
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, TypeAlias, TypeVar
@@ -156,7 +157,7 @@ async def structured_response(
     request: ModelRequest,
     schema: type[ResponseT],
     model: ModelCall,
-    validate: Callable[[ResponseT], str | None] = lambda _: None,
+    validate: Callable[[ResponseT], str | None | Awaitable[str | None]] = lambda _: None,
 ) -> ResponseT:
     parsed, _ = await structured_response_with_history(request, schema, model, validate)
     return parsed
@@ -166,23 +167,14 @@ async def structured_response_with_history(
     request: ModelRequest,
     schema: type[ResponseT],
     model: ModelCall,
-    validate: Callable[[ResponseT], str | None] = lambda _: None,
+    validate: Callable[[ResponseT], str | None | Awaitable[str | None]] = lambda _: None,
 ) -> tuple[ResponseT, tuple[ModelMessage, ...]]:
     response: Final = await model(request)
     if response.context_exceeded:
         raise AnalysisContextExceeded(request)
-    try:
-        parsed: Final = schema.model_validate_json(response.content)
-        if response.finish_reason:
-            raise ValueError(f"Model did not finish its response (finish_reason={response.finish_reason})")
-        invalid: Final = validate(parsed)
-        if invalid:
-            raise ValueError(invalid)
+    parsed, problem = await checked_response(response, schema, validate)
+    if parsed is not None:
         return parsed, (*request.messages, ModelMessage(role="assistant", content=response.content))
-    except ValueError as error:
-        problem: Final = (
-            error.json(include_input=False, include_url=False) if isinstance(error, ValidationError) else str(error)
-        )
     correction: Final = (
         "\nYour previous response did not match the required response contract. Generate a new response "
         "from the original evidence, correcting these validation errors: " + problem
@@ -203,33 +195,42 @@ async def structured_response_with_history(
     repaired: Final = await model(repair)
     if repaired.context_exceeded:
         raise AnalysisContextExceeded(repair)
-    try:
-        corrected: Final = schema.model_validate_json(repaired.content)
-        if repaired.finish_reason:
-            raise ValueError(f"Model did not finish its response (finish_reason={repaired.finish_reason})")
-        remaining: Final = validate(corrected)
-        if remaining:
-            raise ValueError(remaining)
+    corrected, detail = await checked_response(repaired, schema, validate)
+    if corrected is not None:
         return corrected, (*repair.messages, ModelMessage(role="assistant", content=repaired.content))
+    stage: Final = MappingProxyType(
+        {
+            "extract": "Reading executions",
+            "cluster": "Grouping observations",
+            "investigate": "Checking original evidence",
+        }
+    )[request.purpose]
+    stopped: Final = (
+        " Model output was truncated (finish_reason=length)."
+        if repaired.finish_reason == "length"
+        else " Model output was blocked (finish_reason=content_filter)."
+        if repaired.finish_reason == "content_filter"
+        else ""
+    )
+    raise AnalysisResponseError(
+        f"{stage} failed: {schema.__name__} response invalid after 2 attempts.{stopped}\n{detail}"
+    )
+
+
+async def checked_response(
+    response: ModelResult,
+    schema: type[ResponseT],
+    validate: Callable[[ResponseT], str | None | Awaitable[str | None]],
+) -> tuple[ResponseT | None, str]:
+    try:
+        parsed: Final = schema.model_validate_json(response.content)
+        if response.finish_reason:
+            return None, f"Model did not finish its response (finish_reason={response.finish_reason})"
     except ValueError as error:
-        stage: Final = MappingProxyType(
-            {
-                "extract": "Reading executions",
-                "cluster": "Grouping observations",
-                "investigate": "Checking original evidence",
-            }
-        )[request.purpose]
-        detail: Final = validation_details(error) if isinstance(error, ValidationError) else str(error)
-        stopped: Final = (
-            " Model output was truncated (finish_reason=length)."
-            if repaired.finish_reason == "length"
-            else " Model output was blocked (finish_reason=content_filter)."
-            if repaired.finish_reason == "content_filter"
-            else ""
-        )
-        raise AnalysisResponseError(
-            f"{stage} failed: {schema.__name__} response invalid after 2 attempts.{stopped}\n{detail}"
-        ) from error
+        return None, validation_details(error) if isinstance(error, ValidationError) else str(error)
+    validation: Final = validate(parsed)
+    invalid: Final = await validation if isawaitable(validation) else validation
+    return (None, invalid) if invalid else (parsed, "")
 
 
 def evidence_valid(evidence: Evidence, parts: tuple[TracePart, ...]) -> bool:
@@ -478,7 +479,9 @@ def review_of(examined: Examined, model: str, duration_ms: int, at: datetime) ->
         ),
         reasoning=examined.reasoning[:800],
         verdicts=tuple(
-            ReviewVerdict(check_id=o.check_id, kind=o.kind, summary=o.summary[:300]) for o in examined.observations
+            ReviewVerdict(check_id=o.check_id, kind=o.kind, summary=o.summary[:300])
+            for o in examined.observations
+            if any(quote.execution_id == execution.id and quote.role == "support" for quote in o.evidence)
         ),
         cannot_assess=examined.cannot_assess,
         model=model,

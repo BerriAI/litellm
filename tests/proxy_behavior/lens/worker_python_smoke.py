@@ -11,7 +11,7 @@ from typing import Final
 
 import pydantic
 from lens import python_tool
-from lens.python_tool import PythonLimits, execute_python
+from lens.python_tool import PythonInputError, PythonLimits, execute_python
 from pydantic import BaseModel
 
 
@@ -229,6 +229,65 @@ async def cancellation_and_pool() -> None:
     print("PASS worker-wide pool, queued/running cancellation, reaping, cleanup and concurrent workspace isolation")
 
 
+async def streamed_input() -> None:
+    async def slow():
+        yield '{"value":'
+        await asyncio.sleep(0.3)
+        yield '"complete"}'
+
+    reply: Final = Reply.model_validate_json(
+        await execute_python('print(data["value"])', slow(), limits=PythonLimits(wall_seconds=0.2))
+    )
+    succeeded(reply)
+    assert reply.stdout == "complete\n"
+
+    async def missing():
+        yield '{"sessions":['
+        raise PythonInputError("Unknown span IDs: missing")
+
+    invalid: Final = Reply.model_validate_json(await execute_python('print("must not execute")', missing()))
+    assert "Unknown span IDs" in invalid.error and not invalid.stdout and not invalid.output_complete, invalid
+    oversized_closed: Final = asyncio.Event()
+
+    async def oversized():
+        try:
+            yield '"'
+            for _ in range(2048):
+                yield "x" * 65536
+            yield '"'
+        finally:
+            oversized_closed.set()
+
+    oversized_reply: Final = Reply.model_validate_json(
+        await execute_python(
+            'print("must not execute")', oversized(), limits=PythonLimits(memory_bytes=64 * 1024 * 1024)
+        )
+    )
+    assert oversized_reply.error and not oversized_reply.stdout and not oversized_reply.output_complete, oversized_reply
+    assert oversized_closed.is_set()
+    entered: Final = asyncio.Event()
+    closed: Final = asyncio.Event()
+
+    async def stalled():
+        try:
+            yield '{"value":'
+            entered.set()
+            await asyncio.Event().wait()
+        finally:
+            closed.set()
+
+    pending: Final = asyncio.create_task(execute_python('print("must not execute")', stalled()))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    pending.cancel()
+    await asyncio.sleep(0)
+    pending.cancel()
+    stopped: Final = await asyncio.gather(pending, return_exceptions=True)
+    assert isinstance(stopped[0], asyncio.CancelledError) and closed.is_set()
+    assert not tuple(Path("/tmp").glob("lens-python-*"))
+    assert not Path(f"/proc/self/task/{os.getpid()}/children").read_text().strip()
+    print("PASS streamed input, separate fetch/computation timing, missing selectors and stalled-source cancellation")
+
+
 def unavailable_policy() -> None:
     source: Final = Path(python_tool.__file__).parent
     with TemporaryDirectory(prefix="lens-policy-smoke-") as directory:
@@ -265,6 +324,7 @@ async def main() -> None:
     await boundaries()
     await resources()
     await cancellation_and_pool()
+    await streamed_input()
     unavailable_policy()
     print("Python confinement smoke passed")
 

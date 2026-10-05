@@ -28,19 +28,20 @@ class SessionReview(Record):
     cannot_assess: bool = False
 
 
-def validate_evidence(
+async def validate_evidence(
     claim: Claim, workspace: EvidenceWorkspace, check_id: str, evidence: tuple[Evidence, ...]
 ) -> str | None:
     if check_id not in frozenset(check.id for check in claim.job.settings.analysis_checks):
         return "Use an enabled check ID."
-    if not all(workspace.valid(quote) for quote in evidence):
-        return "Every evidence quote must exactly match its execution and span in the original recorded content."
+    for quote in evidence:
+        if not await workspace.valid(quote):
+            return "Every evidence quote must exactly match its execution and span in the original recorded content."
     return None
 
 
-def validate_findings(claim: Claim, workspace: EvidenceWorkspace, findings: Findings) -> str | None:
+async def validate_findings(claim: Claim, workspace: EvidenceWorkspace, findings: Findings) -> str | None:
     for finding in findings.findings:
-        if invalid := validate_evidence(claim, workspace, finding.check_id, finding.evidence):
+        if invalid := await validate_evidence(claim, workspace, finding.check_id, finding.evidence):
             return invalid
         if not any(quote.role == "support" for quote in finding.evidence):
             return "Every finding needs at least one supporting quote."
@@ -63,30 +64,33 @@ async def review_context(
     enable_python: bool = False,
     activity: ActivityTracker | None = None,
 ) -> Examined:
-    def validate(extraction: Extraction) -> str | None:
+    async def validate(extraction: Extraction) -> str | None:
         for observation in extraction.observations:
-            if invalid := validate_evidence(claim, workspace, observation.check_id, observation.evidence):
+            if invalid := await validate_evidence(claim, workspace, observation.check_id, observation.evidence):
                 return invalid
-            if not observation.evidence:
+            if not any(quote.role == "support" for quote in observation.evidence):
                 return "Each final observation requires supporting original evidence."
         return None
 
+    summary: Final = await workspace.summary(session.execution.id)
     response: Final = await run_agent(
         stage="context_review",
         task=PROMPTS.review + "\nReview the assigned execution, including its recorded subagents. "
-        "Original evidence is available through the tools. The final result follows the Extraction schema.",
+        "Original evidence is available through the tools. Inspect actual trace evidence before concluding "
+        "there are no issues; session metadata alone is not enough to assess recorded behavior. "
+        "The final result follows the Extraction schema.",
         purpose="extract",
         claim=claim,
         workspace=workspace,
         model=model,
         schema=Extraction,
-        initial_evidence=session.parts if inject_evidence else (),
+        initial_evidence=await workspace.get_parts(execution_ids=(session.execution.id,)) if inject_evidence else (),
         supplied=json.dumps(
             {
                 "execution": session.execution.model_dump(),
-                "characters": sum(len(part.content) for part in session.parts),
-                "recorded_spans": len(session.parts),
-                "partial": session.partial,
+                "characters": summary.characters,
+                "recorded_spans": summary.span_count,
+                "partial": summary.partial,
             }
         ),
         validate=validate,
@@ -94,21 +98,17 @@ async def review_context(
         activity=activity,
     )
     citations: Final = tuple(chain.from_iterable(observation.evidence for observation in response.observations))
-    cited: Final = tuple(
-        part
-        for part in workspace.parts
-        if any(quote.execution_id == part.execution_id and quote.span_id == part.span_id for quote in citations)
-    )
-    root: Final = next((part for part in session.parts if not part.parent_span_id), None)
+    cited: Final = await workspace.cited_parts(citations, preview=True)
     assigned_cited: Final = tuple(part for part in cited if part.execution_id == session.execution.id)
+    completed: Final = await workspace.summary(session.execution.id)
     return Examined(
         execution=session.execution,
         observations=response.observations,
-        parts=tuple(dict.fromkeys((*session.parts, *cited))),
-        partial=session.partial,
-        cannot_assess=response.cannot_assess or not session.parts,
+        parts=cited,
+        partial=completed.partial,
+        cannot_assess=response.cannot_assess,
         reasoning=response.reasoning,
-        shown=tuple(dict.fromkeys((*((root,) if root is not None else ()), *assigned_cited))),
+        shown=assigned_cited,
         tool_calls=activity.activity.tool_calls if activity is not None else (),
     )
 
@@ -132,11 +132,11 @@ async def review_session(
     broadcast: str = "",
     previous: SessionReview | None = None,
 ) -> SessionReview:
-    def validate(review: SessionReview) -> str | None:
+    async def validate(review: SessionReview) -> str | None:
         if review.execution_id != session.execution.id:
             return "Return the execution_id of your assigned session."
         for hunch in review.hunches:
-            if invalid := validate_evidence(claim, workspace, hunch.check_id, hunch.evidence):
+            if invalid := await validate_evidence(claim, workspace, hunch.check_id, hunch.evidence):
                 return invalid
         return None
 
@@ -156,7 +156,7 @@ async def review_session(
         workspace=workspace,
         model=model,
         schema=SessionReview,
-        initial_evidence=session.parts,
+        initial_evidence=await workspace.get_parts(execution_ids=(session.execution.id,)),
         supplied="\n".join(
             (session.execution.model_dump_json(), previous.model_dump_json() if previous else "", broadcast)
         ),

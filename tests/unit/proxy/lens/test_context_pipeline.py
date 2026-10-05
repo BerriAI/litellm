@@ -4,8 +4,9 @@ from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final, Literal
 
+import httpx
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from litellm.proxy.lens.agent_review import Findings
 from litellm.proxy.lens.agent_runtime import AgentTurn
@@ -231,7 +232,7 @@ async def test_production_entrypoint_makes_complete_child_content_available_with
     assert reviews[0].execution_id == run.id
     assert reviews[0].reasoning == "Recorded task completed."
     assert reviews[0].tool_calls == (ToolCount(name="read", calls=1),)
-    assert tuple((span.span_id, span.preview) for span in reviews[0].spans) == ((root.span_id, root.content),)
+    assert reviews[0].spans == ()
     activities: Final = tuple(event.activity for event in events if event.activity is not None)
     assert frozenset(activity.phase for activity in activities) == frozenset(("load", "review"))
     assert all(activity.execution_ids == (run.id,) for activity in activities)
@@ -533,6 +534,58 @@ async def test_candidate_investigator_rejects_fabricated_original_quotes() -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ("source", "model"))
+async def test_candidate_distinguishes_gateway_schema_failure_from_malformed_model_output(failure: str) -> None:
+    run: Final = execution("run")
+    calls: Final = SimpleQueue[ModelRequest]()
+    reads: Final = SimpleQueue[str]()
+
+    async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        reads.put(identity)
+        return ExecutionContent.model_validate({"execution": run.model_dump(), "parts": "malformed gateway evidence"})
+
+    async def model(request: ModelRequest) -> ModelResult:
+        calls.put(request)
+        if failure == "model":
+            return ModelResult(content="raw-private-model-output", cost=0)
+        return ModelResult(
+            content=AgentTurn[Findings](
+                result=Findings(
+                    findings=(
+                        FindingDraft(
+                            title="The tool timed out",
+                            description="The operation did not complete",
+                            check_id="retries",
+                            brief=issue_brief("The operation timed out"),
+                            evidence=(Evidence(execution_id=run.id, span_id="child", quote="timeout"),),
+                        ),
+                    )
+                )
+            ).model_dump_json(),
+            cost=0,
+        )
+
+    workspace: Final = EvidenceWorkspace(sessions=(SessionContent(execution=run, parts=(), partial=False),), read=read)
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    candidate: Final = Candidate(
+        check_id="retries", title="Timeout", hypothesis="Repeated timeouts", execution_ids=(run.id,)
+    )
+    if failure == "source":
+        with pytest.raises(ValidationError) as raised:
+            await investigate_context_candidate(claim, candidate, workspace, model)
+        assert raised.value.errors()[0]["loc"] == ("parts",)
+        assert calls.qsize() == 1
+        assert reads.get_nowait() == run.id
+    else:
+        result: Final = await investigate_context_candidate(claim, candidate, workspace, model)
+        assert result.findings == ()
+        assert "response invalid after 2 attempts" in result.error
+        assert "raw-private-model-output" not in result.error
+        assert calls.qsize() == 2
+        assert reads.empty()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("access", ("full", "tools", "python"))
 async def test_investigator_only_injects_candidate_sessions_for_full_access(
     access: Literal["full", "tools", "python"],
@@ -561,3 +614,249 @@ async def test_investigator_only_injects_candidate_sessions_for_full_access(
     result: Final = await investigate_context_candidate(claim, candidate, workspace, model, access=access)
     assert result.findings == ()
     assert result.error == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("failure", "supported_finding"), (("invalid", True), ("context", True), ("invalid", False)))
+async def test_failed_session_review_preserves_other_results_and_reports_its_error(
+    failure: str, supported_finding: bool
+) -> None:
+    runs: Final = tuple(
+        execution(identity).model_copy(update=MappingProxyType({"root_seen": True})) for identity in ("failed", "valid")
+    )
+    reviews: Final = SimpleQueue[Review]()
+
+    async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(
+            execution=next(run for run in runs if run.id == identity),
+            parts=(TracePart(execution_id=identity, span_id="child", name="tool", kind="tool", content="timeout"),),
+        )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if request.purpose == "cluster":
+            groups: Final = GroupPrompt.model_validate_json(request.prompt)
+            return ModelResult(content=Clusters(candidates=groups.candidates).model_dump_json(), cost=0)
+        if "Compact this analysis conversation" in request.messages[-1].content:
+            return ModelResult(content="", cost=0, context_exceeded=True)
+        payload: Final = InitialPrompt.model_validate_json(request.messages[1].content)
+        if request.purpose == "extract":
+            assigned: Final = AssignedSession.model_validate_json(payload.supplied).execution
+            if assigned.name == "failed":
+                return ModelResult(
+                    content="raw-private-response-sentinel", cost=0, context_exceeded=failure == "context"
+                )
+            return ModelResult(
+                content=AgentTurn[Extraction](
+                    result=Extraction(
+                        observations=(
+                            Observation(
+                                check_id="retries",
+                                summary="The tool timed out",
+                                evidence=(Evidence(execution_id=assigned.id, span_id="child", quote="timeout"),),
+                            ),
+                        )
+                        if supported_finding
+                        else ()
+                    )
+                ).model_dump_json(),
+                cost=0,
+            )
+        candidate: Final = Candidate.model_validate_json(payload.supplied)
+        return ModelResult(
+            content=AgentTurn[Findings](
+                result=Findings(
+                    findings=(
+                        FindingDraft(
+                            title="The tool timed out",
+                            description="A recorded operation timed out",
+                            check_id="retries",
+                            brief=issue_brief("The operation timed out"),
+                            evidence=(
+                                Evidence(execution_id=candidate.execution_ids[0], span_id="child", quote="timeout"),
+                            ),
+                        ),
+                    )
+                )
+            ).model_dump_json(),
+            cost=0,
+        )
+
+    async def progress(
+        _stage: str | None,
+        _coverage: Coverage | None,
+        review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        if review is not None:
+            reviews.put(review)
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    result: Final = await analyze_sample(claim, Sample(executions=runs, eligible=2), read, model, progress)
+    assert tuple(finding.evidence[0].execution_id for finding in result.findings) == (
+        ("valid",) if supported_finding else ()
+    )
+    assert {assessment.execution_id: assessment.cannot_assess for assessment in result.assessments} == {
+        "failed": True,
+        "valid": False,
+    }
+    assert result.coverage.screened == 2
+    assert result.coverage.unassessable == 1
+    assert result.coverage.investigated == int(supported_finding)
+    assert result.error
+    assert "raw-private-response-sentinel" not in result.error
+    assert ("context window" in result.error) is (failure == "context")
+    completed: Final = tuple(reviews.get_nowait() for _ in range(reviews.qsize()))
+    assert {review.execution_id: review.cannot_assess for review in completed} == {"failed": True, "valid": False}
+
+
+@pytest.mark.asyncio
+async def test_cross_session_observations_attribute_assessments_and_candidates_only_to_supporting_runs() -> None:
+    runs: Final = tuple(
+        execution(identity).model_copy(update=MappingProxyType({"root_seen": True}))
+        for identity in ("assigned", "affected", "healthy")
+    )
+    reviews: Final = SimpleQueue[Review]()
+    candidates: Final = SimpleQueue[Candidate]()
+    comparisons: Final[tuple[tuple[Literal["issue", "pattern"], str, str], ...]] = (
+        ("issue", "r1", "r0"),
+        ("pattern", "r2", "r1"),
+    )
+
+    async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(
+            execution=next(run for run in runs if run.id == identity),
+            parts=(
+                TracePart(execution_id=identity, span_id="span", name="tool", kind="tool", content="recorded behavior"),
+            ),
+        )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if request.purpose == "cluster":
+            groups: Final = GroupPrompt.model_validate_json(request.prompt)
+            return ModelResult(content=Clusters(candidates=groups.candidates).model_dump_json(), cost=0)
+        payload: Final = InitialPrompt.model_validate_json(request.messages[1].content)
+        if request.purpose == "extract":
+            assigned: Final = AssignedSession.model_validate_json(payload.supplied).execution
+            return ModelResult(
+                content=AgentTurn[Extraction](
+                    result=Extraction(
+                        observations=tuple(
+                            Observation(
+                                check_id="retries",
+                                kind=kind,
+                                summary=kind,
+                                evidence=(
+                                    Evidence(execution_id=support, span_id="span", quote="recorded behavior"),
+                                    Evidence(
+                                        execution_id=counterexample,
+                                        span_id="span",
+                                        quote="recorded behavior",
+                                        role="counterexample",
+                                    ),
+                                ),
+                            )
+                            for kind, support, counterexample in comparisons
+                        )
+                        if assigned.name == "assigned"
+                        else ()
+                    )
+                ).model_dump_json(),
+                cost=0,
+            )
+        candidates.put(Candidate.model_validate_json(payload.supplied))
+        return ModelResult(content=AgentTurn[Findings](result=Findings()).model_dump_json(), cost=0)
+
+    async def progress(
+        _stage: str | None,
+        _coverage: Coverage | None,
+        review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        if review is not None:
+            reviews.put(review)
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    result: Final = await analyze_sample(claim, Sample(executions=runs, eligible=3), read, model, progress)
+    assert {
+        assessment.execution_id: (assessment.issue_checks, assessment.pattern_checks)
+        for assessment in result.assessments
+    } == {"assigned": ((), ()), "affected": (("retries",), ()), "healthy": ((), ("retries",))}
+    grouped: Final = tuple(candidates.get_nowait() for _ in range(candidates.qsize()))
+    assert {candidate.kind: candidate.execution_ids for candidate in grouped} == {"issue": ("r1",), "pattern": ("r2",)}
+    completed: Final = tuple(reviews.get_nowait() for _ in range(reviews.qsize()))
+    assert next(review for review in completed if review.execution_id == "assigned").verdicts == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ("cancelled", "transport", "budget"))
+async def test_investigation_propagates_systemic_review_failures(failure: str) -> None:
+    request: Final = httpx.Request("POST", "https://worker.invalid/model")
+    error: Final = (
+        asyncio.CancelledError()
+        if failure == "cancelled"
+        else httpx.ConnectError("worker unavailable")
+        if failure == "transport"
+        else httpx.HTTPStatusError("budget exhausted", request=request, response=httpx.Response(402, request=request))
+    )
+    run: Final = execution("run").model_copy(update=MappingProxyType({"root_seen": True}))
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+
+    async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(
+            execution=run,
+            parts=(TracePart(execution_id=identity, span_id="span", name="tool", kind="tool", content="recorded"),),
+        )
+
+    async def model(_request: ModelRequest) -> ModelResult:
+        raise error
+
+    with pytest.raises(type(error)) as raised:
+        await analyze_sample(claim, Sample(executions=(run,), eligible=1), read, model, ignore_progress)
+    assert raised.value is error
+
+
+@pytest.mark.asyncio
+async def test_metadata_only_review_does_not_fetch_traces_or_treat_unloaded_content_as_missing() -> None:
+    run: Final = execution("run", 17).model_copy(update=MappingProxyType({"root_seen": True}))
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    reviews: Final = SimpleQueue[Review]()
+    activities: Final = SimpleQueue[Activity]()
+
+    async def read(_identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        pytest.fail("An unrequested trace was fetched to construct the review or its preview")
+
+    async def model(request: ModelRequest) -> ModelResult:
+        payload: Final = InitialPrompt.model_validate_json(request.messages[1].content)
+        assert payload.initial_evidence == ()
+        return ModelResult(content=AgentTurn[Extraction](result=Extraction()).model_dump_json(), cost=0)
+
+    async def progress(
+        _stage: str | None,
+        _coverage: Coverage | None,
+        review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        activity: Activity | None = None,
+        /,
+    ) -> None:
+        if review is not None:
+            reviews.put(review)
+        if activity is not None:
+            activities.put(activity)
+
+    result: Final = await analyze_sample(claim, Sample(executions=(run,), eligible=1), read, model, progress)
+    assert result.coverage.screened == 1
+    assert result.coverage.partial == result.coverage.unassessable == 0
+    assert len(result.assessments) == 1
+    assert not result.assessments[0].cannot_assess
+    assert reviews.get_nowait().spans == ()
+    preparation: Final = tuple(
+        activity
+        for activity in (activities.get_nowait() for _ in range(activities.qsize()))
+        if activity.phase == "load"
+    )
+    assert preparation[-1].finished
+    assert all(activity.operations == activity.tool_calls == () for activity in preparation)

@@ -4,9 +4,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal
 
-from pydantic import ValidationError
-
-from .activity import ActivityTracker, observe_operation, observed_model, track_activity
+from .activity import ActivityTracker, observed_model, track_activity
 from .agent_review import FINDINGS_TASK, Findings, review_context, validate_findings
 from .agent_runtime import run_agent
 from .agent_workspace import EvidenceWorkspace, ReviewRecord, load_workspace
@@ -26,7 +24,6 @@ from .analysis import (
     examine_executions,
     merge_candidates,
     observation_batches,
-    validation_details,
 )
 from .models import (
     Claim,
@@ -70,7 +67,9 @@ async def parallel_cluster_batches(
                 kind=observation.kind,
                 title=observation.summary,
                 hypothesis=f"{observation.kind}: {observation.summary}",
-                execution_ids=tuple(sorted(frozenset(quote.execution_id for quote in observation.evidence))),
+                execution_ids=tuple(
+                    sorted(frozenset(quote.execution_id for quote in observation.evidence if quote.role == "support"))
+                ),
             )
             for observation in observations
         )
@@ -181,9 +180,7 @@ async def investigate_context_candidate(
             model=model,
             schema=Findings,
             initial_evidence=(
-                tuple(part for part in workspace.parts if part.execution_id in candidate.execution_ids)
-                if access == "full"
-                else ()
+                await workspace.get_parts(execution_ids=candidate.execution_ids) if access == "full" else ()
             ),
             supplied=candidate.model_dump_json(),
             validate=lambda findings: validate_findings(claim, workspace, findings),
@@ -191,10 +188,8 @@ async def investigate_context_candidate(
             activity=activity,
         )
         return CandidateInvestigation(findings=response.findings)
-    except (ValidationError, AnalysisResponseError) as error:
-        return CandidateInvestigation(
-            error=validation_details(error) if isinstance(error, ValidationError) else str(error)
-        )
+    except AnalysisResponseError as error:
+        return CandidateInvestigation(error=str(error))
 
 
 async def analyze_context(
@@ -209,15 +204,12 @@ async def analyze_context(
     base: Final = Coverage(eligible=sample.eligible, selected=len(sample.executions))
     if not sample.executions:
         return Result(coverage=base)
-    async with (
-        track_activity(
-            progress,
-            identity="load",
-            phase="load",
-            label="Load original trace workspace",
-            execution_ids=tuple(execution.id for execution in sample.executions),
-        ) as activity,
-        observe_operation(activity, "read"),
+    async with track_activity(
+        progress,
+        identity="load",
+        phase="load",
+        label="Prepare evidence workspace",
+        execution_ids=tuple(execution.id for execution in sample.executions),
     ):
         workspace: Final = await load_workspace(sample, read, claim.job.settings.concurrency)
     slots: Final = asyncio.Semaphore(claim.job.settings.concurrency)
@@ -235,15 +227,27 @@ async def analyze_context(
             label=execution.service or execution.name,
             execution_ids=(execution.id,),
         ) as activity:
-            return await review_context(
-                claim,
-                session,
-                workspace,
-                model,
-                inject_evidence=access == "full",
-                enable_python=access == "python",
-                activity=activity,
-            )
+            try:
+                return await review_context(
+                    claim,
+                    session,
+                    workspace,
+                    model,
+                    inject_evidence=access == "full",
+                    enable_python=access == "python",
+                    activity=activity,
+                )
+            except AnalysisResponseError as error:
+                return Examined(
+                    execution=execution,
+                    observations=(),
+                    parts=(),
+                    partial=(await workspace.summary(execution.id)).partial,
+                    cannot_assess=True,
+                    error=str(error),
+                    reasoning=str(error),
+                    tool_calls=activity.activity.tool_calls,
+                )
 
     completed_reviews: Final = tuple(
         [review async for review in examine_executions(claim, sample, read, limited, progress, extractor=extract)]
@@ -259,18 +263,30 @@ async def analyze_context(
             }
         )
     )
-    assessments: Final = tuple(
-        RunAssessment(
+    observations: Final = tuple(chain.from_iterable(review.observations for review in examined))
+
+    def assessment(review: Examined) -> RunAssessment:
+        supported: Final = tuple(
+            observation
+            for observation in observations
+            if any(
+                quote.execution_id == review.execution.id and quote.role == "support" for quote in observation.evidence
+            )
+        )
+        return RunAssessment(
             execution_id=review.execution.id,
-            issue_checks=tuple(sorted(frozenset(o.check_id for o in review.observations if o.kind == "issue"))),
-            pattern_checks=tuple(sorted(frozenset(o.check_id for o in review.observations if o.kind == "pattern"))),
+            issue_checks=tuple(sorted(frozenset(o.check_id for o in supported if o.kind == "issue"))),
+            pattern_checks=tuple(sorted(frozenset(o.check_id for o in supported if o.kind == "pattern"))),
             cannot_assess=review.cannot_assess,
         )
-        for review in examined
-    )
-    observations: Final = tuple(chain.from_iterable(review.observations for review in examined))
+
+    assessments: Final = tuple(assessment(review) for review in examined)
     if not observations:
-        return Result(coverage=coverage, assessments=assessments)
+        return Result(
+            coverage=coverage,
+            assessments=assessments,
+            error="\n\n".join(dict.fromkeys(review.error for review in examined if review.error)),
+        )
     records: Final = tuple(
         ReviewRecord(
             execution_id=review.execution.id,
@@ -281,7 +297,7 @@ async def analyze_context(
         )
         for review in examined
     )
-    review_workspace: Final = workspace.model_copy(update=MappingProxyType({"reviews": records}))
+    review_workspace: Final = workspace.with_reviews(records)
     batches: Final = observation_batches(observations)
     grouping: Final = coverage.model_copy(update=MappingProxyType({"grouping_batches": len(batches)}))
     await progress("Grouping observations", grouping)

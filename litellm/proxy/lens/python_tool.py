@@ -2,7 +2,8 @@ import asyncio
 import json
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import aclosing
 from functools import lru_cache
 from itertools import chain
 from pathlib import Path
@@ -38,6 +39,10 @@ _DEFAULT_LIMITS: Final = PythonLimits()
 
 
 class ExecutionLimit(Exception):
+    pass
+
+
+class PythonInputError(Exception):
     pass
 
 
@@ -97,13 +102,24 @@ def _command(directory: str, limits: PythonLimits) -> tuple[str, ...]:
     )
 
 
-async def _feed(process: asyncio.subprocess.Process, code: str, data: str) -> None:
+async def _input_chunks(data: str | AsyncGenerator[str, None]) -> AsyncGenerator[str, None]:
+    if isinstance(data, str):
+        for offset in range(0, len(data), 65536):
+            yield data[offset : offset + 65536]
+        return
+    async with aclosing(data):
+        async for chunk in data:
+            yield chunk
+
+
+async def _feed(process: asyncio.subprocess.Process, code: str, data: str | AsyncGenerator[str, None]) -> None:
     assert process.stdin is not None
     try:
         process.stdin.write((json.dumps({"code": code})[:-1] + ', "data":').encode())
-        for offset in range(0, len(data), 65536):
-            process.stdin.write(data[offset : offset + 65536].encode())
-            await process.stdin.drain()
+        async with aclosing(_input_chunks(data)) as chunks:
+            async for chunk in chunks:
+                process.stdin.write(chunk.encode())
+                await process.stdin.drain()
         process.stdin.write(b"}")
         await process.stdin.drain()
     except (BrokenPipeError, ConnectionResetError):
@@ -288,7 +304,9 @@ def _python_slots(loop: asyncio.AbstractEventLoop) -> asyncio.Semaphore:
     return asyncio.Semaphore(count)
 
 
-async def execute_python(code: str, data: str, *, limits: PythonLimits = _DEFAULT_LIMITS) -> str:
+async def execute_python(
+    code: str, data: str | AsyncGenerator[str, None], *, limits: PythonLimits = _DEFAULT_LIMITS
+) -> str:
     try:
         slots: Final = _python_slots(asyncio.get_running_loop())
     except ValueError as error:
@@ -297,7 +315,7 @@ async def execute_python(code: str, data: str, *, limits: PythonLimits = _DEFAUL
         return await _execute(code, data, limits)
 
 
-async def _execute(code: str, data: str, limits: PythonLimits) -> str:
+async def _execute(code: str, data: str | AsyncGenerator[str, None], limits: PythonLimits) -> str:
     started: Final = monotonic()
     with TemporaryDirectory(prefix="lens-python-") as temporary:
         directory: Final = str(Path(temporary).resolve())
@@ -315,8 +333,14 @@ async def _execute(code: str, data: str, limits: PythonLimits) -> str:
             asyncio.create_task(_monitor(process, directory, limits, ready)),
         )
         try:
-            _, stdout, stderr, exit_code, _ = await asyncio.wait_for(
-                asyncio.gather(*pending), timeout=limits.wall_seconds
+            finished, _ = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in finished:
+                task.result()
+            if not pending[0].done():
+                pending[0].cancel()
+                await asyncio.gather(pending[0], return_exceptions=True)
+            stdout, stderr, exit_code, _ = await asyncio.wait_for(
+                asyncio.gather(*pending[1:]), timeout=limits.wall_seconds
             )
             return _result(
                 started,
@@ -333,7 +357,7 @@ async def _execute(code: str, data: str, limits: PythonLimits) -> str:
             )
         except TimeoutError:
             return _result(started, error=f"Python exceeded its {limits.wall_seconds:g}-second elapsed-time limit.")
-        except (ExecutionLimit, OSError) as error:
+        except (ExecutionLimit, PythonInputError, OSError) as error:
             return _result(started, error=str(error))
         finally:
             _kill(process)
