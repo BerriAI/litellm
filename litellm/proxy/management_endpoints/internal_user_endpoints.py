@@ -3049,7 +3049,7 @@ async def get_user_daily_activity_aggregated(
             detail={"error": "Please provide start_date and end_date"},
         )
 
-    typed_prisma_client: Final["PrismaClient"] = prisma_client
+    typed_prisma_client: Final[PrismaClient] = prisma_client
 
     try:
         resolved_entity_ids: Final = resolve_user_daily_activity_entity_ids(
