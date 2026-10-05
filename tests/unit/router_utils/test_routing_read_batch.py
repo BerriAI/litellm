@@ -6,6 +6,7 @@ Before `RoutingReadBatch`, `async_get_available_deployment` issued one MGET for 
 """
 
 import time
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 import litellm
 from litellm import Router
 from litellm.caching.redis_cache import RedisCache
+from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 
 _MODEL_GROUP = "claude"
 _MESSAGES = [{"role": "user", "content": "ping"}]
@@ -77,6 +79,46 @@ async def test_usage_based_routing_reads_cooldowns_and_counters_in_one_redis_rou
             "deployment:dep-b:cooldown",
         ]
     ], "cooldown state and usage counters must arrive in one MGET"
+
+
+@pytest.mark.asyncio
+async def test_usage_based_routing_still_batches_when_the_strategy_is_a_fixed_signature_subclass():
+    class OldSignatureV2(LowestTPMLoggingHandler_v2):
+        async def async_get_available_deployments(
+            self,
+            model_group: str,
+            healthy_deployments: list,
+            messages: list[dict[str, str]] | None = None,
+            input: str | list | None = None,
+        ):
+            return await super().async_get_available_deployments(
+                model_group=model_group,
+                healthy_deployments=healthy_deployments,
+                messages=messages,
+                input=input,
+            )
+
+    redis: Final = _redis_answering({})
+    router: Final = _router(redis, "usage-based-routing-v2")
+    router.lowesttpm_logger_v2 = OldSignatureV2(router_cache=router.cache)
+    router.cache.async_batch_get_cache = AsyncMock(wraps=router.cache.async_batch_get_cache)
+
+    deployment: Final = await router.async_get_available_deployment(
+        model=_MODEL_GROUP, request_kwargs={}, messages=_MESSAGES
+    )
+
+    assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
+    assert _redis_key_families(redis) == [
+        [
+            "dep-a:anthropic/claude-x:rpm",
+            "dep-a:anthropic/claude-x:tpm",
+            "dep-b:anthropic/claude-x:rpm",
+            "dep-b:anthropic/claude-x:tpm",
+            "deployment:dep-a:cooldown",
+            "deployment:dep-b:cooldown",
+        ]
+    ], "the subclassed strategy must still get the batched read, not a second MGET"
+    router.cache.async_batch_get_cache.assert_not_awaited()
 
 
 @pytest.mark.asyncio

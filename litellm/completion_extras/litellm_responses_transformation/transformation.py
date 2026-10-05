@@ -123,13 +123,13 @@ def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]: 
     blocks are the fallback for turns that arrived over another API surface.
     """
     items: Final = _get_reasoning_items(msg)
-    stored: Final = [_reasoning_item_to_response_input(item) for item in items]  # mutable-ok: API message payload
+    stored: Final = [_reasoning_item_to_response_input(item) for item in items]
     if stored:
         return stored
     raw_blocks: Final = msg.get("thinking_blocks") or ()
     blocks: Final = cast("Iterable[ChatCompletionThinkingBlock]", raw_blocks)  # cast-ok: untyped client json
     replayed: Final = responses_reasoning_items_from_thinking_blocks(blocks)
-    return [dict(item) for item in replayed]  # mutable-ok: API message payload
+    return [dict(item) for item in replayed]
 
 
 def _build_reasoning_item(
@@ -187,7 +187,7 @@ def _reasoning_items_from_output_items(output_items: Sequence[object]) -> tuple[
 
 
 def _as_chat_reasoning_items(
-    reasoning_items: Sequence[_BuiltReasoningItem],
+    reasoning_items: Sequence[_BuiltReasoningItem | ChatCompletionReasoningItem],
 ) -> list[ChatCompletionReasoningItem] | None:
     if not reasoning_items:
         return None
@@ -271,16 +271,20 @@ def _flat_responses_tool_choice(choice_type: str, name: str) -> ToolChoiceFuncti
 def _reasoning_item_to_response_input(
     r_item: ChatCompletionReasoningItem,
 ) -> dict[str, object]:
-    """Convert a stored ChatCompletionReasoningItem back to a Responses API input item."""
-    r_input: Final[dict[str, object]] = {
+    """Convert a stored ChatCompletionReasoningItem back to a Responses API input item.
+
+    An item without an id is sent without one: the Responses API accepts that and
+    verifies the encrypted content on its own, while it rejects any id it did not mint.
+    """
+    item_id: Final = r_item.get("id")
+    encrypted_content: Final = r_item.get("encrypted_content")
+    return {
         "type": "reasoning",
-        "id": r_item.get("id") or f"rs_{id(r_item)}",
+        **({"id": item_id} if item_id else {}),
         # summary is always required by the Responses API, even when empty
         "summary": r_item.get("summary") or [],
+        **({"encrypted_content": encrypted_content} if encrypted_content else {}),
     }
-    if r_item.get("encrypted_content"):
-        r_input["encrypted_content"] = r_item["encrypted_content"]
-    return r_input
 
 
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
@@ -441,7 +445,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 input_items.extend(_reasoning_input_items(msg))
                 if content:
                     input_items.append(
-                        {  # mutable-ok: API message payload
+                        {
                             "type": "message",
                             "role": "assistant",
                             "content": self._convert_content_to_responses_format(content, "assistant"),
@@ -475,7 +479,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 if role == "assistant":
                     input_items.extend(_reasoning_input_items(msg))
                 input_items.append(
-                    {  # mutable-ok: API message payload
+                    {
                         "type": "message",
                         "role": role,
                         "content": self._convert_content_to_responses_format(content, cast(str, role)),
@@ -531,11 +535,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     ) -> "ResponseText":
         existing: Final = cast(  # cast-ok: text field is a ResponseText | dict[str, Any] | None union
             "dict[str, object]",
-            dict(responses_api_request).get("text") or {},  # mutable-ok: one-shot merge seed
+            dict(responses_api_request).get("text") or {},
         )
         return cast(  # cast-ok: merged mapping is a valid ResponseText shape
             "ResponseText",
-            {**existing, **update},  # mutable-ok: one-shot merged payload
+            {**existing, **update},
         )
 
     def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
@@ -784,7 +788,32 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             else:
                 pass  # don't fail request if item in list is not supported
 
-        # If we accumulated tool calls, create a single choice with all of them
+        if accumulated_tool_calls and choices:
+            last_choice: Final = choices[-1]
+            last_reasoning_content: Final = getattr(last_choice.message, "reasoning_content", None)
+            last_reasoning_items: Final = getattr(last_choice.message, "reasoning_items", None)
+            merged_reasoning_content: Final = (
+                " ".join(value for value in (last_reasoning_content, reasoning_content) if value) or None
+            )
+            merged_reasoning_items: Final = _as_chat_reasoning_items(
+                (
+                    *(last_reasoning_items or ()),
+                    *(() if pending_reasoning_item is None else (pending_reasoning_item,)),
+                )
+            )
+            merged_message: Final = Message(
+                role=last_choice.message.role,
+                content=last_choice.message.content,
+                annotations=getattr(last_choice.message, "annotations", None),
+                tool_calls=accumulated_tool_calls,
+                reasoning_content=merged_reasoning_content,
+                reasoning_items=merged_reasoning_items,
+            )
+            return [
+                *choices[:-1],
+                Choices(message=merged_message, finish_reason="tool_calls", index=last_choice.index),
+            ]
+
         if accumulated_tool_calls:
             msg = Message(
                 content=None,
@@ -1506,7 +1535,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     # tool call; per-stream callers already received it via
                     # output_item.added and the argument delta events
                     return ModelResponseStream(
-                        choices=[  # mutable-ok: ModelResponseStream coerces only list choices
+                        choices=[
                             StreamingChoices(
                                 index=0,
                                 delta=Delta(
@@ -1612,7 +1641,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                     )
                 ],
                 usage=usage,
-                provider_specific_fields=dict(provider_metadata) or None,  # mutable-ok: field is typed dict
+                provider_specific_fields=dict(provider_metadata) or None,
                 **(
                     MappingProxyType({"service_tier": served_service_tier})
                     if isinstance(served_service_tier, str)

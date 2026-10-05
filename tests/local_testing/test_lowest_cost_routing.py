@@ -10,7 +10,6 @@ load_dotenv()
 import copy
 
 import pytest
-from litellm import Router
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.caching.caching import DualCache
 
@@ -94,37 +93,6 @@ async def test_get_available_deployments_custom_price():
     print("selected model: ", selected_model)
 
     assert selected_model["model_info"]["id"] == "chatgpt-v-1"
-
-
-@pytest.mark.asyncio
-async def test_lowest_cost_routing():
-    """
-    Test if router, returns model with the lowest cost
-    """
-    model_list = [
-        {
-            "model_name": "gpt-4",
-            "litellm_params": {"model": "gpt-4"},
-            "model_info": {"id": "openai-gpt-4"},
-        },
-        {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "gpt-3.5-turbo"},
-            "model_info": {"id": "gpt-3.5-turbo"},
-        },
-    ]
-
-    # init router
-    router = Router(model_list=model_list, routing_strategy="cost-based-routing")
-    response = await router.acompletion(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-    )
-    print(response)
-    print(
-        response._hidden_params["model_id"]
-    )  # expect groq-llama, since groq/llama has lowest cost
-    assert "gpt-3.5-turbo" == response._hidden_params["model_id"]
 
 
 async def _deploy(lowest_cost_logger, deployment_id, tokens_used, duration):

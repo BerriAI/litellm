@@ -505,7 +505,7 @@ class TokenCounter(Protocol):
 def _count_objects(
     values: Sequence[Mapping[str, JsonValue]],
 ) -> list[dict[str, JsonValue]]:  # mutable-ok: the existing provider count API requires JSON lists/dicts
-    return [dict(value) for value in values]  # mutable-ok: serialize read-only inputs at the provider API boundary
+    return [dict(value) for value in values]
 
 
 def _messages_url(model: str, api_key: str, api_base: str | None) -> str:
@@ -524,17 +524,19 @@ async def count_prompt_tokens(
     body: Mapping[str, JsonValue],
     api_base: str | None = None,
 ) -> int | None:
+    auth_header: Final = AnthropicModelInfo.get_auth_header(api_key=api_key, api_base=api_base)
+    if auth_header is None:
+        return None
     try:
         native: Final = _CountBody.model_validate(body)
-        count_url: Final = _messages_url(model, api_key, api_base) + "/count_tokens"
         result: Final = _CountResult.model_validate(
             await _counter.handle_count_tokens_request(
                 model=model,
                 messages=_count_objects(native.messages),
                 tools=_count_objects(native.tools) if native.tools is not None else None,
                 system=_JSON_OBJECT.validate_python(MappingProxyType({"system": native.system}))["system"],
-                api_key=api_key,
-                api_base=count_url,
+                auth_header=auth_header,
+                api_base=api_base,
                 optional_params=_JSON_OBJECT.validate_python(
                     MappingProxyType({key: body[key] for key in COUNT_TOKEN_OPTION_NAMES if key in body})
                 ),
