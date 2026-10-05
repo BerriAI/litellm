@@ -21,6 +21,7 @@ from importlib.metadata import distribution
 from importlib.resources import files
 from pathlib import Path
 from typing import Final
+from unittest.mock import patch
 
 EXTRAS_ONLY_MODULES = ("fastapi", "uvicorn", "keyring", "mcp", "mcp_types", "httpx2", "httpcore2")
 AWS_MODULES: Final = ("boto3", "botocore", "s3transfer", "jmespath")
@@ -125,17 +126,13 @@ def check_aws_feature_guidance() -> str:
         else:
             raise AssertionError(f"{label}: silently accepted missing AWS dependencies")
     for callback in ("s3_v2", "aws_sqs"):
-        previous: Final = litellm.success_callback
-        try:
-            litellm.success_callback = [callback]
+        with patch.object(litellm, "success_callback", [callback]):
             try:
                 litellm.completion(model="openai/test", messages=[{"role": "user", "content": "test"}], mock_response="ok")
             except Exception as error:
                 _require("litellm[aws]" in str(error), f"{callback}: missing public guidance: {error}")
             else:
                 raise AssertionError(f"{callback}: completion silently skipped logging")
-        finally:
-            litellm.success_callback = previous
     common: Final = {"api_key": "", "aws_access_key_id": "test", "aws_secret_access_key": "test", "aws_region_name": "us-east-1", "num_retries": 0}
     messages: Final = [{"role": "user", "content": "hello"}]
     provider_calls: Final = (
