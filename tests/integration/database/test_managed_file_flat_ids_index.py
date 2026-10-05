@@ -98,7 +98,7 @@ def _scratch_replica_environment(database_url: str) -> Mapping[str, str]:
         return {}
     replica: Final = urlsplit(replica_url)
     reader: Final = replica.username
-    assert reader, replica_url
+    assert reader, "the read replica URL must name its role"
     with psycopg.connect(database_url, autocommit=True) as admin:
         admin.execute(sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA public TO {}").format(sql.Identifier(reader)))
     return {"DATABASE_URL_READ_REPLICA": urlunsplit(replica._replace(path=urlsplit(database_url).path))}
@@ -160,10 +160,11 @@ def test_migration_entrypoint_adds_the_gin_index_and_the_upgraded_proxy_maps_man
         assert GIN_MIGRATION in _applied_migrations(database_url), entrypoint.stdout
         store: Final = "vs_" + uuid.uuid4().hex
         provider_file_id: Final = "file-" + uuid.uuid4().hex[:16]
+        replica_environment: Final = _scratch_replica_environment(database_url)
         upgraded_environment: Final = {
             "DATABASE_URL": database_url,
             "DISABLE_SCHEMA_UPDATE": "true",
-            **_scratch_replica_environment(database_url),
+            **replica_environment,
         }
         with (
             wire_server(_provider(store, provider_file_id)) as wire,
@@ -195,6 +196,12 @@ def test_migration_entrypoint_adds_the_gin_index_and_the_upgraded_proxy_maps_man
                 database_url=database_url,
             ) == [{"flat_model_file_ids": [provider_file_id]}]
             assert _listed_ids(upgraded, store, model) == (managed,)
+            if replica_environment:
+                assert {"usename": urlsplit(replica_environment["DATABASE_URL_READ_REPLICA"]).username} in read_rows(
+                    "SELECT DISTINCT usename FROM pg_stat_activity WHERE datname = current_database()",
+                    (),
+                    database_url=database_url,
+                )
 
 
 def test_db_push_creates_a_valid_gin_index_on_the_flat_provider_file_ids(gateway: Gateway) -> None:
