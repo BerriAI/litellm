@@ -333,9 +333,11 @@ class _ProxyDBLogger(CustomLogger):
                 if isinstance(counter_key_value := metadata.get("billing_agent_counter_key"), str)
                 else None
             )
-            target_metadata: Final = cast(Mapping[str, object], metadata)
-            target_counter_value: Final = target_metadata.get("target_agent_counter_key")
-            target_agent_counter_key: Final = target_counter_value if isinstance(target_counter_value, str) else None
+            target_agent_counter_key: Final = (
+                target_counter_key_value
+                if isinstance(target_counter_key_value := metadata.get("target_agent_counter_key"), str)
+                else None
+            )
             if (
                 isinstance(completion_response, LiteLLMBatch)
                 and kwargs.get("call_type") == CallTypes.aretrieve_batch.value
@@ -821,7 +823,7 @@ async def _update_database_and_spend_counters_in_batch(
     update_cache_read_keys: Sequence[str],
     billing_agent_id: str | None,
     billing_agent_counter_key: str | None,
-    target_agent_counter_key: str | None = None,
+    target_agent_counter_key: str | None,
 ) -> bool:
     from litellm.proxy.proxy_server import arm_update_cache_read
 
