@@ -226,7 +226,7 @@ def test_output_format_conversion_to_json_tool():
     assert "output_format" not in result, "output_format should be removed from request body"
 
     assert result["messages"][0]["content"].startswith("Extract the key information")
-    assert result["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
+    assert result["tool_choice"] == {"type": "tool", "name": "litellm_bedrock_json_tool_call"}
     parsed_schema = result["tools"][-1]["input_schema"]
     assert parsed_schema["type"] == "object"
     assert "name" in parsed_schema["properties"]
@@ -270,7 +270,7 @@ def test_output_format_conversion_with_string_content():
     )
 
     assert result["messages"][0]["content"] == "What is 2+2?"
-    assert result["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
+    assert result["tool_choice"] == {"type": "tool", "name": "litellm_bedrock_json_tool_call"}
     assert "result" in result["tools"][-1]["input_schema"]["properties"]
 
 

@@ -135,8 +135,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             isinstance(tool, dict) and tool.get("name") == RESPONSE_FORMAT_TOOL_NAME for tool in tools
         )
         if "response_format" in non_default_params and has_json_tool:
-            if AnthropicConfig._response_format_tool_choice_allowed(original_model, non_default_params, "bedrock"):
-                optional_params["tool_choice"] = {"name": RESPONSE_FORMAT_TOOL_NAME, "type": "tool"}
+            if AnthropicConfig.response_format_tool_choice_allowed(original_model, non_default_params, "bedrock"):
+                optional_params["tool_choice"] = {  # rebind-ok: out-param
+                    "name": RESPONSE_FORMAT_TOOL_NAME,
+                    "type": "tool",
+                }
             else:
                 response_format_tool_choice: Final = optional_params.get("tool_choice")
                 if (

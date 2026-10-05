@@ -1473,9 +1473,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return None
 
     @staticmethod
-    def _response_format_tool_choice_allowed(
+    def response_format_tool_choice_allowed(
         model: str,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         custom_llm_provider: str,
     ) -> bool:
         """Whether a synthetic JSON tool may be forced for ``response_format``.
@@ -1563,7 +1563,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     _tool = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
                     if _tool is None:
                         continue
-                    if AnthropicConfig._response_format_tool_choice_allowed(
+                    if AnthropicConfig.response_format_tool_choice_allowed(
                         model, non_default_params, self._resolved_provider
                     ):
                         _tool_choice = {
@@ -2096,7 +2096,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 output_key="top_k",
             )
 
-        data: Final = {
+        data: Final[  # mutable-ok: request body edited in place by _apply_output_config / _nest_output_format_in_output_config
+            dict[str, object]
+        ] = {
             "model": model,
             "messages": anthropic_messages,
             **optional_params,
@@ -2107,7 +2109,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return data
 
-    def _nest_output_format_in_output_config(self, data: dict) -> None:
+    def _nest_output_format_in_output_config(
+        self,
+        data: dict[str, object],  # mutable-ok: request body edited in place like _apply_output_config
+    ) -> None:
         """Move deprecated top-level ``output_format`` into ``output_config.format``.
 
         Claude only enforces structured output from ``output_config.format``.
@@ -2126,9 +2131,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if isinstance(output_config, dict):
             merged: Final = dict(output_config)
             merged.setdefault("format", output_format)
-            data["output_config"] = merged
+            data["output_config"] = merged  # rebind-ok: out-param
             return
-        data["output_config"] = {"format": output_format}
+        data["output_config"] = {"format": output_format}  # rebind-ok: out-param
 
     def _apply_output_config(self, data: dict, model: str, optional_params: dict) -> None:
         """Validate and apply output_config to the request data.

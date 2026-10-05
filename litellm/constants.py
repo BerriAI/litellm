@@ -1540,6 +1540,7 @@ OPENAI_FINISH_REASONS: Final = [
 ]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS: Final = int(os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60))  # 1 minute
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
+BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME: Final = "litellm_bedrock_json_tool_call"  # distinct from RESPONSE_FORMAT_TOOL_NAME so a caller-defined `json_tool_call` tool on Bedrock Messages is never mistaken for the synthetic one
 
 ########################### Logging Callback Constants ###########################
 AZURE_STORAGE_MSFT_VERSION: Final = "2019-07-07"

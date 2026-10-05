@@ -7,6 +7,7 @@ import httpx
 import litellm
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
+    BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME,
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
@@ -34,11 +35,11 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
-    promote_bedrock_json_tool_response,
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
+    promote_bedrock_json_tool_response,
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
 )
@@ -51,6 +52,9 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
     AnthropicThinkingParam,
+)
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
 )
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
@@ -801,18 +805,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ):
+    ) -> AnthropicMessagesResponse:
         """Unwrap a forced JSON tool so Messages clients see schema text, not a tool call."""
-        from litellm.types.llms.anthropic_messages.anthropic_response import (
-            AnthropicMessagesResponse,
-        )
-
         response: Final = super().transform_anthropic_messages_response(
             model=model,
             raw_response=raw_response,
             logging_obj=logging_obj,
         )
-        return AnthropicMessagesResponse(**promote_bedrock_json_tool_response(dict(response)))
+        return promote_bedrock_json_tool_response(response)
 
     def get_async_streaming_response_iterator(
         self,
@@ -973,6 +973,11 @@ class AmazonAnthropicClaudeMessagesConfig(
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
+    def __init__(self, model: str, json_mode: bool | None = False) -> None:
+        super().__init__(model=model, json_mode=json_mode)
+        self._json_tool_block_indexes = set[int]()
+        self._saw_non_json_tool = False
+
     def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         """
         Parse the chunk data into anthropic /messages format
@@ -1010,31 +1015,32 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
             chunk_data["usage"] = {**metrics_usage, **preserved_usage}
         return self._rewrite_json_tool_stream_event(chunk_data)
 
-    def _rewrite_json_tool_stream_event(self, chunk_data: dict) -> dict:
-        """Stream the forced JSON tool as text deltas so clients do not try to run it."""
-        from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-
-        indexes: set[int] | None = getattr(self, "_json_tool_block_indexes", None)
-        if indexes is None:
-            indexes = set()
-            self._json_tool_block_indexes = indexes
+    def _rewrite_json_tool_stream_event(
+        self,
+        chunk_data: dict[str, object],  # mutable-ok: AWS decoder events are plain dicts
+    ) -> dict[str, object]:  # mutable-ok: callers consume a plain dict event
+        """Stream the forced synthetic JSON tool as text deltas so clients do not try to run it."""
         event_type: Final = chunk_data.get("type")
         if event_type == "content_block_start":
             block: Final = chunk_data.get("content_block")
             if isinstance(block, dict) and block.get("type") == "tool_use":
-                if block.get("name") == RESPONSE_FORMAT_TOOL_NAME:
+                if block.get("name") == BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME:
                     start_index: Final = chunk_data.get("index")
                     if isinstance(start_index, int):
-                        indexes.add(start_index)
+                        self._json_tool_block_indexes.add(start_index)
                     return {**chunk_data, "content_block": {"type": "text", "text": ""}}
                 self._saw_non_json_tool = True
         elif event_type == "content_block_delta":
             delta_index: Final = chunk_data.get("index")
             delta: Final = chunk_data.get("delta")
-            if delta_index in indexes and isinstance(delta, dict) and delta.get("type") == "input_json_delta":
+            if (
+                delta_index in self._json_tool_block_indexes
+                and isinstance(delta, dict)
+                and delta.get("type") == "input_json_delta"
+            ):
                 return {**chunk_data, "delta": {"type": "text_delta", "text": delta.get("partial_json") or ""}}
-        elif event_type == "message_delta" and indexes and not getattr(self, "_saw_non_json_tool", False):
-            delta = chunk_data.get("delta")
-            if isinstance(delta, dict) and delta.get("stop_reason") == "tool_use":
-                return {**chunk_data, "delta": {**delta, "stop_reason": "end_turn"}}
+        elif event_type == "message_delta" and self._json_tool_block_indexes and not self._saw_non_json_tool:
+            message_delta: Final = chunk_data.get("delta")
+            if isinstance(message_delta, dict) and message_delta.get("stop_reason") == "tool_use":
+                return {**chunk_data, "delta": {**message_delta, "stop_reason": "end_turn"}}
         return chunk_data

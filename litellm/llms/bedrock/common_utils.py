@@ -26,6 +26,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
+from litellm.constants import BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -34,6 +35,17 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
 from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.types.llms.anthropic import (
+    AnthropicInputSchema,
+    AnthropicMessagesTool,
+    AnthropicMessagesToolChoice,
+    AnthropicResponseContentBlockText,
+    AnthropicResponseContentBlockToolUse,
+)
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
+    AnthropicResponseContentBlock,
+)
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
@@ -251,76 +263,94 @@ def _bedrock_model_supports(model: str, key: str) -> bool:
     return _supports_factory(model=model, custom_llm_provider="bedrock", key=key)
 
 
-def _install_bedrock_json_schema_tool(model: str, request_body: dict, schema_format: dict) -> bool:
+_BedrockMessagesContentBlock: TypeAlias = (
+    AnthropicResponseContentBlock | AnthropicResponseContentBlockText | AnthropicResponseContentBlockToolUse
+)
+
+
+def _install_bedrock_json_schema_tool(
+    model: str,
+    request_body: dict[str, object],  # mutable-ok: edited in place like apply_bedrock_invoke_structured_output
+    schema_format: Mapping[str, object],
+) -> bool:
     """Force a synthetic JSON tool when Bedrock will not accept ``output_config.format``.
 
     Returns False when the schema cannot be forced (legacy budget thinking, or a
     model that rejects ``tool_choice`` of type ``tool``). The caller then keeps
     the inline-text fallback.
     """
-    from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
     schema: Final = schema_format.get("schema")
     if not isinstance(schema, dict):
         return False
     thinking: Final = request_body.get("thinking")
-    probe: Final = {"thinking": thinking} if thinking is not None else {}
-    if not AnthropicConfig._response_format_tool_choice_allowed(model, probe, "bedrock"):
+    probe: Final[Mapping[str, object]] = {"thinking": thinking} if thinking is not None else {}
+    if not AnthropicConfig.response_format_tool_choice_allowed(model, probe, "bedrock"):
         return False
 
-    tool: Final = AnthropicConfig()._create_json_tool_call_for_response_format(json_schema=schema)
-    existing_tools: Final = request_body.get("tools")
-    tools: Final = list(existing_tools) if isinstance(existing_tools, list) else []
-    if not any(isinstance(item, dict) and item.get("name") == RESPONSE_FORMAT_TOOL_NAME for item in tools):
-        tools.append(dict(tool))
-    request_body["tools"] = tools
-    request_body["tool_choice"] = {"type": "tool", "name": RESPONSE_FORMAT_TOOL_NAME}
+    raw_tools: Final = request_body.get("tools")
+    try:
+        existing_tools: Final = _TOOL_DICTS_ADAPTER.validate_python(raw_tools) if raw_tools is not None else ()
+    except ValidationError:
+        return False
+
+    input_schema: Final = AnthropicInputSchema(type="object")
+    input_schema.update(schema)
+    synthetic_tool: Final[AnthropicMessagesTool] = {
+        "name": BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME,
+        "input_schema": input_schema,
+    }
+    if not any(tool.get("name") == BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME for tool in existing_tools):
+        request_body["tools"] = [*existing_tools, synthetic_tool]  # rebind-ok: out-param
+    request_body["tool_choice"] = AnthropicMessagesToolChoice(  # rebind-ok: out-param
+        type="tool", name=BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME
+    )
     return True
 
 
-def promote_bedrock_json_tool_response(response: dict) -> dict:
-    """Turn a forced ``json_tool_call`` block back into text for Messages clients.
+def _bedrock_tool_use_block_name(block: _BedrockMessagesContentBlock) -> str | None:
+    if not isinstance(block, dict):
+        return None
+    plain: Final = dict(block)
+    if plain.get("type") != "tool_use":
+        return None
+    name: Final = plain.get("name")
+    return name if isinstance(name, str) else None
+
+
+def _rewrite_synthetic_json_tool_block(block: _BedrockMessagesContentBlock) -> _BedrockMessagesContentBlock:
+    if not isinstance(block, dict):
+        return block
+    if _bedrock_tool_use_block_name(block) != BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME:
+        return block
+    payload: Final = dict(block).get("input")
+    return {"type": "text", "text": payload if isinstance(payload, str) else json.dumps(payload)}
+
+
+def promote_bedrock_json_tool_response(response: AnthropicMessagesResponse) -> AnthropicMessagesResponse:
+    """Turn a forced synthetic JSON tool block back into text for Messages clients.
 
     Bedrock Claude models that reject ``output_config.format`` still return the
     schema as a tool call. Anthropic structured-output clients expect that JSON
-    in a text block with ``stop_reason`` ``end_turn``.
+    in a text block with ``stop_reason`` ``end_turn``. Only the synthetic
+    ``BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME`` block is rewritten, so a
+    caller-defined tool (even one named ``json_tool_call``) passes through.
     """
-    from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-
     content: Final = response.get("content")
     if not isinstance(content, list):
         return response
-    tool_blocks: Final = [
-        block
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == RESPONSE_FORMAT_TOOL_NAME
-    ]
-    other_tools: Final = [
-        block
-        for block in content
-        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") != RESPONSE_FORMAT_TOOL_NAME
-    ]
-    if not tool_blocks or other_tools:
+    tool_use_names: Final = tuple(
+        name for block in content if (name := _bedrock_tool_use_block_name(block)) is not None
+    )
+    if BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME not in tool_use_names or any(
+        name != BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME for name in tool_use_names
+    ):
         return response
-
-    rewritten: Final[list] = []
-    for block in content:
-        if (
-            not isinstance(block, dict)
-            or block.get("name") != RESPONSE_FORMAT_TOOL_NAME
-            or block.get("type") != "tool_use"
-        ):
-            rewritten.append(block)
-            continue
-        payload: Final = block.get("input")
-        text: Final = payload if isinstance(payload, str) else json.dumps(payload)
-        rewritten.append({"type": "text", "text": text})
-    updated: Final = dict(response)
-    updated["content"] = rewritten
-    if updated.get("stop_reason") == "tool_use":
-        updated["stop_reason"] = "end_turn"
-    return updated
+    rewritten: Final = [_rewrite_synthetic_json_tool_block(block) for block in content]
+    if response.get("stop_reason") == "tool_use":
+        return {**response, "content": rewritten, "stop_reason": "end_turn"}
+    return {**response, "content": rewritten}
 
 
 def apply_bedrock_invoke_structured_output(

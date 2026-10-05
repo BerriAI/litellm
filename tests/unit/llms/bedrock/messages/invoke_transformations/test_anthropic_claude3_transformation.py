@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from litellm.constants import (
+    BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME,
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
@@ -1103,7 +1104,7 @@ def test_bedrock_messages_converts_output_config_format_to_json_tool():
 
     assert result.get("output_config") == {"effort": "xhigh"}
     assert "output_format" not in result
-    assert result["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
+    assert result["tool_choice"] == {"type": "tool", "name": BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME}
     assert result["tools"][-1]["input_schema"]["properties"] == schema["properties"]
     assert result["messages"][0]["content"] == [{"type": "text", "text": "Hello"}]
 
@@ -3177,7 +3178,7 @@ def test_bedrock_messages_forces_json_tool_for_claude_5(local_model_cost_map):
     )
 
     assert "output_config" not in result
-    assert result["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
+    assert result["tool_choice"] == {"type": "tool", "name": BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME}
     assert result["tools"][-1]["input_schema"]["properties"] == schema["properties"]
     assert "zebra_count" not in json.dumps(result["messages"])
 
@@ -3218,7 +3219,12 @@ def test_bedrock_messages_json_tool_response_is_text():
             "stop_reason": "tool_use",
             "content": [
                 {"type": "thinking", "thinking": "hmm"},
-                {"type": "tool_use", "name": "json_tool_call", "id": "t1", "input": {"zebra_count": 3}},
+                {
+                    "type": "tool_use",
+                    "name": BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME,
+                    "id": "t1",
+                    "input": {"zebra_count": 3},
+                },
             ],
         }
     )
@@ -3228,6 +3234,66 @@ def test_bedrock_messages_json_tool_response_is_text():
     assert response["content"][1] == {"type": "text", "text": '{"zebra_count": 3}'}
 
 
+def test_bedrock_messages_caller_defined_json_tool_call_is_not_rewritten():
+    """A caller's own ``json_tool_call`` tool is not the synthetic one: its tool_use
+    blocks must reach the client untouched so the client can execute the call."""
+    from litellm.llms.bedrock.common_utils import promote_bedrock_json_tool_response
+
+    response = {
+        "stop_reason": "tool_use",
+        "content": [
+            {"type": "tool_use", "name": "json_tool_call", "id": "t1", "input": {"zebra_count": 3}},
+        ],
+    }
+
+    assert promote_bedrock_json_tool_response(response) == response
+
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="us.anthropic.claude-sonnet-5")
+    start = decoder._chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "t1", "name": "json_tool_call", "input": {}},
+        }
+    )
+    stop = decoder._chunk_parser({"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}})
+
+    assert start["content_block"]["name"] == "json_tool_call"
+    assert stop["delta"]["stop_reason"] == "tool_use"
+
+
+def test_bedrock_messages_response_format_survives_caller_defined_json_tool_call(local_model_cost_map):
+    """A caller-defined ``json_tool_call`` tool must not shadow the synthetic schema
+    tool: the requested response format is still installed and forced."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema = {
+        "type": "object",
+        "properties": {"zebra_count": {"type": "integer"}},
+    }
+    caller_tool = {"name": "json_tool_call", "input_schema": {"type": "object", "properties": {}}}
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "tools": [caller_tool],
+            "output_config": {"format": {"type": "json_schema", "schema": schema}},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["tool_choice"] == {"type": "tool", "name": BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME}
+    tools_by_name = {tool["name"]: tool for tool in result["tools"]}
+    assert tools_by_name["json_tool_call"] == caller_tool
+    assert (
+        tools_by_name[BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME]["input_schema"]["properties"] == schema["properties"]
+    )
+
+
 def test_bedrock_messages_json_tool_stream_is_text():
     decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="us.anthropic.claude-sonnet-5")
 
@@ -3235,7 +3301,12 @@ def test_bedrock_messages_json_tool_stream_is_text():
         {
             "type": "content_block_start",
             "index": 0,
-            "content_block": {"type": "tool_use", "id": "t1", "name": "json_tool_call", "input": {}},
+            "content_block": {
+                "type": "tool_use",
+                "id": "t1",
+                "name": BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME,
+                "input": {},
+            },
         }
     )
     delta = decoder._chunk_parser(
@@ -3245,9 +3316,7 @@ def test_bedrock_messages_json_tool_stream_is_text():
             "delta": {"type": "input_json_delta", "partial_json": '{"zebra_count": 3}'},
         }
     )
-    stop = decoder._chunk_parser(
-        {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}}
-    )
+    stop = decoder._chunk_parser({"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}})
 
     assert start["content_block"] == {"type": "text", "text": ""}
     assert delta["delta"] == {"type": "text_delta", "text": '{"zebra_count": 3}'}
