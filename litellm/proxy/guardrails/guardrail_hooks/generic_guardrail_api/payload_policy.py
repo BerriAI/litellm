@@ -4,7 +4,6 @@ Shaping is lossy, so every shaped payload carries a ``PayloadLoss``. Caller cont
 guardrail did not see in full is never replaced by the guardrail's response.
 """
 
-import json
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -27,7 +26,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     message_with_slot_texts,
     unappliable_request_rewrite,
 )
-from litellm.proxy.guardrails._content_utils import image_part_url, map_messages_image_urls
+from litellm.proxy.guardrails._content_utils import image_part_url, map_messages_image_urls, same_json_ignoring_nulls
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.config_parsing import config_strings
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
@@ -349,17 +348,6 @@ def shape_payload(
     )
 
 
-def _null_free_object(pairs: Sequence[tuple[str, object]]) -> Mapping[str, object]:
-    return MappingProxyType({key: item for key, item in pairs if item is not None})
-
-
-def _without_nulls(value: object) -> object:
-    normalized: Final[object] = json.loads(  # pyright: ignore[reportAny]  # stdlib parse of our own json.dumps output
-        json.dumps(value), object_pairs_hook=_null_free_object
-    )
-    return normalized
-
-
 def _rewrites(response: GenericGuardrailAPIResponse, body: Mapping[str, JsonValue]) -> bool:
     returned: Final = (
         ("texts", response.texts),
@@ -367,7 +355,7 @@ def _rewrites(response: GenericGuardrailAPIResponse, body: Mapping[str, JsonValu
         ("images", response.images),
         ("tools", response.tools),
     )
-    return any(value and _without_nulls(value) != _without_nulls(body.get(field)) for field, value in returned)
+    return any(value and not same_json_ignoring_nulls(value, body.get(field)) for field, value in returned)
 
 
 def block_only_response(
