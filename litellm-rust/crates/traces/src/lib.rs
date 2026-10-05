@@ -17,6 +17,7 @@ pub mod query;
 mod query_access;
 pub mod request;
 mod resolve;
+pub mod response;
 #[cfg(feature = "schema")]
 pub mod schema;
 mod shared;
