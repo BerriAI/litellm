@@ -29,6 +29,16 @@ model_list:
       model: anthropic/claude-sonnet-4-6
       api_base: http://127.0.0.1:8191
       api_key: synthetic-anthropic-key
+  - model_name: openai/responses/gpt-5.6-sol
+    litellm_params:
+      model: openai/responses/gpt-5.6-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
+  - model_name: openai/responses/gpt-6.1-sol
+    litellm_params:
+      model: openai/responses/gpt-6.1-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
