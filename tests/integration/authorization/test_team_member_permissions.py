@@ -1,13 +1,71 @@
+from collections.abc import Iterator
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Final
 
 import httpx
-from integration._support.client import Gateway, Scenario, object_value, string_value
+import pytest
+from integration._support.client import (
+    Gateway,
+    Scenario,
+    delete_key_if_present,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
 PERMISSION_ERROR: Final = "team_member_permission_error"
+
+
+class _ObservedRequest(BaseModel):
+    body: dict[str, JsonValue]
+
+
+class _Observations(BaseModel):
+    requests: list[_ObservedRequest]
+
+
+class _TeamPermissions(BaseModel):
+    team_id: str
+    team_member_permissions: list[str] | None = None
+
+
+class _PermissionsList(BaseModel):
+    team_id: str
+    team_member_permissions: list[str]
+
+
+class _TeamPermissionRow(BaseModel):
+    team_id: str
+    team_member_permissions: list[str] | None = None
+
+
+class _BulkPermissionsUpdate(BaseModel):
+    message: str
+    teams_updated: int
+    permissions_appended: list[str] | None = None
+
+
+class _GeneratedKey(BaseModel):
+    key: str
+
+
+class _Error(BaseModel):
+    type: str
+
+
+class _ErrorResponse(BaseModel):
+    error: _Error
+
+
+@pytest.fixture
+def upstream(gateway: Gateway) -> Iterator[httpx.Client]:
+    with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as client:
+        response: Final = client.get("/__observations")
+        assert response.status_code == 200, response.text
+        assert _Observations.model_validate_json(response.text).requests == [], response.text
+        yield client
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +97,183 @@ def _refused(response: httpx.Response, status: int, error_type: str | None = Non
     assert response.status_code == status, response.text
     if error_type is not None:
         assert object_value(response.json()["error"])["type"] == error_type, response.text
+
+
+def _observed_models(upstream: httpx.Client) -> tuple[str, ...]:
+    response: Final = upstream.get("/__observations")
+    assert response.status_code == 200, response.text
+    observations: Final = _Observations.model_validate_json(response.text)
+    return tuple(string_value(request.body["model"]) for request in observations.requests)
+
+
+def _permissions(gateway: Gateway, team_id: str) -> _PermissionsList:
+    response: Final = gateway.request("GET", "/team/permissions_list", params={"team_id": team_id})
+    assert response.status_code == 200, response.text
+    return _PermissionsList.model_validate_json(response.text)
+
+
+def _team_permission_rows(team_ids: tuple[str, ...]) -> tuple[_TeamPermissionRow, ...]:
+    return tuple(
+        _TeamPermissionRow.model_validate(row)
+        for row in read_rows(
+            'SELECT team_id, team_member_permissions FROM "LiteLLM_TeamTable" WHERE team_id = ANY(%s) ORDER BY team_id',
+            (list(team_ids),),
+        )
+    )
+
+
+def test_permissions_update_persists_requested_member_permissions(gateway: Gateway, upstream: httpx.Client) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team()
+        requested: Final = ["/key/generate", "/key/info"]
+        updated: Final = gateway.request(
+            "POST",
+            "/team/permissions_update",
+            {"team_id": team, "team_member_permissions": requested},
+        )
+        assert updated.status_code == 200, updated.text
+        response: Final = _TeamPermissions.model_validate_json(updated.text)
+        assert response.team_id == team, updated.text
+        assert response.team_member_permissions == requested, updated.text
+        readback: Final = _permissions(gateway, team)
+        assert readback.team_member_permissions == requested, repr(readback)
+        assert read_rows(
+            'SELECT team_member_permissions FROM "LiteLLM_TeamTable" WHERE team_id = %s',
+            (team,),
+        ) == [{"team_member_permissions": requested}], updated.text
+        observed: Final = _observed_models(upstream)
+        assert observed == (), repr(observed)
+
+
+def test_permissions_update_grants_and_revokes_key_generate_for_a_warmed_member_on_both_proxies(
+    gateway: Gateway, peer: Gateway, upstream: httpx.Client
+) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team()
+        member: Final = scenario.member(team)
+        member_key: Final = scenario.key(user_id=member)
+        denied_gateway: Final = gateway.request("POST", "/key/generate", {"team_id": team}, key=member_key)
+        _refused(denied_gateway, 401, PERMISSION_ERROR)
+        denied_peer: Final = peer.request("POST", "/key/generate", {"team_id": team}, key=member_key)
+        _refused(denied_peer, 401, PERMISSION_ERROR)
+
+        granted: Final = gateway.request(
+            "POST",
+            "/team/permissions_update",
+            {"team_id": team, "team_member_permissions": ["/key/generate", "/key/info"]},
+        )
+        assert granted.status_code == 200, granted.text
+        added: Final = _permissions(gateway, team)
+        assert added.team_member_permissions == ["/key/generate", "/key/info"], repr(added)
+        assert read_rows(
+            'SELECT team_member_permissions FROM "LiteLLM_TeamTable" WHERE team_id = %s',
+            (team,),
+        ) == [{"team_member_permissions": ["/key/generate", "/key/info"]}], granted.text
+        generated_gateway: Final = gateway.request("POST", "/key/generate", {"team_id": team}, key=member_key)
+        assert generated_gateway.status_code == 200, generated_gateway.text
+        gateway_key: Final = _GeneratedKey.model_validate_json(generated_gateway.text).key
+        scenario.cleanups.callback(delete_key_if_present, gateway, gateway_key)
+        generated_peer: Final = peer.request("POST", "/key/generate", {"team_id": team}, key=member_key)
+        assert generated_peer.status_code == 200, generated_peer.text
+        peer_key: Final = _GeneratedKey.model_validate_json(generated_peer.text).key
+        scenario.cleanups.callback(delete_key_if_present, gateway, peer_key)
+
+        revoked: Final = gateway.request(
+            "POST",
+            "/team/permissions_update",
+            {"team_id": team, "team_member_permissions": ["/key/info"]},
+        )
+        assert revoked.status_code == 200, revoked.text
+        revoked_readback: Final = _permissions(gateway, team)
+        assert revoked_readback.team_member_permissions == ["/key/info"], repr(revoked_readback)
+        assert read_rows(
+            'SELECT team_member_permissions FROM "LiteLLM_TeamTable" WHERE team_id = %s',
+            (team,),
+        ) == [{"team_member_permissions": ["/key/info"]}], revoked.text
+        revoked_gateway: Final = gateway.request("POST", "/key/generate", {"team_id": team}, key=member_key)
+        _refused(revoked_gateway, 401, PERMISSION_ERROR)
+        revoked_peer: Final = peer.request("POST", "/key/generate", {"team_id": team}, key=member_key)
+        _refused(revoked_peer, 401, PERMISSION_ERROR)
+        observed: Final = _observed_models(upstream)
+        assert observed == (), repr(observed)
+
+
+def test_permissions_bulk_update_appends_only_to_the_listed_teams(gateway: Gateway, upstream: httpx.Client) -> None:
+    with gateway.scenario() as scenario:
+        team_one: Final = scenario.team(team_member_permissions=["/key/info"])
+        team_two: Final = scenario.team(team_member_permissions=["/key/info", "/key/update"])
+        team_three: Final = scenario.team(team_member_permissions=["/key/info"])
+        team_ids: Final = (team_one, team_two, team_three)
+        before_non_admin: Final = _team_permission_rows(team_ids)
+        user: Final = scenario.user(user_role="internal_user")
+        user_key: Final = scenario.key(user_id=user)
+        denied: Final = gateway.request(
+            "POST",
+            "/team/permissions_bulk_update",
+            {"permissions": ["/key/update"], "team_ids": [team_one, team_two]},
+            key=user_key,
+        )
+        assert denied.status_code == 401, denied.text
+        assert _ErrorResponse.model_validate_json(denied.text).error.type == "auth_error", denied.text
+        after_denied: Final = _team_permission_rows(team_ids)
+        assert after_denied == before_non_admin, repr(after_denied)
+
+        selected: Final = gateway.request(
+            "POST",
+            "/team/permissions_bulk_update",
+            {"permissions": ["/key/update"], "team_ids": [team_one, team_two]},
+        )
+        assert selected.status_code == 200, selected.text
+        selected_response: Final = _BulkPermissionsUpdate.model_validate_json(selected.text)
+        assert selected_response == _BulkPermissionsUpdate(
+            message="Team permissions updated successfully",
+            teams_updated=1,
+            permissions_appended=["/key/update"],
+        ), selected.text
+        selected_rows: Final = _team_permission_rows(team_ids)
+        assert tuple(sorted(selected_rows, key=lambda row: row.team_id)) == tuple(
+            sorted(
+                (
+                    _TeamPermissionRow(team_id=team_one, team_member_permissions=["/key/info", "/key/update"]),
+                    _TeamPermissionRow(team_id=team_two, team_member_permissions=["/key/info", "/key/update"]),
+                    _TeamPermissionRow(team_id=team_three, team_member_permissions=["/key/info"]),
+                ),
+                key=lambda row: row.team_id,
+            )
+        ), repr(selected_rows)
+        all_before: Final = tuple(
+            _TeamPermissionRow.model_validate(row)
+            for row in read_rows(
+                'SELECT team_id, team_member_permissions FROM "LiteLLM_TeamTable" ORDER BY team_id',
+                (),
+            )
+        )
+        missing: Final = tuple(
+            row.team_id for row in all_before if "/key/update" not in (row.team_member_permissions or [])
+        )
+        all_updated: Final = gateway.request(
+            "POST",
+            "/team/permissions_bulk_update",
+            {"permissions": ["/key/update"], "apply_to_all_teams": True},
+        )
+        assert all_updated.status_code == 200, all_updated.text
+        all_response: Final = _BulkPermissionsUpdate.model_validate_json(all_updated.text)
+        assert all_response == _BulkPermissionsUpdate(
+            message="Team permissions updated successfully",
+            teams_updated=len(missing),
+            permissions_appended=["/key/update"],
+        ), all_updated.text
+        all_after: Final = tuple(
+            _TeamPermissionRow.model_validate(row)
+            for row in read_rows(
+                'SELECT team_id, team_member_permissions FROM "LiteLLM_TeamTable" ORDER BY team_id',
+                (),
+            )
+        )
+        assert tuple(row.team_id for row in all_after) == tuple(row.team_id for row in all_before), repr(all_after)
+        assert all("/key/update" in (row.team_member_permissions or []) for row in all_after), repr(all_after)
+        observed: Final = _observed_models(upstream)
+        assert observed == (), repr(observed)
 
 
 def test_default_member_permissions_only_allow_reading_team_keys(gateway: Gateway) -> None:
