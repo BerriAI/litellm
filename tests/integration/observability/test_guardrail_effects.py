@@ -1660,6 +1660,77 @@ def test_chat_pre_call_denial_returns_content_filter(gateway: Gateway, tmp_path:
         ) == (0, 0, 0), body["usage"]
 
 
+def _refusing_provider(request: Request) -> Reply:
+    raise AssertionError(f"denied text completion reached the provider: {request!r}")
+
+
+def test_text_completion_pre_call_denial_returns_text_completion_without_upstream(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with (
+        wire_server(_refusing_provider) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-3.5-turbo-instruct", api_base=wire.url)
+        key: Final = scenario.key(models=[model])
+        with OpenAI(
+            api_key=key,
+            base_url=str(candidate.client.base_url).rstrip("/") + "/v1",
+            max_retries=0,
+            http_client=httpx.Client(timeout=15, trust_env=False),
+        ) as client:
+            completion: Final = client.completions.create(
+                model=model, prompt="say hi", extra_body={"guardrails": [identity]}
+            )
+        assert completion.object == "text_completion", completion
+        assert [choice.text for choice in completion.choices] == [_RESPONSES_DENIAL], completion
+        assert wire.drain() == (), completion
+
+
+def test_text_completion_pre_call_denial_streams_text_completion_without_upstream(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    pytest.skip("BUG: a streamed /v1/completions pre_call denial sends one frame with no text and no [DONE]")
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    config: Final = _responses_denial_config(tmp_path, identity)
+    with (
+        wire_server(_refusing_provider) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="openai/gpt-3.5-turbo-instruct", api_base=wire.url)
+        key: Final = scenario.key(models=[model])
+        raw: Final = candidate.request(
+            "POST",
+            "/v1/completions",
+            {"model": model, "prompt": "say hi", "stream": True, "guardrails": [identity]},
+            key=key,
+        )
+        with OpenAI(
+            api_key=key,
+            base_url=str(candidate.client.base_url).rstrip("/") + "/v1",
+            max_retries=0,
+            http_client=httpx.Client(timeout=15, trust_env=False),
+        ) as client:
+            chunks: Final = list(
+                client.completions.create(
+                    model=model, prompt="say hi", stream=True, extra_body={"guardrails": [identity]}
+                )
+            )
+        assert {chunk.object for chunk in chunks} == {"text_completion"}, chunks
+        assert "".join(choice.text or "" for chunk in chunks for choice in chunk.choices) == _RESPONSES_DENIAL, chunks
+        assert raw.headers["content-type"].startswith("text/event-stream"), raw.text
+        lines: Final = tuple(line for line in raw.text.split("\n") if line.startswith("data: "))
+        assert lines[-1] == "data: [DONE]", raw.text
+        frames: Final = tuple(json.loads(line.removeprefix("data: ")) for line in lines[:-1])
+        assert {frame["object"] for frame in frames} == {"text_completion"}, raw.text
+        assert "".join(choice.get("text") or "" for frame in frames for choice in frame["choices"]) == _RESPONSES_DENIAL
+        assert wire.drain() == (), raw.text
+
+
 @pytest.mark.covers("other.observability.guardrails.messages_pre_call_denial_returns_message")
 def test_messages_pre_call_denial_returns_message(gateway: Gateway, tmp_path: Path) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
