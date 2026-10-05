@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { parseAsString, useQueryStates } from "nuqs";
 import { Link2, RefreshCw } from "lucide-react";
 import { apiClient } from "@/components/networking";
 import { extractProxyErrorMessage } from "@/lib/http/client";
@@ -14,6 +15,14 @@ import ObservedReport from "./ObservedReport";
 import { useObservedReport, type ObservedViewData } from "./useObservedReport";
 import { syncMessage, type ObservedSnapshot } from "./observedData";
 import { createObservedDemo } from "./observedDemo";
+import { parseAsDemoFlag } from "./demoUrlState";
+
+const OBSERVED_ROI_QUERY_PARSERS = {
+  demo: parseAsDemoFlag,
+  connected: parseAsString,
+  connection_cancelled: parseAsString,
+  connection_failed: parseAsString,
+};
 
 function SyncActions({
   data,
@@ -107,35 +116,25 @@ export default function ObservedROIView({
   isViewOnly?: boolean;
 }) {
   const { data, error, refresh } = useObservedReport(accessToken);
-  const [returned] = useState(() => new URLSearchParams(typeof window === "undefined" ? "" : window.location.search));
-  const [sample, setSample] = useState<ObservedSnapshot | null>(() =>
-    returned.get("demo") === "1" ? createObservedDemo(28) : null,
-  );
+  const [{ demo, connected, connection_cancelled, connection_failed }, setQueryParams] =
+    useQueryStates(OBSERVED_ROI_QUERY_PARSERS);
+  const [sample, setSample] = useState<ObservedSnapshot | null>(() => (demo === true ? createObservedDemo(28) : null));
   const [connections, setConnections] = useState(
-    ["github", "gitlab"].includes(returned.get("connected") ?? "") ||
-      returned.has("connection_cancelled") ||
-      returned.has("connection_failed"),
+    ["github", "gitlab"].includes(connected ?? "") || connection_cancelled !== null || connection_failed !== null,
   );
   const [connectionError, setConnectionError] = useState(() => {
-    if (returned.has("connection_failed")) return "Connection failed or expired. Try again or use a token";
-    if (returned.has("connection_cancelled")) return "Connection cancelled. Choose an app or token to try again";
+    if (connection_failed !== null) return "Connection failed or expired. Try again or use a token";
+    if (connection_cancelled !== null) return "Connection cancelled. Choose an app or token to try again";
     return "";
   });
-  const [afterAuthorization, setAfterAuthorization] = useState(Boolean(returned.get("connected")));
+  const [afterAuthorization, setAfterAuthorization] = useState(Boolean(connected));
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   useEffect(() => {
-    const url = new URL(window.location.href);
-    url.searchParams.delete("connected");
-    url.searchParams.delete("connection_cancelled");
-    url.searchParams.delete("connection_failed");
-    window.history.replaceState(window.history.state, "", url);
-  }, []);
+    setQueryParams({ connected: null, connection_cancelled: null, connection_failed: null });
+  }, [setQueryParams]);
   function previewSample(enabled: boolean) {
-    const url = new URL(window.location.href);
-    if (enabled) url.searchParams.set("demo", "1");
-    else url.searchParams.delete("demo");
-    window.history.replaceState(window.history.state, "", url);
+    setQueryParams({ demo: enabled ? true : null });
     setSample(enabled ? createObservedDemo(28) : null);
   }
   function closeConnections() {
