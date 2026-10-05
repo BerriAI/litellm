@@ -13,10 +13,16 @@ use serde_json::json;
 #[case::detail("TraceDetailRequest")]
 #[case::span("TraceSpanRequest")]
 #[case::error_page("TraceErrorPageRequest")]
-#[case::query("TraceQueryRequest")]
-fn request_schemas_reject_unknown_fields(#[case] name: &str) {
+fn get_request_schemas_ignore_unknown_fields(#[case] name: &str) {
     let schemas = request_schemas();
     let schema = serde_json::to_value(&schemas[name]).unwrap();
+    assert_ne!(schema["additionalProperties"], false);
+}
+
+#[rstest]
+fn query_request_schema_rejects_unknown_fields() {
+    let schemas = request_schemas();
+    let schema = serde_json::to_value(&schemas["TraceQueryRequest"]).unwrap();
     assert_eq!(schema["additionalProperties"], false);
 }
 
@@ -42,6 +48,14 @@ fn request_schemas_preserve_explicit_constraints() {
     assert_eq!(span["properties"]["trace_ref"]["default"], "");
     assert_eq!(error_page["properties"]["trace_ref"]["default"], "");
     assert_eq!(query["required"], json!(["sql"]));
+    assert_eq!(
+        list["properties"]["start_ms"]["description"],
+        "Window start, unix ms. Default: 24h ago"
+    );
+    assert_eq!(
+        list["properties"]["end_ms"]["description"],
+        "Window end, unix ms. Default: now"
+    );
 }
 
 #[rstest]
@@ -66,10 +80,14 @@ fn request_models_deserialize_defaults_and_null_cursors() {
 }
 
 #[rstest]
-fn request_models_reject_unknown_fields_and_missing_sql() {
-    assert!(serde_json::from_value::<TraceListRequest>(json!({"unknown": true})).is_err());
-    assert!(serde_json::from_value::<TraceDetailRequest>(json!({"unknown": true})).is_err());
-    assert!(serde_json::from_value::<TraceSpanRequest>(json!({"unknown": true})).is_err());
-    assert!(serde_json::from_value::<TraceErrorPageRequest>(json!({"unknown": true})).is_err());
+fn get_request_models_ignore_unknown_fields_and_query_model_rejects_them() {
+    assert!(serde_json::from_value::<TraceListRequest>(json!({"unknown": true})).is_ok());
+    assert!(serde_json::from_value::<TraceDetailRequest>(json!({"unknown": true})).is_ok());
+    assert!(serde_json::from_value::<TraceSpanRequest>(json!({"unknown": true})).is_ok());
+    assert!(serde_json::from_value::<TraceErrorPageRequest>(json!({"unknown": true})).is_ok());
+    assert!(
+        serde_json::from_value::<TraceQueryRequest>(json!({"sql": "SELECT 1", "unknown": true}))
+            .is_err()
+    );
     assert!(serde_json::from_value::<TraceQueryRequest>(json!({})).is_err());
 }

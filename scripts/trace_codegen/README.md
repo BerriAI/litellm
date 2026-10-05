@@ -2,7 +2,7 @@ Run `uv run scripts/generate_trace_types.py` from the repository root to export 
 
 The script pins datamodel-code-generator in its inline dependency metadata. Rust uses the workspace's locked Schemars version through each owning crate's optional `schema` feature. Neither tool is a Python runtime dependency
 
-The `litellm-traces` Rust request types own the generated request models in `litellm/rust_bridge/trace/generated/requests.py`. FastAPI keeps query binding and HTTP validation, so query constraints are deliberately declared in both places for now
+The `litellm-traces` Rust request types own the generated request models in `litellm/rust_bridge/trace/generated/requests.py`. The GET routes bind their query parameters directly to the generated models. GET request types allow unknown fields because existing clients' unknown query parameters are ignored. The SQL body model forbids extra fields
 
 Each crate exports its own roots using JSON Schema 2020-12. Request parameters use Schemars' deserialization contract and carry only explicitly declared constraints. Their schemas skip the integer-bounds transform because it would add i64 bounds to `start_ms` and `end_ms`, narrowing what Python accepts, and replace `page_size`'s explicit 1..500 range with 0..65535. Trace views and query help use the serialization contract. Lens rows use their ClickHouse deserialization schemas, including quoted numbers and numeric boolean flags
 

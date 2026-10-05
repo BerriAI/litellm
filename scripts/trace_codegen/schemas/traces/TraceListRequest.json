@@ -1,6 +1,5 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
   "properties": {
     "cursor": {
       "default": null,
@@ -12,6 +11,7 @@
     },
     "end_ms": {
       "default": null,
+      "description": "Window end, unix ms. Default: now",
       "format": "int64",
       "type": [
         "integer",
@@ -20,6 +20,7 @@
     },
     "start_ms": {
       "default": null,
+      "description": "Window start, unix ms. Default: 24h ago",
       "format": "int64",
       "type": [
         "integer",

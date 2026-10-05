@@ -1,9 +1,10 @@
 #[macro_rules_attribute::apply(request_type)]
 #[derive(Clone, Debug)]
-#[serde(deny_unknown_fields)]
 pub struct TraceListRequest {
+    /// Window start, unix ms. Default: 24h ago
     #[serde(default)]
     pub start_ms: Option<i64>,
+    /// Window end, unix ms. Default: now
     #[serde(default)]
     pub end_ms: Option<i64>,
     #[serde(default)]
@@ -13,7 +14,6 @@ pub struct TraceListRequest {
 
 #[macro_rules_attribute::apply(request_type)]
 #[derive(Clone, Debug)]
-#[serde(deny_unknown_fields)]
 pub struct TraceDetailRequest {
     #[serde(default)]
     pub trace_ref: String,
@@ -27,7 +27,6 @@ pub struct TraceDetailRequest {
 
 #[macro_rules_attribute::apply(request_type)]
 #[derive(Clone, Debug)]
-#[serde(deny_unknown_fields)]
 pub struct TraceSpanRequest {
     #[serde(default)]
     pub trace_ref: String,
@@ -35,7 +34,6 @@ pub struct TraceSpanRequest {
 
 #[macro_rules_attribute::apply(request_type)]
 #[derive(Clone, Debug)]
-#[serde(deny_unknown_fields)]
 pub struct TraceErrorPageRequest {
     #[serde(default)]
     pub trace_ref: String,

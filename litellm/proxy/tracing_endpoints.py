@@ -195,11 +195,8 @@ def read_failure(error: TraceChanged | ValueError | OverflowError | RuntimeError
 async def list_agent_traces(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
     now_ms: Annotated[int, Depends(current_time_ms)],
-    start_ms: Annotated[int | None, Query(description="Window start, unix ms. Default: 24h ago")] = None,
-    end_ms: Annotated[int | None, Query(description="Window end, unix ms. Default: now")] = None,
-    cursor: Annotated[str | None, Query(max_length=512)] = None,
+    request: Annotated[TraceListRequest, Query()],
 ) -> TracePage:
-    request: Final = TraceListRequest(start_ms=start_ms, end_ms=end_ms, cursor=cursor)
     try:
         tracing, scope = context.reader()
         return await tracing.list_traces(
@@ -279,11 +276,8 @@ async def help_agent_trace_queries(
 async def get_agent_trace(
     trace_id: str,
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
-    trace_ref: Annotated[str, Query()] = "",
-    cursor: Annotated[str | None, Query(max_length=512)] = None,
-    page_size: Annotated[int | None, Query(ge=1, le=500)] = None,
+    request: Annotated[TraceDetailRequest, Query()],
 ) -> Trace:
-    request: Final = TraceDetailRequest(trace_ref=trace_ref, cursor=cursor, page_size=page_size)
     tracing, scope = context.reader()
     try:
         trace: Final = await tracing.get_trace(trace_id, scope, request.trace_ref, request.cursor, request.page_size)
@@ -299,9 +293,8 @@ async def get_agent_trace_span(
     trace_id: str,
     span_id: str,
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
-    trace_ref: Annotated[str, Query()] = "",
+    request: Annotated[TraceSpanRequest, Query()],
 ) -> SpanDetail:
-    request: Final = TraceSpanRequest(trace_ref=trace_ref)
     tracing, scope = context.reader()
     try:
         span: Final = await tracing.get_span(trace_id, span_id, scope, request.trace_ref)
@@ -317,10 +310,8 @@ async def get_agent_trace_span_error(
     trace_id: str,
     span_id: str,
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
-    trace_ref: Annotated[str, Query()] = "",
-    cursor: Annotated[str | None, Query(max_length=512)] = None,
+    request: Annotated[TraceErrorPageRequest, Query()],
 ) -> SpanErrorPage:
-    request: Final = TraceErrorPageRequest(trace_ref=trace_ref, cursor=cursor)
     try:
         tracing, scope = context.reader()
         page: Final = await tracing.get_span_error(trace_id, span_id, scope, request.trace_ref, request.cursor)

@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class TraceDetailRequest(BaseModel):
     model_config = ConfigDict(
-        extra="forbid",
         frozen=True,
     )
 
@@ -20,7 +19,6 @@ class TraceDetailRequest(BaseModel):
 
 class TraceErrorPageRequest(BaseModel):
     model_config = ConfigDict(
-        extra="forbid",
         frozen=True,
     )
 
@@ -30,12 +28,11 @@ class TraceErrorPageRequest(BaseModel):
 
 class TraceListRequest(BaseModel):
     model_config = ConfigDict(
-        extra="forbid",
         frozen=True,
     )
 
-    start_ms: int | None = None
-    end_ms: int | None = None
+    start_ms: int | None = Field(None, description="Window start, unix ms. Default: 24h ago")
+    end_ms: int | None = Field(None, description="Window end, unix ms. Default: now")
     cursor: str | None = Field(None, max_length=512)
 
 
@@ -50,7 +47,6 @@ class TraceQueryRequest(BaseModel):
 
 class TraceSpanRequest(BaseModel):
     model_config = ConfigDict(
-        extra="forbid",
         frozen=True,
     )
 
