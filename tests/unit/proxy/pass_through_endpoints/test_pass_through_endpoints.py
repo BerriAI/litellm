@@ -8404,6 +8404,7 @@ async def test_pass_through_request_strips_caller_identity_before_guardrail_hook
     }
     mock_request = MagicMock(spec=Request)
     mock_request.method = "POST"
+    mock_request.scope = {"path": "/my-llm"}
     mock_request.headers = Headers(
         {
             "content-type": "application/json",
@@ -8460,6 +8461,7 @@ async def test_pass_through_pre_call_block_logs_cleaned_inbound_headers():
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
     mock_request = MagicMock(spec=Request)
     mock_request.method = "POST"
+    mock_request.scope = {"path": "/my-llm"}
     mock_request.headers = Headers(
         {
             "content-type": "application/json",
@@ -8514,13 +8516,16 @@ async def test_pass_through_post_call_guardrails_receive_real_inbound_headers():
         return response
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, endpoint_type=None: data
+    )
     mock_proxy_logging.post_call_success_hook = AsyncMock(side_effect=record_post_call)
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
     mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
 
     mock_request = MagicMock(spec=Request)
     mock_request.method = "POST"
+    mock_request.scope = {"path": "/my-llm"}
     mock_request.headers = Headers(
         {"content-type": "application/json", "x-tenant": "tenant-real", "authorization": "Bearer sk-real-caller-key"}
     )
