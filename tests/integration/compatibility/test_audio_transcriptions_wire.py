@@ -182,17 +182,18 @@ def test_audio_transcription_verbose_json_forwards_every_form_field_and_returns_
             input_cost_per_token=0.000001,
             output_cost_per_token=0.000002,
         )
-        response: Final = _sdk(gateway, "/v1").audio.transcriptions.with_raw_response.create(
-            model=model,
-            file=("a.wav", _WAV_BYTES, "audio/wav"),
-            temperature=0.2,
-            language="en",
-            prompt="hi",
-            response_format="verbose_json",
-            timestamp_granularities=["word", "segment"],
-            include=["logprobs"],
-            extra_headers={"x-litellm-call-id": call_id},
-        )
+        with _sdk(gateway, "/v1") as sdk:
+            response: Final = sdk.audio.transcriptions.with_raw_response.create(
+                model=model,
+                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                temperature=0.2,
+                language="en",
+                prompt="hi",
+                response_format="verbose_json",
+                timestamp_granularities=["word", "segment"],
+                include=["logprobs"],
+                extra_headers={"x-litellm-call-id": call_id},
+            )
         assert response.status_code == 200, response.text
         assert json.loads(response.content) == _VERBOSE_TRANSCRIPT, response.text
         _VerboseTranscript.model_validate_json(response.content)
@@ -222,23 +223,23 @@ def test_audio_transcription_reaches_upstream_identically_on_prefixed_and_unpref
         unprefixed: Final = scenario.model(
             model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        bodies: Final = tuple(
-            json.loads(
-                _sdk(gateway, base_path)
-                .audio.transcriptions.with_raw_response.create(
-                    model=model,
-                    file=("a.wav", _WAV_BYTES, "audio/wav"),
-                    temperature=0.2,
-                    language="en",
-                    prompt="hi",
-                    response_format="verbose_json",
-                    timestamp_granularities=["word", "segment"],
-                    include=["logprobs"],
+        bodies: Final[list[dict]] = []
+        for base_path, model in (("/v1", prefixed), ("", unprefixed)):
+            with _sdk(gateway, base_path) as sdk:
+                bodies.append(
+                    json.loads(
+                        sdk.audio.transcriptions.with_raw_response.create(
+                            model=model,
+                            file=("a.wav", _WAV_BYTES, "audio/wav"),
+                            temperature=0.2,
+                            language="en",
+                            prompt="hi",
+                            response_format="verbose_json",
+                            timestamp_granularities=["word", "segment"],
+                            include=["logprobs"],
+                        ).content
+                    )
                 )
-                .content
-            )
-            for base_path, model in (("/v1", prefixed), ("", unprefixed))
-        )
         assert bodies[0] == bodies[1] == _VERBOSE_TRANSCRIPT
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/v1/audio/transcriptions"),
@@ -259,11 +260,12 @@ def test_audio_transcription_json_format_returns_text_and_usage(gateway: Gateway
         model: Final = scenario.model(
             model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        response: Final = _sdk(gateway, "/v1").audio.transcriptions.with_raw_response.create(
-            model=model,
-            file=("a.wav", _WAV_BYTES, "audio/wav"),
-            response_format="json",
-        )
+        with _sdk(gateway, "/v1") as sdk:
+            response: Final = sdk.audio.transcriptions.with_raw_response.create(
+                model=model,
+                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                response_format="json",
+            )
         assert response.status_code == 200, response.text
         assert json.loads(response.content) == _JSON_TRANSCRIPT, response.text
         assert [(request.method, request.target) for request in wire.drain()] == [
@@ -287,11 +289,12 @@ def test_audio_transcription_forwards_plain_response_format_to_upstream(
         model: Final = scenario.model(
             model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        response: Final = _sdk(gateway, "/v1").audio.transcriptions.with_raw_response.create(
-            model=model,
-            file=("a.wav", _WAV_BYTES, "audio/wav"),
-            response_format=response_format,
-        )
+        with _sdk(gateway, "/v1") as sdk:
+            response: Final = sdk.audio.transcriptions.with_raw_response.create(
+                model=model,
+                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                response_format=response_format,
+            )
         assert response.status_code == 200, response.text
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/v1/audio/transcriptions")
@@ -316,16 +319,16 @@ def test_audio_transcription_plain_response_format_returns_the_raw_transcript(
         model: Final = scenario.model(
             model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        sdk: Final = _sdk(gateway, "/v1")
-        response: Final = sdk.audio.transcriptions.with_raw_response.create(
-            model=model,
-            file=("a.wav", _WAV_BYTES, "audio/wav"),
-            response_format=response_format,
-        )
-        assert response.headers["content-type"].startswith("text/plain"), response.text
-        transcript: Final = sdk.audio.transcriptions.create(
-            model=model,
-            file=("a.wav", _WAV_BYTES, "audio/wav"),
-            response_format=response_format,
-        )
+        with _sdk(gateway, "/v1") as sdk:
+            response: Final = sdk.audio.transcriptions.with_raw_response.create(
+                model=model,
+                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                response_format=response_format,
+            )
+            assert response.headers["content-type"].startswith("text/plain"), response.text
+            transcript: Final = sdk.audio.transcriptions.create(
+                model=model,
+                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                response_format=response_format,
+            )
         assert transcript == _PLAIN_TRANSCRIPTS[response_format]

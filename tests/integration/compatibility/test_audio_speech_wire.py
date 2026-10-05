@@ -48,14 +48,15 @@ def test_audio_speech_forwards_the_full_json_body_and_streams_the_audio(gateway:
         model: Final = scenario.model(
             model="openai/gpt-4o-mini-tts", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        response: Final = _sdk(gateway, base_path).audio.speech.with_raw_response.create(
-            model=model,
-            input="hello",
-            voice="alloy",
-            response_format="wav",
-            speed=1.25,
-            instructions="cheerful",
-        )
+        with _sdk(gateway, base_path) as sdk:
+            response: Final = sdk.audio.speech.with_raw_response.create(
+                model=model,
+                input="hello",
+                voice="alloy",
+                response_format="wav",
+                speed=1.25,
+                instructions="cheerful",
+            )
         assert response.status_code == 200, response.read()
         assert response.content == _SPEECH_BYTES
         assert response.headers["content-type"] == "audio/wav"
@@ -76,12 +77,13 @@ def test_audio_speech_streams_chunked_audio_through_intact(gateway: Gateway) -> 
         model: Final = scenario.model(
             model="openai/gpt-4o-mini-tts", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        response: Final = _sdk(gateway, "/v1").audio.speech.with_raw_response.create(
-            model=model,
-            input="hello",
-            voice="alloy",
-            response_format="mp3",
-        )
+        with _sdk(gateway, "/v1") as sdk:
+            response: Final = sdk.audio.speech.with_raw_response.create(
+                model=model,
+                input="hello",
+                voice="alloy",
+                response_format="mp3",
+            )
         assert response.status_code == 200, response.read()
         assert response.content == audio
         assert response.headers["content-type"] == "audio/wav"
@@ -101,12 +103,13 @@ def test_audio_speech_derives_the_media_type_from_the_requested_format(
         model: Final = scenario.model(
             model="openai/gpt-4o-mini-tts", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        response: Final = _sdk(gateway, "/v1").audio.speech.with_raw_response.create(
-            model=model,
-            input="hello",
-            voice="alloy",
-            response_format=response_format,
-        )
+        with _sdk(gateway, "/v1") as sdk:
+            response: Final = sdk.audio.speech.with_raw_response.create(
+                model=model,
+                input="hello",
+                voice="alloy",
+                response_format=response_format,
+            )
         assert response.status_code == 200, response.read()
         assert response.headers["content-type"] == media_type
         assert response.content == _SPEECH_BYTES
