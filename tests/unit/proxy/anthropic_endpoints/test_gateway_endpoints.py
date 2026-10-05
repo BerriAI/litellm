@@ -2,12 +2,14 @@
 Tests for the Claude Code gateway protocol (anthropic_endpoints/gateway_endpoints.py).
 
 Covers the OAuth device-flow surface (RFC 8414 discovery, RFC 8628 device
-authorization + token), managed settings, OTLP ingestion, and the enable flag.
+authorization + token, the rotating refresh grant, RFC 7009 revocation), managed
+settings, OTLP ingestion, and the enable flag.
 """
 
 import asyncio
 from collections.abc import Iterator, Mapping
 from contextlib import ExitStack, contextmanager
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,6 +20,21 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from litellm.caching.dual_cache import DualCache
+from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+    MintedProxyCredential,
+    ProxyCredentialMintFailure,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
+    SessionRefreshOpened,
+    open_session_refresh_bearer,
+    session_keys_from_master_key,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+    SESSION_REFRESH_PREFIX,
+    MintedSessionToken,
+    SessionPrincipal,
+    mint_session_refresh_token,
+)
 from litellm.proxy._types import ProxyException
 from litellm.proxy.anthropic_endpoints import gateway_endpoints
 from litellm.proxy.management_endpoints.ui_sso import (
@@ -29,6 +46,8 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 
 _DEVICE_CODE_GRANT: Final = "urn:ietf:params:oauth:grant-type:device_code"
 _MASTER_KEY: Final = "sk-master-key"
+_TOKEN_URL: Final = "/claude_code_gateway/oauth/token"
+_REVOKE_URL: Final = "/claude_code_gateway/oauth/revoke"
 _SHARED_LOGIN_ID: Final = "cli-shared-login-code"
 _SHARED_POLL_SECRET: Final = "shared-poll-secret"
 _SHARED_DEVICE_CODE: Final = f"{_SHARED_LOGIN_ID}.{_SHARED_POLL_SECRET}"
@@ -79,15 +98,25 @@ def _replica(redis: _SharedRedisFake) -> DualCache:
     return DualCache(redis_cache=redis, default_in_memory_ttl=600)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
 
 
+class _Minter:
+    def __init__(self, failure: ProxyCredentialMintFailure | None = None) -> None:
+        self.failure: Final = failure
+        self.calls: tuple[tuple[str, str | None], ...] = ()
+
+    async def __call__(self, user_id: str, team_id: str | None) -> MintedProxyCredential | ProxyCredentialMintFailure:
+        self.calls = (*self.calls, (user_id, team_id))
+        if self.failure is not None:
+            return self.failure
+        return MintedProxyCredential(key=f"sk-cli-{user_id}", expires_in=7200, user_id=user_id, team_id=team_id)
+
+
 def _real_auth_proxy_attrs() -> Mapping[str, object]:
     proxy_logging_obj: Final = MagicMock()
     proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
     proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
     return MappingProxyType(
         {
-            "master_key": _MASTER_KEY,
             "prisma_client": None,
-            "user_api_key_cache": DualCache(),
             "proxy_logging_obj": proxy_logging_obj,
             "llm_router": None,
             "llm_model_list": [],
@@ -106,6 +135,8 @@ def _gateway_env(
     enabled: bool = True,
     managed_settings: Mapping[str, object] | None = None,
     cache: DualCache | None = None,
+    claim_cache: DualCache | None = None,
+    minter: _Minter | None = None,
     real_auth: bool = False,
     extra_settings: Mapping[str, object] = MappingProxyType({}),
 ) -> Iterator[tuple[TestClient, DualCache]]:
@@ -119,6 +150,7 @@ def _gateway_env(
     app: Final = FastAPI()
     app.add_middleware(PrometheusAuthMiddleware)
     app.include_router(gateway_endpoints.router)
+    app.dependency_overrides[gateway_endpoints._proxy_credential_minter] = lambda: minter or _Minter()
 
     async def _fake_auth() -> object:
         return object()
@@ -132,6 +164,21 @@ def _gateway_env(
         stack.enter_context(
             patch(  # test-quality-ok: the CLI SSO flow cache is this proxy_server module global shared with ui_sso
                 "litellm.proxy.proxy_server.cli_sso_session_cache", session_cache
+            )
+        )
+        stack.enter_context(
+            patch(  # test-quality-ok: the refresh token is signed under this proxy_server module global
+                "litellm.proxy.proxy_server.master_key", _MASTER_KEY
+            )
+        )
+        stack.enter_context(
+            patch(  # test-quality-ok: the single-use record lives in this proxy_server module global
+                "litellm.proxy.proxy_server.user_api_key_cache", claim_cache or DualCache()
+            )
+        )
+        stack.enter_context(
+            patch(  # test-quality-ok: the single-use guard prefers this proxy_server module global when set
+                "litellm.proxy.proxy_server.redis_usage_cache", None
             )
         )
         if real_auth:
@@ -148,10 +195,43 @@ def _start_device_flow(client: TestClient) -> str:
 
 
 def _request_token(client: TestClient, device_code: str) -> httpx.Response:
-    return client.post(
-        "/claude_code_gateway/oauth/token",
-        data={"grant_type": _DEVICE_CODE_GRANT, "device_code": device_code},
+    return client.post(_TOKEN_URL, data={"grant_type": _DEVICE_CODE_GRANT, "device_code": device_code})
+
+
+def _refresh(client: TestClient, refresh_token: str) -> httpx.Response:
+    return client.post(_TOKEN_URL, data={"grant_type": "refresh_token", "refresh_token": refresh_token})
+
+
+def _revoke(client: TestClient, token: str, hint: str | None = None) -> httpx.Response:
+    return client.post(_REVOKE_URL, data={"token": token, **({} if hint is None else {"token_type_hint": hint})})
+
+
+def _signed_in(client: TestClient, cache: DualCache) -> Mapping[str, object]:
+    device_code: Final = _start_device_flow(client)
+    _complete_flow(cache, device_code)
+    with patch(_MINT, return_value="sk-litellm-session-token"):
+        resp: Final = _request_token(client, device_code)
+    assert resp.status_code == 200
+    return MappingProxyType(resp.json())
+
+
+def _opened_refresh(refresh_token: str, client_id: str = gateway_endpoints.CLAUDE_CODE_CLIENT_ID) -> SessionPrincipal:
+    opened: Final = open_session_refresh_bearer(
+        refresh_token,
+        session_keys_from_master_key(_MASTER_KEY),
+        datetime.now(timezone.utc),
+        expected_client_id=client_id,
     )
+    assert isinstance(opened, SessionRefreshOpened)
+    return opened.principal
+
+
+def _foreign_refresh_token(principal: SessionPrincipal) -> str:
+    minted: Final = mint_session_refresh_token(
+        principal, session_keys_from_master_key(_MASTER_KEY), datetime.now(timezone.utc)
+    )
+    assert isinstance(minted, MintedSessionToken)
+    return minted.token.get_secret_value()
 
 
 def _completed_flow(session_data: Mapping[str, object] = _COMPLETED_SESSION) -> dict[str, object]:
@@ -168,9 +248,7 @@ def _login_id(device_code: str) -> str:
     return device_code.partition(".")[0]
 
 
-def _complete_flow(
-    cache: DualCache, device_code: str, session_data: Mapping[str, object] = _COMPLETED_SESSION
-) -> None:
+def _complete_flow(cache: DualCache, device_code: str, session_data: Mapping[str, object] = _COMPLETED_SESSION) -> None:
     key: Final = _get_cli_sso_flow_cache_key(_login_id(device_code))
     flow: Final = cache.get_cache(key=key)
     assert isinstance(flow, dict)
@@ -185,15 +263,17 @@ def test_discovery_shape():
     body = resp.json()
     assert body["device_authorization_endpoint"].endswith("/claude_code_gateway/oauth/device_authorization")
     assert body["token_endpoint"].endswith("/claude_code_gateway/oauth/token")
+    assert body["revocation_endpoint"].endswith("/claude_code_gateway/oauth/revoke")
     assert body["grant_types_supported"] == [
         "urn:ietf:params:oauth:grant-type:device_code",
         "refresh_token",
     ]
     # authorization_endpoint is intentionally absent (device flow only).
     assert "authorization_endpoint" not in body
-    # Both endpoints must be same-origin with the issuer.
+    # Every endpoint must be same-origin with the issuer, or Claude Code ignores it.
     assert body["device_authorization_endpoint"].startswith(body["issuer"])
     assert body["token_endpoint"].startswith(body["issuer"])
+    assert body["revocation_endpoint"].startswith(body["issuer"])
 
 
 def test_discovery_404_when_disabled():
@@ -270,10 +350,16 @@ def test_token_success_mints_bearer_and_is_single_use():
         with patch(_MINT, return_value="sk-litellm-session-token") as mint:
             resp = _request_token(client, device_code)
             assert resp.status_code == 200
+            assert resp.headers["cache-control"] == "no-store"
             body = resp.json()
             assert body["access_token"] == "sk-litellm-session-token"
             assert body["token_type"] == "Bearer"
             assert body["expires_in"] > 0
+            assert body["refresh_token"].startswith(SESSION_REFRESH_PREFIX)
+            principal = _opened_refresh(body["refresh_token"])
+            assert principal.user_id == "user-123"
+            assert principal.team_id == "team-a"
+            assert principal.audience == "proxy_api"
 
             called_user = mint.call_args.kwargs["user_info"]
             assert called_user.user_id == "user-123"
@@ -374,14 +460,146 @@ def test_token_unknown_device_code_is_expired_token():
     assert resp.json()["error"] == "expired_token"
 
 
-def test_refresh_grant_forces_relogin():
-    with _gateway_env() as (client, _):
-        resp = client.post(
-            "/claude_code_gateway/oauth/token",
-            data={"grant_type": "refresh_token", "refresh_token": "whatever"},
-        )
-    assert resp.status_code == 401
+def test_refresh_grant_mints_a_new_bearer_and_rotates_the_refresh_token():
+    """Claude Code refreshes with grant_type and refresh_token alone, no client_id: the gateway
+    re-mints the session JWT from the live user row for the team the login picked, hands back a
+    fresh refresh token, and the presented one is dead from then on (rotation). The mint runs
+    before the single-use claim on every presentation, a replay included, so a transient mint
+    failure never burns a still-valid token."""
+    minter: Final = _Minter()
+    with _gateway_env(minter=minter) as (client, cache):
+        signed_in = _signed_in(client, cache)
+        refreshed = _refresh(client, str(signed_in["refresh_token"]))
+        assert refreshed.status_code == 200
+        assert refreshed.headers["cache-control"] == "no-store"
+        rotated = refreshed.json()
+        assert minter.calls == (("user-123", "team-a"),)
+        assert rotated["access_token"] == "sk-cli-user-123"
+        assert rotated["token_type"] == "Bearer"
+        assert rotated["expires_in"] == 7200
+        assert rotated["refresh_token"] != signed_in["refresh_token"]
+        assert _opened_refresh(rotated["refresh_token"]).team_id == "team-a"
+
+        replayed = _refresh(client, str(signed_in["refresh_token"]))
+        assert replayed.status_code == 400
+        assert replayed.json()["error"] == "invalid_grant"
+        assert "already used" in replayed.json()["error_description"]
+        assert "access_token" not in replayed.json()
+
+        chained = _refresh(client, rotated["refresh_token"])
+    assert chained.status_code == 200
+    assert chained.json()["refresh_token"] != rotated["refresh_token"]
+    assert minter.calls == (("user-123", "team-a"),) * 3
+
+
+def test_refresh_grant_replay_is_refused_on_a_replica_that_did_not_serve_the_rotation():
+    redis: Final = _SharedRedisFake()
+    minter: Final = _Minter()
+    with _gateway_env(claim_cache=_replica(redis), minter=minter) as (client, cache):
+        refresh_token = str(_signed_in(client, cache)["refresh_token"])
+        assert _refresh(client, refresh_token).status_code == 200
+    with _gateway_env(claim_cache=_replica(redis), minter=minter) as (client, _):
+        replayed = _refresh(client, refresh_token)
+    assert replayed.status_code == 400
+    assert replayed.json()["error"] == "invalid_grant"
+    assert len(minter.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "principal",
+    [
+        SessionPrincipal(user_id="user-123", client_id="llm_dcrc_other", audience="proxy_api", team_id="team-a"),
+        SessionPrincipal(user_id="user-123", client_id=gateway_endpoints.CLAUDE_CODE_CLIENT_ID, team_id="team-a"),
+    ],
+    ids=["dcr_client", "identity_only_audience"],
+)
+def test_refresh_grant_refuses_a_token_minted_for_another_client_or_audience(principal: SessionPrincipal):
+    minter: Final = _Minter()
+    with _gateway_env(minter=minter) as (client, _):
+        resp = _refresh(client, _foreign_refresh_token(principal))
+    assert resp.status_code == 400
     assert resp.json()["error"] == "invalid_grant"
+    assert minter.calls == ()
+
+
+@pytest.mark.parametrize("refresh_token", ["", "not-a-refresh-token"])
+def test_refresh_grant_without_a_usable_token_mints_nothing(refresh_token: str):
+    minter: Final = _Minter()
+    with _gateway_env(minter=minter) as (client, _):
+        resp = _refresh(client, refresh_token)
+    assert resp.status_code == 400
+    assert resp.json()["error"] == ("invalid_request" if refresh_token == "" else "invalid_grant")
+    assert minter.calls == ()
+
+
+@pytest.mark.parametrize(
+    "failure, status, error",
+    [
+        ("no_active_key", 400, "invalid_grant"),
+        ("not_a_member", 400, "invalid_grant"),
+        ("unavailable", 503, "temporarily_unavailable"),
+    ],
+)
+def test_refresh_grant_mint_refusal_leaves_the_refresh_token_usable(
+    failure: ProxyCredentialMintFailure, status: int, error: str
+):
+    """A deactivated user, a lost team membership, or a DB outage refuses the renewal without
+    burning the presented token, so a transient outage never forces a re-login."""
+    claim_cache: Final = DualCache()
+    with _gateway_env(claim_cache=claim_cache, minter=_Minter(failure)) as (client, cache):
+        refresh_token = str(_signed_in(client, cache)["refresh_token"])
+        refused = _refresh(client, refresh_token)
+    assert refused.status_code == status
+    assert refused.json()["error"] == error
+    assert "refresh_token" not in refused.json()
+    with _gateway_env(claim_cache=claim_cache, minter=_Minter()) as (client, _):
+        recovered = _refresh(client, refresh_token)
+    assert recovered.status_code == 200
+
+
+def test_revoke_burns_the_refresh_token_and_answers_200_for_every_other_token():
+    """Claude Code's /logout posts the session JWT and then the refresh token with a hint, each as
+    a form, and tolerates nothing but a 2xx: the refresh token is dead afterwards, while the
+    stateless JWT, an already-dead token, and garbage all answer 200 (RFC 7009 section 2.2)."""
+    minter: Final = _Minter()
+    with _gateway_env(minter=minter) as (client, cache):
+        signed_in = _signed_in(client, cache)
+        jwt_revoked = _revoke(client, str(signed_in["access_token"]))
+        assert jwt_revoked.status_code == 200
+        assert jwt_revoked.json() == {}
+        assert jwt_revoked.headers["cache-control"] == "no-store"
+        assert _refresh(client, str(signed_in["refresh_token"])).status_code == 200
+
+        rotated = _refresh(client, str(signed_in["refresh_token"]))
+        assert rotated.status_code == 400
+        fresh = str(_signed_in(client, cache)["refresh_token"])
+        revoked = _revoke(client, fresh, hint="refresh_token")
+        assert revoked.status_code == 200
+        refused = _refresh(client, fresh)
+        assert refused.status_code == 400
+        assert refused.json()["error"] == "invalid_grant"
+        assert _revoke(client, fresh, hint="refresh_token").status_code == 200
+        assert _revoke(client, "nonsense").status_code == 200
+        missing = client.post(_REVOKE_URL, data={"token_type_hint": "refresh_token"})
+    assert missing.status_code == 400
+    assert missing.json()["error"] == "invalid_request"
+    assert len(minter.calls) == 3
+
+
+def test_revoke_from_another_client_leaves_the_refresh_token_usable():
+    foreign: Final = SessionPrincipal(
+        user_id="user-123", client_id="llm_dcrc_other", audience="proxy_api", team_id="team-a"
+    )
+    with _gateway_env() as (client, cache):
+        own = str(_signed_in(client, cache)["refresh_token"])
+        assert _revoke(client, _foreign_refresh_token(foreign)).status_code == 200
+        assert _refresh(client, own).status_code == 200
+
+
+def test_revoke_404_when_gateway_disabled():
+    with _gateway_env(enabled=False) as (client, _):
+        resp = _revoke(client, "anything")
+    assert resp.status_code == 404
 
 
 def test_unsupported_grant_type():
@@ -409,9 +627,7 @@ def test_managed_settings_returns_client_envelope_and_304_on_cached_checksum():
         assert body["uuid"] == checksum
         assert resp.headers["ETag"] == f'"{checksum}"'
 
-        not_modified = client.get(
-            "/claude_code_gateway/managed/settings", headers={"If-None-Match": f'"{checksum}"'}
-        )
+        not_modified = client.get("/claude_code_gateway/managed/settings", headers={"If-None-Match": f'"{checksum}"'})
         assert not_modified.status_code == 304
         assert not_modified.headers["ETag"] == f'"{checksum}"'
 
