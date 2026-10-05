@@ -12,6 +12,10 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Final
 
+from litellm.litellm_core_utils.optional_dependencies import require_optional_dependency
+
+require_optional_dependency("pydantic_settings", "integrations", "OpenTelemetry presets")
+
 from litellm.integrations.otel.presets.agentops import agentops_preset
 from litellm.integrations.otel.presets.arize import arize_dynamic_headers, arize_preset
 from litellm.integrations.otel.presets.base import Preset
