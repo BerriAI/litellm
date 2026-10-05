@@ -16717,6 +16717,28 @@ async def test_catalog_delete_drops_derived_tool_mapping(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rediscover", [False, True])
+async def test_catalog_publishes_rediscovered_routes_despite_concurrent_owner_change(monkeypatch, rediscover):
+    from mcp.types import Tool
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    manager = MCPServerManager()
+    selected = MCPServer(server_id="selected", name="selected", transport=MCPTransport.http)
+    competing = MCPServer(server_id="competing", name="competing", transport=MCPTransport.http)
+    manager.config_mcp_servers = {server.server_id: server for server in (selected, competing)}
+    manager.published_tool_routes = {"shared_tool": selected.name}
+    async with manager.catalog.operation():
+        manager.published_tool_routes["shared_tool"] = competing.name
+        if rediscover:
+            manager._create_prefixed_tools([Tool(name="shared_tool", input_schema={})], selected)
+        assert manager._get_mcp_server_from_tool_name("shared_tool").server_id == selected.server_id
+    async with manager.catalog.operation():
+        expected = selected if rediscover else competing
+        assert manager._get_mcp_server_from_tool_name("shared_tool").server_id == expected.server_id
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("anchored", [False, True])
 async def test_catalog_reload_preserves_concurrent_config_discovery_and_routes(anchored):
     manager: Final = MCPServerManager()

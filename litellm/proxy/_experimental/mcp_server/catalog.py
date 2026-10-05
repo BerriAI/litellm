@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections import UserDict
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, MutableMapping, Sequence
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -27,12 +28,23 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
 
+class _OperationRoutes(UserDict[str, str]):
+    def __init__(self, initial: Mapping[str, str]) -> None:
+        super().__init__()
+        self.data = dict(initial)
+        self.written_names: set[str] = set()  # mutable-ok: record route writes without copying the journal per tool
+
+    def __setitem__(self, name: str, owner: str) -> None:
+        self.data[name] = owner
+        self.written_names.add(name)
+
+
 @dataclass(frozen=True, slots=True)
 class CatalogSnapshot:
     servers: Mapping[str, MCPServer]
     identity: str
     tools: Mapping[str, MCPTool]
-    routing: dict[str, str]  # mutable-ok: tool routes are remapped in place through this snapshot's live dict
+    routing: MutableMapping[str, str]
 
 
 def _configuration_identity(server: MCPServer) -> str:
@@ -96,7 +108,7 @@ class TargetCatalog:
         scoped: Final = self._operation.get()
         return scoped[0] if scoped is not None and not scoped[1].is_set() else None
 
-    def routing(self) -> dict[str, str]:  # mutable-ok: returns the live routing dict that callers remap in place
+    def routing(self) -> MutableMapping[str, str]:
         staged: Final = self._staged_routing.get()
         if staged is not None and not staged[1].is_set():
             return staged[0]
@@ -166,10 +178,11 @@ class TargetCatalog:
 
         shared: Final = await self._fresh_snapshot()
         initial_routing: Final = self._unchanged_routing(shared.servers, self.manager.published_tool_routes)
+        routing: Final = _OperationRoutes(initial_routing)
         snapshot: Final = replace(
             shared,
             servers=MappingProxyType({key: value.model_copy(deep=True) for key, value in shared.servers.items()}),
-            routing=dict(initial_routing),
+            routing=routing,
         )
         closed: Final = asyncio.Event()
         token: Final = self._operation.set((snapshot, closed))
@@ -179,12 +192,12 @@ class TargetCatalog:
         finally:
             closed.set()
             self._operation.reset(token)
-            self._retain_discovered_routing(snapshot, initial_routing)
+            self._retain_discovered_routing(snapshot, frozenset(routing.written_names))
 
-    def _retain_discovered_routing(self, snapshot: CatalogSnapshot, initial_routing: Mapping[str, str]) -> None:
+    def _retain_discovered_routing(self, snapshot: CatalogSnapshot, written_names: frozenset[str]) -> None:
         self.manager.published_tool_routes = self.manager.published_tool_routes | self._unchanged_routing(
             snapshot.servers,
-            {name: owner for name, owner in snapshot.routing.items() if initial_routing.get(name) != owner},
+            {name: owner for name, owner in snapshot.routing.items() if name in written_names},
         )
 
     def _unchanged_routing(
