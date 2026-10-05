@@ -1,0 +1,97 @@
+import base64
+import json
+from typing import Final
+
+from integration._support.client import Gateway
+from integration._support.wire import Reply, Request, wire_server
+from pydantic import BaseModel
+
+_PDF_BYTES: Final = b"%PDF-1.4\n%integration\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+_PNG_BYTES: Final = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+    b"\x1f\x15\xc4\x89\x00\x00\x00\rIDAT\x08\xd7c\xf8\xcf\xc0\xf0\x1f\x00\x05\x00\x01\xff"
+    b"\x89\x99=\x1d\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+_MISTRAL_KEY: Final = "synthetic-mistral-key"
+_MISTRAL_PAGES: Final = (
+    {"index": 0, "markdown": "# page zero", "images": [], "dimensions": {"dpi": 200, "height": 1100, "width": 850}},
+    {"index": 1, "markdown": "page one", "images": [], "dimensions": {"dpi": 200, "height": 1100, "width": 850}},
+)
+
+
+class _Dimensions(BaseModel):
+    dpi: int
+    height: int
+    width: int
+
+
+class _Page(BaseModel):
+    index: int
+    markdown: str
+    images: tuple[object, ...]
+    dimensions: _Dimensions
+
+
+class _OCRResponse(BaseModel):
+    object: str
+    pages: tuple[_Page, ...]
+
+
+def _data_url(media_type: str, content: bytes) -> str:
+    return f"data:{media_type};base64,{base64.b64encode(content).decode()}"
+
+
+def _expected_bodies(upstream_model: str) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "model": upstream_model,
+            "document": {"type": "document_url", "document_url": _data_url("application/pdf", _PDF_BYTES)},
+            "pages": [0, 1],
+            "include_image_base64": True,
+        },
+        {
+            "model": upstream_model,
+            "document": {"type": "image_url", "image_url": _data_url("image/png", _PNG_BYTES)},
+            "pages": [0, 1],
+            "include_image_base64": True,
+        },
+    )
+
+
+def test_multipart_pdf_and_png_uploads_reach_mistral_as_typed_data_url_documents(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert (request.method, request.target) == ("POST", "/v1/ocr"), request.target
+        assert request.headers["authorization"] == f"Bearer {_MISTRAL_KEY}", request.headers
+        assert request.headers["content-type"] == "application/json", request.headers
+        body: Final = json.loads(request.body)
+        assert body in _expected_bodies("mistral-ocr-latest"), body
+        return Reply(
+            body=json.dumps(
+                {
+                    "pages": list(_MISTRAL_PAGES),
+                    "model": "mistral-ocr-latest",
+                    "usage_info": {"pages_processed": 2, "doc_size_bytes": len(request.body)},
+                    "document_annotation": None,
+                }
+            ).encode()
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="mistral/mistral-ocr-latest",
+            api_base=f"{wire.url}/v1",
+            api_key=_MISTRAL_KEY,
+            model_info={"mode": "ocr"},
+        )
+        fields: Final = {"model": model, "pages": "[0,1]", "include_image_base64": "true"}
+        uploads: Final = (("doc.pdf", _PDF_BYTES, "application/pdf"), ("scan.png", _PNG_BYTES, "image/png"))
+        for upload in uploads:
+            response = gateway.request_multipart("/v1/ocr", fields, {"file": upload})
+            assert response.status_code == 200, response.text
+            payload = _OCRResponse.model_validate_json(response.content)
+            assert payload == _OCRResponse(object="ocr", pages=tuple(_Page(**page) for page in _MISTRAL_PAGES)), (
+                response.text
+            )
+        received: Final = wire.drain()
+    assert [(request.method, request.target) for request in received] == [("POST", "/v1/ocr")] * 2
+    assert tuple(json.loads(request.body) for request in received) == _expected_bodies("mistral-ocr-latest")
