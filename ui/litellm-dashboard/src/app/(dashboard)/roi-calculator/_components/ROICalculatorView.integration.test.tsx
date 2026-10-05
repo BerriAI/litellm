@@ -1,9 +1,12 @@
 import userEvent from "@testing-library/user-event";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render as renderWithoutNuqs, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NuqsAdapter } from "nuqs/adapters/react";
 
 import { apiClient } from "@/components/networking";
 import ROICalculatorView from "./ROICalculatorView";
+
+const render = (ui: Parameters<typeof renderWithoutNuqs>[0]) => renderWithoutNuqs(ui, { wrapper: NuqsAdapter });
 
 vi.mock("@/components/networking", () => ({
   apiClient: {
@@ -135,6 +138,68 @@ describe("ROICalculatorView", () => {
       return Promise.resolve(idleStatus);
     });
     vi.mocked(apiClient.put).mockResolvedValue({ report: summary, identity_map: { alice: "alice@example.com" } });
+  });
+
+  it.each(["github", "gitlab"])("filters people and branches by linked accounts for %s", async (provider) => {
+    const outsidePerson = {
+      ...summary.people[0],
+      id: "outside",
+      email: "",
+      logins: ["outside"],
+      match_methods: ["no gateway match"],
+      spend: null,
+    };
+    const outsidePull = {
+      ...summary.pulls[0],
+      number: 43,
+      title: "External contribution",
+      login: "outside",
+      email: "",
+      match_method: "no gateway match",
+      matched: false,
+    };
+    const linkedPerson = { ...summary.people[0], spend: null, match_methods: ["manual"], eligible: false };
+    const spendOnlyPerson = {
+      ...summary.people[0],
+      id: "internal@example.test",
+      email: "internal@example.test",
+      logins: [],
+      spend: 8.5,
+      prs: 0,
+      match_methods: [],
+      estimated_prs: 0,
+      hours: 0,
+      eligible: false,
+      cost_per_hour: null,
+    };
+    const linkedPull = { ...summary.pulls[0], matched: false, match_method: "manual" };
+    const report = {
+      ...summary,
+      source_provider: provider,
+      people: [linkedPerson, spendOnlyPerson, outsidePerson],
+      pulls: [linkedPull, outsidePull],
+    };
+    vi.mocked(apiClient.get).mockImplementation((path: string) => {
+      if (path.endsWith("/settings")) return Promise.resolve(settings);
+      if (path.endsWith("/report")) return Promise.resolve({ report });
+      return Promise.resolve(idleStatus);
+    });
+    const user = userEvent.setup();
+    render(<ROICalculatorView accessToken="token" />);
+    await user.click(await screen.findByRole("tab", { name: "People" }));
+    expect(screen.getByRole("switch", { name: "Matched people only" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "alice" })).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /internal@example.test/ })).toHaveTextContent("$8.50");
+    expect(screen.queryByRole("button", { name: "outside" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: "Matched people only" }));
+    expect(screen.getByRole("button", { name: "outside" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Branches" }));
+    expect(screen.getByRole("switch", { name: "Matched people only" })).not.toBeChecked();
+    expect(screen.getByText("External contribution")).toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: "Matched people only" }));
+    expect(screen.queryByText("External contribution")).not.toBeInTheDocument();
+    expect(screen.getByText("Improve request routing")).toBeInTheDocument();
+    expect(apiClient.put).not.toHaveBeenCalled();
   });
 
   it("shows the spend summary and opens an accessible pull reasoning dialog", async () => {
@@ -458,7 +523,7 @@ describe("ROICalculatorView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview sample report" }));
 
     expect(await screen.findByText("You’re viewing demo data")).toBeVisible();
-    expect(window.location.search).toBe("?demo=1");
+    await waitFor(() => expect(window.location.search).toBe("?demo=1"));
     expect(screen.getByRole("tab", { name: "Branches" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("searchbox")).toHaveValue("");
     expect(screen.getByRole("cell", { name: "$9.10" })).toBeVisible();
@@ -481,7 +546,7 @@ describe("ROICalculatorView", () => {
 
     expect(screen.getByText("Improve request routing")).toBeVisible();
     expect(screen.queryByText("Sample usage breakdown")).not.toBeInTheDocument();
-    expect(window.location.search).toBe("");
+    await waitFor(() => expect(window.location.search).toBe(""));
     expect(screen.getByRole("button", { name: "Syncing…" })).toBeDisabled();
     expect(apiClient.post).not.toHaveBeenCalled();
     expect(apiClient.put).not.toHaveBeenCalled();
@@ -507,7 +572,7 @@ describe("ROICalculatorView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Exit demo" }));
     expect(screen.getByRole("progressbar")).toBeVisible();
     expect(screen.getByText("$20.00")).toBeVisible();
-    expect(window.location.search).toBe("");
+    await waitFor(() => expect(window.location.search).toBe(""));
   });
 
   it.each(["report", "sync"])("loads a demo link when the live %s request fails", async (failedRequest) => {
@@ -553,7 +618,7 @@ describe("ROICalculatorView", () => {
     expect(screen.getByRole("button", { name: "Settings" })).toBeEnabled();
     expect(screen.queryByText("You’re viewing demo data")).not.toBeInTheDocument();
     expect(apiClient.post).not.toHaveBeenCalled();
-    expect(window.location.search).toBe("?from=review");
+    await waitFor(() => expect(window.location.search).toBe("?from=review"));
     expect(window.location.hash).toBe("#overview");
   });
 
@@ -572,7 +637,7 @@ describe("ROICalculatorView", () => {
     expect(screen.getByText("Loading ROI Calculator…")).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Connect your repositories" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
-    expect(window.location.search).toBe("");
+    await waitFor(() => expect(window.location.search).toBe(""));
 
     pending.resolve(pendingRequest === "report" ? { report: summary } : idleStatus);
     expect(await screen.findByText("Gateway AI cost")).toBeVisible();

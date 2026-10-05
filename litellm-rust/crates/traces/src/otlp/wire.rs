@@ -1,7 +1,7 @@
 use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use prost::Message;
 
-use super::limits::{json_preflight, protobuf_preflight};
+use super::limits::{DecodeLimits, json_preflight, protobuf_preflight};
 use crate::Error;
 
 #[derive(strum::EnumString)]
@@ -19,6 +19,7 @@ enum OtlpMediaType {
 pub(super) fn decode(
     body: &[u8],
     content_type: Option<&str>,
+    limits: &DecodeLimits,
 ) -> Result<ExportTraceServiceRequest, Error> {
     let media_type = content_type
         .unwrap_or("application/x-protobuf")
@@ -31,11 +32,11 @@ pub(super) fn decode(
 
     let request = match media_type {
         OtlpMediaType::Json => {
-            json_preflight(body)?;
+            json_preflight(body, limits)?;
             serde_json::from_slice(body).map_err(|_| Error::InvalidPayload)?
         }
         OtlpMediaType::Protobuf => {
-            protobuf_preflight(body)?;
+            protobuf_preflight(body, limits)?;
             ExportTraceServiceRequest::decode(body).map_err(|_| Error::InvalidPayload)?
         }
     };

@@ -5,7 +5,12 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+schema = ["dep:schemars", "litellm-traces/schema"]
+
 [dependencies]
+macro_rules_attribute.workspace = true
+schemars = { workspace = true, optional = true }
 askama.workspace = true
 flate2.workspace = true
 futures-util.workspace = true
@@ -14,6 +19,7 @@ litellm-http.workspace = true
 litellm-migrate.workspace = true
 litellm-storage-clickhouse.workspace = true
 litellm-traces.workspace = true
+litellm-traces-cache.workspace = true
 moka.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -25,7 +31,13 @@ tokio.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+jsonschema = { version = "0.55.1", default-features = false }
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
 testcontainers-modules = { version = "0.15.0", features = ["clickhouse"] }
 wiremock.workspace = true
+
+[[bin]]
+name = "export-traces-clickhouse-schema"
+path = "src/bin/export_schema.rs"
+required-features = ["schema"]

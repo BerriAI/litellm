@@ -1343,12 +1343,16 @@ def test_is_prompt_caching_enabled_error_handling():
 
 def test_is_prompt_caching_enabled_return_default_image_dimensions():
     """
-    Assert that `is_prompt_caching_valid_prompt` calls token_counter with use_default_image_token_count=True
+    Assert that `is_prompt_caching_valid_prompt` counts tokens with use_default_image_token_count=True
     when processing messages containing images
 
     IMPORTANT: Ensures Get token counter does not make a GET request to the image url
     """
-    with patch("litellm.utils.token_counter") as mock_token_counter:
+    mock_token_counter = MagicMock(return_value=False)
+    with patch(
+        "litellm.utils._get_messages_reach_token_count",
+        return_value=mock_token_counter,
+    ):
         litellm.utils.is_prompt_caching_valid_prompt(
             messages=[
                 {

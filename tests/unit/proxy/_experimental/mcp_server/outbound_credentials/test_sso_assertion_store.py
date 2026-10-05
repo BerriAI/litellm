@@ -210,18 +210,18 @@ async def test_persist_and_fetch_round_trip_encrypted_at_rest():
     stored = {}
     prisma = _make_prisma(stored)
     token = _make_id_token()
-    assertion = assertion_from_sso_login(token, "rt_1")
+    assertion = assertion_from_sso_login(token, "refresh.token")
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         await persist_sso_identity_assertion("user-a", assertion)
         fetched = await fetch_sso_identity_assertion("user-a")
     assert fetched is not None
     assert fetched.id_token.get_secret_value() == token
     assert fetched.refresh_token is not None
-    assert fetched.refresh_token.get_secret_value() == "rt_1"
+    assert fetched.refresh_token.get_secret_value() == "refresh.token"
     assert fetched.issuer == assertion.issuer
     assert fetched.expires_at == assertion.expires_at
     assert token not in stored["user-a"]
-    assert "rt_1" not in stored["user-a"]
+    assert "refresh.token" not in stored["user-a"]
     decrypted = decrypt_value_helper(stored["user-a"], "test", exception_type="debug")
     assert json.loads(decrypted)["id_token"] == token
 
