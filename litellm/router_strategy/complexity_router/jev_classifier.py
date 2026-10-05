@@ -69,6 +69,18 @@ class JevSystemOneResponse(BaseModel):
     usage: JevUsage | None = None
 
 
+def system_one_url(api_base: str) -> str:
+    return f"{api_base.rstrip('/')}/v1/systemone"
+
+
+def system_one_body(content: bytes) -> Mapping[str, object]:
+    body: Final = TypeAdapter(dict[str, object]).validate_json(content)
+    result: Final = body.get("result")
+    if "answers" in body or not isinstance(result, Mapping):
+        return body
+    return TypeAdapter(dict[str, object]).validate_python(result)
+
+
 class JevClassifierClient(Protocol):
     async def evaluate(
         self,
@@ -82,12 +94,12 @@ class HttpJevClassifierClient:
     def __init__(
         self,
         api_key: str | None,
-        api_base: str,
+        url: str,
         http_client: AsyncHTTPHandler,
         provider: Literal["typesafe", "laya", "bespoke"] = "typesafe",
     ) -> None:
         self._api_key = api_key
-        self._api_base = api_base.rstrip("/")
+        self._url = url
         self._http_client = http_client
         self._provider = provider
 
@@ -102,13 +114,13 @@ class HttpJevClassifierClient:
             MappingProxyType({"Authorization": f"Bearer {self._api_key}"}) if self._api_key else MappingProxyType({})
         )
         response: Final = await self._http_client.post(  # pyright: ignore[reportUnknownMemberType]  # AsyncHTTPHandler has a dynamic post signature
-            f"{self._api_base}/v1/systemone",
+            self._url,
             json=request.model_dump(mode="json"),
             headers=MappingProxyType({**authorization, "Content-Type": "application/json"}),  # pyright: ignore[reportArgumentType]  # HTTP headers are not mutated by AsyncHTTPHandler
             timeout=timeout_s,
         )
         response.raise_for_status()
-        body: Final = TypeAdapter(dict[str, object]).validate_json(response.content)
+        body: Final = system_one_body(response.content)
         normalized_body: Final = (
             MappingProxyType({**body, "model": laya_response_model(body, request.model)})
             if self._provider == "laya"
@@ -128,7 +140,7 @@ class HttpJevClassifierClient:
         start_time: datetime,
     ) -> None:
         try:
-            body: Final = TypeAdapter(dict[str, object]).validate_json(response.content)
+            body: Final = system_one_body(response.content)
             _ = TypeAdapter(JevUsage | None).validate_python(body.get("usage"))
         except ValidationError:
             return
