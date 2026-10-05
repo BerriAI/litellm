@@ -415,15 +415,22 @@ class TestUnmappedModelBudgetEnforcement:
             expected[name] for name in order
         ], "the cached verdicts must match the first evaluation"
 
-    def test_hidden_alias_shadowing_an_explicitly_free_group_answers_for_its_unpriced_target(self):
-        """A hidden alias keyed like an explicitly free real group is judged by its target alone.
+    @pytest.mark.parametrize(
+        "alias_entry",
+        ["unpriced-target", {"model": "unpriced-target", "hidden": True}],
+        ids=["plain_alias", "hidden_alias"],
+    )
+    def test_alias_shadowing_an_explicitly_free_group_answers_for_its_unpriced_target(
+        self, alias_entry: str | dict[str, str | bool]
+    ):
+        """An alias keyed like an explicitly free real group is judged by its target alone, hidden or not.
 
         The router serves the alias name from its target, a group whose cost-map price is zero with
         no explicit price on the deployment, so the budget stays enforced exactly as it is for the
         target by name. The shadowed explicitly free deployment is never served under that name and
         must not lend it the bypass.
         """
-        litellm.model_cost["ollama/slp-unpriced-target"] = {
+        litellm.model_cost["ollama/unpriced-zero-cost-target"] = {
             "input_cost_per_token": 0.0,
             "output_cost_per_token": 0.0,
             "litellm_provider": "ollama",
@@ -444,13 +451,13 @@ class TestUnmappedModelBudgetEnforcement:
                 {
                     "model_name": "unpriced-target",
                     "litellm_params": {
-                        "model": "ollama/slp-unpriced-target",
+                        "model": "ollama/unpriced-zero-cost-target",
                         "api_base": "http://localhost:11434",
                     },
                     "model_info": {"id": "unpriced-target-id"},
                 },
             ],
-            model_group_alias={"free-model": {"model": "unpriced-target", "hidden": True}},
+            model_group_alias={"free-model": alias_entry},
         )
 
         assert _is_model_cost_zero(model="unpriced-target", llm_router=router) is False
