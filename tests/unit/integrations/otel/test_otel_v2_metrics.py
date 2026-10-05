@@ -188,6 +188,26 @@ def test_all_six_metrics_emitted_when_enabled():
     assert cost_points[0].sum == pytest.approx(RESPONSE_COST)
 
 
+@pytest.mark.parametrize("response_cost", [0, 0.0123, None])
+def test_cost_metric_records_known_values_including_zero(response_cost: float | None):
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    kwargs, response_obj, start, end = _build_call()
+    kwargs["response_cost"] = response_cost
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    metrics = _metrics_by_name(reader)
+    cost_points = metrics.get(TOKEN_COST, [])
+    if response_cost is None:
+        assert cost_points == []
+        return
+
+    assert len(cost_points) == 1
+    assert cost_points[0].sum == pytest.approx(response_cost)
+    assert cost_points[0].count == 1
+    assert cost_points[0].attributes == metrics[OPERATION_DURATION][0].attributes
+
+
 def test_time_to_first_token_is_streaming_only():
     """time_to_first_token is gated on streaming: a non-streaming call emits the
     other five metrics but never that one."""

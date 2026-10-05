@@ -232,7 +232,7 @@ class GenAIMetricRecorder:
             self._record_token_usage(response_obj, common_attrs)
 
         cost: Final = kwargs.get("response_cost")
-        if cost:
+        if cost is not None:
             self._metrics.token_cost.record(cost, attributes=common_attrs)
 
         self._record_time_to_first_token(kwargs, common_attrs)
