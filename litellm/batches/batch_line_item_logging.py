@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast, get_args
 
 from typing_extensions import assert_never
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.batches.batch_utils import (
     BatchResultFiles,
@@ -74,6 +75,7 @@ batch_line_item_claim_cache: Final = DualCache()
 _ClaimResult: TypeAlias = Literal["claimed", "already_claimed", "unavailable"]
 
 
+@with_service_target("batch_line_items")
 async def _claim_line_items(claim_cache: DualCache, claim_key: str, token: str) -> _ClaimResult:
     redis_cache: Final = claim_cache.redis_cache
     if redis_cache is None:
@@ -90,6 +92,7 @@ async def _claim_line_items(claim_cache: DualCache, claim_key: str, token: str) 
     return "already_claimed"
 
 
+@with_service_target("batch_line_items")
 async def _release_line_item_claim(claim_cache: DualCache, claim_key: str, token: str) -> None:
     try:
         redis_cache: Final = claim_cache.redis_cache
