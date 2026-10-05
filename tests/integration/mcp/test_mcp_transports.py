@@ -1,25 +1,72 @@
 import json
 import uuid
+from collections.abc import Mapping
 from typing import Final
 
+import httpx
 import pytest
 from integration._support.client import Gateway
+from integration._support.database import read_rows
 from integration._support.mcp import (
     ENTRY_POINTS,
     PEER_KINDS,
     EntryPoint,
+    INITIALIZE,
     McpCaller,
     PeerKind,
+    Outcome,
+    _outcome_from_rpc,
     mcp_peer,
     official_client_outcomes,
     peer_of,
     register_mcp,
     tool_calls,
 )
+from integration._support.mcp_grants import create_toolset
 
 ADD: Final = {"http": "add", "sse": "add", "stdio": "add", "openapi": "getpet"}
 ARGUMENTS: Final = {"add": {"a": 3, "b": 4}, "getpet": {"petId": "7"}}
 EXPECTED: Final = {"add": "7", "getpet": json.dumps({"id": "7", "name": "integration-pet"})}
+
+
+def _streamable_rpc(
+    gateway: Gateway, path: str, key: str, method: str, params: Mapping[str, object]
+) -> httpx.Response:
+    return gateway.client.post(
+        path,
+        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+        headers={"Authorization": f"Bearer {key}", "Accept": "application/json, text/event-stream"},
+    )
+
+
+def _streamable_tools(gateway: Gateway, path: str, key: str) -> tuple[httpx.Response, Outcome]:
+    response: Final = _streamable_rpc(gateway, path, key, "tools/list", {})
+    return response, _outcome_from_rpc(response)
+
+
+def _assert_upstream_call(
+    call: Mapping[str, object], name: str, arguments: Mapping[str, object]
+) -> None:
+    body: Final = call["body"]
+    assert isinstance(body, Mapping), call
+    params: Final = body["params"]
+    assert isinstance(params, Mapping), call
+    assert set(params) == {"name", "arguments", "_meta"}, call
+    assert params["name"] == name, call
+    assert params["arguments"] == arguments, call
+    metadata: Final = params["_meta"]
+    assert isinstance(metadata, Mapping), call
+    assert set(metadata) == {"progressToken"}, call
+
+
+def _open_aliases() -> frozenset[str]:
+    rows: Final = read_rows('SELECT alias FROM "LiteLLM_MCPServerTable" WHERE allow_all_keys', ())
+    return frozenset(str(row["alias"]) for row in rows)
+
+
+def _without_foreign_open_servers(tools: tuple[str, ...], open_aliases: frozenset[str]) -> set[str]:
+    prefixes: Final = tuple(f"{alias}-" for alias in open_aliases)
+    return {tool for tool in tools if not tool.startswith(prefixes)}
 
 
 def _peer_saw_call(peer_kind: PeerKind, observed: tuple[dict[str, object], ...], tool: str) -> bool:
@@ -94,6 +141,206 @@ def test_official_client_session_lists_and_calls_through_gateway(
         assert called.ok and called.text == "42", called
         assert _peer_saw_call(peer_kind, peer.drain(), "add")
 
+
+def test_standard_per_server_path_scopes_the_session_to_the_named_servers(gateway: Gateway) -> None:
+    open_before: Final = _open_aliases()
+    with mcp_peer() as peer_a, mcp_peer() as peer_b, mcp_peer() as peer_c, gateway.scenario() as scenario:
+        alias_a: Final = "rt1a" + uuid.uuid4().hex[:10]
+        alias_b: Final = "rt1b" + uuid.uuid4().hex[:10]
+        alias_c: Final = "rt1c" + uuid.uuid4().hex[:10]
+        server_a: Final = register_mcp(scenario, peer_a, alias_a)
+        server_b: Final = register_mcp(scenario, peer_b, alias_b)
+        server_c: Final = register_mcp(scenario, peer_c, alias_c)
+        key: Final = scenario.key(object_permission={"mcp_servers": [server_a, server_b, server_c]})
+        open_aliases: Final = open_before | _open_aliases()
+
+        first_path: Final = f"/mcp/{alias_a}"
+        initialized: Final = _streamable_rpc(gateway, first_path, key, "initialize", dict(INITIALIZE))
+        assert initialized.status_code == 200, initialized.text
+        listed_response, listed = _streamable_tools(gateway, first_path, key)
+        assert listed_response.status_code == 200, listed_response.text
+        assert listed.ok, listed.raw
+        assert _without_foreign_open_servers(listed.tools, open_aliases) == {
+            f"{alias_a}-add",
+            f"{alias_a}-multiply",
+            f"{alias_a}-fail",
+        }, listed.tools
+        called_response: Final = _streamable_rpc(
+            gateway, first_path, key, "tools/call", {"name": f"{alias_a}-add", "arguments": {"a": 20, "b": 22}}
+        )
+        called: Final = _outcome_from_rpc(called_response)
+        assert called_response.status_code == 200, called_response.text
+        assert called.ok and called.text == "42", called.raw
+        calls_a: Final = tool_calls(peer_a.drain())
+        assert len(calls_a) == 1, calls_a
+        _assert_upstream_call(calls_a[0], "add", {"a": 20, "b": 22})
+        assert tool_calls(peer_b.drain()) == ()
+        assert tool_calls(peer_c.drain()) == ()
+
+        combined_path: Final = f"/mcp/{alias_a},{alias_b}"
+        combined_initialized: Final = _streamable_rpc(
+            gateway, combined_path, key, "initialize", dict(INITIALIZE)
+        )
+        assert combined_initialized.status_code == 200, combined_initialized.text
+        combined_listed_response, combined_listed = _streamable_tools(gateway, combined_path, key)
+        assert combined_listed_response.status_code == 200, combined_listed_response.text
+        assert combined_listed.ok, combined_listed.raw
+        assert _without_foreign_open_servers(combined_listed.tools, open_aliases) == {
+            f"{alias_a}-add",
+            f"{alias_a}-multiply",
+            f"{alias_a}-fail",
+            f"{alias_b}-add",
+            f"{alias_b}-multiply",
+            f"{alias_b}-fail",
+        }, combined_listed.tools
+        combined_called_response: Final = _streamable_rpc(
+            gateway,
+            combined_path,
+            key,
+            "tools/call",
+            {"name": f"{alias_b}-multiply", "arguments": {"a": 6, "b": 7}},
+        )
+        combined_called: Final = _outcome_from_rpc(combined_called_response)
+        assert combined_called_response.status_code == 200, combined_called_response.text
+        assert combined_called.ok and combined_called.text == "42", combined_called.raw
+        assert tool_calls(peer_a.drain()) == ()
+        calls_b: Final = tool_calls(peer_b.drain())
+        assert len(calls_b) == 1, calls_b
+        _assert_upstream_call(calls_b[0], "multiply", {"a": 6, "b": 7})
+        assert tool_calls(peer_c.drain()) == ()
+
+
+def test_legacy_server_path_resolves_lists_groups_and_toolsets_and_fails_closed_on_unknown_names(
+    gateway: Gateway,
+) -> None:
+    open_before: Final = _open_aliases()
+    with mcp_peer() as peer_a, mcp_peer() as peer_b, mcp_peer() as peer_c, gateway.scenario() as scenario:
+        alias_a: Final = "rt2a" + uuid.uuid4().hex[:10]
+        alias_b: Final = "rt2b" + uuid.uuid4().hex[:10]
+        alias_c: Final = "rt2c" + uuid.uuid4().hex[:10]
+        group: Final = "rt2g" + uuid.uuid4().hex[:10]
+        server_a: Final = register_mcp(scenario, peer_a, alias_a, mcp_access_groups=[group])
+        server_b: Final = register_mcp(scenario, peer_b, alias_b, mcp_access_groups=[group])
+        server_c: Final = register_mcp(scenario, peer_c, alias_c)
+        toolset_name: Final = "rt2t" + uuid.uuid4().hex[:10]
+        toolset_id: Final = create_toolset(scenario, ((server_a, "add"),), toolset_name=toolset_name)
+        key: Final = scenario.key(object_permission={"mcp_servers": [server_a, server_b, server_c]})
+        toolset_key: Final = scenario.key(object_permission={"mcp_toolsets": [toolset_id]})
+        open_aliases: Final = open_before | _open_aliases()
+
+        direct_path: Final = f"/{alias_a},{alias_b}/mcp"
+        direct_initialized: Final = _streamable_rpc(gateway, direct_path, key, "initialize", dict(INITIALIZE))
+        assert direct_initialized.status_code == 200, direct_initialized.text
+        direct_response, direct_listed = _streamable_tools(gateway, direct_path, key)
+        assert direct_response.status_code == 200, direct_response.text
+        assert direct_listed.ok, direct_listed.raw
+        assert _without_foreign_open_servers(direct_listed.tools, open_aliases) == {
+            f"{alias_a}-add",
+            f"{alias_a}-multiply",
+            f"{alias_a}-fail",
+            f"{alias_b}-add",
+            f"{alias_b}-multiply",
+            f"{alias_b}-fail",
+        }, direct_listed.tools
+        direct_called_response: Final = _streamable_rpc(
+            gateway, direct_path, key, "tools/call", {"name": f"{alias_a}-add", "arguments": {"a": 20, "b": 22}}
+        )
+        direct_called: Final = _outcome_from_rpc(direct_called_response)
+        assert direct_called_response.status_code == 200, direct_called_response.text
+        assert direct_called.ok and direct_called.text == "42", direct_called.raw
+        direct_calls_a: Final = tool_calls(peer_a.drain())
+        assert len(direct_calls_a) == 1, direct_calls_a
+        _assert_upstream_call(direct_calls_a[0], "add", {"a": 20, "b": 22})
+        assert tool_calls(peer_b.drain()) == ()
+        assert tool_calls(peer_c.drain()) == ()
+
+        mixed_path: Final = f"/{alias_a},%20{alias_a}%20,nope{uuid.uuid4().hex}/mcp"
+        mixed_initialized: Final = _streamable_rpc(gateway, mixed_path, key, "initialize", dict(INITIALIZE))
+        assert mixed_initialized.status_code == 200, mixed_initialized.text
+        mixed_response, mixed_listed = _streamable_tools(gateway, mixed_path, key)
+        assert mixed_response.status_code == 200, mixed_response.text
+        assert mixed_listed.ok, mixed_listed.raw
+        assert _without_foreign_open_servers(mixed_listed.tools, open_aliases) == {
+            f"{alias_a}-add",
+            f"{alias_a}-multiply",
+            f"{alias_a}-fail",
+        }, mixed_listed.tools
+        mixed_called_response: Final = _streamable_rpc(
+            gateway, mixed_path, key, "tools/call", {"name": f"{alias_a}-multiply", "arguments": {"a": 6, "b": 7}}
+        )
+        mixed_called: Final = _outcome_from_rpc(mixed_called_response)
+        assert mixed_called_response.status_code == 200, mixed_called_response.text
+        assert mixed_called.ok and mixed_called.text == "42", mixed_called.raw
+        mixed_calls_a: Final = tool_calls(peer_a.drain())
+        assert len(mixed_calls_a) == 1, mixed_calls_a
+        _assert_upstream_call(mixed_calls_a[0], "multiply", {"a": 6, "b": 7})
+        assert tool_calls(peer_b.drain()) == ()
+        assert tool_calls(peer_c.drain()) == ()
+
+        unknown_path: Final = f"/nope1{uuid.uuid4().hex},nope2{uuid.uuid4().hex}/mcp"
+        assert peer_a.drain() == ()
+        assert peer_b.drain() == ()
+        assert peer_c.drain() == ()
+        unknown_initialized: Final = _streamable_rpc(gateway, unknown_path, key, "initialize", dict(INITIALIZE))
+        assert unknown_initialized.status_code == 404, unknown_initialized.text
+        unknown_listed: Final = _streamable_rpc(gateway, unknown_path, key, "tools/list", {})
+        assert unknown_listed.status_code == 404, unknown_listed.text
+        assert peer_a.drain() == ()
+        assert peer_b.drain() == ()
+        assert peer_c.drain() == ()
+
+        group_path: Final = f"/{group}/mcp"
+        group_initialized: Final = _streamable_rpc(gateway, group_path, key, "initialize", dict(INITIALIZE))
+        assert group_initialized.status_code == 200, group_initialized.text
+        group_response, group_listed = _streamable_tools(gateway, group_path, key)
+        assert group_response.status_code == 200, group_response.text
+        assert group_listed.ok, group_listed.raw
+        assert _without_foreign_open_servers(group_listed.tools, open_aliases) == {
+            f"{alias_a}-add",
+            f"{alias_a}-multiply",
+            f"{alias_a}-fail",
+            f"{alias_b}-add",
+            f"{alias_b}-multiply",
+            f"{alias_b}-fail",
+        }, group_listed.tools
+        group_called_response: Final = _streamable_rpc(
+            gateway, group_path, key, "tools/call", {"name": f"{alias_b}-multiply", "arguments": {"a": 6, "b": 7}}
+        )
+        group_called: Final = _outcome_from_rpc(group_called_response)
+        assert group_called_response.status_code == 200, group_called_response.text
+        assert group_called.ok and group_called.text == "42", group_called.raw
+        assert tool_calls(peer_a.drain()) == ()
+        group_calls_b: Final = tool_calls(peer_b.drain())
+        assert len(group_calls_b) == 1, group_calls_b
+        _assert_upstream_call(group_calls_b[0], "multiply", {"a": 6, "b": 7})
+        assert tool_calls(peer_c.drain()) == ()
+
+        toolset_path: Final = f"/{toolset_name}/mcp"
+        toolset_initialized: Final = _streamable_rpc(
+            gateway, toolset_path, toolset_key, "initialize", dict(INITIALIZE)
+        )
+        assert toolset_initialized.status_code == 200, toolset_initialized.text
+        toolset_response, toolset_listed = _streamable_tools(gateway, toolset_path, toolset_key)
+        assert toolset_response.status_code == 200, toolset_response.text
+        assert toolset_listed.ok, toolset_listed.raw
+        assert _without_foreign_open_servers(toolset_listed.tools, open_aliases) == {f"{alias_a}-add"}, (
+            toolset_listed.tools
+        )
+        toolset_called_response: Final = _streamable_rpc(
+            gateway,
+            toolset_path,
+            toolset_key,
+            "tools/call",
+            {"name": f"{alias_a}-add", "arguments": {"a": 20, "b": 22}},
+        )
+        toolset_called: Final = _outcome_from_rpc(toolset_called_response)
+        assert toolset_called_response.status_code == 200, toolset_called_response.text
+        assert toolset_called.ok and toolset_called.text == "42", toolset_called.raw
+        toolset_calls_a: Final = tool_calls(peer_a.drain())
+        assert len(toolset_calls_a) == 1, toolset_calls_a
+        _assert_upstream_call(toolset_calls_a[0], "add", {"a": 20, "b": 22})
+        assert tool_calls(peer_b.drain()) == ()
+        assert tool_calls(peer_c.drain()) == ()
 
 @pytest.mark.parametrize("peer_kind", ("http", "sse", "stdio"))
 def test_prompts_resources_and_templates_are_proxied_from_rich_peer(gateway: Gateway, peer_kind: PeerKind) -> None:

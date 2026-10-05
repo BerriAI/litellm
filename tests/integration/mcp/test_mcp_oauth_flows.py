@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import re
 import secrets
 import textwrap
@@ -9,11 +10,15 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx
 import jwt
 import pytest
+import yaml
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, generate_private_key
+from pydantic import TypeAdapter
+
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.mcp import (
@@ -32,6 +37,7 @@ from integration._support.mcp import (
 from integration._support.mcp_grants import create_toolset
 from integration._support.oauth_server import AuthorizationServer, oauth_server
 from integration._support.process import owned_proxy
+from integration._support.wire import Reply, Request, Wire, wire_server
 
 ADD: Final = {"a": 2, "b": 3}
 CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
@@ -40,6 +46,20 @@ ACCEPT: Final = {"Accept": "application/json, text/event-stream"}
 
 def _base(gateway: Gateway) -> str:
     return str(gateway.client.base_url).rstrip("/")
+
+
+def _response_object(response: httpx.Response) -> dict[str, object]:
+    return TypeAdapter(dict[str, object]).validate_python(response.json())
+
+
+def _open_aliases() -> frozenset[str]:
+    rows: Final = read_rows('SELECT alias FROM "LiteLLM_MCPServerTable" WHERE allow_all_keys', ())
+    return frozenset(str(row["alias"]) for row in rows)
+
+
+def _without_foreign_open_servers(tools: tuple[str, ...], open_aliases: frozenset[str]) -> set[str]:
+    prefixes: Final = tuple(f"{alias}-" for alias in open_aliases)
+    return {tool for tool in tools if not tool.startswith(prefixes)}
 
 
 def _authorizations(peer: McpPeer) -> tuple[bytes | None, ...]:
@@ -289,6 +309,120 @@ def _redeem(gateway: Gateway, alias: str, key: str, client_id: str, code: str, p
     )
 
 
+@pytest.mark.parametrize("auth_method", ("client_secret_post", "client_secret_basic"))
+def test_upstream_token_requests_carry_the_gateway_callback_and_server_credentials(
+    gateway: Gateway, auth_method: str
+) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "rt3" + uuid.uuid4().hex[:10]
+        secret: Final = "rt3-secret-" + uuid.uuid4().hex
+        identity: Final = _register_oauth(
+            scenario,
+            peer,
+            auth,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={
+                "client_id": "ac-client",
+                "client_secret": secret,
+                "scopes": ["tools.call"],
+                "token_endpoint_auth_method": auth_method,
+            },
+        )
+        persisted: Final = gateway.request("GET", f"/v1/mcp/server/{identity}")
+        assert persisted.status_code == 200, persisted.text
+        persisted_body: Final = _response_object(persisted)
+        assert persisted_body["credentials"] == {"scopes": ["tools.call"]}, persisted.text
+        owner: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        registered: Final = gateway.client.post(
+            f"/{alias}/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code in (200, 201), registered.text
+        client_id: Final = str(_response_object(registered)["client_id"])
+        pkce: Final = _Pkce(secrets.token_urlsafe(32))
+        code: Final = _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce)
+        authorize_requests: Final = tuple(item for item in auth.drain() if item.target.startswith("/authorize"))
+        assert len(authorize_requests) == 1, authorize_requests
+        authorize_query: Final = parse_qs(urlsplit(authorize_requests[0].target).query)
+        assert authorize_query["redirect_uri"] == [f"{_base(gateway)}/callback"], authorize_query
+
+        redeemed: Final = gateway.client.post(
+            f"/{alias}/token",
+            headers={"x-litellm-api-key": owner},
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": pkce.verifier,
+                "client_id": client_id,
+                "client_secret": "dummy",
+                "redirect_uri": CLIENT_REDIRECT,
+            },
+        )
+        assert redeemed.status_code == 200, redeemed.text
+        issued: Final = _response_object(redeemed)
+        initial_token_requests: Final = tuple(item for item in auth.drain() if item.target.startswith("/token"))
+        assert len(initial_token_requests) == 1, initial_token_requests
+        initial_request: Final = initial_token_requests[0]
+        initial_form: Final = {
+            name: values[0] for name, values in parse_qs(initial_request.body.decode()).items()
+        }
+        expected_authorization: Final = "Basic " + base64.b64encode(f"ac-client:{secret}".encode()).decode()
+        if auth_method == "client_secret_post":
+            assert initial_form == {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": f"{_base(gateway)}/callback",
+                "code_verifier": pkce.verifier,
+                "client_id": "ac-client",
+                "client_secret": secret,
+            }, initial_form
+            assert initial_request.headers.get("authorization") is None, initial_request.headers
+        else:
+            assert initial_form == {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": f"{_base(gateway)}/callback",
+                "code_verifier": pkce.verifier,
+            }, initial_form
+            assert initial_request.headers.get("authorization") == expected_authorization, initial_request.headers
+
+        upstream_refresh_token: Final = str(issued["refresh_token"])
+        refreshed: Final = gateway.client.post(
+            f"/{alias}/token",
+            headers={"x-litellm-api-key": owner},
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": upstream_refresh_token,
+                "client_id": client_id,
+                "client_secret": "dummy",
+                "scope": "tools.call",
+            },
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        assert _response_object(refreshed)["access_token"] != issued["access_token"], refreshed.text
+        refresh_requests: Final = tuple(item for item in auth.drain() if item.target.startswith("/token"))
+        assert len(refresh_requests) == 1, refresh_requests
+        refresh_request: Final = refresh_requests[0]
+        refresh_form: Final = {name: values[0] for name, values in parse_qs(refresh_request.body.decode()).items()}
+        expected_refresh_form: Final = {
+            "grant_type": "refresh_token",
+            "refresh_token": upstream_refresh_token,
+            "scope": "tools.call",
+            **(
+                {"client_id": "ac-client", "client_secret": secret}
+                if auth_method == "client_secret_post"
+                else {}
+            ),
+        }
+        assert refresh_form == expected_refresh_form, refresh_form
+        if auth_method == "client_secret_post":
+            assert refresh_request.headers.get("authorization") is None, refresh_request.headers
+        else:
+            assert refresh_request.headers.get("authorization") == expected_authorization, refresh_request.headers
+        assert "dummy" not in refresh_request.body.decode() and "dummy" not in repr(refresh_request.headers), refresh_request
+
+
 def test_per_user_authorization_code_with_pkce_binds_the_token_to_the_authorizing_user(gateway: Gateway) -> None:
     with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
         alias: Final = "ac" + uuid.uuid4().hex[:8]
@@ -314,7 +448,7 @@ def test_per_user_authorization_code_with_pkce_binds_the_token_to_the_authorizin
             f"/{alias}/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
         )
         assert registered.status_code in (200, 201), registered.text
-        client_id: Final = registered.json()["client_id"]
+        client_id: Final = str(_response_object(registered)["client_id"])
         pkce: Final = _Pkce(secrets.token_urlsafe(32))
         code: Final = _authorize_through_gateway(gateway, auth, alias, owner, client_id, pkce)
         wrong_verifier: Final = _redeem(gateway, alias, owner, client_id, code, _Pkce("wrong-" + pkce.verifier))
@@ -401,12 +535,14 @@ def _ui_session_cookie(gateway: Gateway, user_id: str) -> dict[str, str]:
     return {"token": jwt.encode(claims, gateway.key, algorithm="HS256")}
 
 
-def _gateway_session_bearer(gateway: Gateway, user_id: str, resource: str | None = None) -> str:
+def _gateway_session_sign_in(
+    gateway: Gateway, user_id: str, resource: str | None = None
+) -> tuple[dict[str, object], str]:
     registered: Final = gateway.client.post(
         "/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
     )
     assert registered.status_code in (200, 201), registered.text
-    client_id: Final = registered.json()["client_id"]
+    client_id: Final = str(_response_object(registered)["client_id"])
     pkce: Final = _Pkce(secrets.token_urlsafe(48))
     cookies: Final = _ui_session_cookie(gateway, user_id)
     started: Final = gateway.client.get(
@@ -441,7 +577,201 @@ def _gateway_session_bearer(gateway: Gateway, user_id: str, resource: str | None
         },
     )
     assert issued.status_code == 200, issued.text
-    return _issued_token(issued.json())
+    return _response_object(issued), client_id
+
+
+def _gateway_session_bearer(gateway: Gateway, user_id: str, resource: str | None = None) -> str:
+    issued, _ = _gateway_session_sign_in(gateway, user_id, resource)
+    return _issued_token(issued)
+
+
+def test_spec_client_discovers_the_aggregate_authorization_server_and_signs_in_to_a_session_bearer(
+    gateway: Gateway,
+) -> None:
+    base: Final = _base(gateway)
+    protected: Final = gateway.client.get("/.well-known/oauth-protected-resource/mcp")
+    assert protected.status_code == 200, protected.text
+    assert _response_object(protected) == {
+        "authorization_servers": [f"{base}/mcp"],
+        "resource": f"{base}/mcp",
+        "scopes_supported": [],
+    }, protected.text
+    authorization_server: Final = gateway.client.get("/.well-known/oauth-authorization-server/mcp")
+    assert authorization_server.status_code == 200, authorization_server.text
+    authorization_metadata: Final = _response_object(authorization_server)
+    assert authorization_metadata == {
+        "issuer": f"{base}/mcp",
+        "authorization_endpoint": f"{base}/authorize/mcp-session",
+        "token_endpoint": f"{base}/token",
+        "introspection_endpoint": f"{base}/introspect",
+        "registration_endpoint": f"{base}/register",
+        "response_types_supported": ["code"],
+        "scopes_supported": [],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+    }, authorization_server.text
+    registration_endpoint: Final = urlsplit(str(authorization_metadata["registration_endpoint"])).path
+    authorization_endpoint: Final = urlsplit(str(authorization_metadata["authorization_endpoint"])).path
+    token_endpoint: Final = urlsplit(str(authorization_metadata["token_endpoint"])).path
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "rt5" + uuid.uuid4().hex[:10]
+        identity: Final = register_mcp(scenario, peer, alias)
+        member: Final = scenario.member(scenario.team(object_permission={"mcp_servers": [identity]}))
+        registered: Final = gateway.client.post(
+            registration_endpoint, json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code in (200, 201), registered.text
+        client_id: Final = str(_response_object(registered)["client_id"])
+        pkce: Final = _Pkce(secrets.token_urlsafe(48))
+        cookies: Final = _ui_session_cookie(gateway, member)
+        started: Final = gateway.client.get(
+            authorization_endpoint,
+            params={
+                "client_id": client_id,
+                "redirect_uri": CLIENT_REDIRECT,
+                "response_type": "code",
+                "state": "rt5-state",
+                "code_challenge": pkce.challenge,
+                "code_challenge_method": "S256",
+                "resource": f"{base}/mcp",
+            },
+            cookies=cookies,
+        )
+        assert started.status_code == 303, started.text
+        connect_location: Final = urlsplit(started.headers["location"])
+        assert connect_location.scheme + "://" + connect_location.netloc + connect_location.path == f"{base}/ui/connect", (
+            started.headers["location"]
+        )
+        connect_flow: Final = parse_qs(connect_location.query)["connect_flow"][0]
+        flow_cookie: Final = f"mcp_connect_flow_{connect_flow}"
+        assert flow_cookie in started.cookies, started.headers
+        flow_cookies: Final = {**cookies, flow_cookie: started.cookies[flow_cookie]}
+        described: Final = gateway.client.get(
+            "/authorize/flow", params={"flow": connect_flow}, cookies=flow_cookies
+        )
+        assert described.status_code == 200, described.text
+        assert _response_object(described) == {
+            "state": "unscoped",
+            "client_origin": "http://127.0.0.1:9",
+            "server_id": None,
+            "server_name": None,
+            "connected": None,
+        }, described.text
+        completed: Final = gateway.client.post(
+            "/authorize/complete", data={"flow": connect_flow}, cookies=flow_cookies
+        )
+        assert completed.status_code == 303, completed.text
+        callback: Final = parse_qs(urlsplit(completed.headers["location"]).query)
+        assert callback["state"] == ["rt5-state"], completed.headers["location"]
+        assert set(callback) == {"code", "state"}, callback
+        token: Final = gateway.client.post(
+            token_endpoint,
+            data={
+                "grant_type": "authorization_code",
+                "code": callback["code"][0],
+                "redirect_uri": CLIENT_REDIRECT,
+                "client_id": client_id,
+                "code_verifier": pkce.verifier,
+            },
+        )
+        assert token.status_code == 200, token.text
+        token_body: Final = _response_object(token)
+        assert set(token_body) == {"access_token", "token_type", "expires_in", "refresh_token"}, token.text
+        assert token_body["token_type"] == "Bearer", token.text
+        assert isinstance(token_body["expires_in"], int) and token_body["expires_in"] > 0, token.text
+        assert str(token_body["access_token"]).startswith("llm_session_"), token.text
+        assert str(token_body["refresh_token"]).startswith("llm_srefresh_"), token.text
+        bearer: Final = str(token_body["access_token"])
+        open_aliases: Final = _open_aliases()
+        initialized: Final = gateway.client.post(
+            "/mcp",
+            headers={"Authorization": f"Bearer {bearer}", **ACCEPT},
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": dict(INITIALIZE)},
+        )
+        assert initialized.status_code == 200, initialized.text
+        listed_response: Final = gateway.client.post(
+            "/mcp",
+            headers={"Authorization": f"Bearer {bearer}", **ACCEPT},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        )
+        assert listed_response.status_code == 200, listed_response.text
+        listed: Final = _outcome_from_rpc(listed_response)
+        assert listed.ok, listed.raw
+        assert _without_foreign_open_servers(listed.tools, open_aliases) == {
+            f"{alias}-add",
+            f"{alias}-multiply",
+            f"{alias}-fail",
+        }, listed.tools
+
+
+def test_rotated_session_refresh_token_cannot_be_replayed_after_revocation(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "rt6" + uuid.uuid4().hex[:10]
+        identity: Final = register_mcp(scenario, peer, alias)
+        member: Final = scenario.member(scenario.team(object_permission={"mcp_servers": [identity]}))
+        issued, client_id = _gateway_session_sign_in(gateway, member)
+        r1: Final = str(issued["refresh_token"])
+        a1: Final = str(issued["access_token"])
+        assert r1.startswith("llm_srefresh_"), r1
+        assert a1.startswith("llm_session_"), a1
+        rotated: Final = gateway.client.post(
+            "/token",
+            data={"grant_type": "refresh_token", "refresh_token": r1, "client_id": client_id},
+        )
+        assert rotated.status_code == 200, rotated.text
+        rotated_body: Final = _response_object(rotated)
+        assert set(rotated_body) == {"access_token", "token_type", "expires_in", "refresh_token"}, rotated.text
+        r2: Final = str(rotated_body["refresh_token"])
+        a2: Final = str(rotated_body["access_token"])
+        assert r2 != r1 and r2.startswith("llm_srefresh_"), rotated.text
+        assert a2 != a1 and a2.startswith("llm_session_"), rotated.text
+        replayed: Final = gateway.client.post(
+            "/token",
+            data={"grant_type": "refresh_token", "refresh_token": r1, "client_id": client_id},
+        )
+        assert replayed.status_code == 400, replayed.text
+        assert _response_object(replayed) == {
+            "error": "invalid_grant",
+            "error_description": "the refresh token was already used",
+        }, replayed.text
+        revoked: Final = gateway.client.post("/revoke", data={"token": r2, "client_id": client_id})
+        assert revoked.status_code == 200, revoked.text
+        assert _response_object(revoked) == {}, revoked.text
+        revoked_again: Final = gateway.client.post("/revoke", data={"token": r2, "client_id": client_id})
+        assert revoked_again.status_code == 200, revoked_again.text
+        assert _response_object(revoked_again) == {}, revoked_again.text
+        after_revoke: Final = gateway.client.post(
+            "/token",
+            data={"grant_type": "refresh_token", "refresh_token": r2, "client_id": client_id},
+        )
+        assert after_revoke.status_code == 400, after_revoke.text
+        assert _response_object(after_revoke) == {
+            "error": "invalid_grant",
+            "error_description": "the refresh token was already used",
+        }, after_revoke.text
+        unknown_client: Final = gateway.client.post(
+            "/revoke", data={"token": r2, "client_id": "dcr-unknown-" + uuid.uuid4().hex}
+        )
+        assert unknown_client.status_code == 401, unknown_client.text
+        assert _response_object(unknown_client) == {
+            "error": "invalid_client",
+            "error_description": "unknown or malformed client_id",
+        }, unknown_client.text
+        open_aliases: Final = _open_aliases()
+        listed_response: Final = gateway.client.post(
+            "/mcp",
+            headers={"Authorization": f"Bearer {a2}", **ACCEPT},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        )
+        assert listed_response.status_code == 200, listed_response.text
+        listed: Final = _outcome_from_rpc(listed_response)
+        assert listed.ok, listed.raw
+        assert _without_foreign_open_servers(listed.tools, open_aliases) == {
+            f"{alias}-add",
+            f"{alias}-multiply",
+            f"{alias}-fail",
+        }, listed.tools
 
 
 def _toolset_rpc(gateway: Gateway, bearer: str, name: str, method: str, params: dict[str, object]) -> Outcome:
@@ -575,3 +905,368 @@ def test_token_exchange_callers_with_different_subject_tokens_own_separate_listi
         assert second.list_tools().ok
         assert _echoed_description(second.call(f"{alias}-add", probe)) == "Add two integers"
         assert tool_calls(peer.drain()) == (), "a blocked probe reached the peer"
+
+
+@dataclass(frozen=True, slots=True)
+class _IdpRig:
+    gateway: Gateway
+    private_key: RSAPrivateKey
+    other_private_key: RSAPrivateKey
+    kid: str
+    dead_jwks: Wire
+
+
+def _idp_proxy_config(directory: Path) -> Path:
+    raw_config: Final[object] = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config: Final = TypeAdapter(dict[str, object]).validate_python(raw_config)
+    raw_general_settings: Final = config["general_settings"]
+    general_settings: Final = TypeAdapter(dict[str, object]).validate_python(raw_general_settings)
+    config_with_idp: Final = {
+        **config,
+        "general_settings": {
+            **general_settings,
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {"user_id_jwt_field": "sub", "user_id_upsert": True},
+            "use_x_forwarded_for": True,
+            "mcp_trusted_proxy_ranges": ["127.0.0.1/32"],
+        },
+    }
+    config_path: Final = directory / "mcp_idp.yaml"
+    config_path.write_text(yaml.safe_dump(config_with_idp))
+    return config_path
+
+
+@pytest.fixture(scope="module")
+def idp_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_IdpRig]:
+    private_key: Final = generate_private_key(public_exponent=65537, key_size=2048)
+    other_private_key: Final = generate_private_key(public_exponent=65537, key_size=2048)
+    kid: Final = "kid-a"
+    public_jwk: Final = TypeAdapter(dict[str, object]).validate_python(
+        json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
+    )
+
+    def respond_good(request: Request) -> Reply:
+        assert request.method == "GET", request
+        return Reply(body=json.dumps({"keys": [{**public_jwk, "kid": kid}]}).encode())
+
+    def respond_dead(request: Request) -> Reply:
+        assert request.method == "GET", request
+        return Reply(drop_connection=True)
+
+    directory: Final = tmp_path_factory.mktemp("mcp-idp")
+    config_path: Final = _idp_proxy_config(directory)
+    with (
+        wire_server(respond_good) as good_jwks,
+        wire_server(respond_dead) as dead_jwks,
+        gateway_from_environment() as gateway,
+        owned_proxy(
+            gateway,
+            directory,
+            {"JWT_PUBLIC_KEY_URL": f"{good_jwks.url},{dead_jwks.url}"},
+            config=config_path,
+            remove_environment=("PROXY_BASE_URL",),
+            workers=2,
+        ) as candidate,
+    ):
+        yield _IdpRig(candidate, private_key, other_private_key, kid, dead_jwks)
+
+
+def test_idp_subject_token_exchange_mints_a_credential_for_the_mapped_user_and_refuses_bad_subjects(
+    idp_rig: _IdpRig,
+) -> None:
+    registered: Final = idp_rig.gateway.client.post(
+        "/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+    )
+    assert registered.status_code in (200, 201), registered.text
+    client_id: Final = str(_response_object(registered)["client_id"])
+    subject: Final = "mcp-idp-user-" + uuid.uuid4().hex
+
+    def token(private_key: RSAPrivateKey, user_id: str, kid: str) -> str:
+        now: Final = int(time.time())
+        return jwt.encode(
+            {"sub": user_id, "iat": now, "exp": now + 300},
+            private_key,
+            algorithm="RS256",
+            headers={"kid": kid},
+        )
+
+    valid_subject: Final = token(idp_rig.private_key, subject, idp_rig.kid)
+    exchange_form: Final = {
+        "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+        "client_id": client_id,
+        "subject_token": valid_subject,
+        "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+        "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
+    }
+    exchanged: Final = idp_rig.gateway.client.post("/token", data=exchange_form)
+    assert exchanged.status_code == 200, exchanged.text
+    outage_form: Final = {
+        **exchange_form,
+        "subject_token": token(idp_rig.other_private_key, subject, "kid-b"),
+    }
+    unavailable: Final = idp_rig.gateway.client.post("/token", data=outage_form)
+    dead_requests: Final = idp_rig.dead_jwks.drain()
+    assert unavailable.status_code == 503, unavailable.text
+    assert _response_object(unavailable) == {
+        "error": "temporarily_unavailable",
+        "error_description": (
+            "the gateway could not verify subject_token because its identity provider or database is unavailable; retry"
+        ),
+    }, unavailable.text
+    assert tuple(request.method for request in dead_requests) == ("GET", "GET", "GET"), dead_requests
+    exchanged_body: Final = _response_object(exchanged)
+    assert set(exchanged_body) == {
+        "access_token",
+        "token_type",
+        "expires_in",
+        "refresh_token",
+        "user_id",
+        "team_id",
+        "issued_token_type",
+    }, exchanged.text
+    assert exchanged_body["token_type"] == "Bearer", exchanged.text
+    assert exchanged_body["issued_token_type"] == "urn:ietf:params:oauth:token-type:access_token", exchanged.text
+    assert exchanged_body["user_id"] == subject, exchanged.text
+    assert exchanged_body["team_id"] is None, exchanged.text
+    assert isinstance(exchanged_body["expires_in"], int) and exchanged_body["expires_in"] > 0, exchanged.text
+    assert str(exchanged_body["refresh_token"]).startswith("llm_srefresh_"), exchanged.text
+    access_token: Final = str(exchanged_body["access_token"])
+    with idp_rig.gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        completion: Final = idp_rig.gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "mcp idp spend"}]},
+            key=access_token,
+        )
+        assert completion.status_code == 200, completion.text
+        request_id: Final = str(_response_object(completion)["id"])
+        spend: Final = eventually(
+            lambda: read_rows(
+                'SELECT metadata->>\'user_api_key_user_id\' AS user_api_key_user_id '
+                'FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
+                (request_id,),
+            ),
+            lambda rows: len(rows) == 1,
+        )
+        assert spend == [{"user_api_key_user_id": subject}], spend
+    user: Final = eventually(
+        lambda: read_rows(
+            'SELECT user_id, user_role, teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,)
+        ),
+        lambda rows: len(rows) == 1,
+    )
+    assert user == [{"user_id": subject, "user_role": None, "teams": []}], user
+    assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token = %s', (access_token,)) == []
+    missing_subject: Final = idp_rig.gateway.client.post(
+        "/token",
+        data={key: value for key, value in exchange_form.items() if key != "subject_token"},
+    )
+    assert missing_subject.status_code == 400, missing_subject.text
+    assert _response_object(missing_subject) == {
+        "error": "invalid_request",
+        "error_description": "subject_token and subject_token_type are required",
+    }, missing_subject.text
+    rejected_subject: Final = idp_rig.gateway.client.post(
+        "/token", data={**exchange_form, "subject_token": token(idp_rig.other_private_key, subject, idp_rig.kid)}
+    )
+    assert rejected_subject.status_code == 400, rejected_subject.text
+    assert _response_object(rejected_subject) == {
+        "error": "invalid_request",
+        "error_description": "subject_token was rejected by the gateway's JWT auth",
+    }, rejected_subject.text
+    non_jwt: Final = idp_rig.gateway.client.post("/token", data={**exchange_form, "subject_token": "not-a-jwt"})
+    assert non_jwt.status_code == 400, non_jwt.text
+    assert _response_object(non_jwt) == {
+        "error": "invalid_request",
+        "error_description": "subject_token is not a JWT",
+    }, non_jwt.text
+
+
+def test_idp_jwks_server_error_answers_temporarily_unavailable(tmp_path: Path) -> None:
+    pytest.skip(
+        "BUG: an IdP JWKS answering HTTP 503 makes the gateway /token token-exchange answer 400 invalid_request "
+        "(subject_token rejected) instead of 503 temporarily_unavailable"
+    )
+    private_key: Final = generate_private_key(public_exponent=65537, key_size=2048)
+    kid: Final = "mcp-runtime-503"
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "GET", request
+        return Reply(status=503, body=b'{"error":"jwks_down"}')
+
+    config: Final = _idp_proxy_config(tmp_path)
+    with (
+        wire_server(respond) as jwks,
+        gateway_from_environment() as gateway,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {"JWT_PUBLIC_KEY_URL": jwks.url},
+            config=config,
+            remove_environment=("PROXY_BASE_URL",),
+            workers=2,
+        ) as idp_gateway,
+    ):
+        registered: Final = idp_gateway.client.post(
+            "/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code in (200, 201), registered.text
+        client_id: Final = str(_response_object(registered)["client_id"])
+        now: Final = int(time.time())
+        subject_token: Final = jwt.encode(
+            {"sub": "mcp-idp-http-503-" + uuid.uuid4().hex, "iat": now, "exp": now + 300},
+            private_key,
+            algorithm="RS256",
+            headers={"kid": kid},
+        )
+        exchange_form: Final = {
+            "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+            "client_id": client_id,
+            "subject_token": subject_token,
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
+        }
+        response: Final = idp_gateway.client.post("/token", data=exchange_form)
+        jwks_requests: Final = jwks.drain()
+        assert response.status_code == 503, (
+            f"request={exchange_form!r}, jwks_requests={jwks_requests!r}, "
+            f"response_status={response.status_code}, response={response.text}"
+        )
+        assert _response_object(response) == {
+            "error": "temporarily_unavailable",
+            "error_description": (
+                "the gateway could not verify subject_token because its identity provider or database is unavailable; "
+                "retry"
+            ),
+        }, response.text
+
+
+def test_standard_pattern_discovery_names_the_per_server_issuer_and_follows_forwarded_headers(
+    gateway: Gateway, idp_rig: _IdpRig
+) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "rt8" + uuid.uuid4().hex[:10]
+        register_mcp(
+            scenario,
+            peer,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={
+                "client_id": "rt8-client",
+                "client_secret": "rt8-secret",
+                "scopes": ["tools.call"],
+            },
+        )
+        base: Final = _base(gateway)
+        protected: Final = gateway.client.get(f"/.well-known/oauth-protected-resource/mcp/{alias}")
+        assert protected.status_code == 200, protected.text
+        aggregate_issuer: Final = f"{base}/mcp"
+        expected_protected: Final = {
+            "authorization_servers": [aggregate_issuer],
+            "resource": f"{base}/mcp/{alias}",
+            "scopes_supported": ["tools.call"],
+        }
+        assert _response_object(protected) == expected_protected, protected.text
+        aggregate_authorization: Final = gateway.client.get("/.well-known/oauth-authorization-server/mcp")
+        assert aggregate_authorization.status_code == 200, aggregate_authorization.text
+        assert _response_object(aggregate_authorization)["issuer"] == aggregate_issuer, aggregate_authorization.text
+        authorization: Final = gateway.client.get(f"/.well-known/oauth-authorization-server/mcp/{alias}")
+        assert authorization.status_code == 200, authorization.text
+        expected_authorization: Final = {
+            "issuer": f"{base}/mcp/{alias}",
+            "authorization_endpoint": f"{base}/{alias}/authorize",
+            "token_endpoint": f"{base}/{alias}/token",
+            "response_types_supported": ["code"],
+            "scopes_supported": ["tools.call"],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+            "code_challenge_methods_supported": ["S256"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post"],
+            "registration_endpoint": f"{base}/{alias}/register",
+        }
+        assert _response_object(authorization) == expected_authorization, authorization.text
+        legacy_authorization: Final = gateway.client.get(f"/.well-known/oauth-authorization-server/{alias}")
+        assert legacy_authorization.status_code == 200, legacy_authorization.text
+        assert _response_object(legacy_authorization) == {**expected_authorization, "issuer": f"{base}/{alias}"}, (
+            legacy_authorization.text
+        )
+        legacy_protected: Final = gateway.client.get(f"/.well-known/oauth-protected-resource/{alias}/mcp")
+        assert legacy_protected.status_code == 200, legacy_protected.text
+        assert _response_object(legacy_protected) == {
+            "authorization_servers": [f"{base}/mcp"],
+            "resource": f"{base}/{alias}/mcp",
+            "scopes_supported": ["tools.call"],
+        }, legacy_protected.text
+        root_protected: Final = gateway.client.get("/.well-known/oauth-protected-resource")
+        assert root_protected.status_code == 200, root_protected.text
+        assert _response_object(root_protected) == {
+            "authorization_servers": [f"{base}/mcp"],
+            "resource": base,
+            "scopes_supported": [],
+        }, root_protected.text
+        anonymous: Final = gateway.client.post(
+            f"/mcp/{alias}",
+            headers=ACCEPT,
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": dict(INITIALIZE)},
+        )
+        assert anonymous.status_code == 401, anonymous.text
+        challenge: Final = anonymous.headers["www-authenticate"]
+        metadata_ref: Final = re.search(r'resource_metadata="([^"]+)"', challenge)
+        assert metadata_ref is not None, challenge
+        metadata: Final = gateway.client.get(urljoin(base + "/", metadata_ref.group(1)))
+        assert metadata.status_code == 200, metadata.text
+        assert _response_object(metadata) == expected_protected, metadata.text
+    with mcp_peer() as peer, idp_rig.gateway.scenario() as scenario:
+        alias: Final = "rt8f" + uuid.uuid4().hex[:9]
+        register_mcp(
+            scenario,
+            peer,
+            alias,
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={"client_id": "rt8f-client", "client_secret": "rt8f-secret"},
+        )
+        forwarded_base: Final = "https://gw.example.test"
+        forwarded_headers: Final = {
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "gw.example.test",
+        }
+        forwarded_prm: Final = idp_rig.gateway.client.get(
+            f"/.well-known/oauth-protected-resource/mcp/{alias}", headers=forwarded_headers
+        )
+        assert forwarded_prm.status_code == 200, forwarded_prm.text
+        assert _response_object(forwarded_prm) == {
+            "authorization_servers": [f"{forwarded_base}/mcp"],
+            "resource": f"{forwarded_base}/mcp/{alias}",
+            "scopes_supported": [],
+        }, forwarded_prm.text
+        forwarded_as: Final = idp_rig.gateway.client.get(
+            f"/.well-known/oauth-authorization-server/mcp/{alias}", headers=forwarded_headers
+        )
+        assert forwarded_as.status_code == 200, forwarded_as.text
+        assert _response_object(forwarded_as) == {
+            "issuer": f"{forwarded_base}/mcp/{alias}",
+            "authorization_endpoint": f"{forwarded_base}/{alias}/authorize",
+            "token_endpoint": f"{forwarded_base}/{alias}/token",
+            "response_types_supported": ["code"],
+            "scopes_supported": [],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+            "code_challenge_methods_supported": ["S256"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post"],
+            "registration_endpoint": f"{forwarded_base}/{alias}/register",
+        }, forwarded_as.text
+        local_base: Final = _base(idp_rig.gateway)
+        local_as: Final = idp_rig.gateway.client.get(f"/.well-known/oauth-authorization-server/mcp/{alias}")
+        assert local_as.status_code == 200, local_as.text
+        assert _response_object(local_as) == {
+            "issuer": f"{local_base}/mcp/{alias}",
+            "authorization_endpoint": f"{local_base}/{alias}/authorize",
+            "token_endpoint": f"{local_base}/{alias}/token",
+            "response_types_supported": ["code"],
+            "scopes_supported": [],
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+            "code_challenge_methods_supported": ["S256"],
+            "token_endpoint_auth_methods_supported": ["client_secret_post"],
+            "registration_endpoint": f"{local_base}/{alias}/register",
+        }, local_as.text

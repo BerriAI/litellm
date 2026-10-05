@@ -9,15 +9,124 @@ from pathlib import Path
 from typing import Final, Literal
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
 from integration._support.mcp import McpPeer, call_tool, mcp_peer, register_mcp, tool_names
+from integration._support.oauth_server import oauth_server
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import TypeAdapter
 
 _Upstream = Callable[[Request], Reply]
+CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
+
+
+def _response_object(response: httpx.Response) -> dict[str, object]:
+    return TypeAdapter(dict[str, object]).validate_python(response.json())
+
+
+def _start_callback_flow(gateway: Gateway, alias: str, key: str, client_id: str) -> tuple[str, str, str]:
+    started: Final = gateway.client.get(
+        f"/{alias}/authorize",
+        params={
+            "client_id": client_id,
+            "redirect_uri": CLIENT_REDIRECT,
+            "response_type": "code",
+            "state": "client-state",
+            "code_challenge": "A" * 43,
+            "code_challenge_method": "S256",
+        },
+        headers={"x-litellm-api-key": key},
+    )
+    assert started.status_code in (302, 307), started.text
+    relay_state: Final = parse_qs(urlsplit(started.headers["location"]).query)["state"][0]
+    cookie_name: Final = f"mcp_oauth_state_{relay_state}"
+    assert cookie_name in started.cookies, started.headers
+    return relay_state, cookie_name, started.cookies[cookie_name]
+
+
+def _assert_cleared_oauth_state_cookie(response: httpx.Response, cookie_name: str) -> None:
+    cleared: Final = response.headers["set-cookie"]
+    assert cleared.startswith(f'{cookie_name}="";'), cleared
+    assert "Max-Age=0" in cleared, cleared
+    assert "Path=/" in cleared, cleared
+    assert "HttpOnly" in cleared, cleared
+    assert "SameSite=lax" in cleared, cleared
+
+
+def test_callback_forwards_the_code_only_for_the_sealed_issuer_and_relays_idp_errors(
+    gateway: Gateway,
+) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        alias: Final = "rt4" + uuid.uuid4().hex[:10]
+        identity: Final = register_mcp(
+            scenario,
+            peer,
+            alias,
+            issuer=auth.issuer,
+            authorization_url=auth.issuer + "/authorize",
+            token_url=auth.issuer + "/token",
+            registration_url=auth.issuer + "/register",
+            auth_type="oauth2",
+            oauth2_flow="authorization_code",
+            credentials={"client_id": "ac-client", "client_secret": "ac-secret", "scopes": ["tools.call"]},
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        registered: Final = gateway.client.post(
+            f"/{alias}/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code in (200, 201), registered.text
+        client_id: Final = str(_response_object(registered)["client_id"])
+
+        wrong_relay, wrong_cookie, wrong_cookie_value = _start_callback_flow(gateway, alias, key, client_id)
+        wrong_code: Final = "callback-code-" + uuid.uuid4().hex
+        wrong: Final = gateway.client.get(
+            "/callback",
+            params={"code": wrong_code, "state": wrong_relay, "iss": "http://127.0.0.1:1/other"},
+            cookies={wrong_cookie: wrong_cookie_value},
+        )
+        assert wrong.status_code == 400, wrong.text
+        assert "invalid_issuer" in wrong.text, wrong.text
+        assert "location" not in wrong.headers, wrong.headers
+        assert wrong_code not in wrong.text, wrong.text
+        _assert_cleared_oauth_state_cookie(wrong, wrong_cookie)
+
+        correct_relay, correct_cookie, correct_cookie_value = _start_callback_flow(gateway, alias, key, client_id)
+        correct: Final = gateway.client.get(
+            "/callback",
+            params={"code": "c", "state": correct_relay, "iss": auth.issuer},
+            cookies={correct_cookie: correct_cookie_value},
+        )
+        assert correct.status_code == 302, correct.text
+        correct_location: Final = urlsplit(correct.headers["location"])
+        assert correct_location.scheme + "://" + correct_location.netloc + correct_location.path == CLIENT_REDIRECT, (
+            correct.headers["location"]
+        )
+        assert parse_qs(correct_location.query) == {"code": ["c"], "state": ["client-state"]}, (
+            correct.headers["location"]
+        )
+        _assert_cleared_oauth_state_cookie(correct, correct_cookie)
+
+        error_relay, error_cookie, error_cookie_value = _start_callback_flow(gateway, alias, key, client_id)
+        error: Final = gateway.client.get(
+            "/callback",
+            params={"error": "access_denied", "error_description": "x", "state": error_relay},
+            cookies={error_cookie: error_cookie_value},
+        )
+        assert error.status_code == 302, error.text
+        error_location: Final = urlsplit(error.headers["location"])
+        assert parse_qs(error_location.query) == {
+            "error": ["access_denied"],
+            "error_description": ["x"],
+            "state": ["client-state"],
+        }, error.headers["location"]
+        _assert_cleared_oauth_state_cookie(error, error_cookie)
+
+        missing: Final = gateway.client.get("/callback")
+        assert missing.status_code == 400, missing.text
+        assert "invalid_request" in missing.text and "code" in missing.text and "state" in missing.text, missing.text
 
 
 @pytest.mark.covers("other.mcp.oauth.discovery_cannot_erase_configured_authorization_endpoint")
