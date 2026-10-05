@@ -147,7 +147,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
     ) -> str:
         """POST /{api_version}/interactions"""
         litellm_params = litellm_params or {}
-        api_base = GeminiModelInfo.get_api_base(api_base)
+        api_base = GeminiModelInfo.get_api_base_with_version(api_base)
         api_key: Final = GeminiModelInfo.get_api_key(litellm_params.get("api_key"))
 
         if not api_key:
