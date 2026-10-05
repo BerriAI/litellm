@@ -136,6 +136,26 @@ class _EchoedResponsesRequestParams(TypedDict, total=False):
     store: ReadOnly[bool]
 
 
+_ECHOED_PARAMS_ADAPTER: Final = TypeAdapter(_EchoedResponsesRequestParams)
+
+
+def _is_echoable(name: str, value: object) -> bool:
+    try:
+        _ = _ECHOED_PARAMS_ADAPTER.validate_python({name: value})
+    except ValidationError:
+        return False
+    return True
+
+
+def _echoable_request_params(request: Mapping[str, object]) -> _EchoedResponsesRequestParams:
+    echoable: Final = {
+        name: request[name]
+        for name in _EchoedResponsesRequestParams.__optional_keys__
+        if name in request and _is_echoable(name, request[name])
+    }
+    return _ECHOED_PARAMS_ADAPTER.validate_python(echoable)
+
+
 @dataclass(frozen=True, slots=True)
 class ResponsesToolChatForm:
     chat_tools: tuple[ChatToolParam, ...]
@@ -2422,9 +2442,7 @@ class LiteLLMCompletionResponsesConfig:
         if choices and len(choices) > 0:
             finish_reason = choices[0].finish_reason
 
-        echoed: Final = cast(  # cast-ok: same dict, narrowed to the fields the response echoes
-            "_EchoedResponsesRequestParams", responses_api_request
-        )
+        echoed: Final = _echoable_request_params(responses_api_request)
         chat_usage: Final = getattr(chat_completion_response, "usage", None)
         incomplete_details: Final = LiteLLMCompletionResponsesConfig._incomplete_details_for_finish_reason(
             finish_reason=finish_reason,

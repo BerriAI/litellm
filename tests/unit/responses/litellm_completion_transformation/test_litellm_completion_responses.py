@@ -5268,6 +5268,36 @@ def test_transform_chat_completion_response_echoes_request_params():
     assert result_unset.text == {}
 
 
+@pytest.mark.parametrize(
+    ("field", "invalid_value", "expected"),
+    [
+        ("user", 123, None),
+        ("instructions", 5, None),
+        ("text", "plain", {}),
+        ("truncation", "bogus", None),
+        ("parallel_tool_calls", "maybe", False),
+    ],
+)
+def test_transform_drops_request_params_the_response_cannot_echo(
+    field: str, invalid_value: object, expected: object
+) -> None:
+    request: Final[dict[str, object]] = {"temperature": 0.7, field: invalid_value}
+    response: Final = ModelResponse(
+        id="resp-invalid-echo",
+        choices=[Choices(index=0, finish_reason="stop", message=Message(content="hi", role="assistant"))],
+        model="gpt-4o",
+    )
+
+    result: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request=request,
+        chat_completion_response=response,
+    )
+
+    assert getattr(result, field) == expected, f"invalid {field} value {invalid_value!r}"
+    assert result.temperature == 0.7, f"valid temperature was dropped with invalid {field}"
+
+
 @pytest.mark.parametrize("stream", [True, False])
 async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool):
     with pytest.raises(litellm.BadRequestError) as exc_info:
