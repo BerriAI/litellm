@@ -94,7 +94,7 @@ async def test_initial_session_review_does_not_eagerly_embed_other_session_span_
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
     for parts in ((unrelated[0],), unrelated):
         workspace: EvidenceWorkspace = EvidenceWorkspace(
-            sessions=(  # rebind-ok: compare two corpus sizes
+            sessions=(
                 SessionContent(execution=run, parts=(root,), partial=False),
                 SessionContent(execution=other, parts=parts, partial=False),
             )
