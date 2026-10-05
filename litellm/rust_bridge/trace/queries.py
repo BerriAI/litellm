@@ -28,7 +28,7 @@ class TraceQueryStatistics(BaseModel):
     bytes_read: int | str
 
 
-class TraceSQLResponse(BaseModel):
+class ClickHouseSQLEnvelope(BaseModel):
     model_config = _RESPONSE_CONFIG
     meta: tuple[TraceQueryColumn, ...]
     data: tuple[Mapping[str, JsonValue], ...]
