@@ -2287,6 +2287,73 @@ def test_model_group_info_cost_none_for_unpriced_deployment_but_zero_when_declar
     assert priced.output_cost_per_token is not None and priced.output_cost_per_token > 0
 
 
+def _alias_cost_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "vllm-free",
+                "litellm_params": {
+                    "model": "openai/my-vllm-free",
+                    "api_key": "fake",
+                    "api_base": "http://localhost:8000/v1",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                },
+            },
+            {
+                "model_name": "gpt-priced",
+                "litellm_params": {"model": "gpt-4o", "api_key": "fake"},
+            },
+        ],
+        model_group_alias={"hidden-free": {"model": "vllm-free", "hidden": True}, "visible": "vllm-free"},
+    )
+
+
+def test_get_model_group_info_include_hidden_resolves_a_hidden_alias():
+    router = _alias_cost_router()
+
+    assert router.get_model_group_info(model_group="hidden-free") is None
+
+    hidden: Final = router.get_model_group_info(model_group="hidden-free", include_hidden=True)
+    assert hidden is not None
+    assert hidden.model_group == "hidden-free"
+    assert hidden.input_cost_per_token == 0
+    assert hidden.output_cost_per_token == 0
+
+
+def test_update_settings_model_group_alias_drops_cached_group_info():
+    router = _alias_cost_router()
+    before: Final = router.cached_model_group_info("visible")
+    assert before is not None and before.input_cost_per_token == 0
+
+    router.update_settings(model_group_alias={"visible": "gpt-priced"})
+
+    after: Final = router.cached_model_group_info("visible")
+    assert after is not None
+    assert after.input_cost_per_token is not None and after.input_cost_per_token > 0
+
+
+def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selector():
+    router = _alias_cost_router()
+
+    router._switch_routing_strategy(
+        "lar1",
+        {
+            "routing_strategy_args": {
+                "confidence_threshold_low": 0.1,
+                "confidence_threshold_medium": 0.3,
+                "confidence_threshold_high": 0.9,
+            }
+        },
+    )
+    assert router.routing_strategy == "lar1"
+    assert "async_get_available_deployment" in router.__dict__
+
+    router._switch_routing_strategy("usage-based-routing-v2", {})
+    assert router.lowesttpm_logger_v2 is not None
+    assert "async_get_available_deployment" not in router.__dict__
+
+
 @pytest.mark.parametrize(
     "value,expected",
     [
@@ -19793,6 +19860,65 @@ async def test_router_subclass_overriding_async_get_healthy_deployments_with_the
     response: Final = await router.acompletion(model="m", messages=[{"role": "user", "content": "x"}])
 
     assert response.choices[0].message.content == "hi"
+
+
+def test_get_deployment_credentials_with_provider_preserves_anthropic_wif_params():
+    """
+    Test that get_deployment_credentials_with_provider preserves a litellm_params-configured
+    Anthropic workload identity federation setup (both the legacy token_file fields and the
+    Phase 1 internal_issuer/keycloak identity-source fields) so files/batches/passthrough
+    deployments using WIF do not silently fall back to a missing credential.
+    """
+    wif_params = {
+        "anthropic_federation_rule_id": "fdrl_deployment",
+        "anthropic_organization_id": "org-deployment",
+        "anthropic_identity_source": "keycloak",
+        "anthropic_keycloak_token_url": "https://keycloak.internal.example/realms/r/protocol/openid-connect/token",
+        "anthropic_keycloak_client_id": "litellm",
+        "anthropic_keycloak_client_secret_ref": "oidc/env/KEYCLOAK_CLIENT_SECRET",
+    }
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic-wif-model",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    **wif_params,
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="anthropic-wif-model")
+
+    assert credentials is not None
+    for key, value in wif_params.items():
+        assert credentials.get(key) == value, key
+
+
+def test_router_keeps_wif_secret_pointers_unresolved(monkeypatch):
+    monkeypatch.setenv("WIF_TEST_KC_SECRET", "kc-secret")
+    monkeypatch.setenv("WIF_TEST_FDRL", "fdrl_from_env")
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-wif",
+                "litellm_params": {
+                    "model": "anthropic/claude-haiku-4-5",
+                    "anthropic_federation_rule_id": "os.environ/WIF_TEST_FDRL",
+                    "anthropic_identity_source": "keycloak",
+                    "anthropic_keycloak_token_url": "https://keycloak.example/token",
+                    "anthropic_keycloak_client_id": "litellm",
+                    "anthropic_keycloak_client_secret_ref": "os.environ/WIF_TEST_KC_SECRET",
+                },
+            }
+        ]
+    )
+
+    litellm_params = router.get_model_list()[0]["litellm_params"]
+
+    assert litellm_params["anthropic_federation_rule_id"] == "fdrl_from_env"
+    assert litellm_params["anthropic_keycloak_client_secret_ref"] == "os.environ/WIF_TEST_KC_SECRET"
 
 
 @pytest.mark.asyncio

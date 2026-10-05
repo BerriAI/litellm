@@ -3,6 +3,20 @@
 # Declare variables to be passed into your templates.
 
 replicaCount: 1
+liteadmin:
+  enabled: false
+  existingSecret: ""
+  gatewayUrl: ""
+  model: ""
+  readOnly: false
+  storageSize: 1Gi
+  storageClassName: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
 # numWorkers: 2
 
 image:

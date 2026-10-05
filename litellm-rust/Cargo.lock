@@ -4086,26 +4086,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-migrate"
-version = "0.1.0"
-dependencies = [
- "litellm-migrate-macros",
- "rstest",
-]
-
-[[package]]
-name = "litellm-migrate-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "rstest",
- "syn 2.0.119",
- "tempfile",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
@@ -4156,6 +4136,7 @@ dependencies = [
  "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-traces",
+ "litellm-traces-cache",
  "litellm-traces-clickhouse",
  "litellm-tracing",
  "prost",
@@ -4169,6 +4150,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sha2 0.10.9",
+ "sqlx",
  "strum",
  "thiserror 2.0.19",
  "tokio",
@@ -4367,6 +4349,9 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "serde_with",
+ "sqlx",
+ "testcontainers-modules",
  "thiserror 2.0.19",
  "tokio",
  "url",
@@ -4454,6 +4439,7 @@ name = "litellm-traces"
 version = "0.1.0"
 dependencies = [
  "askama",
+ "base64 0.22.1",
  "criterion",
  "indexmap 2.14.0",
  "litellm-llms-types",
@@ -4473,13 +4459,17 @@ dependencies = [
 name = "litellm-traces-cache"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "litellm-traces",
  "moka",
  "rstest",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.19",
+ "time",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4487,14 +4477,11 @@ name = "litellm-traces-clickhouse"
 version = "0.1.0"
 dependencies = [
  "askama",
- "base64 0.22.1",
  "flate2",
  "futures-util",
  "hmac 0.12.1",
- "itertools 0.14.0",
  "jsonschema",
  "litellm-http",
- "litellm-migrate",
  "litellm-storage-clickhouse",
  "litellm-traces",
  "litellm-traces-cache",
@@ -4505,12 +4492,12 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sqlx",
  "strum",
  "testcontainers-modules",
  "thiserror 2.0.19",
  "time",
  "tokio",
- "tracing",
  "url",
  "wiremock",
 ]

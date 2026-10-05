@@ -1,7 +1,7 @@
 import { expectTypeOf, test } from "vitest";
 import type { components } from "./schema";
 import type { getClaudeCodePluginsList, userListCall } from "@/components/networking";
-import type { TraceMessage, UIMessage } from "@/components/view_logs/TraceView/traceTypes";
+import type { TraceMessage, UIMessage } from "@/components/lens/traces/types";
 import type { TagNewRequest, TagUpdateRequest } from "@/components/tag_management/types";
 
 test("API read functions expose the generated response contracts", () => {

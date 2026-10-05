@@ -50,6 +50,7 @@ fn llm(span_id: &str, parent: &str, agent: &str, response_id: &str) -> TraceSpan
         input_tokens: 100,
         output_tokens: 20,
         litellm_request_id: response_id.into(),
+        call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
         ..at(row(span_id, parent, "ChatOpenAI", "llm", agent), 1, 100)
     }
 }
@@ -72,6 +73,7 @@ fn spend(
     SpendByResponseIdsRow {
         request_id: request_id.into(),
         response_id: response_id.into(),
+        litellm_call_id: String::new(),
         upstream_response_id: String::new(),
         trace_id: String::new(),
         span_id: String::new(),
@@ -565,6 +567,219 @@ fn transport_spans_complete_a_call_without_its_own_id() {
 }
 
 #[rstest]
+#[case::lone_call(1, Some(0.5))]
+#[case::two_calls(2, None)]
+fn sibling_transports_belong_to_the_only_model_call_under_their_parent(
+    #[case] calls: usize,
+    #[case] expected: Option<f64>,
+) {
+    let mut transport = at(
+        row("http", "step", "gateway.request", "framework", ""),
+        2,
+        10,
+    );
+    transport.trace_id = "trace".into();
+    transport.call_keys = vec![litellm_traces::CallKey::GatewayAttempt];
+    transport.call_evidence = Some(litellm_traces::CallEvidenceKind::Complete);
+    let mut rows = vec![
+        owned(
+            row("agent", "", "agent", "agent", "agent"),
+            "team",
+            "",
+            "key",
+        ),
+        owned(row("step", "agent", "step", "chain", ""), "team", "", "key"),
+        owned(transport, "team", "", "key"),
+    ];
+    for index in 0..calls {
+        let mut call = llm(&format!("chat-{index}"), "step", "agent", "");
+        call.call_evidence = None;
+        rows.push(owned(call, "team", "", "key"));
+    }
+    let mut logged = spend("request", "", "team", "", "key", 0.5);
+    logged.trace_id = "trace".into();
+    logged.span_id = "http".into();
+    let trace = resolve_trace("trace", "ref", &rows, &[logged]).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.agents[0].spend, expected);
+}
+
+#[rstest]
+#[case::without_tool_http_sibling(None, false, litellm_traces::CallKey::Transport, Some(0.5))]
+#[case::after_call(Some((200, 10)), false, litellm_traces::CallKey::Transport, Some(0.5))]
+#[case::inside_call_without_spend(Some((10, 10)), false, litellm_traces::CallKey::Transport, Some(0.5))]
+#[case::inside_call_with_unrelated_spend(Some((10, 10)), true, litellm_traces::CallKey::Transport, Some(0.5))]
+#[case::missing_gateway_attempt(Some((10, 10)), false, litellm_traces::CallKey::GatewayAttempt, None)]
+fn sibling_transport_does_not_lose_model_call_spend(
+    #[case] transport_timing: Option<(i64, u64)>,
+    #[case] unrelated_spend: bool,
+    #[case] key: litellm_traces::CallKey,
+    #[case] expected: Option<f64>,
+) {
+    let call = owned(
+        TraceSpansRow {
+            trace_id: "trace".into(),
+            call_keys: vec![litellm_traces::CallKey::ProviderResponse(
+                "chatcmpl-1".into(),
+            )],
+            call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
+            ..llm("chat", "step", "agent", "chatcmpl-1")
+        },
+        "team",
+        "",
+        "key",
+    );
+    let base_rows = [
+        owned(
+            row("agent", "", "agent", "agent", "agent"),
+            "team",
+            "",
+            "key",
+        ),
+        owned(row("step", "agent", "step", "chain", ""), "team", "", "key"),
+        call,
+    ];
+    let rows: Vec<_> = base_rows
+        .into_iter()
+        .chain(transport_timing.map(|(start, duration)| {
+            let mut transport = at(
+                row("tool-http", "step", "GET", "framework", ""),
+                start,
+                duration,
+            );
+            transport.trace_id = "trace".into();
+            transport.call_keys = vec![key];
+            transport.call_evidence = Some(litellm_traces::CallEvidenceKind::Complete);
+            owned(transport, "team", "", "key")
+        }))
+        .collect();
+    let logs: Vec<_> = std::iter::once(spend("chatcmpl-1", "chatcmpl-1", "team", "", "key", 0.5))
+        .chain(unrelated_spend.then(|| SpendByResponseIdsRow {
+            trace_id: "trace".into(),
+            span_id: "tool-http".into(),
+            ..spend("unrelated", "unrelated", "team", "", "key", 0.75)
+        }))
+        .collect();
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.agents[0].spend, expected);
+}
+
+#[rstest]
+#[case::agreeing_ids(
+    litellm_traces::CallKey::Transport,
+    "call-a",
+    Some("response-a"),
+    Some(0.25)
+)]
+#[case::conflicting_gateway_id(litellm_traces::CallKey::Transport, "call-b", None, None)]
+#[case::conflicting_response_id(
+    litellm_traces::CallKey::Transport,
+    "call-a",
+    Some("response-b"),
+    None
+)]
+#[case::conflicting_gateway_and_response(
+    litellm_traces::CallKey::Transport,
+    "call-b",
+    Some("response-b"),
+    None
+)]
+#[case::agreeing_gateway_attempt(
+    litellm_traces::CallKey::GatewayAttempt,
+    "call-a",
+    Some("response-a"),
+    Some(0.25)
+)]
+#[case::conflicting_gateway_attempt(litellm_traces::CallKey::GatewayAttempt, "call-b", None, None)]
+fn gateway_attempt_identifiers_must_match_one_spend_row(
+    #[case] transport: litellm_traces::CallKey,
+    #[case] call_id: &str,
+    #[case] response_id: Option<&str>,
+    #[case] expected: Option<f64>,
+) {
+    let keys = [
+        transport,
+        litellm_traces::CallKey::LiteLlmRequest(call_id.into()),
+    ]
+    .into_iter()
+    .chain(response_id.map(|id| litellm_traces::CallKey::ProviderResponse(id.into())))
+    .collect();
+    let rows = [
+        owned(
+            row("agent", "", "agent", "agent", "agent"),
+            "team",
+            "",
+            "key",
+        ),
+        owned(llm("call", "agent", "agent", ""), "team", "", "key"),
+        owned(
+            TraceSpansRow {
+                trace_id: "trace".into(),
+                call_keys: keys,
+                call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
+                ..row("attempt", "call", "gateway.request", "framework", "")
+            },
+            "team",
+            "",
+            "key",
+        ),
+    ];
+    let logs = [
+        SpendByResponseIdsRow {
+            litellm_call_id: "call-a".into(),
+            trace_id: "trace".into(),
+            span_id: "attempt".into(),
+            ..spend("request-a", "response-a", "team", "", "key", 0.25)
+        },
+        SpendByResponseIdsRow {
+            litellm_call_id: "call-b".into(),
+            trace_id: "trace".into(),
+            span_id: "other-attempt".into(),
+            ..spend("request-b", "response-b", "team", "", "key", 0.5)
+        },
+    ];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+    assert_eq!(trace.agents[0].spend, expected);
+    assert_eq!(trace.spans[2].spend, expected);
+}
+
+#[rstest]
+#[case::legacy_row("", Some(0.5))]
+#[case::other_call("other-call", None)]
+fn gateway_id_miss_only_vetoes_rows_that_carry_a_call_id(
+    #[case] logged_call_id: &str,
+    #[case] expected: Option<f64>,
+) {
+    let mut transport = row("http", "llm", "gateway.request", "framework", "");
+    transport.trace_id = "trace".into();
+    transport.call_keys = vec![
+        "transport:".parse().unwrap(),
+        "litellm_request:gateway-call".parse().unwrap(),
+    ];
+    transport.call_evidence = Some(litellm_traces::CallEvidenceKind::Complete);
+    let mut call = llm("llm", "agent", "agent", "");
+    call.trace_id = "trace".into();
+    let rows = [
+        owned(
+            row("agent", "", "agent", "agent", "agent"),
+            "team",
+            "",
+            "key",
+        ),
+        owned(call, "team", "", "key"),
+        owned(transport, "team", "", "key"),
+    ];
+    let mut logged = spend("chatcmpl-1", "chatcmpl-1", "team", "", "key", 0.5);
+    logged.trace_id = "trace".into();
+    logged.span_id = "http".into();
+    logged.litellm_call_id = logged_call_id.into();
+    let trace = resolve_trace("trace", "ref", &rows, &[logged]).unwrap();
+    assert_eq!(trace.summary.spend, expected);
+}
+
+#[rstest]
 fn listed_summary_keeps_rollup_counts_with_unknown_cost() {
     let summary = listed_summary(&ListTracesRow {
         trace_id: "t1".into(),
@@ -927,4 +1142,188 @@ fn empty_root_preview_uses_the_earliest_agent_or_model_input() {
     assert_eq!(trace.summary.name, rows[1].name);
     assert_eq!(trace.spans[0].start_offset_ms, 20.0);
     assert_eq!(trace.spans[3].start_offset_ms, 10.0);
+}
+
+#[rstest]
+#[case::oldest_first(false)]
+#[case::newest_first(true)]
+fn repeated_request_ids_preserve_storage_identity(#[case] reverse: bool) {
+    let first = SpendByResponseIdsRow {
+        start_ms: 100,
+        ..spend("same", "response", "team", "", "key", 0.25)
+    };
+    let second = SpendByResponseIdsRow {
+        start_ms: 200,
+        ..spend("same", "response", "team", "", "key", 0.5)
+    };
+    let logs = if reverse {
+        [second, first]
+    } else {
+        [first, second]
+    };
+    let rows = [owned(
+        llm("call", "", "agent", "response"),
+        "team",
+        "",
+        "key",
+    )];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(trace.summary.spend, None);
+    assert_eq!(trace.spans[0].spend, None);
+}
+
+#[rstest]
+#[case::gateway(false)]
+#[case::transport(true)]
+fn independent_key_disambiguates_repeated_request_ids(#[case] transport: bool) {
+    let rows = [owned(
+        TraceSpansRow {
+            trace_id: "trace".into(),
+            call_keys: vec![
+                litellm_traces::CallKey::ProviderResponse("response".into()),
+                if transport {
+                    litellm_traces::CallKey::Transport
+                } else {
+                    litellm_traces::CallKey::LiteLlmRequest("gateway".into())
+                },
+            ],
+            ..llm("call", "", "agent", "response")
+        },
+        "team",
+        "",
+        "key",
+    )];
+    let logs = [
+        SpendByResponseIdsRow {
+            start_ms: 100,
+            litellm_call_id: "gateway".into(),
+            trace_id: "trace".into(),
+            span_id: "call".into(),
+            ..spend("same", "response", "team", "", "key", 0.25)
+        },
+        SpendByResponseIdsRow {
+            start_ms: 200,
+            litellm_call_id: "other".into(),
+            ..spend("same", "response", "team", "", "key", 0.5)
+        },
+    ];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(trace.summary.spend, Some(0.25));
+    assert_eq!(trace.spans[0].spend, Some(0.25));
+}
+
+#[rstest]
+#[case::same_row(true, Some(0.25))]
+#[case::distinct_rows(false, Some(0.75))]
+fn totals_deduplicate_only_equal_storage_identities(
+    #[case] duplicate: bool,
+    #[case] expected: Option<f64>,
+) {
+    let rows = [
+        owned(llm("first", "", "agent", "a"), "team", "", "key"),
+        owned(
+            llm("second", "", "agent", if duplicate { "a" } else { "b" }),
+            "team",
+            "",
+            "key",
+        ),
+    ];
+    let logs = [
+        SpendByResponseIdsRow {
+            start_ms: 100,
+            ..spend("same", "a", "team", "", "key", 0.25)
+        },
+        SpendByResponseIdsRow {
+            start_ms: if duplicate { 100 } else { 200 },
+            ..spend(
+                "same",
+                if duplicate { "a" } else { "b" },
+                "team",
+                "",
+                "key",
+                if duplicate { 0.25 } else { 0.5 },
+            )
+        },
+    ];
+    assert_eq!(
+        resolve_trace("trace", "ref", &rows, &logs)
+            .unwrap()
+            .summary
+            .spend,
+        expected
+    );
+}
+
+#[rstest]
+fn conflicting_keys_cannot_agree_on_request_id_alone() {
+    let rows = [
+        owned(
+            TraceSpansRow {
+                call_keys: vec![litellm_traces::CallKey::LiteLlmRequest("gateway".into())],
+                ..llm("wrapper", "", "agent", "")
+            },
+            "team",
+            "",
+            "key",
+        ),
+        owned(
+            llm("call", "wrapper", "agent", "response"),
+            "team",
+            "",
+            "key",
+        ),
+    ];
+    let logs = [
+        SpendByResponseIdsRow {
+            start_ms: 100,
+            ..spend("same", "response", "team", "", "key", 0.25)
+        },
+        SpendByResponseIdsRow {
+            start_ms: 200,
+            litellm_call_id: "gateway".into(),
+            ..spend("same", "other", "team", "", "key", 0.5)
+        },
+    ];
+    assert_eq!(
+        resolve_trace("trace", "ref", &rows, &logs)
+            .unwrap()
+            .summary
+            .spend,
+        None
+    );
+}
+
+#[rstest]
+#[case::gateway("gateway", "provider-id", "team", "key", Some(0.25))]
+#[case::legacy("", "gateway", "team", "key", Some(0.25))]
+#[case::conflict("other", "gateway", "team", "key", None)]
+#[case::other_team("gateway", "provider-id", "other-team", "key", None)]
+#[case::other_key("gateway", "provider-id", "team", "other-key", None)]
+fn gateway_lookup_respects_legacy_fallback_and_ownership(
+    #[case] call_id: &str,
+    #[case] request_id: &str,
+    #[case] team: &str,
+    #[case] key: &str,
+    #[case] expected: Option<f64>,
+) {
+    let rows = [owned(
+        TraceSpansRow {
+            call_keys: vec![litellm_traces::CallKey::LiteLlmRequest("gateway".into())],
+            ..llm("call", "", "agent", "")
+        },
+        "team",
+        "",
+        "key",
+    )];
+    let logs = [SpendByResponseIdsRow {
+        litellm_call_id: call_id.into(),
+        ..spend(request_id, "provider", team, "", key, 0.25)
+    }];
+    assert_eq!(
+        resolve_trace("trace", "ref", &rows, &logs)
+            .unwrap()
+            .summary
+            .spend,
+        expected
+    );
 }

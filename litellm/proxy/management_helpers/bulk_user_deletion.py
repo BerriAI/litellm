@@ -34,7 +34,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # same audit path /key/delete uses

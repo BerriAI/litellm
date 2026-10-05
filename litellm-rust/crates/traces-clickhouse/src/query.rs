@@ -502,7 +502,7 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Quer
     Ok(QueryHelp {
         dialect: "ClickHouse SQL",
         access: "Request-log visibility enforced by ClickHouse row policies; proxy admins see all rows, users see their own rows and permitted teams",
-        response: "ClickHouse JSON envelope: meta, data, rows, statistics; 64-bit integers may be strings",
+        response: "JSON object {\"data\": [rows]}; each row maps selected columns to values; 64-bit integers may be strings",
         examples,
         gotchas,
         guide: rendered,
