@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
-from litellm.proxy.management.teams.access import TeamAccess
+from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management.users.service import PrismaOrgRoles
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail

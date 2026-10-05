@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
-from litellm.proxy.management.teams.access import (
+from litellm.proxy.management.teams.authz import (
     TEAM_ADMIN_ONLY,
     TEAM_OR_ORG_ADMIN,
     TeamAccess,
@@ -173,3 +173,10 @@ async def test_reads_roster_falls_back_to_the_teams_org_admins(
     who: UserAPIKeyAuth, on_team: LiteLLM_TeamTable, expected: bool
 ) -> None:
     assert await TeamAccess(org_roles=BOSS_OF_ORG_1).reads_roster(who, on_team) is expected
+
+
+def test_the_old_access_module_still_serves_the_published_enterprise_wheel() -> None:
+    from litellm.proxy.management.teams import access, authz
+
+    assert access.is_team_admin is authz.is_team_admin
+    assert set(access.__all__) <= set(dir(authz))

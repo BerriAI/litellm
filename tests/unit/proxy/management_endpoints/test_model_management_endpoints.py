@@ -44,6 +44,68 @@ async def _passthrough_row(update_data):
     return update_data
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["openai/test-model", "auto_router/complexity_router"])
+@pytest.mark.parametrize("team_role", ["admin", "user"])
+@pytest.mark.parametrize("team_key", [False, True])
+async def test_model_creation_disabled_before_any_write(
+    monkeypatch: pytest.MonkeyPatch, model: str, team_role: str, team_key: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+    prisma: Final = MagicMock()
+    prisma.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=SimpleNamespace(
+        ui_settings={"disable_model_add_for_internal_users": True},
+    ))
+    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=LiteLLM_TeamTable(
+        team_id="test_team", members_with_roles=[Member(user_id="test_user", role=team_role)],
+        team_member_permissions=["/auto_router/manage"],
+    ))
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {"disable_model_add_for_internal_users": False})
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    with pytest.raises(ProxyException, match="disable_model_add_for_internal_users") as error:
+        await add_new_model(
+            model_params=Deployment(
+                model_name="creation-policy-test",
+                litellm_params={"model": model, "disable_model_add_for_internal_users": False},
+                model_info={"team_id": "test_team"},
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER,
+                team_id="test_team" if team_key else None,
+            ),
+        )
+    assert error.value.code == "403"
+    prisma.db.litellm_proxymodeltable.create.assert_not_called()
+    prisma.db.litellm_teamtable.update.assert_not_called()
+    prisma.db.litellm_teamtable.find_unique.assert_not_called()
+    prisma.db.litellm_uisettings.find_unique.assert_not_called()
+    prisma.writer_db.litellm_uisettings.find_unique.assert_awaited_once_with(where={"id": "ui_settings"})
+
+
+@pytest.mark.asyncio
+async def test_model_creation_fails_closed_when_authoritative_policy_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+    prisma: Final = MagicMock()
+    prisma.writer_db.litellm_uisettings.find_unique = AsyncMock(side_effect=RuntimeError("writer unavailable"))
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {"disable_model_add_for_internal_users": False})
+    with pytest.raises(ProxyException, match="Unable to verify model creation policy") as error:
+        await add_new_model(
+            Deployment(model_name="cannot-create", litellm_params={"model": "openai/test-model"}),
+            UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+    assert error.value.code == "503"
+    prisma.db.litellm_proxymodeltable.create.assert_not_called()
+    prisma.db.litellm_teamtable.find_unique.assert_not_called()
+
+
 async def _write_empty_row(**kwargs):
     return await kwargs["write_row"]({})
 
@@ -376,6 +438,7 @@ class TestModelManagementAuthChecks:
         )
 
         mock_prisma = MagicMock()
+        mock_prisma.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
         with (
             patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
             patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
@@ -506,6 +569,7 @@ class TestModelManagementAuthChecks:
         )
 
         mock_prisma = MagicMock()
+        mock_prisma.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
         with (
             patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
             patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
@@ -7396,7 +7460,7 @@ class TestTeamMemberAutoRouterWrites:
             litellm_proxymodeltable=table,
             tx=MagicMock(return_value=context),
         )
-        return MagicMock(db=db, transaction=transaction)
+        return MagicMock(db=db, writer_db=MagicMock(litellm_uisettings=MagicMock(find_unique=AsyncMock(return_value=None))), transaction=transaction)
 
     @staticmethod
     def _catalog() -> Router:
@@ -7880,6 +7944,7 @@ class TestModelManagementActorEdges:
 
         actor: Final = UserAPIKeyAuth(user_id="internal-user", user_role=LitellmUserRoles.INTERNAL_USER)
         prisma: Final = MagicMock()
+        prisma.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
         deployment: Final = Deployment(
             model_name="internal-model",
             litellm_params=LiteLLM_Params(model="openai/test-model"),
@@ -8097,6 +8162,7 @@ class TestModelManagementActorEdges:
     def test_post_model_new_binds_to_actor_guard(self):
         actor: Final = UserAPIKeyAuth(user_id="internal-user", user_role=LitellmUserRoles.INTERNAL_USER)
         prisma: Final = MagicMock()
+        prisma.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma),  # test-quality-ok: [TQ008] route reads proxy-server state through its only test seam
             patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: [TQ008] route reads proxy-server state through its only test seam
@@ -8299,6 +8365,7 @@ class TestAddNewModelBlockedAuthGate:
 
         non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
         mock_prisma = MagicMock()
+        mock_prisma.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
 
         with (
             patch(  # test-quality-ok: the proxy wiring under test is what this patches
@@ -8339,6 +8406,7 @@ class TestAddNewModelBlockedAuthGate:
 
         non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
         mock_prisma = MagicMock()
+        mock_prisma.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
         created_row = MagicMock()
         created_row.model_id = "blocked-gate-create-2"
         created_row.model_dump_json.return_value = "{}"
@@ -8614,6 +8682,7 @@ class TestNonAdminCannotPersistWifFieldsOnModel:
 
         non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
         mock_prisma = MagicMock()
+        mock_prisma.writer_db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
 
         with (
             patch(  # test-quality-ok: the proxy wiring under test is what this patches

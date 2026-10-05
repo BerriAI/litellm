@@ -7,7 +7,7 @@ from typing import Final
 import pytest
 
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, TeamMemberBudgetSource, UserAPIKeyAuth
-from litellm.proxy.management.teams.access import TeamAccess
+from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management.teams.repository import TeamMemberRow
 from litellm.proxy.management.teams.service import (
     TEAM_MEMBERS_LIST_SPEC,

@@ -8,7 +8,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
 from litellm.proxy.list_api.list_framework import handle_list
-from litellm.proxy.management.teams.access import TeamAccess
+from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management.teams.dependencies import get_roster_db, get_team_access, get_teams
 from litellm.proxy.management.teams.repository import RawQuery, TeamMemberRows
 from litellm.proxy.management.teams.schemas import TeamMemberListItem

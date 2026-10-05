@@ -6,7 +6,7 @@ from typing import Final, Protocol, TypeAlias
 
 from litellm.proxy._types import LiteLLM_TeamTable, TeamMemberBudgetSource, UserAPIKeyAuth
 from litellm.proxy.list_api.list_framework import FilterSpec, ListSpec, Scope, ScopeAll
-from litellm.proxy.management.teams.access import TeamAccess
+from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management.teams.repository import TeamMemberRow
 from litellm.proxy.management.teams.schemas import TeamMemberListItem
 
