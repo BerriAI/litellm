@@ -2574,10 +2574,15 @@ class ManagedResponsesWebSocketHandler:
             verbose_logger.debug("ManagedResponsesWS: failed to serialize chunk: %s", exc)
             return None
 
-    async def _send_error(self, message: str, error_type: str = "server_error") -> None:
+    async def _send_error(self, message: str, error_type: str = "server_error", status_code: object = 500) -> None:
+        status: Final = (
+            status_code
+            if isinstance(status_code, int) and not isinstance(status_code, bool) and 400 <= status_code < 600
+            else 500
+        )
         try:
             await self.websocket.send_text(
-                json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
+                json.dumps({"type": "error", "status": status, "error": {"type": error_type, "message": message}})
             )
         except Exception:
             pass
@@ -2680,7 +2685,7 @@ class ManagedResponsesWebSocketHandler:
         try:
             msg_obj: Final = _load_json_object(raw_message)
         except json.JSONDecodeError:
-            await self._send_error("Invalid JSON in response.create event", "invalid_request_error")
+            await self._send_error("Invalid JSON in response.create event", "invalid_request_error", status_code=400)
             return None
         if msg_obj.get("type") != "response.create":
             # Silently ignore non-response.create messages (e.g. warmup pings)
@@ -2954,7 +2959,7 @@ class ManagedResponsesWebSocketHandler:
                 self.quota_callbacks, self.user_api_key_dict, self.model_group or self.model, raw_message
             )
         except RateLimitError as e:
-            await self._send_error(str(e), error_type="rate_limit_exceeded")
+            await self._send_error(str(e), error_type="rate_limit_exceeded", status_code=429)
             return
 
         call_kwargs: Final = self._build_base_call_kwargs(msg_obj)
@@ -2984,7 +2989,7 @@ class ManagedResponsesWebSocketHandler:
             completed_event: Final = await self._stream_and_forward(model, call_kwargs)
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
-            await self._send_error(str(exc))
+            await self._send_error(str(exc), status_code=getattr(exc, "status_code", 500))
             return
 
         self._save_turn_history(completed_event, prior_history, current_messages)
