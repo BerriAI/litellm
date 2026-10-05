@@ -1276,6 +1276,35 @@ async fn listed_runs_are_read_once_until_a_live_run_expires() {
 
 #[rstest]
 #[tokio::test]
+async fn listed_run_live_at_its_cutoff_rereads_spend_after_live_ttl() {
+    let store = FakeStore::default();
+    store.set_list_runs(vec![run("trace", "ref")]);
+    store.set_run_spans(vec![SpanRow {
+        kind: ObservationType::Llm,
+        litellm_request_id: "response".into(),
+        call_keys: vec![CallKey::ProviderResponse("response".into())],
+        call_evidence: Some(CallEvidenceKind::Complete),
+        ..span(0)
+    }]);
+    store.state.lock().unwrap().spend = vec![spend_row("response", 1.5)];
+    let reader = TraceReader::new(usize::MAX);
+    let access = access();
+    let filter = RunFilter {
+        as_of_ms: (START_NS / 1_000_000 + 60_000) as u64,
+        ..everything()
+    };
+    let page = newest(1);
+    let list = || reader.list_traces(&store, &access, &filter, RunOrder::NEWEST, &page);
+
+    assert_eq!(list().await.unwrap().data[0].spend, Some(1.5));
+    store.state.lock().unwrap().spend = vec![spend_row("response", 2.5)];
+    tokio::time::sleep(LIVE_TTL + Duration::from_millis(200)).await;
+
+    assert_eq!(list().await.unwrap().data[0].spend, Some(2.5));
+}
+
+#[rstest]
+#[tokio::test]
 async fn concurrent_pages_of_an_evicted_snapshot_share_one_storage_read() {
     let access = access();
     let first = TraceReader::new(usize::MAX)

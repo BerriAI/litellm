@@ -8,7 +8,7 @@ use litellm_traces::{
 use crate::{
     ReadError, SnapshotKey, TraceReader, TraceStore,
     cache::{Freshness, ListedRun},
-    reader::{map_store_error, now_ms, settle, spans},
+    reader::{map_store_error, settle, spans},
     spend::{spend, spend_window, spend_within},
     store::StoreError,
 };
@@ -179,7 +179,7 @@ async fn resolve_runs<S: TraceStore>(
             resolve_trace(&row.trace_id, &row.trace_ref, spans, spend).map(|trace| {
                 ListedRun::Resolved(
                     Box::new(trace.summary),
-                    Freshness::of(spans, true, now_ms()),
+                    Freshness::of(spans, true, snapshot_ms),
                 )
             })
         })

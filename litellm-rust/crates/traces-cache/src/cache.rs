@@ -5,7 +5,7 @@ use moka::{Expiry, future::Cache};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::Error;
+use crate::{Error, reader::now_ms};
 
 pub const LIVE_TTL: Duration = Duration::from_secs(5);
 pub const SETTLED_TTL: Duration = Duration::from_secs(10 * 60);
@@ -79,7 +79,7 @@ impl Freshness {
             .map(|row| row.start_ns.saturating_add_unsigned(row.duration_ns) / 1_000_000)
             .max()
             .unwrap_or(i64::MAX);
-        let quiet_ms = i64::try_from(snapshot_ms)
+        let quiet_ms = i64::try_from(snapshot_ms.min(now_ms()))
             .unwrap_or(i64::MAX)
             .saturating_sub(last_end_ms);
         if spend_known && quiet_ms >= SETTLED_AFTER_MS as i64 {
