@@ -1,8 +1,9 @@
 import base64
 from collections.abc import Mapping, Sequence
-from typing import Final
+from typing import Annotated, Final
 
 from httpx import Headers, Response
+from pydantic import StringConstraints, TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.audio_utils.subtitle_utils import SUBTITLE_RESPONSE_FORMATS
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -211,7 +212,25 @@ def _build_interaction_request(
     return configured_request
 
 
-def _language_config(language: object) -> GeminiTranscriptionConfig:
+_LANGUAGE_CODES_ADAPTER: Final = TypeAdapter(
+    tuple[Annotated[str, StringConstraints(strict=True, strip_whitespace=True, min_length=1)], ...]
+)
+
+
+def _language_config(language: object, language_codes: object) -> GeminiTranscriptionConfig:
+    if language_codes is not None:
+        try:
+            codes: Final = (
+                _LANGUAGE_CODES_ADAPTER.validate_json(language_codes)
+                if isinstance(language_codes, str)
+                else _LANGUAGE_CODES_ADAPTER.validate_python(language_codes)
+            )
+        except ValidationError:
+            raise GeminiError(status_code=400, message="language_codes must be a list of non-empty language strings")
+        multiple_language_config: Final[GeminiTranscriptionConfig] = {
+            "language_codes": tuple(normalize_transcription_language_to_bcp47(code) for code in codes),
+        }
+        return multiple_language_config
     if not isinstance(language, str) or not language:
         return _EMPTY_TRANSCRIPTION_CONFIG
     language_config: Final[GeminiTranscriptionConfig] = {
@@ -229,7 +248,7 @@ def _timestamp_config(timestamp_granularities: object, response_format: object) 
 
 def _build_transcription_config(optional_params: Mapping[str, object]) -> GeminiTranscriptionConfig:
     transcription_config: Final[GeminiTranscriptionConfig] = {
-        **_language_config(optional_params.get("language")),
+        **_language_config(optional_params.get("language"), optional_params.get("language_codes")),
         **_timestamp_config(optional_params.get("timestamp_granularities"), optional_params.get("response_format")),
     }
     return transcription_config
