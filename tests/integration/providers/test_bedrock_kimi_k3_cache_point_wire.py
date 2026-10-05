@@ -568,7 +568,13 @@ def _head_strips() -> bool:
     return os.environ.get("INTEGRATION_LEG", "head") == "head"
 
 
-def _owned_config(wire: Wire, directory: Path, *, names: Iterable[str] = tuple(_NAMES)) -> Path:
+def _owned_config(
+    wire: Wire,
+    directory: Path,
+    *,
+    names: Iterable[str] = tuple(_NAMES),
+    model_info: Mapping[str, Mapping[str, JsonValue]] = _MODEL_INFO,
+) -> Path:
     base: Final = _JSON.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     config: Final[dict[str, JsonValue]] = {
         **base,
@@ -582,7 +588,7 @@ def _owned_config(wire: Wire, directory: Path, *, names: Iterable[str] = tuple(_
                     **_AWS,
                     **({"cache_control_injection_points": _INJECTION[name]} if name in _INJECTION else {}),
                 },
-                **({"model_info": dict(_MODEL_INFO[name])} if name in _MODEL_INFO else {}),
+                **({"model_info": dict(model_info[name])} if name in model_info else {}),
             }
             for name in names
         ],
@@ -1181,16 +1187,22 @@ def test_m08_an_arn_without_the_flag_still_gets_cache_points(gateway: Gateway) -
 
 
 @pytest.mark.timeout(600)
-def test_m12_a_deployment_flag_true_on_kimi_overrides_the_cost_map_row(gateway: Gateway) -> None:
-    with wire_server(_peer()) as wire, gateway.scenario() as scenario:
-        name: Final = _deployment(
-            gateway, scenario, wire, f"bedrock/{_KIMI_BASE}", {"supports_prompt_cache_breakpoint": True}
+def test_m12_a_deployment_flag_true_on_kimi_overrides_the_cost_map_row(gateway: Gateway, tmp_path: Path) -> None:
+    with wire_server(_peer()) as wire:
+        config: Final = _owned_config(
+            wire,
+            tmp_path,
+            names=("kimi-base",),
+            model_info={"kimi-base": {"supports_prompt_cache_breakpoint": True}},
         )
-        outcome, received = _observe_at(gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
-        _assert_answered(outcome)
-        assert received.model == _KIMI_BASE, received.model
-        assert received.cache_points == 2, received.body
-        _success_row(outcome.response_id)
+        with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned:
+            outcome, received = _observe_at(
+                owned.gateway, wire, "chat", _chat_body("kimi-base", _prompt(), _SYSTEM_AND_USER)
+            )
+            _assert_answered(outcome)
+            assert received.model == _KIMI_BASE, received.model
+            assert received.cache_points == 2, received.body
+            _success_row(outcome.response_id)
 
 
 @pytest.mark.timeout(600)
