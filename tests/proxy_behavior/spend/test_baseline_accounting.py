@@ -29,7 +29,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 @asynccontextmanager
 async def _transaction(db: Prisma, *, before_commit: bool = False, after_commit: bool = False) -> AsyncIterator[SupportsRawQueries]:
-    async with db.tx() as tx:
+    async with db.tx(timeout=timedelta(seconds=10)) as tx:
         yield tx
         if before_commit:
             raise RuntimeError("injected pre-commit interruption")
