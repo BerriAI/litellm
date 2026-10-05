@@ -146,6 +146,17 @@ class HeldStatementRelay:
         )
 
 
+class TriggerScanner:
+    def __init__(self, trigger: bytes) -> None:
+        self._trigger: Final = trigger
+        self._tail: bytes = b""
+
+    def feed(self, chunk: bytes) -> bool:
+        window: Final = self._tail + chunk
+        self._tail = window[-(len(self._trigger) - 1) :]
+        return self._trigger in window
+
+
 class DroppedConnectionRelay:
     def __init__(self, upstream_host: str, upstream_port: int, trigger: bytes) -> None:
         self.port: Final = _free_port()
@@ -182,15 +193,14 @@ class DroppedConnectionRelay:
         server_reader, server_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
 
         async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, inspect: bool) -> None:
-            tail = b""  # rebind-ok: carries the previous read's end so a trigger split across reads still matches
+            scanner: Final = TriggerScanner(self._trigger)
             try:
                 while chunk := await reader.read(65536):
-                    window: Final = tail + chunk
-                    if inspect and self._armed.is_set() and self._trigger in window:
+                    matched: Final = scanner.feed(chunk)
+                    if inspect and self._armed.is_set() and matched:
                         self.dropped.set()
                         client_writer.close()
                         return
-                    tail = window[-(len(self._trigger) - 1) :]
                     writer.write(chunk)
                     await writer.drain()
             except (ConnectionError, asyncio.IncompleteReadError):
