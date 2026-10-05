@@ -194,12 +194,11 @@ def test_seed_only_with_no_cli_count_preserves_env_controls(tmp_path: Path) -> N
     proc = _run(
         tmp_path,
         "parse_args --seed-only; master_key=sk-local; py() { "
-        'printf "%s %s %s\\n" "$LENS_DEV_SEED_COPIES" "$LENS_DEV_SEED_BATCH_COPIES" "$@"; }; py=py; seed_data',
+        'printf "%s %s\\n" "$LENS_DEV_SEED_COPIES" "$@"; }; py=py; seed_data',
         LENS_DEV_SEED_COPIES="3",
-        LENS_DEV_SEED_BATCH_COPIES="1",
     )
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.startswith("3 1 -m")
+    assert proc.stdout.startswith("3 -m")
 
 
 def test_proxy_uses_this_checkouts_ui_build(tmp_path: Path) -> None:

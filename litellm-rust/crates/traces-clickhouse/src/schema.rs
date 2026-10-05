@@ -3,8 +3,7 @@ use litellm_migrate::Migration;
 use serde::Serialize;
 use std::time::Duration;
 
-use super::Connection;
-use super::Error;
+use super::{Connection, Error};
 
 const SCHEMA_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 

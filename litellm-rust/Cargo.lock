@@ -4156,6 +4156,7 @@ dependencies = [
  "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-traces",
+ "litellm-traces-cache",
  "litellm-traces-clickhouse",
  "litellm-tracing",
  "prost",
@@ -4474,13 +4475,17 @@ dependencies = [
 name = "litellm-traces-cache"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "litellm-traces",
  "moka",
  "rstest",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.19",
+ "time",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4488,11 +4493,9 @@ name = "litellm-traces-clickhouse"
 version = "0.1.0"
 dependencies = [
  "askama",
- "base64 0.22.1",
  "flate2",
  "futures-util",
  "hmac 0.12.1",
- "itertools 0.14.0",
  "jsonschema",
  "litellm-http",
  "litellm-migrate",
@@ -4511,7 +4514,6 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "tokio",
- "tracing",
  "url",
  "wiremock",
 ]
