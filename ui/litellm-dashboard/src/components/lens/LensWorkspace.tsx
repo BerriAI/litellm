@@ -19,7 +19,14 @@ import { LensModeSwitch, type SetupBadge } from "./LensModeSwitch";
 import { frameCard } from "./ui/frame";
 import { investigationActivity, listPollInterval } from "./model/status";
 import { cn } from "@/lib/cva.config";
-import { useDialogRoute, useInvestigateRoute, useLensRoute, type LensDialog, type LensTab } from "./route";
+import {
+  useDemoRoute,
+  useDialogRoute,
+  useInvestigateRoute,
+  useLensRoute,
+  type LensDialog,
+  type LensTab,
+} from "./route";
 import { LensIntroDialog, useLensIntro } from "./onboarding/LensIntroDialog";
 import { OnboardingProvider, type Onboarding } from "./onboarding/OnboardingContext";
 import { traceRefOf, useOpenTraceRouting, useTracingSetupRoute } from "@/components/lens/traces/routing";
@@ -84,7 +91,8 @@ const PANEL =
 
 function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">) {
   const accessToken = useLensAccessToken();
-  const { tab, lensId, demo, settingUp, setTab, setDemo, setSetup } = useLensRoute();
+  const { tab, lensId, demo, settingUp, setTab, setSetup } = useLensRoute();
+  const setDemo = useDemoRoute();
   const { dialog, openDialog } = useDialogRoute();
   const investigate = useInvestigateRoute();
   const { openTrace } = useOpenTraceRouting();

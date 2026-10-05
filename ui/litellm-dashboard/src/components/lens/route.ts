@@ -53,8 +53,6 @@ const SESSION_PARSERS = {
 };
 const nulls = <K extends string>(keys: readonly K[]) =>
   Object.fromEntries(keys.map((key) => [key, null])) as Record<K, null>;
-/** Switching the sample session clears every Lens key but the tab so ids never cross between live and sample data. */
-const CLEARED_SESSION = nulls(Object.keys(SESSION_PARSERS).filter((key) => key !== "tab"));
 const CLEARED_RESULTS = nulls(Object.keys(RESULT_PARSERS));
 const CLEARED_SETUP = nulls(SETUP_KEYS);
 
@@ -65,24 +63,36 @@ export interface LensRoute {
   readonly settingUp: boolean;
   setTab(tab: LensTab): void;
   setLensId(lensId: string | null): void;
-  setDemo(demo: boolean): void;
   setSetup(settingUp: boolean): void;
 }
 
 /** Lens navigation lives in the URL, sample session included, so any view is a shareable link. */
 export function useLensRoute(): LensRoute {
-  const [{ tab, lens, demo, setup }, setParams] = useQueryStates(SESSION_PARSERS, { history: "push" });
+  const [{ tab, lens, demo, setup }, setParams] = useQueryStates(
+    { ...LENS_PARSERS, ...ISSUE_PARSERS, ...RESULT_PARSERS },
+    { history: "push" },
+  );
   const setTab = useCallback((next: LensTab) => void setParams({ tab: next }), [setParams]);
   const setLensId = useCallback(
     (next: string | null) => void setParams({ ...CLEARED_RESULTS, lens: next, issue: null }),
     [setParams],
   );
-  const setDemo = useCallback(
-    (next: boolean) => void setParams(next ? { ...CLEARED_SESSION, demo: true } : CLEARED_SESSION),
+  const setSetup = useCallback((next: boolean) => void setParams({ setup: next ? "lens" : null }), [setParams]);
+  return { tab, lensId: lens, demo, settingUp: setup === "lens", setTab, setLensId, setSetup };
+}
+
+const { tab: _tab, ...SWITCHED_PARSERS } = SESSION_PARSERS;
+
+/** Switching the sample session clears every Lens key but the tab so ids never cross between live and sample data. */
+export function useDemoRoute(): (demo: boolean) => void {
+  const [, setParams] = useQueryStates(SWITCHED_PARSERS, { history: "push" });
+  return useCallback(
+    (next: boolean) => {
+      void setParams(null);
+      if (next) void setParams({ demo: true });
+    },
     [setParams],
   );
-  const setSetup = useCallback((next: boolean) => void setParams({ setup: next ? "lens" : null }), [setParams]);
-  return { tab, lensId: lens, demo, settingUp: setup === "lens", setTab, setLensId, setDemo, setSetup };
 }
 
 const ISSUE_ROUTE_PARSERS = { ...ISSUE_PARSERS, lens: LENS_PARSERS.lens, ...RESULT_PARSERS };
@@ -124,18 +134,12 @@ export interface InvestigateScope {
 }
 
 /** Starts a new investigation over the runs a Traces search shows. */
+const NEW_INVESTIGATION = { ...CLEARED_SETUP, tab: "investigations", dialog: "new", target: null } as const;
+
 export function useInvestigateRoute(): (scope: InvestigateScope) => void {
   const [, setParams] = useQueryStates({ ...LENS_PARSERS, ...SETUP_ROUTE_PARSERS }, { history: "push" });
   return useCallback(
-    ({ q, lookbackHours }: InvestigateScope) =>
-      void setParams({
-        ...CLEARED_SETUP,
-        tab: "investigations",
-        dialog: "new",
-        target: null,
-        q,
-        lookback: lookbackHours,
-      }),
+    ({ q, lookbackHours }: InvestigateScope) => void setParams({ ...NEW_INVESTIGATION, q, lookback: lookbackHours }),
     [setParams],
   );
 }

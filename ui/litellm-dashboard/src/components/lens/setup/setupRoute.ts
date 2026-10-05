@@ -9,24 +9,28 @@ import {
   parseAsStringLiteral,
   useQueryStates,
   type inferParserType,
+  type Nullable,
 } from "nuqs";
 import { useCallback } from "react";
 import { RUN_FILTER_PARSERS } from "../traces/routing";
 import { watches } from "../model/watches";
 import { investigationDefaults, SETUP_STEPS, type InvestigationInput, type SetupStep } from "./investigationSchema";
 
+const NEW_DRAFT = investigationDefaults(undefined, "new");
+const knownWatch = new Set(watches.map((watch) => watch.id));
+
 /** A new investigation's draft lives in the URL, so a search on the Traces tab can open setup already filled in. */
 export const SETUP_DRAFT_PARSERS = {
   q: RUN_FILTER_PARSERS.q,
-  name: parseAsString,
-  lookback: parseAsInteger,
-  sample: parseAsFloat,
+  name: parseAsString.withDefault(NEW_DRAFT.name),
+  lookback: parseAsInteger.withDefault(NEW_DRAFT.selection.lookback_hours),
+  sample: parseAsFloat.withDefault(NEW_DRAFT.selection.sample_percent),
   max: parseAsInteger,
-  context: parseAsString,
-  watch: parseAsArrayOf(parseAsString),
-  checks: parseAsArrayOf(parseAsString),
-  monitor: parseAsBoolean,
-  every: parseAsInteger,
+  context: parseAsString.withDefault(NEW_DRAFT.context),
+  watch: parseAsArrayOf(parseAsString).withDefault(NEW_DRAFT.watching),
+  checks: parseAsArrayOf(parseAsString).withDefault([]),
+  monitor: parseAsBoolean.withDefault(NEW_DRAFT.repeat),
+  every: parseAsInteger.withDefault(NEW_DRAFT.interval),
 };
 
 export const SETUP_STEP_PARSERS = { step: parseAsStringLiteral(SETUP_STEPS) };
@@ -37,52 +41,46 @@ export const SETUP_KEYS = [...Object.keys(SETUP_DRAFT_PARSERS), ...Object.keys(S
 );
 
 export type SetupDraftParams = inferParserType<typeof SETUP_DRAFT_PARSERS>;
+type SetupDraftUpdate = Nullable<SetupDraftParams>;
 
 export const DRAFT_FIELDS = ["name", "selection", "context", "watching", "questions", "repeat", "interval"] as const;
 export type DraftFields = Pick<InvestigationInput, (typeof DRAFT_FIELDS)[number]>;
 
-const NEW_DRAFT = investigationDefaults(undefined, "new");
-const knownWatch = new Set(watches.map((watch) => watch.id));
-const sameList = (a: readonly string[], b: readonly string[]) =>
-  a.length === b.length && a.every((value, index) => value === b[index]);
-const unlessDefault = <T>(value: T, fallback: T): T | null => (value === fallback ? null : value);
-
 export function draftFromParams(params: SetupDraftParams): InvestigationInput {
-  const selection = NEW_DRAFT.selection;
   return {
     ...NEW_DRAFT,
-    name: params.name ?? NEW_DRAFT.name,
+    name: params.name,
     selection: {
-      ...selection,
+      ...NEW_DRAFT.selection,
       q: params.q,
-      lookback_hours: params.lookback ?? selection.lookback_hours,
-      sample_percent: params.sample ?? selection.sample_percent,
-      sample_size: params.max ?? selection.sample_size,
+      lookback_hours: params.lookback,
+      sample_percent: params.sample,
+      sample_size: params.max ?? NEW_DRAFT.selection.sample_size,
     },
-    context: params.context ?? NEW_DRAFT.context,
-    watching: params.watch ? params.watch.filter((id) => knownWatch.has(id)) : NEW_DRAFT.watching,
-    questions: (params.checks ?? []).map((instruction) => ({ id: crypto.randomUUID(), instruction, enabled: true })),
-    repeat: params.monitor ?? NEW_DRAFT.repeat,
-    interval: params.every ?? NEW_DRAFT.interval,
+    context: params.context,
+    watching: params.watch.filter((id) => knownWatch.has(id)),
+    questions: params.checks.map((instruction) => ({ id: crypto.randomUUID(), instruction, enabled: true })),
+    repeat: params.monitor,
+    interval: params.every,
   };
 }
 
-/** Only what differs from a blank draft reaches the URL, so an untouched setup keeps a short link. */
-export function paramsFromDraft(draft: DraftFields): SetupDraftParams {
+const finite = (value: number | null) => (value != null && Number.isFinite(value) ? value : null);
+
+/** nuqs drops values equal to their defaults from the URL, so an untouched setup keeps a short link. */
+export function paramsFromDraft(draft: DraftFields): SetupDraftUpdate {
   const { selection } = draft;
-  const checks = draft.questions.map((check) => check.instruction).filter((instruction) => instruction.trim());
-  const finite = (value: number | null) => (value != null && Number.isFinite(value) ? value : null);
   return {
     q: selection.q,
-    name: draft.name || null,
-    lookback: unlessDefault(finite(selection.lookback_hours), NEW_DRAFT.selection.lookback_hours),
-    sample: unlessDefault(finite(selection.sample_percent), NEW_DRAFT.selection.sample_percent),
+    name: draft.name,
+    lookback: finite(selection.lookback_hours),
+    sample: finite(selection.sample_percent),
     max: finite(selection.sample_size),
-    context: draft.context || null,
-    watch: sameList(draft.watching, NEW_DRAFT.watching) ? null : draft.watching,
-    checks: checks.length ? checks : null,
-    monitor: unlessDefault(draft.repeat, NEW_DRAFT.repeat),
-    every: unlessDefault(finite(draft.interval), NEW_DRAFT.interval),
+    context: draft.context,
+    watch: draft.watching,
+    checks: draft.questions.map((check) => check.instruction).filter((instruction) => instruction.trim()),
+    monitor: draft.repeat,
+    every: finite(draft.interval),
   };
 }
 

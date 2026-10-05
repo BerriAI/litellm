@@ -3,7 +3,7 @@ import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/test
 import type { PropsWithChildren } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { useDialogRoute, useInvestigateRoute } from "./route";
+import { useDemoRoute, useDialogRoute, useInvestigateRoute } from "./route";
 
 const renderRoute = <T,>(hook: () => T, searchParams: string) => {
   const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
@@ -22,12 +22,8 @@ describe("setup routes", () => {
     const { result, lastUrl } = renderRoute(useInvestigateRoute, "?tab=traces&q=old&context=stale&step=run");
     await act(async () => result.current({ q: "agent:support status:error", lookbackHours: 168 }));
     await waitFor(() => expect(lastUrl().get("dialog")).toBe("new"));
-    expect(Object.fromEntries(lastUrl())).toEqual({
-      tab: "investigations",
-      dialog: "new",
-      q: "agent:support status:error",
-      lookback: "168",
-    });
+    const expected = { tab: "investigations", dialog: "new", q: "agent:support status:error", lookback: "168" };
+    expect(Object.fromEntries(lastUrl())).toEqual(expected);
   });
 
   it("closing setup clears the draft but keeps the run search the Traces tab shares", async () => {
@@ -38,5 +34,23 @@ describe("setup routes", () => {
     await act(async () => result.current.closeDialog());
     await waitFor(() => expect(lastUrl().has("dialog")).toBe(false));
     expect(Object.fromEntries(lastUrl())).toEqual({ tab: "investigations", q: "agent:support" });
+  });
+});
+
+describe("demo route", () => {
+  const live = "?tab=investigations&lens=l1&run=b1&finding=f1&q=agent:support&dialog=new&name=Refunds";
+
+  it("entering the sample session keeps only the tab so live ids never leak into it", async () => {
+    const { result, lastUrl } = renderRoute(useDemoRoute, live);
+    await act(async () => result.current(true));
+    await waitFor(() => expect(lastUrl().get("demo")).toBe("true"));
+    expect(Object.fromEntries(lastUrl())).toEqual({ tab: "investigations", demo: "true" });
+  });
+
+  it("leaving the sample session drops its ids and keeps the tab", async () => {
+    const { result, lastUrl } = renderRoute(useDemoRoute, "?tab=traces&demo=true&lens=sample&q=agent:demo");
+    await act(async () => result.current(false));
+    await waitFor(() => expect(lastUrl().has("demo")).toBe(false));
+    expect(Object.fromEntries(lastUrl())).toEqual({ tab: "traces" });
   });
 });
