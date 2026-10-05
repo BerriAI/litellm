@@ -41,7 +41,7 @@ load_master_key() {
     return
   fi
   if [ ! -s "$key_file" ]; then
-    (umask 077 && printf 'sk-%s\n' "$(openssl rand -hex 16)" > "$key_file")
+    (umask 077 && printf 'sk-%s\n' "$(openssl rand -hex 24)" > "$key_file")
   fi
   master_key="$(cat "$key_file")"
 }
