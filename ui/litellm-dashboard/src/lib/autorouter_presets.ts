@@ -1,3 +1,4 @@
+import { hydrateOssClassifier } from "@/components/add_model/jev_classifier_config";
 import {
   ComplexityRouterConfigPayload,
   hydrateTierLabels,
@@ -302,6 +303,7 @@ export const buildPresetPrefill = (
   config: ComplexityRouterConfigPayload,
   availability: ModelAvailability,
 ): PresetPrefill => {
+  const classifier = hydrateOssClassifier(config);
   const resolve = (model: string): string => resolveAvailableModel(model, availability) ?? model;
   const resolveTier = (models: string[]): string[] => models.map(resolve);
   // Params key on the model name the preset spells while every tier entry is rewritten to the
@@ -334,11 +336,10 @@ export const buildPresetPrefill = (
       },
       tier_model_params: resolveParamKeys(hydrateTierModelParams(config.tiers, config.tier_model_configs)),
       tier_labels: hydrateTierLabels(config.tier_labels),
-      classifier_type: config.classifier_type,
+      ...classifier,
       heuristic_v2_success_threshold: config.heuristic_v2_success_threshold,
-      jev_classifier_config: config.classifier_type === "jev" ? config.jev_classifier_config : undefined,
       classifier_llm_config:
-        config.classifier_type !== "jev" && config.classifier_llm_config
+        classifier.classifier_type !== "jev" && config.classifier_llm_config
           ? { ...config.classifier_llm_config, model: resolve(config.classifier_llm_config.model) }
           : undefined,
       classifier_context_window_size: config.classifier_context_window_size,

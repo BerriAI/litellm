@@ -171,6 +171,42 @@ async def _session_key_is_live(session_key: str | None) -> bool:
     return True
 
 
+async def get_authenticated_browser_user_id(request: Request) -> str | None:
+    from datetime import datetime, timezone
+
+    from pydantic import TypeAdapter, ValidationError
+
+    from litellm.proxy._types import hash_token
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_key_object
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    user_id, session_key = _session_identity_from_cookie(request)
+    if not user_id or not session_key or prisma_client is None:
+        return None
+    try:
+        auth: Final = (
+            await get_key_object(
+                hash_token(session_key),
+                prisma_client,
+                user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=True,
+            )
+            if session_key.startswith("sk-")
+            else ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(session_key)
+        )
+    except Exception:
+        return None
+    if auth is None or auth.user_id != user_id or auth.blocked or auth.expires is None:
+        return None
+    try:
+        expiration: Final = TypeAdapter(datetime).validate_python(auth.expires)
+    except ValidationError:
+        return None
+    expires: Final = expiration.replace(tzinfo=timezone.utc) if expiration.tzinfo is None else expiration
+    return user_id if expires > datetime.now(timezone.utc) else None
+
+
 async def _byok_session_auth(request: Request) -> UserAPIKeyAuth:
     """Require the UI session cookie, with the embedded session key
     re-resolved against the DB so a revoked (logged-out) session cannot

@@ -129,15 +129,13 @@ async def test_async_stream_emits_input_json_delta_for_bundled_tool_args():
         ):
             input_json_delta_idx = i
 
-    assert (
-        tool_start_idx is not None
-    ), f"Expected content_block_start with type=tool_use; events: {event_types}"
-    assert (
-        input_json_delta_idx is not None
-    ), f"Expected content_block_delta with input_json_delta; events: {event_types}"
-    assert (
-        input_json_delta_idx == tool_start_idx + 1
-    ), "input_json_delta should immediately follow the tool_use content_block_start"
+    assert tool_start_idx is not None, f"Expected content_block_start with type=tool_use; events: {event_types}"
+    assert input_json_delta_idx is not None, (
+        f"Expected content_block_delta with input_json_delta; events: {event_types}"
+    )
+    assert input_json_delta_idx == tool_start_idx + 1, (
+        "input_json_delta should immediately follow the tool_use content_block_start"
+    )
 
     # Verify the delta carries the tool arguments
     delta_event = events[input_json_delta_idx]
@@ -230,8 +228,7 @@ async def test_async_stream_no_extra_delta_when_tool_args_empty():
         and e["delta"].get("type") == "input_json_delta"
     ]
     assert len(input_json_deltas) == 1, (
-        f"Expected exactly 1 input_json_delta (from the follow-up chunk), "
-        f"got {len(input_json_deltas)}"
+        f"Expected exactly 1 input_json_delta (from the follow-up chunk), got {len(input_json_deltas)}"
     )
     assert input_json_deltas[0]["delta"]["partial_json"] == '{"location": "NYC"}'
 
@@ -291,15 +288,13 @@ def test_sync_stream_emits_input_json_delta_for_bundled_tool_args():
         ):
             input_json_delta_idx = i
 
-    assert (
-        tool_start_idx is not None
-    ), f"Expected content_block_start with type=tool_use; events: {event_types}"
-    assert (
-        input_json_delta_idx is not None
-    ), f"Expected content_block_delta with input_json_delta; events: {event_types}"
-    assert (
-        input_json_delta_idx == tool_start_idx + 1
-    ), "input_json_delta should immediately follow the tool_use content_block_start"
+    assert tool_start_idx is not None, f"Expected content_block_start with type=tool_use; events: {event_types}"
+    assert input_json_delta_idx is not None, (
+        f"Expected content_block_delta with input_json_delta; events: {event_types}"
+    )
+    assert input_json_delta_idx == tool_start_idx + 1, (
+        "input_json_delta should immediately follow the tool_use content_block_start"
+    )
     assert json.loads(events[input_json_delta_idx]["delta"]["partial_json"]) == {"location": "Boston"}
 
 
@@ -343,9 +338,7 @@ def test_sync_stream_no_extra_delta_when_tool_args_empty():
     )
 
     wrapper = AnthropicStreamWrapper(
-        completion_stream=iter(
-            [text_chunk, tool_name_chunk, tool_args_chunk, finish_chunk]
-        ),
+        completion_stream=iter([text_chunk, tool_name_chunk, tool_args_chunk, finish_chunk]),
         model="test-model",
     )
 
@@ -374,7 +367,6 @@ def test_sync_stream_no_extra_delta_when_tool_args_empty():
         and e["delta"].get("type") == "input_json_delta"
     ]
     assert len(input_json_deltas) == 1, (
-        f"Expected exactly 1 input_json_delta (from the follow-up chunk), "
-        f"got {len(input_json_deltas)}"
+        f"Expected exactly 1 input_json_delta (from the follow-up chunk), got {len(input_json_deltas)}"
     )
     assert input_json_deltas[0]["delta"]["partial_json"] == '{"location": "NYC"}'
