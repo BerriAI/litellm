@@ -138,6 +138,7 @@ async def _async_completion(proxy: Gateway, model: str, user: str, *, stream: bo
 
 def test_proxy_round_trips_over_pfs_gcm_peer_and_writes_spend(cipher_proxy: Gateway, tls_peers: Peers) -> None:
     marker: Final = uuid.uuid4().hex[:8]
+    before: Final = len(tls_peers.gcm.received())
     sync_id: Final = _sync_completion(cipher_proxy, "tls-peer", f"user13-sync-{marker}")
     stream_id: Final = _sync_completion(cipher_proxy, "tls-peer", f"user13-stream-{marker}", stream=True)
     async_id: Final = asyncio.run(_async_completion(cipher_proxy, "tls-peer", f"user13-async-{marker}"))
@@ -145,7 +146,7 @@ def test_proxy_round_trips_over_pfs_gcm_peer_and_writes_spend(cipher_proxy: Gate
         _async_completion(cipher_proxy, "tls-peer", f"user13-astream-{marker}", stream=True)
     )
     users: Final = {f"user13-{leg}-{marker}" for leg in ("sync", "stream", "async", "astream")}
-    recorded: Final = tls_peers.gcm.received()
+    recorded: Final = tls_peers.gcm.received()[before:]
     assert {record.user for record in recorded} == users, recorded
     assert all(record.cipher == PFS_GCM for record in recorded), recorded
     spend_rows: Final = tuple(
