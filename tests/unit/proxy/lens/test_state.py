@@ -1,11 +1,9 @@
 from datetime import datetime, timedelta, timezone
-from functools import reduce
 from typing import Final
 
 import pytest
 
 from litellm.proxy.lens.models import (
-    MAX_STEPS,
     AgentTestCase,
     Check,
     Evidence,
@@ -14,18 +12,15 @@ from litellm.proxy.lens.models import (
     Lens,
     LensSettings,
     Scope,
-    Step,
     Worker,
 )
 from litellm.proxy.lens.state import (
-    add_step,
     can_access,
     claim_job,
     current_job,
     merge_finding,
     next_scan_start,
     queue_job,
-    renew_budget,
 )
 
 NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
@@ -166,14 +161,6 @@ def test_replaying_evidence_does_not_reopen_but_new_occurrence_does() -> None:
     assert merge_finding(dismissed, finding("run2"), 1, NOW).status == "dismissed"
 
 
-def test_monthly_budget_renews_without_erasing_job_costs() -> None:
-    spent: Final = queue_job(lens(), NOW, "job").model_copy(update={"spent": 12})
-    renewed: Final = renew_budget(spent, datetime(2026, 2, 1, tzinfo=timezone.utc))
-    assert renewed.spent == 0
-    assert renewed.jobs == spent.jobs
-    assert renew_budget(spent, NOW) is spent
-
-
 @pytest.mark.parametrize("hours", (24, 168, 720, 4800, 8760))
 def test_first_scan_covers_the_configured_lookback_window(hours: int) -> None:
     original: Final = lens()
@@ -202,15 +189,6 @@ def test_run_now_with_an_exact_window_scans_that_window_and_is_marked_manual() -
     job: Final = queue_job(lens(), NOW, "manual", window=window, trigger="manual").jobs[0]
     assert (job.start, job.end) == window
     assert job.trigger == "manual"
-
-
-def test_steps_keep_only_the_most_recent_entries() -> None:
-    job: Final = queue_job(lens(), NOW, "job").jobs[0]
-    steps: Final = tuple(Step(at=NOW, kind="stage", label=f"step {i}") for i in range(MAX_STEPS + 5))
-    grown: Final = reduce(add_step, steps, job)
-    assert len(grown.steps) == MAX_STEPS
-    assert grown.steps[0].label == "step 5"
-    assert grown.steps[-1].label == f"step {MAX_STEPS + 4}"
 
 
 def test_finding_keeps_uncertainty_separate_from_the_main_summary() -> None:

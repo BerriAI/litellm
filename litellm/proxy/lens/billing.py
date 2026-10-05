@@ -1,5 +1,4 @@
-from collections.abc import Callable, Mapping
-from contextlib import AbstractAsyncContextManager
+from collections.abc import Mapping
 from typing import Final
 
 import orjson
@@ -32,9 +31,7 @@ async def validate_key(key_id: str | None) -> UserAPIKeyAuth | None:
     return key
 
 
-async def complete(
-    key_id: str, data: dict[str, object], reserve: Callable[[], AbstractAsyncContextManager[None]], incoming: Request
-) -> tuple[ModelResponse, float | None]:
+async def complete(key_id: str, data: dict[str, object], incoming: Request) -> tuple[ModelResponse, float | None]:
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import llm_router, proxy_config, proxy_logging_obj, version
 
@@ -71,20 +68,19 @@ async def complete(
         processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         fastapi_response: Final = Response()
         try:
-            async with reserve():
-                response: Final = TypeAdapter(ModelResponse).validate_python(
-                    await processor.base_process_llm_request(
-                        request=request,
-                        fastapi_response=fastapi_response,
-                        user_api_key_dict=auth,
-                        route_type="acompletion",
-                        proxy_logging_obj=proxy_logging_obj,
-                        general_settings=TypeAdapter(dict[str, object]).validate_python(proxy_server.general_settings),  # pyright: ignore[reportUnknownMemberType]  # Validate the legacy untyped config at the request boundary
-                        proxy_config=proxy_config,
-                        llm_router=llm_router,
-                        version=version,
-                    )
+            response: Final = TypeAdapter(ModelResponse).validate_python(
+                await processor.base_process_llm_request(
+                    request=request,
+                    fastapi_response=fastapi_response,
+                    user_api_key_dict=auth,
+                    route_type="acompletion",
+                    proxy_logging_obj=proxy_logging_obj,
+                    general_settings=TypeAdapter(dict[str, object]).validate_python(proxy_server.general_settings),  # pyright: ignore[reportUnknownMemberType]  # Validate the legacy untyped config at the request boundary
+                    proxy_config=proxy_config,
+                    llm_router=llm_router,
+                    version=version,
                 )
+            )
             billed: Final = fastapi_response.headers.get("x-litellm-response-cost")
             return response, float(billed) if billed not in (None, "", "None") else None
         except Exception as exc:

@@ -1,5 +1,3 @@
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final
@@ -15,7 +13,6 @@ from litellm.litellm_core_utils.token_counter import get_modified_max_tokens
 from litellm.proxy.lens.billing import complete, validate_key
 from litellm.proxy.lens.models import Job, Lens, ModelRequest, ModelResult, Step, Worker
 from litellm.proxy.lens.repository import LensRepository
-from litellm.proxy.lens.state import add_step, current_job, renew_budget, replace_job
 from litellm.types.utils import CostPerToken, ModelResponse
 
 
@@ -173,46 +170,17 @@ async def analyze(
     if not deployments:
         raise HTTPException(400, "Analysis model is no longer available")
     estimate: Final = quote(deployments, body.prompt)
-    now: Final = datetime.now(timezone.utc)
-
-    def reserve(e: Lens) -> Lens:
-        current: Final = renew_budget(e, now)
-        active: Final = current_job(current)
-        if (
-            active is None
-            or active.id != job.id
-            or active.worker_id != worker.id
-            or active.lease_until is None
-            or active.lease_until <= datetime.now(timezone.utc)
-        ):
-            raise HTTPException(409, "Job was cancelled or reassigned")
-        if current.spent + estimate > current.settings.monthly_budget:
-            raise HTTPException(402, "Monthly lens budget reached; increase it or wait for next month")
-        return replace_job(
-            current, active.model_copy(update=MappingProxyType({"cost": active.cost + estimate}))
-        ).model_copy(update=MappingProxyType({"spent": current.spent + estimate}))
-
-    def settle(e: Lens, cost: float, step: Step | None) -> Lens:
-        charged: Final = next((j for j in e.jobs if j.id == job.id), None)
-        adjusted: Final = (
-            e.model_copy(update=MappingProxyType({"spent": max(0, e.spent - estimate + cost)}))
-            if e.budget_month == now.strftime("%Y-%m")
-            else e
-        )
-        if charged is None:
-            return adjusted
-        refunded: Final = charged.model_copy(update=MappingProxyType({"cost": max(0, charged.cost - estimate + cost)}))
-        return replace_job(adjusted, add_step(refunded, step) if step is not None else refunded)
-
-    @asynccontextmanager
-    async def reserve_budget() -> AsyncIterator[None]:
-        if await repo.update(lens.id, reserve) is None:
-            raise HTTPException(409, "Could not reserve analysis budget")
-        try:
-            yield
-        except BaseException:
-            await repo.update(lens.id, lambda e: settle(e, 0, None))
-            raise
+    pending: Final = Step(
+        at=datetime.now(timezone.utc),
+        kind="model",
+        label=_PURPOSE_LABELS[body.purpose],
+        model=job.settings.model,
+        purpose=body.purpose,
+        cost=estimate,
+    )
+    reservation: Final = await repo.reserve(lens.id, job.id, pending)
+    if reservation is None:
+        raise HTTPException(402, "Monthly lens budget reached; increase it or wait for next month")
 
     data: Final[dict[str, object]] = {  # mutable-ok: proxy processing enriches request data
         "model": job.settings.model,
@@ -234,12 +202,14 @@ async def analyze(
         },
     }
 
-    with lens_analysis(), inherit_message_logging_privacy(True):
-        response, billed_cost = await complete(worker.analysis_key_id, data, reserve_budget, request)
+    try:
+        with lens_analysis(), inherit_message_logging_privacy(True):
+            response, billed_cost = await complete(worker.analysis_key_id, data, request)
+    except BaseException:
+        await repo.release(reservation)
+        raise
     cost: Final = billed_cost if billed_cost is not None else completion_charge(deployments, response, estimate)
-
-    step: Final = model_step(response, body, job.settings.model, cost)
-    await repo.update(lens.id, lambda e: settle(e, cost, step))
+    await repo.settle(reservation, model_step(response, body, job.settings.model, cost))
     parsed: Final = Completion.model_validate_json(response.model_dump_json())
     choice: Final = parsed.choices[0]
     return ModelResult(

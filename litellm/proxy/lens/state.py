@@ -4,14 +4,12 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.proxy.lens.models import (
-    MAX_STEPS,
     Finding,
     FindingDraft,
     Job,
     Lens,
     LensSettings,
     Scope,
-    Step,
     Worker,
 )
 
@@ -78,10 +76,6 @@ def queue_job(
     return lens.model_copy(update=MappingProxyType({"jobs": (job,)}))
 
 
-def add_step(job: Job, step: Step) -> Job:
-    return job.model_copy(update=MappingProxyType({"steps": (*job.steps, step)[-MAX_STEPS:]}))
-
-
 def claim_job(lens: Lens, worker: Worker, now: datetime) -> Lens:
     job: Final = current_job(lens)
     if job is None or not can_access(worker.scope, lens.scope):
@@ -116,13 +110,6 @@ def claim_job(lens: Lens, worker: Worker, now: datetime) -> Lens:
             )
         ),
     )
-
-
-def renew_budget(lens: Lens, now: datetime) -> Lens:
-    month: Final = now.strftime("%Y-%m")
-    if lens.budget_month == month:
-        return lens
-    return lens.model_copy(update=MappingProxyType({"budget_month": month, "spent": 0}))
 
 
 def merge_finding(lens: Lens, draft: FindingDraft, revision: int, now: datetime) -> Finding:

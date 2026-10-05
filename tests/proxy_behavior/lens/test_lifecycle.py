@@ -273,6 +273,8 @@ async def test_scan_lifecycle_persists_results_and_revokes_worker(lens_database:
             lens.id, claimed.job.id, Progress(stage="Reviewing", coverage=Coverage(screened=2)), worker
         )
         assert await endpoints.heartbeat(lens.id, claimed.job.id, worker)
+        progressed: Final = await endpoints.get_lens(lens.id, worker.scope)
+        assert tuple(s.label for s in progressed.jobs[0].steps if s.kind == "stage") == ("Reviewing",)
         response: Final = await endpoints.model(
             lens.id,
             claimed.job.id,

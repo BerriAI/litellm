@@ -14,10 +14,10 @@ from prisma import Prisma
 from psycopg import sql
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
-from litellm.proxy.lens.models import Check, Lens, LensSettings, MetadataFilter, Scope, Worker
+from litellm.proxy.lens.models import MAX_STEPS, Check, Lens, LensSettings, MetadataFilter, Scope, Step, Worker
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
 from litellm.proxy.lens.search import LensField, parse_search
-from litellm.proxy.lens.state import claim_job, queue_job
+from litellm.proxy.lens.state import claim_job, queue_job, replace_job
 
 
 @pytest_asyncio.fixture(loop_scope="function")
@@ -52,6 +52,135 @@ async def test_concurrent_workers_cannot_both_acquire_the_same_job(lens_db: Pris
         assert tuple(r.jobs[0].worker_id for r in results if r) == (stored.jobs[0].worker_id, stored.jobs[0].worker_id)
     finally:
         await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', lens.id)
+
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def charged_lens(lens_db: Prisma) -> AsyncIterator[tuple[LensRepository, Lens]]:
+    now: Final = datetime.now(timezone.utc)
+    repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
+    lens: Final = Lens(
+        id=uuid4().hex,
+        scope=Scope(all_teams=True),
+        settings=LensSettings(name="Ledger test", model="test", context="Find failures", monthly_budget=1),
+        created_at=now,
+        next_run_at=now,
+        budget_month=now.strftime("%Y-%m"),
+    )
+    await repo.create(queue_job(lens, now, "run-a"))
+    try:
+        yield repo, lens
+    finally:
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_LensRun" WHERE lens_id=$1', lens.id)
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', lens.id)
+
+
+def model_step(at: datetime, cost: float, label: str = "Reviewed a run") -> Step:
+    return Step(at=at, kind="model", label=label, model="test", purpose="extract", cost=cost)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_model_calls_reserve_budget_without_rewriting_the_document(
+    charged_lens: tuple[LensRepository, Lens],
+) -> None:
+    repo, lens = charged_lens
+    now: Final = datetime.now(timezone.utc)
+    reservations: Final = await asyncio.gather(
+        *(repo.reserve(lens.id, "run-a", model_step(now + timedelta(seconds=i), 0.03)) for i in range(32))
+    )
+    assert all(reservation is not None for reservation in reservations)
+    stored: Final = await repo.get(lens.id)
+    assert stored is not None
+    assert stored.version == 0
+    assert stored.spent == pytest.approx(32 * 0.03)
+    assert stored.jobs[0].cost == pytest.approx(32 * 0.03)
+    assert len(stored.jobs[0].steps) == 32
+
+
+@pytest.mark.asyncio
+async def test_concurrent_reservations_admit_exactly_what_fits_the_monthly_budget(
+    charged_lens: tuple[LensRepository, Lens],
+) -> None:
+    repo, lens = charged_lens
+    now: Final = datetime.now(timezone.utc)
+    reservations: Final = await asyncio.gather(
+        *(repo.reserve(lens.id, "run-a", model_step(now, 0.3)) for _ in range(10))
+    )
+    assert sum(reservation is not None for reservation in reservations) == 3
+    stored: Final = await repo.get(lens.id)
+    assert stored is not None
+    assert stored.spent == pytest.approx(0.9)
+    assert len(stored.jobs[0].steps) == 3
+
+
+@pytest.mark.asyncio
+async def test_settling_and_releasing_adjust_spend_exactly_once(charged_lens: tuple[LensRepository, Lens]) -> None:
+    repo, lens = charged_lens
+    now: Final = datetime.now(timezone.utc)
+    first: Final = await repo.reserve(lens.id, "run-a", model_step(now, 0.4))
+    second: Final = await repo.reserve(lens.id, "run-a", model_step(now + timedelta(seconds=1), 0.4))
+    assert first is not None and second is not None
+    await repo.settle(first, model_step(now, 0.1))
+    await repo.release(second)
+    await repo.settle(first, model_step(now, 0.1))
+    await repo.release(first)
+    await repo.settle(second, model_step(now, 0.1))
+    stored: Final = await repo.get(lens.id)
+    assert stored is not None
+    assert stored.spent == pytest.approx(0.1)
+    assert stored.jobs[0].cost == pytest.approx(0.1)
+    assert tuple(step.cost for step in stored.jobs[0].steps) == (pytest.approx(0.1),)
+
+
+@pytest.mark.asyncio
+async def test_spend_counter_survives_document_writes_and_rolls_over_each_month(
+    charged_lens: tuple[LensRepository, Lens],
+) -> None:
+    repo, lens = charged_lens
+    now: Final = datetime.now(timezone.utc)
+    reserved: Final = await repo.reserve(lens.id, "run-a", model_step(now, 0.5))
+    assert reserved is not None
+    renamed: Final = await repo.update(
+        lens.id,
+        lambda e: e.model_copy(update={"settings": e.settings.model_copy(update={"name": "Renamed"}), "spent": 0}),
+    )
+    assert renamed is not None and renamed.spent == pytest.approx(0.5)
+    assert renamed.settings.name == "Renamed"
+    next_month: Final = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
+    rolled: Final = await repo.reserve(lens.id, "run-a", model_step(next_month, 0.2))
+    assert rolled is not None
+    await repo.settle(reserved, model_step(now, 0.3))
+    stored: Final = await repo.get(lens.id)
+    assert stored is not None
+    assert stored.budget_month == next_month.strftime("%Y-%m")
+    assert stored.spent == pytest.approx(0.2)
+    assert stored.jobs[0].cost == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_run_steps_follow_the_run_into_history(charged_lens: tuple[LensRepository, Lens]) -> None:
+    repo, lens = charged_lens
+    now: Final = datetime.now(timezone.utc)
+    reserved: Final = await repo.reserve(lens.id, "run-a", model_step(now, 0.2))
+    assert reserved is not None
+    await repo.settle(reserved, model_step(now, 0.1))
+    for i in range(MAX_STEPS + 5):
+        await repo.record_step(
+            lens.id, "run-a", Step(at=now + timedelta(seconds=i + 1), kind="stage", label=f"stage {i}")
+        )
+    later: Final = now + timedelta(hours=1)
+    await repo.update(lens.id, lambda e: replace_job(e, e.jobs[0].model_copy(update={"status": "completed"})))
+    rotated: Final = await repo.update(lens.id, lambda e: queue_job(e, later, "run-b"))
+    assert rotated is not None and rotated.jobs[0].id == "run-b"
+    assert rotated.jobs[0].steps == () and rotated.jobs[0].cost == 0
+    history: Final = await repo.jobs(lens.id)
+    assert tuple(job.id for job in history) == ("run-b", "run-a")
+    archived: Final = await repo.job(lens.id, "run-a")
+    assert archived is not None and archived.status == "completed"
+    assert archived.cost == pytest.approx(0.1)
+    assert len(archived.steps) == MAX_STEPS
+    assert archived.steps[0].label == "stage 5"
+    assert archived.steps[-1].label == f"stage {MAX_STEPS + 4}"
+    assert await repo.job(lens.id, reserved.id) is None
 
 
 @pytest_asyncio.fixture(loop_scope="function")

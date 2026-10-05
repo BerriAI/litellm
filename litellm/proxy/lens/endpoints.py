@@ -51,7 +51,6 @@ from litellm.proxy.lens.repository import LensRepository, WriterDatabase
 from litellm.proxy.lens.search import LensField, parse_search, search_terms
 from litellm.proxy.lens.sources import SourceReader, Storage
 from litellm.proxy.lens.state import (
-    add_step,
     can_access,
     claim_job,
     current_job,
@@ -520,7 +519,7 @@ async def claim(worker: WorkerAuth, protocol_version: int = 1, worker_release: s
 
 @router.post("/worker/{lens_id}/{job_id}/progress", response_model=bool)
 async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth) -> bool:
-    await assigned(lens_id, job_id, worker)
+    _, before = await assigned(lens_id, job_id, worker)
     now: Final = datetime.now(timezone.utc)
 
     def renew(e: Lens) -> Lens:
@@ -532,12 +531,11 @@ async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth
                 {"stage": body.stage, "coverage": body.coverage, "lease_until": now + timedelta(minutes=5)}
             )
         )
-        return replace_job(
-            e,
-            renewed if body.stage == job.stage else add_step(renewed, Step(at=now, kind="stage", label=body.stage)),
-        )
+        return replace_job(e, renewed)
 
     required(await repository().update(lens_id, renew))
+    if body.stage != before.stage:
+        await repository().record_step(lens_id, job_id, Step(at=now, kind="stage", label=body.stage))
     await repository().heartbeat(worker.id, now.isoformat())
     return True
 
