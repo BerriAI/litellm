@@ -2507,7 +2507,7 @@ class BaseLLMHTTPHandler:
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
-        caller_requested_stream: Final = bool(stream)
+        caller_requested_stream: Final = bool(stream or (extra_body or {}).get("stream"))
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -2702,7 +2702,7 @@ class BaseLLMHTTPHandler:
 
         # Check if streaming is requested
         stream = response_api_optional_request_params.get("stream", False)
-        caller_requested_stream: Final = bool(stream)
+        caller_requested_stream: Final = bool(stream or (extra_body or {}).get("stream"))
 
         api_base: Final = responses_api_provider_config.get_complete_url(
             api_base=litellm_params.api_base,
@@ -2795,7 +2795,6 @@ class BaseLLMHTTPHandler:
                             call_type=CallTypes.responses.value,
                         )
 
-                    # Return the streaming iterator
                     return ResponsesAPIStreamingIterator(
                         response=response,
                         model=model,

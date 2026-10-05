@@ -447,8 +447,6 @@ def _assert_aggregated_chatgpt_response(result):
 
 @pytest.mark.parametrize("caller_params", [{}, {"stream": False}])
 def test_response_api_handler_aggregates_chatgpt_sse_for_a_non_streaming_caller(caller_params):
-    """chatgpt forces `stream: true` on every request because the Codex backend only serves SSE.
-    A caller that did not ask for streaming must still get one aggregated ResponsesAPIResponse."""
     handler = BaseLLMHTTPHandler()
     client = HTTPHandler(client=httpx.Client())
     client.post = Mock(return_value=_chatgpt_sse_response())
@@ -465,6 +463,17 @@ def test_response_api_handler_streams_chatgpt_sse_for_a_streaming_caller():
     client.post = Mock(return_value=_chatgpt_sse_response())
 
     result = handler.response_api_handler(**_chatgpt_handler_kwargs({"stream": True}, client))
+
+    assert isinstance(result, BaseResponsesAPIStreamingIterator)
+    assert [event.type for event in result][-1] == "response.completed"
+
+
+def test_response_api_handler_streams_chatgpt_sse_for_an_extra_body_streaming_caller():
+    handler = BaseLLMHTTPHandler()
+    client = HTTPHandler(client=httpx.Client())
+    client.post = Mock(return_value=_chatgpt_sse_response())
+
+    result = handler.response_api_handler(extra_body={"stream": True}, **_chatgpt_handler_kwargs({}, client))
 
     assert isinstance(result, BaseResponsesAPIStreamingIterator)
     assert [event.type for event in result][-1] == "response.completed"
@@ -503,6 +512,20 @@ async def test_async_response_api_handler_streams_chatgpt_sse_for_a_streaming_ca
     client.post = AsyncMock(return_value=_chatgpt_sse_response())
 
     result = await handler.async_response_api_handler(**_chatgpt_handler_kwargs({"stream": True}, client))
+
+    assert isinstance(result, BaseResponsesAPIStreamingIterator)
+    assert [event.type async for event in result][-1] == "response.completed"
+
+
+@pytest.mark.asyncio
+async def test_async_response_api_handler_streams_chatgpt_sse_for_an_extra_body_streaming_caller():
+    handler = BaseLLMHTTPHandler()
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=_chatgpt_sse_response())
+
+    result = await handler.async_response_api_handler(
+        extra_body={"stream": True}, **_chatgpt_handler_kwargs({}, client)
+    )
 
     assert isinstance(result, BaseResponsesAPIStreamingIterator)
     assert [event.type async for event in result][-1] == "response.completed"
