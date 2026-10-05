@@ -18,17 +18,7 @@ GPT_5_4_TEST_CASE: Final = TranslationTestCase(
     expected_provider_endpoint="/chat/completions",
     expected_provider_headers={
         "content-type": "application/json",
-        "x-stainless-lang": "python",
-        "x-stainless-package-version": "2.33.0",
-        "x-stainless-os": "Linux",
-        "x-stainless-arch": "x64",
-        "x-stainless-runtime": "CPython",
-        "x-stainless-runtime-version": "3.12.13",
         "authorization": "Bearer synthetic-openai-key",
-        "x-stainless-async": "async:asyncio",
-        "x-stainless-raw-response": "true",
-        "x-stainless-retry-count": "0",
-        "x-stainless-read-timeout": "6000.0",
     },
     expected_provider_request={
         "messages": [
@@ -116,17 +106,7 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
     expected_provider_endpoint="/chat/completions",
     expected_provider_headers={
         "content-type": "application/json",
-        "x-stainless-lang": "python",
-        "x-stainless-package-version": "2.33.0",
-        "x-stainless-os": "Linux",
-        "x-stainless-arch": "x64",
-        "x-stainless-runtime": "CPython",
-        "x-stainless-runtime-version": "3.12.13",
         "authorization": "Bearer synthetic-openai-key",
-        "x-stainless-async": "async:asyncio",
-        "x-stainless-raw-response": "true",
-        "x-stainless-retry-count": "0",
-        "x-stainless-read-timeout": "6000.0",
     },
     expected_provider_request={
         "messages": [
@@ -219,17 +199,7 @@ GPT_5_6_LUNA_TEST_CASE: Final = TranslationTestCase(
     expected_provider_endpoint="/chat/completions",
     expected_provider_headers={
         "content-type": "application/json",
-        "x-stainless-lang": "python",
-        "x-stainless-package-version": "2.33.0",
-        "x-stainless-os": "Linux",
-        "x-stainless-arch": "x64",
-        "x-stainless-runtime": "CPython",
-        "x-stainless-runtime-version": "3.12.13",
         "authorization": "Bearer synthetic-openai-key",
-        "x-stainless-async": "async:asyncio",
-        "x-stainless-raw-response": "true",
-        "x-stainless-retry-count": "0",
-        "x-stainless-read-timeout": "6000.0",
     },
     expected_provider_request={
         "messages": [
@@ -322,17 +292,7 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
     expected_provider_endpoint="/chat/completions",
     expected_provider_headers={
         "content-type": "application/json",
-        "x-stainless-lang": "python",
-        "x-stainless-package-version": "2.33.0",
-        "x-stainless-os": "Linux",
-        "x-stainless-arch": "x64",
-        "x-stainless-runtime": "CPython",
-        "x-stainless-runtime-version": "3.12.13",
         "authorization": "Bearer synthetic-openai-key",
-        "x-stainless-async": "async:asyncio",
-        "x-stainless-raw-response": "true",
-        "x-stainless-retry-count": "0",
-        "x-stainless-read-timeout": "6000.0",
     },
     expected_provider_request={
         "messages": [
@@ -425,17 +385,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
     expected_provider_endpoint="/chat/completions",
     expected_provider_headers={
         "content-type": "application/json",
-        "x-stainless-lang": "python",
-        "x-stainless-package-version": "2.33.0",
-        "x-stainless-os": "Linux",
-        "x-stainless-arch": "x64",
-        "x-stainless-runtime": "CPython",
-        "x-stainless-runtime-version": "3.12.13",
         "authorization": "Bearer synthetic-openai-key",
-        "x-stainless-async": "async:asyncio",
-        "x-stainless-raw-response": "true",
-        "x-stainless-retry-count": "0",
-        "x-stainless-read-timeout": "6000.0",
     },
     expected_provider_request={
         "messages": [
