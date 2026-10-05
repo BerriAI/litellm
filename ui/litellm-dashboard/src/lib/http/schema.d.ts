@@ -9281,24 +9281,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/liteadmin/slack/connect/{token}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Connect Page */
-        get: operations["connect_page_liteadmin_slack_connect__token__get"];
-        put?: never;
-        /** Connect Account */
-        post: operations["connect_account_liteadmin_slack_connect__token__post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/litellm/.well-known/litellm-ui-config": {
         parameters: {
             query?: never;
@@ -27431,6 +27413,39 @@ export interface components {
              * @default default
              */
             target_storage: string;
+        };
+        /** Body_image_edit_api_images_edits_post */
+        Body_image_edit_api_images_edits_post: {
+            /** Image */
+            image?: string[] | null;
+            /** Image[] */
+            "image[]"?: string[] | null;
+            /** Mask */
+            mask?: string[] | null;
+            /** Mask[] */
+            "mask[]"?: string[] | null;
+        };
+        /** Body_image_edit_api_openai_deployments__model__images_edits_post */
+        Body_image_edit_api_openai_deployments__model__images_edits_post: {
+            /** Image */
+            image?: string[] | null;
+            /** Image[] */
+            "image[]"?: string[] | null;
+            /** Mask */
+            mask?: string[] | null;
+            /** Mask[] */
+            "mask[]"?: string[] | null;
+        };
+        /** Body_image_edit_api_v1_images_edits_post */
+        Body_image_edit_api_v1_images_edits_post: {
+            /** Image */
+            image?: string[] | null;
+            /** Image[] */
+            "image[]"?: string[] | null;
+            /** Mask */
+            mask?: string[] | null;
+            /** Mask[] */
+            "mask[]"?: string[] | null;
         };
         /** Body_introspect_endpoint_introspect_post */
         Body_introspect_endpoint_introspect_post: {
@@ -52626,8 +52641,6 @@ export interface operations {
                 object_team_id?: string | null;
                 /** @description Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only) */
                 object_key_hash?: string | null;
-                /** @description Match a row whose id, object_id, changed_by, or changed_by_api_key equals this value */
-                search?: string | null;
                 /** @description Column to sort by (e.g. 'updated_at', 'action', 'table_name') */
                 sort_by?: string | null;
                 /** @description Sort order ('asc' or 'desc') */
@@ -61648,7 +61661,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_image_edit_api_images_edits_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -63655,68 +63672,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    connect_page_liteadmin_slack_connect__token__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                token: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    connect_account_liteadmin_slack_connect__token__post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                token: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/html": string;
                 };
             };
             /** @description Validation Error */
@@ -66238,7 +66193,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_image_edit_api_openai_deployments__model__images_edits_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -78507,7 +78466,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_image_edit_api_v1_images_edits_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
