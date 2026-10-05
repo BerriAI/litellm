@@ -23,7 +23,7 @@ import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
-from integration._support.database import read_rows
+from integration._support.database import read_rows, scratch_database
 from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -528,11 +528,18 @@ def _send(gateway: Gateway, endpoint: Endpoint, body: Mapping[str, JsonValue], *
     return _outcome_of(endpoint, stream, response, lines)
 
 
-def _spend_rows(request_ids: frozenset[str], *, expected: int, seconds: float = 90) -> tuple[dict[str, JsonValue], ...]:
+def _spend_rows(
+    request_ids: frozenset[str],
+    *,
+    expected: int,
+    seconds: float = 90,
+    database_url: str | None = None,
+) -> tuple[dict[str, JsonValue], ...]:
     rows: Final = eventually(
         lambda: read_rows(
             'SELECT request_id, status, model, spend FROM "LiteLLM_SpendLogs" WHERE request_id = ANY(string_to_array(%s, %s))',
             (",".join(sorted(request_ids)), ","),
+            database_url=database_url,
         ),
         lambda found: len(found) >= expected,
         seconds=seconds,
@@ -540,9 +547,9 @@ def _spend_rows(request_ids: frozenset[str], *, expected: int, seconds: float = 
     return tuple(rows)
 
 
-def _success_row(request_id: str) -> dict[str, JsonValue]:
+def _success_row(request_id: str, *, database_url: str | None = None) -> dict[str, JsonValue]:
     assert request_id, "No id to look the spend row up by"
-    (row,) = _spend_rows(frozenset({request_id}), expected=1)
+    (row,) = _spend_rows(frozenset({request_id}), expected=1, database_url=database_url)
     assert row["status"] == "success", row
     return row
 
@@ -573,7 +580,6 @@ def _owned_config(
     directory: Path,
     *,
     names: Iterable[str] = tuple(_NAMES),
-    model_info: Mapping[str, Mapping[str, JsonValue]] = _MODEL_INFO,
 ) -> Path:
     base: Final = _JSON.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     config: Final[dict[str, JsonValue]] = {
@@ -588,7 +594,7 @@ def _owned_config(
                     **_AWS,
                     **({"cache_control_injection_points": _INJECTION[name]} if name in _INJECTION else {}),
                 },
-                **({"model_info": dict(model_info[name])} if name in model_info else {}),
+                **({"model_info": dict(_MODEL_INFO[name])} if name in _MODEL_INFO else {}),
             }
             for name in names
         ],
@@ -1188,21 +1194,26 @@ def test_m08_an_arn_without_the_flag_still_gets_cache_points(gateway: Gateway) -
 
 @pytest.mark.timeout(600)
 def test_m12_a_deployment_flag_true_on_kimi_overrides_the_cost_map_row(gateway: Gateway, tmp_path: Path) -> None:
-    with wire_server(_peer()) as wire:
-        config: Final = _owned_config(
-            wire,
-            tmp_path,
-            names=("kimi-base",),
-            model_info={"kimi-base": {"supports_prompt_cache_breakpoint": True}},
-        )
-        with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned:
-            outcome, received = _observe_at(
-                owned.gateway, wire, "chat", _chat_body("kimi-base", _prompt(), _SYSTEM_AND_USER)
+    with scratch_database() as database_url, wire_server(_peer()) as wire:
+        config: Final = _owned_config(wire, tmp_path, names=())
+        with (
+            owned_proxy_process(
+                gateway,
+                tmp_path,
+                {"DATABASE_URL": database_url},
+                config=config,
+                remove_environment=("DATABASE_URL_READ_REPLICA",),
+            ) as owned,
+            owned.gateway.scenario() as scenario,
+        ):
+            name: Final = _deployment(
+                owned.gateway, scenario, wire, f"bedrock/{_KIMI_BASE}", {"supports_prompt_cache_breakpoint": True}
             )
+            outcome, received = _observe_at(owned.gateway, wire, "chat", _chat_body(name, _prompt(), _SYSTEM_AND_USER))
             _assert_answered(outcome)
             assert received.model == _KIMI_BASE, received.model
             assert received.cache_points == 2, received.body
-            _success_row(outcome.response_id)
+            _success_row(outcome.response_id, database_url=database_url)
 
 
 @pytest.mark.timeout(600)
