@@ -110,6 +110,15 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     return "choices" in cached_result
 
 
+def _chat_completion_has_usable_choices(result: object) -> bool:
+    if isinstance(result, ModelResponse):
+        return bool(result.choices)
+    if isinstance(result, dict) and _is_chat_completion_cached_dict(result):
+        choices = result.get("choices")
+        return isinstance(choices, list) and len(choices) > 0
+    return True
+
+
 def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
     if kwargs.get("stream", False) is True:
         return True
@@ -285,6 +294,9 @@ class LLMCachingHandler:
                 )
                 cache_check_end_time = time.perf_counter()
 
+                if cached_result is not None and not _chat_completion_has_usable_choices(cached_result):
+                    cached_result = None
+
                 if cached_result is not None and not isinstance(cached_result, list):
                     verbose_logger.debug("Cache Hit!")
                     cache_hit: Final = True
@@ -397,6 +409,8 @@ class LLMCachingHandler:
             print_verbose("Checking Sync Cache")
             with response_cache_phase("get"):
                 cached_result = litellm.cache.get_cache(**new_kwargs)
+            if cached_result is not None and not _chat_completion_has_usable_choices(cached_result):
+                cached_result = None
             if cached_result is not None:
                 if "detail" in cached_result:
                     # implies an error occurred
@@ -1075,6 +1089,8 @@ class LLMCachingHandler:
         new_kwargs["parent_otel_span"] = parent_otel_span
         # [OPTIONAL] ADD TO CACHE
         if self._should_store_result_in_cache(original_function=original_function, kwargs=new_kwargs):
+            if not _chat_completion_has_usable_choices(result):
+                return
             if (
                 isinstance(result, litellm.ModelResponse)
                 or isinstance(result, litellm.EmbeddingResponse)
@@ -1124,6 +1140,8 @@ class LLMCachingHandler:
             return
 
         if self._should_store_result_in_cache(original_function=self.original_function, kwargs=new_kwargs):
+            if not _chat_completion_has_usable_choices(result):
+                return
             with response_cache_phase("set"):
                 litellm.cache.add_cache(result, **new_kwargs)
 
