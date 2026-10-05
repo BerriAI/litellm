@@ -2,6 +2,7 @@ import asyncio
 import json
 from contextlib import aclosing
 from itertools import chain
+from types import MappingProxyType
 from typing import Final
 
 from .agent_review import FINDINGS_TASK, Findings, findings_result, review_context, validate_findings
@@ -102,7 +103,17 @@ async def analyze_hybrid(
     candidates: Final = (*combined, *settled)
 
     async def investigate(candidate: Candidate) -> Findings:
-        relevant: Final = tuple(s for s in workspace.sessions if s.execution.id in candidate.execution_ids)
+        supporting: Final = tuple(
+            observation
+            for observation in observations
+            if observation.check_id == candidate.check_id and observation.kind == candidate.kind
+        )
+        cited: Final = frozenset(
+            (quote.execution_id, quote.span_id)
+            for quote in chain.from_iterable(observation.evidence for observation in supporting)
+            if quote.execution_id in candidate.execution_ids
+        )
+        originals: Final = tuple(part for part in workspace.parts if (part.execution_id, part.span_id) in cited)
         return await run_agent(
             stage="targeted_investigation",
             task=FINDINGS_TASK + "\nInvestigate this candidate. You may refute, refine, "
@@ -112,11 +123,13 @@ async def analyze_hybrid(
             workspace=workspace,
             model=limited,
             schema=Findings,
-            initial_evidence=tuple(chain.from_iterable(s.parts for s in relevant)),
+            initial_evidence=originals,
             supplied=json.dumps(
                 {
                     "candidate": candidate.model_dump(),
-                    "session_reviews": tuple(item.model_dump() for item in examined),
+                    "session_reviews": tuple(
+                        item.model_dump(exclude=MappingProxyType({"parts": True})) for item in examined
+                    ),
                 }
             ),
             validate=lambda result: validate_findings(claim, workspace, result),
