@@ -133,10 +133,11 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
                   type="button"
                   disabled={!status.ready}
                   onClick={() => openDialog("new")}
-                  className="flex items-center gap-1.5 border-l border-border px-3 text-sm font-medium whitespace-nowrap text-foreground transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60 disabled:pointer-events-none disabled:opacity-50"
+                  aria-label="New investigation"
+                  className="flex items-center gap-1.5 bg-primary px-4 text-sm font-medium whitespace-nowrap text-primary-foreground transition-colors outline-none hover:bg-primary/90 focus-visible:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
                 >
-                  <Plus aria-hidden="true" className="size-3.5 text-muted-foreground" />
-                  New investigation
+                  <Plus aria-hidden="true" className="size-4" />
+                  New
                 </button>
               )
             }
