@@ -291,6 +291,25 @@ export function createLensDemoData(now = Date.now()) {
         })),
         attempts: 1,
         steps: [],
+        reviews: sample.map((execution, index) => ({
+          execution_id: execution.id,
+          trace_id: execution.trace_id,
+          name: execution.name,
+          agent: definition.agent,
+          model: settings.model,
+          at: iso(now - 320_000 - day * 60_000 + index * 1000),
+          duration_ms: 1200,
+          cannot_assess: false,
+          reasoning:
+            snapshot.find((finding) => finding.occurrences.includes(execution.id))?.description ??
+            "The recorded response is consistent with the available information and follows the review criteria.",
+          spans: [],
+          verdicts: snapshot
+            .filter((finding) => finding.occurrences.includes(execution.id))
+            .map((finding) => ({ check_id: finding.check_id, kind: finding.kind, summary: finding.title })),
+        })),
+        reviewed: sample.length,
+        reading: [],
         trigger: "schedule" as const,
         error: "",
         cost: sample.length * 0.012,

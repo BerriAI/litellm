@@ -1,6 +1,8 @@
 "use client";
 
 import moment from "moment";
+import { RefreshCw } from "lucide-react";
+import { traceAgentNames } from "../utils";
 import { useMemo, useState } from "react";
 
 import { filterRuns } from "./runSearch/runQuery";
@@ -94,7 +96,7 @@ export function AgentTracesSection({
 }: AgentTracesSectionProps) {
   const live = useTracesLive();
   const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
-  const { query, setQuery } = useRunFilterRouting();
+  const { query, setQuery, agent, status } = useRunFilterRouting();
   const [showSetup, setShowSetup] = useState(false);
   const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
@@ -115,7 +117,10 @@ export function AgentTracesSection({
     () => ({ startMs: traceWindowStartMs(startTime, endTime, isCustomDate, endMs), endMs }),
     [startTime, endTime, isCustomDate, endMs],
   );
-  const filtered = useMemo(() => filterRuns(traces.traces, query), [traces.traces, query]);
+  const filtered = useMemo(
+    () => filterRuns(traces.traces, query, { agent, status }),
+    [traces.traces, query, agent, status],
+  );
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
 
@@ -170,7 +175,7 @@ export function AgentTracesSection({
       fullScreen={fullScreen}
       onFullScreenChange={setFullScreen}
     >
-      <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden bg-card">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
         {checkHistory && <TraceHistoryError history={history} />}
         <TracesReceived received={setup.received} />
         <Inspector.Panel label="Trace details" testId="run-drawer">
@@ -186,17 +191,31 @@ export function AgentTracesSection({
           )}
         </Inspector.Panel>
         <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces} range={zoom ?? range}>
+          <TracingSetupAction available={traces.traces.length > 0} live={live} onSetup={() => setShowSetup(true)} />
+          <Button
+            variant="outline"
+            size="icon-sm"
+            aria-label="Refresh traces"
+            title="Refresh traces"
+            disabled={traces.isFetching}
+            onClick={checkTraces}
+          >
+            <RefreshCw className="size-3.5" />
+          </Button>
           {timeControls && (
-            <TimeRangeControls
-              fixedRange={zoom ?? (isLiveTail ? null : range)}
-              rangeHours={timeControls.rangeHours}
-              onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
-              live={isLiveTail}
-              showLive={live}
-              onLiveChange={timeControls.onLiveChange}
-            />
+            <div className="h-8 min-w-0 overflow-hidden rounded-md border [&>div]:h-full [&>div]:border-l-0">
+              <TimeRangeControls
+                fixedRange={zoom ?? (isLiveTail ? null : range)}
+                rangeHours={timeControls.rangeHours}
+                onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
+                live={isLiveTail}
+                showLive={live}
+                onLiveChange={timeControls.onLiveChange}
+              />
+            </div>
           )}
         </RunsToolbar>
+        <TraceCounts runs={filtered} />
         <TracesTimeline runs={filtered} range={range} selection={zoom} onSelect={setZoom} />
         <AgentTracesTable
           traces={runs}
@@ -209,6 +228,7 @@ export function AgentTracesSection({
           rangeEmpty={traces.traces.length === 0}
           onSetUpTracing={() => setShowSetup(true)}
         />
+        <TraceFooter runs={runs} hasMore={traces.hasMore} />
       </div>
     </Inspector.Root>
   );
@@ -220,5 +240,35 @@ function TracesReceived({ received }: { received: boolean }) {
     <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
       Traces received. Select a run to inspect it.
     </p>
+  );
+}
+
+function TraceCounts({ runs }: { runs: readonly TraceSummary[] }) {
+  const failed = runs.filter((run) => run.error_count > 0).length;
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-2 text-xs text-muted-foreground">
+      <span>
+        {runs.length} {runs.length === 1 ? "run" : "runs"} from {new Set(runs.flatMap(traceAgentNames)).size} agents
+      </span>
+      {failed > 0 && <span className="text-destructive">{failed} with errors</span>}
+    </div>
+  );
+}
+
+function TraceFooter({ runs, hasMore }: { runs: readonly TraceSummary[]; hasMore: boolean }) {
+  return (
+    <footer className="flex h-8 shrink-0 items-center border-t bg-muted/30 px-3 text-xs text-muted-foreground">
+      {runs.length} {runs.length === 1 ? "run" : "runs"}
+      {hasMore ? " loaded" : ""}
+    </footer>
+  );
+}
+
+function TracingSetupAction({ available, live, onSetup }: { available: boolean; live: boolean; onSetup: () => void }) {
+  if (!available) return null;
+  return (
+    <Button variant="outline" size="sm" className="h-8 text-xs" disabled={!live} onClick={onSetup}>
+      Set up tracing
+    </Button>
   );
 }
