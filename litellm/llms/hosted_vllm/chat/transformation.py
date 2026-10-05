@@ -107,8 +107,6 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                     )
                 elif thinking.get("type") == "adaptive" and thinking.get("effort"):
                     non_default_params["reasoning_effort"] = thinking["effort"]
-        elif thinking is not None and isinstance(thinking, dict) and thinking.get("type") == "enabled":
-            pass
 
         return super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
