@@ -25,6 +25,15 @@ GEMINI_TTS_RAW_RESPONSE_FORMAT: Final = "pcm"
 GEMINI_TTS_SUPPORTED_RESPONSE_FORMATS: Final = frozenset({"wav", GEMINI_TTS_RAW_RESPONSE_FORMAT})
 
 
+def _pcm16_payload(audio: bytes) -> bytes:
+    if not audio.startswith(b"RIFF") or audio[8:12] != b"WAVE":
+        return audio
+    data_index: Final = audio.find(b"data", 12)
+    if data_index < 12:
+        return audio
+    return audio[data_index + 8 :]
+
+
 class ChatAudioParam(TypedDict):
     voice: ReadOnly[str]
     format: ReadOnly[NotRequired[str]]
@@ -150,7 +159,9 @@ class SpeechToCompletionBridgeTransformationHandler:
 
     def _gemini_tts_response_body(self, decoded_audio: bytes, response_format: str | None) -> tuple[bytes, str]:
         if response_format == GEMINI_TTS_RAW_RESPONSE_FORMAT:
-            return decoded_audio, "audio/pcm"
+            return _pcm16_payload(decoded_audio), "audio/pcm"
+        if decoded_audio.startswith(b"RIFF") and decoded_audio[8:12] == b"WAVE":
+            return decoded_audio, "audio/wav"
         return self._convert_pcm16_to_wav(decoded_audio), "audio/wav"
 
     def transform_response(
