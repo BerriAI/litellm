@@ -23,7 +23,7 @@ pub async fn migrated_database(
     let database = database?;
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, DATABASE, 7).await?;
-    for table in ["otel_traces", "agent_traces_by_key", "spend_logs"] {
+    for table in ["otel_traces", "trace_rollup", "spend_logs"] {
         database
             .client
             .post(writer.url().clone())

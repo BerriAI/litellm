@@ -7,8 +7,8 @@ macro_rules! owned_by {
     (otel_traces) => {
         "({access_all:UInt8} = 1 OR ({access_user:String} != '' AND UserId = {access_user:String}) OR has({access_teams:Array(String)}, TeamId))"
     };
-    (agent_traces_by_key) => {
-        "({access_all:UInt8} = 1 OR ({access_user:String} != '' AND UserIds = [{access_user:String}]) OR has({access_teams:Array(String)}, TeamId))"
+    (trace_rollup) => {
+        "({access_all:UInt8} = 1 OR ({access_user:String} != '' AND UserId = {access_user:String}) OR has({access_teams:Array(String)}, TeamId))"
     };
     (spend_logs) => {
         "({access_all:UInt8} = 1 OR ({access_user:String} != '' AND user = {access_user:String}) OR has({access_teams:Array(String)}, team_id))"
@@ -16,24 +16,23 @@ macro_rules! owned_by {
 }
 
 /// Rollup rows of one run merge in the background, so a user-owned row can belong to a run that
-/// other users also wrote to. Trusted reads drop such runs; a row policy cannot express this.
-macro_rules! whole_runs {
+/// other users also wrote to. Trusted reads see a run only if every row they finalize allows it;
+/// a row policy cannot express this.
+macro_rules! owns_run {
     () => {
-        "({access_all:UInt8} = 1 OR has({access_teams:Array(String)}, TeamId) OR (TeamId, ApiKeyHash, TraceId) NOT IN (SELECT TeamId, ApiKeyHash, TraceId FROM agent_traces_by_key WHERE {access_user:String} != '' AND UserIds != [{access_user:String}]))"
+        "({access_all:UInt8} = 1 OR has({access_teams:Array(String)}, TeamId) OR ({access_user:String} != '' AND groupUniqArray(UserId) = [{access_user:String}]))"
     };
 }
 
 /// Prefixes a read with the rows its caller may see: `owned_spans`, `owned_runs` and
-/// `owned_calls`. Trusted SQL reads only these, never the tables.
+/// `owned_calls`. `owned_runs` holds the rollup rows that can belong to a visible run; a read that
+/// finalizes runs must reread all their rows and keep a run only if it satisfies `owns_run!`.
 macro_rules! owned {
     ($($sql:expr),+ $(,)?) => {
         concat!(
             "WITH owned_spans AS (SELECT * FROM otel_traces WHERE ",
             $crate::access::owned_by!(otel_traces),
-            "),\nowned_runs AS (SELECT * FROM agent_traces_by_key WHERE ",
-            $crate::access::owned_by!(agent_traces_by_key),
-            " AND ",
-            $crate::access::whole_runs!(),
+            "),\nowned_runs AS (SELECT * FROM trace_rollup WHERE ({access_all:UInt8} = 1 OR has({access_teams:Array(String)}, TeamId) OR ({access_user:String} != '' AND UserId = {access_user:String}))",
             "),\nowned_calls AS (SELECT * FROM spend_logs FINAL WHERE ",
             $crate::access::owned_by!(spend_logs),
             ")",
@@ -44,9 +43,9 @@ macro_rules! owned {
 
 pub(crate) use owned;
 pub(crate) use owned_by;
-pub(crate) use whole_runs;
+pub(crate) use owns_run;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct AccessParams {
     access_all: u8,
     access_user: String,
@@ -77,7 +76,7 @@ pub(crate) fn predicate(scope: &QueryScope, table: TraceTable) -> String {
     }
     let template = match table {
         TraceTable::OtelTraces => owned_by!(otel_traces),
-        TraceTable::AgentTracesByKey => owned_by!(agent_traces_by_key),
+        TraceTable::TraceRollup => owned_by!(trace_rollup),
         TraceTable::SpendLogs => owned_by!(spend_logs),
     };
     let AccessParams {

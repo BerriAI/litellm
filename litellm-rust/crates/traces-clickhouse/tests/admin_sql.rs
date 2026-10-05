@@ -26,8 +26,8 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
         "CREATE DATABASE litellm",
         "CREATE TABLE litellm.otel_traces (n UInt8) ENGINE = Memory",
         "INSERT INTO litellm.otel_traces VALUES (1)",
-        "CREATE TABLE litellm.agent_traces_by_key (n UInt8) ENGINE = Memory",
-        "INSERT INTO litellm.agent_traces_by_key VALUES (4)",
+        "CREATE TABLE litellm.trace_rollup (n UInt8) ENGINE = Memory",
+        "INSERT INTO litellm.trace_rollup VALUES (4)",
         "CREATE TABLE litellm.spend_logs (n UInt8) ENGINE = Memory",
         "INSERT INTO litellm.spend_logs VALUES (3)",
         "CREATE TABLE litellm.private_traces (n UInt8) ENGINE = Memory",
@@ -79,7 +79,7 @@ async fn admin_sql_reads_rows_with_enforced_settings(
     let result = read(
         &database.client,
         &connection,
-        &format!("SELECT n AS answer FROM agent_traces_by_key{format}"),
+        &format!("SELECT n AS answer FROM trace_rollup{format}"),
     )
     .await?;
     let json: Value = serde_json::from_str(&result)?;

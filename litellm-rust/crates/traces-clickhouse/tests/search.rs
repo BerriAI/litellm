@@ -763,7 +763,7 @@ async fn listing_runs_skips_out_of_window_span_rows(
         .await?
         .unwrap();
     assert_eq!(spans.data.len() as u64, metadata.summary.span_count);
-    let budget = 4 * table_rows(&fixture, "agent_traces_by_key").await?
+    let budget = 4 * table_rows(&fixture, "trace_rollup").await?
         + 3 * runs().iter().flat_map(rows).count() as u64;
     let read = rows_read_by(&fixture, "FROM owned_runs").await?;
     for (operation, read) in [("list", list_read), ("canonical ID lookup", read)] {
@@ -772,6 +772,97 @@ async fn listing_runs_skips_out_of_window_span_rows(
             "{operation} read {read} rows, exceeding the {budget}-row budget for bounded candidate, ownership and canonical scans"
         );
     }
+    Ok(())
+}
+
+async fn peak_memory_of(fixture: &SeededDatabase, marker: &str) -> TestResult<u64> {
+    sql(fixture, "SYSTEM FLUSH LOGS".into()).await?;
+    let peak = sql(
+        fixture,
+        format!(
+            "SELECT max(memory_usage) FROM system.query_log WHERE type = 'QueryFinish' \
+             AND current_database = '{DATABASE}' AND position(query, '{marker}') > 0 \
+             AND query NOT LIKE '%system.query_log%'"
+        ),
+    )
+    .await?;
+    Ok(peak.parse()?)
+}
+
+#[rstest]
+#[tokio::test]
+async fn newest_page_aggregates_recent_runs_instead_of_the_whole_window(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let (hours, runs_per_hour) = (24, 500);
+    let start_ms = |index: i64| T0_MS + index * HOUR_MS / runs_per_hour;
+    insert_rows(
+        &fixture.database.client,
+        &writer,
+        DATABASE,
+        InsertTable::OtelTraces,
+        (0..hours * runs_per_hour)
+            .map(|index| {
+                BTreeMap::from([
+                    ("Timestamp".into(), json!(start_ms(index) * 1_000_000)),
+                    ("TraceId".into(), json!(format!("run-{index:05}"))),
+                    ("SpanId".into(), json!("root")),
+                    ("ParentSpanId".into(), json!("")),
+                    ("SpanName".into(), json!(format!("run-{index}"))),
+                    ("Input".into(), json!(format!("{index}{}", "x".repeat(240)))),
+                    ("TeamId".into(), json!("team-a")),
+                    ("ApiKeyHash".into(), json!("key-a")),
+                ])
+            })
+            .collect(),
+    )
+    .await?;
+    let connection = fixture
+        .readers
+        .connection(&fixture.database.client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let store = ClickHouseTraces::new(fixture.database.client.clone(), connection);
+    let window = RunFilter {
+        start_ms: T0_MS,
+        end_ms: T0_MS + hours * HOUR_MS,
+        ..Default::default()
+    };
+    let listed = store
+        .runs(
+            &QueryScope::All,
+            &RunQuery {
+                selection: RunSelection::Matching(window.clone()),
+                order: RunOrder::NEWEST,
+                after: None,
+                limit: 10,
+            },
+        )
+        .await?;
+    let total = hours * runs_per_hour;
+    assert_eq!(
+        listed.iter().map(|run| run.start_ms).collect::<Vec<_>>(),
+        (total - 10..total).rev().map(start_ms).collect::<Vec<_>>()
+    );
+    let counted = store
+        .run_counts(
+            &QueryScope::All,
+            &RunCountQuery {
+                filter: window,
+                by: CountBy::default(),
+                contains: String::new(),
+                limit: None,
+            },
+        )
+        .await?;
+    assert_eq!(counted[0].runs, total as u64);
+    let page = peak_memory_of(&fixture, "page AS (").await?;
+    let whole_window = peak_memory_of(&fixture, "ARRAY JOIN multiIf(").await?;
+    assert!(
+        page * 4 < whole_window,
+        "the newest page used {page} bytes, close to the {whole_window} bytes of aggregating every run in the window"
+    );
     Ok(())
 }
 

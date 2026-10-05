@@ -187,7 +187,8 @@ function stepState(complete: boolean, open: boolean): StepState {
 export function OnboardingSteps({ state, className }: { state: LensReadiness; className?: string }) {
   const id = useId();
   const listRef = useRef<HTMLOListElement>(null);
-  const [step, setStep] = useState(() => initialSetupStep(state));
+  const [step, setStep] = useState<number>();
+  if (step === undefined && !state.loading) setStep(initialSetupStep(state));
   const goTo = (index: number) => {
     setStep(index);
     listRef.current?.querySelector<HTMLButtonElement>(`[aria-controls="${id}-${index}"]`)?.focus();

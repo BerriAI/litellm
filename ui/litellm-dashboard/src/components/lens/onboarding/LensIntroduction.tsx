@@ -154,10 +154,7 @@ export function LensIntroduction({ onStart, onDemo }: { onStart: () => void; onD
   const [highlighted, setHighlighted] = useState(false);
   const toggleEvidence = () => setHighlighted((current) => !current);
   return (
-    <section
-      aria-labelledby="lens-introduction"
-      className="rounded-2xl border bg-card p-5 sm:px-6 sm:py-5 xl:px-7 xl:py-6"
-    >
+    <section aria-labelledby="lens-introduction">
       <h2 id="lens-introduction" className="text-2xl leading-tight font-semibold tracking-tight sm:text-3xl">
         The gateway that helps your agents improve
       </h2>

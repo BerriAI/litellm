@@ -1,3 +1,4 @@
+- https://github.com/langfuse/langfuse/tree/main/packages/shared/clickhouse/migrations can be good reference
 - Own trace schema, row encoding, SQL query adapters and reader provisioning; consume domain types from `litellm-traces`
 - Keep generic ClickHouse connections and HTTP execution in `litellm-storage-clickhouse`; keep PyO3 conversion in `python-bridge`
 - Keep schema definitions only in `migrations/NNNN_description.sql`, embedded by `litellm_migrate::migrate!`

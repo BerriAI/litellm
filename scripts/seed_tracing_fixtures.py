@@ -24,7 +24,7 @@ from uuid import uuid4
 import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
-from litellm.rust_bridge.trace.generated.types import AllQueryScope, Trace
+from litellm.rust_bridge.trace.generated.types import AllQueryScope, TracePage
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant, span_rows
 from litellm.tracing.config import trace_storage_config
 from litellm.tracing.types import SpendLogRecord
@@ -39,11 +39,12 @@ SPEND_FIXTURES: Final = REPO_ROOT / "litellm-rust/crates/traces-clickhouse/tests
 JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 SPEND_ROWS: Final = TypeAdapter(tuple[SpendLogRecord, ...])
-TRACE: Final = TypeAdapter(Trace)
+TRACE_PAGE: Final = TypeAdapter(TracePage)
 NANOSECOND_FIELDS: Final = frozenset({"startTimeUnixNano", "endTimeUnixNano", "timeUnixNano"})
 TRACE_ID_FIELDS: Final = frozenset({"traceId", "trace_id", "session_id"})
 SPAN_ID_FIELDS: Final = frozenset({"spanId", "parentSpanId", "span_id"})
 COPY_WINDOW_MS: Final = 24 * 60 * 60 * 1000
+VERIFY_MARGIN_MS: Final = 60 * 60 * 1000
 LONG_SESSION_SOURCE: Final = "openai_agents_swarm"
 LONG_SESSION_REPEATS: Final = (50, 400, 4000)
 
@@ -301,11 +302,12 @@ def stamp(row: SpendLogRecord, tenant: TenantIdentity) -> SpendLogRecord:
 
 
 async def verify(
-    client: httpx.AsyncClient, captures: tuple[tuple[str, tuple[SpendLogRecord, ...]], ...], trace_salt: str
+    client: httpx.AsyncClient,
+    captures: tuple[tuple[str, tuple[SpendLogRecord, ...]], ...],
+    trace_salt: str,
+    shift_ms: int = 0,
 ) -> None:
-    verified: Final = tuple(
-        await asyncio.gather(*(verify_capture(client, name, rows, trace_salt) for name, rows in captures))
-    )
+    verified: Final = tuple([await verify_capture(client, name, rows, trace_salt, shift_ms) for name, rows in captures])
     sys.stdout.write(
         json.dumps({"spend_rows": sum(len(rows) for _, rows in captures), "captures": verified}, indent=2) + "\n"
     )
@@ -533,7 +535,7 @@ async def seed(profile: str = "default", copies: int | None = None, timeout_seco
             await copy_clickhouse(clickhouse, config.database, plan)
             await copy_postgres(database, plan)
         if count > 1:
-            await verify(client, captures, str(count - 1))
+            await verify(client, captures, str(count - 1), (count - 1) * repeated.step_ms)
         for plan in sessions:
             sys.stdout.write(
                 f"Long session: {len(plan.numbers)} repeats, "
@@ -554,15 +556,26 @@ def fixture_capture(name: str, row: SpendLogRecord) -> FixtureCapture:
 
 
 async def verify_capture(
-    client: httpx.AsyncClient, name: str, rows: tuple[SpendLogRecord, ...], trace_salt: str = ""
+    client: httpx.AsyncClient, name: str, rows: tuple[SpendLogRecord, ...], trace_salt: str = "", shift_ms: int = 0
 ) -> Mapping[str, JsonValue]:
     capture: Final = fixture_capture(name, rows[0])
     trace_id: Final = copied_trace_id(capture.trace_id, trace_salt) if trace_salt else capture.trace_id
-    detail: Final = await client.get(f"/v1/traces/{trace_id}")
-    detail.raise_for_status()
-    trace: Final = TRACE.validate_json(detail.content)
+    started_ms: Final = min(row["start_time"] for row in rows) - shift_ms
+    listed: Final = await client.get(
+        "/v1/traces",
+        params={
+            "q": f"trace_id:{trace_id}",
+            "start_ms": started_ms - VERIFY_MARGIN_MS,
+            "end_ms": started_ms + VERIFY_MARGIN_MS,
+            "page_size": 1,
+        },
+    )
+    listed.raise_for_status()
+    summary: Final = next(iter(TRACE_PAGE.validate_json(listed.content)["data"]), None)
+    if summary is None:
+        raise RuntimeError(f"Seeded trace {trace_id} ({name}) is not listed")
     expected: Final = sum(row["spend"] or 0 for row in rows)
-    actual: Final = trace["summary"]["spend"]
+    actual: Final = summary["spend"]
     return {
         "fixture": name,
         "trace_id": trace_id,

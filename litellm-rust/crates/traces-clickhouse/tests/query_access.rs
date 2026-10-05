@@ -96,7 +96,7 @@ async fn queries_and_help_are_scoped_by_the_database(
         &query_sql(
             &database.client,
             &reader,
-            "SELECT sum(SpanCount) AS count FROM agent_traces_by_key",
+            "SELECT sum(SpanCount) AS count FROM trace_rollup",
         )
         .await?,
     )?;

@@ -516,7 +516,7 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Quer
     .map_err(|_| Error::InvalidResponse)?;
     Ok(QueryHelp {
         dialect: "ClickHouse SQL",
-        access: "ClickHouse row policies enforce user and permitted-team visibility. Logical traces summarize visible canonical spans; curated user-only reads require full trace ownership. Team and admin start time, duration, span count and error count agree with curated reads",
+        access: "ClickHouse row policies enforce user and permitted-team visibility. Logical traces summarize visible rollup rows; curated user-only reads require full trace ownership. Team and admin start time, duration, span count and error count agree with curated reads",
         response: "ClickHouse JSON envelope: meta, data, rows, statistics; 64-bit and larger integers in result data are decimal strings to preserve precision",
         examples,
         gotchas,

@@ -1,7 +1,7 @@
 "use client";
 
-import { useId, useState } from "react";
-import { Loader2, XIcon } from "lucide-react";
+import { useId, useRef, useState } from "react";
+import { XIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -38,10 +38,13 @@ export type LensIntroDialogProps = Omit<LensGettingStartedProps, "state"> & {
 export function LensIntroDialog({ open, onClose, ...gettingStarted }: LensIntroDialogProps) {
   const [forever, setForever] = useState(false);
   const checkboxId = useId();
+  const popupRef = useRef<HTMLDivElement>(null);
   const close = () => onClose(forever);
   return (
     <Dialog open={open} onOpenChange={(next) => !next && close()}>
       <DialogContent
+        ref={popupRef}
+        initialFocus={popupRef}
         showCloseButton={false}
         className="max-h-[calc(100vh-4rem)] gap-0 overflow-y-auto p-0 sm:max-w-4xl xl:max-w-5xl 2xl:max-w-6xl"
       >
@@ -69,12 +72,5 @@ export function LensIntroDialog({ open, onClose, ...gettingStarted }: LensIntroD
 function IntroContent(props: Omit<LensGettingStartedProps, "state">) {
   const { canViewInvestigations } = useOnboarding();
   const state = useLensReadiness(canViewInvestigations);
-  if (state.loading)
-    return (
-      <p role="status" className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-        <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-        Checking Lens setup…
-      </p>
-    );
   return <LensGettingStarted state={state} {...props} />;
 }

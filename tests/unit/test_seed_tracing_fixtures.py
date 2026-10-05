@@ -18,6 +18,7 @@ from scripts.seed_tracing_fixtures import (
     JSON,
     TRACE_FIXTURES,
     bulk_span_rows,
+    copied_trace_id,
     fixture_capture,
     fixture_replays,
     postgres_row,
@@ -30,6 +31,7 @@ from scripts.seed_tracing_fixtures import (
     seed_id,
     spend_fixtures,
     timestamps,
+    verify_capture,
 )
 
 CALL_KEYS: Final = TypeAdapter(tuple[str, ...])
@@ -228,6 +230,53 @@ async def test_first_copy_stamps_the_authenticated_tenant_and_writes_both_stores
     saved: Final = database.litellm_spendlogs.create_many.call_args.kwargs["data"]
     assert tuple(row["request_id"] for row in saved) == tuple(row["request_id"] for row in rows)
     assert tuple(row["spend"] for row in saved) == tuple(row["spend"] for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_verify_finds_a_shifted_copy_by_its_otlp_trace_id_through_the_list() -> None:
+    name, rows = next((name, rows) for name, rows in spend_fixtures() if any(row["spend"] for row in rows))
+    shift_ms: Final = 3 * 60 * 60 * 1000
+    trace_id: Final = copied_trace_id(fixture_capture(name, rows[0]).trace_id, "7")
+    started_ms: Final = min(row["start_time"] for row in rows) - shift_ms
+    spend: Final = sum(row["spend"] or 0 for row in rows)
+
+    def listed(request: httpx.Request) -> httpx.Response:
+        params: Final = request.url.params
+        found: Final = (
+            request.url.path == "/v1/traces"
+            and params["q"] == f"trace_id:{trace_id}"
+            and int(params["start_ms"]) <= started_ms < int(params["end_ms"])
+        )
+        summary: Final = {
+            "resolution_limited": False,
+            "trace_id": trace_id,
+            "id": "A" * 64,
+            "name": name,
+            "service": "seed",
+            "agent_names": [],
+            "frameworks": [],
+            "input_preview": "",
+            "start_time": "2026-01-01T00:00:00Z",
+            "duration_ms": 1.0,
+            "root_status": "ok",
+            "has_error": False,
+            "span_count": 1,
+            "agent_count": 0,
+            "agent_invocations": 0,
+            "llm_calls": 1,
+            "tool_calls": 0,
+            "error_count": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "models": [],
+            "spend": spend,
+        }
+        window: Final = {"start_ms": 0, "end_ms": 1, "as_of_ms": 1}
+        return httpx.Response(200, json={"window": window, "data": [summary] if found else [], "next_cursor": None})
+
+    async with httpx.AsyncClient(base_url="http://proxy", transport=httpx.MockTransport(listed)) as client:
+        result: Final = await verify_capture(client, name, rows, "7", shift_ms)
+    assert (result["trace_id"], result["trace_spend"], result["verified"]) == (trace_id, spend, True)
 
 
 def test_seed_cli_rejects_nonpositive_copies() -> None:

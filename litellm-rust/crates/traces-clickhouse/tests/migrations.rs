@@ -151,16 +151,6 @@ async fn schema_supports_span_rollups_and_spend_joins(
         .ok_or("missing span detail")?;
     assert_eq!(detail.input, "hello world");
     assert_eq!(detail.attributes["gen_ai.response.id"], "response-1");
-    let request_ids = read_json(
-        &database,
-        "SELECT groupArrayArray(RequestIds) AS ids FROM trace_test.agent_traces_by_key \
-         WHERE TraceId = 'trace-1'",
-    )
-    .await?;
-    assert_eq!(
-        request_ids["data"][0]["ids"],
-        serde_json::json!(["response-1"])
-    );
     let calls = traces(&database, &reader)
         .calls(
             &team,
@@ -196,7 +186,7 @@ async fn schema_supports_span_rollups_and_spend_joins(
     let body = read_json(
         &database,
         "SELECT toUInt32(sum(SpanCount)) AS spans, toUInt32(sum(InputTokens)) AS tokens \
-         FROM trace_test.agent_traces_by_key WHERE TeamId = 'team-1' AND TraceId = 'trace-1'",
+         FROM trace_test.trace_rollup WHERE TeamId = 'team-1' AND TraceId = 'trace-1'",
     )
     .await?;
     assert_eq!(
@@ -345,7 +335,7 @@ async fn retried_trace_insert_does_not_inflate_rollup(
     let counts = read_json(
         &database,
         "SELECT toUInt32(sum(SpanCount)) AS spans, toUInt32(sum(InputTokens)) AS tokens \
-         FROM trace_test.agent_traces_by_key WHERE TraceId = 'retried-trace'",
+         FROM trace_test.trace_rollup WHERE TraceId = 'retried-trace'",
     )
     .await?;
     assert_eq!(table_rows(&database, "otel_traces").await?, 1);
@@ -378,13 +368,13 @@ async fn keyed_rollup_keeps_same_trace_ids_separate_by_api_key(
     insert_rows(&database, "otel_traces", rows).await?;
     execute_write(
         &database,
-        "OPTIMIZE TABLE trace_test.agent_traces_by_key FINAL",
+        "OPTIMIZE TABLE trace_test.trace_rollup FINAL",
     )
     .await?;
     let rows = read_json(
         &database,
-        "SELECT ApiKeyHash, any(RootInput) AS RootInput \
-         FROM trace_test.agent_traces_by_key WHERE TraceId = 'shared-id' \
+        "SELECT ApiKeyHash, argMinMerge(RootInput) AS RootInput \
+         FROM trace_test.trace_rollup WHERE TraceId = 'shared-id' \
          GROUP BY ApiKeyHash ORDER BY ApiKeyHash",
     )
     .await?;
@@ -561,7 +551,7 @@ async fn listed_agent_names_preserve_scope_and_cursor(
 
 #[rstest]
 #[tokio::test]
-async fn rollup_merges_spans_across_days_without_losing_root_fields(
+async fn rollup_finalizes_a_run_across_days_when_its_root_arrives_last(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
@@ -577,7 +567,6 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
         "StatusCode": "STATUS_CODE_ERROR",
         "ResourceAttributes": {"litellm.team_id": "team-1"}
     }))?;
-    insert_rows(&database, "otel_traces", vec![root]).await?;
     let child = serde_json::from_value(serde_json::json!({
         "Timestamp": day_start + 1_000_000_000, "TraceId": "cross-day", "SpanId": "span-child",
         "ParentSpanId": "span-root", "ServiceName": "proxy", "SpanName": "child",
@@ -586,22 +575,23 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
         "ResourceAttributes": {"litellm.team_id": "team-1"}
     }))?;
     insert_rows(&database, "otel_traces", vec![child]).await?;
+    insert_rows(&database, "otel_traces", vec![root]).await?;
     execute_write(
         &database,
-        "OPTIMIZE TABLE trace_test.agent_traces_by_key FINAL",
+        "OPTIMIZE TABLE trace_test.trace_rollup FINAL",
     )
     .await?;
     let response = read_json(
         &database,
-        "SELECT count() AS rows, any(RootName) AS RootName, any(RootInput) AS RootInput, \
-         any(RootStatus) AS RootStatus, sum(SpanCount) AS SpanCount \
-         FROM trace_test.agent_traces_by_key",
+        "SELECT argMinMerge(Name) AS Name, argMinMerge(RootInput) AS RootInput, \
+         argMinMerge(RootStatus) AS RootStatus, sum(SpanCount) AS SpanCount \
+         FROM trace_test.trace_rollup GROUP BY TeamId, ApiKeyHash, TraceId",
     )
     .await?;
     assert_eq!(
         response["data"],
         serde_json::json!([{
-            "rows": 1, "RootName": "root", "RootInput": "root input",
+            "Name": "root", "RootInput": "root input",
             "RootStatus": "STATUS_CODE_ERROR", "SpanCount": 2
         }])
     );
@@ -615,11 +605,23 @@ async fn rollup_merges_spans_across_days_without_losing_root_fields(
         10,
     )
     .await?;
+    assert_eq!(listed["data"].as_array().map(Vec::len), Some(1));
+    assert_eq!(listed["data"][0]["start_ms"], day_start / 1_000_000 - 1000);
     assert_eq!(
         listed["data"][0]["agent_names"],
         serde_json::json!(["lead", "researcher"])
     );
     assert_eq!(listed["data"][0]["agent_count"], 2);
+    let after_start = list_runs(
+        &database,
+        &connection,
+        &owned("", &["team-1"]),
+        day_start / 1_000_000..day_start / 1_000_000 + 2000,
+        None,
+        10,
+    )
+    .await?;
+    assert_eq!(after_start["data"], serde_json::json!([]));
     Ok(())
 }
 
@@ -692,9 +694,9 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     assert_eq!(
         tables["data"],
         serde_json::json!([
-            {"name": "agent_traces_by_key"},
             {"name": "otel_traces"},
-            {"name": "spend_logs"}
+            {"name": "spend_logs"},
+            {"name": "trace_rollup"}
         ])
     );
     let old_time = time::OffsetDateTime::now_utc() - time::Duration::days(20);
@@ -711,7 +713,7 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     }))?;
     insert_rows(&database, "otel_traces", vec![span]).await?;
     insert_rows(&database, "spend_logs", vec![spend]).await?;
-    assert_eq!(table_rows(&database, "agent_traces_by_key").await?, 1);
+    assert_eq!(table_rows(&database, "trace_rollup").await?, 1);
     ensure_schema(&database.client, &writer, "trace_test", 14).await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
@@ -736,12 +738,12 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     execute_write(&database, "OPTIMIZE TABLE trace_test.otel_traces FINAL").await?;
     execute_write(
         &database,
-        "OPTIMIZE TABLE trace_test.agent_traces_by_key FINAL",
+        "OPTIMIZE TABLE trace_test.trace_rollup FINAL",
     )
     .await?;
     execute_write(&database, "OPTIMIZE TABLE trace_test.spend_logs FINAL").await?;
     assert_eq!(table_rows(&database, "otel_traces").await?, 0);
-    assert_eq!(table_rows(&database, "agent_traces_by_key").await?, 0);
+    assert_eq!(table_rows(&database, "trace_rollup").await?, 0);
     assert_eq!(table_rows(&database, "spend_logs").await?, 0);
     let mutation_count = mutation_rows(&database).await?;
     ensure_schema(&database.client, &writer, "trace_test", 14).await?;
@@ -1072,7 +1074,7 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         "spans",
         "calls",
         "otel_traces",
-        "agent_traces_by_key",
+        "trace_rollup",
         "spend_logs",
     ] {
         execute_write(
@@ -1159,7 +1161,7 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         "spans",
         "calls",
         "otel_traces",
-        "agent_traces_by_key",
+        "trace_rollup",
         "spend_logs",
     ] {
         let described = read_json(&database, &format!("DESCRIBE TABLE {table}")).await?;
@@ -1356,7 +1358,7 @@ async fn query_help_preserves_schema_and_guide_when_discovery_hits_reader_limits
         "spans",
         "calls",
         "otel_traces",
-        "agent_traces_by_key",
+        "trace_rollup",
         "spend_logs",
     ] {
         execute_write(
@@ -1595,7 +1597,7 @@ async fn trusted_and_sql_readers_share_request_log_visibility(
 
 #[rstest]
 #[tokio::test]
-async fn rollup_cost_completeness_preserves_missing_ids_and_fails_closed_for_historical_rows(
+async fn listed_runs_include_a_user_only_when_the_user_wrote_every_span(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
@@ -1603,16 +1605,24 @@ async fn rollup_cost_completeness_preserves_missing_ids_and_fails_closed_for_his
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let initial_mutations = mutation_rows(&database).await?;
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
-    let rows = [("complete", "llm", "response"), ("complete", "llm", "response"), ("complete", "agent", ""), ("missing", "llm", "response"), ("missing", "llm", ""), ("missing", "agent", "extra-id"), ("mixed", "llm", "mine"), ("mixed", "llm", "other")]
-        .into_iter().enumerate().map(|(index, (trace, kind, id))| serde_json::from_value(serde_json::json!({
-            "Timestamp": timestamp, "TraceId": trace, "SpanId": index.to_string(), "TeamId": "team", "ApiKeyHash": "export",
-            "UserId": if id == "other" { "other" } else { "owner" }, "ObservationType": kind, "LiteLLMRequestId": id,
-        }))).collect::<Result<Vec<BTreeMap<String, serde_json::Value>>, _>>()?;
-    insert_rows(&database, "otel_traces", rows).await?;
-    execute_write(&database, &format!(
-        "INSERT INTO trace_test.agent_traces_by_key (TeamId, ApiKeyHash, TraceId, StartTs, EndTs, LlmCount, RequestIds) \
-         VALUES ('team', 'export', 'historical', fromUnixTimestamp64Nano({timestamp}), fromUnixTimestamp64Nano({timestamp}), 2, ['response', 'non-llm-id'])"
-    )).await?;
+    let span = |index: usize, trace: &str, kind: &str, user: &str| {
+        serde_json::from_value::<BTreeMap<String, serde_json::Value>>(serde_json::json!({
+            "Timestamp": timestamp, "TraceId": trace, "SpanId": index.to_string(), "TeamId": "team",
+            "ApiKeyHash": "export", "UserId": user, "ObservationType": kind,
+        }))
+    };
+    insert_rows(
+        &database,
+        "otel_traces",
+        vec![
+            span(0, "complete", "llm", "owner")?,
+            span(1, "complete", "llm", "owner")?,
+            span(2, "complete", "agent", "owner")?,
+            span(3, "mixed", "llm", "owner")?,
+        ],
+    )
+    .await?;
+    insert_rows(&database, "otel_traces", vec![span(4, "mixed", "llm", "other")?]).await?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let reader = Connection::reader(&database.url, "trace_test")?;
     let window = timestamp / 1_000_000 - 1..timestamp / 1_000_000 + 1;
@@ -1626,42 +1636,25 @@ async fn rollup_cost_completeness_preserves_missing_ids_and_fails_closed_for_his
     )
     .await?;
     let listed = listed["data"].as_array().ok_or("missing runs")?;
-    assert_eq!(listed.len(), 3);
-    let owner = list_runs(&database, &reader, &owned("owner", &[]), window, None, 10).await?;
-    let owner: std::collections::BTreeSet<_> = owner["data"]
-        .as_array()
-        .ok_or("missing owned runs")?
-        .iter()
-        .filter_map(|row| row["trace_id"].as_str())
-        .collect();
-    assert_eq!(owner, ["complete", "missing"].into());
+    assert_eq!(listed.len(), 2);
     for row in listed {
         match row["trace_id"].as_str().ok_or("missing trace id")? {
             "complete" => {
                 assert_eq!(row["user_id"], "owner");
                 assert_eq!(row["llm_calls"], 2);
             }
-            "missing" | "historical" => {}
             "mixed" => assert_eq!(row["user_id"], ""),
             id => panic!("unexpected trace {id}"),
         }
     }
-    let completeness = read_json(
-        &database,
-        "SELECT TraceId AS trace, sum(IdentifiedLlmCount) = sum(LlmCount) AS complete, \
-         arraySort(groupArrayArray(RequestIds)) AS ids \
-         FROM trace_test.agent_traces_by_key GROUP BY TraceId ORDER BY TraceId",
-    )
-    .await?;
-    assert_eq!(
-        completeness["data"],
-        serde_json::json!([
-            {"trace": "complete", "complete": 1, "ids": ["response", "response"]},
-            {"trace": "historical", "complete": 0, "ids": ["non-llm-id", "response"]},
-            {"trace": "missing", "complete": 0, "ids": ["", "extra-id", "response"]},
-            {"trace": "mixed", "complete": 1, "ids": ["mine", "other"]},
-        ])
-    );
+    let owner = list_runs(&database, &reader, &owned("owner", &[]), window, None, 10).await?;
+    let owner: Vec<_> = owner["data"]
+        .as_array()
+        .ok_or("missing owned runs")?
+        .iter()
+        .filter_map(|row| row["trace_id"].as_str())
+        .collect();
+    assert_eq!(owner, ["complete"]);
     assert_eq!(mutation_rows(&database).await?, initial_mutations);
     Ok(())
 }

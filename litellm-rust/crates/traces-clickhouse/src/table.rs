@@ -7,7 +7,7 @@
 #[strum(serialize_all = "snake_case")]
 pub enum TraceTable {
     OtelTraces,
-    AgentTracesByKey,
+    TraceRollup,
     SpendLogs,
 }
 
@@ -21,6 +21,6 @@ pub enum QueryTable {
     Spans,
     Calls,
     OtelTraces,
-    AgentTracesByKey,
+    TraceRollup,
     SpendLogs,
 }

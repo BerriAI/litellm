@@ -3,7 +3,7 @@ from typing import Final
 from litellm.rust_bridge.trace.storage import ClickHouseStorage
 
 OTEL_TRACES_TABLE: Final = "otel_traces"
-AGENT_TRACES_BY_KEY_TABLE: Final = "agent_traces_by_key"
+TRACE_ROLLUP_TABLE: Final = "trace_rollup"
 SPEND_LOGS_TABLE: Final = "spend_logs"
 
 

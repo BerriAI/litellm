@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, type ComponentProps, type ReactNode } from "react";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 import type { LensReadiness } from "../hooks/useLensReadiness";
@@ -31,7 +32,14 @@ export function OnboardingSetup({ state, action, className, ...props }: Onboardi
             Each step checks your connection, so you’ll see when it’s working.
           </p>
         </div>
-        {action}
+        {state.loading ? (
+          <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+            Checking setup…
+          </p>
+        ) : (
+          action
+        )}
       </div>
       <OnboardingSteps state={state} />
       {state.error && (

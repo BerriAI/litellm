@@ -9,7 +9,9 @@ use litellm_traces::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::access::{AccessParams, owned};
+use std::ops::Range;
+
+use crate::access::{AccessParams, owned, owns_run};
 
 /// `LIKE`'s own metacharacters match literally.
 fn like_literal(value: &str) -> String {
@@ -35,7 +37,7 @@ fn mode(filter: &FieldFilter) -> &'static str {
 }
 
 /// Query parameters only carry string arrays, so filters travel as parallel columns.
-#[derive(Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 struct SearchColumns {
     text: Vec<String>,
     filter_fields: Vec<&'static str>,
@@ -79,13 +81,25 @@ impl From<&RunSearch> for SearchColumns {
     }
 }
 
-#[derive(Debug, Serialize)]
+/// A run's rollup rows sit in the hours its spans started, so a run that began before a range
+/// shows up as one starting inside it. Reading a day of earlier rollups finds its true start
+/// unless its spans paused for longer than that.
+const ROLLUP_LOOKBACK_MS: i64 = 24 * 60 * 60 * 1000;
+
+fn rollups_from(start_ms: i64) -> i64 {
+    start_ms.saturating_sub(ROLLUP_LOOKBACK_MS).max(0)
+}
+
+#[derive(Clone, Debug, Serialize)]
 struct RunsFilter {
     trace_id: String,
     trace_ref: String,
     as_of_ms: u64,
     start_ms: i64,
     end_ms: i64,
+    range_start_ms: i64,
+    range_end_ms: i64,
+    rollups_from_ms: i64,
     #[serde(flatten)]
     search: SearchColumns,
     trace_refs: Vec<String>,
@@ -99,6 +113,9 @@ impl Default for RunsFilter {
             as_of_ms: u64::MAX,
             start_ms: 0,
             end_ms: 0,
+            range_start_ms: 0,
+            range_end_ms: 0,
+            rollups_from_ms: 0,
             search: SearchColumns::default(),
             trace_refs: Vec::new(),
         }
@@ -113,6 +130,9 @@ impl From<&RunFilter> for RunsFilter {
             as_of_ms: filter.as_of_ms,
             start_ms: filter.start_ms,
             end_ms: filter.end_ms,
+            range_start_ms: filter.start_ms,
+            range_end_ms: filter.end_ms,
+            rollups_from_ms: rollups_from(filter.start_ms),
             search: (&filter.search).into(),
             trace_refs: filter.trace_refs.clone(),
         }
@@ -135,7 +155,7 @@ impl From<&RunSelection> for RunsFilter {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct RunsParams {
     #[serde(flatten)]
     access: AccessParams,
@@ -161,6 +181,20 @@ impl RunsParams {
             cursor_value: after.value,
             cursor_ref: after.trace_ref,
             limit: query.limit,
+        }
+    }
+
+    /// The same read, returning at most `limit` runs that started within `range`.
+    pub(crate) fn within(&self, range: Range<i64>, limit: u32) -> Self {
+        Self {
+            filter: RunsFilter {
+                range_start_ms: range.start,
+                range_end_ms: range.end,
+                rollups_from_ms: rollups_from(range.start),
+                ..self.filter.clone()
+            },
+            limit,
+            ..self.clone()
         }
     }
 }
@@ -212,9 +246,9 @@ macro_rules! over_matching_runs {
     ($($tail:expr),+ $(,)?) => {
         owned!(
             ",\n",
-            include_str!("../../query/canonical_spans.sql"),
-            ",\nruns AS (\n",
             include_str!("../../query/matching_runs.sql"),
+            owns_run!(),
+            include_str!("../../query/run_filters.sql"),
             ")",
             $($tail),+
         )
