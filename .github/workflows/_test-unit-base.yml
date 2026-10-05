@@ -123,47 +123,29 @@ jobs:
         timeout-minutes: 5
         uses: ./.github/actions/cache-uv-downloads
 
-      - name: Cache the Rust build
-        if: steps.changes.outputs.decision != 'skip' && inputs.rust-bridge-artifact == ''
+      - name: Set up the Rust build
+        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: ./.github/actions/cache-cargo-build
-
-      - name: Download Rust bridge artifact
-        if: steps.changes.outputs.decision != 'skip' && inputs.rust-bridge-artifact != ''
-        timeout-minutes: 5
-        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        uses: ./.github/actions/rust-bridge
         with:
-          name: ${{ inputs.rust-bridge-artifact }}
-          path: rust-bridge-dist
+          artifact: ${{ inputs.rust-bridge-artifact }}
 
       - name: Install dependencies
-        if: steps.changes.outputs.decision != 'skip' && inputs.rust-bridge-artifact == ''
+        if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 8
+        env:
+          RUST_BRIDGE_ARTIFACT: ${{ inputs.rust-bridge-artifact }}
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime
+          if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime
+          else
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --no-install-project
+            uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
+            cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
+            uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
+          fi
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
-
-      - name: Install dependencies without the project
-        if: steps.changes.outputs.decision != 'skip' && inputs.rust-bridge-artifact != ''
-        timeout-minutes: 8
-        run: |
-          diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --no-install-project
-          uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
-
-      - name: Install prebuilt Rust bridge
-        if: steps.changes.outputs.decision != 'skip' && inputs.rust-bridge-artifact != ''
-        timeout-minutes: 5
-        run: |
-          uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
-          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
-
-      - name: Verify prebuilt Rust bridge
-        if: steps.changes.outputs.decision != 'skip' && inputs.rust-bridge-artifact != ''
-        timeout-minutes: 3
-        run: |
-          uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
