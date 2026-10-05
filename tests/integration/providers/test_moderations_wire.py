@@ -47,7 +47,7 @@ _INPUTS: Final = (
 )
 
 
-def _openai_peer(expected_inputs: list[object]) -> Callable[[Request], Reply]:
+def _openai_peer() -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         if (request.method, request.target) == ("GET", "/v1/models"):
             return Reply(
@@ -55,9 +55,6 @@ def _openai_peer(expected_inputs: list[object]) -> Callable[[Request], Reply]:
             )
         assert (request.method, request.target) == ("POST", "/v1/moderations"), request.target
         assert request.headers["authorization"] == f"Bearer {_OPENAI_KEY}", request.headers
-        body: Final = json.loads(request.body)
-        assert body == {"model": _UPSTREAM_MODEL, "input": expected_inputs[0]}, body
-        expected_inputs.pop(0)
         return Reply(
             body=json.dumps({"id": "modr-integration", "model": _UPSTREAM_MODEL, "results": [_RESULT]}).encode()
         )
@@ -77,11 +74,11 @@ def _spec_view(result: Moderation) -> dict[str, object]:
     }
 
 
-def _moderation_calls(wire: Wire) -> list[tuple[str, str]]:
-    received: Final = [(request.method, request.target) for request in wire.drain()]
-    probes: Final = {call for call in received if call != ("POST", "/v1/moderations")}
-    assert probes <= {("GET", "/v1/models")}, received
-    return [call for call in received if call == ("POST", "/v1/moderations")]
+def _moderation_bodies(wire: Wire) -> list[object]:
+    received: Final = wire.drain()
+    calls: Final = [(request.method, request.target) for request in received]
+    assert set(calls) <= {("GET", "/v1/models"), ("POST", "/v1/moderations")}, calls
+    return [json.loads(request.body) for request in received if request.method == "POST"]
 
 
 def _sdk(gateway: Gateway) -> openai.OpenAI:
@@ -89,8 +86,7 @@ def _sdk(gateway: Gateway) -> openai.OpenAI:
 
 
 def test_openai_sdk_moderation_inputs_reach_upstream_as_exact_model_and_input(gateway: Gateway) -> None:
-    pending: Final[list[object]] = [*_INPUTS, _INPUTS[0]]
-    with wire_server(_openai_peer(pending)) as wire, gateway.scenario() as scenario:
+    with wire_server(_openai_peer()) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"openai/{_UPSTREAM_MODEL}", api_base=f"{wire.url}/v1", api_key=_OPENAI_KEY)
         client: Final = _sdk(gateway)
         for moderation_input in _INPUTS:
@@ -101,13 +97,13 @@ def test_openai_sdk_moderation_inputs_reach_upstream_as_exact_model_and_input(ga
         assert [_spec_view(Moderation.model_validate(result)) for result in alias.json()["results"]] == [_RESULT], (
             alias.text
         )
-        assert _moderation_calls(wire) == [("POST", "/v1/moderations")] * 4
-    assert pending == []
+        assert _moderation_bodies(wire) == [
+            {"model": _UPSTREAM_MODEL, "input": moderation_input} for moderation_input in (*_INPUTS, _INPUTS[0])
+        ]
 
 
 def test_model_less_moderation_resolves_to_configured_moderation_model(gateway: Gateway, tmp_path: Path) -> None:
-    pending: Final[list[object]] = [_INPUTS[0], _INPUTS[2]]
-    with wire_server(_openai_peer(pending)) as wire:
+    with wire_server(_openai_peer()) as wire:
         config: Final = yaml.safe_load(_PROXY_CONFIG.read_text())
         config["model_list"] = [
             {
@@ -128,5 +124,6 @@ def test_model_less_moderation_resolves_to_configured_moderation_model(gateway: 
                 assert response.status_code == 200, response.text
                 results = [_spec_view(Moderation.model_validate(result)) for result in response.json()["results"]]
                 assert results == [_RESULT], response.text
-        assert _moderation_calls(wire) == [("POST", "/v1/moderations")] * 2
-    assert pending == []
+        assert _moderation_bodies(wire) == [
+            {"model": _UPSTREAM_MODEL, "input": moderation_input} for moderation_input in (_INPUTS[0], _INPUTS[2])
+        ]

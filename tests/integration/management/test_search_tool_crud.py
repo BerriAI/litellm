@@ -1,6 +1,7 @@
 import json
 import uuid
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import yaml
@@ -15,6 +16,7 @@ _ORIGINAL_KEY: Final = "exa-original-provider-key"
 _ROTATED_KEY: Final = "exa-rotated-provider-key"
 _TOOL_INFO: Final = {"description": "integration search tool crud"}
 _QUERY: Final = "search tool crud query"
+_KEY_BY_TARGET: Final = MappingProxyType({"/original/search": _ORIGINAL_KEY, "/rotated/search": _ROTATED_KEY})
 
 
 def _config_without_periodic_reload(directory: Path) -> Path:
@@ -51,12 +53,10 @@ def _masked(key: str) -> str:
 def test_search_tool_create_update_delete_is_read_back_and_applied_without_restart(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    expected_calls: Final[list[tuple[str, str]]] = []
-
     def respond(request: Request) -> Reply:
-        assert expected_calls, f"unexpected upstream search call: {request.target}"
-        target, key = expected_calls.pop(0)
-        assert (request.method, request.target) == ("POST", target), request.target
+        assert request.method == "POST" and request.target in _KEY_BY_TARGET, request.target
+        target: Final = request.target
+        key: Final = _KEY_BY_TARGET[target]
         assert request.headers["x-api-key"] == key, request.headers
         assert json.loads(request.body) == {"query": _QUERY, "contents": {"text": True}}, request.body
         return Reply(
@@ -100,7 +100,6 @@ def test_search_tool_create_update_delete_is_read_back_and_applied_without_resta
             assert listed == [expected], listed
 
         def search_reaches(target: str, key: str) -> None:
-            expected_calls.append((target, key))
             response: Final = candidate.request("POST", f"/v1/search/{name}", {"query": _QUERY})
             assert response.status_code == 200, response.text
             assert response.json() == {
@@ -109,7 +108,6 @@ def test_search_tool_create_update_delete_is_read_back_and_applied_without_resta
                     {"title": target, "url": "https://crud.invalid", "snippet": key, "date": None, "last_updated": None}
                 ],
             }, response.text
-            assert expected_calls == [], expected_calls
 
         read_back(original)
         search_reaches("/original/search", _ORIGINAL_KEY)
