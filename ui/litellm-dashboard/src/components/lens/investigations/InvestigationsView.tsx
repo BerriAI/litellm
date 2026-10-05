@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
@@ -129,16 +130,16 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
             onRunNow={(id) => openDialog("run_now", id)}
             actions={
               !readOnly && (
-                <button
-                  type="button"
+                <Button
+                  size="sm"
+                  className="my-auto mr-1.5 h-7"
                   disabled={!status.ready}
                   onClick={() => openDialog("new")}
                   aria-label="New investigation"
-                  className="flex items-center gap-1.5 bg-primary px-4 text-sm font-medium whitespace-nowrap text-primary-foreground transition-colors outline-none hover:bg-primary/90 focus-visible:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
                 >
-                  <Plus aria-hidden="true" className="size-4" />
+                  <Plus aria-hidden="true" className="size-3.5" />
                   New
-                </button>
+                </Button>
               )
             }
           >
