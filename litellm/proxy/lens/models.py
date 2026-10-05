@@ -210,6 +210,37 @@ class Step(Record):
 MAX_REVIEWS = 60
 
 
+ActivityOperation: TypeAlias = Literal[
+    "model",
+    "read",
+    "search",
+    "python",
+    "catalog",
+    "review_catalog",
+    "read_reviews",
+    "search_reviews",
+    "history",
+    "checkpoint",
+]
+ActivityPhase: TypeAlias = Literal["load", "review", "group", "reconcile", "investigate"]
+
+
+class ToolCount(Record):
+    name: ActivityOperation
+    calls: int = Field(ge=0)
+
+
+class Activity(Record):
+    id: str
+    phase: ActivityPhase
+    label: str
+    execution_ids: tuple[str, ...] = ()
+    started_at: datetime
+    operations: tuple[ActivityOperation, ...] = ()
+    tool_calls: tuple[ToolCount, ...] = ()
+    finished: bool = False
+
+
 class ReviewSpan(Record):
     span_id: str
     name: str = Field(max_length=120)
@@ -236,6 +267,7 @@ class Review(Record):
     model: str
     duration_ms: int = Field(ge=0)
     at: datetime
+    tool_calls: tuple[ToolCount, ...] = ()
 
 
 class ReviewPage(Record):
@@ -273,6 +305,7 @@ class Job(Record):
     reviews: tuple[Review, ...] = ()
     reviewed: int = 0
     reading: tuple[InFlight, ...] = ()
+    activities: tuple[Activity, ...] = ()
     trigger: Literal["schedule", "manual"] = "schedule"
 
 
@@ -351,10 +384,11 @@ class Claim(Record):
 
 
 class Progress(Record):
-    stage: str = Field()
-    coverage: Coverage = Coverage()
+    stage: str | None = None
+    coverage: Coverage | None = None
     review: Review | None = None
     reading: tuple[InFlight, ...] | None = None
+    activity: Activity | None = None
 
 
 class Result(Record):
@@ -364,12 +398,19 @@ class Result(Record):
     error: str = Field(default="")
 
 
+class ModelMessage(Record):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ModelRequest(Record):
     prompt: str = Field(min_length=1)
     purpose: Literal["extract", "cluster", "investigate"]
+    messages: tuple[ModelMessage, ...] = ()
 
 
 class ModelResult(Record):
     content: str
     cost: float
+    context_exceeded: bool = False
     finish_reason: Literal["length", "content_filter"] | None = Field(default=None, exclude=True)

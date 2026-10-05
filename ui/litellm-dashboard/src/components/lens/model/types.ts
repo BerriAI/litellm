@@ -37,6 +37,10 @@ export type Review = components["schemas"]["Review"];
 
 export type InFlight = components["schemas"]["InFlight"];
 
+export type Activity = components["schemas"]["Activity"];
+
+export type ToolCount = components["schemas"]["ToolCount"];
+
 export type ReviewVerdict = components["schemas"]["ReviewVerdict"];
 
 export interface RunWindow {
