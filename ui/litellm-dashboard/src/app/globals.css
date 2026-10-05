@@ -469,12 +469,3 @@
     left: 100%;
   }
 }
-
-@keyframes rows-sweep {
-  from {
-    left: -25%;
-  }
-  to {
-    left: 100%;
-  }
-}

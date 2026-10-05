@@ -73,11 +73,9 @@ function ariaSort<T>(column: Column<T>): "ascending" | "descending" | "none" | u
 
 interface HeaderProps {
   readonly hidden?: boolean;
-  /** Shows a progress line under the headings while the rows below are being replaced. */
-  readonly busy?: boolean;
 }
 
-function Header({ hidden = false, busy = false }: HeaderProps) {
+function Header({ hidden = false }: HeaderProps) {
   const { table } = useInspectorTable();
   return (
     <TableHeader
@@ -100,19 +98,6 @@ function Header({ hidden = false, busy = false }: HeaderProps) {
           ))}
         </tr>
       ))}
-      {busy && (
-        <tr className="border-0">
-          <th colSpan={table.getVisibleLeafColumns().length} className="relative h-0 p-0">
-            <div
-              role="progressbar"
-              aria-label="Updating rows"
-              className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-[#3b5bfd]/10"
-            >
-              <div className="absolute inset-y-0 w-1/4 bg-[#3b5bfd]/60 motion-safe:animate-[rows-sweep_1.2s_ease-in-out_infinite] motion-reduce:hidden" />
-            </div>
-          </th>
-        </tr>
-      )}
     </TableHeader>
   );
 }

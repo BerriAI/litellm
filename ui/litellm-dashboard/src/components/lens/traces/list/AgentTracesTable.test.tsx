@@ -236,7 +236,6 @@ describe("AgentTracesTable sorting", () => {
       ),
     );
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
-    expect(screen.getByRole("progressbar", { name: "Updating rows" })).toBeInTheDocument();
     expect(screen.queryByTestId("runs-placeholder")).not.toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(onLoadMore).not.toHaveBeenCalled();

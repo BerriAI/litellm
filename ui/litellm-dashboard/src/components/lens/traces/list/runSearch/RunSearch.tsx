@@ -21,10 +21,11 @@ interface RunSearchProps {
   /** The range and order the list shows; the copied query follows both. */
   range?: TimeWindow;
   order?: RunOrder;
+  busy?: boolean;
 }
 
 /** The runs list query box: free text plus `key:value` filters over run fields, copyable as a trace query. */
-export function RunSearch({ value, onChange, runs, range, order = NEWEST }: RunSearchProps) {
+export function RunSearch({ value, onChange, runs, range, order = NEWEST, busy = false }: RunSearchProps) {
   const command = useMemo(() => runQueryCommand(range, order), [range, order]);
   return (
     <SearchBox.Root
@@ -37,6 +38,7 @@ export function RunSearch({ value, onChange, runs, range, order = NEWEST }: RunS
     >
       <SearchBox.Input
         className="h-full rounded-none border-0 px-3 focus-within:bg-muted/40 focus-within:ring-0 dark:bg-transparent"
+        busy={busy}
         placeholder="Search runs, or filter like agent:researcher status:error"
       />
       <SearchBox.Suggestions>

@@ -671,12 +671,12 @@ describe("AgentTracesPage", () => {
         }),
     );
     fireEvent.click(screen.getByTestId(`sort-header-${key}`));
-    expect(await screen.findByRole("progressbar", { name: "Updating rows" })).toBeInTheDocument();
+    expect(await screen.findByRole("status", { name: "Loading results" })).toBeInTheDocument();
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(rowsBefore.length);
     expect(listRequest(-1)).toMatchObject({ order: { key, descending: true }, page: { cursor: null } });
 
     act(release);
-    await waitFor(() => expect(screen.queryByRole("progressbar")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Loading results" })).not.toBeInTheDocument());
     expect(screen.getAllByTestId("agent-trace-row")[0]).toHaveTextContent(topAfter);
     expect(lastUrl(onUrlUpdate).get("sort_by")).toBe(key);
     expect(lastUrl(onUrlUpdate).has("sort_dir")).toBe(false);

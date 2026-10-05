@@ -171,7 +171,14 @@ export function AgentTracesSection({
             />
           )}
         </Inspector.Panel>
-        <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces} range={zoom ?? window} order={order}>
+        <RunsToolbar
+          query={query}
+          onQueryChange={setQuery}
+          runs={traces.traces}
+          range={zoom ?? window}
+          order={order}
+          busy={traces.isPlaceholder}
+        >
           {timeControls && (
             <TimeRangeControls
               range={range}

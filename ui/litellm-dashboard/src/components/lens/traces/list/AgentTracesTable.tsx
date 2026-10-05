@@ -287,10 +287,10 @@ export function AgentTracesTable({
     <InspectorTable.Root table={table} data-testid="runs-table">
       <ScrollToTop order={order} />
       <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">
-        <InspectorTable.Header busy={isPlaceholder} />
+        <InspectorTable.Header />
         <InspectorTable.Body<TraceSummary>
           rowHeight={() => ROW_HEIGHT}
-          className={cn(isPlaceholder && "opacity-60 transition-opacity motion-reduce:transition-none")}
+          className={cn("transition-[filter]", isPlaceholder && "blur-[1.5px]")}
           after={
             <>
               {isLoading && SKELETON_ROWS.map((row) => <PlaceholderRow key={row} index={row} />)}

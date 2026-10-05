@@ -13,14 +13,16 @@ interface RunsToolbarProps {
   /** The range and order the list shows, for the copied query. */
   range?: TimeWindow;
   order?: RunOrder;
+  /** Shows a spinner in the search box while the list reloads for a new query or order. */
+  busy?: boolean;
   /** Extra controls (time range, live tail) rendered on the right. */
   children?: React.ReactNode;
 }
 
-export function RunsToolbar({ query, onQueryChange, runs, range, order, children }: RunsToolbarProps) {
+export function RunsToolbar({ query, onQueryChange, runs, range, order, busy, children }: RunsToolbarProps) {
   return (
     <div className="flex h-10 shrink-0 items-stretch border-b border-border bg-card">
-      <RunSearch value={query} onChange={onQueryChange} runs={runs} range={range} order={order} />
+      <RunSearch value={query} onChange={onQueryChange} runs={runs} range={range} order={order} busy={busy} />
       {children && <div className="flex shrink-0 items-stretch">{children}</div>}
     </div>
   );
