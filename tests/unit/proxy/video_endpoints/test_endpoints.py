@@ -33,7 +33,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import orjson
 import pytest
-
+from fastapi import Response
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import litellm.proxy.proxy_server as proxy_server
 import litellm.proxy.video_endpoints.endpoints as endpoints
@@ -45,9 +46,6 @@ from litellm.types.videos.utils import (
     encode_character_id_with_provider,
     encode_video_id_with_provider,
 )
-
-from fastapi import Response
-from starlette.datastructures import UploadFile as StarletteUploadFile
 
 # --------------------------------------------------------------------------- #
 # A real model-encoded video id: decodes (for real) to provider "azure",

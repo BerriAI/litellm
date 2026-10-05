@@ -16,7 +16,6 @@ are checked by the genuine decode round-trip.
 
 import pytest
 
-
 from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     extract_model_from_target_model_names,

@@ -37,7 +37,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
