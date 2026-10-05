@@ -16,7 +16,6 @@ flate2.workspace = true
 futures-util.workspace = true
 hmac = "0.12.1"
 litellm-http.workspace = true
-litellm-migrate.workspace = true
 litellm-storage-clickhouse.workspace = true
 litellm-traces.workspace = true
 litellm-traces-cache.workspace = true
@@ -24,6 +23,7 @@ moka.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+sqlx = { workspace = true, features = ["migrate", "macros"] }
 strum.workspace = true
 thiserror.workspace = true
 time = { workspace = true, features = ["formatting"] }

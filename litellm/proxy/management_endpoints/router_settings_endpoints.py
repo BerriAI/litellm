@@ -116,7 +116,7 @@ async def get_router_settings(
         config: Final = await proxy_config.get_config()
         router_settings_from_config: Final = config.get("router_settings", {})
 
-        current_values: Final[dict[str, Any]] = {}
+        current_values: Final[dict[str, object]] = {}
         if llm_router is not None:
             # Router exposes routing groups as private `_routing_groups`; the
             # generic `hasattr` loop below would miss them.

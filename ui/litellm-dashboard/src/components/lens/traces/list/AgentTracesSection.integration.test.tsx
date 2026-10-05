@@ -7,7 +7,6 @@ import { ApiError } from "@/lib/http/client";
 
 import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
 import traceList from "../__fixtures__/trace_list.json";
-import { LensPreviewContext } from "../../ui/LensPreviewButton";
 import AgentTracesPage from "./AgentTracesPage";
 import { filterRuns } from "./runSearch/runQuery";
 import { AgentTracesSection, type TimeControls } from "./AgentTracesSection";
@@ -40,16 +39,14 @@ const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
 
 const renderSection = () =>
   renderWithProviders(
-    <LensPreviewContext.Provider value={{ target: document.body, open: vi.fn() }}>
-      <AgentTracesSection
-        accessToken="sk-test"
-        isActive
-        startTime="2026-09-29T00:00"
-        endTime="2026-09-30T00:00"
-        isCustomDate={false}
-        isLiveTail={false}
-      />
-    </LensPreviewContext.Provider>,
+    <AgentTracesSection
+      accessToken="sk-test"
+      isActive
+      startTime="2026-09-29T00:00"
+      endTime="2026-09-30T00:00"
+      isCustomDate={false}
+      isLiveTail={false}
+    />,
   );
 
 // A UTC-pinned day around the fixture runs (2026-09-30 ~06:43 UTC), so they land in the same bucket in any timezone.
@@ -180,7 +177,7 @@ describe("AgentTracesSection", () => {
 
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Tracing is not enabled");
-    expect(screen.getByRole("button", { name: "Preview sample" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
     expect(card).toHaveTextContent("type: clickhouse");
     expect(card).toHaveTextContent("url: os.environ/CLICKHOUSE_URL");
     expect(screen.getByRole("button", { name: "Check setup" })).toBeEnabled();
@@ -196,7 +193,7 @@ describe("AgentTracesSection", () => {
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Connect your agent");
     expect(card).toHaveTextContent("Waiting for your first trace");
-    expect(screen.getByRole("button", { name: "Preview sample" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
     expect(card).not.toHaveTextContent("store: clickhouse");
   });
 

@@ -54,6 +54,8 @@ from litellm.repositories.autorouter_session_repository import AutoRouterSession
 from litellm.repositories.base_repository import SupportsModelDump
 from litellm.repositories.daily_activity_sql import build_where_clause
 from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.router_strategy.complexity_router import ComplexityRouter
 from litellm.router_utils.auto_router_model_naming import (
     StrategyRouterDependencyRole,
@@ -187,15 +189,15 @@ def _team_table(prisma_client: "PrismaClient") -> _TeamTable:
 
 
 def _verification_tokens(prisma_client: "PrismaClient") -> _VerificationTokenTable:
-    return prisma_client.db.litellm_verificationtoken
+    return VerificationTokenRepository(prisma_client).table
 
 
 def _team_rows(prisma_client: "PrismaClient") -> _TeamRowsTable:
-    return prisma_client.db.litellm_teamtable
+    return TeamRepository(prisma_client).table
 
 
 def _user_rows(prisma_client: "PrismaClient") -> _UserRowsTable:
-    return prisma_client.db.litellm_usertable
+    return UserRepository(prisma_client).table
 
 
 def _shadow_eval_jobs(prisma_client: "PrismaClient") -> _ShadowEvalJobTable:
@@ -571,13 +573,16 @@ async def preview_auto_router_routing(
         llm_router=llm_router,
     )
 
-    complexity_router: Final = ComplexityRouter(
-        model_name=resolved.router_name,
-        litellm_router_instance=llm_router,
-        complexity_router_config=resolved.complexity_router_config.model_dump(exclude_none=True),
-        default_model=resolved.default_model,
-        derive_savings_baseline=False,
-    )
+    try:
+        complexity_router: Final = ComplexityRouter(
+            model_name=resolved.router_name,
+            litellm_router_instance=llm_router,
+            complexity_router_config=resolved.complexity_router_config.model_dump(exclude_none=True),
+            default_model=resolved.complexity_router_config.resolve_default_model(resolved.default_model),
+            derive_savings_baseline=False,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": f"Could not route this prompt: {e}"}) from e
 
     request_kwargs: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=request_data,

@@ -719,13 +719,12 @@ def _normalized_authorize_endpoint(url: str) -> str:
 
 def _issuer_matches(claimed_issuer: object, configured_issuer: str) -> bool:
     """RFC 8414 §3.3 issuer equality between the metadata document's self-attested ``issuer`` and the
-    admin-configured issuer, tolerant only of URL-insignificant differences (scheme/host case, the
-    default port, a trailing slash). A non-string or empty claimed issuer never matches, so a
+    admin-configured issuer. A non-string or empty claimed issuer never matches, so a
     document that omits ``issuer`` fails closed under issuer-anchored discovery.
     """
     if not isinstance(claimed_issuer, str) or not claimed_issuer:
         return False
-    return _normalized_authorize_endpoint(claimed_issuer) == _normalized_authorize_endpoint(configured_issuer)
+    return claimed_issuer == configured_issuer
 
 
 def _flow_endpoints_missing(
@@ -856,6 +855,11 @@ def _carry_forward_resolved_oauth_endpoints(new_server: MCPServer, previous_serv
     may_carry: Final = _endpoints_corroborate_authorization_url(
         previous_server.authorization_url, new_server.authorization_url
     )
+    if may_carry and new_server.issuer is None:
+        new_server.issuer = previous_server.issuer
+        new_server.authorization_response_iss_parameter_supported = (  # rebind-ok: publish on the existing rebuild object
+            previous_server.authorization_response_iss_parameter_supported
+        )
     if new_server.authorization_url is None and previous_server.authorization_url:
         new_server.authorization_url = previous_server.authorization_url
     if may_carry and new_server.token_url is None and previous_server.token_url:
@@ -2110,13 +2114,20 @@ class MCPServerManager:
         if metadata is None:
             return server
         discovered_issuer: Final = metadata.discovered_issuer if not metadata.from_origin_fallback else None
-        resolved: Final = server.model_copy()
-        resolved.scopes = server.scopes or metadata.scopes
-        resolved.issuer = server.issuer or discovered_issuer
-        resolved.authorization_url = server.authorization_url or metadata.authorization_url
-        resolved.token_url = server.token_url or metadata.token_url
-        resolved.registration_url = server.registration_url or metadata.registration_url
-        return resolved
+        return server.model_copy(
+            update={
+                "scopes": server.scopes or metadata.scopes,
+                "issuer": server.issuer or discovered_issuer,
+                "authorization_response_iss_parameter_supported": (
+                    metadata.authorization_response_iss_parameter_supported
+                    if discovered_issuer is not None
+                    else server.authorization_response_iss_parameter_supported
+                ),
+                "authorization_url": server.authorization_url or metadata.authorization_url,
+                "token_url": server.token_url or metadata.token_url,
+                "registration_url": server.registration_url or metadata.registration_url,
+            }
+        )
 
     def _oauth_discovery_slot_is_current(self, server_id: str, generation: int) -> bool:
         slot: Final = self._oauth_discovery_slot(server_id)
@@ -2641,6 +2652,11 @@ class MCPServerManager:
                 scopes=resolved_scopes,
                 configured_scopes=tuple(configured_scopes) if configured_scopes else None,
                 issuer=effective_issuer,
+                authorization_response_iss_parameter_supported=(
+                    gated_oauth_metadata.authorization_response_iss_parameter_supported
+                    if gated_oauth_metadata
+                    else False
+                ),
                 issuer_is_anchored=use_issuer_anchor,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
@@ -3202,12 +3218,17 @@ class MCPServerManager:
             extra_headers=getattr(mcp_server, "extra_headers", None),
             static_headers=static_headers_dict,
             env_vars=env_vars_list,
+            dcr_issuer=credentials_dict.get("dcr_issuer") if credentials_dict else None,
+            dcr_server_url=credentials_dict.get("dcr_server_url") if credentials_dict else None,
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
             oauth2_flow=self._explicit_oauth2_flow(getattr(mcp_server, "oauth2_flow", None)),
             scopes=resolved_scopes,
             configured_scopes=configured_scopes,
             issuer=effective_issuer,
+            authorization_response_iss_parameter_supported=(
+                gated_oauth_metadata.authorization_response_iss_parameter_supported if gated_oauth_metadata else False
+            ),
             issuer_is_anchored=use_issuer_anchor,
             authorization_url=manual_authorization_url or getattr(gated_oauth_metadata, "authorization_url", None),
             token_url=manual_token_url or getattr(gated_oauth_metadata, "token_url", None),
@@ -5174,6 +5195,10 @@ class MCPServerManager:
                 token_url=data.get("token_endpoint"),
                 registration_url=data.get("registration_endpoint"),
                 discovered_issuer=claimed_issuer if isinstance(claimed_issuer, str) and claimed_issuer else None,
+                authorization_response_iss_parameter_supported=data.get(
+                    "authorization_response_iss_parameter_supported"
+                )
+                is True,
             )
 
             if any(
