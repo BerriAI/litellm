@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias
 
 import httpx
-from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError, ValidationInfo, field_validator
 
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -22,7 +22,11 @@ _EMPTY_LIMITS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _positive_limit(value: object) -> int | None:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+    if value is None or type(value) is int and value == 0:
+        return None
+    if type(value) is int and value > 0:
+        return value
+    raise ValueError("Supplier token limits must be nonnegative integers or null")
 
 
 _TokenLimit: TypeAlias = Annotated[int | None, BeforeValidator(_positive_limit)]
@@ -66,6 +70,20 @@ class _ModelCard(GatewayModelMetadata):
     top_provider: _TopProvider | None = None
     reasoning: _Reasoning | None = None
     reasoning_options: tuple[_ReasoningOption, ...] = ()
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def strict_supplier_metadata(cls, value: object, info: ValidationInfo) -> object:
+        normalized: Final = (
+            None
+            if info.field_name in ("context_window", "max_input_tokens", "max_output_tokens")
+            and type(value) is int
+            and value == 0
+            else value
+        )
+        if info.field_name in GatewayModelMetadata.model_fields:
+            cls.validate_field_input(info.field_name, normalized)
+        return normalized
 
     def token_limits(self, provider: str) -> Mapping[str, object]:
         context: Final = self.context_window or self.max_model_len or self.context_length
@@ -198,7 +216,11 @@ async def get_openai_compatible_model_inventory(
         response.raise_for_status()
         models: Final = _ModelList.model_validate_json(response.content)
         ids: Final = tuple(card.id for card in models.data)
-        if models.error is not None or any(not model_id for model_id in ids) or len(frozenset(ids)) != len(ids):
+        if (
+            models.error is not None
+            or any(not model_id.strip() or model_id != model_id.strip() for model_id in ids)
+            or len(frozenset(ids)) != len(ids)
+        ):
             unavailable: Final = SupplierInventoryUnavailable("malformed")
             cache.set_cache(cache_key, unavailable, ttl=60)
             return unavailable

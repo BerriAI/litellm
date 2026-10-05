@@ -4,6 +4,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Final, cast  # noqa: TID251  # native Router dynamic attribute dispatch
 
+from pydantic import TypeAdapter
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 import litellm
@@ -21,6 +22,7 @@ class OfferingServingSnapshot:
     available_models: frozenset[str]
     unavailable_models: Mapping[str, str]
     allowed_deployments: frozenset[str]
+    allowed_deployment_ids: frozenset[str] = frozenset()
 
 
 _PINNED_SNAPSHOT: Final[ContextVar[tuple[int, OfferingServingSnapshot] | None]] = ContextVar(
@@ -28,6 +30,7 @@ _PINNED_SNAPSHOT: Final[ContextVar[tuple[int, OfferingServingSnapshot] | None]] 
 )
 _MODEL_MUTATIONS: Final = frozenset(("set_model_list", "add_deployment", "upsert_deployment", "delete_deployment"))
 _VIEW_MEMBERS: Final = frozenset(("publish_snapshot", "pin_snapshot", "serving_snapshot", "latest_snapshot"))
+_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 class OfferingRouterView(Router):
@@ -153,7 +156,16 @@ class OfferingAccessGuard(CustomLogger):
             CallTypes.embedding,
         ):
             return
-        if model not in self.router.serving_snapshot().allowed_deployments:
+        metadata: Final = _METADATA_ADAPTER.validate_python(
+            kwargs.get("litellm_metadata") or kwargs.get("metadata") or {}
+        )
+        raw_model_info: Final = metadata.get("model_info")
+        model_info: Final = (
+            _METADATA_ADAPTER.validate_python(raw_model_info) if isinstance(raw_model_info, Mapping) else {}
+        )
+        deployment_id: Final = model_info.get("id")
+        snapshot: Final = self.router.serving_snapshot()
+        if model not in snapshot.allowed_deployments or deployment_id not in snapshot.allowed_deployment_ids:
             raise litellm.NotFoundError(
                 message="The requested deployment is not an enabled gateway offering", model=model, llm_provider=""
             )

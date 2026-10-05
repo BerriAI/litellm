@@ -33,6 +33,10 @@ async def test_authoritative_inventory_failure_recovery_and_atomic_config_reload
             httpx.Response(200, json={"missing": "data"}),
             httpx.ReadTimeout("supplier timed out"),
             httpx.Response(200, json={"data": [], "error": {"message": "failed"}}),
+            httpx.Response(200, json={"data": [{"id": "backend", "context_window": "bad"}]}),
+            httpx.Response(200, json={"data": [{"id": "backend", "supports_function_calling": "bad"}]}),
+            httpx.Response(200, json={"data": [{"id": "backend", "supported_endpoints": 123}]}),
+            httpx.Response(200, json={"data": [{"id": " backend "}]}),
             httpx.Response(200, json={"data": []}),
             httpx.Response(200, json={"data": [{"id": "backend", "context_window": 16000}]}),
         )
@@ -55,9 +59,12 @@ async def test_authoritative_inventory_failure_recovery_and_atomic_config_reload
         assert manager.router.model_names == {"automatic", "manual"}
         assert manager.router.latest_snapshot().available_models == {"automatic", "manual"}
         first: Final = manager.router.latest_snapshot()
-        for _ in range(4):
+        for _ in range(8):
             assert await manager.reload(force_inventory=True)
             assert manager.router.latest_snapshot().available_models == first.available_models
+            assert (
+                manager.router.get_model_listing_info("automatic").deployments[0].model_info["context_window"] == 8000
+            )
         pinned: Final = manager.router.latest_snapshot()
         with manager.router.pin_snapshot():
             assert await manager.reload(force_inventory=True)
@@ -162,3 +169,104 @@ async def test_pinned_metadata_does_not_read_new_snapshot_shared_catalog(tmp_pat
         assert "max_output_tokens" not in before
         assert after["context_window"] == 16000
         assert after["max_output_tokens"] == 5001
+
+
+async def test_snapshot_factory_dispatch_and_reload_resources_are_isolated() -> None:
+    import gc
+    import weakref
+
+    import litellm
+
+    template: Final = Router(model_list=[], num_retries=0)
+    callback_counts: Final = tuple(
+        len(callbacks)
+        for callbacks in (
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,
+            litellm._async_failure_callback,
+        )
+    )
+    models: Final = (
+        {"model_name": "selected", "litellm_params": {"model": "openai/fixture", "api_key": "local-only"}},
+    )
+    first: Final = template.snapshot_with_model_list(models)
+    response: Final = await first.aresponses(model="selected", input="fixture", mock_response="local-only")
+    assert response.output[0].content[0].text == "local-only"
+    assert template.get_model_names() == []
+    references: Final = tuple(weakref.ref(template.snapshot_with_model_list(models)) for _ in range(30))
+    gc.collect()
+    assert all(reference() is None for reference in references)
+    assert callback_counts == tuple(
+        len(callbacks)
+        for callbacks in (
+            litellm.success_callback,
+            litellm.failure_callback,
+            litellm._async_success_callback,
+            litellm._async_failure_callback,
+        )
+    )
+
+
+async def test_auto_catalog_fallback_is_frozen_and_manual_metadata_stays_handwritten(tmp_path: Path) -> None:
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    path: Final = tmp_path / "offerings.yaml"
+    upstream: Final = "text-embedding-3-large"
+    bundled: Final = GetModelCostMap.loaded_model_cost_map()[upstream]
+    assert bundled["max_input_tokens"] > 0
+    config: Final = {
+        "version": 1,
+        "providers": {"supplier": {"provider": "openai", "api_base": "https://supplier.test/v1"}},
+        "offerings": [
+            {"model_name": "automatic", "source": "auto", "provider": "supplier", "upstream_model": upstream},
+            {"model_name": "manual", "source": "manual", "provider": "supplier", "upstream_model": upstream},
+        ],
+    }
+    path.write_text(yaml.safe_dump(config))
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"data": [{"id": upstream, "context_window": 12345}]})
+        )
+    ) as client:
+        handler.client = client
+        manager: Final = ModelOfferingsManager(path=path, template=Router(model_list=[]), client=handler)
+        assert await manager.reload(initial=True)
+        auto: Final = manager.router.get_model_listing_info("automatic").deployments[0].model_info
+        manual: Final = manager.router.get_model_listing_info("manual").deployments[0].model_info
+        assert auto["context_window"] == 12345
+        assert auto["max_input_tokens"] == bundled["max_input_tokens"]
+        assert auto["mode"] == "embedding"
+        assert manual.get("context_window") is None
+        assert manual.get("max_input_tokens") is None
+
+
+async def test_changed_inventory_interval_refreshes_without_retaining_old_deadline(tmp_path: Path) -> None:
+    path: Final = tmp_path / "offerings.yaml"
+    config: Final = {
+        "version": 1,
+        "inventory_poll_seconds": 86400,
+        "providers": {"supplier": {"provider": "openai", "api_base": "https://supplier.test/v1"}},
+        "offerings": [
+            {"model_name": "automatic", "source": "auto", "provider": "supplier", "upstream_model": "backend"}
+        ],
+    }
+    path.write_text(yaml.safe_dump(config))
+    responses: Final = iter(
+        (httpx.Response(200, json={"data": [{"id": "backend"}]}), httpx.Response(200, json={"data": []}))
+    )
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: next(responses))) as client:
+        handler.client = client
+        manager: Final = ModelOfferingsManager(
+            path=path, template=Router(model_list=[]), client=handler, clock=lambda: 0.0
+        )
+        assert await manager.reload(initial=True)
+        assert manager.router.latest_snapshot().available_models == {"automatic"}
+        path.write_text(yaml.safe_dump({**config, "inventory_poll_seconds": 1}))
+        assert await manager.reload()
+        assert manager.router.latest_snapshot().available_models == set()
+        assert manager.next_inventory_refresh == 1.0

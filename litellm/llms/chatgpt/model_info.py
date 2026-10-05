@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, ValidationInfo, field_validator
 
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -33,6 +33,22 @@ class _ChatGPTModel(GatewayModelMetadata):
     input_modalities: Sequence[str] | None = None
     supports_parallel_tool_calls: bool | None = None
     multi_agent_reasoning_effort: str | None = None
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def strict_supplier_metadata(cls, value: object, info: ValidationInfo) -> object:
+        normalized: Final = (
+            None
+            if info.field_name in ("context_window", "max_input_tokens", "max_output_tokens", "max_context_window")
+            and type(value) is int
+            and value == 0
+            else value
+        )
+        if info.field_name in GatewayModelMetadata.model_fields or info.field_name == "max_context_window":
+            cls.validate_field_input(
+                "context_window" if info.field_name == "max_context_window" else info.field_name, normalized
+            )
+        return normalized
 
     @field_validator("max_context_window", mode="before")
     @classmethod
@@ -167,7 +183,11 @@ async def get_chatgpt_model_inventory(
         response.raise_for_status()
         catalog: Final = _ChatGPTCatalog.model_validate_json(response.content)
         ids: Final = tuple(card.slug for card in catalog.models)
-        if catalog.error is not None or any(not model_id for model_id in ids) or len(frozenset(ids)) != len(ids):
+        if (
+            catalog.error is not None
+            or any(not model_id.strip() or model_id != model_id.strip() for model_id in ids)
+            or len(frozenset(ids)) != len(ids)
+        ):
             return SupplierInventoryUnavailable("malformed", credential_scope)
         inventory: Final = SupplierModelInventory(
             MappingProxyType({card.slug: card.metadata() for card in catalog.models}), credential_scope

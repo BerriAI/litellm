@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, cast  # noqa: TID251  # Pydantic runtime schema annotations
+from typing import Annotated, Final, Literal
 
 from pydantic import (
     AnyHttpUrl,
@@ -8,7 +8,6 @@ from pydantic import (
     ConfigDict,
     Field,
     SecretStr,
-    TypeAdapter,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -25,9 +24,7 @@ class OfferingModelInfo(GatewayModelMetadata):
     @classmethod
     def strict_configured_metadata(cls, value: object, info: ValidationInfo) -> object:
         if info.field_name is not None:
-            TypeAdapter[object](cast(object, cls.model_fields[info.field_name].rebuild_annotation())).validate_python(
-                value, strict=True
-            )
+            cls.validate_field_input(info.field_name, value)
         return value
 
 

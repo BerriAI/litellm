@@ -1,6 +1,6 @@
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Annotated, Final
+from typing import Annotated, Final, cast  # noqa: TID251  # Pydantic runtime schema boundary
 
 from pydantic import (
     BaseModel,
@@ -63,6 +63,12 @@ class GatewayModelMetadata(BaseModel):
     request_defaults: ModelRequestDefaults | None = Field(
         default=None, description="Configured request defaults, independent of supplier capability limits"
     )
+
+    @classmethod
+    def validate_field_input(cls, field_name: str, value: object) -> None:
+        TypeAdapter[object](
+            cast(object, cls.model_fields[field_name].rebuild_annotation())  # cast-ok: runtime Pydantic field schema
+        ).validate_python(value, strict=True)
 
     @field_validator("context_window", "max_input_tokens", "max_output_tokens", mode="before")
     @classmethod

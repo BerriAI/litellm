@@ -13,6 +13,7 @@ import yaml
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.chatgpt.authenticator import Authenticator, prevent_device_login
 from litellm.llms.chatgpt.model_info import get_chatgpt_model_inventory
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -20,6 +21,7 @@ from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_CONCURRENCY, 
 from litellm.proxy.offering_router import OfferingRouterView, OfferingServingSnapshot
 from litellm.router import Router
 from litellm.types.proxy.model_inventory import SupplierInventoryUnavailable, SupplierModelInventory
+from litellm.types.proxy.model_metadata import GatewayModelMetadata
 from litellm.types.proxy.model_offerings import ModelOffering, ModelOfferingsConfig, SupplierConnection
 
 
@@ -151,7 +153,23 @@ def _deployment(offering: ModelOffering, state: _ProviderState) -> Mapping[str, 
         if offering.source == "auto" and state.inventory is not None
         else {}
     )
-    metadata: Final = {**supplier_info, **offering.model_info.model_dump(mode="json", exclude_none=True)}
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    bundled_info: Final = (
+        catalog.get(f"{connection.provider}/{offering.upstream_model}")
+        or (catalog.get(offering.upstream_model, {}) if connection.provider == "openai" else {})
+        if offering.source == "auto"
+        else {}
+    )
+    bundled_metadata: Final = GatewayModelMetadata.model_validate(bundled_info).model_dump(
+        mode="json", exclude_none=True
+    )
+    bundled_mode: Final = bundled_info.get("mode")
+    metadata: Final = {
+        **bundled_metadata,
+        **({"mode": bundled_mode} if bundled_mode in ("chat", "completion", "embedding") else {}),
+        **supplier_info,
+        **offering.model_info.model_dump(mode="json", exclude_none=True),
+    }
     deployment_id: Final = (
         "offering-"
         + hashlib.sha256(
@@ -269,7 +287,9 @@ class ModelOfferingsManager:
             for offering in loaded.config.offerings
             if offering.model_name in available
         )
-        snapshot: Final = OfferingServingSnapshot(candidate, available, unavailable, allowed_deployments)
+        snapshot: Final = OfferingServingSnapshot(
+            candidate, available, unavailable, allowed_deployments, frozenset(candidate.get_model_ids())
+        )
         self.config = loaded.config
         self.config_fingerprint = loaded.fingerprint
         self.providers = providers
@@ -313,7 +333,16 @@ class ModelOfferingsManager:
                 name not in self.providers or self.providers[name].connection != state.connection
                 for name, state in providers.items()
             )
-            refresh_due: Final = initial or force_inventory or connection_changed or now >= self.next_inventory_refresh
+            interval_changed: Final = (
+                self.config is not None and loaded.config.inventory_poll_seconds != self.config.inventory_poll_seconds
+            )
+            refresh_due: Final = (
+                initial
+                or force_inventory
+                or connection_changed
+                or interval_changed
+                or now >= self.next_inventory_refresh
+            )
             refreshed: Final = await self._refresh_providers(providers) if refresh_due else providers
             if not self._apply(loaded, refreshed):
                 return False

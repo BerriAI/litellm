@@ -9681,6 +9681,12 @@ class Router:
         )
         snapshot.set_model_list([dict(model) for model in model_list])
         snapshot.healthy_deployments = snapshot.get_model_list() or []
+        # Factory closures and the OpenAI-compatible wrapper must dispatch through
+        # this snapshot, rather than the template whose attributes were copied.
+        # Rebinding endpoints does not register callbacks or recreate clients.
+        snapshot.initialize_assistants_endpoint()
+        snapshot.initialize_router_endpoints()
+        snapshot.chat = litellm.Chat(params=snapshot.default_litellm_params, router_obj=snapshot)
         _live_routers.add(snapshot)
         return snapshot
 

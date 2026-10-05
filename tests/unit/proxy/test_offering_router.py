@@ -16,6 +16,7 @@ async def test_unavailable_and_unselected_offerings_cannot_forward_or_override_c
             frozenset({"selected"}),
             MappingProxyType({"missing": "absent from supplier"}),
             frozenset({"openai/backend"}),
+            frozenset({"selected-deployment"}),
         )
     )
     guard: Final = OfferingAccessGuard(router)
@@ -36,10 +37,22 @@ async def test_unavailable_and_unselected_offerings_cannot_forward_or_override_c
         ),
         litellm.BadRequestError,
     )
-    await guard.async_pre_call_deployment_hook({"model": "openai/backend"}, CallTypes.acompletion)
+    await guard.async_pre_call_deployment_hook(
+        {"model": "openai/backend", "metadata": {"model_info": {"id": "selected-deployment"}}},
+        CallTypes.acompletion,
+    )
     try:
         await guard.async_pre_call_deployment_hook({"model": "openai/unselected"}, CallTypes.acompletion)
     except litellm.NotFoundError:
         pass
     else:
         raise AssertionError("An unselected concrete deployment was allowed")
+    try:
+        await guard.async_pre_call_deployment_hook(
+            {"model": "openai/backend", "metadata": {"model_info": {"id": "unavailable-other-connection"}}},
+            CallTypes.acompletion,
+        )
+    except litellm.NotFoundError:
+        pass
+    else:
+        raise AssertionError("An unavailable deployment sharing the backend model was allowed")
