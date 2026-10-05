@@ -8,14 +8,17 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Final, NamedTuple
 
+import httpx
 import jwt
+import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows, scratch_database, write_rows
+from integration._support.mcp import echo_tool, register_mcp, scripted_peer, tool_calls
 from integration._support.process import owned_proxy, owned_proxy_process
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 from jwt.algorithms import RSAAlgorithm
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 
@@ -490,3 +493,273 @@ def test_owner_lookup_failure_keeps_tools_listed_without_a_user(gateway: Gateway
                 'ALTER TABLE "LiteLLM_UserTable_away" RENAME TO "LiteLLM_UserTable"', (), database_url=database_url
             )
         assert _discovered_tool(candidate, tool_name)["user"] == _owner(user, None, alias)
+
+
+_CHAT_REPLY: Final = json.dumps(
+    {
+        "id": "chatcmpl-tool-policy",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "integration-tool-policy",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+).encode()
+
+
+def _chat_upstream(request: Request) -> Reply:
+    if (request.method, request.target) == ("GET", "/v1/models"):
+        return Reply(body=b'{"object": "list", "data": []}')
+    assert (request.method, request.target) == ("POST", "/v1/chat/completions"), request
+    return Reply(body=_CHAT_REPLY)
+
+
+def _tool_policy_config(directory: Path, model: str, upstream_url: str) -> Path:
+    path: Final = _proxy_config(directory, model, upstream_url, general_settings={})
+    config: Final = JSON_OBJECT.validate_json(path.read_text())
+    config["guardrails"] = [
+        {
+            "guardrail_name": "integration-tool-policy",
+            "litellm_params": {"guardrail": "tool_policy", "mode": "pre_call", "default_on": True},
+        }
+    ]
+    path.write_text(json.dumps(config))
+    return path
+
+
+def _blocked_detail(tool_name: str) -> dict[str, JsonValue]:
+    return {
+        "error": {
+            "message": "Violated tool policy",
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "400",
+            "provider_specific_fields": {
+                "error": "Violated tool policy",
+                "blocked_tools": [tool_name],
+                "message": f"Tool(s) {[tool_name]} are blocked by policy.",
+                "guardrail_name": "integration-tool-policy",
+                "guardrail_mode": "pre_call",
+            },
+        }
+    }
+
+
+class UpstreamFunction(BaseModel):
+    name: str
+
+
+class UpstreamTool(BaseModel):
+    function: UpstreamFunction
+
+
+class UpstreamChat(BaseModel):
+    tools: list[UpstreamTool]
+
+
+def _upstream_tool_names(upstream: Wire) -> list[list[str]]:
+    return [
+        [tool.function.name for tool in UpstreamChat.model_validate_json(request.body).tools]
+        for request in upstream.drain()
+        if request.method == "POST"
+    ]
+
+
+def _assert_chat_refused(gateway: Gateway, upstream: Wire, model: str, key: str, tool_name: str) -> None:
+    upstream.drain()
+    refused: Final = gateway.request("POST", "/v1/chat/completions", _tool_call_request(model, tool_name), key=key)
+    assert refused.status_code == 400, refused.text
+    assert refused.json() == _blocked_detail(tool_name), refused.text
+    assert _upstream_tool_names(upstream) == [], "a blocked tool reached the model upstream"
+
+
+def _assert_chat_served(gateway: Gateway, upstream: Wire, model: str, key: str, tool_name: str) -> None:
+    upstream.drain()
+    served: Final = gateway.request("POST", "/v1/chat/completions", _tool_call_request(model, tool_name), key=key)
+    assert served.status_code == 200, served.text
+    assert served.json()["choices"][0]["message"]["content"] == "ok", served.text
+    assert _upstream_tool_names(upstream) == [[tool_name]]
+
+
+def test_global_tool_policy_update_reads_back_persists_and_blocks_the_next_request(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    model: Final = "integration-tool-policy-" + uuid.uuid4().hex
+    suffix: Final = uuid.uuid4().hex[:12]
+    blocked: Final = f"integration/policy/{suffix}/blocked"
+    untouched: Final = f"integration_policy_{suffix}_free"
+    with (
+        wire_server(_chat_upstream) as upstream,
+        owned_proxy(gateway, tmp_path, {}, config=_tool_policy_config(tmp_path, model, upstream.url)) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        scenario.cleanups.callback(_forget_tool, blocked)
+        scenario.cleanups.callback(_forget_tool, untouched)
+        key: Final = scenario.key(models=[model])
+        _assert_chat_served(candidate, upstream, model, key, blocked)
+        _assert_chat_served(candidate, upstream, model, key, untouched)
+        _discovered_tool(candidate, blocked)
+        _discovered_tool(candidate, untouched)
+
+        set_input: Final = candidate.request(
+            "POST", "/v1/tool/policy", {"tool_name": blocked, "input_policy": "blocked"}
+        )
+        assert set_input.status_code == 200, set_input.text
+        assert set_input.json() == {
+            "tool_name": blocked,
+            "input_policy": "blocked",
+            "output_policy": "untrusted",
+            "updated": True,
+            "team_id": None,
+            "key_hash": None,
+        }, set_input.text
+        set_output: Final = candidate.request(
+            "POST", "/v1/tool/policy", {"tool_name": blocked, "output_policy": "trusted"}
+        )
+        assert set_output.status_code == 200, set_output.text
+        assert (set_output.json()["input_policy"], set_output.json()["output_policy"]) == ("blocked", "trusted")
+
+        single: Final = _single(candidate, blocked)
+        assert (single["tool_name"], single["input_policy"], single["output_policy"]) == (blocked, "blocked", "trusted")
+        detail: Final = candidate.get(f"/v1/tool/{blocked}/detail")
+        assert detail["overrides"] == [], detail
+        detail_tool: Final = object_value(detail["tool"])
+        assert (detail_tool["input_policy"], detail_tool["output_policy"]) == ("blocked", "trusted"), detail
+        assert read_rows(
+            'SELECT input_policy, output_policy FROM "LiteLLM_ToolTable" WHERE tool_name = %s', (blocked,)
+        ) == [{"input_policy": "blocked", "output_policy": "trusted"}]
+        assert (_single(candidate, untouched)["input_policy"], _single(candidate, untouched)["output_policy"]) == (
+            "untrusted",
+            "untrusted",
+        )
+
+        _assert_chat_refused(candidate, upstream, model, key, blocked)
+        _assert_chat_served(candidate, upstream, model, key, untouched)
+
+
+def test_global_blocked_tool_policy_refuses_the_mcp_rest_call_naming_it(gateway: Gateway, tmp_path: Path) -> None:
+    pytest.skip(
+        "BUG: /mcp-rest/tools/call runs a tool whose global input_policy is blocked, the tool_policy guardrail sees no"
+        " user_api_key_request_route in the synthetic MCP payload so it extracts no tool name"
+    )
+    model: Final = "integration-tool-policy-" + uuid.uuid4().hex
+    suffix: Final = uuid.uuid4().hex[:12]
+    with (
+        wire_server(_chat_upstream) as upstream,
+        owned_proxy(gateway, tmp_path, {}, config=_tool_policy_config(tmp_path, model, upstream.url)) as candidate,
+        candidate.scenario() as scenario,
+        scripted_peer(echo_tool(f"lookup_{suffix}"), echo_tool(f"free_{suffix}")) as peer,
+    ):
+        identity: Final = register_mcp(scenario, peer, "policy" + suffix)
+        mcp_key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        scenario.cleanups.callback(_forget_tool, f"lookup_{suffix}")
+        mcp_blocked: Final = candidate.request(
+            "POST", "/v1/tool/policy", {"tool_name": f"lookup_{suffix}", "input_policy": "blocked"}
+        )
+        assert mcp_blocked.status_code == 200, mcp_blocked.text
+        peer.drain()
+        refused: Final = _mcp_call(candidate, mcp_key, identity, f"lookup_{suffix}")
+        assert refused.status_code == 400, refused.text
+        assert refused.json()["detail"]["blocked_tools"] == [f"lookup_{suffix}"], refused.text
+        assert tool_calls(peer.drain()) == (), "a blocked MCP tool reached the MCP server"
+        served: Final = _mcp_call(candidate, mcp_key, identity, f"free_{suffix}")
+        assert served.status_code == 200, served.text
+        assert served.json()["content"][0]["text"] == '{"probe": "policy"}', served.text
+        assert [call["body"]["params"]["name"] for call in tool_calls(peer.drain())] == [f"free_{suffix}"]
+
+
+def _mcp_call(gateway: Gateway, key: str, identity: str, name: str) -> httpx.Response:
+    return gateway.client.post(
+        "/mcp-rest/tools/call",
+        headers={"x-litellm-api-key": key},
+        json={"server_id": identity, "name": name, "arguments": {"probe": "policy"}},
+    )
+
+
+_TEAM_BLOCKED_TOOLS: Final = (
+    'SELECT p.blocked_tools FROM "LiteLLM_TeamTable" t JOIN "LiteLLM_ObjectPermissionTable" p'
+    " ON p.object_permission_id = t.object_permission_id WHERE t.team_id = %s"
+)
+_KEY_BLOCKED_TOOLS: Final = (
+    'SELECT p.blocked_tools FROM "LiteLLM_VerificationToken" k JOIN "LiteLLM_ObjectPermissionTable" p'
+    " ON p.object_permission_id = k.object_permission_id WHERE k.token = %s"
+)
+
+
+def test_scoped_tool_overrides_block_only_their_team_or_key_survive_restart_and_delete_restores(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    model: Final = "integration-tool-override-" + uuid.uuid4().hex
+    tool: Final = f"integration/override/{uuid.uuid4().hex[:12]}/tool"
+    config: Final = tmp_path / "config"
+    config.mkdir()
+    with wire_server(_chat_upstream) as upstream, gateway.scenario() as scenario:
+        scenario.cleanups.callback(_forget_tool, tool)
+        proxy_config: Final = _tool_policy_config(config, model, upstream.url)
+        unscoped: Final[dict[str, JsonValue]] = {"object_permission": {"mcp_servers": []}}
+        blocked_team: Final = scenario.team(**unscoped)
+        sibling_team: Final = scenario.team(**unscoped)
+        team_key: Final = scenario.key(team_id=blocked_team, models=[model])
+        sibling_team_key: Final = scenario.key(team_id=sibling_team, models=[model])
+        blocked_key: Final = scenario.key(models=[model], **unscoped)
+        sibling_key: Final = scenario.key(models=[model], **unscoped)
+        blocked_hash: Final = sha256(blocked_key.encode()).hexdigest()
+
+        def assert_scopes(candidate: Gateway, refused: tuple[str, ...], served: tuple[str, ...]) -> None:
+            for key in refused:
+                _assert_chat_refused(candidate, upstream, model, key, tool)
+            for key in served:
+                _assert_chat_served(candidate, upstream, model, key, tool)
+
+        first_dir: Final = tmp_path / "first"
+        first_dir.mkdir()
+        with owned_proxy(gateway, first_dir, {}, config=proxy_config) as first:
+            assert_scopes(first, (), (team_key, sibling_team_key, blocked_key, sibling_key))
+            for scope in ({"team_id": blocked_team}, {"key_hash": blocked_hash}):
+                response = first.request(
+                    "POST", "/v1/tool/policy", {"tool_name": tool, "input_policy": "blocked", **scope}
+                )
+                assert response.status_code == 200, response.text
+                assert response.json() == {
+                    "tool_name": tool,
+                    "input_policy": "blocked",
+                    "output_policy": None,
+                    "updated": True,
+                    "team_id": None,
+                    "key_hash": None,
+                    **scope,
+                }, response.text
+            assert_scopes(first, (team_key, blocked_key), (sibling_team_key, sibling_key))
+            _discovered_tool(first, tool)
+            overrides: Final = first.get(f"/v1/tool/{tool}/detail")["overrides"]
+            assert isinstance(overrides, list), overrides
+            assert sorted(
+                (
+                    str(object_value(row)["team_id"]),
+                    str(object_value(row)["key_hash"]),
+                    object_value(row)["input_policy"],
+                )
+                for row in overrides
+            ) == sorted([(blocked_team, "None", "blocked"), ("None", blocked_hash, "blocked")]), overrides
+            assert read_rows(_TEAM_BLOCKED_TOOLS, (blocked_team,)) == [{"blocked_tools": [tool]}]
+            assert read_rows(_KEY_BLOCKED_TOOLS, (blocked_hash,)) == [{"blocked_tools": [tool]}]
+            assert read_rows(_TEAM_BLOCKED_TOOLS, (sibling_team,)) == [{"blocked_tools": []}]
+
+        second_dir: Final = tmp_path / "second"
+        second_dir.mkdir()
+        with owned_proxy(gateway, second_dir, {}, config=proxy_config) as second:
+            assert_scopes(second, (team_key, blocked_key), (sibling_team_key, sibling_key))
+            removed_team: Final = second.request(
+                "DELETE", f"/v1/tool/{tool}/overrides", params={"team_id": blocked_team}
+            )
+            assert removed_team.status_code == 200, removed_team.text
+            assert removed_team.json() == {"deleted": True, "tool_name": tool}, removed_team.text
+            assert_scopes(second, (blocked_key,), (team_key, sibling_team_key, sibling_key))
+            removed_key: Final = second.request(
+                "DELETE", f"/v1/tool/{tool}/overrides", params={"key_hash": blocked_hash}
+            )
+            assert removed_key.status_code == 200, removed_key.text
+            assert removed_key.json() == {"deleted": True, "tool_name": tool}, removed_key.text
+            assert_scopes(second, (), (team_key, sibling_team_key, blocked_key, sibling_key))
+            assert read_rows(_TEAM_BLOCKED_TOOLS, (blocked_team,)) == [{"blocked_tools": []}]
+            assert read_rows(_KEY_BLOCKED_TOOLS, (blocked_hash,)) == [{"blocked_tools": []}]

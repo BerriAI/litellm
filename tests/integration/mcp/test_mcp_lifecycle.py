@@ -12,7 +12,7 @@ import yaml
 from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
-from integration._support.client import Gateway, eventually
+from integration._support.client import JSON_OBJECT, Gateway, eventually, string_value
 from integration._support.database import read_rows
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 from integration._support.mcp import (
@@ -29,7 +29,7 @@ from integration._support.mcp import (
     tool_names,
 )
 from integration._support.process import owned_proxy
-from pydantic import TypeAdapter
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter
 
 _SPEND_NONCES: Final = (
     "SELECT status, metadata->'mcp_tool_call_metadata'->'arguments'->>'nonce' AS nonce"
@@ -590,3 +590,112 @@ def test_tool_calls_on_both_workers_stay_base_compatible_after_each_worker_lists
         assert sorted((str(row["status"]), str(row["nonce"])) for row in rows) == sorted(
             ("success", nonce) for nonce in (nonces[0], nonces[1], nonces[0])
         ), rows
+
+
+_ENVELOPE_SPEND: Final = (
+    "SELECT request_tags, metadata->'spend_logs_metadata' AS spend_logs_metadata,"
+    " metadata->'mcp_tool_call_metadata' AS tool"
+    ' FROM "LiteLLM_SpendLogs" WHERE api_key = %s AND call_type = %s ORDER BY "startTime"'
+)
+
+
+class EnvelopeText(BaseModel):
+    type: str
+    text: str
+    annotations: None
+    meta: None = Field(alias="_meta")
+
+
+class EnvelopeResult(BaseModel):
+    meta: None = Field(alias="_meta")
+    content: list[EnvelopeText]
+    structuredContent: dict[str, JsonValue]
+    isError: bool
+    resultType: str
+
+
+class EnvelopeTool(BaseModel):
+    name: str
+    arguments: dict[str, JsonValue]
+    mcp_server_name: str
+
+
+class EnvelopeSpendRow(BaseModel):
+    request_tags: list[str]
+    spend_logs_metadata: dict[str, JsonValue]
+    tool: EnvelopeTool
+
+
+def _structured_result(params: JsonRpc) -> JsonRpc:
+    order: Final = string_value(JSON_OBJECT.validate_python(params.get("arguments"))["order"])
+    return {
+        "content": [{"type": "text", "text": f"order {order} shipped"}],
+        "structuredContent": {"order": order, "status": "shipped", "eta_days": 2},
+        "isError": False,
+    }
+
+
+def test_rest_call_envelope_keeps_caller_metadata_forwarded_headers_and_structured_content(gateway: Gateway) -> None:
+    with scripted_peer(ScriptedTool("track", _structured_result)) as peer, gateway.scenario() as scenario:
+        alias: Final = "envelope" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias, auth_type="bearer_token")
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        tag: Final = "envelope-tag-" + uuid.uuid4().hex[:8]
+        ticket: Final = "T-" + uuid.uuid4().hex[:8]
+        cases: Final = (
+            (
+                {
+                    f"x-mcp-{alias}-authorization": "Bearer per-server-token",
+                    f"x-mcp-{alias}-x-tenant": "tenant-a",
+                    "x-mcp-auth": "Bearer legacy-token",
+                },
+                {"authorization": "Bearer per-server-token", "x-tenant": "tenant-a"},
+            ),
+            ({"x-mcp-auth": "Bearer legacy-token"}, {"authorization": "Bearer legacy-token", "x-tenant": None}),
+        )
+        for index, (forwarded, expected) in enumerate(cases):
+            order = f"A-{index}"
+            peer.drain()
+            response = gateway.client.post(
+                "/mcp-rest/tools/call",
+                headers={"x-litellm-api-key": key, **forwarded},
+                json={
+                    "server_id": identity,
+                    "name": "track",
+                    "arguments": {"order": order},
+                    "metadata": {"tags": [tag], "spend_logs_metadata": {"ticket": ticket}},
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert EnvelopeResult.model_validate_json(response.content) == EnvelopeResult.model_validate(
+                {
+                    "_meta": None,
+                    "content": [{"type": "text", "text": f"order {order} shipped", "annotations": None, "_meta": None}],
+                    "structuredContent": {"order": order, "status": "shipped", "eta_days": 2},
+                    "isError": False,
+                    "resultType": "complete",
+                }
+            ), response.text
+            calls = tool_calls(peer.drain())
+            assert len(calls) == 1, calls
+            body = _OBJECTS.validate_python(calls[0]["body"])
+            assert body["params"] == {
+                "name": "track",
+                "arguments": {"order": order},
+                "_meta": {"progressToken": body["id"]},
+            }, calls
+            headers = _STRINGS.validate_python(calls[0]["headers"])
+            assert {name: headers.get(name) for name in ("authorization", "x-tenant")} == expected, headers
+            assert sum("token" in value for value in headers.values()) == 1, headers
+        rows: Final = eventually(
+            lambda: read_rows(_ENVELOPE_SPEND, (sha256(key.encode()).hexdigest(), "call_mcp_tool")),
+            lambda found: len(found) == 2,
+            seconds=70,
+        )
+        for index, row in enumerate(rows):
+            spend = EnvelopeSpendRow.model_validate(row)
+            assert tag in spend.request_tags, row
+            assert spend.spend_logs_metadata == {"ticket": ticket}, row
+            assert spend.tool == EnvelopeTool(name="track", arguments={"order": f"A-{index}"}, mcp_server_name=alias), (
+                row
+            )
