@@ -1327,3 +1327,65 @@ fn gateway_lookup_respects_legacy_fallback_and_ownership(
         expected
     );
 }
+
+#[rstest]
+#[case::matching("call-one", "claude_code.tool.execution", SpanStatus::Error)]
+#[case::other_tool("other-call", "claude_code.tool.execution", SpanStatus::Ok)]
+#[case::child_agent("call-one", "child agent", SpanStatus::Ok)]
+fn native_tool_status_uses_only_its_own_execution_error(
+    #[case] call: &str,
+    #[case] name: &str,
+    #[case] expected: SpanStatus,
+) {
+    let tool = TraceSpansRow {
+        framework: "claude-code".to_owned(),
+        tool_call_id: "call-one".to_owned(),
+        ..row("tool", "", "Bash", "tool", "claude-code")
+    };
+    let execution = TraceSpansRow {
+        status: SpanStatus::Error,
+        status_message: "exit 3".to_owned(),
+        tool_call_id: call.to_owned(),
+        ..row("execution", "tool", name, "framework", "claude-code")
+    };
+    let trace = resolve_trace("trace", "", &[tool, execution], &[]).unwrap();
+    assert_eq!(trace.spans[0].status, expected);
+    assert_eq!(
+        trace.spans[0].error.as_deref(),
+        if expected == SpanStatus::Error {
+            Some("exit 3")
+        } else {
+            None
+        }
+    );
+}
+
+#[rstest]
+#[case::matching("call-one", SpanStatus::Error)]
+#[case::other_tool("other-call", SpanStatus::Ok)]
+fn native_tool_failure_log_matches_by_call_id_without_double_counting(
+    #[case] call: &str,
+    #[case] expected: SpanStatus,
+) {
+    let tool = TraceSpansRow {
+        framework: "claude-code".into(),
+        tool_call_id: "call-one".into(),
+        ..row("tool", "root", "Bash", "tool", "claude-code")
+    };
+    let log = TraceSpansRow {
+        framework: "claude-code".into(),
+        status: SpanStatus::Error,
+        status_message: "Permission denied".into(),
+        tool_call_id: call.into(),
+        ..row(
+            "log",
+            "root",
+            "claude_code.tool_result",
+            "framework",
+            "claude-code",
+        )
+    };
+    let trace = resolve_trace("trace", "", &[tool, log], &[]).unwrap();
+    assert_eq!(trace.spans[0].status, expected);
+    assert_eq!(trace.summary.error_count, 1);
+}
