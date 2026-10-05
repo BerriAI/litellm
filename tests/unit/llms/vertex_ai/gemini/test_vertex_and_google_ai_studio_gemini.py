@@ -18,7 +18,7 @@ from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.types.llms.vertex_ai import GeminiFinishReason, UsageMetadata
+from litellm.types.llms.vertex_ai import GeminiFinishReason, HttpxPartType, UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import CustomStreamWrapper
 
@@ -6356,3 +6356,54 @@ def test_gemini_multi_candidate_messages_do_not_share_state():
     assert resp.choices[1].message.tool_calls is None
     assert getattr(resp.choices[1].message, "reasoning_content", None) is None
     assert resp.choices[1].provider_specific_fields["native_finish_reason"] == "STOP"
+
+
+@pytest.mark.parametrize(
+    ("parts", "expected"),
+    [
+        ([{"audioTranscription": {"text": "TRANSCRIPTION_MARKER_123"}}], "TRANSCRIPTION_MARKER_123"),
+        ([{"audioTranscription": {"text": "first "}}, {"audioTranscription": {"text": "second"}}], "first second"),
+        ([{"text": "hello"}], "hello"),
+        ([{"text": "hello"}, {"audioTranscription": {"text": "transcript"}}], "hello"),
+        ([{"audioTranscription": {"text": "transcript"}}, {"text": "hello"}], "hello"),
+        ([{"text": "hello", "audioTranscription": {"text": "transcript"}}], "hello"),
+        ([{"audioTranscription": {"text": ""}}], None),
+        ([{"text": ""}, {"audioTranscription": {"text": "transcript"}}], "transcript"),
+        ([{"audioTranscription": {"text": "private"}, "thought": True}], None),
+    ],
+)
+def test_audio_transcription_content_fallback(parts: list[HttpxPartType], expected: str | None) -> None:
+    assert VertexGeminiConfig().get_assistant_content_message(parts) == (expected, None)
+
+
+def test_audio_transcription_non_streaming_content() -> None:
+    response: Final = httpx.Response(
+        200,
+        json={
+            "candidates": [{"content": {"parts": [{"audioTranscription": {"text": "TRANSCRIPTION_MARKER_123"}}]}}],
+            "usageMetadata": {"promptTokenCount": 1, "totalTokenCount": 1},
+        },
+    )
+    result: Final = VertexGeminiConfig().transform_response(
+        model="gemini-3.5-transcribe",
+        raw_response=response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+    assert result.choices[0].message.content == "TRANSCRIPTION_MARKER_123"
+
+
+def test_audio_transcription_streaming_content() -> None:
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
+
+    iterator: Final = ModelResponseIterator(streaming_response=[], sync_stream=True, logging_obj=MagicMock())
+    result: Final = iterator.chunk_parser(
+        {"candidates": [{"content": {"parts": [{"audioTranscription": {"text": "TRANSCRIPTION_MARKER_123"}}]}}]}
+    )
+    assert result is not None
+    assert result.choices[0].delta.content == "TRANSCRIPTION_MARKER_123"

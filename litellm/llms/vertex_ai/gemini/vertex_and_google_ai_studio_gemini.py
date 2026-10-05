@@ -1385,6 +1385,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         content_str = ""
                     content_str += _content_str
 
+        if content_str is None:
+            transcription_text: Final = "".join(
+                part["audioTranscription"].get("text", "")
+                for part in parts
+                if "audioTranscription" in part and part.get("thought") is not True
+            )
+            return transcription_text or None, reasoning_content_str
+
         return content_str, reasoning_content_str
 
     def _extract_thinking_blocks_from_parts(self, parts: list[HttpxPartType]) -> list[ChatCompletionThinkingBlock]:

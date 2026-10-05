@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
+    ReadOnly,
     Required,
     TypedDict,
 )
@@ -92,8 +93,13 @@ class HttpxServerSideToolResponse(TypedDict, total=False):
     response: str | dict
 
 
+class HttpxAudioTranscription(TypedDict):
+    text: ReadOnly[str]
+
+
 class HttpxPartType(TypedDict, total=False):
     text: str
+    audioTranscription: ReadOnly[HttpxAudioTranscription]
     inlineData: HttpxBlobType
     fileData: FileDataType
     functionCall: HttpxFunctionCall
