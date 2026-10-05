@@ -1,5 +1,6 @@
 import os
 import sys
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Literal
 
@@ -116,6 +117,15 @@ BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS: Final = 256 * 1024
 REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
 # in-memory stand-in handed to provider converters for redacted arguments; never stored
 REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER: Final = "{}"
+GENERIC_GUARDRAIL_IMAGE_OMITTED_PLACEHOLDER: Final = "[omitted]"
+
+
+@dataclass(frozen=True, slots=True)
+class GenericGuardrailUnappliableRewrite:
+    pass
+
+
+GENERIC_GUARDRAIL_UNAPPLIABLE_REWRITE: Final = GenericGuardrailUnappliableRewrite()
 
 MAX_STRING_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_STRING_LENGTH_STDOUT_LOG", 4096)
 MAX_BASE64_LENGTH_STDOUT_LOG: Final = get_env_int("MAX_BASE64_LENGTH_STDOUT_LOG", 4096)

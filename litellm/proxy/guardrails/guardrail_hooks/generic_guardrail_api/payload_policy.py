@@ -12,6 +12,11 @@ from typing import Final, Literal
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import (
+    GENERIC_GUARDRAIL_IMAGE_OMITTED_PLACEHOLDER,
+    GENERIC_GUARDRAIL_UNAPPLIABLE_REWRITE,
+    GenericGuardrailUnappliableRewrite,
+)
 from litellm.llms.base_llm.guardrail_translation.utils import unappliable_request_rewrite
 from litellm.proxy.guardrails._content_utils import image_part_url, map_messages_image_urls
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.config_parsing import config_strings
@@ -24,8 +29,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
 )
 
 PROTECTED_PAYLOAD_FIELDS: Final = frozenset({"input_type", "litellm_call_id"})
-
-IMAGE_OMITTED_PLACEHOLDER: Final = "[omitted]"
 
 _BOOL: Final = TypeAdapter(bool)
 _PARTS: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
@@ -72,14 +75,6 @@ class AcceptedRewrites:
     tools: list[GuardrailToolParam] | None  # mutable-ok: guardrail inputs take a list
     rows: Sequence[AllMessageValues] | None
     refused_any: bool
-
-
-@dataclass(frozen=True, slots=True)
-class _Unappliable:
-    pass
-
-
-_UNAPPLIABLE: Final = _Unappliable()
 
 
 def resolve_payload_policy(
@@ -140,7 +135,7 @@ def _resolve_exclude_fields(raw: Sequence[str], *, guardrail_name: str | None) -
 
 
 def _omit_image(_url: str) -> str:
-    return IMAGE_OMITTED_PLACEHOLDER
+    return GENERIC_GUARDRAIL_IMAGE_OMITTED_PLACEHOLDER
 
 
 def _content(row: Mapping[str, object]) -> object:
@@ -152,7 +147,7 @@ def _part_list(value: object) -> tuple[object, ...] | None:
 
 
 def _holds_placeholder(part: object) -> bool:
-    return image_part_url(part) == IMAGE_OMITTED_PLACEHOLDER
+    return image_part_url(part) == GENERIC_GUARDRAIL_IMAGE_OMITTED_PLACEHOLDER
 
 
 def _altered_message_indices(unshaped: JsonValue, sent: JsonValue) -> frozenset[int]:
@@ -255,7 +250,9 @@ def _omitted_image_count(content: object) -> int:
 def _restored_part(returned: object, caller: object, sent: object) -> object:
     if returned == sent:
         return caller
-    return _UNAPPLIABLE if _holds_placeholder(sent) or _holds_placeholder(returned) else returned
+    return (
+        GENERIC_GUARDRAIL_UNAPPLIABLE_REWRITE if _holds_placeholder(sent) or _holds_placeholder(returned) else returned
+    )
 
 
 def _restored_content(returned: object, caller: object, sent: object) -> object:
@@ -265,12 +262,12 @@ def _restored_content(returned: object, caller: object, sent: object) -> object:
     caller_parts: Final = _part_list(caller)
     sent_parts: Final = _part_list(sent)
     if returned_parts is None or caller_parts is None or sent_parts is None:
-        return _UNAPPLIABLE
+        return GENERIC_GUARDRAIL_UNAPPLIABLE_REWRITE
     if not len(returned_parts) == len(caller_parts) == len(sent_parts):
-        return _UNAPPLIABLE
+        return GENERIC_GUARDRAIL_UNAPPLIABLE_REWRITE
     parts: Final = tuple(_restored_part(*aligned) for aligned in zip(returned_parts, caller_parts, sent_parts))
-    restored: Final = [part for part in parts if not isinstance(part, _Unappliable)]
-    return restored if len(restored) == len(parts) else _UNAPPLIABLE
+    restored: Final = [part for part in parts if not isinstance(part, GenericGuardrailUnappliableRewrite)]
+    return restored if len(restored) == len(parts) else GENERIC_GUARDRAIL_UNAPPLIABLE_REWRITE
 
 
 def _restored_row(
@@ -279,17 +276,17 @@ def _restored_row(
     sent: AllMessageValues,
     *,
     altered: bool,
-) -> Mapping[str, object] | _Unappliable:
+) -> Mapping[str, object] | GenericGuardrailUnappliableRewrite:
     if returned is caller:
         return caller
     returned_content: Final = _content(returned)
     caller_content: Final = _content(caller)
     if not altered:
         adds_placeholder: Final = _omitted_image_count(returned_content) > _omitted_image_count(caller_content)
-        return _UNAPPLIABLE if adds_placeholder else returned
+        return GENERIC_GUARDRAIL_UNAPPLIABLE_REWRITE if adds_placeholder else returned
     content: Final = _restored_content(returned_content, caller_content, _content(sent))
-    if isinstance(content, _Unappliable):
-        return _UNAPPLIABLE
+    if isinstance(content, GenericGuardrailUnappliableRewrite):
+        return GENERIC_GUARDRAIL_UNAPPLIABLE_REWRITE
     return {**returned, "content": content}
 
 
@@ -313,7 +310,9 @@ def restore_unseen_rows(
         _restored_row(row, caller_row, sent_row, altered=index in altered)
         for index, (row, caller_row, sent_row) in enumerate(zip(rows, caller, sent))
     )
-    accepted: Final = structured_messages_from_json([row for row in restored if not isinstance(row, _Unappliable)])
+    accepted: Final = structured_messages_from_json(
+        [row for row in restored if not isinstance(row, GenericGuardrailUnappliableRewrite)]
+    )
     if accepted is None or len(accepted) != len(restored):
         raise unappliable_request_rewrite(guardrail_name)
     return tuple(accepted)

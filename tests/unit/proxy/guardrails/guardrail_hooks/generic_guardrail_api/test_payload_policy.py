@@ -7,6 +7,7 @@ from typing import Final
 import httpx
 import pytest
 
+from litellm.constants import GENERIC_GUARDRAIL_IMAGE_OMITTED_PLACEHOLDER
 from litellm.exceptions import GuardrailRaisedException
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
@@ -15,9 +16,6 @@ from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCom
 from litellm.llms.openai.embeddings.guardrail_translation.handler import OpenAIEmbeddingsHandler
 from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
-from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.payload_policy import (
-    IMAGE_OMITTED_PLACEHOLDER,
-)
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPIRequest
 from litellm.types.utils import ModelResponse
 
@@ -182,8 +180,11 @@ async def test_send_images_false_withholds_every_image_but_keeps_the_parts():
             "role": "user",
             "content": [
                 {"type": "text", "text": f"my ssn is {SSN}"},
-                {"type": "image_url", "image_url": {"url": IMAGE_OMITTED_PLACEHOLDER, "detail": "low"}},
-                {"type": "image_url", "image_url": IMAGE_OMITTED_PLACEHOLDER},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": GENERIC_GUARDRAIL_IMAGE_OMITTED_PLACEHOLDER, "detail": "low"},
+                },
+                {"type": "image_url", "image_url": GENERIC_GUARDRAIL_IMAGE_OMITTED_PLACEHOLDER},
             ],
         },
         _text_message(),
@@ -210,7 +211,7 @@ async def test_send_images_false_withholds_the_image_in_a_row_the_request_model_
             "role": "user",
             "content": [
                 {"type": "guarded_text", "text": "hi"},
-                {"type": "image_url", "image_url": {"url": IMAGE_OMITTED_PLACEHOLDER}},
+                {"type": "image_url", "image_url": {"url": GENERIC_GUARDRAIL_IMAGE_OMITTED_PLACEHOLDER}},
             ],
         }
     ]
@@ -352,8 +353,11 @@ async def test_an_echoed_placeholder_row_is_restored_to_the_callers_row():
 
 
 _TEXT_PART: Final = {"type": "text", "text": "my ssn is [SSN]"}
-_OBJECT_PLACEHOLDER: Final = {"type": "image_url", "image_url": {"url": IMAGE_OMITTED_PLACEHOLDER, "detail": "low"}}
-_BARE_PLACEHOLDER: Final = {"type": "image_url", "image_url": IMAGE_OMITTED_PLACEHOLDER}
+_OBJECT_PLACEHOLDER: Final = {
+    "type": "image_url",
+    "image_url": {"url": GENERIC_GUARDRAIL_IMAGE_OMITTED_PLACEHOLDER, "detail": "low"},
+}
+_BARE_PLACEHOLDER: Final = {"type": "image_url", "image_url": GENERIC_GUARDRAIL_IMAGE_OMITTED_PLACEHOLDER}
 
 
 def _with_content(content: object) -> Callable[[int, dict], dict]:
@@ -743,6 +747,41 @@ async def test_a_chat_request_is_rejected_when_the_only_masking_went_to_texts_th
 
     with pytest.raises(UnappliableRequestRewrite):
         await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+
+@pytest.mark.asyncio
+async def test_a_messages_request_is_rejected_when_unsent_texts_are_masked_and_rows_echoed_without_nulls():
+    def echo_rows_without_nulls_and_mask_texts(payload: dict) -> dict:
+        rows_without_nulls: Final = json.loads(
+            json.dumps(payload["structured_messages"]),
+            object_hook=lambda row: {key: value for key, value in row.items() if value is not None},
+        )
+        return {
+            "action": "GUARDRAIL_INTERVENED",
+            "texts": ["my ssn is [SSN]"],
+            "structured_messages": rows_without_nulls,
+        }
+
+    messages: Final = [
+        {"role": "user", "content": f"my ssn is {SSN}"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "calling"},
+                {"type": "tool_use", "id": "t1", "name": "f", "input": {}},
+            ],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "r"}]},
+    ]
+    data: Final = {"model": "claude", "max_tokens": 5, "messages": copy.deepcopy(messages)}
+    guardrail: Final = _guardrail(
+        _GuardrailEndpoint(echo_rows_without_nulls_and_mask_texts), exclude_payload_fields=["texts"]
+    )
+
+    with pytest.raises(UnappliableRequestRewrite):
+        await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert data["messages"] == messages
 
 
 @pytest.mark.asyncio
