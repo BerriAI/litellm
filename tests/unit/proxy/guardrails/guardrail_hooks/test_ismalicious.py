@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 
@@ -6,6 +7,8 @@ import pytest
 from mcp.types import CallToolResult, TextContent
 
 import litellm
+from litellm.caching.evicted_client_closer import EvictedClientCloser
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import MCPGuardrailTranslationHandler
 from litellm.proxy.guardrails.guardrail_hooks.ismalicious import initialize_guardrail
@@ -68,6 +71,31 @@ async def test_native_pre_handler_preserves_original_url_and_arguments():
     assert all(request.headers["X-API-KEY"] == KEY for request in requests)
     assert all("Authorization" not in request.headers for request in requests)
     assert all(request.extensions["timeout"]["read"] == 15 for request in requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scheme", ["HTTPS", "hTtPs", "HTTP", "HtTp"])
+@pytest.mark.parametrize("verdict", ["allow", "block"])
+async def test_native_pre_handler_checks_case_variant_schemes_without_rewriting(scheme, verdict):
+    url = f"{scheme}://blocked.example/CaseSensitive?Token=AbC#Fragment"
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return service_response(request, verdict if request.url.path == "/gate/url" else "allow")
+
+    data = {"mcp_tool_name": "fetch", "mcp_arguments": {"url": url}}
+    if verdict == "block":
+        with pytest.raises(GuardrailRaisedException) as exc:
+            await MCPGuardrailTranslationHandler().process_input_messages(data, guardrail(handler))
+        assert exc.value.blocked_content
+        assert [request.url.path for request in requests] == ["/gate/url"]
+    else:
+        assert await MCPGuardrailTranslationHandler().process_input_messages(data, guardrail(handler)) is data
+        assert [request.url.path for request in requests] == ["/gate/url", "/gate/scan"]
+        assert json.loads(json.loads(requests[1].content)["content"]) == [url]
+    assert requests[0].url.params["u"] == url
+    assert data["mcp_arguments"]["url"] == url
 
 
 @pytest.mark.asyncio
@@ -340,6 +368,7 @@ class ClosureAwareTransport(httpx.MockTransport):
     def __init__(self, handler):
         super().__init__(handler)
         self.closed = False
+        self.closed_event = asyncio.Event()
 
     async def handle_async_request(self, request):
         if self.closed:
@@ -349,6 +378,45 @@ class ClosureAwareTransport(httpx.MockTransport):
     async def aclose(self):
         self.closed = True
         await super().aclose()
+        self.closed_event.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("additional_url", [None, "https://second.example/path"])
+async def test_native_eviction_between_inspections_returns_fixed_refusal(monkeypatch, additional_url):
+    cache = LLMClientCache(max_size_in_memory=1, evicted_client_closer=EvictedClientCloser(grace_seconds=0))
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", cache)
+    requests = []
+
+    async def handler(request):
+        requests.append(request)
+        cache.set_cache("replacement", object())
+        await transport.closed_event.wait()
+        return service_response(request)
+
+    transport = ClosureAwareTransport(handler)
+    callback = IsMaliciousGuardrail(api_key=KEY, event_hook=GuardrailEventHooks.pre_mcp_call, transport=transport)
+    arguments = {"url": URL}
+    if additional_url is not None:
+        arguments["second_url"] = additional_url
+    with pytest.raises(GuardrailRaisedException) as exc:
+        await MCPGuardrailTranslationHandler().process_input_messages(
+            {"mcp_tool_name": "fetch", "mcp_arguments": arguments}, callback
+        )
+    assert exc.value.message.endswith("Message: IsMalicious could not allow the inspected MCP content")
+    assert not exc.value.blocked_content
+    assert URL not in str(exc.value) and KEY not in str(exc.value)
+    assert [request.url.path for request in requests] == ["/gate/url"]
+    assert transport.closed
+
+
+@pytest.mark.asyncio
+async def test_unrelated_transport_runtime_error_is_not_masked_as_a_closed_client():
+    def handler(request):
+        raise RuntimeError("Unrelated transport implementation error")
+
+    with pytest.raises(RuntimeError, match="Unrelated transport implementation error"):
+        await guardrail(handler).apply_guardrail({"texts": ["Allowed text"]}, {}, "response")
 
 
 @pytest.mark.asyncio

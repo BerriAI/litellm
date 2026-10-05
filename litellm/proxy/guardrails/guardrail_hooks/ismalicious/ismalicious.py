@@ -108,7 +108,7 @@ def _encoded_body(texts: list[str]) -> bytes | _Failure:
 
 
 def _url_argument(text: str) -> str | None | _Failure:
-    if not text.startswith(("http://", "https://")):
+    if not text.lower().startswith(("http://", "https://")):
         return None
     try:
         parsed: Final = urlsplit(text)
@@ -195,6 +195,10 @@ class IsMaliciousGuardrail(CustomGuardrail):
                 )
             )
         except httpx.HTTPError:
+            return _Failure()
+        except RuntimeError:
+            if not client.is_closed:
+                raise
             return _Failure()
         return _verdict(response, url)
 
