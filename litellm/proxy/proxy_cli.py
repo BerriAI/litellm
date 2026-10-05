@@ -702,6 +702,16 @@ class ProxyInitializationHelpers:
         return multiproc_dir
 
 
+def _value_type_name(value: object) -> str:
+    """Return the runtime class name of an arbitrary config value.
+
+    The value read from YAML is untyped; annotate the parameter as ``object``
+    so ``type()`` receives a known-typed argument and the strict type gate does
+    not count a ``reportUnknownArgumentType`` error on the error path.
+    """
+    return type(value).__name__
+
+
 @click.command()
 @click.argument("cli_args", nargs=-1)
 @click.option("--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST")
@@ -1014,16 +1024,6 @@ class ProxyInitializationHelpers:
     ),
     envvar="PROMETHEUS_METRICS_PORT",
 )
-def _value_type_name(value: object) -> str:
-    """Return the runtime class name of an arbitrary config value.
-
-    The value read from YAML is untyped; annotate the parameter as ``object``
-    so ``type()`` receives a known-typed argument and the strict type gate does
-    not count a ``reportUnknownArgumentType`` error on the error path.
-    """
-    return type(value).__name__
-
-
 def run_server(
     cli_args,
     host,
