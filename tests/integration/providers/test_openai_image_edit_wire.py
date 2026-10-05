@@ -9,6 +9,7 @@ from email.policy import HTTP
 from typing import Final, cast
 
 import httpx
+import openai
 import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
@@ -288,6 +289,44 @@ def test_image_edit_repeated_plain_image_parts_reach_openai_as_two_file_parts(ga
         assert response.status_code == 200, response.text
         payload: Final = _ImageResponse.model_validate_json(response.content)
         assert [image.b64_json for image in payload.data] == [_EDITED_IMAGE_B64], response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/images/edits")]
+
+
+def test_openai_sdk_image_edit_with_image_list_and_mask_reaches_openai_as_file_parts(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/images/edits"
+        assert request.headers["authorization"] == "Bearer synthetic-openai-key"
+        assert request.headers["content-type"].startswith("multipart/form-data; boundary=")
+        parts: Final = _multipart_parts(request)
+        assert _text_parts(parts) == (("model", "gpt-image-1"), ("n", "2"), ("prompt", _PROMPT))
+        assert _file_parts(parts) == (
+            _FilePart("image[]", "image.png", "image/png", _PNG_BYTES),
+            _FilePart("image[]", "image.png", "image/png", _SECOND_PNG),
+            _FilePart("mask", "mask.png", "image/png", _MASK_PNG),
+        )
+        return Reply(body=json.dumps({"created": 1700000000, "data": [{"b64_json": _EDITED_IMAGE_B64}]}).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/gpt-image-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        client: Final = openai.OpenAI(
+            base_url=str(gateway.client.base_url) + "/v1",
+            api_key=gateway.key,
+            max_retries=0,
+        )
+        result: Final = client.images.edit(
+            model=model,
+            image=[
+                ("first.png", _PNG_BYTES, "image/png"),
+                ("second.png", _SECOND_PNG, "image/png"),
+            ],
+            mask=("mask.png", _MASK_PNG, "image/png"),
+            prompt=_PROMPT,
+            n=2,
+        )
+        assert [image.b64_json for image in result.data] == [_EDITED_IMAGE_B64]
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/images/edits")]
 
 
