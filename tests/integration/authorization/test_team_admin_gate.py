@@ -8,13 +8,16 @@ team-admin gate can prove parity.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final, Literal, assert_never
 
+import httpx
 import pytest
 from pydantic import JsonValue
 
@@ -429,3 +432,213 @@ def test_status_code(shared: TeamScenario, org_team: TeamScenario, route: Route,
             ) == [{"max_budget": 4.0 if response.status_code == 200 else 5.0}]
         if response.status_code == 200 and route.cleanup is not None:
             route.cleanup(s, object_value(response.json()))
+
+
+ADMIN_ONLY_CALLERS: Final[tuple[tuple[str, Caller], ...]] = (
+    ("shared", "team_admin"),
+    ("shared", "member"),
+    ("shared", "outsider"),
+    ("org_team", "org_admin"),
+)
+ADMIN_ONLY_IDS: Final = tuple(caller for _, caller in ADMIN_ONLY_CALLERS)
+
+
+def _admin_only_team(request: pytest.FixtureRequest, fixture: str, scenario: Scenario) -> TeamScenario:
+    team: Final = request.getfixturevalue(fixture)
+    assert isinstance(team, TeamScenario)
+    return replace(team, scenario=scenario)
+
+
+def _team_model(s: TeamScenario) -> tuple[str, str]:
+    name: Final = f"matrix-{uuid.uuid4().hex}"
+    created: Final = s.gateway.post("/model/new", _team_model_body(s, name))
+    model_id: Final = string_value(object_value(created["model_info"])["id"])
+    s.scenario.cleanups.callback(_delete_model_if_present, s.gateway, model_id)
+    return model_id, name
+
+
+def _blocked(model_id: str) -> list[dict[str, object]]:
+    return read_rows('SELECT blocked FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (model_id,))
+
+
+def _serve(s: TeamScenario, name: str, key: str) -> httpx.Response:
+    return s.gateway.request(
+        "POST", "/v1/chat/completions", {"model": name, "messages": [{"role": "user", "content": "serving state"}]}, key=key
+    )
+
+
+def _refusal(response: httpx.Response) -> JsonValue:
+    """The error body with the caller's masked user id elided, since it differs per caller."""
+    body: Final = response.json()
+    error: Final = object_value(body).get("error")
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        return {**body, "error": {**error, "message": re.sub(r"Your user_id=\S+", "Your user_id=<caller>", error["message"])}}
+    return body
+
+
+def _admin_only_route(route: str) -> tuple[int, JsonValue]:
+    return 401, {
+        "error": {
+            "message": "Authentication Error, Only proxy admin can be used to generate, delete, update info for new "
+            f"keys/users/teams. Route={route}. Your role=internal_user. Your user_id=<caller>",
+            "type": "auth_error",
+            "param": "None",
+            "code": "401",
+        }
+    }
+
+
+_BLOCK_REFUSALS: Final[Mapping[tuple[str, str], tuple[int, JsonValue]]] = MappingProxyType(
+    {
+        ("POST", "/model/block"): _admin_only_route("/model/block"),
+        ("POST", "/model/unblock"): _admin_only_route("/model/unblock"),
+    }
+)
+_PATCH_BLOCKED_REFUSED: Final[tuple[int, JsonValue]] = (
+    403,
+    {"error": {"message": "Only proxy admins can change a model's blocked flag.", "type": "auth_error", "param": "blocked", "code": "403"}},
+)
+_PATCH_NOT_TEAM_ADMIN: Final[tuple[int, JsonValue]] = (
+    403,
+    {"detail": "This team does not allow you to manage your own auto routers."},
+)
+
+
+def _block_refusal(caller: Caller, call: Call) -> tuple[int, JsonValue]:
+    if call.method == "PATCH":
+        return _PATCH_BLOCKED_REFUSED if caller == "team_admin" else _PATCH_NOT_TEAM_ADMIN
+    return _BLOCK_REFUSALS[call.method, call.path]
+
+
+@pytest.mark.parametrize(("fixture", "caller"), ADMIN_ONLY_CALLERS, ids=ADMIN_ONLY_IDS)
+def test_only_proxy_admin_flips_a_models_blocked_flag(request: pytest.FixtureRequest, fixture: str, caller: Caller) -> None:
+    with gateway_from_environment() as gateway, gateway.scenario() as scenario:
+        s: Final = _admin_only_team(request, fixture, scenario)
+        model_id, name = _team_model(s)
+        for blocked in (True, False):
+            s.gateway.post("/model/block" if blocked else "/model/unblock", {"model_id": model_id})
+            attempts: Final = (
+                Call("POST", "/model/unblock" if blocked else "/model/block", {"model_id": model_id}),
+                Call("PATCH", f"/model/{model_id}/update", {"blocked": not blocked}),
+            )
+            for call in attempts:
+                response = s.gateway.request(call.method, call.path, call.body, key=s.keys[caller])
+                assert (response.status_code, _refusal(response)) == _block_refusal(caller, call), (
+                    f"{caller} {call.method} {call.path}: {response.text}"
+                )
+                assert _blocked(model_id) == [{"blocked": blocked}], f"{caller} {call.method} {call.path} flipped blocked"
+            served = _serve(s, name, s.keys["team_admin"])
+            assert served.status_code == (403 if blocked else 200), served.text
+
+
+@contextmanager
+def _model_creation_disabled_for_internal_users(gateway: Gateway) -> Iterator[None]:
+    setting: Final = "disable_model_add_for_internal_users"
+    original: Final = object_value(gateway.get("/get/ui_settings")["values"]).get(setting, False)
+    response: Final = gateway.request("PATCH", "/update/ui_settings", {setting: True})
+    assert response.status_code == 200, response.text
+    try:
+        yield
+    finally:
+        restored: Final = gateway.request("PATCH", "/update/ui_settings", {setting: original})
+        assert restored.status_code == 200, restored.text
+
+
+def _model_rows(name: str) -> list[dict[str, object]]:
+    return read_rows(
+        'SELECT model_id FROM "LiteLLM_ProxyModelTable" '
+        "WHERE model_name = %s OR model_info->>'team_public_model_name' = %s",
+        (name, name),
+    )
+
+
+def _listed_names(gateway: Gateway, key: str) -> tuple[frozenset[str], frozenset[str]]:
+    info: Final = gateway.get("/model/info")["data"]
+    models: Final = gateway.request("GET", "/v1/models", key=key)
+    assert models.status_code == 200, models.text
+    listed: Final = models.json()["data"]
+    assert isinstance(info, list) and isinstance(listed, list), models.text
+    info_names: Final = frozenset(
+        name
+        for entry in map(object_value, info)
+        for name in (entry["model_name"], object_value(entry["model_info"]).get("team_public_model_name"))
+        if isinstance(name, str)
+    )
+    return info_names, frozenset(string_value(object_value(entry)["id"]) for entry in listed)
+
+
+def test_internal_user_model_creation_prohibition_refuses_team_admin_but_not_proxy_admin(shared: TeamScenario) -> None:
+    with shared.gateway.scenario() as scenario:
+        s: Final = replace(shared, scenario=scenario)
+        team_admin: Final = s.keys["team_admin"]
+        refused_name: Final = f"matrix-{uuid.uuid4().hex}"
+        admin_name: Final = f"matrix-{uuid.uuid4().hex}"
+        with _model_creation_disabled_for_internal_users(s.gateway):
+            refused: Final = s.gateway.request("POST", "/model/new", _team_model_body(s, refused_name), key=team_admin)
+            assert (refused.status_code, refused.json()) == (
+                403,
+                {
+                    "error": {
+                        "message": "Model creation is disabled for internal users by disable_model_add_for_internal_users.",
+                        "type": "auth_error",
+                        "param": "None",
+                        "code": "403",
+                    }
+                },
+            ), refused.text
+            assert _model_rows(refused_name) == []
+            info_names, listed = _listed_names(s.gateway, team_admin)
+            assert refused_name not in info_names and refused_name not in listed, (info_names, listed)
+            created: Final = s.gateway.post("/model/new", _team_model_body(s, admin_name))
+            s.scenario.cleanups.callback(
+                _delete_model_if_present, s.gateway, string_value(object_value(created["model_info"])["id"])
+            )
+            assert _model_rows(admin_name) == [{"model_id": object_value(created["model_info"])["id"]}]
+            assert admin_name in _listed_names(s.gateway, team_admin)[1]
+        allowed_name: Final = f"matrix-{uuid.uuid4().hex}"
+        allowed: Final = s.gateway.request("POST", "/model/new", _team_model_body(s, allowed_name), key=team_admin)
+        assert allowed.status_code == 200, allowed.text
+        s.scenario.cleanups.callback(
+            _delete_model_if_present, s.gateway, string_value(object_value(allowed.json()["model_info"])["id"])
+        )
+        assert len(_model_rows(allowed_name)) == 1
+
+
+def _credential_row(name: str) -> list[dict[str, object]]:
+    return read_rows(
+        'SELECT credential_name, credential_values, credential_info, updated_at::text AS updated_at FROM "LiteLLM_CredentialsTable" '
+        "WHERE credential_name = %s",
+        (name,),
+    )
+
+
+@pytest.mark.parametrize(("fixture", "caller"), ADMIN_ONLY_CALLERS, ids=ADMIN_ONLY_IDS)
+def test_only_proxy_admin_reads_or_changes_credentials(request: pytest.FixtureRequest, fixture: str, caller: Caller) -> None:
+    secret: Final = f"synthetic-shared-credential-{uuid.uuid4().hex}"
+    with gateway_from_environment() as gateway, gateway.scenario() as scenario:
+        s: Final = _admin_only_team(request, fixture, scenario)
+        name: Final = f"credential-{uuid.uuid4().hex}"
+        attempted: Final = f"credential-{uuid.uuid4().hex}"
+        s.gateway.post(
+            "/credentials",
+            {"credential_name": name, "credential_values": {"api_key": secret}, "credential_info": {"team": "shared"}},
+        )
+        s.scenario.cleanups.callback(s.gateway.request, "DELETE", f"/credentials/{name}")
+        s.scenario.cleanups.callback(s.gateway.request, "DELETE", f"/credentials/{attempted}")
+        stored: Final = _credential_row(name)
+        assert len(stored) == 1, stored
+        attempts: Final = (
+            Call("POST", "/credentials", {"credential_name": attempted, "credential_values": {"api_key": "k"}, "credential_info": {}}),
+            Call("PATCH", f"/credentials/{name}", {"credential_name": name, "credential_values": {"api_key": "overwritten"}, "credential_info": {}}),
+            Call("DELETE", f"/credentials/{name}"),
+            Call("GET", "/credentials"),
+            Call("GET", f"/credentials/by_name/{name}"),
+        )
+        for call in attempts:
+            response = s.gateway.request(call.method, call.path, call.body, key=s.keys[caller])
+            assert (response.status_code, _refusal(response)) == _admin_only_route(call.path), (
+                f"{caller} {call.method} {call.path}: {response.text}"
+            )
+            assert secret not in response.text, f"{caller} {call.method} {call.path} exposed the credential"
+            assert _credential_row(name) == stored, f"{caller} {call.method} {call.path} changed the credential row"
+            assert _credential_row(attempted) == [], f"{caller} {call.method} {call.path} wrote a credential"
