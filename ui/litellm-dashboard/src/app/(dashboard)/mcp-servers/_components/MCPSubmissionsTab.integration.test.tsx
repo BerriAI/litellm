@@ -2,11 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MCPServer, MCPSubmissionsSummary } from "@/components/mcp_tools/types";
-import {
-  fetchMCPSubmissions,
-  getGeneralSettingsCall,
-  updateConfigFieldSetting,
-} from "@/components/networking";
+import { fetchMCPSubmissions, getGeneralSettingsCall, updateConfigFieldSetting } from "@/components/networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 
 vi.mock("@/components/networking", () => ({
