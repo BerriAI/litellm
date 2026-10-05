@@ -1,15 +1,21 @@
 """Tests for unified guardrail."""
 
+import asyncio
+import contextlib
+import io
 import logging
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
 
+import anyio
 import pytest
 
 import litellm
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    ModifyResponseException,
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
@@ -41,7 +47,15 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import CallTypes, Delta, GenericGuardrailAPIInputs, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    CallTypes,
+    Delta,
+    GenericGuardrailAPIInputs,
+    ModelResponse,
+    ModelResponseStream,
+    StandardLoggingGuardrailInformation,
+    StreamingChoices,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -373,6 +387,37 @@ class TestUnifiedLLMGuardrails:
             assert result["prompt"] == "a paper boat on a stream [GUARDRAILED]"
             assert result["seconds"] == "4"
 
+        @pytest.mark.asyncio
+        @pytest.mark.parametrize("call_type", ["aimage_edit", "image_edit"])
+        async def test_image_edit_routes_scan_prompt_and_keep_rewrite(self, monkeypatch, call_type: str) -> None:
+            """/v1/images/edits dispatches call_type="aimage_edit", which had no translation mapping,
+            so the hook returned the request unscanned. Runs against the discovered handler map."""
+            _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
+            handler = UnifiedLLMGuardrails()
+            guardrail = RewritingGuardrail()
+            image = io.BytesIO(b"\x89PNG\r\n\x1a\n")
+            data = {
+                "guardrail_to_apply": guardrail,
+                "model": "gemini-3-pro-image",
+                "prompt": "a watercolor painting of a lighthouse",
+                "image": [image],
+            }
+
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                cache=DualCache(),
+                data=data,
+                call_type=call_type,
+            )
+
+            assert guardrail.event_history == [GuardrailEventHooks.pre_call]
+            assert [call["inputs"]["texts"] for call in guardrail.apply_calls] == [
+                ["a watercolor painting of a lighthouse"]
+            ]
+            assert guardrail.apply_calls[0]["inputs"]["model"] == "gemini-3-pro-image"
+            assert result["prompt"] == "a watercolor painting of a lighthouse [GUARDRAILED]"
+            assert result["image"] == [image]
+
     class TestAsyncModerationHook:
         @pytest.mark.asyncio
         async def test_uses_mcp_event_type(self):
@@ -418,6 +463,29 @@ class TestUnifiedLLMGuardrails:
             )
 
             assert guardrail.event_history == [GuardrailEventHooks.during_call]
+
+        @pytest.mark.asyncio
+        async def test_runs_for_image_edits(self, monkeypatch) -> None:
+            _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
+            handler = UnifiedLLMGuardrails()
+            guardrail = RecordingGuardrail()
+            data = {
+                "guardrail_to_apply": guardrail,
+                "model": "gemini-3-pro-image",
+                "prompt": "a watercolor painting of a lighthouse",
+                "image": [io.BytesIO(b"\x89PNG\r\n\x1a\n")],
+            }
+
+            await handler.async_moderation_hook(
+                data=data,
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                call_type=CallTypes.aimage_edit.value,
+            )
+
+            assert guardrail.event_history == [GuardrailEventHooks.during_call]
+            assert [call["inputs"]["texts"] for call in guardrail.apply_calls] == [
+                ["a watercolor painting of a lighthouse"]
+            ]
 
     class TestAsyncPostCallStreamingIteratorHook:
         @pytest.mark.asyncio
@@ -2107,6 +2175,554 @@ class _ScanCountingGuardrail(CustomGuardrail):
             },
         )
         return inputs
+
+
+class _GatedScanGuardrail(_ScanCountingGuardrail):
+    """End-of-stream scan that holds until released, recording scans that finished."""
+
+    def __init__(self) -> None:
+        super().__init__(end_of_stream_only=True)
+        self.scan_started = anyio.Event()
+        self.scan_released = anyio.Event()
+        self.finished_scans = 0
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
+        self.scan_started.set()
+        await self.scan_released.wait()
+        recorded = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+        self.finished_scans += 1
+        return recorded
+
+
+class _FinishReasonRecordingGuardrail(_ScanCountingGuardrail):
+    """Records the finish reasons of the stream handed to each response-side scan"""
+
+    def __init__(self) -> None:
+        super().__init__(end_of_stream_only=True)
+        self.finish_reasons: tuple[str | None, ...] = ()
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
+        rebuilt = request_data.get("response")
+        released = request_data.get("responses")
+        chunks = (
+            tuple(chunk for chunk in released if isinstance(chunk, ModelResponseStream))
+            if isinstance(released, list)
+            else ()
+        )
+        choices = [
+            *(rebuilt.choices if isinstance(rebuilt, ModelResponse) else ()),
+            *(choice for chunk in chunks for choice in chunk.choices),
+        ]
+        self.finish_reasons = (*self.finish_reasons, *(choice.finish_reason for choice in choices))
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _GatedToolCallGuardrail(_StreamingTextGuardrail):
+    """Tool-call inspection that holds until released"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.inspection_started = anyio.Event()
+        self.inspection_released = anyio.Event()
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
+        if input_type == "response" and inputs.get("tool_calls"):
+            self.inspection_started.set()
+            await self.inspection_released.wait()
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _MarkerBlockingScanGuardrail(_ScanCountingGuardrail):
+    """Scan-counting guardrail that blocks any scan whose text contains BLOCKME"""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
+        recorded = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+        if any("BLOCKME" in text for text in recorded.get("texts") or []):
+            raise ModifyResponseException(
+                message="blocked", model="gpt-4", request_data=request_data, guardrail_name=self.guardrail_name
+            )
+        return recorded
+
+
+class _MarkerHttpErrorScanGuardrail(_ScanCountingGuardrail):
+    """Scan-counting guardrail that raises an HTTPException for any scan whose text contains BLOCKME"""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
+        recorded = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+        if any("BLOCKME" in text for text in recorded.get("texts") or []):
+            raise unified_module.HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
+        return recorded
+
+
+class _MarkerBlockingStreamingTextGuardrail(_StreamingTextGuardrail):
+    """incremental_diff guardrail that blocks any round whose text contains BLOCKME"""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
+        transformed = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+        if any("BLOCKME" in text for text in inputs.get("texts") or []):
+            raise ModifyResponseException(
+                message="blocked", model="gpt-4", request_data=request_data, guardrail_name=self.guardrail_name
+            )
+        return transformed
+
+
+class _DisconnectRewritingGuardrail(_ScanCountingGuardrail):
+    """End-of-stream guardrail that rewrites every scanned text"""
+
+    def __init__(self) -> None:
+        super().__init__(end_of_stream_only=True)
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
+        recorded = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+        return {**recorded, "texts": ["REWRITTEN" for _ in recorded.get("texts") or []]}
+
+
+class _RecordedScanGuardrail(CustomGuardrail):
+    """End-of-stream scan recorded through log_guardrail_information, returning ``reply`` or raising ``error``"""
+
+    def __init__(self, *, reply: GenericGuardrailAPIInputs | None = None, error: Exception | None = None) -> None:
+        super().__init__(guardrail_name="recorded-scan")
+        self.streaming_end_of_stream_only = True
+        self.streaming_buffer_until_moderated = False
+        self.guardrail_config = {}
+        self._reply = reply
+        self._error = error
+
+    def should_run_guardrail(self, data: dict[str, object], event_type: GuardrailEventHooks) -> bool:
+        return True
+
+    @log_guardrail_information
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        **kwargs: object,
+    ) -> GenericGuardrailAPIInputs:
+        if self._error is not None:
+            raise self._error
+        return inputs if self._reply is None else self._reply
+
+
+def _recorded_guardrail_statuses(request_data: dict[str, object]) -> list[str]:
+    metadata = request_data["metadata"]
+    assert isinstance(metadata, dict), request_data
+    entries: list[StandardLoggingGuardrailInformation] = metadata.get("standard_logging_guardrail_information", [])
+    return [entry["guardrail_status"] for entry in entries]
+
+
+class TestStreamingClientDisconnectScan:
+    """A client that reads streamed content and then disconnects must not skip
+    the end-of-stream scan of what it already received."""
+
+    @pytest.fixture(autouse=True)
+    def _use_real_mappings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _patch_translation_mappings(monkeypatch, load_guardrail_translation_mappings())
+
+    @staticmethod
+    def _guarded_stream(guardrail: CustomGuardrail, upstream: AsyncIterable[object]) -> AsyncGenerator[object, None]:
+        return UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
+            response=upstream,
+            request_data={"guardrail_to_apply": guardrail, "model": "gpt-4", "metadata": {}},
+        )
+
+    @pytest.mark.asyncio
+    async def test_closing_after_released_content_still_scans_it(self):
+        guardrail = _ScanCountingGuardrail(end_of_stream_only=True)
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            yield _stream_chunk("synthetic secret")
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        stream = self._guarded_stream(guardrail, upstream())
+        received = await stream.__anext__()
+        await stream.aclose()
+
+        assert _delta_text(received) == "synthetic secret"
+        assert [scan["texts"] for scan in guardrail.scans] == [["synthetic secret"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_closing_mid_text_stream_does_not_hand_the_scan_a_tool_calls_finish(self):
+        guardrail = _FinishReasonRecordingGuardrail()
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            yield _stream_chunk("synthetic secret")
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        stream = self._guarded_stream(guardrail, upstream())
+        await stream.__anext__()
+        await stream.aclose()
+
+        assert [scan["texts"] for scan in guardrail.scans] == [["synthetic secret"]], guardrail.scans
+        assert "tool_calls" not in guardrail.finish_reasons, guardrail.finish_reasons
+
+    @pytest.mark.asyncio
+    async def test_upstream_cancellation_after_released_content_still_scans_it(self):
+        guardrail = _ScanCountingGuardrail(end_of_stream_only=True)
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            yield _stream_chunk("synthetic secret")
+            raise asyncio.CancelledError()
+
+        stream = self._guarded_stream(guardrail, upstream())
+        received = await stream.__anext__()
+        with pytest.raises(asyncio.CancelledError):
+            await stream.__anext__()
+
+        assert _delta_text(received) == "synthetic secret"
+        assert [scan["texts"] for scan in guardrail.scans] == [["synthetic secret"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_cancellation_while_the_disconnect_scan_is_in_flight_lets_it_finish(self):
+        guardrail = _GatedScanGuardrail()
+        first_chunk_received = anyio.Event()
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            yield _stream_chunk("synthetic secret")
+            await anyio.sleep_forever()
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        async def consume(scope_ready: list[anyio.CancelScope]) -> None:
+            with anyio.CancelScope() as scope:
+                scope_ready.append(scope)
+                async with contextlib.aclosing(self._guarded_stream(guardrail, upstream())) as stream:
+                    async for _item in stream:
+                        first_chunk_received.set()
+
+        scopes = []
+        with anyio.fail_after(5):
+            async with anyio.create_task_group() as task_group:
+                task_group.start_soon(consume, scopes)
+                await first_chunk_received.wait()
+                scopes[0].cancel()
+                await guardrail.scan_started.wait()
+                await anyio.sleep(0)
+                guardrail.scan_released.set()
+
+        assert guardrail.finished_scans == 1
+        assert [scan["texts"] for scan in guardrail.scans] == [["synthetic secret"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_closing_after_a_sampled_scan_covered_everything_released_does_not_scan_again(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=1)
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            yield _stream_chunk("synthetic")
+            yield _stream_chunk(" secret")
+            await anyio.sleep_forever()
+
+        stream = self._guarded_stream(guardrail, upstream())
+        released = [await stream.__anext__(), await stream.__anext__()]
+        await stream.aclose()
+
+        scanned_texts = [scan["texts"] for scan in guardrail.scans]
+        assert "".join(_delta_text(chunk) for chunk in released) == "synthetic secret"
+        assert scanned_texts[-1] == ["synthetic secret"], scanned_texts
+        assert len(scanned_texts) == len({tuple(texts) for texts in scanned_texts}), scanned_texts
+
+    @pytest.mark.asyncio
+    async def test_closing_before_any_content_is_released_does_not_scan(self):
+        guardrail = _ScanCountingGuardrail(end_of_stream_only=True, buffer_until_moderated=True)
+        upstream_started = anyio.Event()
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            yield _stream_chunk("withheld")
+            upstream_started.set()
+            await anyio.sleep_forever()
+            yield _stream_chunk("never", finish_reason="stop")
+
+        stream = self._guarded_stream(guardrail, upstream())
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(stream.__anext__)
+            await upstream_started.wait()
+            task_group.cancel_scope.cancel()
+
+        assert guardrail.scans == ()
+
+    @pytest.mark.asyncio
+    async def test_cancellation_during_end_of_stream_scan_lets_the_scan_finish(self):
+        guardrail = _GatedScanGuardrail()
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            yield _stream_chunk("synthetic secret")
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        async def consume(scope_ready: list[anyio.CancelScope]) -> None:
+            with anyio.CancelScope() as scope:
+                scope_ready.append(scope)
+                async for _item in self._guarded_stream(guardrail, upstream()):
+                    pass
+
+        scopes = []
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(consume, scopes)
+            await guardrail.scan_started.wait()
+            scopes[0].cancel()
+            await anyio.sleep(0)
+            guardrail.scan_released.set()
+
+        assert guardrail.finished_scans == 1
+        assert [scan["texts"] for scan in guardrail.scans] == [["synthetic secret tail"]], guardrail.scans
+
+    @staticmethod
+    async def _close_after_first_chunk(guardrail: CustomGuardrail) -> dict[str, object]:
+        request_data: dict[str, object] = {"guardrail_to_apply": guardrail, "model": "gpt-4", "metadata": {}}
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            yield _stream_chunk("synthetic secret")
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        stream = UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
+            response=upstream(),
+            request_data=request_data,
+        )
+        received = await stream.__anext__()
+        await stream.aclose()
+        assert _delta_text(received) == "synthetic secret"
+        return request_data
+
+    @pytest.mark.asyncio
+    async def test_disconnect_scan_that_fails_after_the_verdict_records_the_failure(self):
+        request_data = await self._close_after_first_chunk(
+            _RecordedScanGuardrail(reply={"texts": ["synthetic secret", "unmatched extra text"]})
+        )
+
+        assert _recorded_guardrail_statuses(request_data) == ["success", "guardrail_failed_to_respond"]
+
+    @pytest.mark.asyncio
+    async def test_disconnect_scan_whose_guardrail_raises_records_one_failure(self):
+        request_data = await self._close_after_first_chunk(_RecordedScanGuardrail(error=RuntimeError("provider down")))
+
+        assert _recorded_guardrail_statuses(request_data) == ["guardrail_failed_to_respond"]
+
+    @pytest.mark.asyncio
+    async def test_disconnect_scan_that_passes_records_only_the_verdict(self):
+        request_data = await self._close_after_first_chunk(_RecordedScanGuardrail())
+
+        assert _recorded_guardrail_statuses(request_data) == ["success"]
+
+    @staticmethod
+    async def _tool_call_upstream() -> AsyncIterator[ModelResponseStream]:
+        from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+        tool_call = ChatCompletionDeltaToolCall(
+            id="call_1", index=0, type="function", function=Function(name="get_weather", arguments='{"city": "Paris"}')
+        )
+        yield ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content=None, tool_calls=[tool_call]))]
+        )
+        yield _stream_chunk(None, finish_reason="tool_calls")
+
+    @pytest.mark.asyncio
+    async def test_cancellation_during_incremental_diff_tool_call_inspection_lets_it_finish_once(self):
+        guardrail = _GatedToolCallGuardrail()
+
+        async def consume(scope_ready: list[anyio.CancelScope]) -> None:
+            with anyio.CancelScope() as scope:
+                scope_ready.append(scope)
+                async with contextlib.aclosing(self._guarded_stream(guardrail, self._tool_call_upstream())) as stream:
+                    async for _item in stream:
+                        pass
+
+        scopes = []
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(consume, scopes)
+            await guardrail.inspection_started.wait()
+            scopes[0].cancel()
+            await anyio.sleep(0)
+            guardrail.inspection_released.set()
+
+        assert [[call["function"]["name"] for call in calls] for calls in guardrail.received_tool_calls] == [
+            ["get_weather"]
+        ], guardrail.received_tool_calls
+
+    @pytest.mark.asyncio
+    async def test_closing_after_the_incremental_diff_tool_call_inspection_does_not_inspect_again(self):
+        guardrail = _StreamingTextGuardrail()
+
+        stream = self._guarded_stream(guardrail, self._tool_call_upstream())
+        released = [await stream.__anext__(), await stream.__anext__()]
+        await stream.aclose()
+
+        assert released[-1].choices[0].finish_reason == "tool_calls"
+        assert [[call["function"]["name"] for call in calls] for calls in guardrail.received_tool_calls] == [
+            ["get_weather"]
+        ], guardrail.received_tool_calls
+
+    @pytest.mark.asyncio
+    async def test_closing_after_a_released_tool_call_under_incremental_diff_still_inspects_it(self):
+        guardrail = _StreamingTextGuardrail()
+
+        stream = self._guarded_stream(guardrail, self._tool_call_upstream())
+        received = await stream.__anext__()
+        await stream.aclose()
+
+        assert [call.function.name for call in received.choices[0].delta.tool_calls] == ["get_weather"]
+        assert [[call["function"]["name"] for call in calls] for calls in guardrail.received_tool_calls] == [
+            ["get_weather"]
+        ], guardrail.received_tool_calls
+
+    @pytest.mark.asyncio
+    async def test_closing_while_a_mid_stream_block_is_delivered_does_not_scan_the_blocked_content_again(self):
+        guardrail = _MarkerBlockingScanGuardrail(sampling_rate=2)
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            for text in ("a", "b", "c", "BLOCKME"):
+                yield _stream_chunk(text)
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        stream = self._guarded_stream(guardrail, upstream())
+        received = [_delta_text(await stream.__anext__()) for _ in range(3)]
+        await stream.__anext__()
+        await stream.aclose()
+
+        assert received == ["a", "b", "c"]
+        assert [scan["texts"] for scan in guardrail.scans] == [["ab"], ["abcBLOCKME"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_closing_while_a_mid_stream_guardrail_error_is_delivered_does_not_scan_the_content_again(self):
+        guardrail = _MarkerHttpErrorScanGuardrail(sampling_rate=2)
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            for text in ("a", "b", "c", "BLOCKME"):
+                yield _stream_chunk(text)
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        stream = self._guarded_stream(guardrail, upstream())
+        received = [_delta_text(await stream.__anext__()) for _ in range(3)]
+        await stream.__anext__()
+        await stream.aclose()
+
+        assert received == ["a", "b", "c"]
+        assert [scan["texts"] for scan in guardrail.scans] == [["ab"], ["abcBLOCKME"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_closing_while_the_scanned_final_chunk_is_delivered_does_not_scan_the_stream_again(self):
+        guardrail = _ScanCountingGuardrail(end_of_stream_only=True)
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            yield _stream_chunk("a")
+            yield _stream_chunk("b")
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        stream = self._guarded_stream(guardrail, upstream())
+        received = [_delta_text(await stream.__anext__()) for _ in range(3)]
+        await stream.aclose()
+
+        assert received == ["a", "b", " tail"]
+        assert [scan["texts"] for scan in guardrail.scans] == [["ab tail"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_cancellation_with_a_withheld_window_scans_only_the_released_chunks(self):
+        guardrail = _ScanCountingGuardrail(sampling_rate=2, buffer_until_moderated=True)
+        guardrail.streaming_buffer_release_on_scan = True
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            yield _stream_chunk("a")
+            yield _stream_chunk("b")
+            yield _stream_chunk("WITHHELD")
+            raise asyncio.CancelledError()
+
+        stream = self._guarded_stream(guardrail, upstream())
+        received = [_delta_text(await stream.__anext__()), _delta_text(await stream.__anext__())]
+        with pytest.raises(asyncio.CancelledError):
+            await stream.__anext__()
+
+        assert received == ["a", "b"]
+        assert [scan["texts"] for scan in guardrail.scans] == [["ab"]], guardrail.scans
+
+    @pytest.mark.asyncio
+    async def test_disconnect_scan_that_rewrites_text_leaves_the_released_chunks_untouched(self):
+        stream = self._guarded_stream(_DisconnectRewritingGuardrail(), self._text_then_tail_upstream())
+        received = await stream.__anext__()
+        await stream.aclose()
+
+        assert _delta_text(received) == "synthetic secret"
+
+    @staticmethod
+    async def _text_then_tail_upstream() -> AsyncIterator[ModelResponseStream]:
+        yield _stream_chunk("synthetic secret")
+        yield _stream_chunk(" tail", finish_reason="stop")
+
+    @pytest.mark.asyncio
+    async def test_closing_while_an_incremental_diff_block_is_delivered_does_not_inspect_the_tool_call_again(self):
+        guardrail = _MarkerBlockingStreamingTextGuardrail()
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            async for tool_chunk in self._tool_call_upstream():
+                if tool_chunk.choices[0].finish_reason is None:
+                    yield tool_chunk
+            yield _stream_chunk("BLOCKME")
+            yield _stream_chunk(" tail", finish_reason="stop")
+
+        stream = self._guarded_stream(guardrail, upstream())
+        released = [await stream.__anext__(), await stream.__anext__()]
+        await stream.aclose()
+
+        assert [call.function.name for call in released[0].choices[0].delta.tool_calls] == ["get_weather"]
+        assert guardrail.received_texts == [["BLOCKME"]], guardrail.received_texts
+        assert guardrail.received_tool_calls == [], guardrail.received_tool_calls
+
+    @pytest.mark.asyncio
+    async def test_closing_after_a_released_tool_call_under_incremental_diff_scans_no_held_back_text(self):
+        guardrail = _StreamingTextGuardrail(holdback_schedule=[len("held secret")] * 2)
+
+        async def upstream() -> AsyncIterator[ModelResponseStream]:
+            yield _stream_chunk("held secret")
+            async for tool_chunk in self._tool_call_upstream():
+                yield tool_chunk
+
+        stream = self._guarded_stream(guardrail, upstream())
+        received = await stream.__anext__()
+        await stream.aclose()
+
+        assert [call.function.name for call in received.choices[0].delta.tool_calls] == ["get_weather"]
+        assert guardrail.received_tool_calls, guardrail.received_texts
+        assert all("held secret" not in text for text in guardrail.received_texts[-1]), guardrail.received_texts
 
 
 def _responses_delta(sequence_number, text):

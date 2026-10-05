@@ -1,14 +1,10 @@
 "use client";
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
-import { LensView } from "./_components/LensView";
+import { LensWorkspace } from "@/components/lens/LensWorkspace";
 
 export default function LensPage() {
-  const { accessToken, userRole } = useAuthorized();
+  const { accessToken, userRole, isViewOnly } = useAuthorized();
   if (!accessToken) return null;
-  if (!isProxyAdminTierRole(userRole ?? "")) {
-    return <p className="p-6 text-sm text-muted-foreground">Lens requires proxy administrator access.</p>;
-  }
-  return <LensView accessToken={accessToken} readOnly={!isProxyAdminRole(userRole ?? "")} />;
+  return <LensWorkspace accessToken={accessToken} userRole={userRole ?? ""} readOnly={isViewOnly} />;
 }

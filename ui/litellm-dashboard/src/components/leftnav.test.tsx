@@ -496,6 +496,7 @@ describe("Sidebar (leftnav)", () => {
 
       expect(screen.queryByText("Guardrails Monitor")).not.toBeInTheDocument();
       expect(screen.getByText("Usage")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Lens Beta" })).toHaveAttribute("href", "/ui/lens");
       expect(screen.getByText("Cost Optimization")).toBeInTheDocument();
     });
 

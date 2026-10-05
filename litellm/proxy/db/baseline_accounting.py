@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from functools import reduce
 from itertools import groupby
@@ -25,6 +26,7 @@ from litellm.proxy.db.daily_spend_bulk_upsert import (
     build_bulk_upsert,
     merge_by_conflict_key,
 )
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.spend_tracking.baseline_accounting import (
     BaselineEstimate,
@@ -179,6 +181,8 @@ class _Change(BaseModel):
     actual_delta: float
     savings_delta: float
     daily: DailyBaselineAttribution | None
+    date: str | None = None
+    router_type: str | None = None
 
 
 class _TransactionManager(Protocol):
@@ -303,6 +307,26 @@ WHERE {user_match}session.api_key = totals.api_key AND session.session_id = tota
 
 _UPDATE_SESSIONS: Final = _session_correction_sql(user_scoped=False)
 _UPDATE_USER_SESSIONS: Final = _session_correction_sql(user_scoped=True)
+_UPDATE_DAYS: Final = """
+WITH totals AS (
+    SELECT date, api_key, user_id, router_name, router_type, SUM(covered_delta)::int AS covered_delta,
+        SUM(actual_delta) AS actual_delta, SUM(savings_delta) AS savings_delta
+    FROM jsonb_to_recordset($1::jsonb) AS x(
+        date text, api_key text, user_id text, router_name text, router_type text,
+        covered_delta int, actual_delta float8, savings_delta float8
+    )
+    WHERE date IS NOT NULL
+    GROUP BY date, api_key, user_id, router_name, router_type
+)
+UPDATE "LiteLLM_AutoRouterDailySpend" AS day
+SET saved_spend = day.saved_spend + totals.savings_delta,
+    savings_estimated_turns = day.savings_estimated_turns + totals.covered_delta,
+    savings_estimated_actual_spend = day.savings_estimated_actual_spend + totals.actual_delta,
+    savings_estimated_saved_spend = day.savings_estimated_saved_spend + totals.savings_delta
+FROM totals
+WHERE day.date = totals.date AND day.api_key = totals.api_key AND day.user_id = totals.user_id
+    AND day.router_name = totals.router_name AND day.router_type = totals.router_type
+"""
 
 
 def _primary_transaction(client: PrismaClient) -> _TransactionManager:
@@ -331,6 +355,8 @@ def _change(record: BaselineAccountingRecord, old: BaselinePublication | None, n
         savings_delta=(current.savings if current is not None else 0.0)
         - (previous.savings if previous is not None else 0.0),
         daily=record.daily,
+        date=record.turn.turn_at.date().isoformat() if record.turn is not None else None,
+        router_type=record.turn.router_type if record.turn is not None else None,
     )
 
 
@@ -373,6 +399,7 @@ async def _publish(db: SupportsRawQueries, changes: Sequence[_Change]) -> None:
     await db.execute_raw(_UPDATE_SESSIONS, serialized)
     if any(change.user_id for change in changes):
         await db.execute_raw(_UPDATE_USER_SESSIONS, serialized)
+    await db.execute_raw(_UPDATE_DAYS, serialized)
     for entity, table in DAILY_SPEND_TABLES.items():
         if adjustments := tuple(
             change.daily.adjustment(target, change.savings_delta, change.request_id)
@@ -392,8 +419,13 @@ class BaselineAccountingStore:
 
     @classmethod
     def for_client(cls, client: PrismaClient) -> BaselineAccountingStore:
-        def transaction() -> _TransactionManager:
-            return _primary_transaction(client)
+        @asynccontextmanager
+        async def transaction() -> AsyncGenerator[SupportsRawQueries]:
+            async with (
+                db_span("baseline_accounting", "LiteLLM_AutoRouterBaselineComparison"),
+                _primary_transaction(client) as db,
+            ):
+                yield db
 
         return cls(transaction)
 

@@ -64,6 +64,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth_websocket_for_model,
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
 class _RoutingRequest:
@@ -2018,6 +2019,454 @@ async def test_auto_register_binds_api_key_to_token_hash():
     assert result.api_key == token_hash
     assert result.org_id == "validated-org"
     assert result.end_user_id == "validated-end-user"
+
+
+def _auto_register_patches(*, plaintext_key: str | None = "sk-minted-plaintext"):
+    from litellm.proxy.auth.auth_method import AuthMethod
+    from litellm.proxy.auth.resolvers.models import CredentialRef
+    from litellm.proxy.auth.resolvers.store import IdentityStore
+    from litellm.proxy.proxy_server import hash_token
+
+    resolved_key = UserAPIKeyAuth(
+        token="existing-hash" if plaintext_key is None else hash_token(plaintext_key),
+        user_id="validated-user",
+        team_id="validated-team",
+        org_id="key-own-org",
+    )
+    principal = IdentityStore._principal_from_key(
+        resolved_key,
+        auth_method=AuthMethod.API_KEY,
+        credential_ref=CredentialRef(token_id=resolved_key.token),
+    )
+    return (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            new_callable=AsyncMock,
+            return_value={"token": plaintext_key},
+        ),
+        patch(
+            "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
+            new_callable=AsyncMock,
+            return_value=principal,
+        ),
+    )
+
+
+def _auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler, **over):
+    kwargs = {
+        "virtual_key_claim_field": "sub",
+        "claim_value": "validated-user",
+        "jwt_handler": jwt_handler,
+        "prisma_client": prisma_client,
+        "user_api_key_cache": user_api_key_cache,
+        "parent_otel_span": None,
+        "proxy_logging_obj": MagicMock(),
+        "cache_key": "jwt_key_mapping:sub:validated-user",
+        "team_id": "validated-team",
+        "user_id": "validated-user",
+        "org_id": "jwt-org",
+        "end_user_id": "validated-end-user",
+    }
+    kwargs.update(over)
+    return kwargs
+
+
+@pytest.mark.asyncio
+async def test_auto_register_map_existing_key_reuses_users_key_but_never_an_auto_registered_one():
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[
+            {"token": "auto-registered-hash", "metadata": {"auto_registered": True}},
+            {"token": "existing-hash", "metadata": {}},
+        ]
+    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches(plaintext_key=None)
+    with generate_patch as generate_key, resolve_patch:
+        result = await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler)
+        )
+
+    generate_key.assert_not_awaited()
+
+    create_data = prisma_client.db.litellm_jwtkeymapping.create.await_args.kwargs["data"]
+    assert create_data["token"] == "existing-hash"
+    assert create_data["created_by"] == "auto_register"
+    assert user_api_key_cache.async_set_cache.await_args.kwargs["value"] == "existing-hash"
+    assert result is not None
+    assert result.token == "existing-hash"
+    assert result.api_key == "existing-hash"
+    assert result.org_id == "key-own-org"
+
+
+@pytest.mark.asyncio
+async def test_auto_register_map_existing_key_mints_when_user_has_no_key():
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.proxy.proxy_server import hash_token
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches()
+    with generate_patch as generate_key, resolve_patch:
+        result = await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler)
+        )
+
+    generate_key.assert_awaited_once()
+    create_data = prisma_client.db.litellm_jwtkeymapping.create.await_args.kwargs["data"]
+    assert create_data["token"] == hash_token("sk-minted-plaintext")
+    assert result is not None
+    assert result.token == hash_token("sk-minted-plaintext")
+
+
+@pytest.mark.asyncio
+async def test_auto_register_default_never_looks_up_existing_keys():
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[{"token": "existing-hash", "metadata": {}}]
+    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(user_id_jwt_field="sub", virtual_key_mapping_cache_ttl=300)
+
+    generate_patch, resolve_patch = _auto_register_patches()
+    with generate_patch as generate_key, resolve_patch:
+        await _auto_register_jwt_mapping(**_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler))
+
+    prisma_client.db.litellm_verificationtoken.find_many.assert_not_awaited()
+    generate_key.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_auto_register_map_existing_key_race_loser_keeps_reused_key():
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[{"token": "existing-hash", "metadata": {}}]
+    )
+    prisma_client.db.litellm_verificationtoken.delete = AsyncMock()
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock(side_effect=Exception("Unique constraint failed (P2002)"))
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches(plaintext_key=None)
+    with (
+        generate_patch,
+        resolve_patch,
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.get_jwt_key_mapping_object",
+            new_callable=AsyncMock,
+            return_value="winner-hash",
+        ),
+    ):
+        result = await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler)
+        )
+
+    assert result is not None
+    assert result.org_id == "key-own-org"
+    prisma_client.db.litellm_verificationtoken.delete.assert_not_awaited()
+    assert user_api_key_cache.async_set_cache.await_args.kwargs["value"] == "winner-hash"
+
+
+@pytest.mark.asyncio
+async def test_auto_register_map_existing_key_user_id_none_mints():
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[{"token": "existing-hash", "metadata": {}}]
+    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches()
+    with generate_patch as generate_key, resolve_patch:
+        await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(prisma_client, user_api_key_cache, jwt_handler, user_id=None)
+        )
+
+    prisma_client.db.litellm_verificationtoken.find_many.assert_not_awaited()
+    generate_key.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_auto_register_map_existing_key_reuses_when_the_user_was_matched_by_a_fallback_lookup():
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[{"token": "existing-hash", "metadata": {}}]
+    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
+        user_email_jwt_field="email",
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches(plaintext_key=None)
+    with generate_patch as generate_key, resolve_patch:
+        await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(
+                prisma_client,
+                user_api_key_cache,
+                jwt_handler,
+                claim_value="idp-subject-not-the-db-user-id",
+                cache_key="jwt_key_mapping:sub:idp-subject-not-the-db-user-id",
+            )
+        )
+
+    generate_key.assert_not_awaited()
+    assert prisma_client.db.litellm_jwtkeymapping.create.await_args.kwargs["data"]["token"] == "existing-hash"
+
+
+@pytest.mark.asyncio
+async def test_auto_register_map_existing_key_mints_when_the_claim_is_not_a_user_identity_field():
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.proxy.proxy_server import hash_token
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[{"token": "existing-hash", "metadata": {}}]
+    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches()
+    with generate_patch as generate_key, resolve_patch:
+        await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(
+                prisma_client,
+                user_api_key_cache,
+                jwt_handler,
+                virtual_key_claim_field="azp",
+                claim_value="shared-client-app",
+                cache_key="jwt_key_mapping:azp:shared-client-app",
+            )
+        )
+
+    prisma_client.db.litellm_verificationtoken.find_many.assert_not_awaited()
+    generate_key.assert_awaited_once()
+    assert prisma_client.db.litellm_jwtkeymapping.create.await_args.kwargs["data"]["token"] == hash_token(
+        "sk-minted-plaintext"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("issuer_user_id_field", "expect_reuse"),
+    [("uid", False), (None, True)],
+)
+async def test_auto_register_map_existing_key_uses_the_issuers_own_user_field_over_the_global_one(
+    issuer_user_id_field, expect_reuse
+):
+    from litellm.proxy._types import JWTIssuerConfig
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.proxy.proxy_server import hash_token
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[{"token": "existing-hash", "metadata": {}}]
+    )
+    prisma_client.db.litellm_jwtkeymapping.create = AsyncMock()
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        user_id_jwt_field="sub",
+        auto_register_map_existing_key=True,
+        virtual_key_mapping_cache_ttl=300,
+        issuers=[
+            JWTIssuerConfig(
+                issuer="https://idp.example.com", audience="litellm", user_id_jwt_field=issuer_user_id_field
+            )
+        ],
+    )
+
+    generate_patch, resolve_patch = _auto_register_patches()
+    with generate_patch as generate_key, resolve_patch:
+        await _auto_register_jwt_mapping(
+            **_auto_register_kwargs(
+                prisma_client, user_api_key_cache, jwt_handler, jwt_issuer="https://idp.example.com"
+            )
+        )
+
+    mapped_token = prisma_client.db.litellm_jwtkeymapping.create.await_args.kwargs["data"]["token"]
+    assert mapped_token == ("existing-hash" if expect_reuse else hash_token("sk-minted-plaintext"))
+    assert generate_key.await_count == (0 if expect_reuse else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("map_existing_key", "master_key", "reused_key_models", "expect_denied"),
+    [
+        (True, "sk-master", ["some-other-model"], True),
+        (True, "sk-master", [], False),
+        (False, "sk-master", ["some-other-model"], False),
+        (True, None, ["some-other-model"], False),
+    ],
+)
+async def test_auto_register_map_existing_key_first_request_runs_key_checks(
+    map_existing_key: bool, master_key: str | None, reused_key_models: list[str], expect_denied: bool
+) -> None:
+    jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+    user_api_key_cache = DualCache()
+    prisma_client = MagicMock()
+    jwt_handler = MagicMock()
+    jwt_handler.is_jwt.return_value = True
+    jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "user1"})
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="sub",
+        virtual_key_mapping_cache_ttl=300,
+        auto_register_map_existing_key=map_existing_key,
+    )
+    reused_key = UserAPIKeyAuth(
+        token="hashed-existing-key",
+        api_key="hashed-existing-key",
+        user_id="validated-user",
+        team_id="validated-team",
+        models=reused_key_models,
+    )
+    mock_jwt_result = {
+        "is_proxy_admin": False,
+        "team_object": None,
+        "user_object": LiteLLM_UserTable(user_id="validated-user", user_role="internal_user"),
+        "end_user_object": None,
+        "org_object": None,
+        "token": jwt_token,
+        "team_id": "validated-team",
+        "user_id": "validated-user",
+        "user_email": None,
+        "end_user_id": None,
+        "org_id": None,
+        "team_membership": None,
+        "jwt_claims": {"sub": "user1"},
+    }
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": True}),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.master_key", master_key),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
+        ),
+        patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._resolve_jwt_to_virtual_key",
+            new_callable=AsyncMock,
+            return_value=_PendingAutoRegister(
+                claim_field="sub",
+                claim_value="user1",
+                cache_key="jwt_key_mapping:sub:user1",
+            ),
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+            new_callable=AsyncMock,
+            return_value=mock_jwt_result,
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._auto_register_jwt_mapping",
+            new_callable=AsyncMock,
+            return_value=reused_key,
+        ),
+    ):
+        call = _user_api_key_auth_builder(
+            request=mock_request,
+            api_key=jwt_token,
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={"model": "gpt-4o-mini"},
+        )
+        if expect_denied:
+            with pytest.raises(ProxyException, match="not available for this API key"):
+                await call
+            return
+        result = await call
+
+    assert result.api_key == "hashed-existing-key"
+    assert result.user_id == "validated-user"
+    assert result.team_id == "validated-team"
+    assert result.models == reused_key_models
 
 
 @pytest.mark.asyncio
@@ -6268,6 +6717,7 @@ async def test_user_api_key_auth_sets_end_user_id_when_builder_skips_it():
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
             "query_string": b"",
+            "path": "/chat/completions",
         }
     )
     request._url = URL(url="/chat/completions")
@@ -6323,6 +6773,7 @@ async def test_user_api_key_auth_does_not_overwrite_end_user_id_set_by_builder()
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
             "query_string": b"",
+            "path": "/chat/completions",
         }
     )
     request._url = URL(url="/chat/completions")
@@ -6378,6 +6829,7 @@ async def test_user_api_key_auth_authenticates_before_raising_malformed_body_err
             "type": "http",
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
+            "path": "/chat/completions",
         }
     )
     request._url = URL(url="/chat/completions")
@@ -6437,6 +6889,7 @@ async def _run_auth_with_malformed_body(post_call_failure_hook):
             "type": "http",
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
+            "path": "/chat/completions",
         }
     )
     request._url = URL(url="/chat/completions")
@@ -6509,6 +6962,7 @@ async def test_user_api_key_auth_malformed_body_with_rejected_key_still_returns_
             "type": "http",
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
+            "path": "/chat/completions",
         }
     )
     request._url = URL(url="/chat/completions")
@@ -6559,6 +7013,7 @@ async def test_user_api_key_auth_does_not_double_log_a_malformed_body_from_a_rej
             "type": "http",
             "headers": [(b"content-type", b"application/json")],
             "method": "POST",
+            "path": "/chat/completions",
         }
     )
     request._url = URL(url="/chat/completions")
@@ -6868,15 +7323,10 @@ async def test_expired_cli_session_token_is_rejected(monkeypatch):
     on the shared validation path, not only for DB-backed keys."""
     monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-test")
-    monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "-1")
 
-    import importlib
-
-    from litellm import constants
     from litellm.proxy.auth import auth_checks
 
-    importlib.reload(constants)
-    importlib.reload(auth_checks)
+    monkeypatch.setattr(auth_checks, "CLI_JWT_EXPIRATION_HOURS", -1)
 
     user_info = LiteLLM_UserTable(
         user_id="cli-admin",
@@ -6893,22 +7343,17 @@ async def test_expired_cli_session_token_is_rejected(monkeypatch):
     mock_request.headers = {"authorization": f"Bearer {cli_token}"}
     mock_request.query_params = {}
 
-    try:
-        with (
-            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
-            patch("litellm.proxy.proxy_server.prisma_client", None),
-        ):
-            with pytest.raises(ProxyException) as exc_info:
-                await user_api_key_auth(
-                    request=mock_request,
-                    api_key=f"Bearer {cli_token}",
-                )
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await user_api_key_auth(
+                request=mock_request,
+                api_key=f"Bearer {cli_token}",
+            )
 
-        assert exc_info.value.type == ProxyErrorTypes.expired_key
-    finally:
-        monkeypatch.delenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", raising=False)
-        importlib.reload(constants)
-        importlib.reload(auth_checks)
+    assert exc_info.value.type == ProxyErrorTypes.expired_key
 
 
 @pytest.mark.asyncio
@@ -9909,3 +10354,63 @@ async def test_agent_admission_prices_the_model_selected_for_dispatch(
     reserve.assert_awaited_once()
     assert reserve.call_args.kwargs["valid_token"].agent_invocation_cost == pytest.approx(0.25)
     assert reserve.call_args.kwargs["request_body"]["model"] == "a2a/paid"
+
+
+@pytest.mark.asyncio
+async def test_auto_register_mapping_insert_emits_a_postgres_insert_event_for_the_jwt_key_mapping_table():
+    from litellm._service_logger import ServiceTypes
+    from litellm.proxy.auth.auth_method import AuthMethod
+    from litellm.proxy.auth.resolvers.models import CredentialRef
+    from litellm.proxy.auth.resolvers.store import IdentityStore
+    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.proxy.proxy_server import hash_token
+
+    plaintext = "sk-auto-registered-span"
+    token_hash = hash_token(plaintext)
+    principal = IdentityStore._principal_from_key(
+        UserAPIKeyAuth(token=token_hash, user_id="validated-user", team_id="validated-team"),
+        auth_method=AuthMethod.API_KEY,
+        credential_ref=CredentialRef(token_id=token_hash),
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_jwtkeymapping.create = engine_call()
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_set_cache = AsyncMock()
+    jwt_handler = MagicMock()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(virtual_key_mapping_cache_ttl=300)
+    success = AsyncMock()
+    service_logging = MagicMock(async_service_success_hook=success, async_service_failure_hook=AsyncMock())
+
+    with (
+        patch(  # test-quality-ok: key creation is an inline import inside the helper; no dependency injection seam exists
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            new_callable=AsyncMock,
+            return_value={"token": plaintext},
+        ),
+        patch(  # test-quality-ok: the helper constructs IdentityStore itself; no dependency injection seam exists
+            "litellm.proxy.auth.resolvers.store.IdentityStore.resolve",
+            new_callable=AsyncMock,
+            return_value=principal,
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(service_logging_obj=service_logging)),
+    ):
+        await _auto_register_jwt_mapping(
+            virtual_key_claim_field="sub",
+            claim_value="user1",
+            jwt_handler=jwt_handler,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+            cache_key="jwt_key_mapping:sub:user1",
+            team_id="validated-team",
+            user_id="validated-user",
+        )
+        await asyncio.sleep(0)
+
+    event = success.await_args.kwargs
+    assert (event["service"], event["call_type"], event["event_metadata"]) == (
+        ServiceTypes.DB,
+        "auto_register_jwt_mapping",
+        {"table_name": "LiteLLM_JWTKeyMapping"},
+    )

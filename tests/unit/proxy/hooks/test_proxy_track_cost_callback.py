@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -2910,3 +2910,42 @@ async def test_callback_does_not_charge_a_header_selected_agent(
     assert cache.in_memory_cache.get_cache(key="spend:agent:header-selected-agent") == 0.0
     assert cache.in_memory_cache.get_cache(key="spend:agent:verified-agent") == 0.0
     assert cache.in_memory_cache.get_cache(key="spend:agent_window:20260102T000000.000000Z:verified-agent") == (0.01 if billing_agent else 0.0)
+
+
+_CALL_START: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_enqueue_emits_no_service_span():  # test-quality-ok: no event is the behaviour
+    """Spend tracking only enqueues into the in-memory spend queues here, no Postgres round
+    trip happens, so neither a ``batch_write_to_db`` nor a ``postgres`` service event may be
+    emitted; the flush that writes the queue emits its own table-named spans."""
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    logger = _ProxyDBLogger()
+    kwargs = {
+        "model": "gpt-4",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_user_id": "user-1",
+                "litellm_parent_otel_span": MagicMock(name="server-span"),
+            },
+        },
+        "standard_logging_object": {"response_cost": 0.1, "request_tags": None},
+        "stream": False,
+    }
+    success_hook = AsyncMock()
+    update_database = AsyncMock()
+    with (
+        patch.object(proxy_logging_obj.service_logging_obj, "async_service_success_hook", success_hook),
+        patch.object(proxy_logging_obj.db_spend_update_writer, "update_database", update_database),
+    ):
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs, completion_response=None, start_time=_CALL_START, end_time=_CALL_START + timedelta(seconds=1)
+        )
+        await asyncio.sleep(0)
+
+    assert update_database.await_count == 1, "the spend enqueue itself must still run"
+    assert success_hook.await_count == 0, [call.kwargs for call in success_hook.await_args_list]
