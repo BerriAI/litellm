@@ -1,4 +1,5 @@
 import { formatActivityTimestamp } from "@/utils/activityTimestamp";
+import { budgetReached } from "./runSituation";
 import type { Job, Lens, LensList } from "./types";
 
 export function workerConnected(worker: LensList["workers"][number], now = Date.now()): boolean {
@@ -23,8 +24,7 @@ export function listPollInterval(list: LensList | undefined, settingsOpen: boole
 export function lensStatus(lens: Lens, connected: boolean): string {
   const active = lens.jobs?.find((job) => ["queued", "running"].includes(job.status ?? ""));
   if (active) return connected ? active.stage ?? "Queued" : "Waiting for analyzer";
-  const spent = lens.budget_month === new Date().toISOString().slice(0, 7) ? lens.spent ?? 0 : 0;
-  if (spent >= (lens.settings.monthly_budget ?? 100)) return "Budget reached";
+  if (budgetReached(lens)) return "Budget reached";
   const latest = lens.jobs?.[0];
   if (latest?.status === "failed") return "Failed";
   if (latest?.status === "cancelled") return "Cancelled";

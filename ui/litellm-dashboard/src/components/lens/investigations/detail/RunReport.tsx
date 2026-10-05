@@ -1,56 +1,139 @@
 "use client";
 
-import { ChevronRight } from "lucide-react";
-import type { ReactNode } from "react";
+import {
+  ChevronRight,
+  CircleStop,
+  ListChecks,
+  Play,
+  Plug,
+  RefreshCw,
+  Repeat,
+  Wallet,
+  type LucideIcon,
+} from "lucide-react";
+import type { ComponentProps, ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cva.config";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useNow } from "@/hooks/useNow";
 
 import { analysisElapsed } from "../../model/progress";
 import { money } from "../../model/format";
 import { modelsUsed, shortTime, windowLabel } from "../../model/inbox";
-import type { Finding, Job } from "../../model/types";
+import { NEXT_ACTION, openIssues, runSituation, type RunAction, type RunSituation } from "../../model/runSituation";
+import type { Finding, Job, Lens } from "../../model/types";
 import { InvestigationProgress } from "../InvestigationProgress";
 import { StepFeed } from "../StepFeed";
 
+export type RunActionHandlers = Record<RunAction, () => void>;
+
 export interface RunReportProps {
+  readonly lens: Lens;
   readonly job: Job | undefined;
   /** Null when the run predates saved result snapshots. */
   readonly findings: readonly Finding[] | null | undefined;
   readonly connected: boolean;
+  readonly ready: boolean;
+  readonly busy: boolean;
   readonly picker: ReactNode;
-  readonly onCancel?: () => void;
+  /** Absent for viewers who cannot act on the investigation. */
+  readonly actions?: RunActionHandlers;
 }
 
-const STATUS_LABEL: Record<Job["status"], string> = {
-  queued: "Queued",
-  running: "Running",
-  completed: "Completed",
-  failed: "Failed",
-  cancelled: "Cancelled",
+interface Facts {
+  readonly runs: string;
+  readonly found: string;
+  readonly openIssues: number;
+}
+
+type Tone = "info" | "success" | "destructive" | "muted";
+
+interface SituationView {
+  readonly status: string;
+  readonly tone: Tone;
+  readonly headline: (facts: Facts) => string;
+  readonly body: "progress" | "error" | null;
+}
+
+const completed = ({ found, runs }: Facts) =>
+  found ? `Found ${found} across ${runs}` : `Nothing found across ${runs}`;
+
+const SITUATIONS: Record<RunSituation, SituationView> = {
+  never: { status: "Not run yet", tone: "muted", headline: () => "Run it to get the first report", body: null },
+  queued: {
+    status: "Queued",
+    tone: "info",
+    headline: () => "Waiting for an analyzer to pick this up",
+    body: "progress",
+  },
+  running: { status: "Running", tone: "info", headline: () => "Investigating now", body: "progress" },
+  budget: {
+    status: "Failed",
+    tone: "destructive",
+    headline: () => "Stopped: the monthly budget is used up",
+    body: "error",
+  },
+  offline: {
+    status: "Failed",
+    tone: "destructive",
+    headline: () => "Stopped: no analyzer is connected",
+    body: "error",
+  },
+  failed: { status: "Failed", tone: "destructive", headline: () => "Stopped before it finished", body: "error" },
+  cancelled: {
+    status: "Cancelled",
+    tone: "muted",
+    headline: ({ runs }) => `Cancelled after reviewing ${runs}`,
+    body: "error",
+  },
+  unknown: { status: "Completed", tone: "success", headline: ({ runs }) => `Reviewed ${runs}`, body: null },
+  issues: { status: "Completed", tone: "success", headline: completed, body: null },
+  watching: { status: "Completed", tone: "success", headline: completed, body: null },
+  clean: { status: "Completed", tone: "success", headline: completed, body: null },
+};
+
+interface ActionView {
+  readonly label: (facts: Facts) => string;
+  readonly icon: LucideIcon;
+  readonly variant: ComponentProps<typeof Button>["variant"];
+  readonly needsReady: boolean;
+}
+
+const ACTIONS: Record<RunAction, ActionView> = {
+  run: { label: () => "Run now", icon: Play, variant: "default", needsReady: true },
+  stop: { label: () => "Stop run", icon: CircleStop, variant: "outline", needsReady: false },
+  retry: { label: () => "Retry", icon: RefreshCw, variant: "default", needsReady: true },
+  raiseBudget: { label: () => "Raise budget", icon: Wallet, variant: "default", needsReady: false },
+  connectWorker: { label: () => "Connect worker", icon: Plug, variant: "default", needsReady: false },
+  reviewIssues: {
+    label: ({ openIssues: count }) => `Review ${plural(count, "issue")}`,
+    icon: ListChecks,
+    variant: "default",
+    needsReady: false,
+  },
+  monitor: { label: () => "Monitor this", icon: Repeat, variant: "default", needsReady: true },
+};
+
+const TONE_CLASS: Record<Tone, string> = {
+  info: "text-info",
+  success: "text-success",
+  destructive: "text-destructive",
+  muted: "text-muted-foreground",
 };
 
 const plural = (count: number, noun: string) => `${count.toLocaleString()} ${noun}${count === 1 ? "" : "s"}`;
-const isActive = (job: Job) => job.status === "queued" || job.status === "running";
 
-function headline(job: Job, findings: readonly Finding[] | null | undefined, connected: boolean): string {
-  const runs = plural(job.coverage?.screened ?? 0, "run");
-  const issues = findings?.filter((f) => f.kind === "issue").length ?? 0;
-  const patterns = findings?.filter((f) => f.kind === "pattern").length ?? 0;
-  switch (job.status) {
-    case "queued":
-      return connected ? "Waiting for the analyzer to pick this up" : "Waiting for an analyzer to connect";
-    case "running":
-      return "Investigating now";
-    case "failed":
-      return "Stopped before it finished";
-    case "cancelled":
-      return `Cancelled after reviewing ${runs}`;
-    case "completed":
-      if (!findings) return `Reviewed ${runs}`;
-      if (issues + patterns === 0) return `Nothing found across ${runs}`;
-      return `Found ${[issues && plural(issues, "issue"), patterns && plural(patterns, "pattern")].filter(Boolean).join(" and ")} across ${runs}`;
-  }
+function facts(job: Job | undefined, findings: readonly Finding[] | null | undefined): Facts {
+  const count = (kind: Finding["kind"], noun: string) => {
+    const total = findings?.filter((f) => f.kind === kind).length ?? 0;
+    return total ? plural(total, noun) : "";
+  };
+  return {
+    runs: plural(job?.coverage?.screened ?? 0, "run"),
+    found: [count("issue", "issue"), count("pattern", "pattern")].filter(Boolean).join(" and "),
+    openIssues: openIssues(findings),
+  };
 }
 
 function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
@@ -73,25 +156,26 @@ function coverageNote(job: Job): string | undefined {
   return notes.length ? notes.join(" · ") : undefined;
 }
 
-function issueNote(job: Job, high: number): string | undefined {
-  if (isActive(job)) return "When the run finishes";
-  return high ? `${high} high priority` : undefined;
+const isActive = (job: Job) => job.status === "queued" || job.status === "running";
+
+function issueStat(job: Job, findings: readonly Finding[] | null | undefined) {
+  if (isActive(job)) return { value: "–", note: "When the run finishes" };
+  if (job.status !== "completed" || findings == null) return { value: "–" };
+  const issues = findings.filter((f) => f.kind === "issue");
+  const high = issues.filter((f) => f.priority === "high").length;
+  return { value: issues.length.toLocaleString(), note: high ? `${high} high priority` : undefined };
 }
 
 function RunStats({ job, findings, now }: { job: Job; findings: readonly Finding[] | null | undefined; now: number }) {
-  const active = isActive(job);
-  const known = job.status === "completed" && findings != null;
   const calls = (job.steps ?? []).filter((step) => step.kind === "model").length;
   const { screened = 0, selected = 0 } = job.coverage ?? {};
-  const issues = findings?.filter((f) => f.kind === "issue") ?? [];
-  const high = issues.filter((f) => f.priority === "high").length;
   const end = job.finished_at ? Date.parse(job.finished_at) : now;
   return (
     <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
       <Stat label="Cost" value={money(job.cost ?? 0)} note={plural(calls, "model call")} />
       <Stat
         label="Duration"
-        value={active || job.finished_at ? analysisElapsed(job.created_at, end) : "–"}
+        value={isActive(job) || job.finished_at ? analysisElapsed(job.created_at, end) : "–"}
         note={`Started ${shortTime(job.created_at)}`}
       />
       <Stat
@@ -99,7 +183,7 @@ function RunStats({ job, findings, now }: { job: Job; findings: readonly Finding
         value={`${screened.toLocaleString()} / ${selected.toLocaleString()}`}
         note={coverageNote(job)}
       />
-      <Stat label="Issues" value={known ? issues.length.toLocaleString() : "–"} note={issueNote(job, high)} />
+      <Stat label="Issues" {...issueStat(job, findings)} />
     </dl>
   );
 }
@@ -147,35 +231,53 @@ function RunLog({ job }: { job: Job }) {
   );
 }
 
-export function RunReport({ job, findings, connected, picker, onCancel }: RunReportProps) {
-  const active = job !== undefined && isActive(job);
-  const now = useNow(active ? 1000 : 60000);
-  if (!job) {
-    return (
-      <section aria-label="Run report" className="flex items-center justify-between gap-3 rounded-lg border p-4">
-        <p className="text-sm text-muted-foreground">No runs yet. Run it now to get the first report.</p>
-        {picker}
-      </section>
-    );
-  }
+function NextAction({
+  action,
+  facts: known,
+  ready,
+  busy,
+  onClick,
+}: {
+  action: RunAction;
+  facts: Facts;
+  ready: boolean;
+  busy: boolean;
+  onClick: () => void;
+}) {
+  const { label, icon: Icon, variant, needsReady } = ACTIONS[action];
+  return (
+    <Button variant={variant} disabled={busy || (needsReady && !ready)} onClick={onClick}>
+      <Icon className="size-3.5" />
+      {label(known)}
+    </Button>
+  );
+}
+
+export function RunReport({ lens, job, findings, connected, ready, busy, picker, actions }: RunReportProps) {
+  const now = useNow(job && isActive(job) ? 1000 : 60000);
+  const situation = runSituation({ lens, job, findings, connected });
+  const view = SITUATIONS[situation];
+  const known = facts(job, findings);
+  const latest = job === undefined || job.id === lens.jobs[0]?.id;
+  const action = latest ? NEXT_ACTION[situation] : null;
   return (
     <section aria-label="Run report" className="space-y-4 rounded-lg border p-4">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p
-            data-state={job.status}
-            className="text-xs font-medium text-muted-foreground data-[state=completed]:text-success data-[state=failed]:text-destructive data-[state=running]:text-info"
-          >
-            {STATUS_LABEL[job.status]}
-          </p>
-          <h3 className="mt-0.5 text-base font-semibold">{headline(job, findings, connected)}</h3>
+          <p className={cn("text-xs font-medium", TONE_CLASS[view.tone])}>{view.status}</p>
+          <h3 className="mt-0.5 text-base font-semibold">{view.headline(known)}</h3>
         </div>
-        {picker}
+        <div className="flex items-center gap-1">
+          {job && picker}
+          {action && actions && (
+            <NextAction action={action} facts={known} ready={ready} busy={busy} onClick={actions[action]} />
+          )}
+        </div>
       </header>
-      {active && <InvestigationProgress key={job.id} job={job} now={now} onCancel={onCancel} />}
-      {job.error && <RunFailure job={job} connected={connected} />}
-      <RunStats job={job} findings={findings} now={now} />
-      <RunLog job={job} />
+      {job && view.body === "progress" && <InvestigationProgress key={job.id} job={job} now={now} />}
+      {job?.error && view.body === "error" && <RunFailure job={job} connected={connected} />}
+      {job && <RunStats job={job} findings={findings} now={now} />}
+      {job && <RunLog job={job} />}
     </section>
   );
 }

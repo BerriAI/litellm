@@ -64,7 +64,7 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
   const actions = useInvestigationActions();
   const { dialog, target, openDialog, closeDialog } = useDialogRoute();
   const { issueKey, setIssueKey } = useIssueRoute();
-  const { lensId, setLensId } = useLensRoute();
+  const { lensId, setLensId, setTab } = useLensRoute();
   const list = useQuery(lensQueries.list(api));
   const status = useLensReadiness(true);
   const { connected } = status;
@@ -162,6 +162,7 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
                     onEnableMonitoring={() => openDialog("monitoring")}
                     onCancelRun={() => void actions.cancelRun(row.lens)}
                     onRunNow={() => openDialog("run_now")}
+                    onConnectWorker={() => setTab("settings")}
                     onReviewFinding={(owned, reviewStatus, reason) =>
                       void actions.review(owned.lens, owned.finding, reviewStatus, reason)
                     }

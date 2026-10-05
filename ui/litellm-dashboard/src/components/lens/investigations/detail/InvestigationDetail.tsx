@@ -5,11 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RunsTab } from "./RunsTab";
 import { InvestigationSummary } from "./InvestigationSummary";
-import { RunReport } from "./RunReport";
+import { RunReport, type RunActionHandlers } from "./RunReport";
 import type { OwnedFinding } from "../../model/inbox";
 import { type Finding, type Lens } from "../../model/types";
 import { FindingPanel } from "../FindingDetails";
-import { useSectionRoute } from "../../route";
+import { mergeFeedback } from "../../model/findings";
+import { useFindingFilters, useSectionRoute } from "../../route";
 import { useRunSnapshot } from "../useRunSnapshot";
 
 import { InvestigationActions, type InvestigationIntents } from "./InvestigationActions";
@@ -38,8 +39,22 @@ export function InvestigationDetail({
   ...intents
 }: InvestigationDetailProps) {
   const { section, setSection } = useSectionRoute();
+  const { setKind, setStatus } = useFindingFilters();
   const snapshot = useRunSnapshot(lens);
   const { job, batchId, batchSettings, batchFindings, missingSnapshot } = snapshot;
+  const runActions: RunActionHandlers = {
+    run: intents.onRunNow,
+    retry: intents.onRunNow,
+    stop: onCancelRun,
+    raiseBudget: intents.onEdit,
+    connectWorker: intents.onConnectWorker,
+    monitor: intents.onEnableMonitoring,
+    reviewIssues: () => {
+      setSection("findings");
+      setKind("issue");
+      setStatus("open");
+    },
+  };
   return (
     <div>
       <section className="min-w-0 space-y-5">
@@ -51,11 +66,14 @@ export function InvestigationDetail({
           {!readOnly && <InvestigationActions lens={lens} ready={ready} busy={busy} {...intents} />}
         </div>
         <RunReport
+          lens={lens}
           job={job}
-          findings={job?.findings}
+          findings={job?.findings && mergeFeedback(job.findings, lens.findings ?? [])}
           connected={connected}
+          ready={ready}
+          busy={busy}
           picker={<RunPicker lens={lens} job={job} />}
-          onCancel={readOnly ? undefined : onCancelRun}
+          actions={readOnly ? undefined : runActions}
         />
         <Tabs value={section} onValueChange={setSection} key={lens.id}>
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b">
