@@ -22026,7 +22026,11 @@ export interface paths {
          */
         get: operations["get_skill_v1_skills__skill_id__get"];
         put?: never;
-        post?: never;
+        /**
+         * Update Skill
+         * @description Native skill operation: update
+         */
+        post: operations["update_skill_v1_skills__skill_id__post"];
         /**
          * Delete Skill
          * @description Delete a skill by ID from Anthropic.
@@ -22069,6 +22073,94 @@ export interface paths {
          * @description Stored skill upload, repacked so SKILL.md sits at the archive root.
          */
         get: operations["agent_skills_archive_v1_skills__skill_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/skills/{skill_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Content Skill
+         * @description Native skill operation: content
+         */
+        get: operations["content_skill_v1_skills__skill_id__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/skills/{skill_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Versions Skill
+         * @description Native skill operation: list versions
+         */
+        get: operations["list_versions_skill_v1_skills__skill_id__versions_get"];
+        put?: never;
+        /**
+         * Create Version Skill
+         * @description Native skill operation: create version
+         */
+        post: operations["create_version_skill_v1_skills__skill_id__versions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/skills/{skill_id}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Version Skill
+         * @description Native skill operation: version
+         */
+        get: operations["version_skill_v1_skills__skill_id__versions__version__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Version Skill
+         * @description Native skill operation: delete version
+         */
+        delete: operations["delete_version_skill_v1_skills__skill_id__versions__version__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/skills/{skill_id}/versions/{version}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Version Content Skill
+         * @description Native skill operation: version content
+         */
+        get: operations["version_content_skill_v1_skills__skill_id__versions__version__content_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -31267,19 +31359,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /**
-         * DeleteSkillResponse
-         * @description Response from deleting a skill
-         */
-        DeleteSkillResponse: {
-            /** Id */
-            id: string;
-            /**
-             * Type
-             * @default skill_deleted
-             */
-            type: string;
-        };
         /** DeleteTeamRequest */
         DeleteTeamRequest: {
             /** Team Ids */
@@ -33896,21 +33975,6 @@ export interface components {
         ListSearchToolsResponse: {
             /** Search Tools */
             search_tools: components["schemas"]["SearchToolInfoResponse"][];
-        };
-        /**
-         * ListSkillsResponse
-         * @description Response from listing skills
-         */
-        ListSkillsResponse: {
-            /** Data */
-            data: components["schemas"]["Skill"][];
-            /**
-             * Has More
-             * @default false
-             */
-            has_more: boolean;
-            /** Next Page */
-            next_page?: string | null;
         };
         /** LiteLLMFineTuningJobCreate */
         LiteLLMFineTuningJobCreate: {
@@ -44772,33 +44836,6 @@ export interface components {
             };
             /** Type */
             type: "shell" | string;
-        };
-        /**
-         * Skill
-         * @description Represents a skill from the Anthropic Skills API
-         */
-        Skill: {
-            /** Created At */
-            created_at: string;
-            /** Description */
-            description?: string | null;
-            /** Display Title */
-            display_title?: string | null;
-            /** Id */
-            id: string;
-            /** Latest Version */
-            latest_version?: string | null;
-            /** Search Score */
-            search_score?: number | null;
-            /** Source */
-            source: string;
-            /**
-             * Type
-             * @default skill
-             */
-            type: string;
-            /** Updated At */
-            updated_at: string;
         };
         /** SkillReference */
         SkillReference: {
@@ -79215,7 +79252,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ListSkillsResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -79246,7 +79283,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Skill"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -79279,7 +79316,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Skill"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -79289,6 +79326,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_skill_v1_skills__skill_id__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -79312,7 +79371,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DeleteSkillResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -79354,6 +79413,137 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    content_skill_v1_skills__skill_id__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_versions_skill_v1_skills__skill_id__versions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    create_version_skill_v1_skills__skill_id__versions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    version_skill_v1_skills__skill_id__versions__version__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    delete_version_skill_v1_skills__skill_id__versions__version__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    version_content_skill_v1_skills__skill_id__versions__version__content_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
