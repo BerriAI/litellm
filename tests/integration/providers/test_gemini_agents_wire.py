@@ -18,6 +18,7 @@ def _template(params: dict) -> str:
     return urllib.parse.quote(json.dumps(params))
 
 
+@pytest.mark.parametrize("caller", ["admin", "virtual_key"], ids=["admin", "virtual_key"])
 @pytest.mark.parametrize(
     "method,path",
     [
@@ -27,13 +28,16 @@ def _template(params: dict) -> str:
     ],
 )
 def test_agents_rejects_api_base_without_caller_key(
-    gateway: Gateway, tmp_path: Path, method: str, path: str
+    gateway: Gateway, tmp_path: Path, method: str, path: str, caller: str
 ) -> None:
     def respond(request: Request) -> Reply:
         return Reply(body=b"{}")
 
     with wire_server(respond) as wire:
-        with owned_proxy_process(gateway, tmp_path, {"GEMINI_API_KEY": _ENV_GEMINI_KEY}) as owned:
+        with owned_proxy_process(
+            gateway, tmp_path, {"GEMINI_API_KEY": _ENV_GEMINI_KEY}
+        ) as owned, owned.gateway.scenario() as scenario:
+            virtual_key: Final = None if caller == "admin" else scenario.key()
             if method == "POST":
                 response: Final = owned.gateway.request(
                     "POST",
@@ -44,15 +48,21 @@ def test_agents_rejects_api_base_without_caller_key(
                         "instructions": "make slides",
                         "litellm_params_template": {"api_base": wire.url},
                     },
+                    key=virtual_key,
                 )
             else:
                 response = owned.gateway.request(
                     method,
                     f"{path}?litellm_params_template={_template({'api_base': wire.url})}",
+                    key=virtual_key,
                 )
-            assert response.status_code == 500, response.text
-            assert response.json()["error"]["type"] == "internal_server_error", response.text
-            assert "api_base" in response.text and "api_key" in response.text, response.text
+            if caller == "admin":
+                assert response.status_code == 500, response.text
+                assert response.json()["error"]["type"] == "internal_server_error", response.text
+                assert "api_base" in response.text and "api_key" in response.text, response.text
+            else:
+                assert response.status_code == 401, response.text
+                assert "caller-supplied" in response.json()["detail"], response.text
             assert wire.drain() == ()
 
 

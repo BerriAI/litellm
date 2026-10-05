@@ -80,6 +80,11 @@ def test_generate_content_bills_from_usage_metadata(gateway: Gateway, stream: bo
             seconds=70,
         )
         assert float(info["spend"]) == pytest.approx(0.025), info
+        reread: Final = read_rows(
+            'SELECT call_type, prompt_tokens, completion_tokens, spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+            (digest,),
+        )
+        assert reread == rows, reread
         assert [(r.method, r.target) for r in wire.drain()] == [
             ("POST", f"/models/gemini-2.5-flash:{action}{'?alt=sse' if stream else ''}")
         ]
