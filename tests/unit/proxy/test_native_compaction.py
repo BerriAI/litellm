@@ -10,6 +10,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils import internal_call_metadata as billing
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
@@ -83,8 +84,9 @@ async def test_child_preserves_credentials_and_isolates_context(protocol: Litera
 @pytest.mark.asyncio
 @pytest.mark.parametrize("protocol", ("chat", "messages"))
 @pytest.mark.parametrize("policy", ("allowed", "denied", "forged", "router_alias", "unrelated_alias"))
+@pytest.mark.parametrize("evaluation_owned", (False, True))
 async def test_real_proxy_child_auth_privacy_and_body_policy(
-    monkeypatch: pytest.MonkeyPatch, protocol: Literal["chat", "messages"], policy: str,
+    monkeypatch: pytest.MonkeyPatch, protocol: Literal["chat", "messages"], policy: str, evaluation_owned: bool,
 ) -> None:
     cache: Final = DualCache()
     token: Final = proxy_server.hash_token("sk-compaction-fixture")
@@ -93,6 +95,7 @@ async def test_real_proxy_child_auth_privacy_and_body_policy(
     await cache.async_set_cache(key=token, value=auth)
     dispatched: Final = asyncio.Event()
     allowed: Final = policy in ("allowed", "router_alias")
+    owner: Final = billing.EvaluationBillingOwner("evaluation-admin") if evaluation_owned else None
 
     async def route(
         data: Mapping[str, object], llm_router: Router | None, user_model: str | None,
@@ -100,6 +103,8 @@ async def test_real_proxy_child_auth_privacy_and_body_policy(
     ) -> Awaitable[ModelResponse]:
         dispatched.set()
         assert allowed
+        assert billing.get_evaluation_billing_owner() is owner
+        assert user_api_key_dict is not None and user_api_key_dict.api_key == token
         if policy == "router_alias":
             with pytest.raises(ProxyException):
                 await can_key_call_model("unrelated-compactor", None, auth, None)
@@ -122,7 +127,7 @@ async def test_real_proxy_child_auth_privacy_and_body_policy(
     monkeypatch.setattr(proxy_server, "llm_router", None)
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(common_request_processing, "route_request", route)
-    with inherit_message_logging_privacy(True):
+    with inherit_message_logging_privacy(True), billing.evaluation_billing_context(owner):
         call: Final = with_proxy_compaction_executor(
             _child(protocol, policy == "forged", "auto" if policy.endswith("alias") else None), _request(proxy_server.app)
         )
@@ -133,6 +138,7 @@ async def test_real_proxy_child_auth_privacy_and_body_policy(
             with pytest.raises(BadRequestError, match=rf"child request failed \(HTTP {status}\)"):
                 await call
     assert dispatched.is_set() is allowed
+    assert billing.get_evaluation_billing_owner() is None
     assert compaction_executor.get() is None
     if policy.endswith("alias"):
         with pytest.raises(ProxyException):

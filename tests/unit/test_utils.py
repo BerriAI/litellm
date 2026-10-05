@@ -29,13 +29,19 @@ from litellm._logging import (
     trace_id_var,
     verbose_logger,
 )
-from litellm.caching.caching import Cache
+from litellm.caching.caching import Cache, DualCache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.internal_call_metadata import (
+    EVALUATION_BUDGET_RESERVATION_KEY,
+    EvaluationBillingOwner,
+    evaluation_billing_context,
+)
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.proxy.utils import is_valid_api_key
@@ -5522,6 +5528,397 @@ async def test_wrapper_async_leaves_the_budget_reservation_alone_on_internal_cal
 
     assert never_claimed["callback_bound"] is False
     assert claimed_by_the_outer_call["callback_bound"] is True
+
+
+_EVALUATION_BRIDGE_MODEL: Final = "hosted_vllm/evaluation-bridge-fixture"
+_EVALUATION_FALLBACK_MODEL: Final = "hosted_vllm/evaluation-fallback-fixture"
+_EVALUATION_BRIDGE_REQUEST: Final = {
+    "model": _EVALUATION_BRIDGE_MODEL,
+    "messages": [{"role": "user", "content": "hello"}],
+    "max_tokens": 10,
+}
+
+
+def _evaluation_provider_response(output_tokens: int = 2, model: str = "evaluation-bridge-fixture") -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": f"evaluation-{output_tokens}",
+            "object": "chat.completion",
+            "created": 1,
+            "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": output_tokens, "total_tokens": 10 + output_tokens},
+        },
+    )
+
+
+def _deferred_evaluation_logger(receipts: asyncio.Queue[Mapping[str, object]]) -> Logging:
+    async def capture(kwargs: Mapping[str, object], response: object, start: datetime, end: datetime) -> None:
+        receipts.put_nowait(kwargs)
+
+    logger: Final = Logging(
+        model=_EVALUATION_BRIDGE_MODEL,
+        messages=_EVALUATION_BRIDGE_REQUEST["messages"],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="evaluation",
+        function_id="test",
+        dynamic_async_success_callbacks=[capture],
+    )
+    logger._defer_async_logging = True
+    return logger
+
+
+@pytest.fixture
+def evaluation_bridge_budget(monkeypatch: pytest.MonkeyPatch) -> tuple[EvaluationBillingOwner, DualCache]:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.hooks.model_max_budget_limiter import _PROXY_VirtualKeyModelMaxBudgetLimiter
+
+    cache: Final = DualCache()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "model_max_budget_limiter", _PROXY_VirtualKeyModelMaxBudgetLimiter(cache))
+    for model in (_EVALUATION_BRIDGE_MODEL, _EVALUATION_FALLBACK_MODEL):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {
+                "input_cost_per_token": 0.001 if model == _EVALUATION_BRIDGE_MODEL else 0.003,
+                "output_cost_per_token": 0.002 if model == _EVALUATION_BRIDGE_MODEL else 0.004,
+                "max_input_tokens": 1000,
+                "max_output_tokens": 1000,
+                "litellm_provider": "hosted_vllm",
+                "mode": "chat",
+            },
+        )
+    owner: Final = EvaluationBillingOwner(
+        "evaluation-admin",
+        {
+            model: {"max_budget": 1.0, "budget_duration": "1d"}
+            for model in (_EVALUATION_BRIDGE_MODEL, _EVALUATION_FALLBACK_MODEL)
+        },
+        max_budget=1.0,
+    )
+    return owner, cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ("success", "error", "cancelled"))
+async def test_nested_messages_evaluation_reserves_once_and_releases_its_own_budget(
+    evaluation_bridge_budget: tuple[EvaluationBillingOwner, DualCache],
+    outcome: str,
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.budget_reservation import estimate_request_input_cost, estimate_request_max_cost
+    from litellm.proxy.spend_tracking.evaluation_budget import EvaluationBudgetReservation
+
+    owner, cache = evaluation_bridge_budget
+    estimate: Final = estimate_request_max_cost(_EVALUATION_BRIDGE_REQUEST, "/v1/messages", None)
+    entered: Final = asyncio.Event()
+    complete: Final = asyncio.Event()
+    receipts: Final[asyncio.Queue[Mapping[str, object]]] = asyncio.Queue()
+    requests: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        entered.set()
+        await complete.wait()
+        if outcome == "error":
+            return httpx.Response(500, json={"error": {"message": "upstream failed", "type": "server_error"}})
+        return _evaluation_provider_response()
+
+    async def capture(kwargs: Mapping[str, object], response: object, start: datetime, end: datetime) -> None:
+        receipts.put_nowait(kwargs)
+
+    with respx.mock(assert_all_called=False) as transport, evaluation_billing_context(owner):
+        transport.post("https://evaluation.invalid/v1/chat/completions").mock(side_effect=upstream)
+        pending: Final = asyncio.create_task(
+            litellm.anthropic.messages.acreate(
+                **_EVALUATION_BRIDGE_REQUEST,
+                api_base="https://evaluation.invalid/v1",
+                api_key="transport-only",
+                num_retries=0,
+                max_retries=0,
+                fallbacks=[],
+                success_callback=[capture],
+            )
+        )
+        pending.add_done_callback(lambda task: entered.set())
+        try:
+            await asyncio.wait_for(entered.wait(), 10)
+            if pending.done():
+                await pending
+            assert await cache.async_get_cache("spend:user:evaluation-admin") == pytest.approx(estimate)
+            if outcome == "cancelled":
+                pending.cancel()
+            else:
+                complete.set()
+            if outcome == "success":
+                response: Final = await asyncio.wait_for(pending, 10)
+                assert response["content"][0]["text"] == "ok"
+            else:
+                with pytest.raises(asyncio.CancelledError if outcome == "cancelled" else litellm.InternalServerError):
+                    await asyncio.wait_for(pending, 10)
+        finally:
+            complete.set()
+            if not pending.done():
+                pending.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await pending
+        assert requests.qsize() == 1
+    if outcome == "success":
+        receipt: Final = await asyncio.wait_for(receipts.get(), 10)
+        reservation: Final = receipt[EVALUATION_BUDGET_RESERVATION_KEY]
+        assert isinstance(reservation, EvaluationBudgetReservation)
+        assert reservation.model is not None
+        actual: Final = 10 * 0.001 + 2 * 0.002
+        await proxy_server.model_max_budget_limiter.async_log_success_event(receipt, None, None, None)
+        await proxy_server.increment_spend_counters(
+            token=None,
+            team_id=None,
+            user_id=owner.user_id,
+            response_cost=actual,
+            budget_reservation=reservation.total,
+        )
+        assert await cache.async_get_cache(reservation.model.spend_key) == pytest.approx(actual)
+        assert await cache.async_get_cache("spend:user:evaluation-admin") == pytest.approx(actual)
+        await GLOBAL_LOGGING_WORKER.flush()
+    else:
+        incurred: Final = (
+            estimate_request_input_cost(_EVALUATION_BRIDGE_REQUEST, "/v1/messages", None)
+            if outcome == "cancelled"
+            else 0.0
+        )
+        assert await cache.async_get_cache("spend:user:evaluation-admin") == pytest.approx(incurred)
+        assert (
+            await cache.async_get_cache(f"user_model_spend:{owner.user_id}:{_EVALUATION_BRIDGE_MODEL}:1d") or 0.0
+        ) == pytest.approx(incurred)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ("chat", "messages"))
+async def test_evaluation_fallback_rechecks_budget_before_the_next_provider_call(
+    evaluation_bridge_budget: tuple[EvaluationBillingOwner, DualCache],
+    api: str,
+) -> None:
+    owner, cache = evaluation_bridge_budget
+    restricted: Final = EvaluationBillingOwner(
+        owner.user_id,
+        {
+            _EVALUATION_BRIDGE_MODEL: {"max_budget": 1.0, "budget_duration": "1d"},
+            _EVALUATION_FALLBACK_MODEL: {"max_budget": 0.0, "budget_duration": "1d"},
+        },
+        max_budget=1.0,
+    )
+    with respx.mock(assert_all_called=True) as transport, evaluation_billing_context(restricted):
+        route: Final = transport.post("https://evaluation.invalid/v1/chat/completions").respond(
+            500,
+            json={"error": {"message": "upstream failed", "type": "server_error"}},
+        )
+        create: Final = litellm.acompletion if api == "chat" else litellm.anthropic.messages.acreate
+        with pytest.raises(Exception, match="All fallback attempts failed"):
+            await create(
+                **_EVALUATION_BRIDGE_REQUEST,
+                fallbacks=[_EVALUATION_FALLBACK_MODEL],
+                api_base="https://evaluation.invalid/v1",
+                api_key="transport-only",
+                num_retries=0,
+                max_retries=0,
+            )
+        assert route.call_count == 1
+    assert await cache.async_get_cache("spend:user:evaluation-admin") == pytest.approx(0.0)
+    assert (
+        await cache.async_get_cache(f"user_model_spend:{owner.user_id}:{_EVALUATION_BRIDGE_MODEL}:1d") or 0.0
+    ) == pytest.approx(0.0)
+    assert (
+        await cache.async_get_cache(f"user_model_spend:{owner.user_id}:{_EVALUATION_FALLBACK_MODEL}:1d") or 0.0
+    ) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ("chat", "embedding"))
+@pytest.mark.parametrize("scope", ("total", "model"))
+async def test_paid_classifier_calls_enforce_creator_budget_before_dispatch(
+    evaluation_bridge_budget: tuple[EvaluationBillingOwner, DualCache],
+    api: str,
+    scope: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
+    from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+
+    owner, cache = evaluation_bridge_budget
+    restricted: Final = EvaluationBillingOwner(
+        owner.user_id,
+        {_EVALUATION_BRIDGE_MODEL: {"max_budget": 0.0, "budget_duration": "1d"}} if scope == "model" else None,
+        max_budget=0.0 if scope == "total" else None,
+    )
+    metadata: Final = forwarded_internal_call_metadata(
+        {"user_api_key_user_id": "sampled-user"}, AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+    )
+    request: Final = (
+        _EVALUATION_BRIDGE_REQUEST if api == "chat" else {"model": _EVALUATION_BRIDGE_MODEL, "input": ["hello"]}
+    )
+    create: Final = litellm.acompletion if api == "chat" else litellm.aembedding
+    if api == "embedding":
+        monkeypatch.setattr(litellm, "model_fallbacks", [_EVALUATION_FALLBACK_MODEL])
+    with respx.mock(assert_all_called=False) as transport, evaluation_billing_context(restricted):
+        route: Final = transport.post(
+            "https://evaluation.invalid/v1/chat/completions" if api == "chat" else "https://evaluation.invalid/v1/embeddings"
+        ).respond(500)
+        with pytest.raises(litellm.BudgetExceededError):
+            await create(
+                **request,
+                api_base="https://evaluation.invalid/v1",
+                api_key="transport-only",
+                metadata=metadata,
+                num_retries=0,
+            )
+        assert route.call_count == 0
+    assert (await cache.async_get_cache("spend:user:evaluation-admin") or 0.0) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_delayed_nested_evaluation_callbacks_keep_each_calls_reservation_and_cost(
+    evaluation_bridge_budget: tuple[EvaluationBillingOwner, DualCache],
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.evaluation_budget import EvaluationBudgetReservation
+
+    owner, cache = evaluation_bridge_budget
+    requests: Final[asyncio.Queue[httpx.Request]] = asyncio.Queue()
+    receipts: Final[asyncio.Queue[Mapping[str, object]]] = asyncio.Queue()
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return _evaluation_provider_response(
+            requests.qsize(),
+            "evaluation-bridge-fixture" if requests.qsize() == 1 else "evaluation-fallback-fixture",
+        )
+
+    with respx.mock(assert_all_called=True) as transport, evaluation_billing_context(owner):
+        transport.post("https://evaluation.invalid/v1/chat/completions").mock(side_effect=upstream)
+        logging_obj: Final = _deferred_evaluation_logger(receipts)
+        callbacks: Final[asyncio.Queue[Callable[[], None]]] = asyncio.Queue()
+        reservations: Final[asyncio.Queue[EvaluationBudgetReservation]] = asyncio.Queue()
+        for model in (_EVALUATION_BRIDGE_MODEL, _EVALUATION_FALLBACK_MODEL):
+            await litellm.anthropic.messages.acreate(
+                **{**_EVALUATION_BRIDGE_REQUEST, "model": model},
+                litellm_logging_obj=logging_obj,
+                api_base="https://evaluation.invalid/v1",
+                api_key="transport-only",
+                num_retries=0,
+            )
+            enqueue: Final = logging_obj._enqueue_deferred_logging
+            assert enqueue is not None
+            reservation: Final = logging_obj.evaluation_budget_reservation
+            assert reservation is not None
+            callbacks.put_nowait(enqueue)
+            reservations.put_nowait(reservation)
+            logging_obj._enqueue_deferred_logging = None
+        callbacks.get_nowait()()
+        callbacks.get_nowait()()
+        received: Final = (
+            await asyncio.wait_for(receipts.get(), 10),
+            await asyncio.wait_for(receipts.get(), 10),
+        )
+        await GLOBAL_LOGGING_WORKER.flush()
+    first, second = reservations.get_nowait(), reservations.get_nowait()
+    assert first is not second
+    assert receipts.empty()
+    assert {id(receipt[EVALUATION_BUDGET_RESERVATION_KEY]): receipt["response_cost"] for receipt in received} == {
+        id(first): 10 * 0.001 + 0.002,
+        id(second): 10 * 0.003 + 2 * 0.004,
+    }
+    for receipt in received:
+        handle: Final = receipt[EVALUATION_BUDGET_RESERVATION_KEY]
+        assert isinstance(handle, EvaluationBudgetReservation)
+        cost: Final = receipt["response_cost"]
+        assert isinstance(cost, float)
+        await proxy_server.model_max_budget_limiter.async_log_success_event(receipt, None, None, None)
+        await proxy_server.increment_spend_counters(
+            token=None,
+            team_id=None,
+            user_id=owner.user_id,
+            response_cost=cost,
+            budget_reservation=handle.total,
+        )
+    assert await cache.async_get_cache("spend:user:evaluation-admin") == pytest.approx(
+        10 * 0.001 + 0.002 + 10 * 0.003 + 2 * 0.004
+    )
+    await cache.async_set_cache("spend:user:evaluation-admin", 1.0)
+    with respx.mock(assert_all_called=False), pytest.raises(litellm.BudgetExceededError):
+        await litellm.anthropic.messages.acreate(
+            **_EVALUATION_BRIDGE_REQUEST,
+            litellm_logging_obj=logging_obj,
+            api_base="https://evaluation.invalid/v1",
+            api_key="transport-only",
+            num_retries=0,
+        )
+    assert await cache.async_get_cache("spend:user:evaluation-admin") == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_cached_evaluation_reusing_logger_does_not_release_prior_pending_spend(
+    evaluation_bridge_budget: tuple[EvaluationBillingOwner, DualCache],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.budget_reservation import estimate_request_max_cost
+
+    owner, cache = evaluation_bridge_budget
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    receipts: Final[asyncio.Queue[Mapping[str, object]]] = asyncio.Queue()
+
+    with respx.mock(assert_all_called=True) as transport, evaluation_billing_context(owner):
+        route: Final = transport.post("https://evaluation.invalid/v1/chat/completions").mock(
+            return_value=_evaluation_provider_response(),
+        )
+        logging_obj: Final = _deferred_evaluation_logger(receipts)
+        request: Final = {
+            **_EVALUATION_BRIDGE_REQUEST,
+            "api_base": "https://evaluation.invalid/v1",
+            "api_key": "transport-only",
+            "num_retries": 0,
+            "litellm_logging_obj": logging_obj,
+        }
+        await litellm.acompletion(**request)
+        original: Final = logging_obj.evaluation_budget_reservation
+        enqueue: Final = logging_obj._enqueue_deferred_logging
+        assert original is not None and enqueue is not None
+        logging_obj._enqueue_deferred_logging = None
+        await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+        await litellm.acompletion(**request)
+        cached: Final = await asyncio.wait_for(receipts.get(), 10)
+        await GLOBAL_LOGGING_WORKER.flush()
+        assert route.call_count == 1
+        assert cached[EVALUATION_BUDGET_RESERVATION_KEY] is None
+        assert cached["response_cost"] == 0.0
+        assert await cache.async_get_cache("spend:user:evaluation-admin") == pytest.approx(
+            estimate_request_max_cost(_EVALUATION_BRIDGE_REQUEST, "/chat/completions", None)
+        )
+        enqueue()
+        receipt: Final = await asyncio.wait_for(receipts.get(), 10)
+        await GLOBAL_LOGGING_WORKER.flush()
+    assert receipt[EVALUATION_BUDGET_RESERVATION_KEY] is original
+    assert receipt["response_cost"] == pytest.approx(10 * 0.001 + 2 * 0.002)
+    await proxy_server.increment_spend_counters(
+        token=None,
+        team_id=None,
+        user_id=owner.user_id,
+        response_cost=0.014,
+        budget_reservation=original.total,
+    )
+    assert await cache.async_get_cache("spend:user:evaluation-admin") == pytest.approx(0.014)
 
 
 @pytest.mark.asyncio

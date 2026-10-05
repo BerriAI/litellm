@@ -45,7 +45,7 @@ from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic
 from openai.types.chat.completion_create_params import ResponseFormat
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 import litellm.litellm_core_utils
@@ -1379,11 +1379,14 @@ def _schedule_async_success_logging(
     first-wins rule: the innermost wrapper's provider-shaped result is the one the spend log
     reads usage from, and a later wrapper never swaps in its client-shaped translation.
     """
+    from litellm.litellm_core_utils.litellm_logging import evaluation_logging_snapshot
+
+    receipt_logger: Final = evaluation_logging_snapshot(logging_obj)
 
     def _enqueue_async_logging() -> None:
         asyncio.create_task(
             _client_async_logging_helper(
-                logging_obj=logging_obj,
+                logging_obj=receipt_logger,
                 result=result,
                 start_time=start_time,
                 end_time=end_time,
@@ -1965,11 +1968,25 @@ def client(original_function):
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):
+        from litellm.litellm_core_utils.internal_call_metadata import (
+            EVALUATION_BUDGET_RESERVATION_KEY,
+            EvaluationBillingOwner,
+            get_evaluation_billing_owner,
+        )
+        from litellm.litellm_core_utils.litellm_logging import EvaluationBudgetInvocation, Logging
+
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time: Final = datetime.datetime.now()
         result = None
         _update_response_metadata: Final[_ResponseMetadataUpdater] = litellm_utils.update_response_metadata
         logging_obj: LiteLLMLoggingObject | None = kwargs.get("litellm_logging_obj", None)
+        evaluation_invocation: Final = (
+            EvaluationBudgetInvocation()
+            if get_evaluation_billing_owner() is not None
+            or isinstance(logging_obj, Logging)
+            and logging_obj.evaluation_billing_owner is not None
+            else None
+        )
         LLMCachingHandler: Final = _get_cached_llm_caching_handler()
         _llm_caching_handler: Final[LLMCachingHandler] = LLMCachingHandler(
             original_function=original_function,
@@ -1982,7 +1999,14 @@ def client(original_function):
             kwargs["litellm_call_id"] = str(uuid.uuid4())
 
         model: Final[str | None] = args[0] if len(args) > 0 else kwargs.get("model", None)
-        is_completion_with_fallbacks: Final = kwargs.get("fallbacks") is not None
+        is_completion_with_fallbacks: Final = (
+            kwargs.get("fallbacks")
+            or (
+                litellm.model_fallbacks
+                if call_type in (CallTypes.acompletion.value, CallTypes.atext_completion.value)
+                else None
+            )
+        ) is not None
         kwargs.pop("_is_litellm_internal_call", None)  # discard if injected
         _is_litellm_internal_call: Final = is_internal_call.get()
         _deployment_call_end_time: datetime.datetime | None = None
@@ -1993,6 +2017,24 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
+            if (
+                evaluation_invocation is not None
+                and isinstance(logging_obj, Logging)
+                and isinstance(logging_obj.evaluation_billing_owner, EvaluationBillingOwner)
+                and not _is_litellm_internal_call
+                and not is_completion_with_fallbacks
+                and logging_obj.evaluation_budget_invocation is None
+            ):
+                logging_obj.evaluation_budget_invocation = evaluation_invocation
+                logging_obj.evaluation_budget_reservation = None
+                prior_receipt: Final = TypeAdapter(Mapping[str, object]).validate_python(logging_obj.model_call_details)
+                logging_obj.model_call_details = {
+                    key: value
+                    for key, value in prior_receipt.items()
+                    if not key.startswith("has_logged_")
+                    and key not in ("response_cost", "standard_logging_object", "combined_usage_object")
+                }
+                logging_obj.model_call_details[EVALUATION_BUDGET_RESERVATION_KEY] = None
             if not _is_litellm_internal_call:
                 bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
@@ -2089,6 +2131,23 @@ def client(original_function):
                 and _caching_handler_response.embedding_uncached_input is not None
                 else kwargs
             )
+            if (
+                evaluation_invocation is not None
+                and isinstance(logging_obj, Logging)
+                and isinstance(logging_obj.evaluation_billing_owner, EvaluationBillingOwner)
+                and logging_obj.evaluation_budget_invocation is evaluation_invocation
+            ):
+                from litellm.proxy.spend_tracking.evaluation_budget import reserve_evaluation_budget
+
+                evaluation_invocation.reservation = await reserve_evaluation_budget(
+                    logging_obj.evaluation_billing_owner,
+                    TypeAdapter(dict[str, object]).validate_python(
+                        {**call_kwargs, "model": model, "messages": logging_obj.messages}
+                    ),
+                    TypeAdapter(str).validate_python(call_type),
+                )
+                logging_obj.evaluation_budget_reservation = evaluation_invocation.reservation
+                logging_obj.model_call_details[EVALUATION_BUDGET_RESERVATION_KEY] = evaluation_invocation.reservation
             try:
                 result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
@@ -2196,7 +2255,23 @@ def client(original_function):
             )
 
             return result
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
+            if (
+                evaluation_invocation is not None
+                and isinstance(logging_obj, Logging)
+                and logging_obj.evaluation_budget_invocation is evaluation_invocation
+            ):
+                from litellm.proxy.spend_tracking.evaluation_budget import release_evaluation_budget
+
+                await asyncio.shield(
+                    release_evaluation_budget(
+                        evaluation_invocation.reservation,
+                        cancelled=isinstance(e, asyncio.CancelledError),
+                        actual_cost=logging_obj.recover_failure_cost(result),
+                    )
+                )
+            if isinstance(e, asyncio.CancelledError):
+                raise
             traceback_exception: Final = traceback.format_exc()
             # Reuse the timestamp taken right when the deployment call itself failed, before
             # the failure hook ran, so a slow callback doesn't inflate the reported duration.
@@ -2216,7 +2291,10 @@ def client(original_function):
 
             call_type = original_function.__name__
             num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
-            if call_type == CallTypes.acompletion.value:
+            sdk_retries_enabled: Final = not isinstance(logging_obj, Logging) or not isinstance(
+                logging_obj.evaluation_billing_owner, EvaluationBillingOwner
+            )
+            if call_type == CallTypes.acompletion.value and sdk_retries_enabled:
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
                 _is_litellm_router_call = "model_group" in (
@@ -2251,7 +2329,7 @@ def client(original_function):
                         kwargs["model"] = context_window_fallback_dict[model]
                     result = await original_function(*args, **kwargs)
                     return result
-            elif call_type == CallTypes.aresponses.value:
+            elif call_type == CallTypes.aresponses.value and sdk_retries_enabled:
                 _is_litellm_router_call = "model_group" in (
                     kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
@@ -2282,6 +2360,12 @@ def client(original_function):
             raise e
 
         finally:
+            if (
+                evaluation_invocation is not None
+                and isinstance(logging_obj, Logging)
+                and logging_obj.evaluation_budget_invocation is evaluation_invocation
+            ):
+                logging_obj.evaluation_budget_invocation = None
             # Restore trace_id/session_id contextvars to their pre-call value once
             # this call (in this asyncio Task) is fully done - see
             # request_correlation_in_logs. Unlike wrapper()'s sync path, it's safe to
