@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Final, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching_handler import create_cache_write_task
-from litellm.constants import ANTHROPIC_MESSAGES_STREAM_CACHE_MAX_BYTES
+from litellm.constants import STREAM_CACHE_MAX_ENTRY_BYTES
 from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
     BaseAnthropicMessagesStreamingIterator,
@@ -87,7 +87,7 @@ class AnthropicMessagesStreamCacheWriter:
             return chunk
         chunk_bytes: Final = chunk.encode("utf-8") if isinstance(chunk, str) else chunk
         retained_bytes: Final = self.retained_bytes + len(chunk_bytes)
-        if retained_bytes > ANTHROPIC_MESSAGES_STREAM_CACHE_MAX_BYTES:
+        if retained_bytes > STREAM_CACHE_MAX_ENTRY_BYTES:
             self.collected_chunks.clear()
             self.retained_bytes = 0
             self.overflowed = True

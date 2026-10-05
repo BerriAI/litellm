@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, AsyncIterator, Dict, List
+from typing import Any, AsyncIterator, Dict, Final, List
 
 import pytest
 
@@ -9,9 +9,12 @@ import datetime
 import litellm
 from litellm._internal_context import in_post_response_phase
 from litellm.caching.caching import Cache, LiteLLMCacheType
-from litellm.caching.caching_handler import LLMCachingHandler
+from litellm.caching.caching_handler import (
+    _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # await the cache write before retrying
+    LLMCachingHandler,
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.anthropic.pass_through.messages import handler
+from litellm.llms.anthropic.pass_through.messages import handler, response_cache
 from litellm.llms.anthropic.pass_through.messages.response_cache import (
     AnthropicMessagesStreamCacheWriter,
 )
@@ -146,6 +149,50 @@ async def test_streaming_request_is_replayed_from_cache(local_cache, request_kwa
     assert first == STREAM_EVENTS
     assert second == STREAM_EVENTS
     assert second_stream._hidden_params["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_stream_at_configured_cache_entry_limit_is_cached(
+    local_cache: Cache,
+    request_kwargs: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream_bytes: Final = b"".join(STREAM_EVENTS)
+    monkeypatch.setattr(response_cache, "STREAM_CACHE_MAX_ENTRY_BYTES", len(stream_bytes))
+    fake_handler: Final = _CountingHandler([_byte_stream(STREAM_EVENTS), _byte_stream([b"event: never_used\n\n"])])
+    monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
+
+    first: Final = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    second: Final = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+
+    assert first == STREAM_EVENTS
+    assert second == STREAM_EVENTS
+    assert len(fake_handler.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_one_byte_over_configured_cache_entry_limit_is_delivered_and_refetched(
+    local_cache: Cache,
+    request_kwargs: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    second_events: Final = tuple(chunk.replace(b"ALPHA", b"BETA") for chunk in STREAM_EVENTS)
+    monkeypatch.setattr(
+        response_cache,
+        "STREAM_CACHE_MAX_ENTRY_BYTES",
+        len(b"".join(STREAM_EVENTS)) - 1,
+    )
+    fake_handler: Final = _CountingHandler([_byte_stream(STREAM_EVENTS), _byte_stream(second_events)])
+    monkeypatch.setattr(handler, "anthropic_messages_handler", fake_handler)
+
+    first: Final = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    second: Final = await _collect(await litellm.anthropic_messages(**request_kwargs, stream=True))
+
+    assert first == STREAM_EVENTS
+    assert tuple(second) == second_events
+    assert len(fake_handler.calls) == 2
 
 
 @pytest.mark.asyncio

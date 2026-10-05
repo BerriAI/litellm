@@ -13,6 +13,8 @@ use litellm_cache_response::{
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 
+const _: () = assert!(DEFAULT_MAX_ENTRY_BYTES == 4194304);
+
 #[pyclass(
     frozen,
     name = "NativeCacheHandle",
@@ -54,7 +56,7 @@ fn request(key: String, ttl: Option<f64>) -> PyResult<ResponseCacheRequest> {
 #[pymethods]
 impl NativeCacheHandle {
     #[staticmethod]
-    #[pyo3(signature = (*, ttl=600.0, capacity=200, max_entry_bytes=DEFAULT_MAX_ENTRY_BYTES))]
+    #[pyo3(signature = (*, ttl=600.0, capacity=200, max_entry_bytes=4194304))]
     fn memory(ttl: f64, capacity: usize, max_entry_bytes: usize) -> PyResult<Self> {
         let ttl = duration(ttl)?;
         if capacity == 0 || max_entry_bytes == 0 {
@@ -76,7 +78,7 @@ impl NativeCacheHandle {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (url, *, namespace, ttl=600.0, max_entry_bytes=DEFAULT_MAX_ENTRY_BYTES))]
+    #[pyo3(signature = (url, *, namespace, ttl=600.0, max_entry_bytes=4194304))]
     fn redis(
         py: Python<'_>,
         url: &str,

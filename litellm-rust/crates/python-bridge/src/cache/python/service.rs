@@ -3,8 +3,7 @@ use std::{future::Future, pin::Pin, time::Duration};
 use bytes::Bytes;
 use litellm_cache::Error;
 use litellm_cache_response::{
-    DEFAULT_MAX_ENTRY_BYTES, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
-    ResponseEnvelope,
+    ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
 };
 use litellm_core::caching::CachedOutput;
 use litellm_host::{
@@ -69,6 +68,7 @@ struct PythonCacheService<P: Protocol> {
 pub(in crate::cache) fn service<P: Protocol<HostCall = CacheCall>>(
     services: HostServices<P>,
     namespace: String,
+    max_entry_bytes: usize,
 ) -> std::sync::Arc<dyn ResponseCacheService>
 where
     P::Error: From<MachineFault>,
@@ -77,7 +77,7 @@ where
         services,
         config: ResponseCacheConfig {
             namespace,
-            max_entry_bytes: DEFAULT_MAX_ENTRY_BYTES,
+            max_entry_bytes,
         },
     })
 }

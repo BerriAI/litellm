@@ -23,7 +23,10 @@ impl<P: Protocol> Protocol for Cached<P> {
 enum Backend {
     Disabled,
     Native(Arc<dyn ResponseCacheService>),
-    Python { namespace: String },
+    Python {
+        namespace: String,
+        max_entry_bytes: usize,
+    },
 }
 
 pub(crate) struct Selection {
@@ -42,7 +45,10 @@ impl Selection {
         let service = match self.backend {
             Backend::Disabled => None,
             Backend::Native(service) => Some(service),
-            Backend::Python { namespace } => Some(python::service(services, namespace)),
+            Backend::Python {
+                namespace,
+                max_entry_bytes,
+            } => Some(python::service(services, namespace, max_entry_bytes)),
         };
         (
             service.map(|service| ScopedCache::new(service, CacheScope::Shared)),
@@ -170,12 +176,17 @@ pub(crate) fn configure(
         .transpose()?
         .unwrap_or_default();
     python.bind(cache, arguments);
-    Ok(Selection {
-        backend: if enabled {
-            Backend::Python { namespace }
-        } else {
-            Backend::Disabled
-        },
-        options,
-    })
+    let backend = if enabled {
+        let max_entry_bytes = py
+            .import("litellm.constants")?
+            .getattr("STREAM_CACHE_MAX_ENTRY_BYTES")?
+            .extract::<usize>()?;
+        Backend::Python {
+            namespace,
+            max_entry_bytes,
+        }
+    } else {
+        Backend::Disabled
+    };
+    Ok(Selection { backend, options })
 }

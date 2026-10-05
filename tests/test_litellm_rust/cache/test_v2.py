@@ -9,6 +9,7 @@ import pytest
 from pydantic import BaseModel, TypeAdapter
 
 import litellm
+import litellm.constants
 from litellm import _v2
 from litellm._v2.cache import NativeBackend
 from litellm.caching.caching import Cache, CacheMode
@@ -423,6 +424,29 @@ async def test_rust_messages_replays_each_cached_sse_event_and_closes_cleanly(
     await drain_logging()
     assert "async_log_failure_event" not in recorder.names
     assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_rust_python_cache_reads_configured_stream_entry_limit(
+    recording_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    monkeypatch.setattr(litellm.constants, "STREAM_CACHE_MAX_ENTRY_BYTES", 1)
+    recording_server.expected_requests = 2
+    litellm.cache = Cache()
+    options: Final = {"stream": True}
+
+    first: Final = await invoke("messages", recording_server, options)
+    first_bytes: Final = await collect(first)
+    expected: Final = b"".join(recording_server.default_response.payloads())
+    assert first_bytes == expected
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+
+    second: Final = await invoke("messages", recording_server, options)
+    second_bytes: Final = await collect(second)
+    assert second_bytes == expected
+    assert len(recording_server.requests) == 2
 
 
 @pytest.mark.asyncio
