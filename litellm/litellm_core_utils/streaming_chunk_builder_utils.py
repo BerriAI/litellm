@@ -147,9 +147,7 @@ _ToolCallKey: TypeAlias = tuple[int, int]
 
 
 def _append_fragment(current: str | None, fragment: str | None) -> str | None:
-    # a streamed id/name may arrive whole on every chunk or split across
-    # chunks: append each new piece, but a piece equal to what is already
-    # accumulated is the same value repeated, not an extension (#44392)
+    # equal consecutive fragments are a whole-value repeat, not an extension (#44392)
     if not fragment:
         return current
     if not current:
