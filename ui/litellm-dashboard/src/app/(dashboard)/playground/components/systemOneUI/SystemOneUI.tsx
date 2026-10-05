@@ -40,7 +40,7 @@ function getCustomProxyBaseUrl(): string | undefined {
 export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation = false }: SystemOneUIProps) {
   const [apiKeySource, setApiKeySource] = useState<ApiKeySource>(disabledPersonalKeyCreation ? "custom" : "session");
   const [customApiKey, setCustomApiKey] = useState("");
-  const [endpoint, setEndpoint] = useState<DecisionEndpoint>("/v1/decisions");
+  const [endpoint, setEndpoint] = useState<DecisionEndpoint>("/typesafe/v1/systemone");
   const [payloads, setPayloads] = useState<Record<DecisionEndpoint, string>>({
     "/v1/decisions": DECISIONS_EXAMPLE_PAYLOAD,
     "/typesafe/v1/systemone": EXAMPLE_PAYLOAD,
@@ -186,7 +186,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           </AlertTitle>
           <AlertDescription>
             {endpoint === "/v1/decisions"
-              ? "Sends choice, noul, and score questions through /v1/decisions. Replace the example model with a decision model configured on your proxy."
+              ? "Sends choice, noul, and score questions through /v1/decisions. Replace the example model with a decision model configured on your proxy, or omit model to use the proxy's configured default."
               : "Sends requests through /typesafe/v1/systemone and requires TYPESAFE_API_KEY on the proxy."}{" "}
             <a href={DECISION_MODELS_DISCUSSION_URL} target="_blank" rel="noopener noreferrer" className="underline">
               Give us feedback on what you want for decision models

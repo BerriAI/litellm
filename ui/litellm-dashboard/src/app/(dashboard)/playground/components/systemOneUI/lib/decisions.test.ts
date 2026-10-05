@@ -19,7 +19,13 @@ describe("native decisions validation", () => {
     expect(validate(request)).toMatchObject({ isValid: true, payload: request, issues: [] });
   });
 
-  it.each([undefined, "", "   ", 1])("rejects a missing or invalid model (%s)", (model) => {
+  it("accepts an omitted model without inserting one", () => {
+    const payload = { state: request.state, questions: request.questions };
+    expect(validate(payload)).toMatchObject({ isValid: true, payload, issues: [] });
+    expect(validate(payload).payload).not.toHaveProperty("model");
+  });
+
+  it.each([null, "", "   ", 1])("rejects an invalid explicit model (%s)", (model) => {
     expect(validate({ ...request, model }).isValid).toBe(false);
   });
 

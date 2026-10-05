@@ -30,7 +30,10 @@ const decisionQuestionSchema = z.discriminatedUnion("type", [
 ]);
 
 export const decisionsRequestSchema = z.looseObject({
-  model: z.string().refine((value) => value.trim().length > 0, "Model must be a non-empty string."),
+  model: z
+    .string()
+    .refine((value) => value.trim().length > 0, "Model must be a non-empty string.")
+    .optional(),
   state: decisionsJson,
   questions: z.record(z.string().min(1), decisionQuestionSchema).refine((value) => {
     const count = Object.keys(value).length;
