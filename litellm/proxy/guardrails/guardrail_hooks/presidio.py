@@ -48,6 +48,7 @@ from litellm.proxy.guardrails.anthropic_sse import (
     is_anthropic_sse_stream,
     model_response_text,
 )
+from litellm.proxy.guardrails.guardrail_hooks.presidio_anthropic_sse import AnthropicSSEUnmasker
 from litellm.types.guardrails import (
     GuardrailEventHooks,
     LitellmParams,
@@ -1588,6 +1589,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         remaining_chunks: list[ModelResponseStream] = []
         saw_non_chat_chunk = False
+        sse_unmasker: Final = AnthropicSSEUnmasker(pii_tokens) if pii_tokens else None
         try:
             async for chunk in response:
                 if isinstance(chunk, ModelResponseStream):
@@ -1596,8 +1598,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     else:
                         remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
-                    if pii_tokens:
-                        yield self._unmask_sse_bytes_chunk(chunk, pii_tokens)
+                    if sse_unmasker is not None:
+                        if unmasked_bytes := sse_unmasker.feed(chunk):
+                            yield unmasked_bytes
                     else:
                         yield chunk
                     continue
@@ -1614,6 +1617,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         self._unmask_responses_api_completed_chunk(chunk, pii_tokens)
                     saw_non_chat_chunk = True
                     yield chunk
+
+            if sse_unmasker is not None and (tail := sse_unmasker.flush()):
+                yield tail
 
             if saw_non_chat_chunk:
                 return
@@ -1645,6 +1651,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             verbose_proxy_logger.error("Error in PII streaming processing: %s", e)
             for chunk in remaining_chunks:
                 yield chunk
+            if sse_unmasker is not None and (tail := sse_unmasker.flush()):
+                yield tail
 
     async def async_post_call_streaming_iterator_hook(
         self,
