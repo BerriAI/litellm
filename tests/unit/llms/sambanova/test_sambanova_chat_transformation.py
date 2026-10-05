@@ -3,7 +3,6 @@ import pytest
 from litellm.llms.sambanova.chat import SambanovaConfig
 from litellm.utils import get_optional_params
 
-# Params documented in SambaNova's chat completions API spec that map 1:1 from OpenAI.
 _ALWAYS_SUPPORTED = (
     "max_tokens",
     "max_completion_tokens",
