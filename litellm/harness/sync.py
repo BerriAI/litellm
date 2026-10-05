@@ -62,7 +62,7 @@ class _LoopThread:
                 self._thread.start()
             return self._loop
 
-    def submit(self, coro: Coroutine[Any, Any, T]) -> Future[T]:
+    def submit(self, coro: Coroutine[object, None, T]) -> Future[T]:
         return asyncio.run_coroutine_threadsafe(coro, self.loop())
 
 
@@ -77,7 +77,7 @@ def _ensure_sync_context(name: str) -> None:
     raise RuntimeError(IN_LOOP_MESSAGE.format(name=name))
 
 
-def run_sync(coro: Coroutine[Any, Any, T], name: str) -> T:
+def run_sync(coro: Coroutine[object, None, T], name: str) -> T:
     """Run coro on the harness loop thread and block for its result."""
     try:
         _ensure_sync_context(name)
@@ -186,7 +186,7 @@ class Session:
 
     def history(
         self,
-    ) -> list[dict[str, Any]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
+    ) -> list[dict[str, object]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
         return run_sync(self._inner.history(), "history")
 
     @property
@@ -215,7 +215,7 @@ def _run(
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
-    tools: Sequence[Callable[..., Any]] = (),
+    tools: Sequence[Callable[..., object]] = (),
     skills: Sequence[str | os.PathLike[str]] = (),
     disable_tools: Sequence[str] = (),
     permissions: PermissionMode = "full",
@@ -223,7 +223,7 @@ def _run(
     output: type[BaseModel] | None = None,
     max_turns: int | None = None,
     timeout: float | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> Result:
@@ -262,7 +262,7 @@ def _stream(
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
-    tools: Sequence[Callable[..., Any]] = (),
+    tools: Sequence[Callable[..., object]] = (),
     skills: Sequence[str | os.PathLike[str]] = (),
     disable_tools: Sequence[str] = (),
     permissions: PermissionMode = "full",
@@ -270,7 +270,7 @@ def _stream(
     output: type[BaseModel] | None = None,
     max_turns: int | None = None,
     timeout: float | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> EventStream:
@@ -307,7 +307,7 @@ def agent_session(
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
-    tools: Sequence[Callable[..., Any]] = (),
+    tools: Sequence[Callable[..., object]] = (),
     skills: Sequence[str | os.PathLike[str]] = (),
     disable_tools: Sequence[str] = (),
     permissions: PermissionMode = "full",
@@ -315,7 +315,7 @@ def agent_session(
     output: type[BaseModel] | None = None,
     max_turns: int | None = None,
     timeout: float | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> Session:
@@ -352,7 +352,7 @@ def agent_resume(
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
-    tools: Sequence[Callable[..., Any]] = (),
+    tools: Sequence[Callable[..., object]] = (),
     skills: Sequence[str | os.PathLike[str]] = (),
     disable_tools: Sequence[str] = (),
     permissions: PermissionMode = "full",
@@ -360,7 +360,7 @@ def agent_resume(
     output: type[BaseModel] | None = None,
     max_turns: int | None = None,
     timeout: float | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> Session:
@@ -399,7 +399,7 @@ def agent(
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
-    tools: Sequence[Callable[..., Any]] = (),
+    tools: Sequence[Callable[..., object]] = (),
     skills: Sequence[str | os.PathLike[str]] = (),
     disable_tools: Sequence[str] = (),
     permissions: PermissionMode = "full",
@@ -407,11 +407,11 @@ def agent(
     output: type[BaseModel] | None = None,
     max_turns: int | None = None,
     timeout: float | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> Result | EventStream:
-    """Run an agent harness (Claude Code, Codex, OpenCode, Deep Agents) on one prompt.
+    """Run an agent harness (Claude Code, Codex, OpenCode, Deep Agents, Tool Loop) on one prompt.
 
     Returns a Result. With stream=True it returns an iterator of events instead.
     Prefix the model with `litellm_proxy/` to route every model call through your

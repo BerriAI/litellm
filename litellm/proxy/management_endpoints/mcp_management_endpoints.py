@@ -54,12 +54,14 @@ except ImportError:
     UniqueViolationError = Exception
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
+    MCP_SERVERS_TARGET,
     McpServerPayloadLike,
     build_env_var_setup_url,
     collect_env_var_references,
@@ -495,6 +497,7 @@ if MCP_AVAILABLE:
         )
         return server
 
+    @with_service_target(MCP_SERVERS_TARGET)
     async def _cache_temporary_mcp_server_in_redis(server: MCPServer, ttl_seconds: int) -> None:
         """
         Best-effort write-through to Redis so temporary MCP OAuth sessions are
@@ -527,6 +530,7 @@ if MCP_AVAILABLE:
         except Exception as e:
             verbose_proxy_logger.debug("Failed to write temporary MCP server to Redis cache: %s", e)
 
+    @with_service_target(MCP_SERVERS_TARGET)
     async def _get_temporary_mcp_server_from_redis(
         server_id: str,
     ) -> MCPServer | None:
@@ -1014,6 +1018,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
+            record_listing=True,
         )
         tools: Final = listing.tools
         dumped_tools: Final = [tool.model_dump(by_alias=True) for tool in tools]

@@ -54,13 +54,9 @@ def get_all_functions_called_in_tests(base_dir):
                     if file == "test_router_validate_fallbacks.py":
                         print(f"tree: {tree}")
                     for node in ast.walk(tree):
-                        if isinstance(node, ast.Call) and isinstance(
-                            node.func, ast.Name
-                        ):
+                        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                             called_functions.add(node.func.id)
-                        elif isinstance(node, ast.Call) and isinstance(
-                            node.func, ast.Attribute
-                        ):
+                        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                             called_functions.add(node.func.attr)
 
     return called_functions
@@ -91,6 +87,10 @@ ignored_function_names = [
     "_get_claude_code_session_router_binding",  # Tested through the two-worker session routing test in test_router.py
     "_apply_updated_routing_strategy_args",  # Tested via update_settings in test_lowest_latency.py (file lacks "router" in name)
     "arm_routing_read_prefetch",  # Tested in tests/unit/caching/test_request_redis_batch_pre_call.py (file lacks "router" in name)
+    "_configured_model_info",  # Tested through get_configured_service_tiers in test_router.py
+    "_routable_deployments",  # Tested through get_configured_service_tiers and get_routable_upstream_model in test_router.py
+    "_async_get_available_deployment",  # Body of the `route {model}` phase wrapper, exercised through async_get_available_deployment in test_router.py
+    "_async_get_available_deployment_for_pass_through",  # Same, through async_get_available_deployment_for_pass_through in test_router.py
     "_embedding",
     "_aembedding",
 ]
@@ -107,9 +107,7 @@ def main():
     #     "../../litellm/router_utils/pattern_match_deployments.py",
     #     "../../litellm/router_utils/batch_utils.py",
     # ]  ## LOCAL TESTING
-    tests_dir = (
-        "./tests/"  # Update this path if your tests directory is located elsewhere
-    )
+    tests_dir = "./tests/"  # Update this path if your tests directory is located elsewhere
     # tests_dir = "../../tests/"  # LOCAL TESTING
 
     router_functions = []
@@ -117,9 +115,7 @@ def main():
         router_functions.extend(get_functions_from_router(file))
     print("router_functions: ", router_functions)
     called_functions_in_tests = get_all_functions_called_in_tests(tests_dir)
-    untested_functions = [
-        fn for fn in router_functions if fn not in called_functions_in_tests
-    ]
+    untested_functions = [fn for fn in router_functions if fn not in called_functions_in_tests]
 
     if untested_functions:
         all_untested_functions = []

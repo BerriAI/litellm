@@ -1477,6 +1477,13 @@
         "rerank": false
       }
     },
+    "bespoke": {
+      "display_name": "Bespoke Nimble (`bespoke`)",
+      "url": "https://docs.litellm.ai/docs/auto_router/decision_classifiers",
+      "endpoints": {
+        "systemone": true
+      }
+    },
     "laya": {
       "display_name": "Laya (`laya`)",
       "url": "https://docs.litellm.ai/docs/auto_router/decision_classifiers",
@@ -2390,7 +2397,7 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false,
+        "rerank": true,
         "a2a": true,
         "interactions": true
       }
@@ -2557,6 +2564,20 @@
       "url": "https://docs.litellm.ai/docs/providers/topaz",
       "endpoints": {
         "image_variations": true
+      }
+    },
+    "typesafe": {
+      "display_name": "TypeSafe (`typesafe`)",
+      "url": "https://docs.typesafe.ai/models",
+      "endpoints": {
+        "systemone": true
+      }
+    },
+    "strands_decider": {
+      "display_name": "Strands Decider (`strands_decider`)",
+      "url": "https://docs.litellm.ai/docs/providers",
+      "endpoints": {
+        "systemone": true
       }
     },
     "tavily": {
