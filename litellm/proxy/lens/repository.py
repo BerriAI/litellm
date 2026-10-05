@@ -129,19 +129,27 @@ class LensRepository:
         rows: Final = _ROWS.validate_python(
             await self.db.query_raw(
                 """WITH targets AS (
-                    SELECT DISTINCT trace_id, trace_ref
+                    SELECT DISTINCT trace_id, trace_ref,
+                        jsonb_build_array(jsonb_build_object('source', 'traces', 'trace_id', trace_id)) AS executions
                     FROM jsonb_to_recordset($1::jsonb) AS target(trace_id text, trace_ref text)
                 ), jobs AS (
-                    SELECT data AS job FROM "LiteLLM_LensRun" WHERE data->>'status'='completed'
+                    SELECT target.trace_id, target.trace_ref, run.data AS job
+                    FROM targets AS target JOIN "LiteLLM_LensRun" AS run
+                        ON run.data->'sample'->'executions' @> target.executions
+                    WHERE run.data->>'status'='completed'
                     UNION ALL
-                    SELECT job FROM "LiteLLM_Lens", jsonb_array_elements(data->'jobs') AS job
+                    SELECT target.trace_id, target.trace_ref, job
+                    FROM targets AS target JOIN "LiteLLM_Lens" AS lens
+                        ON lens.data->'jobs' @> jsonb_build_array(jsonb_build_object(
+                            'status', 'completed', 'sample', jsonb_build_object('executions', target.executions)))
+                    CROSS JOIN LATERAL jsonb_array_elements(lens.data->'jobs') AS job
                     WHERE job->>'status'='completed'
                 ), assessed AS (
-                    SELECT target.trace_id, target.trace_ref, execution->>'id' AS execution_id, job
+                    SELECT jobs.trace_id, jobs.trace_ref, execution->>'id' AS execution_id, job
                     FROM jobs, jsonb_array_elements(job->'sample'->'executions') AS execution
-                    JOIN targets AS target ON execution->>'trace_id'=target.trace_id
-                        AND COALESCE(execution->>'trace_ref', '')=target.trace_ref
-                    WHERE execution->>'source'='traces' AND EXISTS (
+                    WHERE execution->>'trace_id'=jobs.trace_id
+                        AND COALESCE(execution->>'trace_ref', '')=jobs.trace_ref
+                        AND execution->>'source'='traces' AND EXISTS (
                         SELECT 1 FROM jsonb_array_elements(job->'assessments') AS assessment
                         WHERE assessment->>'execution_id'=execution->>'id'
                             AND COALESCE((assessment->>'cannot_assess')::boolean, false)=false
