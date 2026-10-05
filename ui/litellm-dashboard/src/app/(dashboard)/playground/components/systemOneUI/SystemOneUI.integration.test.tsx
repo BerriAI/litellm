@@ -239,7 +239,6 @@ describe("SystemOneUI integration", () => {
       }
       await pending.promise.catch(() => undefined);
     });
-    // Wait for the mutation itself to settle, not only the fetch promise.
     await waitFor(() => expect(queryClient.isMutating()).toBe(0));
     expect(screen.queryByText("stale-model")).not.toBeInTheDocument();
     expect(screen.queryByText("Stale request failed")).not.toBeInTheDocument();
