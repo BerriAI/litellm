@@ -356,10 +356,12 @@ async def test_langsmith_key_based_logging():
         # tenant_id should not be in headers if not provided
         assert "x-tenant-id" not in call_args[1]["headers"]
 
+        assert call_args[1]["headers"]["Content-Type"] == "application/json"
+
         # Verify the request body contains the expected data
-        request_body = call_args[1]["json"]
+        request_body = json.loads(call_args[1]["content"])
         assert "post" in request_body
-        assert len(request_body["post"]) == 1  # Should contain one run
+        assert len(request_body["post"]) == 1
 
         # EXPECTED BODY
         expected_body = {
@@ -404,7 +406,7 @@ async def test_langsmith_key_based_logging():
         }
 
         # Print both bodies for debugging
-        actual_body = call_args[1]["json"]
+        actual_body = json.loads(call_args[1]["content"])
         print("\nExpected body:")
         print(json.dumps(expected_body, indent=2))
         print("\nActual body:")

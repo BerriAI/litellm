@@ -1,0 +1,131 @@
+name: Linear Release
+
+on:
+  push:
+    branches:
+      - main
+      - "rc/**"
+  release:
+    types: [published]
+  workflow_call:
+    inputs:
+      rc_version:
+        description: "X.Y.0 release whose rc branch was just cut"
+        required: true
+        type: string
+    secrets:
+      LINEAR_API_KEY:
+        required: true
+
+permissions: {}
+
+jobs:
+  linear-release:
+    name: Linear Release
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Plan
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          BEFORE: ${{ github.event.before }}
+          CREATED: ${{ github.event.created }}
+          RC_VERSION: ${{ inputs.rc_version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          sync_base="${BEFORE}"
+          if [ "${CREATED}" = "true" ]; then
+            sync_base=""
+          fi
+          if [ -n "${RC_VERSION}" ]; then
+            echo "version=${RC_VERSION}" >> "$GITHUB_OUTPUT"
+            echo "stage=rc" >> "$GITHUB_OUTPUT"
+          elif [ "${EVENT}" = "release" ]; then
+            if [ "${PRERELEASE}" = "true" ] || ! echo "${RELEASE_TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.0$'; then
+              echo "::notice::${RELEASE_TAG} is not an X.Y.0 stable release; nothing to complete"
+              exit 0
+            fi
+            echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          elif [ "${REF_NAME}" = "main" ]; then
+            version="$(python3 .github/scripts/read_rc_version.py | cut -d= -f2)"
+            status=0
+            git ls-remote --exit-code --heads origin "rc/${version}" > /dev/null || status=$?
+            case "${status}" in
+              0)
+                IFS=. read -r major minor _ <<< "${version}"
+                version="${major}.$((minor + 1)).0"
+                ;;
+              2) ;;
+              *)
+                echo "::error::could not check whether rc/${version} exists (git ls-remote exit ${status})"
+                exit 1
+                ;;
+            esac
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+            echo "sync_base=${sync_base}" >> "$GITHUB_OUTPUT"
+            echo "main=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${REF_NAME#rc/}" >> "$GITHUB_OUTPUT"
+            echo "sync_base=${sync_base}" >> "$GITHUB_OUTPUT"
+            echo "stage=rc" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sync commits into the release
+        if: steps.plan.outputs.sync_base != ''
+        uses: linear/linear-release-action@d4af10092984f9bc6d5efa075b242bdf01333463 # v0.18.0
+        with:
+          access_key: ${{ secrets.LINEAR_API_KEY }}
+          command: sync
+          name: LiteLLM ${{ steps.plan.outputs.version }}
+          version: ${{ steps.plan.outputs.version }}
+          base_ref: ${{ steps.plan.outputs.sync_base }}
+          cli_version: v0.18.0
+
+      - name: Keep the main stage unless the rc branch was cut during this run
+        id: main_stage
+        if: steps.plan.outputs.main == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          status=0
+          git ls-remote --exit-code --heads origin "rc/${VERSION}" > /dev/null || status=$?
+          case "${status}" in
+            0) echo "::notice::rc/${VERSION} was cut during this run; leaving the release in its rc stage" ;;
+            2) echo "stage=main" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::could not check whether rc/${VERSION} exists (git ls-remote exit ${status})"
+              exit 1
+              ;;
+          esac
+
+      - name: Move the release to its stage
+        if: steps.plan.outputs.stage != '' || steps.main_stage.outputs.stage != ''
+        uses: linear/linear-release-action@d4af10092984f9bc6d5efa075b242bdf01333463 # v0.18.0
+        with:
+          access_key: ${{ secrets.LINEAR_API_KEY }}
+          command: update
+          stage: ${{ steps.plan.outputs.stage || steps.main_stage.outputs.stage }}
+          version: ${{ steps.plan.outputs.version }}
+          cli_version: v0.18.0
+
+      - name: Complete the release
+        if: steps.plan.outputs.complete == 'true'
+        uses: linear/linear-release-action@d4af10092984f9bc6d5efa075b242bdf01333463 # v0.18.0
+        with:
+          access_key: ${{ secrets.LINEAR_API_KEY }}
+          command: complete
+          version: ${{ steps.plan.outputs.version }}
+          cli_version: v0.18.0

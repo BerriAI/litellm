@@ -10,6 +10,8 @@ vi.mock("@/components/networking", () => ({
   modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
 }));
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 const mockPrompts: PromptSpec[] = [
   {
     prompt_id: "prompt-newer",
@@ -51,6 +53,15 @@ describe("PromptTable", () => {
     for (const header of ["Prompt ID", "Model", "Created At", "Updated At", "Environment", "Created By", "Type"]) {
       expect(screen.getByText(header)).toBeInTheDocument();
     }
+  });
+
+  it("links the Created By cell to the creator's detail page, leaving the placeholder unlinked", () => {
+    const prompts = [mockPrompts[0], { ...mockPrompts[1], created_by: "default_user_id" }];
+    render(<PromptTable {...defaultProps} promptsList={prompts} />);
+
+    expect(screen.getByRole("link", { name: "user-1" })).toHaveAttribute("href", "/ui/users?user=user-1");
+    expect(screen.getByText("default_user_id")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "default_user_id" })).not.toBeInTheDocument();
   });
 
   it("should display the empty state when data is empty", () => {

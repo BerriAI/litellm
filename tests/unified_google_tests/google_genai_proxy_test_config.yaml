@@ -1,15 +1,20 @@
 model_list:
-  - model_name: gemini-2.5-flash-lite
+  - model_name: gemini-3.5-flash-lite
     litellm_params:
-      model: gemini/gemini-2.5-flash-lite
+      model: gemini/gemini-3.5-flash-lite
       api_key: os.environ/GEMINI_API_KEY
 
-  - model_name: vertex-gemini-2.5-flash-lite
+  - model_name: vertex-gemini-3.5-flash-lite
     litellm_params:
-      model: vertex_ai/gemini-2.5-flash-lite
+      model: vertex_ai/gemini-3.5-flash-lite
+      vertex_location: global
+
+router_settings:
+  retry_policy:
+    RateLimitErrorRetries: 5
 
 general_settings:
-  master_key: sk-1234
+  master_key: sk-unified-google-tests-4f9b2c7d8e1a
   store_model_in_db: false
 
 litellm_settings:

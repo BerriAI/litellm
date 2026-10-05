@@ -15,12 +15,13 @@ import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from e2e_config import settle_propagation
 from e2e_http import Headers, NoBody, Result, Success, UnknownApiError, unwrap
-from models import KeyGenerateBody, ObjectPermission
+from models import KeyGenerateBody, McpServerListResponse, McpServerRow, ObjectPermission
 from proxy_client import ProxyClient
 
 McpToolArg = str | int | float | bool | list[str] | dict[str, str]
@@ -46,13 +47,16 @@ class McpServerNewResponse(BaseModel):
     server_id: str
 
 
-class McpServerRow(BaseModel):
+class McpHealthParams(BaseModel):
+    server_ids: list[str] | None = None
+
+
+class McpHealthRow(BaseModel):
     server_id: str
-    alias: str | None = None
-    url: str | None = None
+    status: Literal["healthy", "unhealthy", "unknown"] | None
 
 
-class McpServersListResponse(RootModel[list[McpServerRow]]):
+class McpHealthResponse(RootModel[list[McpHealthRow]]):
     pass
 
 
@@ -193,30 +197,36 @@ class McpClient:
                 "/v1/mcp/server",
                 headers=self.proxy.transport.master,
                 params=NoBody(),
-                response_type=McpServersListResponse,
+                response_type=McpServerListResponse,
             )
         ).root
 
-    def await_registered(self, server_id: str) -> None:
-        """Poll /v1/mcp/server until `server_id` is listed. Fails at poll_timeout.
+    def list_servers(self, key: str) -> Result[McpServerListResponse]:
+        return self.proxy.transport.get(
+            "/v1/mcp/server",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            params=NoBody(),
+            response_type=McpServerListResponse,
+        )
 
-        The DB row exists the moment registration returns, but a data-plane pod
-        answers the listing from a registry it refreshes on a periodic DB sync, so a
-        pod that joined the load balancer after the write reports the server as
-        absent until its first sync.
-        """
-        deadline = time.monotonic() + self.proxy.poll_timeout
-        while True:
-            registered = frozenset(row.server_id for row in self.registered_servers())
-            if server_id in registered:
-                return
-            if time.monotonic() >= deadline:
-                raise AssertionError(
-                    f"registered server {server_id} still absent from /v1/mcp/server "
-                    f"{self.proxy.poll_timeout}s after registration (the data plane never synced "
-                    f"the row): {registered}"
-                )
-            time.sleep(self.proxy.poll_interval)
+    def server_health(self, key: str, server_ids: list[str] | None = None) -> Result[McpHealthResponse]:
+        return self.proxy.transport.get(
+            "/v1/mcp/server/health",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            params=McpHealthParams(server_ids=server_ids),
+            response_type=McpHealthResponse,
+        )
+
+    def await_registered(self, server_id: str) -> McpServerRow:
+        """Wait for every configured replica to list the server and return its row."""
+        registered = self.proxy.read_body_back_everywhere(
+            "/v1/mcp/server",
+            McpServerListResponse,
+            settled=lambda response: any(row.server_id == server_id for row in response.root),
+        )
+        return next(
+            row for response in registered.values() for row in response.root if row.server_id == server_id
+        )
 
     def generate_key(
         self,
@@ -224,11 +234,16 @@ class McpClient:
         user_id: str,
         mcp_servers: list[str] | None,
         mcp_access_groups: list[str] | None = None,
+        mcp_toolsets: list[str] | None = None,
         models: list[str] | None = None,
     ) -> str:
         object_permission = (
-            ObjectPermission(mcp_servers=mcp_servers, mcp_access_groups=mcp_access_groups)
-            if mcp_servers is not None or mcp_access_groups is not None
+            ObjectPermission(
+                mcp_servers=mcp_servers,
+                mcp_access_groups=mcp_access_groups,
+                mcp_toolsets=mcp_toolsets,
+            )
+            if mcp_servers is not None or mcp_access_groups is not None or mcp_toolsets is not None
             else None
         )
         return self.proxy.generate_key(
@@ -270,6 +285,20 @@ class McpClient:
                     f"{self.proxy.poll_timeout}s of registration (upstream unreachable, or "
                     f"the key's grant was not applied); last tools/list: {result}"
                 )
+            time.sleep(self.proxy.poll_interval)
+
+    def await_tools(self, key: str, server_id: str, *, expected: frozenset[str]) -> frozenset[str]:
+        """Poll tools/list until `server_id`'s tools as `key` sees them are exactly
+        `expected`, and return the last listing either way, so the caller's equality
+        assertion names the difference. Fails at poll_timeout only when the read
+        itself never succeeded."""
+        deadline = time.monotonic() + self.proxy.poll_timeout
+        while True:
+            result = self.list_tools(key)
+            if isinstance(result, Success) and result.data.tool_names_for_server(server_id) == expected:
+                return expected
+            if time.monotonic() >= deadline:
+                return unwrap(result).tool_names_for_server(server_id)
             time.sleep(self.proxy.poll_interval)
 
     def await_call_tool(

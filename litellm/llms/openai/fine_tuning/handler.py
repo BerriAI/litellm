@@ -1,13 +1,14 @@
-from collections.abc import Coroutine
-from typing import Any, Final, cast
+from collections.abc import Coroutine, Mapping
+from typing import Final, cast
 
 import httpx
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from openai.types.fine_tuning import FineTuningJob
 
 from litellm._logging import verbose_logger
 from litellm.types.utils import LiteLLMFineTuningJob
 
-_AZURE_STATUS_MAP: Final = {
+_AZURE_STATUS_MAP: Final[Mapping[object, str]] = {
     "pending": "queued",
     "notRunning": "queued",
     "running": "running",
@@ -20,7 +21,7 @@ _AZURE_STATUS_MAP: Final = {
 # because LiteLLMFineTuningJob schema has no intermediate cancellation state.
 
 
-def _normalize_fine_tuning_job_dict(data: dict[str, Any], is_azure: bool = False) -> dict[str, Any]:
+def _normalize_fine_tuning_job_dict(data: dict[str, object], is_azure: bool = False) -> dict[str, object]:
     """
     Normalize Azure OpenAI FineTuningJob response to match OpenAI schema.
 
@@ -47,7 +48,7 @@ def _normalize_fine_tuning_job_dict(data: dict[str, Any], is_azure: bool = False
     return normalized
 
 
-def _litellm_fine_tuning_job_from_response(response: Any, is_azure: bool = False) -> LiteLLMFineTuningJob:
+def _litellm_fine_tuning_job_from_response(response: FineTuningJob, is_azure: bool = False) -> LiteLLMFineTuningJob:
     return LiteLLMFineTuningJob(**_normalize_fine_tuning_job_dict(response.model_dump(), is_azure=is_azure))
 
 
@@ -111,7 +112,7 @@ class OpenAIFineTuningAPI:
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
-    ) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
+    ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
         openai_client: Final[OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -159,7 +160,7 @@ class OpenAIFineTuningAPI:
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
-    ) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
+    ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
         openai_client: Final[OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,
@@ -258,7 +259,7 @@ class OpenAIFineTuningAPI:
         max_retries: int | None,
         organization: str | None,
         client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None,
-    ) -> LiteLLMFineTuningJob | Coroutine[Any, Any, LiteLLMFineTuningJob]:
+    ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
         openai_client: Final[OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None] = self.get_openai_client(
             api_key=api_key,
             api_base=api_base,

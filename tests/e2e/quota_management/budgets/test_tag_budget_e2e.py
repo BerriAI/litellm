@@ -13,17 +13,19 @@ import pytest
 from budget_client import BudgetClient, is_budget_block
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
+MODEL = "claude-haiku-4-5"
 TINY_BUDGET = 1e-6
 
 
 def _tagged_call(client: BudgetClient, key: str, tag: str):
     result = client.chat(
         key,
-        "claude-haiku-4-5",
+        MODEL,
         f"hi {unique_marker()}",
         tags=[tag],
         max_tokens=64,
@@ -34,6 +36,14 @@ def _tagged_call(client: BudgetClient, key: str, tag: str):
 
 
 @pytest.mark.covers("quota_management.budget.tag.blocks_over_limit")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        providers=(Provider.ANTHROPIC,),
+        models=(MODEL,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_tag_budget_blocks_tagged_requests(
     client: BudgetClient, scoped_key: str, resources: ResourceManager
 ) -> None:

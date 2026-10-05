@@ -2,10 +2,18 @@ import Anthropic from "@anthropic-ai/sdk";
 import { MessageType } from "@/components/chat_ui/types";
 import { TokenUsage } from "@/components/chat_ui/ResponseMetrics";
 import { buildMcpToolBlocks } from "@/components/llm_calls/mcp_tool_blocks";
+import { buildPlaygroundHeaders, type CustomHeaders } from "@/components/llm_calls/request_headers";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import { getProxyBaseUrl } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
+
+const toTokenUsage = (usage: Anthropic.Usage): TokenUsage => ({
+  completionTokens: usage.output_tokens,
+  promptTokens: usage.input_tokens,
+  totalTokens: usage.input_tokens + usage.output_tokens,
+  ...extractPromptCacheTokens(usage),
+});
 
 export async function makeAnthropicMessagesRequest(
   messages: MessageType[],
@@ -26,6 +34,8 @@ export async function makeAnthropicMessagesRequest(
   mcpServers?: MCPServer[],
   mcpServerToolRestrictions?: Record<string, string[]>,
   mcpToolsets?: MCPToolset[],
+  streamingEnabled: boolean = true,
+  customHeaders?: CustomHeaders,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -38,11 +48,7 @@ export async function makeAnthropicMessagesRequest(
 
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
 
-  // Prepare headers with tags and trace ID
-  const headers: Record<string, string> = {};
-  if (tags && tags.length > 0) {
-    headers["x-litellm-tags"] = tags.join(",");
-  }
+  const headers = buildPlaygroundHeaders(tags, customHeaders);
 
   const client = new Anthropic({
     apiKey: accessToken,
@@ -58,7 +64,7 @@ export async function makeAnthropicMessagesRequest(
     const requestBody: any = {
       model: selectedModel,
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
-      stream: true,
+      stream: streamingEnabled,
       max_tokens: 1024,
       // @ts-ignore - litellm specific parameter
       litellm_trace_id: traceId,
@@ -74,6 +80,20 @@ export async function makeAnthropicMessagesRequest(
     if (vector_store_ids) requestBody.vector_store_ids = vector_store_ids;
     if (guardrails) requestBody.guardrails = guardrails;
     if (policies) requestBody.policies = policies;
+
+    if (!streamingEnabled) {
+      const message: Anthropic.Message = await client.messages.create({ ...requestBody, stream: false }, { signal });
+      for (const block of message.content) {
+        if (block.type === "text") {
+          updateTextUI("assistant", block.text, selectedModel);
+        } else if (block.type === "thinking" && onReasoningContent) {
+          onReasoningContent(block.thinking);
+        }
+      }
+      onUsageData?.(toTokenUsage(message.usage));
+      return;
+    }
+
     // Use the streaming helper method for cleaner async iteration
     // @ts-ignore - The SDK types might not include all litellm-specific parameters
     const stream = client.messages.stream(requestBody, { signal });
@@ -105,14 +125,7 @@ export async function makeAnthropicMessagesRequest(
 
       // Process usage data from message_delta events
       if (messageStreamEvent.type === "message_delta" && (messageStreamEvent as any).usage && onUsageData) {
-        const usage = (messageStreamEvent as any).usage;
-        const usageData: TokenUsage = {
-          completionTokens: usage.output_tokens,
-          promptTokens: usage.input_tokens,
-          totalTokens: usage.input_tokens + usage.output_tokens,
-          ...extractPromptCacheTokens(usage),
-        };
-        onUsageData(usageData);
+        onUsageData(toTokenUsage((messageStreamEvent as any).usage));
       }
     }
   } catch (error) {

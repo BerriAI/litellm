@@ -11,6 +11,7 @@ import pytest
 from typing import Optional
 
 import litellm
+from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.utils import calculate_max_parallel_requests
 
 """
@@ -93,26 +94,26 @@ def test_setting_mpr_limits_per_model(
         default_max_parallel_requests=default_max_parallel_requests,
     )
 
-    mpr_client: Optional[asyncio.Semaphore] = router._get_client(
+    mpr_client: Optional[MaxParallelRequestsLimit] = router._get_client(
         deployment=deployment,
         kwargs={},
         client_type="max_parallel_requests",
     )
 
     if max_parallel_requests is not None:
-        assert max_parallel_requests == mpr_client._value
+        assert max_parallel_requests == mpr_client.max_parallel_requests
     elif rpm is not None:
-        assert rpm == mpr_client._value
+        assert rpm == mpr_client.max_parallel_requests
     elif tpm is not None:
         calculated_rpm = int(tpm / 1000 * 6)
         if calculated_rpm == 0:
             calculated_rpm = 1
         print(
-            f"test calculated_rpm: {calculated_rpm}, calculated_max_parallel_requests={mpr_client._value}"
+            f"test calculated_rpm: {calculated_rpm}, calculated_max_parallel_requests={mpr_client.max_parallel_requests}"
         )
-        assert calculated_rpm == mpr_client._value
+        assert calculated_rpm == mpr_client.max_parallel_requests
     elif default_max_parallel_requests is not None:
-        assert mpr_client._value == default_max_parallel_requests
+        assert mpr_client.max_parallel_requests == default_max_parallel_requests
     else:
         assert mpr_client is None
 

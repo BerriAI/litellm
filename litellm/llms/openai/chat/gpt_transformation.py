@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import httpx
 
 import litellm
+from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _extract_reasoning_content,
@@ -19,10 +20,13 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    drop_non_python_regex_patterns,
     drop_tool_reference_parts_from_tool_messages,
+    flatten_combinators_and_drop_non_python_regex_patterns,
     get_tool_call_names,
     hoist_images_from_tool_messages,
-    tool_with_flattened_parameters,
+    system_messages_first,
+    tool_with_sanitized_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
@@ -54,11 +58,11 @@ from litellm.types.utils import (
 from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import OpenAIError
+from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.base_llm.base_utils import BaseTokenCounter
     from litellm.types.llms.openai import ChatCompletionToolParam
 
@@ -68,6 +72,11 @@ else:
 
 
 _NO_TOOLS_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
+    value: Final = litellm_params.get(key) if litellm_params is not None else None
+    return value if isinstance(value, str) else None
 
 
 class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
@@ -432,7 +441,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             custom_llm_provider, api_base
         )
 
-    def _flattened_tools_update_for_openai(
+    def _sanitized_tools_update_for_openai(
         self,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
@@ -440,22 +449,35 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         OpenAI's chat completions validator rejects tool `parameters` carrying
         'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the top level for every
-        model family, unlike the Responses API, where GPT-5+ accepts them.
+        model family, unlike the Responses API, where GPT-5+ accepts them, and
+        a `pattern` Python's `re` cannot compile for every model family on both.
+        A custom api_base on the `openai` provider is usually a proxy in front of
+        the same validator, so regexes are dropped there too, while the lossier
+        combinator flattening stays limited to api.openai.com hosts.
         """
         tools: Final = optional_params.get("tools")
-        if not isinstance(tools, list):
-            return _NO_TOOLS_UPDATE
         provider: Final = litellm_params.get("custom_llm_provider")
-        raw_api_base: Final = litellm_params.get("api_base")
-        if not self._targets_openai_hosted_endpoint(
-            provider if isinstance(provider, str) else None,
-            raw_api_base if isinstance(raw_api_base, str) else None,
-        ):
+        if not isinstance(tools, list) or provider != "openai":
             return _NO_TOOLS_UPDATE
-        flattened: Final = [  # mutable-ok: request tools are a JSON list
-            tool_with_flattened_parameters(tool) if isinstance(tool, dict) else tool for tool in tools
+        raw_api_base: Final = litellm_params.get("api_base")
+        sanitize: Final = (
+            flatten_combinators_and_drop_non_python_regex_patterns
+            if self._targets_openai_hosted_endpoint(provider, raw_api_base if isinstance(raw_api_base, str) else None)
+            else drop_non_python_regex_patterns
+        )
+        sanitized: Final = [
+            tool_with_sanitized_parameters(tool, sanitize) if isinstance(tool, dict) else tool for tool in tools
         ]
-        return MappingProxyType({"tools": flattened})
+        return MappingProxyType({"tools": sanitized})
+
+    def _prompt_cache_ordered_messages(
+        self, messages: list[AllMessageValues], litellm_params: Mapping[str, object]
+    ) -> list[AllMessageValues]:
+        if not litellm.openai_system_messages_first:
+            return messages
+        if litellm_params.get("custom_llm_provider") not in OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS:
+            return messages
+        return system_messages_first(messages)
 
     def transform_request(
         self,
@@ -471,7 +493,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         Returns:
             dict: The transformed request. Sent as the body of the API call.
         """
-        messages = self._transform_messages(messages=messages, model=model)
+        messages = self._transform_messages(
+            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model
+        )
         if not self._should_preserve_cache_control_for_endpoint(
             litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
         ):
@@ -489,7 +513,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             "model": model,
             "messages": messages,
             **optional_params,
-            **self._flattened_tools_update_for_openai(optional_params, litellm_params),
+            **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
         }
 
     async def async_transform_request(
@@ -500,7 +524,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        transformed_messages = await self._transform_messages(messages=messages, model=model, is_async=True)
+        transformed_messages = await self._transform_messages(
+            messages=self._prompt_cache_ordered_messages(messages, litellm_params), model=model, is_async=True
+        )
         if not self._should_preserve_cache_control_for_endpoint(
             litellm_params.get("custom_llm_provider"), litellm_params.get("api_base")
         ):
@@ -521,7 +547,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 "model": model,
                 "messages": transformed_messages,
                 **optional_params,
-                **self._flattened_tools_update_for_openai(optional_params, litellm_params),
+                **self._sanitized_tools_update_for_openai(optional_params, litellm_params),
             }
         else:
             ## allow for any object specific behaviour to be handled
@@ -576,9 +602,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         for choice in choices:
             ## HANDLE JSON MODE - anthropic returns single function call]
             tool_calls = choice["message"].get("tool_calls", None)
-            new_tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None = (
-                None  # mutable-ok: holds _handle_invalid_parallel_tool_calls' list; Message.__init__ expects list
-            )
+            new_tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None = None
             message_content = choice["message"].get("content", None)
             if tool_calls is not None:
                 _openai_tool_calls = []
@@ -650,7 +674,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -747,28 +771,39 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         """
         Calls OpenAI's `/v1/models` endpoint and returns the list of models.
         """
-
-        if api_base is None:
-            api_base = "https://api.openai.com"
-        if api_key is None:
-            api_key = get_secret_str("OPENAI_API_KEY")
-
-        # Strip api_base to just the base URL (scheme + host + port)
-        parsed_url: Final = httpx.URL(api_base)
-        base_url = f"{parsed_url.scheme}://{parsed_url.host}"
-        if parsed_url.port:
-            base_url += f":{parsed_url.port}"
-
-        response: Final = litellm.module_level_client.get(
-            url=f"{base_url}/v1/models",
-            headers={"Authorization": f"Bearer {api_key}"},
+        return self._fetch_model_ids(
+            api_base=api_base, bearer_token=get_secret_str("OPENAI_API_KEY") if api_key is None else api_key
         )
 
+    def discover_models(
+        self, litellm_params: Mapping[str, object] | None = None
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+        if type(self) is not OpenAIGPTConfig:
+            return super().discover_models(litellm_params)
+        api_key: Final = _litellm_params_str(litellm_params, "api_key")
+        api_base: Final = _litellm_params_str(litellm_params, "api_base")
+        workload_identity_config: Final = resolve_openai_workload_identity_config(
+            api_key=api_key, api_base=api_base, litellm_params=litellm_params
+        )
+        if workload_identity_config is None:
+            return self.get_models(api_key=api_key, api_base=api_base)
+        return self._fetch_model_ids(
+            api_base=api_base, bearer_token=get_workload_identity_bearer_token(workload_identity_config)
+        )
+
+    @staticmethod
+    def _fetch_model_ids(
+        api_base: str | None, bearer_token: str | None
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+        parsed_url: Final = httpx.URL(api_base or "https://api.openai.com")
+        port_suffix: Final = f":{parsed_url.port}" if parsed_url.port else ""
+        response: Final = litellm.module_level_client.get(
+            url=f"{parsed_url.scheme}://{parsed_url.host}{port_suffix}/v1/models",
+            headers={"Authorization": f"Bearer {bearer_token}"},
+        )
         if response.status_code != 200:
             raise Exception(f"Failed to get models: {response.text}")
-
-        models: Final = response.json()["data"]
-        return [model["id"] for model in models]
+        return [model["id"] for model in response.json()["data"]]
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
@@ -813,7 +848,7 @@ class OpenAIUnknownModelConfig(OpenAIGPTConfig):
     forward reasoning_effort and let the server decide whether it is supported."""
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract
-        return super().get_supported_openai_params(model) + ["reasoning_effort"]  # mutable-ok: inherited contract
+        return super().get_supported_openai_params(model) + ["reasoning_effort"]
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
@@ -872,6 +907,9 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             }
             if "usage" in chunk and chunk["usage"] is not None:
                 kwargs["usage"] = chunk["usage"]
+            service_tier: Final = chunk.get("service_tier")
+            if isinstance(service_tier, str) and service_tier:
+                kwargs["service_tier"] = service_tier
             return ModelResponseStream(**kwargs)
         except Exception as e:
             raise e

@@ -57,3 +57,20 @@ export const getEndpointType = (mode: string): EndpointType => {
   // else default to chat
   return EndpointType.CHAT;
 };
+
+export const isModeCompatibleWithEndpoint = (mode: string | null | undefined, endpointType: EndpointType): boolean => {
+  if (!mode) return true;
+  if (!Object.values(ModelMode).includes(mode as ModelMode)) return false;
+  const optionEndpoint = getEndpointType(mode);
+  if (
+    endpointType === EndpointType.RESPONSES ||
+    endpointType === EndpointType.ANTHROPIC_MESSAGES ||
+    endpointType === EndpointType.INTERACTIONS
+  ) {
+    return optionEndpoint === endpointType || optionEndpoint === EndpointType.CHAT;
+  }
+  if (endpointType === EndpointType.IMAGE_EDITS) {
+    return optionEndpoint === endpointType || optionEndpoint === EndpointType.IMAGE;
+  }
+  return optionEndpoint === endpointType;
+};

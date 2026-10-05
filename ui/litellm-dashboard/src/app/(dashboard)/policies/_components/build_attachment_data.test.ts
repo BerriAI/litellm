@@ -79,4 +79,28 @@ describe("buildAttachmentData", () => {
       expect(result.tags).toBeUndefined();
     });
   });
+
+  describe("default", () => {
+    it.each(["global", "specific"] as const)("should send default: true for a %s scope", (scopeType) => {
+      expect(buildAttachmentData({ policy_name: "p", default: true }, scopeType).default).toBe(true);
+    });
+
+    it.each([undefined, false])("should omit default when it is %s", (value) => {
+      expect(buildAttachmentData({ policy_name: "p", default: value }, "specific")).not.toHaveProperty("default");
+    });
+  });
+
+  describe("priority", () => {
+    it.each(["global", "specific"] as const)("should include priority for a %s scope", (scopeType) => {
+      expect(buildAttachmentData({ policy_name: "p", priority: 0 }, scopeType).priority).toBe(0);
+    });
+
+    it("should include a negative priority", () => {
+      expect(buildAttachmentData({ policy_name: "p", priority: -5 }, "specific").priority).toBe(-5);
+    });
+
+    it.each([undefined, null])("should omit priority when it is %s", (priority) => {
+      expect(buildAttachmentData({ policy_name: "p", priority }, "specific")).not.toHaveProperty("priority");
+    });
+  });
 });

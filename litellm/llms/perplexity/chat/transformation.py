@@ -15,7 +15,7 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionAnnotation
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class PerplexityChatConfig(OpenAIGPTConfig):
@@ -75,7 +75,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

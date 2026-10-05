@@ -883,7 +883,6 @@ async def test_provider_specific_fields_in_proxy_http_response(
         max_tokens=None,
         request_timeout=600,
         max_budget=None,
-        telemetry=False,
         drop_params=True,
         add_function_to_prompt=False,
         headers=None,

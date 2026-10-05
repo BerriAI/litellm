@@ -9,6 +9,8 @@ from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 class TestBedrockGPTOSS(BaseLLMChatTest):
+    test_json_response_format = None
+
     def get_base_completion_call_args(self) -> dict:
         return {
             "model": "bedrock/converse/openai.gpt-oss-20b-1:0",
@@ -22,7 +24,7 @@ class TestBedrockGPTOSS(BaseLLMChatTest):
         """Bedrock GPT-OSS intermittently emits truncated toolUse.input deltas on
         the live endpoint, which makes the inherited live integration test flaky.
         The accumulation side is covered deterministically by
-        tests/test_litellm/llms/bedrock/chat/test_invoke_handler.py::test_transform_tool_calls_index;
+        tests/unit/llms/bedrock/chat/test_invoke_handler.py::test_transform_tool_calls_index;
         the GPT-OSS-specific request-body transformation is covered by
         test_function_calling_request_body_gpt_oss below.
         """

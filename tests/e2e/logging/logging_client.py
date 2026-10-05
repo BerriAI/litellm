@@ -146,6 +146,29 @@ class LangfuseObservationList(BaseModel):
     data: list[LangfuseObservation] = []
 
 
+class LangfuseOtelMetadata(BaseModel):
+    """Langfuse stores every OTel span attribute under metadata.attributes."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    attributes: dict[str, str] = {}
+
+
+def otel_attributes(obs: LangfuseObservation) -> dict[str, str]:
+    try:
+        return LangfuseOtelMetadata.model_validate(obs.metadata).attributes
+    except ValidationError:
+        return {}
+
+
+def is_otel_v2_generation(obs: LangfuseObservation, *, key_alias: str) -> bool:
+    attributes = otel_attributes(obs)
+    return (
+        attributes.get("langfuse.observation.type") == "generation"
+        and attributes.get("litellm.metadata.user_api_key_alias") == key_alias
+    )
+
+
 class LangfuseListParams(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -187,6 +210,45 @@ class LangfuseCreds:
                 )
             ]
         )
+
+
+@dataclass(frozen=True, slots=True)
+class WeaveCreds:
+    """Weights & Biases Weave credentials for a key-scoped ``weave_otel`` callback.
+
+    The proxy still needs WANDB_API_KEY / WANDB_PROJECT_ID in its own environment:
+    the weave_otel logger is constructed from those before the per-key vars are
+    applied, so a key-scoped callback on a proxy without them never initializes.
+    The per-key vars are what direct THIS key's spans at this project.
+    """
+
+    api_key: str
+    project_id: str
+
+    def key_logging_metadata(self) -> KeyMetadata:
+        return KeyMetadata(
+            logging=[
+                KeyLoggingCallback(
+                    callback_name="weave_otel",
+                    callback_type="success_and_failure",
+                    callback_vars=KeyLoggingCallbackVars(
+                        wandb_api_key=self.api_key,
+                        weave_project_id=self.project_id,
+                    ),
+                )
+            ]
+        )
+
+
+def load_weave_creds() -> WeaveCreds:
+    api_key = os.getenv("WANDB_API_KEY")
+    project_id = (os.getenv("WEAVE_PROJECT_ID") or os.getenv("WANDB_PROJECT_ID") or "").strip()
+    if not (api_key and project_id):
+        pytest.fail(
+            "Weave e2e requires WANDB_API_KEY and WEAVE_PROJECT_ID (or WANDB_PROJECT_ID, "
+            "format <entity>/<project>); missing credentials is a hard failure, not a skip"
+        )
+    return WeaveCreds(api_key=api_key, project_id=project_id)
 
 
 def load_langfuse_creds() -> LangfuseCreds:
@@ -590,6 +652,18 @@ class LoggingClient:
                     return last
             time.sleep(POLL_INTERVAL)
         return last
+
+    def poll_langfuse_generation(
+        self, creds: LangfuseCreds, *, key_alias: str, from_start_time: str
+    ) -> LangfuseObservation | None:
+        """The OTel v2 generation the proxy exported for one key alias since from_start_time."""
+        deadline = time.monotonic() + POLL_TIMEOUT
+        while time.monotonic() < deadline:
+            for obs in self.list_langfuse_observations(creds, from_start_time=from_start_time):
+                if is_otel_v2_generation(obs, key_alias=key_alias):
+                    return obs
+            time.sleep(POLL_INTERVAL)
+        return None
 
     def poll_langfuse_trace_observations(
         self,

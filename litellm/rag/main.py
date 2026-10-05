@@ -245,6 +245,9 @@ async def _execute_query_pipeline(
         raise ValueError("No query found in messages for RAG query")
 
     # 2. Search vector store
+    top_level_filters: Final = kwargs.pop("filters", None)
+    filters: Final = retrieval_config.get("retrieval_filter") or retrieval_config.get("filters") or top_level_filters
+    filter_search_params: Final = MappingProxyType({"filters": filters} if filters else {})
     # Forward allowlisted provider retrieval_config extras (region, embedding
     # model, bucket, credential refs) to the search call; the managed store's
     # params win on conflict.
@@ -258,7 +261,9 @@ async def _execute_query_pipeline(
             if k not in _SEARCH_ARGS_SET_BY_PIPELINE
         }
     )
-    forwarded_search_params: Final = MappingProxyType({**provider_search_params, **kwargs, **store_search_params})
+    forwarded_search_params: Final = MappingProxyType(
+        {**provider_search_params, **kwargs, **filter_search_params, **store_search_params}
+    )
     with _suppressed_sub_call_billing():
         search_response: Final = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],

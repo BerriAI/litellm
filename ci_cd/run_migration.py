@@ -6,12 +6,9 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-
-import testing.postgresql
-
+from typing import Final
 
 DESTRUCTIVE_PATTERN = re.compile(r"\bDROP\s+(COLUMN|TABLE|INDEX)\b", re.IGNORECASE)
-DEFAULT_BASE_BRANCH = "litellm_internal_staging"
 
 
 def _find_destructive_statements(sql: str) -> list:
@@ -94,31 +91,57 @@ def _print_stale_branch_refusal(base_branch: str, behind: int) -> None:
     print(banner, file=out)
 
 
-def _check_branch_freshness(root_dir: Path, base_branch: str) -> None:
+def _default_base_branch(root_dir: Path) -> str:
+    try:
+        result: Final = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve().parents[1] / "scripts" / "default_branch.py"),
+                "--repo-root",
+                str(root_dir),
+                "--branch",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        _print_freshness_failure(
+            "default branch",
+            "Could not discover origin's default branch. Pass --base-branch <name> to choose one.",
+            exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc),
+        )
+        sys.exit(3)
+    return result.stdout.strip()
+
+
+def _check_branch_freshness(root_dir: Path, base_branch: str | None = None) -> None:
     """Fetch origin/<base_branch> and exit 3 if HEAD is behind it."""
+    resolved_branch: Final = base_branch or _default_base_branch(root_dir)
     cwd = str(root_dir)
     try:
         subprocess.run(
-            ["git", "fetch", "origin", base_branch],
+            ["git", "fetch", "origin", f"+refs/heads/{resolved_branch}:refs/remotes/origin/{resolved_branch}"],
             check=True,
             capture_output=True,
             text=True,
             cwd=cwd,
         )
     except FileNotFoundError:
-        _print_freshness_failure(base_branch, "git executable not found on PATH")
+        _print_freshness_failure(resolved_branch, "git executable not found on PATH")
         sys.exit(3)
     except subprocess.CalledProcessError as e:
         _print_freshness_failure(
-            base_branch,
-            f"`git fetch origin {base_branch}` failed",
+            resolved_branch,
+            f"`git fetch origin {resolved_branch}` failed",
             e.stderr or "",
         )
         sys.exit(3)
 
     try:
         result = subprocess.run(
-            ["git", "rev-list", "--count", f"HEAD..origin/{base_branch}"],
+            ["git", "rev-list", "--count", f"HEAD..origin/{resolved_branch}"],
             check=True,
             capture_output=True,
             text=True,
@@ -127,23 +150,23 @@ def _check_branch_freshness(root_dir: Path, base_branch: str) -> None:
         behind = int(result.stdout.strip())
     except subprocess.CalledProcessError as e:
         _print_freshness_failure(
-            base_branch,
-            f"`git rev-list HEAD..origin/{base_branch}` failed",
+            resolved_branch,
+            f"`git rev-list HEAD..origin/{resolved_branch}` failed",
             e.stderr or "",
         )
         sys.exit(3)
     except ValueError:
         _print_freshness_failure(
-            base_branch,
+            resolved_branch,
             "could not parse commit count from `git rev-list`",
         )
         sys.exit(3)
 
     if behind > 0:
-        _print_stale_branch_refusal(base_branch, behind)
+        _print_stale_branch_refusal(resolved_branch, behind)
         sys.exit(3)
 
-    print(f"Branch freshness OK: up to date with origin/{base_branch}.")
+    print(f"Branch freshness OK: up to date with origin/{resolved_branch}.")
 
 
 def _print_destructive_refusal(destructive_lines: list) -> None:
@@ -198,7 +221,7 @@ def _print_destructive_refusal(destructive_lines: list) -> None:
 def create_migration(
     migration_name: str = None,
     allow_destructive: bool = False,
-    base_branch: str = DEFAULT_BASE_BRANCH,
+    base_branch: str | None = None,
     skip_freshness_check: bool = False,
 ):
     """
@@ -211,7 +234,7 @@ def create_migration(
             DROP COLUMN, DROP TABLE, or DROP INDEX statements. Without this
             flag, the script exits non-zero and prints guidance.
         base_branch (str): Branch to check freshness against
-            (default: "litellm_internal_staging").
+            (default: origin's current default branch).
         skip_freshness_check (bool): Skip the "branch is up to date" check.
             Only for intentional migrations against an older base.
     """
@@ -224,6 +247,8 @@ def create_migration(
         )
     else:
         _check_branch_freshness(root_dir, base_branch)
+
+    import testing.postgresql
 
     try:
         migrations_dir = (
@@ -342,9 +367,8 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--base-branch",
-        default=DEFAULT_BASE_BRANCH,
         help=(
-            f"Branch to check freshness against (default: {DEFAULT_BASE_BRANCH}). "
+            "Branch to check freshness against (default: origin's current default branch). "
             "The script fetches origin/<base-branch> and refuses to run if HEAD "
             "is behind it."
         ),

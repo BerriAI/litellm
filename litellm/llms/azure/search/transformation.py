@@ -289,7 +289,7 @@ class BingGroundingSearchConfig(BaseSearchConfig):
         Returns a new dict rather than mutating ``headers``: the http handler calls this
         a second time after ``litellm/search/main.py`` already did, so it has to be idempotent.
         """
-        return {  # mutable-ok: httpx requires a plain dict of headers
+        return {
             **headers,
             **self._auth_header(api_key, api_base),
             "Content-Type": "application/json",
@@ -387,7 +387,7 @@ class BingGroundingSearchConfig(BaseSearchConfig):
             raise self.get_error_class(
                 error_message=f"response does not match the Foundry Responses API schema: {e}",
                 status_code=raw_response.status_code,
-                headers=dict(raw_response.headers),  # mutable-ok: BaseSearchConfig.get_error_class signature
+                headers=dict(raw_response.headers),
             )
         if parsed.status == "failed":
             detail: Final = (
@@ -408,7 +408,7 @@ class BingGroundingSearchConfig(BaseSearchConfig):
         return self.get_error_class(
             error_message=detail,
             status_code=_UPSTREAM_ERROR_STATUS,
-            headers=dict(raw_response.headers),  # mutable-ok: BaseSearchConfig.get_error_class signature
+            headers=dict(raw_response.headers),
         )
 
     def _priced(self, results: tuple[SearchResult, ...]) -> SearchResponse:
@@ -416,16 +416,12 @@ class BingGroundingSearchConfig(BaseSearchConfig):
         inherit the connection-mode ``bing_grounding/search`` price; zero its per-query
         cost while leaving connection mode to the cost map."""
         response: Final = SearchResponse(
-            results=list(results),  # mutable-ok: SearchResponse.results is list[SearchResult]
+            results=list(results),
             object="search",
         )
         if get_secret_str(CONNECTION_ID_ENV):
             return response
-        response._hidden_params[
-            "additional_headers"
-        ] = {  # mutable-ok: response_cost_calculator writes into _hidden_params
-            _RESPONSE_COST_HEADER: 0.0
-        }
+        response._hidden_params["additional_headers"] = {_RESPONSE_COST_HEADER: 0.0}
         return response
 
     def get_error_class(

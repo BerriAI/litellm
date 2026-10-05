@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
+import { userDetailHref } from "@/utils/entityLinks";
 
 import { extractModel, getProviderFromModelHub, ModelGroupInfo } from "./prompt_utils";
 
@@ -191,9 +192,16 @@ export const getPromptTableColumns = ({
     enableSorting: false,
     cell: ({ row }) => {
       const createdBy = row.original.created_by;
+      if (!createdBy) {
+        return <span className="text-muted-foreground">-</span>;
+      }
       return (
-        <span className="block max-w-60 truncate text-sm text-muted-foreground" title={createdBy}>
-          {createdBy || "-"}
+        <span className="block max-w-60" title={createdBy}>
+          <IdentityCell
+            title={createdBy}
+            titleClassName="font-normal text-muted-foreground"
+            href={userDetailHref(createdBy)}
+          />
         </span>
       );
     },

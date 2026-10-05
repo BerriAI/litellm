@@ -1,0 +1,376 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "telemetry.sdk.language",
+            "value": {
+              "stringValue": "python"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "opentelemetry"
+            }
+          },
+          {
+            "key": "telemetry.sdk.version",
+            "value": {
+              "stringValue": "1.45.0"
+            }
+          },
+          {
+            "key": "service.instance.id",
+            "value": {
+              "stringValue": "3fa5ae56-aced-437e-94a5-54e1c31ed324"
+            }
+          },
+          {
+            "key": "telemetry.auto.version",
+            "value": {
+              "stringValue": "0.66b0"
+            }
+          },
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "unknown_service:python3"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "litellm.gateway.client"
+          },
+          "spans": [
+            {
+              "traceId": "951c8f6dbe7350974f563de3f282b3ac",
+              "spanId": "b6c34c8c5588fdf5",
+              "parentSpanId": "83101bb38bd133b9",
+              "name": "gateway.request",
+              "kind": 3,
+              "startTimeUnixNano": "1791061436352657000",
+              "endTimeUnixNano": "1791061437051540000",
+              "attributes": [
+                {
+                  "key": "litellm.gateway.attempt",
+                  "value": {
+                    "boolValue": true
+                  }
+                },
+                {
+                  "key": "http.request.method",
+                  "value": {
+                    "stringValue": "POST"
+                  }
+                },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "http://localhost:4002/v1/chat/completions"
+                  }
+                },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "localhost"
+                  }
+                },
+                {
+                  "key": "http.response.status_code",
+                  "value": {
+                    "intValue": "200"
+                  }
+                },
+                {
+                  "key": "litellm.call_id",
+                  "value": {
+                    "stringValue": "c958e5e9-a1d6-411c-b070-8f5aab06de79"
+                  }
+                },
+                {
+                  "key": "error.type",
+                  "value": {
+                    "stringValue": "ReadError"
+                  }
+                }
+              ],
+              "status": {
+                "code": 2
+              },
+              "flags": 256
+            }
+          ]
+        },
+        {
+          "scope": {
+            "name": "strands.telemetry.tracer"
+          },
+          "spans": [
+            {
+              "traceId": "951c8f6dbe7350974f563de3f282b3ac",
+              "spanId": "83101bb38bd133b9",
+              "parentSpanId": "f7402bfedd37a19b",
+              "name": "chat",
+              "kind": 1,
+              "startTimeUnixNano": "1791061436181224000",
+              "endTimeUnixNano": "1791061437055932000",
+              "attributes": [
+                {
+                  "key": "gen_ai.event.start_time",
+                  "value": {
+                    "stringValue": "2026-10-03T21:03:56.181226+00:00"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "strands-agents"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"Reply with one short sentence about agent traces.\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.event.end_time",
+                  "value": {
+                    "stringValue": "2026-10-03T21:03:57.051675+00:00"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791061437055924000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "httpx.ReadError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Client lost billed response"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 740, in terminal\n    async for event in stream_messages(\n    ...<12 lines>...\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/streaming.py\", line 572, in stream_messages\n    async for event in process_stream(chunks, start_time, cancel_signal):\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/streaming.py\", line 460, in process_stream\n    async for chunk in chunks:\n    ...<36 lines>...\n            handle_redact_content(chunk[\"redactContent\"], state)\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/models/openai.py\", line 749, in stream\n    async for event in response:\n    ...<36 lines>...\n            break\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 158, in __aiter__\n    async for item in self._iterator:\n        yield item\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 172, in __stream__\n    async for sse in iterator:\n    ...<44 lines>...\n            )\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 162, in _iter_events\n    async for sse in self._decoder.aiter_bytes(self.response.aiter_bytes()):\n        yield sse\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 319, in aiter_bytes\n    async for chunk in self._aiter_chunks(iterator):\n    ...<5 lines>...\n                yield sse\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 330, in _aiter_chunks\n    async for chunk in iterator:\n    ...<4 lines>...\n                data = b\"\"\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/httpx/_models.py\", line 997, in aiter_bytes\n    async for raw_bytes in self.aiter_raw():\n    ...<2 lines>...\n            yield chunk\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/httpx/_models.py\", line 1055, in aiter_raw\n    async for raw_stream_bytes in self.stream:\n    ...<2 lines>...\n            yield chunk\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/httpx/_client.py\", line 176, in __aiter__\n    async for chunk in self._stream:\n        yield chunk\n  File \"/home/user/dev/litellm-lens-example/shared/python/gateway_tracing/_transport.py\", line 28, in __aiter__\n    async for chunk in self._stream:\n        yield chunk\n  File \"/home/user/dev/litellm-lens-example/strands/validate_attempts.py\", line 32, in __aiter__\n    raise httpx.ReadError(\"Client lost billed response\")\nhttpx.ReadError: Client lost billed response\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "Client lost billed response",
+                "code": 2
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "951c8f6dbe7350974f563de3f282b3ac",
+              "spanId": "f7402bfedd37a19b",
+              "parentSpanId": "154ba09c7365c8eb",
+              "name": "execute_event_loop_cycle",
+              "kind": 1,
+              "startTimeUnixNano": "1791061436181105000",
+              "endTimeUnixNano": "1791061437057722000",
+              "attributes": [
+                {
+                  "key": "gen_ai.event.start_time",
+                  "value": {
+                    "stringValue": "2026-10-03T21:03:56.181106+00:00"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "execute_event_loop_cycle"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "strands-agents"
+                  }
+                },
+                {
+                  "key": "event_loop.cycle_id",
+                  "value": {
+                    "stringValue": "cee2236f-0324-4487-9cf0-8d7215b064bc"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"Reply with one short sentence about agent traces.\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.event.end_time",
+                  "value": {
+                    "stringValue": "2026-10-03T21:03:57.056063+00:00"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791061437057718000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "httpx.ReadError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Client lost billed response"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 302, in event_loop_cycle\n    async for model_event in model_events:\n        if not isinstance(model_event, ModelStopReason):\n            yield model_event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 691, in _handle_model_execution\n    raise e\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 609, in _handle_model_execution\n    async for event in agent._middleware_registry.invoke(\n    ...<5 lines>...\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/_middleware/registry.py\", line 167, in invoke\n    async for event in gen:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 740, in terminal\n    async for event in stream_messages(\n    ...<12 lines>...\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/streaming.py\", line 572, in stream_messages\n    async for event in process_stream(chunks, start_time, cancel_signal):\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/streaming.py\", line 460, in process_stream\n    async for chunk in chunks:\n    ...<36 lines>...\n            handle_redact_content(chunk[\"redactContent\"], state)\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/models/openai.py\", line 749, in stream\n    async for event in response:\n    ...<36 lines>...\n            break\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 158, in __aiter__\n    async for item in self._iterator:\n        yield item\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 172, in __stream__\n    async for sse in iterator:\n    ...<44 lines>...\n            )\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 162, in _iter_events\n    async for sse in self._decoder.aiter_bytes(self.response.aiter_bytes()):\n        yield sse\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 319, in aiter_bytes\n    async for chunk in self._aiter_chunks(iterator):\n    ...<5 lines>...\n                yield sse\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 330, in _aiter_chunks\n    async for chunk in iterator:\n    ...<4 lines>...\n                data = b\"\"\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/httpx/_models.py\", line 997, in aiter_bytes\n    async for raw_bytes in self.aiter_raw():\n    ...<2 lines>...\n            yield chunk\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/httpx/_models.py\", line 1055, in aiter_raw\n    async for raw_stream_bytes in self.stream:\n    ...<2 lines>...\n            yield chunk\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/httpx/_client.py\", line 176, in __aiter__\n    async for chunk in self._stream:\n        yield chunk\n  File \"/home/user/dev/litellm-lens-example/shared/python/gateway_tracing/_transport.py\", line 28, in __aiter__\n    async for chunk in self._stream:\n        yield chunk\n  File \"/home/user/dev/litellm-lens-example/strands/validate_attempts.py\", line 32, in __aiter__\n    raise httpx.ReadError(\"Client lost billed response\")\nhttpx.ReadError: Client lost billed response\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "Client lost billed response",
+                "code": 2
+              },
+              "flags": 256
+            },
+            {
+              "traceId": "951c8f6dbe7350974f563de3f282b3ac",
+              "spanId": "154ba09c7365c8eb",
+              "name": "invoke_agent research_agent",
+              "kind": 1,
+              "startTimeUnixNano": "1791061436180510000",
+              "endTimeUnixNano": "1791061437060237000",
+              "attributes": [
+                {
+                  "key": "gen_ai.event.start_time",
+                  "value": {
+                    "stringValue": "2026-10-03T21:03:56.180517+00:00"
+                  }
+                },
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "invoke_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.provider.name",
+                  "value": {
+                    "stringValue": "strands-agents"
+                  }
+                },
+                {
+                  "key": "gen_ai.agent.name",
+                  "value": {
+                    "stringValue": "research_agent"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai/gpt-6-luna"
+                  }
+                },
+                {
+                  "key": "gen_ai.input.messages",
+                  "value": {
+                    "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"Reply with one short sentence about agent traces.\"}]}]"
+                  }
+                },
+                {
+                  "key": "gen_ai.event.end_time",
+                  "value": {
+                    "stringValue": "2026-10-03T21:03:57.057835+00:00"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1791061437060235000",
+                  "name": "exception",
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "httpx.ReadError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "Client lost billed response"
+                      }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": {
+                        "stringValue": "Traceback (most recent call last):\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/agent/agent.py\", line 1398, in stream_async\n    async for event in events:\n    ...<8 lines>...\n            yield as_dict\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/agent/agent.py\", line 1542, in _run_loop\n    async for event in self._middleware_registry.invoke(\n    ...<11 lines>...\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/_middleware/registry.py\", line 167, in invoke\n    async for event in gen:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/agent/agent.py\", line 1697, in terminal\n    async for event in events:\n    ...<17 lines>...\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/agent/agent.py\", line 1752, in _execute_event_loop_cycle\n    async for event in events:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 302, in event_loop_cycle\n    async for model_event in model_events:\n        if not isinstance(model_event, ModelStopReason):\n            yield model_event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 691, in _handle_model_execution\n    raise e\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 609, in _handle_model_execution\n    async for event in agent._middleware_registry.invoke(\n    ...<5 lines>...\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/_middleware/registry.py\", line 167, in invoke\n    async for event in gen:\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/event_loop.py\", line 740, in terminal\n    async for event in stream_messages(\n    ...<12 lines>...\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/streaming.py\", line 572, in stream_messages\n    async for event in process_stream(chunks, start_time, cancel_signal):\n        yield event\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/event_loop/streaming.py\", line 460, in process_stream\n    async for chunk in chunks:\n    ...<36 lines>...\n            handle_redact_content(chunk[\"redactContent\"], state)\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/strands/models/openai.py\", line 749, in stream\n    async for event in response:\n    ...<36 lines>...\n            break\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 158, in __aiter__\n    async for item in self._iterator:\n        yield item\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 172, in __stream__\n    async for sse in iterator:\n    ...<44 lines>...\n            )\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 162, in _iter_events\n    async for sse in self._decoder.aiter_bytes(self.response.aiter_bytes()):\n        yield sse\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 319, in aiter_bytes\n    async for chunk in self._aiter_chunks(iterator):\n    ...<5 lines>...\n                yield sse\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/openai/_streaming.py\", line 330, in _aiter_chunks\n    async for chunk in iterator:\n    ...<4 lines>...\n                data = b\"\"\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/httpx/_models.py\", line 997, in aiter_bytes\n    async for raw_bytes in self.aiter_raw():\n    ...<2 lines>...\n            yield chunk\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/httpx/_models.py\", line 1055, in aiter_raw\n    async for raw_stream_bytes in self.stream:\n    ...<2 lines>...\n            yield chunk\n  File \"/home/user/dev/litellm-lens-example/strands/.venv/lib/python3.13/site-packages/httpx/_client.py\", line 176, in __aiter__\n    async for chunk in self._stream:\n        yield chunk\n  File \"/home/user/dev/litellm-lens-example/shared/python/gateway_tracing/_transport.py\", line 28, in __aiter__\n    async for chunk in self._stream:\n        yield chunk\n  File \"/home/user/dev/litellm-lens-example/strands/validate_attempts.py\", line 32, in __aiter__\n    raise httpx.ReadError(\"Client lost billed response\")\nhttpx.ReadError: Client lost billed response\n"
+                      }
+                    },
+                    {
+                      "key": "exception.escaped",
+                      "value": {
+                        "stringValue": "False"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "message": "Client lost billed response",
+                "code": 2
+              },
+              "flags": 256
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,29 +1,26 @@
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
-import { PaginationState } from "@tanstack/react-table";
 import { KeyIcon, SearchIcon, X } from "lucide-react";
-import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { ProjectKeysTable } from "./ProjectKeysTable";
+import { useProjectKeysTableState } from "./useProjectsUrlState";
 
 interface ProjectKeysSectionProps {
   projectId: string;
 }
 
-const PAGE_SIZE = 5;
-
 export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
-  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
-  const [keyAlias, setKeyAlias] = useState<string>("");
+  const {
+    search: keyAlias,
+    setSearch: setKeyAlias,
+    pagination,
+    onPaginationChange: setPagination,
+  } = useProjectKeysTableState();
 
-  const { data, isLoading } = useKeys(pagination.pageIndex + 1, pagination.pageSize, {
+  const { data, isLoading, isError } = useKeys(pagination.pageIndex + 1, pagination.pageSize, {
     projectID: projectId,
     selectedKeyAlias: keyAlias || null,
   });
-
-  useEffect(() => {
-    setPagination((current) => ({ ...current, pageIndex: 0 }));
-  }, [keyAlias]);
 
   const keys = data?.keys ?? [];
   const totalCount = data?.total_count ?? 0;
@@ -60,6 +57,7 @@ export function ProjectKeysSection({ projectId }: ProjectKeysSectionProps) {
           keys={keys}
           totalCount={totalCount}
           isLoading={isLoading}
+          isError={isError}
           pagination={pagination}
           onPaginationChange={setPagination}
         />

@@ -6,6 +6,16 @@ import litellm
 from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 
 
+_LITELLM_LOGO_IMAGE_URL = (
+    "https://cdn.jsdelivr.net/gh/BerriAI/litellm@d769e81c90d453240c61fc572cdb27fae06a89d0/"
+    "ui/litellm-dashboard/public/assets/logos/litellm_logo.jpg"
+)
+_AWSMP_LOGO_IMAGE_URL = (
+    "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/"
+    "c233c9ade2ccb5491072ae232c814942.png"
+)
+
+
 @pytest.mark.flaky(retries=3, delay=5)
 class TestBedrockInvokeClaudeJson(BaseLLMChatTest):
     def get_base_completion_call_args(self) -> dict:
@@ -18,8 +28,27 @@ class TestBedrockInvokeClaudeJson(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
+    @pytest.mark.parametrize(
+        "image_url, detail",
+        [
+            (_LITELLM_LOGO_IMAGE_URL, None),
+            (_LITELLM_LOGO_IMAGE_URL, "low"),
+            (_LITELLM_LOGO_IMAGE_URL, "high"),
+            (_AWSMP_LOGO_IMAGE_URL, "low"),
+            (_AWSMP_LOGO_IMAGE_URL, "high"),
+        ],
+    )
+    @pytest.mark.flaky(retries=4, delay=2)
+    def test_image_url(self, image_url, detail):
+        super().test_image_url(detail=detail, image_url=image_url)
+    test_content_list_handling = None
+    test_image_url_string = None
+    test_pdf_handling = None
+
 
 class TestBedrockInvokeNovaJson(BaseLLMChatTest):
+    test_json_response_format = None
+
     def get_base_completion_call_args(self) -> dict:
         return {
             "model": "bedrock/invoke/us.amazon.nova-micro-v1:0",

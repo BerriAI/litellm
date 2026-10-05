@@ -14,7 +14,7 @@ try:
 except ImportError:
     GOOGLE_GENAI_SDK_AVAILABLE = False
 
-MASTER_KEY = "sk-1234"
+MASTER_KEY = "sk-unified-google-tests-4f9b2c7d8e1a"
 PROMPT = "Reply with only the single word: pong"
 
 

@@ -41,6 +41,29 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return headers, api_base
 
+    async def avalidate_anthropic_messages_environment(
+        self,
+        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        model: str,
+        messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        """Async counterpart used by the async handler. The default delegates to the
+        sync implementation; providers whose sync path can block the event loop
+        (e.g. a WIF token exchange) override this."""
+        return self.validate_anthropic_messages_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
+
     @abstractmethod
     def get_complete_url(
         self,
@@ -127,6 +150,9 @@ class BaseAnthropicMessagesConfig(ABC):
         return True so those requests flow through untouched.
         """
         return True
+
+    def uses_get_llm_provider_api_base(self) -> bool:
+        return False
 
     def get_async_streaming_response_iterator(
         self,

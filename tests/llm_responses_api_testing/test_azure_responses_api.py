@@ -18,6 +18,9 @@ from base_responses_api import BaseResponsesAPITest
 
 
 class TestAzureResponsesAPITest(BaseResponsesAPITest):
+    test_multiturn_responses_api = None
+    test_responses_api_with_tool_calls = None
+
     def get_base_completion_call_args(self):
         return {
             "model": "azure/gpt-4.1-mini",

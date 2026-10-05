@@ -17,7 +17,7 @@ import pytest
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import require_successful_call, unwrap
 from lifecycle import ResourceManager
-from models import KeyGenerateBody, SpendLogRow
+from models import ChatResponse, KeyGenerateBody, SpendLogRow
 from passthrough_client import (
     AnthropicTool,
     GeminiFunctionDeclaration,
@@ -341,6 +341,44 @@ class TestOpenAIPassthroughSpend:
         assert (row.prompt_tokens or 0) > 0, (
             f"the embeddings row logged no prompt tokens, so whatever cost it carries "
             f"was not computed from the real usage: {row}"
+        )
+
+
+class TestOpenAIProviderPrefixChat:
+    """OpenAI-format chat through the raw `/openai/{endpoint}` passthrough (LIT-4752).
+
+    The body goes to OpenAI untranslated with the proxy's own OPENAI_API_KEY swapped
+    in, so the customer gets OpenAI's real completion back, and the gateway must
+    still write a costed pass_through_endpoint row for it.
+    """
+
+    @pytest.mark.covers("llm.chat_completions.openai.passthrough.nonstream.cost_logged")
+    def test_openai_prefix_chat_returns_completion_and_logs_its_cost(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
+        result = client.openai_chat(scoped_key, CHEAP_OPENAI_MODEL, f"Say hi in one word. {unique_marker()}")
+        require_successful_call(result)
+
+        completion = ChatResponse.model_validate_json(result.body)
+        assert completion.id, f"/openai/v1/chat/completions relayed no completion id: {result.body[:300]}"
+        content = (
+            completion.choices[0].message.content
+            if completion.choices and completion.choices[0].message
+            else None
+        )
+        assert content and content.strip(), (
+            f"/openai/v1/chat/completions relayed an empty completion: {result.body[:300]}"
+        )
+        assert completion.usage is not None, f"the completion carried no usage to price from: {completion}"
+
+        row = _fetch_cost_breakdown(client, completion.id)
+        assert row.prompt_tokens == completion.usage.prompt_tokens, (
+            f"logged {row.prompt_tokens} prompt tokens, the completion the customer read "
+            f"reported {completion.usage.prompt_tokens}"
+        )
+        assert row.completion_tokens == completion.usage.completion_tokens, (
+            f"logged {row.completion_tokens} completion tokens, the completion the customer read "
+            f"reported {completion.usage.completion_tokens}"
         )
 
 

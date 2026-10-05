@@ -102,6 +102,13 @@ env    = "stage"
 #   }
 # }
 
+# ---------- Prometheus metrics sidecar ----------
+# Serve /metrics from a sidecar in the gateway task instead of the inference
+# workers. The port is not behind the ALB and has no auth: open it only to
+# your Prometheus subnets.
+# gateway_metrics_port         = 4001
+# gateway_metrics_scrape_cidrs = ["10.0.0.0/16"]
+
 # ---------- Extra env / secrets ----------
 # Plain-text env vars (non-sensitive). Land directly in the ECS task def.
 # gateway_extra_env = {

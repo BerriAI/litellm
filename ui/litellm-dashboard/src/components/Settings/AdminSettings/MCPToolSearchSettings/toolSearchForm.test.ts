@@ -51,6 +51,7 @@ describe("parseCoreTools", () => {
 describe("formToPayload", () => {
   it("sends null for a cleared embedding model so the proxy returns to keyword matching", () => {
     expect(formToPayload({ ...DEFAULT_FORM_VALUES, embedding_model: "  " })).toEqual(KEYWORD_PAYLOAD);
+    expect(formToPayload({ ...DEFAULT_FORM_VALUES, embedding_model: null })).toEqual(KEYWORD_PAYLOAD);
   });
 
   it("clamps top_k into the range the proxy accepts and lists core tools", () => {

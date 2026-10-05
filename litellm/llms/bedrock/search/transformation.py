@@ -39,7 +39,6 @@ from typing import Final
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
@@ -179,7 +178,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         Authentication itself happens in sign_request(): bearer token for
         CUSTOM_JWT gateways, AWS SigV4 for AWS_IAM gateways.
         """
-        return {  # mutable-ok: httpx request headers are a dict
+        return {
             **headers,
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
@@ -235,13 +234,13 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
                 "Other gateway tools cannot be invoked through this provider."
             )
 
-        return {  # mutable-ok: JSON-RPC request bodies are JSON objects
+        return {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {  # mutable-ok: JSON-RPC request bodies are JSON objects
+            "params": {
                 "name": tool_name,
-                "arguments": {  # mutable-ok: JSON-RPC request bodies are JSON objects
+                "arguments": {
                     "query": joined_query[:AGENTCORE_MAX_QUERY_LENGTH],
                     "maxResults": optional_params.get("max_results", AGENTCORE_DEFAULT_MAX_RESULTS),
                 },
@@ -287,7 +286,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             default_api_base=api_base if gateway_host_match else None,
         )
         if bearer_token:
-            bearer_headers: Final = {  # mutable-ok: httpx request headers are a dict
+            bearer_headers: Final = {
                 **headers,
                 "Authorization": f"Bearer {bearer_token}",
             }
@@ -303,7 +302,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         signing_params: Final = (
             optional_params
             if optional_params.get("aws_region_name") is not None
-            else {  # mutable-ok: BaseAWSLLM._sign_request takes optional params as a dict
+            else {
                 **optional_params,
                 "aws_region_name": self._signing_region(api_base),
             }
@@ -380,6 +379,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             raise BedrockError(
                 status_code=raw_response.status_code if raw_response.status_code >= 400 else 502,
                 message=f"AgentCore gateway MCP error: {error}",
+                headers=raw_response.headers,
             )
 
         # A failed tools/call is reported in-band, as HTTP 200 with result.isError
@@ -389,6 +389,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             raise BedrockError(
                 status_code=raw_response.status_code if raw_response.status_code >= 400 else 502,
                 message=f"AgentCore web search tool error: {self._tool_error_message(response_json)}",
+                headers=raw_response.headers,
             )
 
         text_items: Final = tuple(
@@ -397,7 +398,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         structured: Final = result.get("structuredContent") if isinstance(result, Mapping) else None
         items: Final = text_items or _result_items(structured)
 
-        results: Final = [_to_search_result(item) for item in items]  # mutable-ok: pydantic list field
+        results: Final = [_to_search_result(item) for item in items]
 
         return SearchResponse(results=results, object="search")
 
@@ -440,6 +441,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         raise BedrockError(
             status_code=502,
             message=f"AgentCore gateway returned SSE without a JSON data frame: {text[:200]}",
+            headers=raw_response.headers,
         )
 
     def get_error_class(
@@ -448,7 +450,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         status_code: int,
         headers: dict,  # mutable-ok: BaseSearchConfig.get_error_class takes the response headers as a dict
     ) -> Exception:
-        return BaseLLMException(
+        return BedrockError(
             status_code=status_code,
             message=error_message,
             headers=headers,

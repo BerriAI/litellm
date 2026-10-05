@@ -23,7 +23,7 @@ def get_azure_ai_image_edit_config(model: str) -> BaseImageEditConfig:
     """
     Get the appropriate image edit config for an Azure AI model.
 
-    - MAI models use /mai/v1/images/edits with multipart form data and size
+    - MAI models use /mai/v1/images/edits with multipart form data
     - FLUX 2 models use JSON with base64 image
     - FLUX 1 models use multipart/form-data
     """

@@ -58,7 +58,7 @@ class TestNimbleSearch(BaseSearchTest):
 class TestNimbleSearchTransformation:
     """
     Full-stack tests through `litellm.search` / `litellm.asearch` with the HTTP layer mocked.
-    Transformation details are unit-tested in tests/test_litellm/llms/nimble/search/.
+    Transformation details are unit-tested in tests/unit/llms/nimble/search/.
     """
 
     @pytest.fixture(autouse=True)

@@ -15,9 +15,14 @@ if TYPE_CHECKING:
 class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
     """Repository for object permission database operations."""
 
+    def __init__(self, prisma_client: object, *, use_writer: bool = False) -> None:
+        super().__init__(prisma_client)
+        self._use_writer = use_writer
+
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_ObjectPermissionTable"]:
-        return self.prisma_client.db.litellm_objectpermissiontable
+        database: Final = self.prisma_client.writer_db if self._use_writer else self.prisma_client.db
+        return database.litellm_objectpermissiontable
 
     @property
     def model_class(self) -> type[LiteLLM_ObjectPermissionTable]:
@@ -40,6 +45,7 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
         blocked_tools: list[str] | None = None,
         mcp_toolsets: list[str] | None = None,
         search_tools: list[str] | None = None,
+        skills: list[str] | None = None,
     ) -> LiteLLM_ObjectPermissionTable:
         """Create a new object permission record."""
         data: Final[dict[str, Any]] = {}
@@ -63,6 +69,8 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
             data["mcp_toolsets"] = mcp_toolsets
         if search_tools is not None:
             data["search_tools"] = search_tools
+        if skills is not None:
+            data["skills"] = skills
 
         return await self.create(data)
 
@@ -79,6 +87,7 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
         blocked_tools: list[str] | None = None,
         mcp_toolsets: list[str] | None = None,
         search_tools: list[str] | None = None,
+        skills: list[str] | None = None,
     ) -> LiteLLM_ObjectPermissionTable | None:
         """Update an object permission record."""
         data: Final[dict[str, Any]] = {}
@@ -102,6 +111,8 @@ class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
             data["mcp_toolsets"] = mcp_toolsets
         if search_tools is not None:
             data["search_tools"] = search_tools
+        if skills is not None:
+            data["skills"] = skills
 
         return await self.update(object_permission_id, data, id_field="object_permission_id")
 

@@ -474,6 +474,26 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     tags: ["Content Moderation", "Prompt Injection", "PII", "Policy"],
     providerKey: "Alice",
   },
+  {
+    id: "agent_365",
+    name: "Microsoft Agent 365",
+    description:
+      "Microsoft Agent 365 tool-call governance: Defender threat evaluation and observability for MCP tool calls, acting on behalf of the signed-in user",
+    category: "partner",
+    logo: guardrailLogoMap["Microsoft Agent 365"],
+    tags: ["Agentic", "MCP", "Tool Misuse", "Observability"],
+    providerKey: "Agent365",
+  },
+  {
+    id: "conduct",
+    name: "Conduct Guard",
+    description:
+      "Conduct Guard evaluates prompts against workspace rules before the model call: prompt injection, PII, and custom policies, with block, warning, and approval verdicts.",
+    category: "partner",
+    logo: guardrailLogoMap["Conduct Guard"],
+    tags: ["Security", "Prompt Injection", "PII", "Policy"],
+    providerKey: "Conduct",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];

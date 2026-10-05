@@ -8,6 +8,7 @@ export interface AlertingObject {
   // every row to render as "Success".
   type?: "success" | "failure" | "success_and_failure";
   variables: AlertingVariables;
+  read_only?: boolean;
 }
 
 export interface AlertingVariables {

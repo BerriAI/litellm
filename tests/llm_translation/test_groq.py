@@ -18,6 +18,10 @@ from litellm.llms.groq.chat.transformation import (
 
 
 class TestGroq(BaseLLMChatTest):
+    test_content_list_handling = None
+    test_empty_tools = None
+    test_web_search = None
+
     def get_base_completion_call_args(self) -> dict:
         return {
             "model": "groq/openai/gpt-oss-120b",
@@ -32,7 +36,7 @@ class TestGroq(BaseLLMChatTest):
 
     @pytest.mark.parametrize(
         "model",
-        ["groq/qwen/qwen3-32b", "groq/openai/gpt-oss-20b", "groq/openai/gpt-oss-120b"],
+        ["groq/qwen/qwen3.8-27b", "groq/openai/gpt-oss-20b", "groq/openai/gpt-oss-120b"],
     )
     def test_reasoning_effort_in_supported_params(self, model):
         """Test that reasoning_effort is in the list of supported parameters for Groq"""

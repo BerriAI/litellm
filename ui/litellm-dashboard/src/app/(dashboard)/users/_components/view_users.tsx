@@ -295,7 +295,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     <UsersTable
       data={users}
       rowCount={totalUserCount}
-      isLoading={userListQuery.isLoading}
+      isLoading={userListQuery.isLoading || userListQuery.isPlaceholderData}
       possibleUIRoles={possibleUIRoles}
       teams={teams}
       sorting={sorting}
@@ -412,7 +412,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
           {
             label: "Global Proxy Role",
             value:
-              (userToDelete && possibleUIRoles?.[userToDelete.user_role]?.ui_label) || userToDelete?.user_role || "-",
+              (userToDelete?.user_role && possibleUIRoles?.[userToDelete.user_role]?.ui_label) ||
+              userToDelete?.user_role ||
+              "-",
           },
           { label: "Total Spend (USD)", value: userToDelete?.spend?.toFixed(2) },
         ]}

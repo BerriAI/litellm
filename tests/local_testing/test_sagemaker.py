@@ -55,7 +55,7 @@ async def test_completion_sagemaker(sync_mode):
                 ],
                 temperature=0.2,
                 max_tokens=80,
-                input_cost_per_second=0.000420,
+                cost_per_second=0.000420,
             )
         else:
             response = await litellm.acompletion(
@@ -65,7 +65,7 @@ async def test_completion_sagemaker(sync_mode):
                 ],
                 temperature=0.2,
                 max_tokens=80,
-                input_cost_per_second=0.000420,
+                cost_per_second=0.000420,
             )
         # Add any assertions here to check the response
         print(response)
@@ -169,7 +169,7 @@ async def test_completion_sagemaker_stream(sync_mode, model):
                 temperature=0.2,
                 stream=True,
                 max_tokens=80,
-                input_cost_per_second=0.000420,
+                cost_per_second=0.000420,
             )
 
             for idx, chunk in enumerate(response):
@@ -187,7 +187,7 @@ async def test_completion_sagemaker_stream(sync_mode, model):
                 stream=True,
                 temperature=0.2,
                 max_tokens=80,
-                input_cost_per_second=0.000420,
+                cost_per_second=0.000420,
             )
 
             print("streaming response")
@@ -280,7 +280,7 @@ async def test_acompletion_sagemaker_non_stream():
             ],
             temperature=0.2,
             max_tokens=80,
-            input_cost_per_second=0.000420,
+            cost_per_second=0.000420,
         )
 
         # Print what was called on the mock
@@ -340,7 +340,7 @@ async def test_completion_sagemaker_non_stream():
             ],
             temperature=0.2,
             max_tokens=80,
-            input_cost_per_second=0.000420,
+            cost_per_second=0.000420,
         )
 
         # Print what was called on the mock
@@ -457,7 +457,7 @@ async def test_completion_sagemaker_non_stream_with_aws_params():
             ],
             temperature=0.2,
             max_tokens=80,
-            input_cost_per_second=0.000420,
+            cost_per_second=0.000420,
             aws_access_key_id="gm",
             aws_secret_access_key="s",
             aws_region_name="us-west-5",

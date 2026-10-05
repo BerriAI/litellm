@@ -1,8 +1,9 @@
 #### OCR Endpoints #####
 
+import io
 import json
 from collections.abc import Mapping
-from typing import Any, Final, cast
+from typing import Final, cast
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
@@ -15,40 +16,35 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRResponse,
     parse_ocr_request_format,
 )
-from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
 router: Final = APIRouter()
+_MAX_FILE_BYTES: Final = 50 * 1024 * 1024
+
+
+class _NamedUpload(io.BytesIO):
+    name: str | None
+
+    def __init__(self, content: bytes, name: str | None) -> None:
+        super().__init__(content)
+        self.name = name
 
 
 def _build_document_from_upload(
     file_content: bytes,
     filename: str | None,
     content_type: str | None,
-) -> dict[str, str]:
-    """
-    Convert uploaded file bytes into a Mistral-format document dict with base64 data URI.
-
-    Delegates to convert_file_document_to_url_document after resolving MIME type
-    from the upload's content_type header or filename.
-    """
-    mime_type = content_type.split(";")[0].strip() if content_type else None
-    if not mime_type or mime_type == "application/octet-stream":
-        if filename:
-            mime_type = get_mime_type(filename)
-
-    return convert_file_document_to_url_document(
-        {
-            "type": "file",
-            "file": file_content,
-            "mime_type": mime_type or "application/octet-stream",
-        }
-    )
+) -> dict[str, object]:
+    supplied_mime: Final = content_type.split(";")[0].strip() if content_type else None
+    upload: Final = _NamedUpload(file_content, filename)
+    if supplied_mime and supplied_mime != "application/octet-stream":
+        return {"type": "file", "file": upload, "mime_type": supplied_mime}
+    return {"type": "file", "file": upload}
 
 
-def _with_request_format(data: Mapping[str, Any], request: Request) -> Mapping[str, Any]:
+def _with_request_format(data: Mapping[str, object], request: Request) -> Mapping[str, object]:
     """
     Resolve the requested response format from the body or the `x-req-format` header.
 
@@ -90,7 +86,7 @@ def _native_response(response: object, fastapi_response: Response) -> Response |
     )
 
 
-async def _parse_multipart_form(request: Request) -> dict[str, Any]:
+async def _parse_multipart_form(request: Request) -> dict[str, object]:
     """
     Extract OCR data from a multipart form request.
 
@@ -120,9 +116,11 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
 
     # Seek to start in case the file was already partially read by middleware
     await uploaded_file.seek(0)
-    file_content: Final = await uploaded_file.read()
+    file_content: Final = await uploaded_file.read(_MAX_FILE_BYTES + 1)
     if not file_content:
         raise ValueError("Uploaded file is empty")
+    if len(file_content) > _MAX_FILE_BYTES:
+        raise ValueError("OCR file exceeds the size limit")
 
     document: Final = _build_document_from_upload(
         file_content=file_content,
@@ -130,7 +128,7 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
         content_type=uploaded_file.content_type,
     )
 
-    data: Final[dict[str, Any]] = {"document": document}
+    data: Final[dict[str, object]] = {"document": document}
 
     for field_name, field_value in form.items():
         if field_name in ("file", "document"):
@@ -154,12 +152,12 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
     return data
 
 
-async def _parse_ocr_request(request: Request) -> Mapping[str, Any]:
+async def _parse_ocr_request(request: Request) -> Mapping[str, object]:
     """Parse an OCR request and apply the `x-req-format` header, if any."""
     return _with_request_format(await _parse_ocr_request_body(request), request)
 
 
-async def _parse_ocr_request_body(request: Request) -> dict[str, Any]:
+async def _parse_ocr_request_body(request: Request) -> dict[str, object]:
     """
     Parse an OCR request, supporting both JSON and multipart form data.
 
@@ -320,7 +318,7 @@ async def ocr(
         # Process request using ProxyBaseLLMRequestProcessing
         processor = ProxyBaseLLMRequestProcessing(data=data)
 
-        response: Final = await processor.base_process_llm_request(
+        response: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,

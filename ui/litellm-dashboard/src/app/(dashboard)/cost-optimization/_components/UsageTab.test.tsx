@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolSpendResponse } from "@/components/networking";
 
+import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 
 const mockGetToolSpend = vi.fn();
@@ -119,11 +120,16 @@ const renderWith = (results: DailyData[], options: RenderOptions = {}) => {
         dateValue: { from, to },
         onDateChange: vi.fn(),
         results,
+        metadata: EMPTY_DAILY_ACTIVITY_METADATA,
         loading: false,
-        isFetchingMore: false,
-        progress: { currentPage: 1, totalPages: 1 },
-        cancelled: false,
-        cancel: vi.fn(),
+        failed: false,
+        scope: {
+          accessToken: "test-token",
+          startTime: from,
+          endTime: to,
+          userId: null,
+          apiKey: null,
+        },
       }}
     />,
   );

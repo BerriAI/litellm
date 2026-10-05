@@ -123,6 +123,7 @@ class AporiaGuardrail(CustomGuardrail):
                 "X-APORIA-API-KEY": self.aporia_api_key,
                 "Content-Type": "application/json",
             },
+            timeout=self.timeout,
         )
         verbose_proxy_logger.debug("Aporia AI response: %s", response.text)
         if response.status_code == 200:

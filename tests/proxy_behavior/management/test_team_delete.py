@@ -6,7 +6,7 @@ from .conftest import create_scratch_team
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-# POST /team/delete runs per-team _verify_team_access. The request carries the
+# POST /team/delete asks TeamAccess.allows per team. The request carries the
 # team's organization_id so an org admin of that org clears the management-
 # route gate; a team admin is an INTERNAL_USER on a non-internal_user route,
 # so a team admin never reaches the handler. Only PROXY_ADMIN and an org admin

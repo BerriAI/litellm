@@ -19,3 +19,4 @@ class GenerateContentCompletionKwargs(TypedDict, total=False):
     stream: bool
     metadata: dict[str, object]
     extra_headers: dict[str, str] | None
+    proxy_server_request: dict[str, object] | None

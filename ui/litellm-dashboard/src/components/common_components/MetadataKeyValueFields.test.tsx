@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import MetadataKeyValueFields, {
@@ -51,6 +51,12 @@ describe("metadataObjectToPairs", () => {
     expect(
       metadataObjectToPairs({ department: "research", logging: [{ callback_name: "langfuse" }] }, new Set(["logging"])),
     ).toEqual([{ key: "department", value: "research" }]);
+  });
+
+  it("drops an empty key, which the form can never submit, so an API-written one does not block saving", () => {
+    expect(metadataObjectToPairs({ "": { displayName: "okta-push-group" }, scim_managed: true })).toEqual([
+      { key: "scim_managed", value: "true" },
+    ]);
   });
 });
 

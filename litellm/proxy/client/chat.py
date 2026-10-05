@@ -73,7 +73,7 @@ class ChatClient:
         url: Final = f"{self._base_url}/chat/completions"
 
         # Build request data with required fields
-        data: Final[dict[str, Any]] = {"model": model, "messages": messages}
+        data: Final[dict[str, object]] = {"model": model, "messages": messages}
 
         # Add optional parameters if provided
         if temperature is not None:
@@ -143,7 +143,7 @@ class ChatClient:
         url: Final = f"{self._base_url}/chat/completions"
 
         # Build request data with required fields
-        data: Final[dict[str, Any]] = {"model": model, "messages": messages, "stream": True}
+        data: Final[dict[str, object]] = {"model": model, "messages": messages, "stream": True}
 
         # Add optional parameters if provided
         if temperature is not None:

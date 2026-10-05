@@ -16,13 +16,13 @@ import {
   useComboboxAnchor,
 } from "@/components/ui/combobox";
 import EntityUsageExportModal from "./EntityUsageExportModal";
-import type { EntitySpendData, EntityType } from "./types";
+import type { EntityType, ExportFormat, ExportType } from "./types";
 import type { Team } from "@/components/key_team_helpers/key_list";
 
 interface UsageExportHeaderProps {
   dateValue: DateRangePickerValue;
   entityType: EntityType;
-  spendData: EntitySpendData;
+  onExport: (exportType: ExportType, format: ExportFormat) => Promise<Blob>;
   // Optional filter props
   showFilters?: boolean;
   filterLabel?: string;
@@ -39,7 +39,7 @@ interface UsageExportHeaderProps {
 const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   dateValue,
   entityType,
-  spendData,
+  onExport,
   showFilters = false,
   filterLabel,
   filterPlaceholder,
@@ -133,7 +133,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
         isOpen={isExportModalOpen}
         onClose={() => setIsExportModalOpen(false)}
         entityType={entityType}
-        spendData={spendData}
+        onExport={onExport}
         dateRange={dateValue}
         selectedFilters={selectedFilters}
         customTitle={customTitle}

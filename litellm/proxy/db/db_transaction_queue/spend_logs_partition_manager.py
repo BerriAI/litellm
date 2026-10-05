@@ -16,15 +16,23 @@ keeps the batched-DELETE path, so existing deployments are untouched.
 import re
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final, TypeAlias
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    TypeAlias,
+    cast,  # noqa: TID251  # db.tx is reached through untyped __getattr__ delegation
+)
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     SPEND_LOG_PARTITION_INTERVAL,
     SPEND_LOG_PARTITION_PRECREATE_AHEAD,
 )
+from litellm.proxy.db.db_span import db_span
 
 if TYPE_CHECKING:
+    from prisma.client import TransactionManager
+
     from litellm.proxy.utils import PrismaClient
 
 SPEND_LOGS_TABLE: Final = "LiteLLM_SpendLogs"
@@ -116,6 +124,21 @@ def select_partitions_to_drop(partitions: list[tuple[str, datetime | None]], cut
     return [name for name, upper in partitions if upper is not None and upper <= cutoff]
 
 
+_TX_COMMIT_SLACK: Final = timedelta(seconds=5)
+
+
+def _bounded_tx(prisma_client: "PrismaClient", timeout_ms: int) -> "TransactionManager":
+    """
+    Open an interactive transaction that outlives the statement bound it
+    carries. prisma's default 5s transaction timeout would close it mid
+    lock-wait, after which the engine answers the next call with a 422.
+    """
+    return cast(  # cast-ok: PrismaWrapper delegates tx via __getattr__ (untyped)
+        "TransactionManager",
+        prisma_client.db.tx(timeout=timedelta(milliseconds=timeout_ms) + _TX_COMMIT_SLACK),
+    )
+
+
 class SpendLogsPartitionManager:
     def __init__(
         self,
@@ -137,7 +160,10 @@ class SpendLogsPartitionManager:
         if budget_ms is None:
             return False
         try:
-            async with prisma_client.db.tx() as tx:
+            async with (
+                db_span("check_spend_log_partitioning", "LiteLLM_SpendLogs"),
+                _bounded_tx(prisma_client, budget_ms) as tx,
+            ):
                 await tx.execute_raw(f"SET LOCAL statement_timeout = {budget_ms}")
                 rows: Final = await tx.query_raw(
                     """
@@ -172,7 +198,10 @@ class SpendLogsPartitionManager:
         wait for the lock and statement_timeout bounds the work itself, so a
         partition this run cannot get is simply left for the next one.
         """
-        async with prisma_client.db.tx() as tx:
+        async with (
+            db_span("create_spend_log_partition", "LiteLLM_SpendLogs"),
+            _bounded_tx(prisma_client, timeout_ms) as tx,
+        ):
             await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
             await tx.execute_raw(f"SET LOCAL lock_timeout = {timeout_ms}")
             await tx.execute_raw(statement)
@@ -209,7 +238,10 @@ class SpendLogsPartitionManager:
     async def _list_partitions(
         self, prisma_client: "PrismaClient", timeout_ms: int
     ) -> list[tuple[str, datetime | None]]:
-        async with prisma_client.db.tx() as tx:
+        async with (
+            db_span("list_spend_log_partitions", "LiteLLM_SpendLogs"),
+            _bounded_tx(prisma_client, timeout_ms) as tx,
+        ):
             await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
             rows: Final = await tx.query_raw(
                 """

@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { keyDeleteCall, keyUpdateCall } from "../networking";
 import { QueryClient } from "@tanstack/react-query";
-import KeyInfoView from "./key_info_view";
+import KeyInfoView, { needsLifetimeSpendBackfill } from "./key_info_view";
 
 const editViewMocks = vi.hoisted(() => ({
   onSubmit: undefined as ((v: Record<string, any>) => Promise<void>) | undefined,
@@ -24,6 +24,30 @@ vi.mock("./key_edit_view", () => ({
     editViewMocks.onSubmit = onSubmit;
     return <div data-testid="key-edit-view-stub" />;
   },
+}));
+
+import type { ActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
+
+const AnalyticsDateControl = ({ activity, keyToken }: { activity: ActivityDateRange; keyToken: string }) => (
+  <div>
+    <span data-testid="key-auto-router-usage">{keyToken}</span>
+    <output aria-label="Selected dates">{activity.dateValue.from?.toISOString()}</output>
+    {[1, 10].map((day) => (
+      <button
+        key={day}
+        onClick={() => activity.onDateChange({ from: new Date(Date.UTC(2026, 7, day)), to: new Date(2026, 7, 20) })}
+      >
+        Select August {day}
+      </button>
+    ))}
+  </div>
+);
+
+vi.mock("./KeyAutoRouterUsageTab", () => ({
+  default: (props: React.ComponentProps<typeof AnalyticsDateControl>) => <AnalyticsDateControl {...props} />,
+}));
+vi.mock("./KeySavingsTab", () => ({
+  default: (props: React.ComponentProps<typeof AnalyticsDateControl>) => <AnalyticsDateControl {...props} />,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
@@ -95,6 +119,7 @@ describe("KeyInfoView", () => {
     key_name: "sk-...TUuw",
     key_alias: "asdasdas",
     spend: 0,
+    total_spend: 0,
     max_budget: 0,
     expires: "null",
     models: [],
@@ -176,6 +201,38 @@ describe("KeyInfoView", () => {
     await userEvent.click(await screen.findByRole("button", { name: /more key actions/i }));
   };
 
+  it("shows key-scoped auto-router usage as its own admin tab", async () => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+    renderWithProviders(<KeyInfoView keyData={MOCK_KEY_DATA} onClose={() => {}} keyId="test-key-id" teams={[]} />);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Auto-router usage" }));
+
+    expect(screen.getByTestId("key-auto-router-usage")).toHaveTextContent("test-token-123");
+  });
+
+  it("preserves dates in both directions across unmounted analytics panels", async () => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Admin" });
+    renderWithProviders(<KeyInfoView keyData={MOCK_KEY_DATA} onClose={() => {}} keyId="test-key-id" teams={[]} />);
+
+    expect(screen.queryByLabelText("Selected dates")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Savings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Select August 1" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Auto-router usage" }));
+    expect(screen.getByLabelText("Selected dates")).toHaveTextContent("2026-08-01T00:00:00.000Z");
+    await userEvent.click(screen.getByRole("button", { name: "Select August 10" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(screen.queryByLabelText("Selected dates")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Savings" }));
+    expect(screen.getByLabelText("Selected dates")).toHaveTextContent("2026-08-10T00:00:00.000Z");
+  });
+
+  it("does not offer the admin-only auto-router usage tab to an internal user", () => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...baseUseAuthorizedMock, userRole: "Internal User" });
+    renderWithProviders(<KeyInfoView keyData={MOCK_KEY_DATA} onClose={() => {}} keyId="test-key-id" teams={[]} />);
+
+    expect(screen.queryByRole("tab", { name: "Auto-router usage" })).not.toBeInTheDocument();
+  });
+
   describe("last updated", () => {
     const renderWithTimestamps = (overrides: Partial<KeyResponse>) => {
       vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
@@ -213,6 +270,75 @@ describe("KeyInfoView", () => {
 
       expect(await findLastUpdatedText()).toMatch(/Jun \d+, 2021/);
       expect(screen.queryByText(/Jun \d+, 2023/)).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows lifetime spend separately from the resettable period spend", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, spend: 0.25, total_spend: 340.5 }}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByText("$0.2500")).toBeInTheDocument();
+    expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime spend: $340.5000");
+  });
+
+  it("shows the backfill hint when lifetime spend trails the period spend", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, spend: 10, total_spend: 4 }}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByTestId("key-lifetime-spend-backfill-hint")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /lifetime spend is below/i })).toBeInTheDocument();
+    expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime spend: $4.0000");
+  });
+
+  it("hides the backfill hint when lifetime spend covers the period spend", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, spend: 0.25, total_spend: 340.5 }}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByTestId("key-lifetime-spend")).toBeInTheDocument();
+    expect(screen.queryByTestId("key-lifetime-spend-backfill-hint")).not.toBeInTheDocument();
+  });
+
+  describe("needsLifetimeSpendBackfill", () => {
+    it("returns true when total spend is below the period spend", () => {
+      expect(needsLifetimeSpendBackfill(10, 4)).toBe(true);
+    });
+
+    it("returns false when total spend equals or exceeds the period spend", () => {
+      expect(needsLifetimeSpendBackfill(10, 10)).toBe(false);
+      expect(needsLifetimeSpendBackfill(10, 12)).toBe(false);
+    });
+
+    it("treats a missing total spend as zero", () => {
+      expect(needsLifetimeSpendBackfill(10, null)).toBe(true);
+      expect(needsLifetimeSpendBackfill(10, undefined)).toBe(true);
+      expect(needsLifetimeSpendBackfill(0, null)).toBe(false);
     });
   });
 
@@ -1014,6 +1140,16 @@ describe("KeyInfoView", () => {
       await editViewMocks.onSubmit!({ key: keyData.token, token: keyData.token, policies: [] });
 
       expect(keyUpdateCall).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ policies: [] }));
+    });
+
+    it("puts the key identifier and an explicit null max_budget on the wire when the edit view hands over a cleared budget", async () => {
+      await enterEditMode({ ...MOCK_KEY_DATA, user_id: "proxy-admin-user" } as KeyResponse);
+      await editViewMocks.onSubmit!({ token: MOCK_KEY_DATA.token, max_budget: "" });
+
+      expect(keyUpdateCall).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ key: "test-token-123", max_budget: null }),
+      );
     });
   });
 

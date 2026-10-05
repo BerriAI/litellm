@@ -66,8 +66,8 @@ def parse_user_banner(raw_settings: object) -> UserBanner:
 
 @router.get(
     "/get/user_banner",
-    tags=["UI Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI's route decorator only accepts a list
+    tags=["UI Settings"],
+    dependencies=[Depends(user_api_key_auth)],
     response_model=UserBanner,
 )
 async def get_user_banner() -> UserBanner:
@@ -86,7 +86,7 @@ async def get_user_banner() -> UserBanner:
 
 @router.patch(
     "/update/user_banner",
-    tags=["UI Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
+    tags=["UI Settings"],
     response_model=UpdateUserBannerResponse,
 )
 async def update_user_banner(

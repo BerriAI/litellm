@@ -1,3 +1,4 @@
+import inspect
 from typing import Any, Final
 
 from pydantic import BaseModel, Field
@@ -31,11 +32,15 @@ def get_status_code(exception):
     return 500  # Internal Server Error as default
 
 
+def _error_description(exception: type[Exception]) -> str:
+    return inspect.cleandoc(exception.__doc__) if exception.__doc__ else exception.__name__
+
+
 # Create error responses
 ERROR_RESPONSES: Final = {
     get_status_code(exception): {
         "model": ErrorResponse,
-        "description": exception.__doc__ or exception.__name__,
+        "description": _error_description(exception),
     }
     for exception in LITELLM_EXCEPTION_TYPES
 }

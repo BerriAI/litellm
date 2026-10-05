@@ -30,7 +30,7 @@ class GigaChatModelResponseIterator:
 
     def chunk_parser(self, chunk: Mapping[str, object]) -> GenericStreamingChunk:
         """Parse a single streaming chunk from GigaChat."""
-        choices: Sequence = chunk.get("choices") or ()  # mutable-ok: tuple literal as default
+        choices: Sequence = chunk.get("choices") or ()
         if not choices:
             return GenericStreamingChunk(
                 text="",
@@ -42,7 +42,7 @@ class GigaChatModelResponseIterator:
             )
 
         choice: Final = choices[0]
-        delta: Mapping[str, object] = choice.get("delta") or {}  # mutable-ok: empty dict default for get
+        delta: Mapping[str, object] = choice.get("delta") or {}
         chunk_finish_reason: Final = choice.get("finish_reason")
 
         # Extract text content
@@ -56,7 +56,7 @@ class GigaChatModelResponseIterator:
         if chunk_finish_reason == "function_call" and isinstance(raw_function_call, Mapping) and raw_function_call:
             func_call: Final[Mapping[str, object]] = raw_function_call
             args_raw: Final[object] = func_call.get("arguments") or {}
-            args_str: str  # rebind-ok: conditionally assigned from dict or str
+            args_str: str
             if isinstance(args_raw, dict):
                 args_str = json.dumps(args_raw, ensure_ascii=False)  # rebind-ok: build from dict
             else:
@@ -74,16 +74,16 @@ class GigaChatModelResponseIterator:
             )
             finish_reason = "tool_calls"
 
-        usage_data: Final = chunk.get("usage") or {}  # mutable-ok: empty dict default
+        usage_data: Final = chunk.get("usage") or {}
         if usage_data and isinstance(usage_data, dict):
             validated_usage: Final = {k: int(v) for k, v in usage_data.items()}
             usage = convert_usage(validated_usage)
             _prompt_details: dict | None = (
                 usage.prompt_tokens_details.model_dump() if usage.prompt_tokens_details else None
-            )  # rebind-ok: conditional
+            )
             _completion_details: dict | None = (
                 usage.completion_tokens_details.model_dump() if usage.completion_tokens_details else None
-            )  # rebind-ok: conditional
+            )
             usage_block = ChatCompletionUsageBlock(  # pyright: ignore[reportCallIssue]  # TypedDict kwarg constructor
                 prompt_tokens=usage.prompt_tokens,
                 completion_tokens=usage.completion_tokens,

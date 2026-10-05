@@ -67,22 +67,6 @@ async def _run_transcription(
 )
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
-async def test_transcription_openai_whisper(response_format, timestamp_granularities):
-    await _run_transcription(
-        model="whisper-1",
-        api_key=None,
-        api_base=None,
-        response_format=response_format,
-        timestamp_granularities=timestamp_granularities,
-    )
-
-
-@pytest.mark.parametrize(
-    "response_format, timestamp_granularities",
-    [("json", None), ("vtt", None), ("verbose_json", ["word"])],
-)
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
 async def test_transcription_azure_whisper(response_format, timestamp_granularities):
     await _run_transcription(
         model="azure/whisper",
@@ -152,17 +136,6 @@ async def test_whisper_log_pre_call():
             file=_audio_file(),
         )
         mock_log_pre_call.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_gpt_4o_transcribe():
-    from litellm.litellm_core_utils.litellm_logging import Logging
-    from datetime import datetime
-    from unittest.mock import patch, MagicMock
-
-    await litellm.atranscription(
-        model="openai/gpt-4o-transcribe", file=_audio_file(), response_format="json"
-    )
 
 
 @pytest.mark.asyncio

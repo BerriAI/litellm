@@ -79,7 +79,7 @@ def stream_output(chunks: Sequence[object], data: Mapping[str, object]) -> str |
 def _assembled_chat_stream(chunks: Sequence[object], data: Mapping[str, object]) -> object:
     try:
         return litellm.stream_chunk_builder(  # pyright: ignore[reportUnknownMemberType]  # upstream types chunks as a bare list
-            chunks=list(chunks),  # mutable-ok: stream_chunk_builder takes a list
+            chunks=list(chunks),
             messages=_MESSAGES.validate_python(data.get("messages")),
         )
     except (litellm.APIError, ValidationError):

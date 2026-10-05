@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Generic, Protocol, TypeVar, cast, runtime_checkable
 
 from litellm import verbose_logger
+from litellm._internal_context import with_service_target
 from litellm.llms.base_llm.managed_resources.isolation import (
     build_list_page,
     build_owner_filter,
@@ -17,6 +18,8 @@ from litellm.llms.base_llm.managed_resources.isolation import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import SpecialEnums
+
+MANAGED_RESOURCES_TARGET: Final = "managed_resources"
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -158,6 +161,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
     #                     COMMON STORAGE OPERATIONS
     # ============================================================================
 
+    @with_service_target(MANAGED_RESOURCES_TARGET)
     async def store_unified_resource_id(
         self,
         unified_resource_id: str,
@@ -240,6 +244,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             "LiteLLM Managed %s with id=%s stored in db: %s", self.resource_type, unified_resource_id, result
         )
 
+    @with_service_target(MANAGED_RESOURCES_TARGET)
     async def get_unified_resource_id(
         self,
         unified_resource_id: str,
@@ -276,6 +281,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
 
         return None
 
+    @with_service_target(MANAGED_RESOURCES_TARGET)
     async def delete_unified_resource_id(
         self,
         unified_resource_id: str,

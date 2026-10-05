@@ -6,11 +6,15 @@ Used by the transformation layer and skills injection hook.
 """
 
 import uuid
-from typing import Any, Final
+from collections.abc import Sequence
+from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.llms.litellm_proxy.skills.constants import LITELLM_SKILL_ID_PREFIX
+from litellm.llms.litellm_proxy.skills.constants import (
+    LITELLM_SKILL_ID_PREFIX,
+    MAX_SKILLS_PER_SEARCH,
+)
 from litellm.proxy._types import LiteLLM_SkillsTable, NewSkillRequest, UserAPIKeyAuth
 from litellm.proxy.common_utils.resource_ownership import (
     get_primary_resource_owner_scope,
@@ -76,7 +80,7 @@ class LiteLLMSkillsHandler:
             # this module FastAPI-free per the project layering rule.
             raise ValueError("Unable to record skill ownership: caller has no identity scope.")
 
-        skill_data: Final[dict[str, Any]] = {
+        skill_data: Final[dict[str, object]] = {
             "skill_id": skill_id,
             "display_title": data.display_title,
             "description": data.description,
@@ -115,22 +119,37 @@ class LiteLLMSkillsHandler:
 
         verbose_logger.debug("LiteLLMSkillsHandler: Listing skills with limit=%s, offset=%s", limit, offset)
 
-        find_many_kwargs: Final[dict[str, Any]] = {
-            "take": limit,
-            "skip": offset,
-            "order": {"created_at": "desc"},
-        }
-        if user_api_key_dict is not None and not is_proxy_admin(user_api_key_dict):
-            owner_scopes: Final = get_resource_owner_scopes(user_api_key_dict)
-            if not owner_scopes:
-                return []
-            find_many_kwargs["where"] = {"created_by": {"in": owner_scopes}}
+        owner_scopes: Final = (
+            get_resource_owner_scopes(user_api_key_dict)
+            if user_api_key_dict is not None and not is_proxy_admin(user_api_key_dict)
+            else None
+        )
+        if owner_scopes is not None and not owner_scopes:
+            return []
 
-        skills: Final = await SkillsRepository(prisma_client).table.find_many(**find_many_kwargs)
+        skills: Final = await SkillsRepository(prisma_client).table.find_many(
+            take=limit,
+            skip=offset,
+            order={"created_at": "desc"},
+            where={"created_by": {"in": owner_scopes}} if owner_scopes else None,
+        )
         return [_prisma_skill_to_litellm(s) for s in skills]
 
     @staticmethod
-    async def _load_skill(skill_id: str) -> Any | None:
+    async def list_skills_for_search(
+        user_api_key_dict: UserAPIKeyAuth | None = None,
+    ) -> Sequence[LiteLLM_SkillsTable]:
+        """Every skill the caller can access, for ranking. Same owner-scope filter as
+        ``list_skills``, but unpaginated (up to ``MAX_SKILLS_PER_SEARCH``) since a query
+        must be scored against the whole accessible set, not one page of it."""
+        return await LiteLLMSkillsHandler.list_skills(
+            limit=MAX_SKILLS_PER_SEARCH,
+            offset=0,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    @staticmethod
+    async def _load_skill(skill_id: str) -> object | None:
         """Cache-first read of the Prisma skill row. Owner-scope filtering
         happens on the cached row, so the cache is per-skill not per-caller.
         """

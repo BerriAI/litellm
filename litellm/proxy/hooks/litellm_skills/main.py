@@ -29,6 +29,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -493,7 +494,6 @@ class SkillsInjectionHook(CustomLogger):
 
         Returns the final response with generated files inline.
         """
-        import litellm
         from litellm.llms.litellm_proxy.skills.code_execution import (
             LiteLLMInternalTools,
         )
@@ -723,7 +723,6 @@ print('No executable skill module found')
 
         Returns the final response with generated files inline.
         """
-        import litellm
         from litellm.llms.litellm_proxy.skills.code_execution import (
             LiteLLMInternalTools,
         )
@@ -913,11 +912,3 @@ print('No executable skill module found')
         verbose_proxy_logger.debug("SkillsInjectionHook: Attached %s files to response", len(generated_files))
 
         return response
-
-
-# Global instance for registration
-skills_injection_hook: Final = SkillsInjectionHook()
-
-import litellm
-
-litellm.logging_callback_manager.add_litellm_callback(skills_injection_hook)

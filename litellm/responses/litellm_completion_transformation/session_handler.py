@@ -122,7 +122,7 @@ class ResponsesSessionHandler:
             elif isinstance(_response_input_param, dict):
                 response_input_param = cast(
                     ResponseInputParam,
-                    [_response_input_param],  # mutable-ok: a lone input item still has to arrive as a list
+                    [_response_input_param],
                 )
 
         if response_input_param:
@@ -317,4 +317,4 @@ class ResponsesSessionHandler:
                 return spend_logs
 
         verbose_proxy_logger.debug("Found no spend logs for previous response id %s", response_id)
-        return []  # mutable-ok: an empty result the caller only reads
+        return []

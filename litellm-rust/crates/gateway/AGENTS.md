@@ -1,0 +1,5 @@
+- Keep this crate a thin composition layer: mount endpoint routers and serve the supplied listener
+- Server lifecycle and shared inbound middleware belong here, including client authentication, rate limiting, and request logging
+- Endpoint paths, request handling, model resolution, and response encoding belong to the mounted crates; provider execution belongs to `core` and `llms`
+- Inject shared state and infrastructure; avoid global runtimes, duplicate client pools, and abstractions for hypothetical endpoint groups
+- Test mounting and server lifecycle through public HTTP behavior; test endpoint semantics in the owning crate

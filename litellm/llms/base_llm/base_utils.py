@@ -5,6 +5,7 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Any, Final
 
 from openai.lib import _parsing, _pydantic
@@ -50,12 +51,36 @@ class BaseLLMModelInfo(ABC):
         """
         return None
 
+    def get_model_cost_key(self, model: str) -> str | None:
+        """
+        Maps the model name a user sends to the key `litellm.model_cost` stores it under, when the two differ.
+        `get_model_info` tries this key once the exact `model` and `provider/model` keys miss. The default None means
+        the provider's user-facing names already match the cost map, so there is nothing extra to try.
+        """
+        return None
+
     @abstractmethod
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         """
         Returns a list of models supported by this provider.
         """
         return []
+
+    def discover_models(
+        self, litellm_params: Mapping[str, object] | None = None
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+        """
+        Live model discovery for a configured deployment. Defaults to the api_key/api_base
+        facade every provider already implements via ``get_models``; a provider whose
+        discovery needs more of ``litellm_params`` (e.g. Anthropic's workload identity
+        federation) overrides this instead of widening ``get_models`` for every provider.
+        """
+        api_key: Final = litellm_params.get("api_key") if litellm_params is not None else None
+        api_base: Final = litellm_params.get("api_base") if litellm_params is not None else None
+        return self.get_models(
+            api_key=api_key if isinstance(api_key, str) else None,
+            api_base=api_base if isinstance(api_base, str) else None,
+        )
 
     @staticmethod
     @abstractmethod

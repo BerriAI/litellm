@@ -4,11 +4,12 @@ import { pruneTierModelParams } from "./complexity_router_tiers";
 import {
   type ActiveTierRow,
   type TierRow,
-  TIER_ORDER,
+  ALL_BUILT_IN_TIERS,
   activeTierName,
   activeTierRows,
   rowParamsByTier,
   sameTierIdentity,
+  tierOrderFor,
   tierRowById,
   tierRowByName,
 } from "./tier_rows";
@@ -74,13 +75,13 @@ const rulesFollowingRows = (
 // Models and params both come from these rows, so the two cannot be keyed differently.
 const exitToBuiltInTiers = (value: ComplexityRouterConfigValue, rows: readonly ActiveTierRow[]) => {
   const { custom_tier_set: _dropped, ...rest } = value;
-  const builtInRows: ActiveTierRow[] = TIER_ORDER.map(
+  const builtInRows: ActiveTierRow[] = tierOrderFor(value.enable_non_reasoning_tier).map(
     (tier) =>
       tierRowById(rows, tier) ?? {
         id: tier,
         name: tier,
         definition: "",
-        models: value.tiers[tier],
+        models: value.tiers[tier] ?? [],
         params: value.tier_model_params?.[tier] ?? {},
       },
   );
@@ -92,6 +93,30 @@ const exitToBuiltInTiers = (value: ComplexityRouterConfigValue, rows: readonly A
   return commitTierRows(activeTierRows(restored), "", restored);
 };
 
+/** Model changes reconcile params and the plan floor against the resulting populated pools. */
+export const setTierModels = (
+  value: ComplexityRouterConfigValue,
+  id: string,
+  models: string[],
+): ComplexityRouterConfigValue => {
+  const next: ComplexityRouterConfigValue = {
+    ...value,
+    ...(value.custom_tier_set
+      ? {
+          custom_tier_set: {
+            ...value.custom_tier_set,
+            tiers: value.custom_tier_set.tiers.map((row) => (row.id === id ? { ...row, models } : row)),
+          },
+        }
+      : { tiers: { ...value.tiers, [id]: models } }),
+    tier_model_params: pruneTierModelParams(value.tier_model_params, id, models),
+  };
+  const floor = next.plan_mode_min_tier;
+  return floor && !activeTierRows(next).some((row) => row.id === floor && row.models.length > 0)
+    ? { ...next, plan_mode_min_tier: undefined }
+    : next;
+};
+
 const nextTierSetValue = (
   value: ComplexityRouterConfigValue,
   rows: ActiveTierRow[],
@@ -101,11 +126,7 @@ const nextTierSetValue = (
 
   switch (action.kind) {
     case "models":
-      return commitTierRows(
-        rows.map((row) => (row.id === action.id ? { ...row, models: action.models } : row)),
-        fallbackId,
-        { ...value, tier_model_params: pruneTierModelParams(value.tier_model_params, action.id, action.models) },
-      );
+      return setTierModels(value, action.id, action.models);
     case "patch":
       return commitTierRows(
         rows.map((row) => (row.id === action.id ? { ...row, ...action.patch } : row)),
@@ -121,7 +142,7 @@ const nextTierSetValue = (
     case "remove": {
       const removed = tierRowById(rows, action.id);
       const snapshot =
-        removed && (TIER_ORDER as string[]).includes(action.id)
+        removed && (ALL_BUILT_IN_TIERS as string[]).includes(action.id)
           ? { ...value, tiers: { ...value.tiers, [action.id]: removed.models } }
           : value;
       return commitTierRows(

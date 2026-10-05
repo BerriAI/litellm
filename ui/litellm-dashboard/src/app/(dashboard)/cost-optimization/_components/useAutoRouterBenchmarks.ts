@@ -23,10 +23,15 @@ export const benchmarksWindow = (
   };
 };
 
-export const useAutoRouterBenchmarks = (accessToken: string | null, range: DateRange) =>
+export const useAutoRouterBenchmarks = (
+  accessToken: string | null,
+  range: DateRange,
+  apiKey?: string,
+  userId?: string,
+) =>
   $api.useQuery(
     "get",
     "/auto_router/benchmarks",
-    { params: { query: benchmarksWindow(range, new Date()) } },
+    { params: { query: { ...benchmarksWindow(range, new Date()), api_key: apiKey, user_id: userId } } },
     { enabled: Boolean(accessToken && range.from && range.to), retry: false },
   );

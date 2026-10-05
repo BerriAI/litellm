@@ -20,7 +20,9 @@ import pytest
 
 IMAGE: Final = os.getenv("LITELLM_IMAGE")
 NON_ROOT_UID: Final = "12345:0"
-IMPORT_PROBE: Final = "import aws_sdk_bedrock_runtime, smithy_aws_core; print('bedrock-realtime ok')"
+IMPORT_PROBE: Final = (
+    "import aws_sdk_bedrock_runtime, smithy_aws_core, smithy_http.aio.crt; print('bedrock-realtime ok')"
+)
 
 pytestmark = [
     pytest.mark.skipif(IMAGE is None, reason="requires a built image (set LITELLM_IMAGE)"),
@@ -52,7 +54,7 @@ def test_image_imports_bedrock_realtime_sdk():
     )
 
     assert probe.returncode == 0 and "bedrock-realtime ok" in probe.stdout, (
-        f"{IMAGE} cannot import aws_sdk_bedrock_runtime as uid {NON_ROOT_UID}, so Bedrock Nova Sonic "
-        "/v1/realtime sessions fail with 'Missing aws_sdk_bedrock_runtime'. Is `--extra bedrock-realtime` "
+        f"{IMAGE} cannot import aws_sdk_bedrock_runtime with its awscrt transport as uid {NON_ROOT_UID}, so "
+        "Bedrock Nova Sonic /v1/realtime sessions fail at SDK import. Is `--extra bedrock-realtime` "
         f"passed to every `uv sync` in its Dockerfile?\nstdout:\n{probe.stdout}\nstderr:\n{probe.stderr}"
     )

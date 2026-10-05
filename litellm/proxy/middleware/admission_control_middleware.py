@@ -32,9 +32,6 @@ class AdmissionControlSettings:
     queue_timeout_seconds: float
 
 
-AdmissionControlSettingsGetter: TypeAlias = Callable[[], AdmissionControlSettings | None]  # mutable-ok: Callable params
-
-
 @dataclass(frozen=True, slots=True)
 class AdmissionControlStats:
     admitted: int
@@ -66,13 +63,10 @@ class AdmissionControlMetrics:
     rejected_counter: _Counter
 
 
-AdmissionControlMetricsFactory: TypeAlias = Callable[[], AdmissionControlMetrics | None]  # mutable-ok: Callable params
-
-
 class AdmissionControlState:
     """Per-process admission counters and the in-flight semaphore shared by one worker's requests."""
 
-    def __init__(self, metrics_factory: AdmissionControlMetricsFactory) -> None:
+    def __init__(self, metrics_factory: Callable[[], AdmissionControlMetrics | None]) -> None:
         self._metrics_factory = metrics_factory
         self._metrics: AdmissionControlMetrics | None = None
         self._metrics_init_attempted = False
@@ -140,7 +134,7 @@ class AdmissionControlMiddleware:
     def __init__(
         self,
         app: ASGIApp,
-        get_settings: AdmissionControlSettingsGetter,
+        get_settings: Callable[[], AdmissionControlSettings | None],
         state: AdmissionControlState,
     ) -> None:
         self.app = app
@@ -230,7 +224,7 @@ def create_prometheus_admission_metrics() -> AdmissionControlMetrics | None:
                 "litellm_admission_queued_requests",
                 "Number of requests queued by this worker",
             ),
-            rejected_counter=Counter(  # mutable-ok: Prometheus requires runtime Counter construction
+            rejected_counter=Counter(
                 "litellm_admission_rejected_requests_total",
                 "Number of requests rejected by this worker",
                 labelnames=("reason",),
@@ -302,9 +296,9 @@ def _overloaded_response(state: AdmissionControlState) -> JSONResponse:
     stats: Final = state.get_stats()
     return JSONResponse(
         status_code=503,
-        headers={"retry-after": "1"},  # mutable-ok: Starlette expects a plain headers mapping
-        content={  # mutable-ok: Starlette serializes a plain response mapping
-            "error": {  # mutable-ok: nested response mapping
+        headers={"retry-after": "1"},
+        content={
+            "error": {
                 "message": (
                     f"Worker at capacity: {stats.admitted} in-flight, {stats.queued} queued requests. Retry later."
                 ),

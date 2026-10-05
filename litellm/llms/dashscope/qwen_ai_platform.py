@@ -3,6 +3,7 @@ from typing import Final
 from litellm.secret_managers.main import get_secret_str
 
 from .chat.transformation import DashScopeChatConfig
+from .common_utils import resolve_dashscope_family_rerank_api_base
 from .embed.transformation import DashScopeEmbeddingConfig
 from .image_generation.transformation import DashScopeImageGenerationConfig
 from .rerank.transformation import DashScopeRerankConfig
@@ -22,7 +23,7 @@ def _require_qwen_ai_platform_api_key(api_key: str | None) -> str:
     resolved: Final = _resolve_qwen_ai_platform_api_key(api_key)
     if resolved is None:
         raise ValueError(
-            "Qwen AI Platform API key is required. Set 'QWEN_AI_PLATFORM_API_KEY' or 'DASHSCOPE_API_KEY' env var "
+            "Qianwen AI Platform API key is required. Set 'QWEN_AI_PLATFORM_API_KEY' or 'DASHSCOPE_API_KEY' env var "
             "or pass api_key explicitly."
         )
     return resolved
@@ -51,7 +52,9 @@ class QwenAIPlatformRerankConfig(DashScopeRerankConfig):
         return _require_qwen_ai_platform_api_key(api_key)
 
     def _resolve_rerank_api_base(self, api_base: str | None) -> str:
-        return api_base or get_secret_str("QWEN_AI_PLATFORM_API_BASE_RERANK") or QWEN_AI_PLATFORM_RERANK_API_BASE
+        return resolve_dashscope_family_rerank_api_base(
+            api_base, "QWEN_AI_PLATFORM_API_BASE_RERANK", QWEN_AI_PLATFORM_RERANK_API_BASE
+        )
 
 
 class QwenAIPlatformImageGenerationConfig(DashScopeImageGenerationConfig):

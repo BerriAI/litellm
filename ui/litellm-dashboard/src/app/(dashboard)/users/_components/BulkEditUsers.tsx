@@ -9,7 +9,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  NUMERIC_CELL_CLASS,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { cn } from "@/lib/cva.config";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface BulkEditUserModalProps {
@@ -250,7 +259,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
                     <TableHead className="w-[30%]">User ID</TableHead>
                     <TableHead className="w-[25%]">Email</TableHead>
                     <TableHead className="w-[25%]">Current Role</TableHead>
-                    <TableHead className="w-[20%]">Budget</TableHead>
+                    <TableHead className={cn("w-[20%]", NUMERIC_CELL_CLASS)}>Budget</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -263,7 +272,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
                       <TableCell className="text-xs text-foreground">
                         {possibleUIRoles?.[user.user_role]?.ui_label || user.user_role}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className={NUMERIC_CELL_CLASS}>
                         <MoneyCell value={user.max_budget} decimals={2} emptyText="Unlimited" showZero />
                       </TableCell>
                     </TableRow>

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "content": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "parent_span_id": {
+      "type": "string"
+    },
+    "span_id": {
+      "type": "string"
+    },
+    "truncated": {
+      "anyOf": [
+        {
+          "enum": [
+            0,
+            1
+          ],
+          "type": "integer"
+        },
+        {
+          "enum": [
+            "0",
+            "1"
+          ],
+          "type": "string"
+        }
+      ],
+      "x-python-normalized": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "int"
+      }
+    }
+  },
+  "required": [
+    "span_id",
+    "parent_span_id",
+    "name",
+    "kind",
+    "content",
+    "truncated"
+  ],
+  "title": "PartRow",
+  "type": "object"
+}
