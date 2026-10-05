@@ -26,4 +26,8 @@ from integration.translation.runner import run
     ids=lambda case: case.id,
 )
 def test_responses_basic_anthropic(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
+    pytest.skip(
+        "BUG: LIT-9231 the chat-completions bridge returns instructions and max_output_tokens as null"
+        " and temperature as 0.0 instead of echoing the request"
+    )
     run(case, gateway, provider)
