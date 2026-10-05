@@ -38,6 +38,9 @@ export const SETUP_KEYS = [...Object.keys(SETUP_DRAFT_PARSERS), ...Object.keys(S
 
 export type SetupDraftParams = inferParserType<typeof SETUP_DRAFT_PARSERS>;
 
+export const DRAFT_FIELDS = ["name", "selection", "context", "watching", "questions", "repeat", "interval"] as const;
+export type DraftFields = Pick<InvestigationInput, (typeof DRAFT_FIELDS)[number]>;
+
 const NEW_DRAFT = investigationDefaults(undefined, "new");
 const knownWatch = new Set(watches.map((watch) => watch.id));
 const sameList = (a: readonly string[], b: readonly string[]) =>
@@ -65,7 +68,7 @@ export function draftFromParams(params: SetupDraftParams): InvestigationInput {
 }
 
 /** Only what differs from a blank draft reaches the URL, so an untouched setup keeps a short link. */
-export function paramsFromDraft(draft: InvestigationInput): SetupDraftParams {
+export function paramsFromDraft(draft: DraftFields): SetupDraftParams {
   const { selection } = draft;
   const checks = draft.questions.map((check) => check.instruction).filter((instruction) => instruction.trim());
   const finite = (value: number | null) => (value != null && Number.isFinite(value) ? value : null);
@@ -85,7 +88,7 @@ export function paramsFromDraft(draft: InvestigationInput): SetupDraftParams {
 
 export function useSetupDraftRoute() {
   const [params, setParams] = useQueryStates(SETUP_DRAFT_PARSERS, { history: "replace" });
-  const saveDraft = useCallback((draft: InvestigationInput) => void setParams(paramsFromDraft(draft)), [setParams]);
+  const saveDraft = useCallback((draft: DraftFields) => void setParams(paramsFromDraft(draft)), [setParams]);
   return { params, saveDraft };
 }
 

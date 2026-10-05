@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useFormContext, useWatch } from "react-hook-form";
 import { lensKeys, lensQueries } from "../data/queries";
@@ -95,16 +95,6 @@ function manualSelectedCount(selection: Selection): number {
   return Math.min(sampled, selection.sample_size ?? Infinity);
 }
 
-function manualPicks(selection: Selection, setExecutionIds: (ids: readonly string[]) => void): PreviewSelection {
-  const ids = selection.execution_ids;
-  return {
-    ids,
-    count: manualSelectedCount(selection),
-    toggle: (id, checked) => setExecutionIds(checked ? [...ids, id] : ids.filter((other) => other !== id)),
-    clear: () => setExecutionIds([]),
-  };
-}
-
 function windowLabel(selection: Selection): string {
   if (!validWindow(selection)) return "Choose a valid history window";
   return `Last ${durationLabel(selection.lookback_hours ?? 24, "hours")}`;
@@ -135,7 +125,7 @@ export function useMatchingActivity(): MatchingActivity {
   const valid = windowValid && validScope(scope);
   const preview = useInfiniteQuery(lensQueries.preview(api, { scope, asOf, enabled: valid }));
   const firstPage = preview.data?.pages[0];
-  const executions = preview.data?.pages.flatMap((page) => page.executions) ?? [];
+  const executions = useMemo(() => preview.data?.pages.flatMap((page) => page.executions) ?? [], [preview.data]);
   const empty = firstPage?.eligible === 0;
   const refresh = useCallback(() => {
     setRefreshedAt(new Date().toISOString());
@@ -150,9 +140,21 @@ export function useMatchingActivity(): MatchingActivity {
   const ready = !pending && valid;
   const loading = valid && pending && !firstPage;
   const stale = valid && pending && !!firstPage;
-  const setExecutionIds = (next: readonly string[]) =>
-    setValue("selection.execution_ids", [...next], { shouldValidate: true });
-  const picked = manualSelection ? manualPicks(selection, setExecutionIds) : null;
+  const ids = selection.execution_ids;
+  const setExecutionIds = useCallback(
+    (next: readonly string[]) => setValue("selection.execution_ids", [...next], { shouldValidate: true }),
+    [setValue],
+  );
+  const toggle = useCallback(
+    (id: string, checked: boolean) => setExecutionIds(checked ? [...ids, id] : ids.filter((other) => other !== id)),
+    [ids, setExecutionIds],
+  );
+  const clear = useCallback(() => setExecutionIds([]), [setExecutionIds]);
+  const { hasNextPage, isFetching, fetchNextPage } = preview;
+  const loadMore = useCallback(() => {
+    if (hasNextPage && !isFetching) void fetchNextPage({ cancelRefetch: false });
+  }, [hasNextPage, isFetching, fetchNextPage]);
+  const picked = manualSelection ? { ids, count: manualSelectedCount(selection), toggle, clear } : null;
   const hasMatches = !preview.error && (firstPage?.selected ?? 0) > 0;
   const hasSelection = !picked || picked.ids.length > 0;
   return {
@@ -173,9 +175,7 @@ export function useMatchingActivity(): MatchingActivity {
         executions,
         hasMore: preview.hasNextPage,
         loadingMore: preview.isFetchingNextPage,
-        loadMore: () => {
-          if (preview.hasNextPage && !preview.isFetching) void preview.fetchNextPage({ cancelRefetch: false });
-        },
+        loadMore,
       },
       selection: picked,
     },

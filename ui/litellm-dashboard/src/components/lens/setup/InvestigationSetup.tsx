@@ -1,7 +1,7 @@
 "use client";
 
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowLeft } from "lucide-react";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,8 @@ import {
   type InvestigationInput,
   type InvestigationOutput,
 } from "./investigationSchema";
-import { draftFromParams, useSetupDraftRoute, useSetupStepRoute } from "./setupRoute";
+import { DRAFT_FIELDS, draftFromParams, useSetupDraftRoute, useSetupStepRoute } from "./setupRoute";
+import { useDebouncedValue } from "./useDebouncedValue";
 import { nextSetupStep, SetupStep, SetupSteps } from "./SetupSteps";
 import { ScopeFields } from "./fields/ScopeFields";
 import { SampleFields } from "./fields/SampleFields";
@@ -33,6 +34,8 @@ import { type Settings } from "../model/types";
 
 type SetupMode = "new" | "edit" | "duplicate";
 
+const DRAFT_URL_DEBOUNCE_MS = 400;
+
 const TITLES: Record<SetupMode, string> = {
   new: "New investigation",
   edit: "Edit investigation",
@@ -42,6 +45,20 @@ const TITLES: Record<SetupMode, string> = {
 function saveLabelFor(mode: SetupMode, repeat: boolean): string {
   if (mode === "edit") return "Save changes";
   return repeat ? "Run and monitor" : "Run investigation";
+}
+
+function ActivitySummary() {
+  const [selection, manual] = useWatch<InvestigationInput, ["selection", "manualSelection"]>({
+    name: ["selection", "manualSelection"],
+  });
+  return activitySummary(selection, manual);
+}
+
+function CriteriaSummary() {
+  const [context, watching, questions] = useWatch<InvestigationInput, ["context", "watching", "questions"]>({
+    name: ["context", "watching", "questions"],
+  });
+  return criteriaSummary({ context, watching, questions });
 }
 
 function activitySummary(selection: InvestigationInput["selection"], manual: boolean): string {
@@ -74,16 +91,25 @@ export function InvestigationSetup(props: SetupProps) {
     defaultValues: mode === "new" ? draftFromParams(draft.params) : investigationDefaults(initial, mode),
     mode: "onChange",
   });
-  const { saveDraft } = draft;
-  useEffect(() => {
-    if (mode !== "new") return;
-    return form.subscribe({ formState: { values: true }, callback: ({ values }) => saveDraft(values) });
-  }, [form, mode, saveDraft]);
   return (
     <FormProvider {...form}>
+      {mode === "new" && <DraftUrlSync />}
       <SetupEditor {...props} form={form} />
     </FormProvider>
   );
+}
+
+/** Writes the draft to the URL once typing pauses; only this empty component re-renders per keystroke. */
+function DraftUrlSync() {
+  const [name, selection, context, watching, questions, repeat, interval] = useWatch<
+    InvestigationInput,
+    typeof DRAFT_FIELDS
+  >({ name: DRAFT_FIELDS });
+  const draft = { name, selection, context, watching, questions, repeat, interval };
+  const { value } = useDebouncedValue(draft, DRAFT_URL_DEBOUNCE_MS);
+  const { saveDraft } = useSetupDraftRoute();
+  useEffect(() => saveDraft(value), [value, saveDraft]);
+  return null;
 }
 
 function SetupEditor({
@@ -99,12 +125,13 @@ function SetupEditor({
   const [error, setError] = useState("");
   const [trace, setTrace] = useState<TraceRef | null>(null);
   const { control, register, setValue, subscribe, trigger, formState } = form;
-  const [selectedModel, repeat, selection, manualSelection, context, watching, questions] = useWatch({
-    control,
-    name: ["selectedModel", "repeat", "selection", "manualSelection", "context", "watching", "questions"],
-  });
+  const [selectedModel, repeat] = useWatch({ control, name: ["selectedModel", "repeat"] });
   const activity = useMatchingActivity();
-  const traceRuns = activity.preview.page.executions.flatMap((run) => (run.summary ? [traceRefOf(run.summary)] : []));
+  const { executions } = activity.preview.page;
+  const traceRuns = useMemo(
+    () => executions.flatMap((run) => (run.summary ? [traceRefOf(run.summary)] : [])),
+    [executions],
+  );
   const model = selectedModel ?? analysis.defaultModel ?? "";
   useEffect(
     () =>
@@ -169,12 +196,7 @@ function SetupEditor({
       )}
       <div className="grid min-w-0 flex-1 items-start gap-8 pt-6 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] xl:gap-10">
         <SetupSteps aria-label="Investigation setup" current={step} onOpen={setStep}>
-          <SetupStep
-            id="activity"
-            heading="Activity"
-            description="Which runs to review"
-            summary={activitySummary(selection, manualSelection)}
-          >
+          <SetupStep id="activity" heading="Activity" description="Which runs to review" summary={<ActivitySummary />}>
             <ScopeFields {...activity.scope} />
             <SampleFields eligible={activity.preview.page.eligible} />
             <StepFooter>
@@ -185,7 +207,7 @@ function SetupEditor({
             id="criteria"
             heading="Criteria"
             description="What the agent should do and what to watch for"
-            summary={criteriaSummary({ context, watching, questions })}
+            summary={<CriteriaSummary />}
           >
             <ExpectationsFields />
             <StepFooter>

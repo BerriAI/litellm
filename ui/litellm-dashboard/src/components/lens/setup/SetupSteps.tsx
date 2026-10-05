@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, type ComponentProps } from "react";
+import { createContext, useContext, type ComponentProps, type ReactNode } from "react";
 import { cn } from "@/lib/cva.config";
 import { StepIndicator, type StepState } from "../ui/StepIndicator";
 import { SETUP_STEPS, type SetupStep as SetupStepId } from "./investigationSchema";
@@ -45,7 +45,7 @@ export type SetupStepProps = ComponentProps<"li"> & {
   id: SetupStepId;
   heading: string;
   description: string;
-  summary: string;
+  summary: ReactNode;
 };
 
 export function SetupStep({ id, heading, description, summary, className, children, ...props }: SetupStepProps) {

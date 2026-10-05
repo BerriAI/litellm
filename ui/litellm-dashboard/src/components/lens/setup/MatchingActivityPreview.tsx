@@ -1,6 +1,6 @@
 "use client";
 
-import { type ComponentProps } from "react";
+import { memo, useMemo, type ComponentProps } from "react";
 import { RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
@@ -11,10 +11,15 @@ import type { MatchingPreview, PreviewSelection } from "./useMatchingActivity";
 
 const executionOf = (run: TraceSummary) => `${run.trace_ref}:${run.trace_id}`;
 
-const runPicks = (selection: PreviewSelection): RunPicks => ({
-  isPicked: (run) => selection.ids.includes(executionOf(run)),
-  toggle: (run, picked) => selection.toggle(executionOf(run), picked),
+const runPicks = (ids: PreviewSelection["ids"], toggle: PreviewSelection["toggle"]): RunPicks => ({
+  isPicked: (run) => ids.includes(executionOf(run)),
+  toggle: (run, picked) => toggle(executionOf(run), picked),
 });
+
+const noSetup = () => {};
+
+/** The preview can hold hundreds of rows; it re-renders only when its rows or paging change, not on every keystroke. */
+const PreviewTable = memo(AgentTracesTable);
 
 type PreviewFooterProps = ComponentProps<"div"> & Pick<MatchingPreview, "page" | "selection">;
 
@@ -59,7 +64,13 @@ export function MatchingActivityPreview({
   className,
   ...props
 }: MatchingActivityPreviewProps) {
-  const runs = page.executions.flatMap((run) => (run.summary ? [run.summary] : []));
+  const runs = useMemo(() => page.executions.flatMap((run) => (run.summary ? [run.summary] : [])), [page.executions]);
+  const pickedIds = selection?.ids;
+  const togglePick = selection?.toggle;
+  const picks = useMemo(
+    () => (pickedIds && togglePick ? runPicks(pickedIds, togglePick) : undefined),
+    [pickedIds, togglePick],
+  );
   const shown = status.ready || status.stale;
   return (
     <section
@@ -104,7 +115,7 @@ export function MatchingActivityPreview({
       )}
       {(status.loading || (shown && !status.error && runs.length > 0)) && (
         <div className="max-h-[calc(100dvh-16rem)] min-h-0 overflow-auto">
-          <AgentTracesTable
+          <PreviewTable
             traces={runs}
             isLoading={status.loading}
             error={null}
@@ -112,8 +123,8 @@ export function MatchingActivityPreview({
             isFetching={page.loadingMore}
             isPlaceholder={status.stale}
             onLoadMore={page.loadMore}
-            onSetUpTracing={() => {}}
-            picks={selection ? runPicks(selection) : undefined}
+            onSetUpTracing={noSetup}
+            picks={picks}
           />
         </div>
       )}
