@@ -51,11 +51,32 @@ def _sse_event(event_type: str, payload: dict) -> bytes:
 
 
 _STREAM_EVENTS: Final = (
-    ("interaction.start", {"id": "interaction-wire-2", "object": "interaction", "status": "in_progress"}),
-    ("content.delta", {"id": "interaction-wire-2", "delta": {"type": "text", "text": "itin"}}),
+    (
+        "interaction.start",
+        {
+            "event_type": "interaction.start",
+            "id": "interaction-wire-2",
+            "object": "interaction",
+            "status": "in_progress",
+        },
+    ),
+    (
+        "content.delta",
+        {
+            "event_type": "content.delta",
+            "id": "interaction-wire-2",
+            "delta": {"type": "text", "text": "itin"},
+        },
+    ),
     (
         "interaction.complete",
-        {"id": "interaction-wire-2", "object": "interaction", "status": "completed", "usage": {"total_tokens": 42}},
+        {
+            "event_type": "interaction.complete",
+            "id": "interaction-wire-2",
+            "object": "interaction",
+            "status": "completed",
+            "usage": {"total_tokens": 42},
+        },
     ),
 )
 
@@ -147,6 +168,12 @@ def test_agent_interaction_uses_env_gemini_credentials(
                 {"agent": "deep-research-pro-preview-12-2025", "input": [{"role": "user", "content": "research trails"}]},
             )
             assert response.status_code == 200, response.text
+            payload: Final = _Interaction.model_validate_json(response.content)
+            assert payload.agent == "deep-research-pro-preview-12-2025", response.text
+            assert payload.id == _INTERACTION_REPLY["id"], response.text
+            assert payload.status == _INTERACTION_REPLY["status"], response.text
+            assert payload.steps == _INTERACTION_REPLY["steps"], response.text
+            assert payload.usage == _INTERACTION_REPLY["usage"], response.text
             assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions")]
 
 
@@ -176,12 +203,38 @@ def test_stream_interaction_relays_gemini_events(gateway: Gateway, prefix: str) 
         )
         assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("text/event-stream"), response.headers
+        parts: Final = [part for part in response.text.split("\n\n") if part]
+        assert all(part.startswith("data: ") for part in parts), response.text
+        data_frames: Final = parts[:-1] if parts[-1] == "data: [DONE]" else parts
+        received: Final = [json.loads(part.removeprefix("data: ")) for part in data_frames]
+        assert received == [{**payload, "model": model} for _event_type, payload in _STREAM_EVENTS], response.text
+        assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions?alt=sse")]
+
+
+@pytest.mark.parametrize("prefix", ["/v1beta/interactions", "/interactions"])
+def test_stream_interaction_ends_without_openai_done_terminator(gateway: Gateway, prefix: str) -> None:
+    pytest.skip("BUG: /interactions stream=true appends an OpenAI data: [DONE] frame to the Gemini event stream")
+    frames: Final = tuple(_sse_event(event_type, payload) for event_type, payload in _STREAM_EVENTS)
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1beta/interactions?alt=sse"
+        return Reply(content_type="text/event-stream", chunks=frames)
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model=_GEMINI_MODEL, api_base=wire.url, api_key=_GEMINI_DEPLOYMENT_KEY
+        )
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.request(
+            "POST", prefix, {"model": model, "input": "plan a trip", "stream": True}, key=key
+        )
+        assert response.status_code == 200, response.text
+        assert "[DONE]" not in response.text, response.text
         received: Final = [
             json.loads(part.removeprefix("data: "))
             for part in response.text.split("\n\n")
-            if part.startswith("data: ") and part != "data: [DONE]"
+            if part
         ]
-        assert len(received) == len(_STREAM_EVENTS), response.text
-        for parsed, (_event_type, payload) in zip(received, _STREAM_EVENTS):
-            assert parsed == {**payload, "model": model}, response.text
+        assert received == [{**payload, "model": model} for _event_type, payload in _STREAM_EVENTS], response.text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/interactions?alt=sse")]

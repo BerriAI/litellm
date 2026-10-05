@@ -61,6 +61,12 @@ def test_agents_forwards_caller_supplied_key_to_chosen_api_base(gateway: Gateway
         assert request.method == "POST"
         assert request.target == "/v1beta/agents"
         assert request.headers["x-goog-api-key"] == "synthetic-caller-key"
+        assert _ENV_GEMINI_KEY not in request.headers.values()
+        assert json.loads(request.body) == {
+            "name": _AGENT_NAME,
+            "base_agent": "waverunner",
+            "instructions": "make slides",
+        }
         return Reply(body=json.dumps(_AGENT_REPLY).encode())
 
     with wire_server(respond) as wire:
@@ -76,4 +82,5 @@ def test_agents_forwards_caller_supplied_key_to_chosen_api_base(gateway: Gateway
                 },
             )
             assert response.status_code == 200, response.text
+            assert json.loads(response.content) == {**_AGENT_REPLY, "name": _AGENT_NAME}, response.text
             assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1beta/agents")]

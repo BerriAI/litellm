@@ -2,6 +2,7 @@ import json
 import uuid
 from typing import Final
 
+import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -349,6 +350,7 @@ def test_stream_generate_content_adapts_openai_sse_to_gemini_frames(gateway: Gat
         frames_out: Final = [part for part in text.split("\n\n") if part]
         assert all(part.startswith("data: ") for part in frames_out), text
         parsed: Final = [json.loads(part.removeprefix("data: ")) for part in frames_out]
+        parsed[-1].pop("usageMetadata")
         assert parsed == [
             {
                 "candidates": [
@@ -381,8 +383,43 @@ def test_stream_generate_content_adapts_openai_sse_to_gemini_frames(gateway: Gat
                         "index": 0,
                         "safetyRatings": [],
                     }
-                ],
-                "usageMetadata": {"promptTokenCount": 0, "candidatesTokenCount": 0, "totalTokenCount": 0},
+                ]
             },
         ], text
         assert [(r.method, r.target) for r in wire.drain()] == [("POST", "/v1/chat/completions")]
+
+
+def test_stream_generate_content_adapter_reports_upstream_usage(gateway: Gateway) -> None:
+    pytest.skip("BUG: native Google stream served by an openai deployment ends with usageMetadata 0/0/0 although the upstream sent usage 20/9/29")
+    frames: Final = _openai_stream_frames()
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/chat/completions"
+        assert request.headers["authorization"] == "Bearer synthetic-openai-key"
+        return Reply(content_type="text/event-stream", chunks=frames)
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        marker: Final = uuid.uuid4().hex
+        model: Final = scenario.model(
+            model="openai/gpt-4o-mini", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.client.post(
+            f"/v1beta/models/{model}:streamGenerateContent?alt=sse",
+            json={
+                "contents": _contents(marker),
+                "systemInstruction": _SYSTEM_INSTRUCTION,
+                "tools": _TOOLS,
+                "toolConfig": {"functionCallingConfig": {"mode": "ANY"}},
+            },
+            headers={"Authorization": f"Bearer {key}"},
+        )
+        assert response.status_code == 200, response.text
+        frames_out: Final = [part for part in response.text.split("\n\n") if part]
+        parsed: Final = [json.loads(part.removeprefix("data: ")) for part in frames_out]
+        assert parsed[-1]["usageMetadata"] == {
+            "promptTokenCount": 20,
+            "candidatesTokenCount": 9,
+            "totalTokenCount": 29,
+        }, response.text
