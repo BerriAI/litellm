@@ -230,6 +230,60 @@ def owned_proxy_process(
         _stop(process)
 
 
+def _is_ready(client: httpx.Client) -> bool:
+    try:
+        return client.get("/health/readiness", timeout=2).status_code == 200
+    except httpx.TransportError:
+        return False
+
+
+def refused_boot_log(
+    gateway: Gateway,
+    directory: Path,
+    overrides: Mapping[str, str],
+    *,
+    config: Path | None = None,
+) -> str:
+    """Start the proxy and return its log once it exits non-zero instead of becoming ready."""
+    root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
+    environment: Final = {
+        **os.environ,
+        **proxy_database_environment(),
+        "LITELLM_MASTER_KEY": gateway.key,
+        "LITELLM_SALT_KEY": os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"),
+        "STORE_MODEL_IN_DB": "True",
+        **overrides,
+    }
+    output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
+    output.mkdir(parents=True, exist_ok=True)
+    command: Final = (
+        sys.executable,
+        "-m",
+        "integration._support.proxy",
+        "--config",
+        str(config or "tests/integration/proxy_config.yaml"),
+        "--host",
+        "127.0.0.1",
+        "--num_workers",
+        "1",
+        *DB_PUSH,
+    )
+    launch: Final = _launch(command, root, environment, output)
+    try:
+        with httpx.Client(base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False) as client:
+            deadline: Final = time.monotonic() + 70
+            while launch.process.poll() is None:
+                assert not _is_ready(client), (
+                    f"Proxy became ready instead of refusing to boot:\n{launch.log.read_text()}"
+                )
+                assert time.monotonic() < deadline, "Proxy neither exited nor became ready within the deadline"
+                time.sleep(0.1)
+        assert launch.process.returncode != 0, f"Proxy exited 0 instead of refusing to boot:\n{launch.log.read_text()}"
+        return launch.log.read_text()
+    finally:
+        _stop(launch.process)
+
+
 _UPSTREAM_READY_SECONDS: Final = 60
 
 
