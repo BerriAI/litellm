@@ -4663,6 +4663,7 @@
     "azure/eu/gpt-4o-realtime-preview-2024-10-01": {
         "cache_creation_input_audio_token_cost": 2.2e-05,
         "cache_read_input_token_cost": 2.75e-06,
+        "deprecation_date": "2025-03-26",
         "input_cost_per_audio_token": 0.00011,
         "input_cost_per_token": 5.5e-06,
         "litellm_provider": "azure",
@@ -4672,6 +4673,7 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 0.00022,
         "output_cost_per_token": 2.2e-05,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
         "supports_audio_input": true,
         "supports_audio_output": true,
         "supports_function_calling": true,
@@ -6137,7 +6139,7 @@
         "cache_creation_input_audio_token_cost": 4e-07,
         "cache_read_input_audio_token_cost": 4e-07,
         "cache_read_input_token_cost": 4e-07,
-        "deprecation_date": "2027-07-31",
+        "deprecation_date": "2027-06-25",
         "input_cost_per_audio_token": 3.2e-05,
         "input_cost_per_image_token": 5e-06,
         "input_cost_per_token": 4e-06,
@@ -6148,7 +6150,7 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 6.4e-05,
         "output_cost_per_token": 2.4e-05,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "supported_endpoints": [
             "/v1/realtime"
         ],
@@ -6172,7 +6174,7 @@
         "cache_creation_input_audio_token_cost": 3e-07,
         "cache_read_input_audio_token_cost": 3e-07,
         "cache_read_input_token_cost": 6e-08,
-        "deprecation_date": "2027-07-31",
+        "deprecation_date": "2027-06-25",
         "input_cost_per_audio_token": 1e-05,
         "input_cost_per_image_token": 8e-07,
         "input_cost_per_token": 6e-07,
@@ -6183,7 +6185,7 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 2e-05,
         "output_cost_per_token": 2.4e-06,
-        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "supported_endpoints": [
             "/v1/realtime"
         ],
@@ -6306,6 +6308,7 @@
     "azure/gpt-4o-realtime-preview-2024-10-01": {
         "cache_creation_input_audio_token_cost": 2e-05,
         "cache_read_input_token_cost": 2.5e-06,
+        "deprecation_date": "2025-03-26",
         "input_cost_per_audio_token": 0.0001,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure",
@@ -6315,6 +6318,7 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 0.0002,
         "output_cost_per_token": 2e-05,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
         "supports_audio_input": true,
         "supports_audio_output": true,
         "supports_function_calling": true,
@@ -6350,7 +6354,7 @@
         "supports_tool_choice": true
     },
     "azure/gpt-4o-transcribe": {
-        "deprecation_date": "2026-12-31",
+        "deprecation_date": "2026-10-15",
         "input_cost_per_audio_token": 2.5e-06,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure",
@@ -6358,7 +6362,7 @@
         "max_output_tokens": 2000,
         "mode": "audio_transcription",
         "output_cost_per_token": 1e-05,
-        "source": "https://management.azure.com/subscriptions/c873328e-b572-4770-8dff-aaeb6f1f0e79/providers/Microsoft.CognitiveServices/locations/eastus2/models?api-version=2024-10-01",
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
         ]
@@ -10841,31 +10845,31 @@
         "deprecation_date": "2028-02-09",
         "input_cost_per_token": 1.3e-07,
         "litellm_provider": "azure",
-        "max_input_tokens": 8191,
-        "max_tokens": 8191,
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
     },
     "azure/text-embedding-3-small": {
         "deprecation_date": "2028-02-09",
         "input_cost_per_token": 2e-08,
         "litellm_provider": "azure",
-        "max_input_tokens": 8191,
-        "max_tokens": 8191,
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
     },
     "azure/text-embedding-ada-002": {
         "deprecation_date": "2028-02-09",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "azure",
-        "max_input_tokens": 8191,
-        "max_tokens": 8191,
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
         "mode": "embedding",
         "output_cost_per_token": 0.0,
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure"
     },
     "azure/speech/azure-tts": {
         "input_cost_per_character": 1.5e-05,
@@ -11093,6 +11097,7 @@
     "azure/us/gpt-4o-realtime-preview-2024-10-01": {
         "cache_creation_input_audio_token_cost": 2.2e-05,
         "cache_read_input_token_cost": 2.75e-06,
+        "deprecation_date": "2025-03-26",
         "input_cost_per_audio_token": 0.00011,
         "input_cost_per_token": 5.5e-06,
         "litellm_provider": "azure",
@@ -11102,6 +11107,7 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 0.00022,
         "output_cost_per_token": 2.2e-05,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
         "supports_audio_input": true,
         "supports_audio_output": true,
         "supports_function_calling": true,
@@ -12556,6 +12562,7 @@
         "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models"
     },
     "azure_ai/jamba-instruct": {
+        "deprecation_date": "2025-03-01",
         "input_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 70000,
@@ -12563,6 +12570,7 @@
         "max_tokens": 4096,
         "mode": "chat",
         "output_cost_per_token": 7e-07,
+        "source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/retired-models",
         "supports_tool_choice": true
     },
     "azure_ai/kimi-k2.5": {
@@ -29028,6 +29036,7 @@
         },
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_audio_token_batches": 5e-07,
+        "input_cost_per_audio_token_priority": 1.8e-06,
         "input_cost_per_token_batches": 1.5e-07,
         "input_cost_per_token_flex": 1.5e-07,
         "input_cost_per_token_priority": 5.4e-07,
@@ -29359,6 +29368,7 @@
         },
         "google_maps_grounding_cost_per_query": 0.025,
         "input_cost_per_audio_token_batches": 1.5e-07,
+        "input_cost_per_audio_token_priority": 5.4e-07,
         "input_cost_per_token_batches": 5e-08,
         "input_cost_per_token_flex": 5e-08,
         "input_cost_per_token_priority": 1.8e-07,
@@ -29659,7 +29669,8 @@
         },
         "web_search_billing_unit": "per_query",
         "google_maps_grounding_cost_per_query": 0.014,
-        "input_cost_per_audio_token_batches": 2.5e-07
+        "input_cost_per_audio_token_batches": 2.5e-07,
+        "input_cost_per_audio_token_priority": 9e-07
     },
     "gemini/gemini-3.5-flash-lite": {
         "cache_read_input_token_cost": 3e-08,
@@ -42177,14 +42188,13 @@
         "supports_web_search": false
     },
     "openrouter/deepseek/deepseek-chat-v3-0324": {
-        "cache_read_input_token_cost": 1.1e-07,
-        "input_cost_per_token": 2.9e-07,
+        "input_cost_per_token": 2.5e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 163840,
         "max_output_tokens": 147456,
         "max_tokens": 147456,
         "mode": "chat",
-        "output_cost_per_token": 1.14e-06,
+        "output_cost_per_token": 1e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -42329,14 +42339,14 @@
         "supports_web_search": false
     },
     "openrouter/deepseek/deepseek-v4.1-flash": {
-        "cache_read_input_token_cost": 6e-09,
-        "input_cost_per_token": 3e-07,
+        "cache_read_input_token_cost": 3e-09,
+        "input_cost_per_token": 3e-09,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
         "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 1.2e-06,
+        "output_cost_per_token": 2.4e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -42349,15 +42359,14 @@
         "supports_web_search": false
     },
     "openrouter/deepseek/deepseek-v4-pro-0813": {
-        "cache_read_input_token_cost": 4.4e-08,
-        "input_cost_per_token": 1.32e-06,
+        "cache_read_input_token_cost": 7e-07,
+        "input_cost_per_token": 8.5e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 393216,
-        "max_tokens": 393216,
+        "max_output_tokens": 943718,
+        "max_tokens": 943718,
         "mode": "chat",
-        "off_peak_pricing": {"input_cost_per_token":6.6e-7,"output_cost_per_token":0.00000198,"cache_read_input_token_cost":2.2e-8,"windows":[{"hours_utc":"00:00-00:00","weekdays":["saturday","sunday"]},{"hours_utc":"00:00-01:00","weekdays":["monday","tuesday","wednesday","thursday","friday"]},{"hours_utc":"04:00-06:00","weekdays":["monday","tuesday","wednesday","thursday","friday"]},{"hours_utc":"10:00-00:00","weekdays":["monday","tuesday","wednesday","thursday","friday"]}]},
-        "output_cost_per_token": 3.96e-06,
+        "output_cost_per_token": 5e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -67618,8 +67627,9 @@
         "supports_web_search": false
     },
     "openrouter/qwen/qwen3.8-27b": {
-        "input_cost_per_token": 4.2e-07,
-        "output_cost_per_token": 3e-06,
+        "cache_creation_input_token_cost": 5.3125e-07,
+        "input_cost_per_token": 4.25e-07,
+        "output_cost_per_token": 2.55e-06,
         "cache_read_input_token_cost": 8.5e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1000000,
@@ -67734,8 +67744,8 @@
         "supports_prompt_caching": true
     },
     "openrouter/deepseek/deepseek-v4-flash-0731": {
-        "cache_read_input_token_cost": 5.1e-09,
-        "input_cost_per_token": 5.1e-09,
+        "cache_read_input_token_cost": 1.52e-08,
+        "input_cost_per_token": 1.52e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
@@ -67825,14 +67835,14 @@
         "supports_web_search": false
     },
     "openrouter/moonshotai/kimi-k3": {
-        "cache_read_input_token_cost": 2.7e-07,
-        "input_cost_per_token": 2.7e-06,
+        "cache_read_input_token_cost": 7e-07,
+        "input_cost_per_token": 7.2e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
         "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 1.35e-05,
+        "output_cost_per_token": 1.4e-05,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -67950,14 +67960,14 @@
         "supports_web_search": true
     },
     "openrouter/z-ai/glm-5.2": {
-        "cache_read_input_token_cost": 2.6e-07,
-        "input_cost_per_token": 4.1e-07,
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 1.04e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 943718,
-        "max_tokens": 943718,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 3.99e-06,
+        "output_cost_per_token": 8e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -68313,14 +68323,14 @@
         "supports_web_search": true
     },
     "openrouter/deepseek/deepseek-v4-flash": {
-        "cache_read_input_token_cost": 5.6e-09,
-        "input_cost_per_token": 2.8e-08,
+        "cache_read_input_token_cost": 2.24e-08,
+        "input_cost_per_token": 2.24e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 384000,
-        "max_tokens": 384000,
+        "max_output_tokens": 943718,
+        "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 5.6e-08,
+        "output_cost_per_token": 1.28e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -68333,24 +68343,24 @@
         "supports_web_search": false
     },
     "openrouter/moonshotai/kimi-k2.6": {
-        "input_cost_per_token": 4.3415e-07,
-        "output_cost_per_token": 1.828e-06,
-        "cache_read_input_token_cost": 7.312e-08,
+        "cache_read_input_token_cost": 1.6e-07,
+        "input_cost_per_token": 9.5e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
         "max_output_tokens": 235929,
         "max_tokens": 235929,
         "mode": "chat",
+        "output_cost_per_token": 4e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
-        "supports_tool_choice": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": false,
-        "supports_vision": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
         "supports_web_search": false
     },
     "openrouter/google/gemma-4-26b-a4b-it": {
@@ -69370,13 +69380,13 @@
         "supports_web_search": false
     },
     "openrouter/qwen/qwen3-30b-a3b-instruct-2507": {
-        "input_cost_per_token": 1e-07,
+        "input_cost_per_token": 4.815e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
-        "max_output_tokens": 235929,
-        "max_tokens": 235929,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
         "mode": "chat",
-        "output_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.9305e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -69933,21 +69943,22 @@
         "supports_web_search": false
     },
     "openrouter/meta-llama/llama-3.3-70b-instruct": {
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 3.2e-07,
+        "cache_read_input_token_cost": 1.1e-07,
+        "input_cost_per_token": 2.2e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 131072,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
+        "output_cost_per_token": 5e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
         "supports_pdf_input": false,
         "supports_prompt_caching": false,
         "supports_reasoning": false,
-        "supports_tool_choice": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": false,
         "supports_web_search": false
     },
@@ -79983,6 +79994,7 @@
         "supports_web_search": false
     },
     "azure_ai/kimi-k2-thinking": {
+        "deprecation_date": "2026-03-29",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 262144,

@@ -3,9 +3,11 @@ import {
   investigationDefaults,
   investigationSchema,
   investigationSettings,
+  investigationStepFields,
+  SETUP_STEPS,
   type InvestigationInput,
 } from "./investigationSchema";
-import { watchChecks } from "./watches";
+import { watchChecks } from "../model/watches";
 
 const defaults = investigationDefaults(undefined, "new", "traces");
 
@@ -138,5 +140,14 @@ describe("investigation validation", () => {
       interval_minutes: 15,
       enabled: false,
     });
+  });
+});
+
+describe("investigationStepFields", () => {
+  it("assigns every form field to exactly one step", () => {
+    const { selection, ...rest } = defaults;
+    const formFields = [...Object.keys(rest), ...Object.keys(selection).map((key) => `selection.${key}`)].sort();
+    const stepFields = SETUP_STEPS.flatMap((step) => investigationStepFields[step]).sort();
+    expect(stepFields).toEqual(formFields);
   });
 });

@@ -15,7 +15,18 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use super::{Connection, Error};
 use litellm_traces::Shared;
 
-const MAX_INSERT_BYTES: usize = 64 * 1024 * 1024;
+fn max_insert_bytes() -> Result<usize, Error> {
+    let name = "CLICKHOUSE_TRACE_MAX_INSERT_BYTES";
+    match std::env::var(name) {
+        Ok(value) => value
+            .parse::<usize>()
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or(Error::InvalidLimit(name)),
+        Err(std::env::VarError::NotPresent) => Ok(64 * 1024 * 1024),
+        Err(_) => Err(Error::InvalidLimit(name)),
+    }
+}
 
 pub type InsertRow = BTreeMap<String, Shared<Value>>;
 
@@ -62,7 +73,7 @@ pub async fn insert_shared_rows(
         return Ok(());
     }
     let received_ms = (OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64;
-    let (token, body) = prepare_insert(&rows, received_ms, MAX_INSERT_BYTES)?;
+    let (token, body) = prepare_insert(&rows, received_ms, max_insert_bytes()?)?;
     litellm_storage_clickhouse::insert_compressed_rows(
         client,
         connection,
@@ -228,8 +239,7 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    use super::Error;
-    use super::{shared_rows, write_rows};
+    use super::{Error, shared_rows, write_rows};
 
     #[rstest]
     fn encoded_limit_counts_utf8_bytes_across_rows() {

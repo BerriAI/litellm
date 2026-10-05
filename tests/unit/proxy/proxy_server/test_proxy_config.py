@@ -3326,6 +3326,23 @@ async def test_ProxyConfig_load_config_warns_and_turns_off_a_non_flag_litellm_se
 # ---------------------------------------------------------------------------
 
 
+def test_ProxyConfig_decrypt_credentials_returns_an_encrypted_empty_value_as_empty(monkeypatch):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-decrypt-credentials-test-salt")
+    decrypted = ProxyConfig().decrypt_credentials(
+        {
+            "credential_name": "openai-wif",
+            "credential_values": {
+                "api_base": encrypt_value_helper(""),
+                "openai_service_account_id": encrypt_value_helper("user-1"),
+            },
+            "credential_info": {"custom_llm_provider": "openai"},
+        }
+    )
+    assert decrypted.credential_values == {"api_base": "", "openai_service_account_id": "user-1"}
+
+
 def test_ProxyConfig_decrypt_model_list_from_db_returns_decrypted(monkeypatch):
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
@@ -4672,7 +4689,8 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch):
+@pytest.mark.parametrize("ui_settings_already_synced", [False, True])
+async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch, ui_settings_already_synced):
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
@@ -4684,14 +4702,18 @@ async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endp
         "get_config_param",
         AsyncMock(return_value=SimpleNamespace(param_value={"pass_through_endpoints": None})),
     )
-    monkeypatch.setattr(proxy_server, "sync_ui_settings_to_general_settings", AsyncMock())
+    settings_refresh = AsyncMock()
+    monkeypatch.setattr(proxy_server, "sync_ui_settings_to_general_settings", settings_refresh)
     monkeypatch.setattr(pc, "_should_load_db_object", lambda *, object_type: False)
     monkeypatch.setattr(pc, "get_credentials", AsyncMock())
     monkeypatch.setattr(pc, "_init_non_llm_objects_in_db", non_llm_initialization)
 
-    await pc.add_deployment(prisma_client=MagicMock(), proxy_logging_obj=MagicMock())
+    await pc.add_deployment(
+        prisma_client=MagicMock(), proxy_logging_obj=MagicMock(), ui_settings_already_synced=ui_settings_already_synced
+    )
 
     non_llm_initialization.assert_awaited_once()
+    assert settings_refresh.await_count == (0 if ui_settings_already_synced else 1)
 
 
 # ---------------------------------------------------------------------------

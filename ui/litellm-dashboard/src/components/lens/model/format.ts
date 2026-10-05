@@ -1,6 +1,7 @@
 import { formatActivityTimestamp as runTime } from "@/utils/activityTimestamp";
 import type { Settings } from "./types";
-export { formatActivityTimestamp as runTime } from "@/utils/activityTimestamp";
+
+export { runTime };
 
 export function scopeLabel(settings: Partial<Pick<Settings, "service" | "agent_name" | "filters">>): string {
   return (
@@ -25,6 +26,15 @@ export function durationLabel(value: number, base: "minutes" | "hours" = "minute
   }
   if (minutes % 60 === 0) return `${minutes / 60} ${minutes === 60 ? "hour" : "hours"}`;
   return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+}
+
+export function agoLabel(thenMs: number, nowMs: number): string {
+  const seconds = Math.max(0, Math.floor((nowMs - thenMs) / 1000));
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
 }
 
 export const money = (n: number) =>
