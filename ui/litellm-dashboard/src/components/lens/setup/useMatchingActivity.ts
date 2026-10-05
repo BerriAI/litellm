@@ -29,6 +29,10 @@ export interface PreviewStatus {
   readonly title: string;
   readonly windowLabel: string;
   readonly ready: boolean;
+  /** No results yet for any search: the table shows skeleton rows. */
+  readonly loading: boolean;
+  /** The rows belong to the previous search while this one loads. */
+  readonly stale: boolean;
   readonly error: Error | null;
   readonly refresh: () => void;
 }
@@ -144,6 +148,8 @@ export function useMatchingActivity(): MatchingActivity {
   }, [empty, valid, asOf, refresh]);
   const pending = settling || preview.isLoading || preview.isPlaceholderData;
   const ready = !pending && valid;
+  const loading = valid && pending && !firstPage;
+  const stale = valid && pending && !!firstPage;
   const setExecutionIds = (next: readonly string[]) =>
     setValue("selection.execution_ids", [...next], { shouldValidate: true });
   const picked = manualSelection ? manualPicks(selection, setExecutionIds) : null;
@@ -156,6 +162,8 @@ export function useMatchingActivity(): MatchingActivity {
         title: previewTitle({ pending, validWindow: windowValid, valid }, firstPage),
         windowLabel: windowLabel(selection),
         ready,
+        loading,
+        stale,
         error: preview.error,
         refresh,
       },

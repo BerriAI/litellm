@@ -60,6 +60,7 @@ export function MatchingActivityPreview({
   ...props
 }: MatchingActivityPreviewProps) {
   const runs = page.executions.flatMap((run) => (run.summary ? [run.summary] : []));
+  const shown = status.ready || status.stale;
   return (
     <section
       aria-label="Matching activity"
@@ -97,21 +98,22 @@ export function MatchingActivityPreview({
           No matches. Try removing a filter from the search. Recent trace updates need two minutes to settle.
         </p>
       )}
-      {status.ready && runs.length > 0 && (
+      {(status.loading || (shown && !status.error && runs.length > 0)) && (
         <div className="max-h-[60dvh] min-h-0 overflow-auto">
           <AgentTracesTable
             traces={runs}
-            isLoading={false}
+            isLoading={status.loading}
             error={null}
             hasMore={page.hasMore}
             isFetching={page.loadingMore}
+            isPlaceholder={status.stale}
             onLoadMore={page.loadMore}
             onSetUpTracing={() => {}}
             picks={selection ? runPicks(selection) : undefined}
           />
         </div>
       )}
-      {status.ready && <PreviewFooter page={page} selection={selection} />}
+      {shown && <PreviewFooter page={page} selection={selection} />}
     </section>
   );
 }

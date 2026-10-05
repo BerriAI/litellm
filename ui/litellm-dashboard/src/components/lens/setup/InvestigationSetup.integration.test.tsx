@@ -430,6 +430,30 @@ it("fetches one preview for two keystrokes inside the debounce window", async ()
   }
 });
 
+it("shows skeleton rows on first load and keeps the previous rows while a new search loads", async () => {
+  const pending = new Map<string, (page: unknown) => void>();
+  proxy.post.mockImplementation(
+    (_path, options) =>
+      new Promise((resolve) => {
+        pending.set((options?.body as { selection: Settings }).selection.q, resolve);
+      }),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />);
+  const preview = within(screen.getByRole("region", { name: "Matching activity" }));
+  expect((await preview.findAllByTestId("runs-placeholder")).length).toBeGreaterThan(0);
+  act(() => pending.get("")?.({ eligible: 1, selected: 1, executions: [run("Old run", 1)] }));
+  expect(await preview.findByText("Old run")).toBeVisible();
+  expect(preview.queryByTestId("runs-placeholder")).not.toBeInTheDocument();
+  await user.type(screen.getByRole("combobox", { name: "Search runs" }), "new");
+  await waitFor(() => expect(pending.has("new")).toBe(true));
+  expect(preview.getByText("Old run")).toBeVisible();
+  expect(preview.queryByTestId("runs-placeholder")).not.toBeInTheDocument();
+  act(() => pending.get("new")?.({ eligible: 1, selected: 1, executions: [run("New run", 2)] }));
+  expect(await preview.findByText("New run")).toBeVisible();
+  expect(preview.queryByText("Old run")).not.toBeInTheDocument();
+});
+
 it.each(["empty", "error"])("blocks a new investigation when its preview is %s", async (state) => {
   if (state === "error") proxy.post.mockRejectedValue(new Error("Storage unavailable"));
   else proxy.post.mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
