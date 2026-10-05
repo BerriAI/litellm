@@ -114,8 +114,8 @@ class ThirdlawGuardrailConfigModel(GuardrailConfigModel[ThirdlawGuardrailConfigM
     api_base: str | None = Field(
         default=None,
         description="ThirdLaw intervene-service base URL; /guardrails/litellm/v2 is appended unless already present. Env: THIRDLAW_API_BASE.",
-        json_schema_extra={  # mutable-ok: pydantic stores schema extras as plain JSON containers
-            "examples": [  # mutable-ok: pydantic stores schema extras as plain JSON containers
+        json_schema_extra={
+            "examples": [
                 "https://api.thirdlaw.<your-domain>",
             ]
         },

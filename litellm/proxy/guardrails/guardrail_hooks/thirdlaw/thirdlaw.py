@@ -234,7 +234,7 @@ def _organization_metadata_of(auth: UserAPIKeyAuth) -> object:
 
 def _jsonable_dict(value: Mapping[str, object]) -> Mapping[str, object]:
     """Round-trip through JSON so the payload cannot carry live objects."""
-    plain: Final = dict(value)  # mutable-ok: json.dumps requires a real dict; consumed immediately
+    plain: Final = dict(value)
     return _JSON_DICT_ADAPTER.validate_python(json.loads(json.dumps(plain, default=str)))
 
 
@@ -540,17 +540,17 @@ class ThirdlawGuardrail(CustomGuardrail):
             additional_provider_specific_params or _EMPTY_MAP
         )
 
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))  # mutable-ok: base API
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
         super().__init__(**kwargs)
 
         self.async_handler = async_handler or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
-            params={"timeout": self.guardrail_timeout},  # mutable-ok: one-shot client-factory argument
+            params={"timeout": self.guardrail_timeout},
         )
 
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: CustomGuardrail base-class contract
-        return [  # mutable-ok: CustomGuardrail base-class contract returns a list
+        return [
             GuardrailEventHooks.pre_call,
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.during_call,
@@ -604,7 +604,7 @@ class ThirdlawGuardrail(CustomGuardrail):
     ) -> None:
         now: Final = datetime.now(timezone.utc)
         self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_json_response=dict(trace),  # mutable-ok: the logging helper requires a plain dict
+            guardrail_json_response=dict(trace),
             request_data=request_data,
             guardrail_status=status,
             start_time=started_at.timestamp(),
@@ -662,7 +662,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         try:
             http_response: Final = await self.async_handler.post(
                 url=self.api_base,
-                headers=dict(self.http_headers),  # mutable-ok: the HTTP client requires a plain dict
+                headers=dict(self.http_headers),
                 json=payload.model_dump(mode="json", exclude_none=True),
             )
             http_response.raise_for_status()
@@ -673,7 +673,7 @@ class ThirdlawGuardrail(CustomGuardrail):
                 event_type=event_type,
                 status="guardrail_failed_to_respond",
                 started_at=started_at,
-                trace={"error": _service_error_message(error)},  # mutable-ok: one-shot trace payload
+                trace={"error": _service_error_message(error)},
             )
             self._handle_call_failure(error=error, wire_event=wire_event)
             return None
@@ -720,17 +720,15 @@ class ThirdlawGuardrail(CustomGuardrail):
             verbose_proxy_logger.warning(
                 "ThirdLaw guardrail: modify_request decision carried no request_body; request unchanged"
             )
-            return dict(data)  # mutable-ok: the pre-call hook contract returns a plain request dict
-        accepted: Final = {  # mutable-ok: one-shot filter merged into the returned request dict
-            key: value for key, value in replacement.items() if key not in _WRITE_BACK_DENY_KEYS
-        }
+            return dict(data)
+        accepted: Final = {key: value for key, value in replacement.items() if key not in _WRITE_BACK_DENY_KEYS}
         denied: Final = replacement.keys() - accepted.keys()
         if denied:
             verbose_proxy_logger.warning(
                 "ThirdLaw guardrail: dropping protected keys from modify_request write-back: %s",
                 sorted(denied),
             )
-        return {**data, **accepted}  # mutable-ok: the proxy owns the replaced request dict
+        return {**data, **accepted}
 
     @staticmethod
     def _carry_hidden_params(*, source: object, target: object) -> None:
@@ -770,7 +768,7 @@ class ThirdlawGuardrail(CustomGuardrail):
                     guardrail_name=self.guardrail_name,
                     message="ThirdLaw guardrail returned a malformed modified response: choices must be a list",
                 )
-            merged: Final = {  # mutable-ok: one-shot overlay consumed immediately by model_validate
+            merged: Final = {
                 **_JSON_DICT_ADAPTER.validate_python(response.model_dump()),
                 **replacement,
             }
@@ -785,9 +783,9 @@ class ThirdlawGuardrail(CustomGuardrail):
             return validated
         response_dict: Final = _dict_of(response)
         if response_dict is not None:
-            return {**response_dict, **replacement}  # mutable-ok: the proxy owns the replaced response dict
+            return {**response_dict, **replacement}
         if isinstance(response, BaseModel):
-            merged_body: Final = {  # mutable-ok: one-shot overlay consumed immediately by model_validate
+            merged_body: Final = {
                 **_JSON_DICT_ADAPTER.validate_python(response.model_dump(mode="json")),
                 **replacement,
             }
@@ -910,6 +908,7 @@ class ThirdlawGuardrail(CustomGuardrail):
             verbose_proxy_logger.warning(
                 "ThirdLaw guardrail: modify_response is discarded when run_in_parallel=True (block-only mode)"
             )
+            return response
         modified: Final = self._modified_response(response=response, replacement=decision.response_body)
         return cast(LLMResponseTypes, modified)  # cast-ok: dict passthrough mirrors the proxy /v1/messages contract
 
@@ -996,7 +995,7 @@ class ThirdlawGuardrail(CustomGuardrail):
         from litellm.main import stream_chunk_builder
 
         try:
-            assembled: Final = stream_chunk_builder(chunks=list(collected))  # mutable-ok: builder requires a list
+            assembled: Final = stream_chunk_builder(chunks=list(collected))
         except Exception:  # noqa: BLE001  # unassembleable streams route to the explicit fail-closed/pass-through path
             verbose_proxy_logger.warning("ThirdLaw guardrail: could not assemble streamed response", exc_info=True)
             return None

@@ -2266,3 +2266,232 @@ async def test_block_never_travels_as_a_success_status(service_status, expected_
             call_type="completion",
         )
     assert excinfo.value.status_code == expected_status
+
+
+def _sampled_guardrail(**overrides: object) -> ThirdlawGuardrail:
+    return _make_guardrail(
+        streaming_buffer_until_moderated=False,
+        streaming_end_of_stream_only=False,
+        **{"streaming_sampling_rate": 100, **overrides},
+    )
+
+
+async def test_request_with_no_inbound_headers_posts_no_headers():
+    data = _request_data()
+    del data["proxy_server_request"]["headers"]
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})])
+    await _run_pre_call(g, data)
+    assert _sent_payload(g).get("request_headers") is None
+
+
+class _SelfReferencingResponse:
+    """A response whose dump cannot be turned into JSON, the way a live object graph can loop."""
+
+    def model_dump(self, mode: str = "python") -> JsonDict:
+        body: JsonDict = {"id": "resp-loop"}
+        body["self"] = body
+        return body
+
+
+async def test_post_call_skips_a_response_it_cannot_serialize_instead_of_failing_the_request():
+    g = _make_guardrail(decisions=[])
+    response = _SelfReferencingResponse()
+    out = await g.async_post_call_success_hook(
+        data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=response
+    )
+    assert out is response
+    assert g.async_handler.post.await_count == 0
+
+
+class _UndumpableEvent:
+    type = "response.output_text.delta"
+
+    def model_dump(self, mode: str = "python") -> JsonDict:
+        raise ValueError("cannot dump")
+
+
+class _ListDumpingEvent:
+    type = "response.output_text.delta"
+
+    def model_dump(self, mode: str = "python") -> list[object]:
+        return ["not", "a", "mapping"]
+
+
+async def test_unserializable_stream_events_are_left_out_of_the_posted_chunks():
+    """One event that will not serialize must not cost the service the rest of the stream."""
+    chunks = _responses_stream_chunks()
+    stream = [
+        *chunks[:2],
+        {"type": "response.output_text.delta", "delta": " plain-dict"},
+        _UndumpableEvent(),
+        _ListDumpingEvent(),
+        *chunks[2:],
+    ]
+    g = _make_guardrail(send_stream_chunks=True, decisions=[_decision_response({"action": "allow"})])
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(stream), request_data=_request_data()
+        )
+    )
+    assert out == stream
+    posted = _sent_payload(g)["response_chunks"]
+    assert [c["type"] for c in posted] == [
+        "response.created",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.completed",
+    ]
+    assert posted[2]["delta"] == " plain-dict"
+
+
+async def test_during_call_passes_through_when_the_service_is_unreachable_and_fail_open():
+    g = _make_guardrail(unreachable_fallback="fail_open")
+    g.async_handler.post.side_effect = _connect_error()
+    data = _request_data()
+    out = await g.async_moderation_hook(data=data, user_api_key_dict=UserAPIKeyAuth(), call_type="completion")
+    assert out is data
+    assert data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_status"] == (
+        "guardrail_failed_to_respond"
+    )
+
+
+async def test_post_call_returns_the_original_response_when_the_service_is_unreachable_and_fail_open():
+    g = _make_guardrail(unreachable_fallback="fail_open")
+    g.async_handler.post.side_effect = _connect_error()
+    response = _model_response()
+    out = await g.async_post_call_success_hook(
+        data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=response
+    )
+    assert out is response
+
+
+async def test_run_in_parallel_discards_a_rewrite_without_validating_it():
+    """The proxy throws this hook's return value away in parallel mode, so a malformed rewrite
+    must not be able to reject a response the scan otherwise let through."""
+    g = _make_guardrail(
+        run_in_parallel=True,
+        decisions=[_decision_response({"action": "modify_response", "response_body": {"choices": "not-a-list"}})],
+    )
+    response = _model_response()
+    out = await g.async_post_call_success_hook(
+        data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=response
+    )
+    assert out is response
+
+
+async def test_a_buffered_stream_raises_when_the_service_fails_before_headers_are_flushed():
+    g = _make_guardrail()
+    g.async_handler.post.side_effect = _connect_error()
+    with pytest.raises(GuardrailRaisedException, match="ThirdLaw"):
+        await _collect(
+            g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(), response=_aiter(_stream_chunks()), request_data=_request_data()
+            )
+        )
+
+
+async def test_a_buffered_messages_stream_gets_an_error_frame_when_the_service_fails_after_a_keepalive(
+    monkeypatch,
+):
+    """Once a keepalive ping has flushed a 200 status line, a raise can no longer reach the
+    client, so the failure has to travel in-stream as an Anthropic error frame."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "anthropic_sse_ping_interval_seconds", 1e-9)
+    g = _make_guardrail()
+    g.async_handler.post.side_effect = _connect_error()
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(_anthropic_sse_frames()), request_data=_request_data()
+        )
+    )
+    frames = b"".join(item for item in out if isinstance(item, bytes)).decode()
+    assert "event: error" in frames
+    assert "ThirdLaw guardrail request failed" in frames
+    assert "hello" not in frames
+
+
+async def test_a_buffered_modify_with_no_replacement_body_releases_the_original_stream():
+    g = _make_guardrail(decisions=[_decision_response({"action": "modify_response"})])
+    chunks = _stream_chunks()
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    assert out == chunks
+
+
+async def test_fail_open_does_not_cover_chat_chunks_that_will_not_assemble():
+    """Chat chunks are a supported shape, so failing to assemble them is a scan failure that the
+    unscannable-stream opt-in must not wave through."""
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    g = _make_guardrail(decisions=[], unscannable_stream_fallback="fail_open")
+    with pytest.raises(StreamingCallbackError, match="could not be assembled for scanning"):
+        await _collect(
+            g.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=_aiter([*_stream_chunks(), None]),
+                request_data=_request_data(),
+            )
+        )
+    assert g.async_handler.post.await_count == 0
+
+
+async def test_a_sampled_stream_that_will_not_assemble_is_refused_after_delivery():
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
+    first, second, last = _stream_chunks()
+    g = _sampled_guardrail(streaming_sampling_rate=2, decisions=[])
+    agen = g.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(), response=_aiter([first, None, last]), request_data=_request_data()
+    )
+    assert await agen.__anext__() is first
+    assert await agen.__anext__() is None
+    assert await agen.__anext__() is last
+    with pytest.raises(StreamingCallbackError, match="could not be assembled for scanning"):
+        await agen.__anext__()
+    assert g.async_handler.post.await_count == 0
+
+
+async def test_a_sampled_stream_is_delivered_untouched_when_the_service_is_unreachable_and_fail_open():
+    g = _sampled_guardrail(unreachable_fallback="fail_open")
+    g.async_handler.post.side_effect = _connect_error()
+    chunks = _stream_chunks()
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    assert out == chunks
+
+
+async def test_a_sampled_responses_stream_blocked_at_the_end_closes_with_an_error_event():
+    """A /v1/responses client only understands Responses events, so the late block has to arrive
+    as one rather than as the proxy's generic error blob."""
+    chunks = _responses_stream_chunks()
+    g = _sampled_guardrail(decisions=[_decision_response({"action": "block", "message": "final says no"})])
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    assert out[: len(chunks)] == chunks
+    error_event = out[len(chunks)]
+    assert error_event.type == ResponsesAPIStreamEvents.ERROR
+    assert "final says no" in str(error_event)
+
+
+async def test_a_sampled_responses_stream_that_never_completes_closes_with_an_error_event():
+    chunks = _truncated_responses_chunks()
+    g = _sampled_guardrail(decisions=[])
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
+    )
+    assert out[: len(chunks)] == chunks
+    assert out[len(chunks)].type == ResponsesAPIStreamEvents.ERROR
+    assert "could not be assembled for scanning" in str(out[len(chunks)])
+    assert g.async_handler.post.await_count == 0

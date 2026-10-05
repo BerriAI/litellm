@@ -35,10 +35,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _thirdlaw_callback
 
 
-guardrail_initializer_registry: Final = {  # mutable-ok: the registry loader requires a plain dict
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.THIRDLAW.value: initialize_guardrail,
 }
 
-guardrail_class_registry: Final = {  # mutable-ok: the registry loader requires a plain dict
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.THIRDLAW.value: ThirdlawGuardrail,
 }

@@ -104,3 +104,62 @@ def test_a_tool_block_with_no_arguments_assembles_as_an_empty_object():
         ("message_stop", {"type": "message_stop"}),
     )
     assert arguments == {}
+
+
+def _text_block_start(index: int = 0) -> tuple[str, dict[str, object]]:
+    return (
+        "content_block_start",
+        {"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}},
+    )
+
+
+def _block_delta(delta: dict[str, object], index: int = 0) -> tuple[str, dict[str, object]]:
+    return ("content_block_delta", {"type": "content_block_delta", "index": index, "delta": delta})
+
+
+def _assembled_content(*events: tuple[str, dict[str, object]]) -> Sequence[dict[str, object]]:
+    body = assemble_anthropic_sse_body(_frames(*events))
+    assert body is not None
+    content = body["content"]
+    assert isinstance(content, Sequence)
+    return content
+
+
+def test_citation_deltas_land_on_the_text_block_they_annotate():
+    citation = {"type": "char_location", "cited_text": "the sky is blue", "document_index": 0}
+    content = _assembled_content(
+        _message_start(),
+        _text_block_start(),
+        _block_delta({"type": "text_delta", "text": "Blue."}),
+        _block_delta({"type": "citations_delta", "citation": citation}),
+        _block_delta({"type": "citations_delta"}),
+        _block_delta({"type": "some_future_delta", "text": "ignored"}),
+    )
+    assert list(content) == [{"type": "text", "text": "Blue.", "citations": (citation,)}]
+
+
+def test_a_block_type_with_no_deltas_keeps_its_start_payload():
+    redacted = {"type": "redacted_thinking", "data": "opaque-blob"}
+    content = _assembled_content(
+        _message_start(),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": redacted}),
+    )
+    assert list(content) == [redacted]
+
+
+def test_malformed_block_events_are_skipped_without_corrupting_the_rest():
+    content = _assembled_content(
+        _message_start(),
+        ("content_block_start", {"type": "content_block_start", "content_block": {"type": "text", "text": ""}}),
+        _text_block_start(),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": "not-a-mapping"}),
+        _block_delta({"type": "text_delta", "text": "kept"}),
+    )
+    assert list(content) == [{"type": "text", "text": "kept"}]
+
+
+def test_an_undecodable_stream_assembles_to_nothing():
+    """Nothing scannable comes out of bytes that are not UTF-8, so callers must treat the stream as
+    unassembled rather than scanning a partial body."""
+    frames = _frames(_message_start(), _text_block_start())
+    assert assemble_anthropic_sse_body([*frames[:1], b"\xff\xfe\xfd", *frames[1:]]) is None
