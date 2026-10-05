@@ -12,6 +12,7 @@ from typing import Final, Literal, Protocol, TypeAlias, TypeVar
 from pydantic import Field, TypeAdapter, ValidationError
 
 from .models import (
+    Activity,
     Claim,
     Coverage,
     Evidence,
@@ -19,6 +20,7 @@ from .models import (
     ExecutionContent,
     FindingDraft,
     InFlight,
+    ModelMessage,
     ModelRequest,
     ModelResult,
     Record,
@@ -28,6 +30,7 @@ from .models import (
     ReviewVerdict,
     RunAssessment,
     Sample,
+    ToolCount,
     TracePart,
 )
 from .prompts import PROMPTS
@@ -93,6 +96,7 @@ class Examined(Record):
     error: str = ""
     reasoning: str = ""
     shown: tuple[TracePart, ...] = ()
+    tool_calls: tuple[ToolCount, ...] = ()
 
 
 class Investigation(Record):
@@ -108,10 +112,11 @@ ReadContent: TypeAlias = Callable[[str, str, int], Awaitable[ExecutionContent]]
 class ReportProgress(Protocol):
     def __call__(
         self,
-        stage: str,
-        coverage: Coverage,
+        stage: str | None,
+        coverage: Coverage | None,
         review: Review | None = None,
         reading: tuple[InFlight, ...] | None = None,
+        activity: Activity | None = None,
         /,
     ) -> Awaitable[None]: ...
 
@@ -141,13 +146,31 @@ class AnalysisResponseError(ValueError):
     pass
 
 
+class AnalysisContextExceeded(AnalysisResponseError):
+    def __init__(self, request: ModelRequest) -> None:
+        self.request: Final = request
+        super().__init__("The analysis conversation exceeds the model's context window.")
+
+
 async def structured_response(
     request: ModelRequest,
     schema: type[ResponseT],
     model: ModelCall,
     validate: Callable[[ResponseT], str | None] = lambda _: None,
 ) -> ResponseT:
+    parsed, _ = await structured_response_with_history(request, schema, model, validate)
+    return parsed
+
+
+async def structured_response_with_history(
+    request: ModelRequest,
+    schema: type[ResponseT],
+    model: ModelCall,
+    validate: Callable[[ResponseT], str | None] = lambda _: None,
+) -> tuple[ResponseT, tuple[ModelMessage, ...]]:
     response: Final = await model(request)
+    if response.context_exceeded:
+        raise AnalysisContextExceeded(request)
     try:
         parsed: Final = schema.model_validate_json(response.content)
         if response.finish_reason:
@@ -155,21 +178,31 @@ async def structured_response(
         invalid: Final = validate(parsed)
         if invalid:
             raise ValueError(invalid)
-        return parsed
+        return parsed, (*request.messages, ModelMessage(role="assistant", content=response.content))
     except ValueError as error:
         problem: Final = (
             error.json(include_input=False, include_url=False) if isinstance(error, ValidationError) else str(error)
         )
+    correction: Final = (
+        "\nYour previous response did not match the required response contract. Generate a new response "
+        "from the original evidence, correcting these validation errors: " + problem
+    )
     repair: Final = request.model_copy(
         update=MappingProxyType(
             {
-                "prompt": request.prompt
-                + "\nYour previous response did not match the required response contract. Generate a new response "
-                "from the original evidence, correcting these validation errors: " + problem
+                "messages": (
+                    *request.messages,
+                    ModelMessage(role="assistant", content=response.content),
+                    ModelMessage(role="user", content=correction),
+                )
             }
+            if request.messages
+            else {"prompt": request.prompt + correction}
         )
     )
     repaired: Final = await model(repair)
+    if repaired.context_exceeded:
+        raise AnalysisContextExceeded(repair)
     try:
         corrected: Final = schema.model_validate_json(repaired.content)
         if repaired.finish_reason:
@@ -177,7 +210,7 @@ async def structured_response(
         remaining: Final = validate(corrected)
         if remaining:
             raise ValueError(remaining)
-        return corrected
+        return corrected, (*repair.messages, ModelMessage(role="assistant", content=repaired.content))
     except ValueError as error:
         stage: Final = MappingProxyType(
             {
@@ -451,6 +484,7 @@ def review_of(examined: Examined, model: str, duration_ms: int, at: datetime) ->
         model=model,
         duration_ms=max(duration_ms, 0),
         at=at,
+        tool_calls=examined.tool_calls,
     )
 
 
@@ -672,8 +706,23 @@ async def investigation_decision(request: ModelRequest, model: ModelCall, steps:
     return Decision(action=final.action, finding=final.finding)
 
 
+AnalyzeSample: TypeAlias = Callable[[Claim, Sample, ReadContent, ModelCall, ReportProgress], Awaitable[Result]]
+ExtractExecution: TypeAlias = Callable[[Claim, Execution, ReadContent, ModelCall], Awaitable[Examined]]
+
+
 async def analyze_sample(
     claim: Claim, sample: Sample, read: ReadContent, model: ModelCall, progress: ReportProgress
+) -> Result:
+    return await analyze_with(claim, sample, read, model, progress, analyze_executions)
+
+
+async def analyze_with(
+    claim: Claim,
+    sample: Sample,
+    read: ReadContent,
+    model: ModelCall,
+    progress: ReportProgress,
+    analyze: AnalyzeSample,
 ) -> Result:
     originals: Final = MappingProxyType({f"r{index}": e for index, e in enumerate(sample.executions)})
     executions: Final = tuple(e.model_copy(update=MappingProxyType({"id": alias})) for alias, e in originals.items())
@@ -696,7 +745,12 @@ async def analyze_sample(
         return originals[identity].id
 
     async def progress_original(
-        stage: str, coverage: Coverage, review: Review | None = None, reading: tuple[InFlight, ...] | None = None, /
+        stage: str | None,
+        coverage: Coverage | None,
+        review: Review | None = None,
+        reading: tuple[InFlight, ...] | None = None,
+        activity: Activity | None = None,
+        /,
     ) -> None:
         await progress(
             stage,
@@ -707,9 +761,16 @@ async def analyze_sample(
             else tuple(
                 r.model_copy(update=MappingProxyType({"execution_id": original(r.execution_id)})) for r in reading
             ),
+            activity.model_copy(
+                update=MappingProxyType(
+                    {"execution_ids": tuple(original(identity) for identity in activity.execution_ids)}
+                )
+            )
+            if activity is not None
+            else None,
         )
 
-    result: Final = await _analyze_sample(
+    result: Final = await analyze(
         claim,
         sample.model_copy(update=MappingProxyType({"executions": executions})),
         read_alias,
@@ -743,8 +804,14 @@ async def analyze_sample(
     )
 
 
-async def _analyze_sample(
-    claim: Claim, sample: Sample, read: ReadContent, model: ModelCall, progress: ReportProgress
+async def analyze_executions(
+    claim: Claim,
+    sample: Sample,
+    read: ReadContent,
+    model: ModelCall,
+    progress: ReportProgress,
+    *,
+    extractor: ExtractExecution = extract,
 ) -> Result:
     base: Final = Coverage(eligible=sample.eligible, selected=len(sample.executions))
     if not sample.executions:
@@ -755,7 +822,9 @@ async def _analyze_sample(
         async with slots:
             return await model(request)
 
-    examined: Final = tuple([item async for item in examine_executions(claim, sample, read, limited_model, progress)])
+    examined: Final = tuple(
+        [item async for item in examine_executions(claim, sample, read, limited_model, progress, extractor=extractor)]
+    )
     coverage: Final = base.model_copy(
         update=MappingProxyType(
             {
@@ -932,7 +1001,13 @@ async def merge_candidates(
 
 
 async def examine_executions(
-    claim: Claim, sample: Sample, read: ReadContent, model: ModelCall, progress: ReportProgress
+    claim: Claim,
+    sample: Sample,
+    read: ReadContent,
+    model: ModelCall,
+    progress: ReportProgress,
+    *,
+    extractor: ExtractExecution = extract,
 ) -> AsyncIterator[Examined]:
     reading: tuple[InFlight, ...] = ()  # rebind-ok: the in-flight set changes as each read starts and finishes
     screened = 0  # rebind-ok: counts finished reads for progress
@@ -954,7 +1029,7 @@ async def examine_executions(
         )
         await report(lambda current: (*current, entry), None)
         started: Final = time.perf_counter()
-        examined: Final = await extract(claim, execution, read, model)
+        examined: Final = await extractor(claim, execution, read, model)
         elapsed: Final = round((time.perf_counter() - started) * 1000)
         return examined, review_of(examined, claim.job.settings.model, elapsed, datetime.now(timezone.utc))
 

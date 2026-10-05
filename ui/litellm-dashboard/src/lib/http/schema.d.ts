@@ -25302,6 +25302,43 @@ export interface components {
             /** Results */
             results: components["schemas"]["TagActiveUsersResponse"][];
         };
+        /** Activity */
+        Activity: {
+            /**
+             * Execution Ids
+             * @default []
+             */
+            execution_ids: string[];
+            /**
+             * Finished
+             * @default false
+             */
+            finished: boolean;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Operations
+             * @default []
+             */
+            operations: ("model" | "read" | "search" | "python" | "catalog" | "review_catalog" | "read_reviews" | "search_reviews" | "history" | "checkpoint")[];
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "load" | "review" | "group" | "reconcile" | "investigate";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["ToolCount"][];
+        };
         /** ActivityAvailability */
         ActivityAvailability: {
             /**
@@ -33293,6 +33330,11 @@ export interface components {
         /** Job */
         Job: {
             /**
+             * Activities
+             * @default []
+             */
+            activities: components["schemas"]["Activity"][];
+            /**
              * Assessments
              * @default []
              */
@@ -38212,6 +38254,16 @@ export interface components {
             /** Top Models */
             top_models: components["schemas"]["ModelInsightMetric"][];
         };
+        /** ModelMessage */
+        ModelMessage: {
+            /** Content */
+            content: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant";
+        };
         /** ModelParams */
         ModelParams: {
             /** Litellm Params */
@@ -38224,6 +38276,11 @@ export interface components {
         };
         /** ModelRequest */
         ModelRequest: {
+            /**
+             * Messages
+             * @default []
+             */
+            messages: components["schemas"]["ModelMessage"][];
             /** Prompt */
             prompt: string;
             /**
@@ -38253,6 +38310,11 @@ export interface components {
         ModelResult: {
             /** Content */
             content: string;
+            /**
+             * Context Exceeded
+             * @default false
+             */
+            context_exceeded: boolean;
             /** Cost */
             cost: number;
         };
@@ -40939,26 +41001,13 @@ export interface components {
         };
         /** Progress */
         Progress: {
-            /**
-             * @default {
-             *       "candidates": 0,
-             *       "eligible": 0,
-             *       "grouped_batches": 0,
-             *       "grouping_batches": 0,
-             *       "inconclusive": 0,
-             *       "investigated": 0,
-             *       "partial": 0,
-             *       "screened": 0,
-             *       "selected": 0,
-             *       "unassessable": 0
-             *     }
-             */
-            coverage: components["schemas"]["Coverage"];
+            activity?: components["schemas"]["Activity"] | null;
+            coverage?: components["schemas"]["Coverage"] | null;
             /** Reading */
             reading?: components["schemas"]["InFlight"][] | null;
             review?: components["schemas"]["Review"] | null;
             /** Stage */
-            stage: string;
+            stage?: string | null;
         };
         /** Prompt */
         Prompt: {
@@ -43752,6 +43801,11 @@ export interface components {
              * @default []
              */
             spans: components["schemas"]["ReviewSpan"][];
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["ToolCount"][];
             /** Trace Id */
             trace_id: string;
             /**
@@ -46561,6 +46615,16 @@ export interface components {
             type: "file_search" | "web_search_preview" | "computer" | "computer_use_preview" | "computer_use" | "web_search_preview_2025_03_11" | "image_generation" | "code_interpreter";
         } & {
             [key: string]: unknown;
+        };
+        /** ToolCount */
+        ToolCount: {
+            /** Calls */
+            calls: number;
+            /**
+             * Name
+             * @enum {string}
+             */
+            name: "model" | "read" | "search" | "python" | "catalog" | "review_catalog" | "read_reviews" | "search_reviews" | "history" | "checkpoint";
         };
         /** ToolDetailResponse */
         ToolDetailResponse: {

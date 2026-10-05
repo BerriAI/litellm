@@ -21,8 +21,13 @@ import {
   outcome,
   providerOf,
   polling,
+  activeActivities,
+  activityOperation,
+  activityPhase,
+  toolCallSummary,
+  reviewScope,
 } from "./live";
-import type { Job, Review } from "./types";
+import type { Activity, Job, Review } from "./types";
 
 function review(id: string, overrides: Partial<Review> = {}): Review {
   return {
@@ -31,6 +36,7 @@ function review(id: string, overrides: Partial<Review> = {}): Review {
     agent: "support-bot",
     name: id,
     spans: [],
+    tool_calls: [],
     reasoning: "",
     verdicts: [],
     cannot_assess: false,
@@ -240,7 +246,7 @@ describe("issue count", () => {
     expect(issueCount({ ...running, reviewed: 3 })).toEqual({ count: 2, scope: "" });
     expect(issueCount({ ...running, reviewed: 120 })).toEqual({
       count: 2,
-      scope: "in last 3 reviewed",
+      scope: "in 3 displayed reviews",
     });
   });
 });
@@ -328,5 +334,72 @@ describe("honest live list", () => {
     expect(durationLabel(420)).toBe("420ms");
     expect(durationLabel(1420)).toBe("1.4s");
     expect(durationLabel(83_000)).toBe("1m 23s");
+  });
+});
+
+describe("analysis activity", () => {
+  const activity: Activity = {
+    id: "candidate-1",
+    phase: "investigate",
+    label: "Check repeated grep failures",
+    execution_ids: ["a", "b"],
+    started_at: "2026-10-03T16:00:00Z",
+    operations: ["python", "read"],
+    tool_calls: [{ name: "search", calls: 2 }],
+    finished: false,
+  };
+
+  it("uses actual phase and operations instead of calling candidate work a trace read", () => {
+    expect(activityPhase(activity)).toBe("Investigating candidate");
+    expect(activityOperation(activity)).toBe("Running Python · Reading trace content");
+    expect(activityOperation({ phase: "group", operations: [] })).toBe("Grouping observations");
+    expect(activityPhase({ phase: "reconcile" })).toBe("Combining candidate groups");
+    expect(activityPhase({ phase: "load" })).toBe("Loading trace evidence");
+    expect(activityPhase({ phase: "review" })).toBe("Reviewing trace");
+    expect(activityOperation({ phase: "review", operations: ["checkpoint", "model"] })).toBe(
+      "Compacting context · Analyzing evidence",
+    );
+  });
+
+  it("keeps fast tool calls visible separately from the current operation", () => {
+    expect(activityOperation({ ...activity, operations: ["model"] })).toBe("Analyzing evidence");
+    expect(
+      toolCallSummary([
+        { name: "read", calls: 2 },
+        { name: "python", calls: 1 },
+        { name: "search", calls: 0 },
+      ]),
+    ).toBe("Read × 2 · Python × 1");
+    expect(toolCallSummary()).toBe("");
+    expect(toolCallSummary([{ name: "checkpoint", calls: 1 }])).toBe("Context compaction × 1");
+  });
+
+  it("clears active work after termination and ignores completed snapshot entries", () => {
+    expect(activeActivities({ status: "running", activities: [activity, { ...activity, finished: true }] })).toEqual([
+      activity,
+    ]);
+    expect(activeActivities({ status: "completed", activities: [activity] })).toEqual([]);
+    expect(activeActivities({ status: "failed", activities: [activity] })).toEqual([]);
+  });
+
+  it("describes retained reviews without claiming a gap-free latest window", () => {
+    expect(reviewScope(2048, 120)).toBe("120 displayed of 2048 reviewed");
+    expect(reviewScope(20, 20)).toBe("");
+  });
+
+  it("still reports grouping and investigation stages after initial reviews arrive", () => {
+    const job = {
+      status: "running" as const,
+      error: "",
+      steps: [],
+      coverage: { selected: 2048 } as Job["coverage"],
+      reviews: [review("a")],
+      stage: "Grouping observations",
+    };
+    expect(stripState(job, "analysis")).toEqual({ kind: "reviewing", message: "Grouping observations" });
+    expect(stripState({ ...job, stage: "Checking original evidence" }, "analysis")).toEqual({
+      kind: "reviewing",
+      message: "Checking original evidence",
+    });
   });
 });

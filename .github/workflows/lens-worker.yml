@@ -6,12 +6,14 @@ on:
     paths:
       - deploy/lens/**
       - litellm/proxy/lens/**
+      - tests/proxy_behavior/lens/**
       - .github/workflows/lens-worker.yml
   push:
     branches: [main]
     paths:
       - deploy/lens/**
       - litellm/proxy/lens/**
+      - tests/proxy_behavior/lens/**
       - .github/workflows/lens-worker.yml
   workflow_dispatch:
 
@@ -54,7 +56,19 @@ jobs:
           with trace_store() as store:
               assert store.count() == 0
           '
-      - name: Verify recovery after temporary storage fills
+      - name: Verify confined Python execution
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --tmpfs /tmp:rw,noexec,nosuid,size=1g --security-opt no-new-privileges \
+            -v "$PWD/tests/proxy_behavior/lens/worker_python_smoke.py:/app/python_smoke.py:ro" \
+            --entrypoint python lens-worker:${{ github.sha }} /app/python_smoke.py
+      - name: Verify workspace investigation and live review output
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --tmpfs /tmp:rw,noexec,nosuid,size=1g --security-opt no-new-privileges \
+            -v "$PWD/tests/proxy_behavior/lens/worker_context_smoke.py:/app/context_smoke.py:ro" \
+            --entrypoint python lens-worker:${{ github.sha }} /app/context_smoke.py
+      - name: Verify legacy trace-store recovery after temporary storage fills
         run: |
           docker run --rm --network none --read-only --cap-drop ALL \
             --tmpfs /tmp:rw,noexec,nosuid,size=64k --security-opt no-new-privileges \

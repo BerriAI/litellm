@@ -6,7 +6,15 @@ import { agoLabel } from "../../model/format";
 import { useNow } from "@/hooks/useNow";
 import { cn } from "@/lib/cva.config";
 
-import { briefReasoning, durationLabel, inGroup, newestFirst, outcome, shortVerdict } from "../../model/live";
+import {
+  briefReasoning,
+  durationLabel,
+  inGroup,
+  newestFirst,
+  outcome,
+  shortVerdict,
+  toolCallSummary,
+} from "../../model/live";
 import type { Review } from "../../model/types";
 
 const LIMIT = 200;
@@ -15,6 +23,7 @@ const ROW =
   "grid h-9 w-full grid-cols-[0.75rem_minmax(0,5rem)_minmax(0,1fr)_auto] sm:grid-cols-[0.75rem_minmax(0,8rem)_minmax(0,1fr)_auto] items-center gap-2 px-2 text-left text-xs";
 
 function Expanded({ review }: { review: Review }) {
+  const tools = toolCallSummary(review.tool_calls);
   const verdicts = review.verdicts.length
     ? review.verdicts
     : [
@@ -27,6 +36,7 @@ function Expanded({ review }: { review: Review }) {
   return (
     <div className="flex flex-col gap-1.5 px-7 pt-0.5 pb-2.5 text-xs leading-relaxed">
       {review.reasoning && <p className="text-muted-foreground">{briefReasoning(review.reasoning)}</p>}
+      {tools && <p className="text-muted-foreground">Tool calls: {tools}</p>}
       <ul className="flex flex-col gap-1">
         {verdicts.map((verdict, index) => (
           <li

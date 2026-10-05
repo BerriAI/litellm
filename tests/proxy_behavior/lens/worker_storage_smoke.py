@@ -6,12 +6,13 @@ from queue import SimpleQueue
 from typing import Final
 
 import httpx
+from lens.analysis import analyze_sample
 from lens.models import (
     Claim,
-    LensSettings,
     Execution,
     ExecutionContent,
     Job,
+    LensSettings,
     ModelResult,
     Result,
     Sample,
@@ -71,7 +72,7 @@ async def main() -> None:
         return httpx.Response(200, json=True)
 
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
-        worker: Final = LensWorker(client)
+        worker: Final = LensWorker(client, analysis=analyze_sample)
         assert await worker.run_once()
         failed: Final = saved.get_nowait()
         assert failed.error.startswith("Worker temporary storage failed.")
