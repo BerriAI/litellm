@@ -5564,6 +5564,10 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, smtp_email_loggers.smtp_email):
                     return callback
         elif logging_integration == "newrelic":
+            from litellm.integrations.otel.model.flags import is_otel_v2_enabled
+
+            if not is_otel_v2_enabled():
+                return next((callback for callback in _in_memory_loggers if isinstance(callback, NewRelicLogger)), None)
             from litellm.integrations.otel.logger import OpenTelemetryV2
 
             for callback in _in_memory_loggers:

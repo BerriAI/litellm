@@ -13,9 +13,6 @@ import httpx
 
 from litellm.litellm_core_utils.optional_dependencies import require_optional_dependency
 
-require_optional_dependency("dateutil", "search", "Brave search date parsing")
-from dateutil import parser
-
 _ISO_YMD: Final = re.compile(r"^\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*$")
 _UNIX_TIMESTAMP: Final = re.compile(r"^\s*-?\d+(\.\d+)?\s*$")
 BRAVE_SECTIONS: Final = ["web", "discussions", "faqs", "faq", "news", "videos"]
@@ -38,6 +35,9 @@ def to_yyyy_mm_dd(
     """
     Convert a string/int/float to YYYY-MM-DD; return None if parsing fails.
     """
+    require_optional_dependency("dateutil", "search", "Brave search date parsing")
+    from dateutil import parser
+
     if not s:
         return None
 
@@ -99,6 +99,9 @@ class BraveSearchRequest(_BraveSearchRequestRequired, total=False):
 
 class BraveSearchConfig(BaseSearchConfig):
     BRAVE_API_BASE = "https://api.search.brave.com/res/v1/web/search"
+
+    def __init__(self) -> None:
+        require_optional_dependency("dateutil", "search", "Brave search date parsing")
 
     @staticmethod
     def ui_friendly_name() -> str:

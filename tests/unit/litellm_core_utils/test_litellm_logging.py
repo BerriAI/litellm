@@ -9576,13 +9576,12 @@ def test_optional_callback_dependency_is_not_silently_ignored(callback, monkeypa
         is_otel_v2_enabled.cache_clear()
 
 
-@pytest.mark.parametrize("enabled", ("true", "false"))
-def test_optional_logger_lookup_dependency_is_not_silently_ignored(enabled, monkeypatch):
+def test_optional_logger_lookup_dependency_is_not_silently_ignored(monkeypatch):
     import sys
     from litellm.integrations.otel.model.flags import is_otel_v2_enabled
     from litellm.litellm_core_utils.litellm_logging import get_custom_logger_compatible_class
 
-    monkeypatch.setenv("LITELLM_OTEL_V2", enabled)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     monkeypatch.setitem(sys.modules, "pydantic_settings", None)
     monkeypatch.delitem(sys.modules, "litellm.integrations.otel.model.config", raising=False)
     monkeypatch.delitem(sys.modules, "litellm.integrations.otel.logger", raising=False)
@@ -9592,5 +9591,24 @@ def test_optional_logger_lookup_dependency_is_not_silently_ignored(enabled, monk
             get_custom_logger_compatible_class("newrelic")
         assert isinstance(caught.value.__cause__, ModuleNotFoundError)
         assert caught.value.__cause__.name == "pydantic_settings"
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.parametrize("missing", ("pydantic_settings", "opentelemetry"))
+def test_legacy_newrelic_lookup_does_not_load_v2_dependencies(missing, monkeypatch):
+    import sys
+    from litellm.integrations.otel.model.flags import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "false")
+    monkeypatch.setitem(sys.modules, missing, None)
+    monkeypatch.delitem(sys.modules, "litellm.integrations.otel.model.config", raising=False)
+    monkeypatch.delitem(sys.modules, "litellm.integrations.otel.logger", raising=False)
+    legacy = logging_module.NewRelicLogger()
+    monkeypatch.setattr(logging_module, "_in_memory_loggers", [legacy])
+    is_otel_v2_enabled.cache_clear()
+    try:
+        assert logging_module.get_custom_logger_compatible_class("newrelic") is legacy
     finally:
         is_otel_v2_enabled.cache_clear()

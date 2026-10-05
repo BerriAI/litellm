@@ -370,6 +370,15 @@ def check_integration_configuration() -> str:
     from litellm.integrations.lunary import LunaryLogger
 
     _require(is_otel_v2_enabled() is False, "disabled telemetry must work in core")
+    from litellm.litellm_core_utils import litellm_logging
+
+    previous_loggers: Final = tuple(litellm_logging._in_memory_loggers)
+    try:
+        legacy: Final = litellm_logging._init_custom_logger_compatible_class("newrelic", None, None)
+        _require(legacy is not None, "legacy New Relic initialization failed without V2 dependencies")
+        _require(litellm_logging.get_custom_logger_compatible_class("newrelic") is legacy, "legacy New Relic lookup requires unselected V2 dependencies")
+    finally:
+        litellm_logging._in_memory_loggers[:] = previous_loggers
     if importlib.util.find_spec("packaging") is None:
         _expect_extra("integrations", partial(raise_if_unsupported_langfuse_version, "4.7.0"))
         _expect_extra("integrations", LunaryLogger)

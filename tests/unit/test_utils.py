@@ -6582,6 +6582,7 @@ def test_search_provider_selection_without_brave_dependencies(provider, monkeypa
 
 
 def test_brave_search_configuration_with_date_parser():
+    from litellm.llms.brave.search.transformation import to_yyyy_mm_dd
     from litellm.types.utils import SearchProviders
     from litellm.utils import ProviderConfigManager
 
@@ -6589,3 +6590,6 @@ def test_brave_search_configuration_with_date_parser():
     assert config is not None
     assert config.get_http_method() == "GET"
     assert config.validate_environment(headers={}, api_key="brave-test")["X-Subscription-Token"] == "brave-test"
+    assert to_yyyy_mm_dd("January 2, 2026") == "2026-01-02"
+    assert to_yyyy_mm_dd("02/03/2026", dayfirst=True) == "2026-03-02"
+    assert to_yyyy_mm_dd("not a date") is None
