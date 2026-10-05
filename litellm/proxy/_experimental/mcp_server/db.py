@@ -648,7 +648,7 @@ MCP_CATALOG_REVISION_PARAM_NAME: Final = "mcp_catalog"
 async def get_mcp_catalog_revision(prisma_client: PrismaClient) -> int | None:
     """The ``LiteLLM_Config`` revision the MCP server table trigger last published, or None when
     no write has ever bumped it (or the trigger is not installed), meaning always reload."""
-    row: Final = await ConfigRepository(prisma_client).table.find_unique(
+    row: Final = await ConfigRepository(prisma_client, use_writer=True).table.find_unique(
         where={"param_name": MCP_CATALOG_REVISION_PARAM_NAME}
     )
     if row is None:
@@ -792,7 +792,7 @@ async def get_runtime_mcp_server_rows(
     where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
         "OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]
     }
-    return await _db_find_mcp_server_rows(prisma_client, where)
+    return await MCPServerRepository(prisma_client, use_writer=True).table.find_many(where=where)
 
 
 async def get_mcp_server(prisma_client: PrismaClient, server_id: str) -> LiteLLM_MCPServerTable | None:

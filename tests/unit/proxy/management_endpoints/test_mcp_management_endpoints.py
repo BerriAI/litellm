@@ -2954,6 +2954,7 @@ class TestTemporaryMCPSessionEndpoints:
         )
         manager: Final = MCPServerManager()
         prisma: Final = MagicMock()
+        prisma.writer_db = prisma.db
 
         async def persisted_rows(*, where: Mapping[str, object]) -> list[LiteLLM_MCPServerTable]:
             return [] if where.get("approval_status") == "draft" else [row]
@@ -8380,6 +8381,7 @@ async def test_saved_server_authorize_denial_does_not_dispatch_upstream():
         auth_type=MCPAuth.oauth2, url="https://upstream.example/mcp",
         authorization_url="https://upstream.example/authorize", token_url="https://upstream.example/token")
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     user: Final = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER)
@@ -8896,6 +8898,7 @@ def _mock_mcp_resolution_prisma_client(
     object_permission: LiteLLM_ObjectPermissionTable | None = None,
 ) -> MagicMock:
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     prisma.db.litellm_verificationtoken.find_unique = AsyncMock(
         return_value=SimpleNamespace(object_permission=key_permission)

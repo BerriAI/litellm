@@ -218,6 +218,7 @@ async def test_guardrail_observes_saved_server_creation_and_deletion_on_another_
     row = LiteLLM_MCPServerTable(server_id="peer-server", alias="peer_server", transport="http",
         url="https://upstream.example/mcp")
     prisma = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=([row], []))
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     data = {"tools": [{"type": "mcp", "server_url": "litellm_proxy/mcp/peer-server"}],

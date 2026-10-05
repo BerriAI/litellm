@@ -646,6 +646,7 @@ async def test_dynamic_route_observes_committed_peer_catalog_changes(monkeypatch
         litellm_mcptoolsettable=SimpleNamespace(find_first=AsyncMock(return_value=None)),
         litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
     ))
+    prisma.writer_db = prisma.db
     manager = mcp_server_manager.MCPServerManager()
     if change != "create":
         manager.registry = {old_row.server_id: await manager.build_mcp_server_from_table(old_row)}

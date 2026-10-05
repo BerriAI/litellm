@@ -9348,6 +9348,7 @@ async def test_reload_servers_from_database_hydrates_dcr_clients():
     )
 
     prisma = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
@@ -12654,6 +12655,7 @@ async def test_authorize_observes_committed_peer_server_changes(monkeypatch, cha
     )
     read_rows = AsyncMock(return_value=[] if change == "delete" else [row])
     prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=SimpleNamespace(find_many=read_rows), litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))))
+    prisma.writer_db = prisma.db
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(
         global_mcp_server_manager, "registry", {} if change == "create" else {old_server.server_id: old_server}

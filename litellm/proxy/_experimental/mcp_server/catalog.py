@@ -120,22 +120,20 @@ class TargetCatalog:
             return _snapshot(self.manager, self._database_identity)
         from litellm.proxy._experimental.mcp_server.db import get_mcp_catalog_revision
 
-        revision: Final = await get_mcp_catalog_revision(prisma_client)
-        if revision is not None and revision == self._applied_revision and self._shared_snapshot is not None:
-            return self._shared_snapshot
-        self._arrival_ticket += 1
-        arrival: Final = self._arrival_ticket
-        async with self._refresh_lock:
-            if arrival > self._completed_ticket or revision != self._applied_revision:
-                try:
+        try:
+            revision: Final = await get_mcp_catalog_revision(prisma_client)
+            if revision is not None and revision == self._applied_revision and self._shared_snapshot is not None:
+                return self._shared_snapshot
+            self._arrival_ticket += 1
+            arrival: Final = self._arrival_ticket
+            async with self._refresh_lock:
+                if arrival > self._completed_ticket or revision != self._applied_revision:
                     await self._publish_refresh(revision, reuse_unchanged=True)
-                except Exception as exc:
-                    raise HTTPException(
-                        status_code=503, detail="MCP server configuration could not be refreshed"
-                    ) from exc
-            if self._shared_snapshot is None:
-                raise HTTPException(status_code=503, detail="MCP server configuration could not be refreshed")
-            return self._shared_snapshot
+                if self._shared_snapshot is None:
+                    raise HTTPException(status_code=503, detail="MCP server configuration could not be refreshed")
+                return self._shared_snapshot
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="MCP server configuration could not be refreshed") from exc
 
     async def list(self) -> Mapping[str, MCPServer]:
         async with self.operation() as snapshot:

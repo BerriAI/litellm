@@ -1279,6 +1279,7 @@ class TestMCPServerManager:
             find_many=AsyncMock(return_value=[_row(cached.server_id, corrupted), _row("healthy-sibling", stored)])
         )
         prisma = SimpleNamespace(db=SimpleNamespace(litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)), litellm_mcpservertable=table))
+        prisma.writer_db = prisma.db
         monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
         with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
@@ -16488,6 +16489,7 @@ def _catalog_database(monkeypatch, read_rows, read_revision=None):
             litellm_config=SimpleNamespace(find_unique=read_revision),
         )
     )
+    client.writer_db = client.db
     monkeypatch.setattr(proxy_server, "prisma_client", client)
 
 
@@ -16737,6 +16739,7 @@ async def test_catalog_reload_preserves_concurrent_config_discovery_and_routes(a
         return []
 
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=read_rows)
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     with (
@@ -16769,6 +16772,7 @@ async def test_catalog_reload_does_not_restore_replaced_config_credentials_or_ro
         return []
 
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=read_rows)
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
@@ -16850,6 +16854,7 @@ async def test_catalog_reload_keeps_new_route_owner_over_earlier_route(change, m
         return []
 
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=read_rows)
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
@@ -16875,6 +16880,7 @@ async def test_catalog_observes_committed_update_and_delete_without_background_r
     )
     updated: Final = row.model_copy(update={"url": "https://second.example.com/mcp", "updated_at": timestamp + timedelta(seconds=1)})
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=([row], [updated], []))
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     manager: Final = MCPServerManager()
@@ -16902,6 +16908,7 @@ async def test_catalog_rebuilt_unchanged_server_keeps_discovered_tool_routes():
         url="https://upstream.example/mcp", transport=MCPTransport.http)
     manager: Final = MCPServerManager()
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
@@ -16952,6 +16959,7 @@ async def test_catalog_reload_retains_routes_discovered_for_a_late_server(change
             "updated_at": row.updated_at + timedelta(seconds=1)})]
 
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=read_rows)
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     task: Final = asyncio.create_task(publish())
@@ -16990,6 +16998,7 @@ async def test_catalog_openapi_refresh_does_not_restore_removed_operations(tmp_p
     row: Final = LiteLLM_MCPServerTable(server_id="spec-refresh", alias="spec_refresh",
         url="https://upstream.example", transport=MCPTransport.http, spec_path=str(spec_path))
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     upstream: Final = respx_mock.get("https://upstream.example/retained").respond(200, json={"value": "retained"})
@@ -17032,6 +17041,7 @@ async def test_catalog_lookup_uses_one_snapshot_until_operation_finishes():
     )
     updated: Final = row.model_copy(update={"url": "https://second.example.com/mcp", "updated_at": row.updated_at + timedelta(seconds=1)})
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=([row], [updated], [updated]))
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     manager: Final = MCPServerManager()
@@ -17058,6 +17068,7 @@ async def test_catalog_failed_reload_preserves_published_discovery_state():
     manager.registry = {server.server_id: server}
     manager._upstream_initialize_instructions_by_server_id[server.server_id] = "healthy instructions"
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=RuntimeError("database unavailable"))
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
@@ -17082,6 +17093,7 @@ async def test_catalog_cancellation_retains_state_and_releases_refresh_lock():
     manager.registry = {server.server_id: server}
     manager._upstream_initialize_instructions_by_server_id[server.server_id] = "healthy instructions"
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=blocked_read)
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
@@ -17136,6 +17148,7 @@ async def test_catalog_cancelled_openapi_refresh_retains_tools_and_discovery(mon
     row: Final = LiteLLM_MCPServerTable(server_id=server.server_id, alias="staged", transport=MCPTransport.http,
         url="https://after.example/mcp", spec_path="after.json", updated_at=stamp + timedelta(seconds=1), auth_type=MCPAuth.oauth2)
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
@@ -17164,6 +17177,7 @@ async def test_catalog_snapshot_identity_is_independent_of_worker_oauth_discover
     row: Final = LiteLLM_MCPServerTable(server_id="identity-server", alias="identity_server", transport=MCPTransport.http,
         url="https://upstream.example/mcp", auth_type=MCPAuth.oauth2, updated_at=datetime.now())
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     manager: Final = MCPServerManager()
@@ -17192,6 +17206,7 @@ async def test_catalog_failed_openapi_row_does_not_publish_partial_handlers(monk
     row: Final = LiteLLM_MCPServerTable(server_id="broken", alias="broken", transport=MCPTransport.http,
         url="https://upstream.example/mcp", spec_path="broken.json")
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
@@ -17446,6 +17461,7 @@ async def test_catalog_fresh_lookup_does_not_fall_back_to_stale_grants_when_data
         allow_all_keys=True)
     manager.registry = {server.server_id: server}
     prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=RuntimeError("unavailable"))
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     with (
@@ -17627,6 +17643,7 @@ class TestSharedIdentifierPrefixWarning:
         raw_rows = [MagicMock(model_dump=lambda row=row, **kwargs: row.model_dump(**kwargs)) for row in rows]
         repository = MagicMock()
         prisma = MagicMock()
+        prisma.writer_db = prisma.db
         prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         repository.table.find_many = AsyncMock(return_value=raw_rows)
 
@@ -17684,6 +17701,7 @@ async def test_reload_warns_once_about_a_blocked_stdio_row_that_is_rebuilt_every
     manager = MCPServerManager()
     repository = MagicMock()
     prisma = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
     async def build_from_table(table, **_kwargs):
@@ -18539,3 +18557,53 @@ async def test_overlapping_server_prefix_cannot_authorize_registered_openapi_han
     assert result.is_error is False
     handler.assert_awaited_once_with()
     assert check.await_args.kwargs["server"].server_id == private.server_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["update", "delete"])
+async def test_catalog_observes_writer_changes_while_read_replica_lags(monkeypatch, change):
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.routing_prisma_wrapper import _RoutedActions
+
+    original: Final = _catalog_row()
+    changed: Final = _catalog_row("updated")
+    reader: Final = SimpleNamespace(
+        litellm_mcpservertable=SimpleNamespace(find_many=AsyncMock(return_value=[original])),
+        litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=_revision_row(7))),
+    )
+    writer: Final = SimpleNamespace(
+        litellm_mcpservertable=SimpleNamespace(find_many=AsyncMock(return_value=[original])),
+        litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=_revision_row(7))),
+    )
+    routed: Final = SimpleNamespace(**{
+        name: _RoutedActions(getattr(writer, name), getattr(reader, name), lambda: True)
+        for name in ("litellm_mcpservertable", "litellm_config")
+    })
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=routed, writer_db=writer))
+    manager: Final = MCPServerManager()
+    assert (await manager.catalog.resolve(original.server_id)).name == "initial"
+    writer.litellm_mcpservertable.find_many.return_value = [changed] if change == "update" else []
+    writer.litellm_config.find_unique.return_value = _revision_row(8)
+    selected: Final = await manager.catalog.resolve(original.server_id)
+    assert (selected.name if selected is not None else None) == ("updated" if change == "update" else None)
+    writer.litellm_config.find_unique.side_effect = RuntimeError("writer unavailable")
+    with pytest.raises(HTTPException) as unavailable:
+        await manager.catalog.resolve(original.server_id)
+    assert unavailable.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_catalog_revision_failure_preserves_state_and_recovers(monkeypatch):
+    reader: Final = AsyncMock(side_effect=([_catalog_row()], [_catalog_row("updated")]))
+    revisions: Final = AsyncMock(side_effect=[_revision_row(7), RuntimeError("private database detail"), _revision_row(8)])
+    _catalog_database(monkeypatch, reader, revisions)
+    manager: Final = MCPServerManager()
+    assert (await manager.catalog.resolve("catalog-server")).name == "initial"
+    with pytest.raises(HTTPException) as unavailable:
+        await manager.catalog.resolve("catalog-server")
+    assert unavailable.value.status_code == 503
+    assert unavailable.value.detail == "MCP server configuration could not be refreshed"
+    assert manager.registry["catalog-server"].name == "initial"
+    assert (await manager.catalog.resolve("catalog-server")).name == "updated"

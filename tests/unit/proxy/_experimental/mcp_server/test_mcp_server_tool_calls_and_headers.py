@@ -5405,6 +5405,7 @@ class TestMCPServerManagerReload:
         db_row = _make_db_mcp_server("server-1", timestamp)
 
         mock_prisma = MagicMock()
+        mock_prisma.writer_db = mock_prisma.db
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[db_row])
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
@@ -5448,6 +5449,7 @@ class TestMCPServerManagerReload:
         )
 
         mock_prisma = MagicMock()
+        mock_prisma.writer_db = mock_prisma.db
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[db_row])
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
@@ -5502,6 +5504,7 @@ class TestMCPServerManagerReload:
             return another_healthy_server
 
         mock_prisma = MagicMock()
+        mock_prisma.writer_db = mock_prisma.db
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
             return_value=[healthy_row, bad_row, another_healthy_row]
         )
@@ -5575,6 +5578,7 @@ class TestMCPServerManagerReload:
                 raise RuntimeError("blocked address")
 
         mock_prisma = MagicMock()
+        mock_prisma.writer_db = mock_prisma.db
         mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[healthy_row, bad_openapi_row])
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         with (
