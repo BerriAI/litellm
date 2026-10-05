@@ -532,10 +532,10 @@ async def test_uncacheable_messages_streams_are_not_stored(
         first_chunks: Final = await collect_chunks(first_stream)
         if case == "oversized":
             assert b"".join(first_chunks) == b"".join(first_response.payloads())
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
 
     second_stream: Final = await invoke("messages", recording_server, options, native=native)
     second_chunks: Final = await collect_chunks(second_stream)
-    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
     assert b"".join(second_chunks) == b"".join(second_response.payloads())
     assert len(recording_server.requests) == 2
 
