@@ -1,7 +1,7 @@
 import createFetchClient, { type Middleware } from "openapi-fetch";
 import createQueryClient from "openapi-react-query";
 import type { paths } from "./schema";
-import { ApiError, deriveErrorMessage } from "./client";
+import { ApiError, deriveErrorMessage, retryAfterMs } from "./client";
 import { getAuthHeaderName, getAuthToken, getRequestBaseUrl, reportError } from "./runtime";
 import { resolveRequestUrl } from "./resolveApiBase";
 
@@ -16,7 +16,7 @@ const BaseAwareRequest = function (url: string, init?: RequestInit): Request {
 const middleware: Middleware = {
   onRequest({ request }) {
     const token = getAuthToken();
-    if (token) {
+    if (token && !request.headers.has(getAuthHeaderName())) {
       request.headers.set(getAuthHeaderName(), `Bearer ${token}`);
     }
   },
@@ -32,7 +32,7 @@ const middleware: Middleware = {
       message = raw || `HTTP ${response.status}`;
     }
     reportError(message);
-    throw new ApiError(message, response.status, body);
+    throw new ApiError(message, response.status, body, retryAfterMs(response.headers));
   },
 };
 
