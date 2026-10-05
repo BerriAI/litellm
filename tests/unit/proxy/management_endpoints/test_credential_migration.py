@@ -562,7 +562,7 @@ async def test_scan_covered_tables_classifies_legacy_and_v2(salt_key, monkeypatc
     )
     client.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
-    by_loc = {r.location: r for r in await cm._scan_covered_tables(client)}
+    by_loc = {r.location: r for r in await cm.scan_covered_tables(client)}
 
     assert by_loc["model_table"].legacy == 1
     assert by_loc["model_table"].plaintext == 1  # "gpt-4" model name, not ciphertext
@@ -586,7 +586,7 @@ async def test_scan_covered_tables_classifies_search_tool_params(salt_key, monke
     )
     client.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
-    by_loc = {r.location: r for r in await cm._scan_covered_tables(client)}
+    by_loc = {r.location: r for r in await cm.scan_covered_tables(client)}
 
     assert (by_loc["search_tools"].legacy, by_loc["search_tools"].already_v2) == (1, 1)
     assert by_loc["search_tools"].plaintext == 1

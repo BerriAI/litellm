@@ -5222,9 +5222,9 @@ async def _require_legacy_reader_for_stored_values(prisma_client: PrismaClient) 
     rotation before any row is rewritten. A fully migrated store passes; with PyNaCl installed nothing runs"""
     if legacy_encryption_available():
         return
-    from litellm.proxy.management_endpoints.credential_migration import _scan_covered_tables
+    from litellm.proxy.management_endpoints.credential_migration import scan_covered_tables
 
-    await _scan_covered_tables(prisma_client)
+    await scan_covered_tables(prisma_client)
 
 
 async def _rotate_master_key(
@@ -5255,7 +5255,7 @@ async def _rotate_master_key(
     except LegacyEncryptionUnavailableError as error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": str(error)},  # mutable-ok: FastAPI detail contract
+            detail={"error": str(error)},
         ) from error
 
     try:

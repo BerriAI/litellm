@@ -180,7 +180,7 @@ def _drop_stale_minted_on_client_rotation(merged: dict[str, object], new_creds: 
     }
 
 
-def _is_global_env_var_scope(scope: object) -> bool:
+def is_global_env_var_scope(scope: object) -> bool:
     """``scope="user"`` entries are placeholders the user fills in; everything
     else (including a missing scope) is an admin-supplied global value."""
     return scope != MCPEnvVarScope.user and scope != "user"
@@ -195,7 +195,7 @@ def _encrypt_global_env_var_values(env_vars: Iterable[dict[str, str]]) -> None:
     secrets and are stored verbatim.
     """
     for entry in env_vars:
-        if not _is_global_env_var_scope(entry.get("scope")):
+        if not is_global_env_var_scope(entry.get("scope")):
             continue
         value = entry.get("value")
         if value:
@@ -216,7 +216,7 @@ def decrypt_global_env_var_values(env_vars: Iterable[MCPEnvVar | dict[str, str]]
     for entry in env_vars:
         is_dict = isinstance(entry, dict)
         scope = entry.get("scope") if is_dict else getattr(entry, "scope", None)
-        if not _is_global_env_var_scope(scope):
+        if not is_global_env_var_scope(scope):
             continue
         value = entry.get("value") if is_dict else getattr(entry, "value", None)
         if not value:
@@ -296,7 +296,7 @@ def _reencrypt_global_env_var_values(
     rebuilt: Final = [dict(v) for v in entries]
     rotated = False
     for entry in rebuilt:
-        if not _is_global_env_var_scope(entry.get("scope")):
+        if not is_global_env_var_scope(entry.get("scope")):
             continue
         value = entry.get("value")
         if not value:

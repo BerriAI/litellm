@@ -495,7 +495,7 @@ def _mcp_encrypted_leaves(col: str, raw: object) -> Iterator[str]:
     """Only the strings an MCP column encrypts at rest: a credentials blob keeps auth_type, scopes and urls in
     plaintext and env_vars keeps every name and every per user placeholder, so without PyNaCl those must not be
     mistaken for legacy ciphertext and refuse the scan"""
-    from litellm.proxy._experimental.mcp_server.db import MCP_CREDENTIAL_SECRET_FIELDS, _is_global_env_var_scope
+    from litellm.proxy._experimental.mcp_server.db import MCP_CREDENTIAL_SECRET_FIELDS, is_global_env_var_scope
 
     if col == "credentials":
         if not isinstance(raw, dict):
@@ -506,7 +506,7 @@ def _mcp_encrypted_leaves(col: str, raw: object) -> Iterator[str]:
     return (
         e["value"]
         for e in raw
-        if isinstance(e, dict) and _is_global_env_var_scope(e.get("scope")) and isinstance(e.get("value"), str)
+        if isinstance(e, dict) and is_global_env_var_scope(e.get("scope")) and isinstance(e.get("value"), str)
     )
 
 
@@ -609,7 +609,7 @@ async def _scan_config_env_vars(prisma_client: object) -> LocationReport:
     return report
 
 
-async def _scan_covered_tables(prisma_client: object) -> list[LocationReport]:
+async def scan_covered_tables(prisma_client: object) -> list[LocationReport]:
     """Read-only classification of every rotation-covered table. No writes."""
     reports: Final[list[LocationReport]] = []
     for location, db_attr, json_cols, scalar_cols in _COVERED_TABLE_SPECS:
@@ -642,7 +642,7 @@ async def _migrate_covered_tables(prisma_client: object, user_api_key_dict: obje
         _rotate_master_key,
     )
 
-    pre: Final = {r.location: r for r in await _scan_covered_tables(prisma_client)}
+    pre: Final = {r.location: r for r in await scan_covered_tables(prisma_client)}
 
     current_key: Final = _get_salt_key()
     if current_key is None:
@@ -656,7 +656,7 @@ async def _migrate_covered_tables(prisma_client: object, user_api_key_dict: obje
         new_master_key=current_key,  # same key, algorithm-only switch
     )
 
-    post: Final = await _scan_covered_tables(prisma_client)
+    post: Final = await scan_covered_tables(prisma_client)
     for post_report in post:
         pre_report = pre.get(post_report.location)
         pre_legacy = pre_report.legacy if pre_report else 0
@@ -689,7 +689,7 @@ async def migrate_encryption(
     # delegate to the rotation path (with bracketing scans for counts); on a dry
     # run only classify them read-only.
     if dry_run:
-        for covered in await _scan_covered_tables(prisma_client):
+        for covered in await scan_covered_tables(prisma_client):
             report.add(covered)
     else:
         for covered in await _migrate_covered_tables(prisma_client, user_api_key_dict):
@@ -717,7 +717,7 @@ async def check_encryption(prisma_client: object) -> MigrationReport:
     report: Final = MigrationReport()
 
     # Rotation-covered tables (read-only classification).
-    for covered in await _scan_covered_tables(prisma_client):
+    for covered in await scan_covered_tables(prisma_client):
         report.add(covered)
 
     # Net-new walker locations, in dry-run (read-only) mode.

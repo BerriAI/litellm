@@ -3348,6 +3348,28 @@ def test_ProxyConfig_decrypt_credentials_returns_an_encrypted_empty_value_as_emp
     assert decrypted.credential_values == {"api_base": "", "openai_service_account_id": "user-1"}
 
 
+def test_ProxyConfig_decrypt_credentials_without_pynacl_drops_a_legacy_value_instead_of_serving_the_blob(monkeypatch):
+    import base64
+    import hashlib
+
+    import nacl.secret
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-decrypt-credentials-test-salt")
+    box = nacl.secret.SecretBox(hashlib.sha256(b"sk-decrypt-credentials-test-salt").digest())
+    legacy = base64.urlsafe_b64encode(bytes(box.encrypt(b"sk-legacy-upstream"))).decode()
+    monkeypatch.setitem(sys.modules, "nacl", None)
+    monkeypatch.setitem(sys.modules, "nacl.secret", None)
+
+    decrypted = ProxyConfig().decrypt_credentials(
+        {
+            "credential_name": "openai-legacy",
+            "credential_values": {"api_key": legacy, "api_base": encrypt_value_helper("https://api.example.test")},
+            "credential_info": {"custom_llm_provider": "openai"},
+        }
+    )
+    assert decrypted.credential_values == {"api_base": "https://api.example.test"}
+
+
 def test_ProxyConfig_decrypt_model_list_from_db_returns_decrypted(monkeypatch):
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.decrypt_value_helper",
