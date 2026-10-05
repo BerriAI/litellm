@@ -15,7 +15,7 @@ from typing import Final
 import httpx
 from pydantic import BaseModel
 
-from integration._support.client import Gateway, Scenario, object_value, string_value
+from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 
 
@@ -133,12 +133,21 @@ def _listed(gateway: Gateway, key: str) -> list[str]:
 
 
 def _assert_listing(gateway: Gateway, caller: _Holder, *, served: str, gone: str | None) -> None:
-    listed: Final = _listed(gateway, caller.key)
-    if caller.listing_is_scoped:
-        assert listed == [served], caller.kind
-        return
-    # Project and user allowlists gate calls but not /v1/models, which then lists every proxy model.
-    assert served in listed and gone not in listed, (caller.kind, listed)
+    def converged(listed: list[str]) -> bool:
+        if caller.listing_is_scoped:
+            return listed == [served]
+        # Project and user allowlists gate calls but not /v1/models, which then lists every proxy model.
+        return served in listed and gone not in listed
+
+    eventually(lambda: _listed(gateway, caller.key), converged)
+
+
+def _served(gateway: Gateway, model: str, caller: _Holder) -> httpx.Response:
+    served: Final = eventually(
+        lambda: _chat(gateway, model, caller.key), lambda r: r.status_code == 200, return_last_on_timeout=True
+    )
+    assert served.status_code == 200, f"{caller.kind}: {served.text}"
+    return served
 
 
 def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that_named_it(gateway: Gateway) -> None:
@@ -151,7 +160,7 @@ def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that
         with _access_group(gateway, access_team, old) as access_group_id:
             callers: Final = (*holders, _Holder("access_group", "", "", access_group_id, access_key))
             for caller in callers:
-                assert _chat(gateway, old, caller.key).status_code == 200, caller.kind
+                _served(gateway, old, caller)
                 _assert_listing(gateway, caller, served=old, gone=None)
 
             new: Final = f"integration-renamed-{uuid.uuid4().hex}"
@@ -172,8 +181,7 @@ def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that
             refusals: dict[str, tuple[int, dict[str, object]]] = {}
             denials: dict[str, object] = {}
             for caller in callers:
-                served = _chat(gateway, new, caller.key)
-                assert served.status_code == 200, f"{caller.kind}: {served.text}"
+                served = _served(gateway, new, caller)
                 assert _Completion.model_validate_json(served.content) == _Completion(
                     model=new, usage=_Usage(total_tokens=40)
                 ), f"{caller.kind}: {served.text}"
