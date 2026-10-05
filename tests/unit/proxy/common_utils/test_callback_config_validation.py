@@ -131,8 +131,8 @@ def test_arize_sampling_rates_are_not_family_credentials():
 
 
 @pytest.mark.parametrize("callback_name", ["langfuse_otel", "arize", "weave_otel", "newrelic"])
-@pytest.mark.parametrize("value", ["no_content", "span_only"])
-def test_capture_message_content_is_accepted_on_every_otel_v2_destination(callback_name, value):
+@pytest.mark.parametrize("value", ["no_content", "span_only", "event_only", "span_and_event"])
+def test_capture_message_content_is_accepted_on_every_otel_v2_destination(callback_name: str, value: str) -> None:
     assert callback_config_error(callback_name, {"capture_message_content": value}) is None
 
 
@@ -161,12 +161,14 @@ def test_an_unsupported_capture_message_content_is_rejected_on_key_logging_metad
     "new_vars, stored, rejected",
     [
         ({"capture_message_content": "no_content"}, [{"capture_message_content": "span_only"}], True),
+        ({"capture_message_content": "event_only"}, [{"capture_message_content": "span_and_event"}], True),
         (
             {"capture_message_content": "span_only"},
             [{"langfuse_public_key": "pk"}, {"capture_message_content": "no_content"}],
             True,
         ),
         ({"capture_message_content": "no_content"}, [{"capture_message_content": "no_content"}], False),
+        ({"capture_message_content": "event_only"}, [{"capture_message_content": "event_only"}], False),
         ({"capture_message_content": "no_content"}, [{"langfuse_span_scope": "llm_only"}], False),
         ({"langfuse_public_key": "pk"}, [{"capture_message_content": "no_content"}], False),
     ],

@@ -3641,8 +3641,17 @@ OPENAI_RESPONSE_HEADERS: Final = [
 
 OtelSpanScope = Literal["full", "llm_only"]
 OTEL_SPAN_SCOPES: Final[frozenset[str]] = frozenset(get_args(OtelSpanScope))
-TeamCaptureMessageContent = Literal["no_content", "span_only"]
-TEAM_CAPTURE_MESSAGE_CONTENT_VALUES: Final[frozenset[str]] = frozenset(get_args(TeamCaptureMessageContent))
+
+
+class CaptureMessageContent(str, Enum):
+    NO_CONTENT = "no_content"
+    SPAN_ONLY = "span_only"
+    EVENT_ONLY = "event_only"
+    SPAN_AND_EVENT = "span_and_event"
+
+    @property
+    def captures_span(self) -> bool:
+        return self in (self.SPAN_ONLY, self.SPAN_AND_EVENT)
 
 
 class StandardCallbackDynamicParams(TypedDict, total=False):
@@ -3654,7 +3663,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_environment: ReadOnly[str | None]
     langfuse_span_scope: ReadOnly[OtelSpanScope | None]
 
-    capture_message_content: ReadOnly[TeamCaptureMessageContent | None]
+    capture_message_content: ReadOnly[CaptureMessageContent | None]
 
     # Langfuse prompt version
     langfuse_prompt_version: int | None

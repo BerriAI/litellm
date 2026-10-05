@@ -1738,14 +1738,17 @@ async def test_add_team_callbacks_rejects_capture_message_content_on_a_non_otel_
 
 
 @pytest.mark.asyncio
-async def test_add_team_callbacks_stores_capture_message_content_in_the_existing_callback_metadata(patched_prisma):
-    data = AddTeamCallback(
+@pytest.mark.parametrize("capture", ["no_content", "span_only", "event_only", "span_and_event"])
+async def test_add_team_callbacks_stores_capture_message_content_in_the_existing_callback_metadata(
+    patched_prisma, capture: str
+) -> None:
+    data: Final = AddTeamCallback(
         callback_name="langfuse_otel",
         callback_type="success",
         callback_vars={
             "langfuse_public_key": "pk",
             "langfuse_secret_key": "sk",
-            "capture_message_content": "no_content",
+            "capture_message_content": capture,
         },
     )
     await add_team_callbacks(
@@ -1755,5 +1758,5 @@ async def test_add_team_callbacks_stores_capture_message_content_in_the_existing
         user_api_key_dict=_admin_auth(),
     )
     patched_prisma.db.litellm_teamtable.update.assert_awaited_once()
-    stored = json.loads(patched_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
-    assert [entry["callback_vars"].get("capture_message_content") for entry in stored["logging"]] == ["no_content"]
+    stored: Final = json.loads(patched_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
+    assert [entry["callback_vars"].get("capture_message_content") for entry in stored["logging"]] == [capture]

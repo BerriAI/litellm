@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from litellm.types.utils import OtelSpanScope, TeamCaptureMessageContent
+from litellm.types.utils import CaptureMessageContent, OtelSpanScope
 
 
 class OtelDestination(BaseModel):
@@ -31,17 +31,17 @@ class OtelDestination(BaseModel):
         default="full",
         description="``llm_only`` keeps just the model-call spans; the rest of the request tree is not forwarded.",
     )
-    capture_message_content: TeamCaptureMessageContent | None = Field(
+    capture_message_content: CaptureMessageContent | None = Field(
         default=None,
         description=(
-            "``no_content`` strips prompt and response content from this destination's copy. ``span_only`` "
-            "and ``None`` (omitted) forward whatever the global capture policy collected."
+            "An explicit mode overrides the global capture policy for this destination. "
+            "Omitted follows the global setting."
         ),
     )
 
-    @property
-    def redacts_message_content(self) -> bool:
-        return self.capture_message_content == "no_content"
+    def captures_content(self, default: CaptureMessageContent) -> bool:
+        setting: Final = self.capture_message_content
+        return (default if setting is None else setting).captures_span
 
     def header_string(self) -> str:
         """Render headers as the ``k=v,k2=v2`` form an ``ExporterSpec`` expects.

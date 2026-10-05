@@ -34,7 +34,7 @@ CALL_ID: Final = "litellm.call_id"
 OPERATION: Final = "gen_ai.operation.name"
 INPUT_TOKENS: Final = "gen_ai.usage.input_tokens"
 Endpoint = Literal["chat", "responses", "messages"]
-Capture = Literal["no_content", "span_only"]
+Capture = Literal["no_content", "span_only", "event_only", "span_and_event"]
 
 
 def _marker(kind: str = "") -> str:
@@ -503,17 +503,29 @@ def test_newrelic_destination_drops_genai_content(rig: Rig) -> None:
     assert tenant
 
 
-def test_global_no_content_is_not_lifted_by_a_span_only_team(dark_rig: Rig) -> None:
-    _, key = dark_rig.team_key("span_only", "b")
+def test_span_only_team_lifts_global_no_content_only_for_its_destination(dark_rig: Rig) -> None:
+    team, key = dark_rig.team_key("span_only", "b")
+    attached: Final = dark_rig.attach(
+        team,
+        "arize",
+        {"arize_space_key": "space-sibling", "arize_api_key": "arize-sibling"},
+    )
+    assert attached.status_code == 200, attached.text
     cursors: Final = dark_rig.cursors()
     sent: Final = _served(dark_rig.send(key))
     assert dark_rig.upstream_hits(sent.marker) == 1
     operator: Final = _arrived(dark_rig.sinks.operator, cursors.operator, sent, frozenset())
-    tenant: Final = _arrived(
-        dark_rig.sinks.tenant, cursors.tenant, sent, frozenset(span["name"] for span in _model_spans(operator))
+    tenant: Final = _with_content(dark_rig.sinks.tenant, cursors.tenant, sent)
+    sibling: Final = _arrived(
+        dark_rig.sinks.arize,
+        cursors.arize,
+        sent,
+        frozenset(),
+        ("arize-space-id", "space-sibling"),
     )
-    leaked: Final = [span["name"] for span in (*operator, *tenant) if _carries(span, sent.marker)]
-    assert leaked == [], leaked
+    assert any(_carries(span, sent.marker) for span in tenant), _names(tenant)
+    assert not any(_carries(span, sent.marker) for span in operator), _names(operator)
+    assert not any(_carries(span, sent.marker) for span in sibling), _names(sibling)
 
 
 def test_an_unsupported_value_fails_registration(rig: Rig) -> None:

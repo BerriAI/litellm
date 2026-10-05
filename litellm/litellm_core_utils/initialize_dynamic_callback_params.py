@@ -6,8 +6,8 @@ from typing import Any, Final
 
 from litellm.types.utils import (
     OTEL_SPAN_SCOPES,
-    TEAM_CAPTURE_MESSAGE_CONTENT_VALUES,
     TRUSTED_CALLBACK_VARS_FIELD,
+    CaptureMessageContent,
     StandardCallbackDynamicParams,
 )
 
@@ -87,10 +87,13 @@ def validate_langfuse_span_scope_value(value: str) -> None:
 
 
 def validate_capture_message_content_value(value: str) -> None:
-    if value not in TEAM_CAPTURE_MESSAGE_CONTENT_VALUES:
+    try:
+        CaptureMessageContent(value)
+    except ValueError:
         raise ValueError(
-            f"Invalid capture_message_content {value!r}: must be one of {sorted(TEAM_CAPTURE_MESSAGE_CONTENT_VALUES)}"
-        )
+            f"Invalid capture_message_content {value!r}: must be one of "
+            f"{sorted(option.value for option in CaptureMessageContent)}"
+        ) from None
 
 
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict

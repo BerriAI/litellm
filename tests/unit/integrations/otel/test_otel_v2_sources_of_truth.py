@@ -31,6 +31,7 @@ from litellm.integrations.otel import (
 )
 from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.model import spans as spans_mod
+from litellm.integrations.otel.model.config import CaptureMessageContent
 from litellm.integrations.otel.model.metadata import LLMCallEvent
 from litellm.integrations.otel.model.payloads import (
     EmbeddingOutput,
@@ -1684,6 +1685,18 @@ def test_capture_message_content_normalizer_only_touches_strings():
 
     with pytest.raises(ValidationError):
         OpenTelemetryV2Config(capture_message_content=123)
+
+
+def test_unknown_capture_message_content_env_falls_back_without_raising(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "invalid-mode")
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        config: Final = OpenTelemetryV2Config()
+
+    assert config.capture_message_content is CaptureMessageContent.NO_CONTENT
+    assert "invalid-mode" in caplog.text and "defaulting to no_content" in caplog.text
 
 
 def test_v2_flag_is_off_by_default(monkeypatch):

@@ -29,6 +29,7 @@ from litellm.integrations.otel.logger import (
 )
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.model.config import (
+    CaptureMessageContent,
     ExporterOwner,
     ExporterSpec,
     OpenTelemetryV2Config,
@@ -3569,14 +3570,21 @@ def carries_content(span: ReadableSpan) -> bool:
 
 
 class TestCaptureMessageContent:
-    """A team narrows the globally captured content for its own destination only."""
+    """A destination's explicit capture mode overrides the global default."""
 
     @staticmethod
-    def _fan_out(operator: InMemorySpanExporter, exporters: Mapping[str, InMemorySpanExporter]) -> TracerProvider:
+    def _fan_out(
+        operator: InMemorySpanExporter,
+        exporters: Mapping[str, InMemorySpanExporter],
+        default_capture: CaptureMessageContent = CaptureMessageContent.SPAN_ONLY,
+    ) -> TracerProvider:
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(operator))
         provider.add_span_processor(
-            TenantFanOutSpanProcessor(processor_factory=lambda d: SimpleSpanProcessor(exporters[d.endpoint]))
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda d: SimpleSpanProcessor(exporters[d.endpoint]),
+                default_capture=default_capture,
+            )
         )
         return provider
 
@@ -3591,18 +3599,19 @@ class TestCaptureMessageContent:
         in_fresh_context(run)
 
     @pytest.mark.parametrize(
-        ("globally_captured", "setting", "content_exported"),
+        ("setting", "content_exported"),
         [
-            (True, None, True),
-            (True, "span_only", True),
-            (True, "no_content", False),
-            (False, None, False),
-            (False, "span_only", False),
-            (False, "no_content", False),
+            (None, True),
+            ("no_content", False),
+            ("span_only", True),
+            ("event_only", False),
+            ("span_and_event", True),
         ],
     )
-    def test_the_team_setting_only_ever_narrows_the_global_capture(self, globally_captured, setting, content_exported):
-        attributes = mapped(_MODEL_CALL_WITH_CONTENT if globally_captured else _MODEL_CALL_WITHOUT_CONTENT)
+    def test_a_destination_setting_controls_its_copy_and_omission_uses_the_global_default(
+        self, setting: str | None, content_exported: bool
+    ) -> None:
+        attributes = mapped(_MODEL_CALL_WITH_CONTENT)
         destination = OtelDestination(
             endpoint="http://team.local/api/public/otel",
             headers=MappingProxyType({"Authorization": "Basic dA=="}),
@@ -3615,12 +3624,49 @@ class TestCaptureMessageContent:
 
         exported = by_name(tenant)["chat gpt-4o"]
         assert carries_content(exported) is content_exported
-        assert carries_content(by_name(operator)["chat gpt-4o"]) is globally_captured, (
-            "the operator's copy is untouched"
-        )
+        assert carries_content(by_name(operator)["chat gpt-4o"])
         assert exported.attributes["gen_ai.request.model"] == "gpt-4o"
         assert exported.attributes["gen_ai.usage.input_tokens"] == 12
         assert exported.attributes["gen_ai.usage.output_tokens"] == 8
+
+    def test_a_span_only_team_lifts_global_no_content_only_for_its_destination(self):
+        operator_exporter, team_exporter, sibling_exporter = (
+            InMemorySpanExporter(),
+            InMemorySpanExporter(),
+            InMemorySpanExporter(),
+        )
+        kind = "lit8244_global_no_content_capture"
+        register_exporter_factory(kind, lambda _spec: operator_exporter)
+        config = OpenTelemetryV2Config(
+            capture_message_content=CaptureMessageContent.NO_CONTENT,
+            exporters=[ExporterSpec(kind=kind)],
+        )
+        provider = build_tracer_provider(config, use_simple_processor=True, tenant_overrides=True)
+        team = OtelDestination(
+            endpoint="http://team.local/api/public/otel",
+            headers=MappingProxyType({"Authorization": "Basic dA=="}),
+            callback_name="langfuse_otel",
+            capture_message_content="span_only",
+        )
+        sibling = INHERITING_DEST
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda destination: SimpleSpanProcessor(
+                    team_exporter if destination.endpoint == team.endpoint else sibling_exporter
+                ),
+                default_capture=config.capture_message_content,
+            )
+        )
+
+        self._run(
+            provider,
+            (team, sibling),
+            mapped(_MODEL_CALL_WITH_CONTENT),
+        )
+
+        assert carries_content(by_name(team_exporter)["chat gpt-4o"])
+        assert not any(carries_content(span) for span in operator_exporter.get_finished_spans())
+        assert not any(carries_content(span) for span in sibling_exporter.get_finished_spans())
 
     @pytest.mark.parametrize(
         ("with_content", "without_content"),
@@ -3664,7 +3710,9 @@ class TestCaptureMessageContent:
 
     def test_an_omitted_setting_and_span_only_export_the_same_span(self):
         attributes = mapped(_MODEL_CALL_WITH_CONTENT)
-        span_only = INHERITING_DEST.model_copy(update={"capture_message_content": "span_only"})
+        span_only = INHERITING_DEST.model_copy(
+            update={"capture_message_content": CaptureMessageContent.SPAN_ONLY}
+        )
         omitted_exporter, span_only_exporter = InMemorySpanExporter(), InMemorySpanExporter()
 
         for destination, exporter in ((INHERITING_DEST, omitted_exporter), (span_only, span_only_exporter)):
@@ -3676,10 +3724,22 @@ class TestCaptureMessageContent:
             n: dict(s.attributes) for n, s in by_name(span_only_exporter).items()
         }
 
-    @pytest.mark.parametrize(("setting", "content_exported"), [("no_content", False), (None, True)])
+    @pytest.mark.parametrize(
+        ("globally_captured", "setting", "content_exported"),
+        [
+            (True, "no_content", False),
+            (True, None, True),
+            (False, "span_only", True),
+            (False, None, False),
+        ],
+    )
     def test_the_operators_exporter_on_the_same_account_honors_the_teams_setting_once(
-        self, monkeypatch, setting, content_exported
-    ):
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        globally_captured: bool,
+        setting: str | None,
+        content_exported: bool,
+    ) -> None:
         """The fan-out skips a destination the operator already writes to, so the operator's
         copy is the one that account receives and must not bypass the team's restriction."""
         monkeypatch.setattr(litellm, "otel_tenant_destination_mode", "additive", raising=False)
@@ -3687,7 +3747,11 @@ class TestCaptureMessageContent:
         provider = TracerProvider()
         provider.add_span_processor(
             _OverriddenBackendFilter(
-                SimpleSpanProcessor(shared), "langfuse_otel", "full", TestRoutingMode.OPERATOR_SINK
+                SimpleSpanProcessor(shared),
+                "langfuse_otel",
+                "full",
+                TestRoutingMode.OPERATOR_SINK,
+                global_captures=globally_captured,
             )
         )
         provider.add_span_processor(
@@ -3745,15 +3809,19 @@ class TestCaptureMessageContent:
         assert not any(carries_content(span) for span in model_calls)
 
     @pytest.mark.parametrize(
-        ("setting", "content_exported"), [("no_content", False), ("span_only", True), (None, True)]
+        ("setting", "content_exported"),
+        [("no_content", False), ("span_only", True), ("event_only", False), ("span_and_event", True), (None, False)],
     )
-    def test_a_request_routed_to_the_teams_credentials_honors_the_setting(self, setting, content_exported):
+    def test_a_request_routed_to_the_teams_credentials_honors_the_setting(
+        self, setting: str | None, content_exported: bool
+    ) -> None:
         """A failure-only entry, or a destination the fan-out could not deliver, leaves the
         model call on the per-request tracer route with the team's credentials."""
         exporters: dict[ExporterOwner | None, InMemorySpanExporter] = {}
         kind = f"lit8244_routed_{setting}"
         register_exporter_factory(kind, lambda spec: exporters.setdefault(spec.owner, InMemorySpanExporter()))
         config = OpenTelemetryV2Config(
+            capture_message_content=CaptureMessageContent.NO_CONTENT,
             exporters=[
                 ExporterSpec(
                     kind=kind,
@@ -3778,11 +3846,12 @@ class TestCaptureMessageContent:
         team_copy = by_name(exporters[ExporterOwner.LANGFUSE_OTEL])["chat gpt-4o"]
         assert carries_content(team_copy) is content_exported
         assert team_copy.attributes["gen_ai.usage.input_tokens"] == 12
-        assert carries_content(by_name(exporters[None])["chat gpt-4o"]), "the operator's collector keeps the content"
+        assert not carries_content(by_name(exporters[None])["chat gpt-4o"])
 
     def test_a_restricted_and_an_unrestricted_team_never_share_a_routed_provider(self):
         cache = TenantTracerCache(
             OpenTelemetryV2Config(
+                capture_message_content=CaptureMessageContent.NO_CONTENT,
                 exporters=[
                     ExporterSpec(kind="otlp_http", endpoint="http://op.local", owner=ExporterOwner.LANGFUSE_OTEL)
                 ]
@@ -3794,15 +3863,17 @@ class TestCaptureMessageContent:
         creds = {"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}
 
         restricted = cache.route_for(default, {**creds, "capture_message_content": "no_content"})
-        unrestricted = cache.route_for(default, creds)
+        capturing = cache.route_for(default, {**creds, "capture_message_content": "span_only"})
 
-        assert restricted.provider is not unrestricted.provider
+        assert restricted.provider is not capturing.provider
         cache.release(restricted.provider)
-        cache.release(unrestricted.provider)
+        cache.release(capturing.provider)
 
     @pytest.mark.usefixtures("allow_test_hosts")
-    @pytest.mark.parametrize("setting", ["no_content", "span_only", None])
-    def test_the_setting_rides_the_teams_destination_and_omission_stays_omitted(self, monkeypatch, setting):
+    @pytest.mark.parametrize("setting", ["no_content", "span_only", "event_only", "span_and_event", None])
+    def test_the_setting_rides_the_teams_destination_and_omission_stays_omitted(
+        self, monkeypatch: pytest.MonkeyPatch, setting: str | None
+    ) -> None:
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         is_otel_v2_enabled.cache_clear()
         callback_vars = {
@@ -3830,9 +3901,12 @@ class TestCaptureMessageContent:
         assert destinations["langfuse_otel"].capture_message_content == setting
         assert destinations["arize"].capture_message_content is None, "the setting stays on its own callback"
 
-    @pytest.mark.parametrize("value", ["full", "NO_CONTENT", "span_and_event", "", "true"])
-    def test_an_unsupported_value_fails_registration(self, value):
-        with pytest.raises(ValueError, match=r"Invalid capture_message_content .*\['no_content', 'span_only'\]"):
+    @pytest.mark.parametrize("value", ["full", "NO_CONTENT", "", "true"])
+    def test_an_unsupported_value_fails_registration(self, value: str) -> None:
+        with pytest.raises(
+            ValueError,
+            match=r"Invalid capture_message_content .*\['event_only', 'no_content', 'span_and_event', 'span_only'\]",
+        ):
             AddTeamCallback(
                 callback_name="langfuse_otel",
                 callback_type="success",
@@ -3843,8 +3917,8 @@ class TestCaptureMessageContent:
                 },
             )
 
-    @pytest.mark.parametrize("value", ["no_content", "span_only"])
-    def test_a_supported_value_is_stored_as_given(self, value):
+    @pytest.mark.parametrize("value", ["no_content", "span_only", "event_only", "span_and_event"])
+    def test_a_supported_value_is_stored_as_given(self, value: str) -> None:
         saved = AddTeamCallback(
             callback_name="langfuse_otel",
             callback_type="success",

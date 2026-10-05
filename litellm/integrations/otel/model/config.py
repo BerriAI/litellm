@@ -15,17 +15,10 @@ from litellm.integrations.otel.model.baggage import (
     DEFAULT_BAGGAGE_TEAM_METADATA_KEYS,
 )
 from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
-from litellm.types.utils import OtelSpanScope
+from litellm.types.utils import CaptureMessageContent, OtelSpanScope
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
 OTEL_V2_ENV: Final = "LITELLM_OTEL_V2"
-
-
-class CaptureMessageContent(str):
-    NO_CONTENT = "no_content"
-    SPAN_ONLY = "span_only"
-    EVENT_ONLY = "event_only"
-    SPAN_AND_EVENT = "span_and_event"
 
 
 class ExporterOwner(str, Enum):
@@ -191,7 +184,7 @@ class OpenTelemetryV2Config(BaseSettings):
         default=False,
         validation_alias=AliasChoices("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS"),
     )
-    capture_message_content: str = Field(
+    capture_message_content: CaptureMessageContent = Field(
         default=CaptureMessageContent.NO_CONTENT,
         validation_alias=AliasChoices("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"),
     )
@@ -297,7 +290,14 @@ class OpenTelemetryV2Config(BaseSettings):
         spellings working and lets every downstream comparison stay exact.
         """
         if isinstance(value, str):
-            return value.lower()
+            normalized: Final = parse_capture_message_content(value.lower())
+            if normalized is not None:
+                return normalized
+            verbose_logger.warning(
+                "Unrecognized OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT value %r; defaulting to no_content",
+                value,
+            )
+            return CaptureMessageContent.NO_CONTENT
         return value
 
     @field_validator("langfuse_span_scope", mode="before")
@@ -370,16 +370,8 @@ class OpenTelemetryV2Config(BaseSettings):
 
     @property
     def capture_span_content(self) -> bool:
-        """Whether prompt/response content may be stamped as span attributes.
-
-        Defaults off (``no_content``): an operator must opt in before message
-        bodies leave the process, so a user request can never force its prompt
-        or completion into the configured backend while capture is disabled.
-        """
-        return self.capture_message_content in (
-            CaptureMessageContent.SPAN_ONLY,
-            CaptureMessageContent.SPAN_AND_EVENT,
-        )
+        """Whether the global setting permits prompt/response span attributes."""
+        return self.capture_message_content.captures_span
 
     @classmethod
     def from_env(cls) -> "OpenTelemetryV2Config":
@@ -392,6 +384,15 @@ _EXCLUDED_SERVICES_INPUT: Final[TypeAdapter[str | tuple[object, ...]]] = TypeAda
 def excluded_db_systems_from(value: object) -> frozenset[str]:
     """Normalize a raw ``excluded_services`` value without building a settings model that rereads the env"""
     return _normalize_excluded_services(excluded_service_names(value))
+
+
+def parse_capture_message_content(value: object) -> CaptureMessageContent | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return CaptureMessageContent(value)
+    except ValueError:
+        return None
 
 
 def excluded_service_names(value: object) -> frozenset[str]:

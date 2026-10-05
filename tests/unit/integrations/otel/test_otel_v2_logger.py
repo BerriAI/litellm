@@ -43,7 +43,7 @@ from litellm.integrations.otel import (  # noqa: E402
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
-from litellm.integrations.otel.model.config import ExporterSpec  # noqa: E402
+from litellm.integrations.otel.model.config import CaptureMessageContent, ExporterSpec  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
     SpanRole,
@@ -564,8 +564,6 @@ def _mcp_payload(**overrides):
 
 
 def _logger_capturing():
-    from litellm.integrations.otel.model.config import CaptureMessageContent
-
     cfg = OpenTelemetryV2Config(
         exporter="in_memory",
         legacy_compat=False,
@@ -629,6 +627,45 @@ def test_mcp_tool_call_captures_io_when_enabled():
     (span,) = exporter.get_finished_spans()
     assert '"Paris"' in span.attributes["gen_ai.tool.call.arguments"]
     assert "21" in span.attributes["gen_ai.tool.call.result"]
+
+
+@pytest.mark.parametrize(
+    ("capture_mode", "captures_content"),
+    [
+        ("no_content", False),
+        ("span_only", True),
+        ("event_only", False),
+        ("span_and_event", True),
+        ("invalid", False),
+    ],
+)
+def test_dynamic_capture_mode_controls_llm_payload_content(capture_mode: str, captures_content: bool) -> None:
+    config: Final = OpenTelemetryV2Config(
+        exporter="in_memory",
+        capture_message_content=CaptureMessageContent.NO_CONTENT,
+    )
+    exporter: Final = InMemorySpanExporter()
+    logger: Final = OpenTelemetryV2(
+        config=config, tracer_provider=providers.build_tracer_provider(config, exporter=exporter)
+    )
+    payload: Final = _payload(
+        messages=[{"role": "user", "content": "prompt marker"}],
+        response={
+            "id": "resp_1",
+            "model": "gpt-4o-2024",
+            "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "answer marker"}}],
+        },
+    )
+    kwargs: Final = {
+        **_kwargs(payload),
+        "standard_callback_dynamic_params": {"capture_message_content": capture_mode},
+    }
+
+    _emit_llm(logger, kwargs)
+
+    (span,) = exporter.get_finished_spans()
+    assert ("gen_ai.input.messages" in span.attributes) is captures_content
+    assert ("gen_ai.output.messages" in span.attributes) is captures_content
 
 
 def test_mcp_tool_call_failure_marks_error():
