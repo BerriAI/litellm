@@ -3,7 +3,7 @@
 The preview tests an unsaved server, so no per-user credential is persisted yet. The operator holds
 the just-authorized token; this serves it through the same v2 resolver path runtime uses for the
 stored token, so the preview never relies on the caller-credential-override path that
-``create_mcp_client`` refuses for ``authorization_code``. It backs a single preview call, so it
+``_create_mcp_client`` refuses for ``authorization_code``. It backs a single preview call, so it
 returns its one token regardless of the lookup key.
 """
 

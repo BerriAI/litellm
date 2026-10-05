@@ -826,7 +826,7 @@ async def test_call_tool_m2m_skips_authorization_headers():
     mock_client = MagicMock()
     mock_client.call_tool = AsyncMock(return_value=MagicMock())
 
-    with patch.object(manager, "create_mcp_client", new=AsyncMock(return_value=mock_client)) as create_client_mock:
+    with patch.object(manager, "_create_mcp_client", new=AsyncMock(return_value=mock_client)) as create_client_mock:
         await manager._call_regular_mcp_tool(
             mcp_server=server,
             original_tool_name="echo",
@@ -4260,7 +4260,7 @@ async def test_oauth2_caller_headers_not_forwarded_for_migrated_server():
     # Set auth context with OAuth2 headers
     set_auth_context(user_api_key_auth=user_api_key_auth, oauth2_headers=oauth2_headers)
 
-    # This will capture the arguments passed to create_mcp_client
+    # This will capture the arguments passed to _create_mcp_client
     captured_client_args = {}
 
     async def mock_create_mcp_client(
@@ -4284,19 +4284,19 @@ async def test_oauth2_caller_headers_not_forwarded_for_migrated_server():
         mock_client = MagicMock()
         return mock_client
 
-    # Mock fetch_tools_with_timeout to avoid actual network calls
+    # Mock _fetch_tools_with_timeout to avoid actual network calls
     async def mock_fetch_tools_with_timeout(client, server_name):
         return []  # Return empty list of tools
 
     with (
         patch.object(
             global_mcp_server_manager,
-            "create_mcp_client",
+            "_create_mcp_client",
             side_effect=mock_create_mcp_client,
         ) as mock_create_client,
         patch.object(
             global_mcp_server_manager,
-            "fetch_tools_with_timeout",
+            "_fetch_tools_with_timeout",
             side_effect=mock_fetch_tools_with_timeout,
         ),
         patch(
@@ -4314,7 +4314,7 @@ async def test_oauth2_caller_headers_not_forwarded_for_migrated_server():
             return_value=None,
         ),
     ):
-        # Call _get_tools_from_mcp_servers which should eventually call create_mcp_client
+        # Call _get_tools_from_mcp_servers which should eventually call _create_mcp_client
         await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=None,
@@ -4322,10 +4322,10 @@ async def test_oauth2_caller_headers_not_forwarded_for_migrated_server():
             oauth2_headers=oauth2_headers,
         )
 
-    # Verify that create_mcp_client was called
-    assert mock_create_client.call_count == 1, "Expected create_mcp_client to be called once"
+    # Verify that _create_mcp_client was called
+    assert mock_create_client.call_count == 1, "Expected _create_mcp_client to be called once"
 
-    # Verify the server passed to create_mcp_client is the OAuth2 server
+    # Verify the server passed to _create_mcp_client is the OAuth2 server
     assert captured_client_args["server"].server_id == oauth2_server.server_id
     assert captured_client_args["server"].auth_type == MCPAuth.oauth2
 
@@ -6301,7 +6301,7 @@ class TestEnsureUpstreamInitializeInstructionsCached:
         )
 
         server = _make_instruction_server(server_id="yaml-only", instructions="from yaml")
-        with patch.object(global_mcp_server_manager, "create_mcp_client", AsyncMock()) as mock_create:
+        with patch.object(global_mcp_server_manager, "_create_mcp_client", AsyncMock()) as mock_create:
             await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
         mock_create.assert_not_awaited()
 
@@ -6316,7 +6316,7 @@ class TestEnsureUpstreamInitializeInstructionsCached:
         server = _make_instruction_server(server_id="cached-only", instructions=None)
         global_mcp_server_manager._upstream_initialize_instructions_by_server_id["cached-only"] = "warm"
         try:
-            with patch.object(global_mcp_server_manager, "create_mcp_client", AsyncMock()) as mock_create:
+            with patch.object(global_mcp_server_manager, "_create_mcp_client", AsyncMock()) as mock_create:
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
             mock_create.assert_not_awaited()
         finally:
@@ -6331,7 +6331,7 @@ class TestEnsureUpstreamInitializeInstructionsCached:
         )
 
         server = _make_instruction_server(server_id="openapi-spec", spec_path="/openapi.json", url=None)
-        with patch.object(global_mcp_server_manager, "create_mcp_client", AsyncMock()) as mock_create:
+        with patch.object(global_mcp_server_manager, "_create_mcp_client", AsyncMock()) as mock_create:
             await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
         mock_create.assert_not_awaited()
 
@@ -6350,7 +6350,7 @@ class TestEnsureUpstreamInitializeInstructionsCached:
 
         with patch.object(
             global_mcp_server_manager,
-            "create_mcp_client",
+            "_create_mcp_client",
             AsyncMock(return_value=fake_client),
         ):
             try:
@@ -6378,7 +6378,7 @@ class TestEnsureUpstreamInitializeInstructionsCached:
         fake_client._last_initialize_instructions = None  # upstream sent nothing
 
         create = AsyncMock(return_value=fake_client)
-        with patch.object(global_mcp_server_manager, "create_mcp_client", create):
+        with patch.object(global_mcp_server_manager, "_create_mcp_client", create):
             try:
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
@@ -6403,7 +6403,7 @@ class TestEnsureUpstreamInitializeInstructionsCached:
         fake_client._last_initialize_instructions = None
 
         create = AsyncMock(return_value=fake_client)
-        with patch.object(global_mcp_server_manager, "create_mcp_client", create):
+        with patch.object(global_mcp_server_manager, "_create_mcp_client", create):
             try:
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(server)
@@ -6841,7 +6841,7 @@ async def test_call_tool_empty_extra_headers_returns_none():
     with (
         patch.object(
             manager,
-            "create_mcp_client",
+            "_create_mcp_client",
             side_effect=capture_create_mcp_client,
         ),
         patch.object(
@@ -7362,7 +7362,7 @@ async def test_create_mcp_client_sampling_disabled_by_default():
         transport=MCPTransport.http,
     )
 
-    client = await manager.create_mcp_client(server=server)
+    client = await manager._create_mcp_client(server=server)
     assert client._sampling_callback is None
 
 
@@ -7382,7 +7382,7 @@ async def test_create_mcp_client_sampling_enabled():
         allow_sampling=True,
     )
 
-    client = await manager.create_mcp_client(server=server)
+    client = await manager._create_mcp_client(server=server)
     assert client._sampling_callback is not None
 
 
@@ -7503,12 +7503,12 @@ def _worker_that_never_listed(server: MCPServer, upstream_tools: tuple[str, ...]
     with (
         patch.object(  # test-quality-ok: the upstream MCP session is the boundary; a real one needs an initialize handshake over a live server
             mcp_operations.global_mcp_server_manager,
-            "create_mcp_client",
+            "_create_mcp_client",
             new=AsyncMock(return_value=MagicMock()),
         ) as create_client,
         patch.object(  # test-quality-ok: same boundary, this is the tools/list answer the upstream would give
             mcp_operations.global_mcp_server_manager,
-            "fetch_tools_with_timeout",
+            "_fetch_tools_with_timeout",
             side_effect=fake_fetch_tools,
         ) as fetch_tools,
         patch.object(  # test-quality-ok: records the resolved server and bare name the managed call would forward upstream
@@ -7591,7 +7591,7 @@ async def test_execute_mcp_tool_does_not_relist_a_server_this_worker_already_lis
 
     server = _never_listed_passthrough_server()
     with _worker_that_never_listed(server, upstream_tools=("add",)) as worker:
-        mcp_operations.global_mcp_server_manager.create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
+        mcp_operations.global_mcp_server_manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
         await mcp_operations.execute_mcp_tool(
             name="lazy_map-add",
             arguments={"a": 1, "b": 2},
@@ -7614,7 +7614,7 @@ async def test_execute_mcp_tool_lists_a_tool_this_worker_has_not_yet_seen_on_a_l
 
     server = _never_listed_passthrough_server()
     with _worker_that_never_listed(server, upstream_tools=("add", "multiply")) as worker:
-        mcp_operations.global_mcp_server_manager.create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
+        mcp_operations.global_mcp_server_manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
         await mcp_operations.execute_mcp_tool(
             name="lazy_map-multiply",
             arguments={"a": 1, "b": 2},
@@ -7771,7 +7771,7 @@ async def test_execute_mcp_tool_rest_server_id_injects_requested_server_credenti
         ),
         patch.object(
             mcp_operations.global_mcp_server_manager,
-            "create_mcp_client",
+            "_create_mcp_client",
             new=fake_create_mcp_client,
         ),
         patch.object(
@@ -10576,7 +10576,7 @@ class TestListFiltersHonorThePrefixBoundary:
             )
 
         manager = MCPServerManager()
-        manager.create_prefixed_tools(
+        manager._create_prefixed_tools(
             [MCPTool(name="read_wiki_contents", description="", inputSchema={"type": "object"})],
             _server(),
         )

@@ -21,7 +21,7 @@ class TestMCPMetadataPreservation:
     """Test that metadata is preserved when creating prefixed tools"""
 
     def test_create_prefixed_tools_preserves_metadata(self):
-        """Test that create_prefixed_tools preserves metadata and _meta fields"""
+        """Test that _create_prefixed_tools preserves metadata and _meta fields"""
         manager = MCPServerManager()
 
         # Create a mock server
@@ -47,7 +47,7 @@ class TestMCPMetadataPreservation:
         )
 
         # Create prefixed tools
-        prefixed_tools = manager.create_prefixed_tools(
+        prefixed_tools = manager._create_prefixed_tools(
             [tool_with_metadata], mock_server, add_prefix=True
         )
 

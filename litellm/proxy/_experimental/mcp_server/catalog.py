@@ -23,13 +23,10 @@ from litellm._logging import verbose_logger
 if TYPE_CHECKING:
     from mcp.types import ListToolsResult, PaginatedRequestParams, PaginatedResult
 
-    from litellm.experimental_mcp_client.client import MCPClient
     from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult, OperationContext
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing, ServerOutcome
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.utils import ProxyLogging
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.mcp_server.tool_registry import MCPTool
 
@@ -748,209 +745,6 @@ class _ListingState(BaseModel):
     failures: Mapping[str, JsonValue] = {}
 
 
-async def get_server_tools(
-    manager: MCPServerManager,
-    server: MCPServer,
-    mcp_auth_header: str | dict[str, str] | None = None,
-    extra_headers: dict[str, str] | None = None,
-    add_prefix: bool = True,
-    raw_headers: dict[str, str] | None = None,
-    user_api_key_auth: UserAPIKeyAuth | None = None,
-    oauth2_headers: dict[str, str] | None = None,
-    client_ip: str | None = None,
-    proxy_logging_obj: ProxyLogging | None = None,
-    params: PaginatedRequestParams | None = None,
-) -> ListToolsResult:
-
-    from fastapi import HTTPException
-    from mcp.types import ListToolsResult
-
-    from litellm.proxy._experimental.mcp_server.exceptions import MCPServerListError, MCPUpstreamAuthError
-    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
-        ServerListFault,
-        raise_classified_list_failure,
-    )
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import upstream_failure_suffix
-    from litellm.proxy._experimental.mcp_server.tool_registry import (
-        global_mcp_tool_registry,
-    )
-    from litellm.proxy._experimental.mcp_server.utils import (
-        MCP_TOOL_PREFIX_SEPARATOR,
-        get_server_prefix,
-        normalize_server_name,
-    )
-    from litellm.types.mcp import MCPAuth
-
-    if manager.skip_blocked_stdio_listing(server, "tool"):
-        return ListToolsResult(tools=[])
-
-    verbose_logger.debug("Connecting to url: %s", server.url)
-    verbose_logger.info("_get_tools_from_server for %s...", server.name)
-
-    client = None
-
-    try:
-        # Tool *listing* must not be blocked by missing per-user env vars —
-        # the server's tools should still appear so the client connects. The
-        # friendly "missing vars" error is raised only on the tool-*call*
-        # path (see _call_regular_mcp_tool).
-        resolved_static_headers: Final = await manager.resolve_static_headers_with_env_vars(
-            server, user_api_key_auth, raise_on_missing=False
-        )
-        if resolved_static_headers:
-            if extra_headers is None:
-                extra_headers = {}
-            extra_headers.update(resolved_static_headers)
-
-        # MCPJWTSigner: inject signed JWT for tools/list (the catalog scan's pre_call_hook
-        # carries no extra_headers bag, which the signer treats as not its call).
-        # Skip entirely when the signer is not configured (avoid an unnecessary
-        # dict copy on every list call), when the server has its own static
-        # Authorization header, when a per-user mcp_auth_header has already
-        # been resolved, or when the caller already supplied an Authorization
-        # entry in extra_headers (e.g. a per-user OAuth token resolved
-        # upstream) — admin-configured static auth and per-user OAuth must
-        # take precedence so the signer doesn't silently overwrite e.g. an
-        # upstream API key or a user's OAuth token (MCPClient._get_auth_headers
-        # applies extra_headers after writing Authorization from auth_value, so
-        # an injected JWT would otherwise clobber the per-user token).
-        if user_api_key_auth is not None and not server.spec_path:
-            from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
-                get_mcp_jwt_signer,
-                inject_mcp_jwt_headers_for_upstream,
-            )
-
-            static_headers: Final = server.static_headers or {}
-            has_static_authorization: Final = any(
-                isinstance(k, str) and k.lower() == "authorization" for k in static_headers
-            )
-            has_extra_authorization: Final = bool(extra_headers) and any(
-                isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {})
-            )
-
-            if (
-                get_mcp_jwt_signer() is not None
-                and not has_static_authorization
-                and not mcp_auth_header
-                and not has_extra_authorization
-            ):
-                extra_headers = await inject_mcp_jwt_headers_for_upstream(
-                    user_api_key_dict=user_api_key_auth,
-                    extra_headers=extra_headers,
-                    raw_headers=raw_headers,
-                    for_list_tools=True,
-                )
-
-        stdio_env: Final = manager.build_stdio_env(server, raw_headers)
-
-        # token_exchange (OBO) discovery needs the caller's token too: list it with the user's own
-        # token (mirrors the call path), not v1's deleted client_credentials fallback. Other modes
-        # never read the inbound bearer, so leave subject_token None to avoid forwarding it.
-        subject_token: Final = (
-            manager.extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth)
-            if server.auth_type == MCPAuth.oauth2_token_exchange
-            else None
-        )
-
-        client = await manager.create_mcp_client(
-            server=server,
-            mcp_auth_header=mcp_auth_header,
-            extra_headers=extra_headers,
-            stdio_env=stdio_env,
-            subject_token=subject_token,
-            user_api_key_auth=user_api_key_auth,
-            raw_headers=raw_headers,
-            client_ip=client_ip,
-        )
-
-        ## HANDLE OPENAPI TOOLS
-        if server.spec_path:
-            # OpenAPI tools were stored in the registry under the prefix
-            # active at registration time — fetch by that same prefix.
-            registry_prefix: Final = normalize_server_name(get_server_prefix(server)) + MCP_TOOL_PREFIX_SEPARATOR
-            registered: Final = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
-                global_mcp_tool_registry.list_tools(tool_prefix=registry_prefix)
-            )
-            registered_names: Final = MappingProxyType(
-                {t.name.removeprefix(registry_prefix): t.name for t in registered}
-            )
-            guarded_openapi: Final = await manager.guard_tool_catalog(
-                server=server,
-                tools=[t.model_copy(update={"name": t.name.removeprefix(registry_prefix)}) for t in registered],
-                proxy_logging_obj=proxy_logging_obj,
-                user_api_key_auth=user_api_key_auth,
-                raw_headers=raw_headers,
-            )
-            # OpenAPI tools are stored in the registry with their prefix already
-            # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
-            # through create_prefixed_tools — that would add the prefix a second
-            # time producing "test_petstore-test_petstore-getinventory".
-            if not add_prefix:
-                return ListToolsResult(tools=list(guarded_openapi))
-            return ListToolsResult(
-                tools=[t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
-            )
-        else:
-            page: Final = (
-                await client.list_tools_page(params)
-                if params is not None
-                else ListToolsResult(tools=await manager.fetch_tools_with_timeout(client, server.name))
-            )
-            tools = page.tools
-            manager.remember_upstream_initialize_instructions(server, client)
-
-        guarded_tools: Final = await manager.guard_tool_catalog(
-            server=server,
-            tools=tools,
-            proxy_logging_obj=proxy_logging_obj,
-            user_api_key_auth=user_api_key_auth,
-            raw_headers=raw_headers,
-        )
-        prefixed_or_original_tools: Final = manager.create_prefixed_tools(
-            list(guarded_tools),
-            server,
-            add_prefix=add_prefix,
-            register_bare_names=params is None or (params.cursor is None and not page.next_cursor),
-        )
-
-        return page.model_copy(update={"tools": prefixed_or_original_tools})
-
-    except MCPUpstreamAuthError as upstream_auth_error:
-        # Pass-through 401 must surface to single-server routes so the
-        # client triggers the upstream OAuth flow. The multi-server
-        # aggregator catches this explicitly to keep absorbing.
-        if server.is_dcr_bridge and upstream_auth_error.www_authenticate is not None:
-            raise MCPUpstreamAuthError(
-                status_code=upstream_auth_error.status_code,
-                www_authenticate=None,
-                server_name=upstream_auth_error.server_name,
-            ) from upstream_auth_error
-        raise
-    except HTTPException as e:
-        # A v2 resolver auth challenge (token_exchange's RFC 9728 401, authorization_code's
-        # browser-OAuth 401, or a 403) is raised at client-build time, inside this try. Route it
-        # through the same MCPUpstreamAuthError channel as pass-through so single-server routes
-        # surface the challenge (the client re-authenticates) while the aggregator keeps absorbing.
-        # Non-auth HTTP errors stay absorbed so one misconfigured server can't blank the listing.
-        if e.status_code in (401, 403):
-            headers: Final = e.headers or {}
-            challenge_header: Final = headers.get("WWW-Authenticate") or headers.get("www-authenticate")
-            raise MCPUpstreamAuthError(
-                status_code=e.status_code,
-                www_authenticate=None if server.is_dcr_bridge else challenge_header,
-                server_name=server.name,
-            ) from e
-        verbose_logger.warning("Failed to get tools from server %s: %s", server.name, e)
-        raise MCPServerListError(ServerListFault(tag="internal", status_code=e.status_code), server.name) from e
-    except MCPServerListError:
-        raise
-    except Exception as e:
-        verbose_logger.warning(
-            "Failed to get tools from server %s: %s%s", server.name, type(e).__name__, upstream_failure_suffix(e)
-        )
-        raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
-
-
 async def get_filtered_server_tools(
     server: MCPServer,
     *,
@@ -958,6 +752,7 @@ async def get_filtered_server_tools(
     allowed_mcp_servers: Sequence[MCPServer],
     prefetched_oauth_creds: Mapping[str, OAuthCredentialPayload],
     params: PaginatedRequestParams | None = None,
+    record_listing: bool = False,
 ) -> tuple[ListToolsResult, ServerOutcome]:
     from mcp.types import ListToolsResult
 
@@ -1024,12 +819,14 @@ async def get_filtered_server_tools(
             prefetched_creds=prefetched_oauth_creds,
         )
 
+    catalog_auth_header: Final = server_auth_header
     if server.is_byok and server.auth_type != MCPAuth.oauth2 and server_auth_header is None:
         server_auth_header = await _get_byok_credential(server, user_api_key_auth)
 
     try:
         from litellm.proxy.proxy_server import proxy_logging_obj
 
+        listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
         if params is None:
             page = ListToolsResult(
                 tools=await global_mcp_server_manager._get_tools_from_server(
@@ -1042,11 +839,12 @@ async def get_filtered_server_tools(
                     user_api_key_auth=user_api_key_auth,
                     oauth2_headers=oauth2_headers,
                     proxy_logging_obj=proxy_logging_obj,
+                    catalog_auth_header=catalog_auth_header,
+                    record_listing=False,
                 )
             )
         else:
-            page = await get_server_tools(
-                global_mcp_server_manager,
+            page = await global_mcp_server_manager.get_tools_page(
                 server=server,
                 mcp_auth_header=server_auth_header,
                 extra_headers=extra_headers,
@@ -1057,6 +855,8 @@ async def get_filtered_server_tools(
                 oauth2_headers=oauth2_headers,
                 proxy_logging_obj=proxy_logging_obj,
                 params=params,
+                catalog_auth_header=catalog_auth_header,
+                record_listing=False,
             )
         tools: Final = page.tools
         filtered_tools = filter_tools_by_allowed_tools(tools, server)
@@ -1065,6 +865,23 @@ async def get_filtered_server_tools(
             tools=filtered_tools,
             server_id=server.server_id,
             user_api_key_auth=user_api_key_auth,
+        )
+
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
+        from litellm.proxy._experimental.mcp_server.utils import strip_known_server_prefix
+
+        global_mcp_server_manager.record_listed_tools(
+            server,
+            [tool.model_copy(update={"name": strip_known_server_prefix(tool.name, server)}) for tool in filtered_tools],
+            ListedToolsCaller(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=catalog_auth_header,
+                raw_headers=raw_headers,
+                oauth2_headers=oauth2_headers,
+            ),
+            listed_generation,
+            record_listing=record_listing,
+            continuation=params is not None and params.cursor is not None,
         )
 
         if mcp_proxy_mode:
@@ -1126,6 +943,8 @@ async def aggregate_gateway_tools(
     params: PaginatedRequestParams,
     allowed: Sequence[MCPServer],
     prefetched: Mapping[str, OAuthCredentialPayload],
+    *,
+    record_listing: bool = False,
 ) -> AggregateToolListing:
     import time
 
@@ -1149,6 +968,7 @@ async def aggregate_gateway_tools(
                 allowed_mcp_servers=allowed,
                 prefetched_oauth_creds=prefetched,
                 params=PaginatedRequestParams(cursor=cursor),
+                record_listing=record_listing,
             )
             if cursor is not None and outcome.tag != "ok":
                 from mcp.shared.exceptions import MCPError
@@ -1203,6 +1023,7 @@ async def list_gateway_tools(
         params=params,
         protocol_version=context.protocol_version,
         log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
+        record_listing=True,
         list_tools_log_source="mcp_protocol",
     )
     return ListToolsResult(
@@ -1214,44 +1035,6 @@ async def list_gateway_tools(
         if listing.outcomes
         else None,
     )
-
-
-async def prepare_optional_list_client(
-    manager: MCPServerManager,
-    server: MCPServer,
-    user_api_key_auth: UserAPIKeyAuth | None,
-    *,
-    mcp_auth_header: str | dict[str, str] | None = None,
-    extra_headers: dict[str, str] | None = None,
-    raw_headers: dict[str, str] | None = None,
-    client_ip: str | None = None,
-) -> tuple[MCPClient, tuple[str, str | None]]:
-    headers: Final = (
-        dict(
-            chain(
-                extra_headers.items() if extra_headers else (),
-                server.static_headers.items() if server.static_headers else (),
-            )
-        )
-        or None
-    )
-    stdio_env: Final = manager.build_stdio_env(server, raw_headers)
-    subject_token: Final = manager.obo_subject_token(server, raw_headers, user_api_key_auth)
-    client: Final = await manager.create_mcp_client(
-        server=server,
-        mcp_auth_header=mcp_auth_header,
-        extra_headers=headers,
-        stdio_env=stdio_env,
-        subject_token=subject_token,
-        user_api_key_auth=user_api_key_auth,
-        raw_headers=raw_headers,
-        client_ip=client_ip,
-    )
-    credential_fingerprint: Final = await client.discovery_auth_fingerprint()
-    key: Final = manager.discovery_key(
-        server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
-    )
-    return client, key
 
 
 async def list_gateway_catalog(
@@ -1359,15 +1142,11 @@ async def fetch_optional_catalog_page(
     allowed: Sequence[MCPServer],
     cursor: str | None,
 ) -> CatalogListResult:
-    from mcp.types import ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult, PaginatedRequestParams
+    from mcp.types import PaginatedRequestParams
 
     from litellm.proxy._experimental.mcp_server.operations import _prepare_mcp_server_headers, global_mcp_server_manager
 
     caller, auth, _, server_headers, oauth_headers, raw_headers, client_ip = context.legacy_auth()
-    if global_mcp_server_manager.skip_blocked_stdio_listing(server, "catalog"):
-        if cursor is not None:
-            raise RuntimeError("Upstream catalog is unavailable")
-        return combine_optional_catalog(request, (), None, None)
     auth_header, extra_headers = _prepare_mcp_server_headers(
         server=server,
         mcp_server_auth_headers=server_headers,
@@ -1377,33 +1156,15 @@ async def fetch_optional_catalog_page(
         user_api_key_auth=caller,
         scope_servers=list(allowed),
     )
-    client, _ = await prepare_optional_list_client(
-        global_mcp_server_manager,
+    return await global_mcp_server_manager.get_optional_catalog_page(
         server,
+        request.model_copy(update={"params": PaginatedRequestParams(cursor=cursor)}),
         caller,
         mcp_auth_header=auth_header,
         extra_headers=extra_headers,
         raw_headers=raw_headers,
         client_ip=client_ip,
     )
-    page: Final = await client.list_page(request.model_copy(update={"params": PaginatedRequestParams(cursor=cursor)}))
-    if isinstance(page, ListPromptsResult):
-        return page.model_copy(
-            update={"prompts": global_mcp_server_manager.create_prefixed_prompts(page.prompts, server)}
-        )
-    if isinstance(page, ListResourcesResult):
-        return page.model_copy(
-            update={"resources": global_mcp_server_manager.create_prefixed_resources(page.resources, server)}
-        )
-    if isinstance(page, ListResourceTemplatesResult):
-        return page.model_copy(
-            update={
-                "resource_templates": global_mcp_server_manager.create_prefixed_resource_templates(
-                    page.resource_templates, server
-                )
-            }
-        )
-    raise RuntimeError("Unexpected catalog result type")
 
 
 def combine_optional_catalog(

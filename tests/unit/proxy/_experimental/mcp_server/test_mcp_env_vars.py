@@ -155,7 +155,7 @@ def test_missing_user_env_vars_error_falls_back_to_server_id():
     assert "- X" in text
 
 
-# ── resolve_static_headers_with_env_vars ────────────────────────────────
+# ── _resolve_static_headers_with_env_vars ────────────────────────────────
 
 
 @pytest.fixture
@@ -203,7 +203,7 @@ async def test_resolve_static_headers_interpolates_globals_and_user(
 
     monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
 
-    headers = await manager.resolve_static_headers_with_env_vars(
+    headers = await manager._resolve_static_headers_with_env_vars(
         mock_server, user_api_key_auth=object()
     )
     assert headers == {
@@ -231,7 +231,7 @@ async def test_resolve_static_headers_raises_when_user_vars_missing(
     monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
 
     with pytest.raises(_u("MCPMissingUserEnvVarsError")) as exc:
-        await manager.resolve_static_headers_with_env_vars(
+        await manager._resolve_static_headers_with_env_vars(
             mock_server, user_api_key_auth=object()
         )
     assert exc.value.missing == ["CORP_PASSWORD"]
@@ -270,7 +270,7 @@ async def test_resolve_static_headers_rechecks_db_before_raising_412(
 
     monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
 
-    headers = await manager.resolve_static_headers_with_env_vars(
+    headers = await manager._resolve_static_headers_with_env_vars(
         mock_server, user_api_key_auth=object()
     )
     assert headers == {
@@ -300,7 +300,7 @@ async def test_resolve_static_headers_missing_is_non_blocking_for_listing(
 
     monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
 
-    headers = await manager.resolve_static_headers_with_env_vars(
+    headers = await manager._resolve_static_headers_with_env_vars(
         mock_server, user_api_key_auth=object(), raise_on_missing=False
     )
     # Globals + the supplied user var are interpolated; the still-missing
@@ -329,7 +329,7 @@ async def test_resolve_static_headers_propagates_db_error_on_tool_call(
     monkeypatch.setattr(manager, "_load_user_env_vars", boom)
 
     with pytest.raises(RuntimeError, match="db down"):
-        await manager.resolve_static_headers_with_env_vars(
+        await manager._resolve_static_headers_with_env_vars(
             mock_server, user_api_key_auth=object()
         )
 
@@ -351,7 +351,7 @@ async def test_resolve_static_headers_swallows_db_error_on_listing(
 
     monkeypatch.setattr(manager, "_load_user_env_vars", boom)
 
-    headers = await manager.resolve_static_headers_with_env_vars(
+    headers = await manager._resolve_static_headers_with_env_vars(
         mock_server, user_api_key_auth=object(), raise_on_missing=False
     )
     assert headers == {
@@ -377,7 +377,7 @@ async def test_resolve_static_headers_passthrough_when_no_env_vars():
         static_headers={"Authorization": "Bearer admin-static"},
         env_vars=None,
     )
-    headers = await manager.resolve_static_headers_with_env_vars(server, None)
+    headers = await manager._resolve_static_headers_with_env_vars(server, None)
     assert headers == {"Authorization": "Bearer admin-static"}
 
 
@@ -412,7 +412,7 @@ async def test_resolve_static_headers_unreferenced_user_var_is_not_blocking(
 
     monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
 
-    headers = await manager.resolve_static_headers_with_env_vars(server, object())
+    headers = await manager._resolve_static_headers_with_env_vars(server, object())
     assert headers == {"X-Static": "ok"}
 
 
@@ -448,7 +448,7 @@ async def test_resolve_static_headers_stale_user_value_cannot_override_global(
 
     monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
 
-    headers = await manager.resolve_static_headers_with_env_vars(server, object())
+    headers = await manager._resolve_static_headers_with_env_vars(server, object())
     assert headers == {"X-DB-URL": "admin-db/alice"}
 
 
@@ -488,7 +488,7 @@ async def test_resolve_static_headers_dual_scope_var_uses_global_without_412(
 
     monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
 
-    headers = await manager.resolve_static_headers_with_env_vars(
+    headers = await manager._resolve_static_headers_with_env_vars(
         server, user_api_key_auth=object()
     )
     assert headers == {"Authorization": "Bearer global-secret"}
@@ -530,7 +530,7 @@ async def test_resolve_static_headers_empty_global_does_not_cover_user_var(
     monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
 
     with pytest.raises(_u("MCPMissingUserEnvVarsError")) as exc:
-        await manager.resolve_static_headers_with_env_vars(
+        await manager._resolve_static_headers_with_env_vars(
             server, user_api_key_auth=object()
         )
     assert exc.value.missing == ["SHARED_TOKEN"]
@@ -568,7 +568,7 @@ async def test_resolve_static_headers_user_value_wins_over_empty_global(
 
     monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
 
-    headers = await manager.resolve_static_headers_with_env_vars(
+    headers = await manager._resolve_static_headers_with_env_vars(
         server, user_api_key_auth=object()
     )
     assert headers == {"Authorization": "Bearer user-secret"}
@@ -631,7 +631,7 @@ async def test_health_check_reaches_servers_without_forwarding_per_user_env_vars
     manager: Final = MCPServerManager()
     manager.registry[mock_server.server_id] = mock_server
     create_client: Final = AsyncMock()
-    monkeypatch.setattr(manager, "create_mcp_client", create_client)
+    monkeypatch.setattr(manager, "_create_mcp_client", create_client)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     route: Final = respx_mock.get(mock_server.url).respond(401)
 
@@ -725,7 +725,7 @@ async def test_resolve_static_headers_db_unavailable_is_not_missing_412(
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
 
     with pytest.raises(RuntimeError, match="database connection"):
-        await manager.resolve_static_headers_with_env_vars(
+        await manager._resolve_static_headers_with_env_vars(
             mock_server, user_api_key_auth=fake_auth
         )
 
@@ -1467,7 +1467,7 @@ async def test_build_mcp_server_from_table_decrypts_global_env_vars(env_vars_sal
     manager = MCPServerManager()
     server = await manager.build_mcp_server_from_table(table)
 
-    headers = await manager.resolve_static_headers_with_env_vars(server, None)
+    headers = await manager._resolve_static_headers_with_env_vars(server, None)
     assert headers == {"X-Db": "s3cr3t-p@ss"}
 
 
@@ -1513,7 +1513,7 @@ async def test_add_server_does_not_double_decrypt_global_env_vars(env_vars_salt_
     await manager.add_server(table)
 
     server = manager.registry["srv-add"]
-    headers = await manager.resolve_static_headers_with_env_vars(server, None)
+    headers = await manager._resolve_static_headers_with_env_vars(server, None)
     assert headers == {"X-Db": "s3cr3t-p@ss"}
 
 

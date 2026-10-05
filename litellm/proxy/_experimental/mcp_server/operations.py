@@ -81,7 +81,6 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     outcome_wire_value,
 )
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-    ListedToolsCaller,
     MCPServerManager,
     _caller_authorization_fans_out,
     _client_forwarded_authorization_headers,
@@ -1089,6 +1088,7 @@ async def _get_tools_from_mcp_servers(
                 context=context,
                 allowed_mcp_servers=allowed_mcp_servers,
                 prefetched_oauth_creds=_prefetched_oauth_creds,
+                record_listing=record_listing,
             )
             return page.tools, outcome
 
@@ -1105,7 +1105,9 @@ async def _get_tools_from_mcp_servers(
         else:
             from litellm.proxy._experimental.mcp_server.catalog import aggregate_gateway_tools
 
-            aggregated = await aggregate_gateway_tools(context, params, allowed_mcp_servers, _prefetched_oauth_creds)
+            aggregated = await aggregate_gateway_tools(
+                context, params, allowed_mcp_servers, _prefetched_oauth_creds, record_listing=record_listing
+            )
         all_tools: Final = aggregated.tools
         server_outcomes: Final = aggregated.outcomes
 
@@ -1702,7 +1704,7 @@ def _challenge_missing_token_exchange_subject(
         return
     if all(allowed.server_id != server.server_id for allowed in allowed_mcp_servers):
         return
-    if global_mcp_server_manager.extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth) is not None:
+    if global_mcp_server_manager._extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth) is not None:
         return
     from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
         raise_token_exchange_challenge,
@@ -3184,12 +3186,12 @@ class GatewayOperations:
                 )
             case CallToolRequest(params=params):
                 return await _execute_mcp_server_tool_call(context, params, self._host_progress_callback)
-            case GetPromptRequest(params=params):
-                return await _execute_get_prompt(context, params, self._host_progress_callback)
             case ListPromptsRequest(params=params):
                 return await _execute_list_prompts(
                     context, params or PaginatedRequestParams(), self._host_progress_callback
                 )
+            case GetPromptRequest(params=params):
+                return await _execute_get_prompt(context, params, self._host_progress_callback)
             case ListResourcesRequest(params=params):
                 return await _execute_list_resources(
                     context, params or PaginatedRequestParams(), self._host_progress_callback

@@ -6569,7 +6569,7 @@ class TestComputeUserEnvVarStatus:
 
     def test_dual_scope_var_with_global_fallback_is_not_required(self):
         # SHARED_TOKEN is declared both global and user. The global value covers
-        # the reference (globals win in resolve_static_headers_with_env_vars),
+        # the reference (globals win in _resolve_static_headers_with_env_vars),
         # so the tool-call path never raises a 412 for it. The status endpoint
         # must agree and not report it as required/missing, otherwise it asks the
         # user for a credential the request would never actually need.
@@ -6587,7 +6587,7 @@ class TestComputeUserEnvVarStatus:
 
     def test_dual_scope_var_with_empty_global_is_required(self):
         # SHARED_TOKEN is declared both global (empty value) and user. An empty
-        # global is not a usable fallback, so resolve_static_headers_with_env_vars
+        # global is not a usable fallback, so _resolve_static_headers_with_env_vars
         # still requires the user value and the tool-call path 412s without it. The
         # status endpoint must agree and report it required, or it would tell the
         # user no credential is needed for a var every call rejects.
