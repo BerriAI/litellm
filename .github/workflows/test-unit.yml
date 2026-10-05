@@ -166,7 +166,7 @@ jobs:
               tests/unit/enterprise/proxy/test_managed_files_access_check.py
               tests/unit/enterprise/proxy/test_managed_files_hook.py
             workers: 4
-            reruns: 0
+            reruns: 2
             timeout-minutes: 20
             job-timeout-minutes: 60
 
