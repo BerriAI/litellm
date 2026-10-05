@@ -90,3 +90,10 @@ pub fn request_schemas() -> BTreeMap<&'static str, Schema> {
         ),
     ])
 }
+
+pub fn response_schemas() -> BTreeMap<&'static str, Schema> {
+    BTreeMap::from([(
+        "TraceSQLResponse",
+        emitted::<crate::response::TraceSQLResponse>(),
+    )])
+}
