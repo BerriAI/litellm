@@ -226,6 +226,18 @@ class TestChatGPTResponsesAPITransformation:
 
         assert request["input"] == list_input
 
+    def test_chatgpt_leaves_empty_string_input_for_the_backend_to_reject(self) -> None:
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-6.1-sol",
+            input="",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == ""
+
     @pytest.mark.parametrize(
         "model_name",
         [
