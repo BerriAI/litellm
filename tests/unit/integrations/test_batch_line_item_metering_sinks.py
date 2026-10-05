@@ -344,8 +344,7 @@ async def test_otel_v1_meter_cost_skips_line_items_but_spans_stay(
     finished = span_exporter.get_finished_spans()
     assert finished, "OTel v1 emitted no spans at all"
     assert any("chatcmpl-line-1" in str(span.attributes) for span in finished), (
-        f"OTel v1 dropped the per-line span the feature exists to deliver: "
-        f"{[span.name for span in finished]}"
+        f"OTel v1 dropped the per-line span the feature exists to deliver: {[span.name for span in finished]}"
     )
 
 
