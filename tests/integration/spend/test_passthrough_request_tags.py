@@ -483,7 +483,7 @@ def test_configured_endpoint_forwards_json_multipart_and_query_and_an_update_kee
     subpath_root: Final = f"/integration-contract-subpath-{marker}"
     with (
         wire_server(_received_reply) as wire,
-        owned_proxy(gateway, tmp_path, {_CONTRACT_TOKEN_ENV: _CONTRACT_TOKEN}, workers=2) as candidate,
+        owned_proxy(gateway, tmp_path, {_CONTRACT_TOKEN_ENV: _CONTRACT_TOKEN}) as candidate,
         candidate.scenario() as scenario,
     ):
         created: Final = _create_endpoint(
@@ -598,7 +598,7 @@ def test_deleted_configured_endpoint_leaves_readback_storage_and_runtime_and_tea
     marker: Final = uuid.uuid4().hex
     with (
         wire_server(_received_reply) as wire,
-        owned_proxy(gateway, tmp_path, {}, workers=2) as candidate,
+        owned_proxy(gateway, tmp_path, {}) as candidate,
         candidate.scenario() as scenario,
     ):
         allowed: Final = _create_endpoint(
