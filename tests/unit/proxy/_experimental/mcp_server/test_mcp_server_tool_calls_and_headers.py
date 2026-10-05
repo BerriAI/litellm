@@ -1706,6 +1706,50 @@ async def test_handle_list_tools_converts_permission_httpexception_to_mcp_error(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "handler_name",
+    [
+        "list_prompts",
+        "list_resources",
+        "list_resource_templates",
+    ],
+)
+async def test_rate_limited_catalog_lists_return_mcp_errors(_mcp_request_ctx, handler_name):
+    from mcp.shared.exceptions import MCPError
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_server
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    user_api_key_auth: Final = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    server_config: Final = MCPServer(
+        server_id="rate-limited",
+        name="rate-limited",
+        server_name="rate-limited",
+        transport=MCPTransport.http,
+        rpm=1,
+    )
+    rate_limit_error: Final = ProxyRateLimitError(detail="server RPM exceeded")
+    enforce_rate_limit: Final = AsyncMock(side_effect=rate_limit_error)
+    proxy_logging: Final = MagicMock(enforce_mcp_server_rate_limits=enforce_rate_limit)
+
+    with (
+        patch.object(
+            mcp_server,
+            "get_or_extract_auth_context",
+            new=AsyncMock(return_value=(user_api_key_auth, None, [server_config.server_id], None, None, None, None)),
+        ),
+        patch.object(mcp_operations, "_get_allowed_mcp_servers", new=AsyncMock(return_value=[server_config])),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", new=proxy_logging),
+    ):
+        with pytest.raises(MCPError) as exc_info:
+            await getattr(mcp_server, handler_name)(_mcp_request_ctx(), _paged_params())
+
+    assert exc_info.value.error.code == INVALID_REQUEST
+    assert exc_info.value.error.message == "server RPM exceeded"
+    enforce_rate_limit.assert_awaited_once_with(user_api_key_auth, server_config)
+
+
+@pytest.mark.asyncio
 async def test_mcp_server_tool_call_renders_denial_message_not_detail_dict(_mcp_request_ctx):
     try:
         from litellm.proxy._experimental.mcp_server.server import mcp_server_tool_call
