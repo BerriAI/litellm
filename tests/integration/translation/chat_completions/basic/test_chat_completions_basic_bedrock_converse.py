@@ -2,7 +2,7 @@ import pytest
 from integration._support.client import Gateway
 from integration._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
-from integration.translation.responses.bases.anthropic import (
+from integration.translation.chat_completions.bases.bedrock_converse import (
     CLAUDE_HAIKU_4_5_TEST_CASE,
     CLAUDE_OPUS_4_8_TEST_CASE,
     CLAUDE_OPUS_5_5_TEST_CASE,
@@ -25,5 +25,7 @@ from integration.translation.runner import run
     ],
     ids=lambda case: case.id,
 )
-def test_responses_basic_anthropic(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
+def test_chat_completions_basic_bedrock_converse(
+    case: TranslationTestCase, gateway: Gateway, provider: SharedProvider
+) -> None:
     run(case, gateway, provider)
