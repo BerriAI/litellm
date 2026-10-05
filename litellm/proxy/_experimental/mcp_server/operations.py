@@ -1089,7 +1089,6 @@ async def _get_tools_from_mcp_servers(
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
-
         if mcp_servers and not allowed_mcp_servers:
             await raise_denied_scoped_mcp_access(
                 requested_names=mcp_servers,
@@ -3121,8 +3120,6 @@ async def _execute_list_resources(
         raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(e.detail)) from e
     except Exception as e:
         verbose_logger.exception("Error in list_resources endpoint: %s", e)
-        # Return empty list instead of failing completely
-        # This prevents the HTTP stream from failing and allows the client to get a response
         return ListResourcesResult(resources=[])
 
 
@@ -3168,8 +3165,6 @@ async def _execute_list_resource_templates(
         raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(e.detail)) from e
     except Exception as e:
         verbose_logger.exception("Error in list_resource_templates endpoint: %s", e)
-        # Return empty list instead of failing completely
-        # This prevents the HTTP stream from failing and allows the client to get a response
         return ListResourceTemplatesResult(resource_templates=[])
 
 
