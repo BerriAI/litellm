@@ -5,6 +5,7 @@ Keys, teams, organizations, projects and users store public model names, and acc
 new name, lose the old one, and see only the new name in ``/v1/models``.
 """
 
+import json
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -105,7 +106,7 @@ def _holders(scenario: Scenario, old: str) -> tuple[_Holder, ...]:
 def _allowlist(holder: _Holder) -> list[dict[str, object]]:
     if holder.kind == "key":
         return read_rows(
-            'SELECT models FROM "LiteLLM_VerificationToken" WHERE token = encode(sha256(%s::bytea), \'hex\')',
+            "SELECT models FROM \"LiteLLM_VerificationToken\" WHERE token = encode(sha256(%s::bytea), 'hex')",
             (holder.key,),
         )
     return read_rows(
@@ -156,9 +157,9 @@ def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that
             new: Final = f"integration-renamed-{uuid.uuid4().hex}"
             renamed: Final = gateway.request("PATCH", f"/model/{model_id}/update", {"model_name": new})
             assert renamed.status_code == 200, renamed.text
-            assert read_rows(
-                'SELECT model_name FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (model_id,)
-            ) == [{"model_name": new}]
+            assert read_rows('SELECT model_name FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (model_id,)) == [
+                {"model_name": new}
+            ]
 
             for holder in holders:
                 assert _allowlist(holder) == [{"models": [new]}], holder.kind
@@ -168,6 +169,8 @@ def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that
                 access_group_id=access_group_id, access_model_names=[new]
             ), group.text
 
+            refusals: dict[str, tuple[int, dict[str, object]]] = {}
+            denials: dict[str, object] = {}
             for caller in callers:
                 served = _chat(gateway, new, caller.key)
                 assert served.status_code == 200, f"{caller.kind}: {served.text}"
@@ -175,5 +178,24 @@ def test_renamed_model_is_reachable_by_its_new_name_through_every_allowlist_that
                     model=new, usage=_Usage(total_tokens=40)
                 ), f"{caller.kind}: {served.text}"
                 refused = _chat(gateway, old, caller.key)
-                assert refused.status_code in (401, 403), f"{caller.kind}: {refused.text}"
+                error = object_value(refused.json())["error"]
+                assert isinstance(error, dict), refused.text
+                refusals[caller.kind] = (refused.status_code, {k: v for k, v in error.items() if k != "type"})
+                denials[caller.kind] = error["type"]
                 _assert_listing(gateway, caller, served=new, gone=old)
+            denied: Final = {
+                "message": f"The requested model '{old}' is not available for this API key, or the model name is "
+                "invalid. Check the models available to you and try again.",
+                "param": "model",
+                "code": "403",
+            }
+            assert refusals == {caller.kind: (403, denied) for caller in callers}, json.dumps(refusals)
+            # The access-group caller holds no project, yet which object check names the refusal is not fixed.
+            assert denials.pop("access_group") in ("team_model_access_denied", "project_model_access_denied"), denials
+            assert denials == {
+                "key": "key_model_access_denied",
+                "team": "team_model_access_denied",
+                "organization": "team_model_access_denied",
+                "project": "project_model_access_denied",
+                "user": "user_model_access_denied",
+            }, json.dumps(denials)
