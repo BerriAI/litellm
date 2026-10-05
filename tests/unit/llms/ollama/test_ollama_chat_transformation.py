@@ -989,3 +989,43 @@ class TestOllamaStreamingUsage:
         )
 
         assert result.usage is None
+
+
+class TestOllamaChatPenaltyParams:
+    """OpenAI's penalties are additive (0 = off); Ollama's `repeat_penalty` is multiplicative (1.0 = off)."""
+
+    def test_frequency_penalty_is_forwarded_under_its_own_name(self):
+        optional_params = get_optional_params(
+            model="ollama_chat/test-model",
+            frequency_penalty=0,
+            custom_llm_provider="ollama_chat",
+        )
+
+        assert optional_params["frequency_penalty"] == 0
+        assert "repeat_penalty" not in optional_params
+
+    def test_presence_penalty_is_forwarded(self):
+        optional_params = get_optional_params(
+            model="ollama_chat/test-model",
+            presence_penalty=0.5,
+            custom_llm_provider="ollama_chat",
+        )
+
+        assert optional_params["presence_penalty"] == 0.5
+
+    def test_presence_penalty_is_a_supported_param(self):
+        supported = OllamaChatConfig().get_supported_openai_params("test-model")
+
+        assert "presence_penalty" in supported
+        assert "frequency_penalty" in supported
+
+    def test_explicit_repeat_penalty_is_passed_through(self):
+        optional_params = get_optional_params(
+            model="ollama_chat/test-model",
+            frequency_penalty=0.2,
+            repeat_penalty=1.3,
+            custom_llm_provider="ollama_chat",
+        )
+
+        assert optional_params["repeat_penalty"] == 1.3
+        assert optional_params["frequency_penalty"] == 0.2

@@ -135,6 +135,7 @@ class OllamaChatConfig(BaseConfig):
             "temperature",
             "seed",
             "frequency_penalty",
+            "presence_penalty",
             "stop",
             "tools",
             "tool_choice",
@@ -161,8 +162,13 @@ class OllamaChatConfig(BaseConfig):
                 optional_params["seed"] = value
             if param == "top_p":
                 optional_params["top_p"] = value
+            # Ollama exposes OpenAI's additive penalties under the same names.
+            # `repeat_penalty` is a different, multiplicative setting (1.0 = off),
+            # so forwarding an OpenAI value of 0 to it would invert the penalty.
             if param == "frequency_penalty":
-                optional_params["repeat_penalty"] = value
+                optional_params["frequency_penalty"] = value
+            if param == "presence_penalty":
+                optional_params["presence_penalty"] = value
             if param == "stop":
                 optional_params["stop"] = value
             if param == "response_format" and isinstance(value, dict) and value.get("type") == "json_object":
