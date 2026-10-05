@@ -94,7 +94,7 @@ async fn enforces_configured_keys_without_exposing_secrets(
 #[rstest]
 fn hash_token_matches_python_sha256_hexdigest() {
     assert_eq!(
-        hash_token("sk-1234"),
+        hash_token("sk-9876"),
         "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
     );
 }

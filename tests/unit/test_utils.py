@@ -2218,7 +2218,7 @@ def test_block_key_hashing_logic():
 
     # Test cases: (input_key, should_be_hashed, expected_output)
     test_cases = [
-        ("sk-1234567890abcdef", True, hash_token("sk-1234567890abcdef")),
+        ("sk-9876567890abcdef", True, hash_token("sk-9876567890abcdef")),
         ("sk-test-key", True, hash_token("sk-test-key")),
         ("abc123", False, "abc123"),  # Should not be hashed
         ("hashed_key_123", False, "hashed_key_123"),  # Should not be hashed

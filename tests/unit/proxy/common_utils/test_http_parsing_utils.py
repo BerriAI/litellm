@@ -498,7 +498,7 @@ async def test_json_parsing_error_handling():
                 "type": "mcp",
                 "server_label": "litellm",
                 "headers": {
-                    "x-litellm-api-key": "Bearer sk-1234",
+                    "x-litellm-api-key": "Bearer sk-9876",
                 }
             }
         ],
@@ -550,7 +550,7 @@ async def test_json_parsing_error_handling():
                 "type": "mcp",
                 "server_label": "litellm",
                 "headers": {
-                    "x-litellm-api-key": "Bearer sk-1234"
+                    "x-litellm-api-key": "Bearer sk-9876"
                 }
             }
         ],

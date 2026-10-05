@@ -3402,7 +3402,7 @@ def test_redact_logged_api_key_empty_string_returns_none():
 
 
 def test_redact_logged_api_key_sk_key_is_hashed():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     result = _redact_logged_api_key(raw)
     assert result == hash_token(raw)
     assert result is not None
@@ -3411,14 +3411,14 @@ def test_redact_logged_api_key_sk_key_is_hashed():
 
 
 def test_redact_logged_api_key_bearer_sk_equals_sk_hash():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     result_plain = _redact_logged_api_key(raw)
     result_bearer = _redact_logged_api_key(f"Bearer {raw}")
     assert result_bearer == result_plain
 
 
 def test_redact_logged_api_key_bearer_case_insensitive():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     result_lower = _redact_logged_api_key(f"bearer {raw}")
     result_upper = _redact_logged_api_key(f"BEARER {raw}")
     expected = hash_token(raw)
@@ -3618,7 +3618,7 @@ def test_redact_logged_api_key_bearer_only_returns_none():
 
 
 def test_get_spend_logs_metadata_sk_key_hashed():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     meta = _get_spend_logs_metadata({"user_api_key": raw})
     assert meta["user_api_key"] == hash_token(raw)
     assert meta["user_api_key"] is not None
@@ -3629,7 +3629,7 @@ def test_get_spend_logs_metadata_sk_key_hashed():
 
 
 def test_get_spend_logs_metadata_bearer_sk_key_hashed_same_as_plain():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     meta_plain = _get_spend_logs_metadata({"user_api_key": raw})
     meta_bearer = _get_spend_logs_metadata({"user_api_key": f"Bearer {raw}"})
     assert meta_bearer["user_api_key"] == meta_plain["user_api_key"]

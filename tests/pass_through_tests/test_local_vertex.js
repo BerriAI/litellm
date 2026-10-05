@@ -1,5 +1,8 @@
 const { VertexAI, RequestOptions } = require('@google-cloud/vertexai');
 
+const masterKey = process.env.LITELLM_MASTER_KEY;
+if (!masterKey) throw new Error("LITELLM_MASTER_KEY must be set");
+
 
 
 const vertexAI = new VertexAI({
@@ -10,7 +13,7 @@ const vertexAI = new VertexAI({
 
 // Create customHeaders using Headers
 const customHeaders = new Headers({
-    "X-Litellm-Api-Key": "sk-1234",
+    "X-Litellm-Api-Key": masterKey,
     tags: "vertexjs,test-2"
 });
 

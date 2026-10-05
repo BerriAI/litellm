@@ -533,7 +533,7 @@ class TestSecretMasking:
         environ: Final = {
             "OPENAI_API_KEY": "sk-proj-0123456789",
             "AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMI/K7MDENG",
-            "LITELLM_MASTER_KEY": "sk-1234",
+            "LITELLM_MASTER_KEY": "sk-test",
             "GOOGLE_APPLICATION_CREDENTIALS": "/secrets/vertex.json",
             "KEYCLOAK_URL": "http://localhost:8080",
             "E2E_MODEL": "claude-haiku-4-5",
