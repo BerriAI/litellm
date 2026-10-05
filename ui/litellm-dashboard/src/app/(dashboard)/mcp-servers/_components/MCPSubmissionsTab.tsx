@@ -46,6 +46,14 @@ const STATUS_CONFIG: Record<MCPStatus, { label: string; bg: string; text: string
   },
 };
 
+const EMPTY_SUMMARY: MCPSubmissionsSummary = {
+  total: 0,
+  pending_review: 0,
+  active: 0,
+  rejected: 0,
+  items: [],
+};
+
 function formatDate(value: string | null | undefined): string {
   if (!value) return "—";
   try {
@@ -265,19 +273,166 @@ type MCPServerCardProps = {
   requiredFields: string[];
 };
 
+type ComplianceCheck = {
+  key: string;
+  label: string;
+  description: string;
+  passed: boolean;
+};
+
+type CardReviewActionsProps = {
+  approvalStatus: MCPStatus;
+  onApprove: () => void;
+  onReject: () => void;
+};
+
+function CardReviewActions({ approvalStatus, onApprove, onReject }: CardReviewActionsProps) {
+  return (
+    <>
+      {approvalStatus !== "rejected" && (
+        <div className="flex items-center gap-2 shrink-0">
+          {approvalStatus !== "active" && (
+            <button
+              type="button"
+              onClick={onApprove}
+              className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
+            >
+              Approve
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onReject}
+            className="text-xs border border-destructive/30 text-destructive hover:bg-destructive/10 px-3 py-1.5 rounded-md transition-colors font-medium"
+          >
+            Reject
+          </button>
+        </div>
+      )}
+      {approvalStatus === "rejected" && (
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={onApprove}
+            className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
+          >
+            Re-approve
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
+type ComplianceChecksPanelProps = {
+  checks: ComplianceCheck[];
+  approvalStatus: MCPStatus;
+  onApprove: () => void;
+  onReject: () => void;
+};
+
+function ComplianceChecksPanel({ checks, approvalStatus, onApprove, onReject }: ComplianceChecksPanelProps) {
+  const passCount = checks.filter((c) => c.passed).length;
+  const failCount = checks.length - passCount;
+  const allPassed = checks.length > 0 && failCount === 0;
+
+  return (
+    <div className="border-t border-border">
+      {/* Overall status header */}
+      <div
+        className={`flex items-center gap-3 px-4 py-3 ${
+          allPassed ? "bg-success/10 border-b border-success/15" : "bg-destructive/10 border-b border-destructive/15"
+        }`}
+      >
+        {/* Large status circle */}
+        <div
+          className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+            allPassed ? "bg-success" : "bg-destructive"
+          }`}
+        >
+          {allPassed ? (
+            <CheckIcon className="h-4 w-4 text-success-foreground" />
+          ) : (
+            <XIcon className="h-4 w-4 text-destructive-foreground" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className={`text-sm font-semibold leading-tight ${allPassed ? "text-success" : "text-destructive"}`}>
+            {allPassed ? "All checks passed" : `${failCount} check${failCount !== 1 ? "s" : ""} failed`}
+          </div>
+          <div className="text-xs text-muted-foreground mt-0.5">
+            {passCount} passing, {failCount} failing
+          </div>
+        </div>
+        {/* Approve / Reject in header */}
+        <div className="flex items-center gap-2 shrink-0">
+          {approvalStatus !== "active" && approvalStatus !== "rejected" && (
+            <button
+              type="button"
+              onClick={onApprove}
+              className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
+            >
+              Approve
+            </button>
+          )}
+          {approvalStatus === "rejected" && (
+            <button
+              type="button"
+              onClick={onApprove}
+              className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
+            >
+              Re-approve
+            </button>
+          )}
+          {approvalStatus !== "rejected" && (
+            <button
+              type="button"
+              onClick={onReject}
+              className="text-xs border border-destructive/30 text-destructive hover:bg-destructive/10 bg-card px-3 py-1.5 rounded-md transition-colors font-medium"
+            >
+              Reject
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Individual check rows */}
+      <div className="divide-y divide-border">
+        {checks.map((c) => (
+          <div key={c.key} className="flex items-center gap-3 px-4 py-2.5">
+            {/* Small circle icon */}
+            <div
+              className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
+                c.passed ? "bg-success/15" : "bg-destructive/15"
+              }`}
+            >
+              {c.passed ? (
+                <CheckIcon className="h-3 w-3 text-success" />
+              ) : (
+                <XIcon className="h-3 w-3 text-destructive" />
+              )}
+            </div>
+            <span className={`text-sm flex-1 ${c.passed ? "text-foreground" : "text-foreground"}`}>{c.label}</span>
+            <span className={`text-xs ${c.passed ? "text-success" : "text-destructive"}`}>
+              {c.passed ? "Passes" : "Missing"}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServerCardProps) {
   const approvalStatus = (server.approval_status ?? "active") as MCPStatus;
   const statusCfg = STATUS_CONFIG[approvalStatus] ?? STATUS_CONFIG["active"];
 
-  const checks = MCP_REQUIRED_FIELD_DEFS.filter((f) => requiredFields.includes(f.key)).map((f) => ({
+  const checks: ComplianceCheck[] = MCP_REQUIRED_FIELD_DEFS.filter((f) => requiredFields.includes(f.key)).map((f) => ({
     key: f.key,
     label: f.label,
     description: f.description,
     passed: f.check(server),
   }));
-  const passCount = checks.filter((c) => c.passed).length;
-  const failCount = checks.length - passCount;
-  const allPassed = checks.length > 0 && failCount === 0;
 
   return (
     <div className="bg-card border border-border rounded-lg overflow-hidden">
@@ -321,127 +476,20 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
             )}
           </div>
           {/* Approve/Reject when no checks panel (no rules configured) */}
-          {checks.length === 0 && approvalStatus !== "rejected" && (
-            <div className="flex items-center gap-2 shrink-0">
-              {approvalStatus !== "active" && (
-                <button
-                  type="button"
-                  onClick={onApprove}
-                  className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
-                >
-                  Approve
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={onReject}
-                className="text-xs border border-destructive/30 text-destructive hover:bg-destructive/10 px-3 py-1.5 rounded-md transition-colors font-medium"
-              >
-                Reject
-              </button>
-            </div>
-          )}
-          {checks.length === 0 && approvalStatus === "rejected" && (
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={onApprove}
-                className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
-              >
-                Re-approve
-              </button>
-            </div>
+          {checks.length === 0 && (
+            <CardReviewActions approvalStatus={approvalStatus} onApprove={onApprove} onReject={onReject} />
           )}
         </div>
       </div>
 
       {/* GitHub-style checks panel */}
       {checks.length > 0 && (
-        <div className="border-t border-border">
-          {/* Overall status header */}
-          <div
-            className={`flex items-center gap-3 px-4 py-3 ${
-              allPassed
-                ? "bg-success/10 border-b border-success/15"
-                : "bg-destructive/10 border-b border-destructive/15"
-            }`}
-          >
-            {/* Large status circle */}
-            <div
-              className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-                allPassed ? "bg-success" : "bg-destructive"
-              }`}
-            >
-              {allPassed ? (
-                <CheckIcon className="h-4 w-4 text-success-foreground" />
-              ) : (
-                <XIcon className="h-4 w-4 text-destructive-foreground" />
-              )}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className={`text-sm font-semibold leading-tight ${allPassed ? "text-success" : "text-destructive"}`}>
-                {allPassed ? "All checks passed" : `${failCount} check${failCount !== 1 ? "s" : ""} failed`}
-              </div>
-              <div className="text-xs text-muted-foreground mt-0.5">
-                {passCount} passing, {failCount} failing
-              </div>
-            </div>
-            {/* Approve / Reject in header */}
-            <div className="flex items-center gap-2 shrink-0">
-              {approvalStatus !== "active" && approvalStatus !== "rejected" && (
-                <button
-                  type="button"
-                  onClick={onApprove}
-                  className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
-                >
-                  Approve
-                </button>
-              )}
-              {approvalStatus === "rejected" && (
-                <button
-                  type="button"
-                  onClick={onApprove}
-                  className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
-                >
-                  Re-approve
-                </button>
-              )}
-              {approvalStatus !== "rejected" && (
-                <button
-                  type="button"
-                  onClick={onReject}
-                  className="text-xs border border-destructive/30 text-destructive hover:bg-destructive/10 bg-card px-3 py-1.5 rounded-md transition-colors font-medium"
-                >
-                  Reject
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Individual check rows */}
-          <div className="divide-y divide-border">
-            {checks.map((c) => (
-              <div key={c.key} className="flex items-center gap-3 px-4 py-2.5">
-                {/* Small circle icon */}
-                <div
-                  className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
-                    c.passed ? "bg-success/15" : "bg-destructive/15"
-                  }`}
-                >
-                  {c.passed ? (
-                    <CheckIcon className="h-3 w-3 text-success" />
-                  ) : (
-                    <XIcon className="h-3 w-3 text-destructive" />
-                  )}
-                </div>
-                <span className={`text-sm flex-1 ${c.passed ? "text-foreground" : "text-foreground"}`}>{c.label}</span>
-                <span className={`text-xs ${c.passed ? "text-success" : "text-destructive"}`}>
-                  {c.passed ? "Passes" : "Missing"}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
+        <ComplianceChecksPanel
+          checks={checks}
+          approvalStatus={approvalStatus}
+          onApprove={onApprove}
+          onReject={onReject}
+        />
       )}
     </div>
   );
@@ -452,13 +500,7 @@ interface MCPSubmissionsTabProps {
 }
 
 export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
-  const [summary, setSummary] = useState<MCPSubmissionsSummary>({
-    total: 0,
-    pending_review: 0,
-    active: 0,
-    rejected: 0,
-    items: [],
-  });
+  const [summary, setSummary] = useState<MCPSubmissionsSummary>(EMPTY_SUMMARY);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | MCPStatus>("all");
   const [confirmAction, setConfirmAction] = useState<{
@@ -528,6 +570,8 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     }
     return true;
   });
+
+  const showEmptyState = !isLoading && !error && filtered.length === 0;
 
   async function handleApprove(serverId: string, serverName: string) {
     if (!accessToken) return;
@@ -599,7 +643,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
       <div className="space-y-3">
         {isLoading && <div className="text-center py-12 text-muted-foreground text-sm">Loading submissions…</div>}
         {error && <div className="text-center py-12 text-destructive text-sm">{error}</div>}
-        {!isLoading && !error && filtered.length === 0 && (
+        {showEmptyState && (
           <div className="text-center py-12 text-muted-foreground text-sm">
             No MCP server submissions match your filters.
           </div>
@@ -618,14 +662,15 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
                   action: "approve",
                 })
               }
-              onReject={() =>
-                setConfirmAction({
+              onReject={() => {
+                const rejectAction: NonNullable<typeof confirmAction> = {
                   serverId: server.server_id,
                   serverName: server.alias ?? server.server_name ?? server.server_id,
                   action: "reject",
                   isCurrentlyActive: server.approval_status === "active",
-                })
-              }
+                };
+                setConfirmAction(rejectAction);
+              }}
             />
           ))}
       </div>
