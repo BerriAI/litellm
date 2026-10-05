@@ -259,7 +259,7 @@ describe("incremental reviews", () => {
   it("keeps the same feed for an empty page and never duplicates a re-sent review", () => {
     const feed = appendPage(EMPTY_FEED, { reviews: [at("a", 1)], reviewed: 1 });
     expect(appendPage(feed, { reviews: [], reviewed: 1 })).toBe(feed);
-    expect(appendPage(feed, { reviews: [at("a", 1)], reviewed: 1 }).reviews).toHaveLength(1);
+    expect(appendPage(feed, { reviews: [at("a", 1)], reviewed: 1 })).toBe(feed);
   });
 
   it("caps how many reviews are kept, dropping the oldest", () => {

@@ -44,20 +44,34 @@ function groupBy<T>(items: readonly T[], key: (item: T) => string): Map<string, 
   }, new Map<string, T[]>());
 }
 
+function inboxGroupKey(lens: Lens, finding: Finding, agents: readonly string[]): string {
+  const check = lens.settings.checks.find((candidate) => candidate.id === finding.check_id);
+  return JSON.stringify([
+    lens.scope.team_id,
+    lens.scope.api_key_hash,
+    lens.scope.all_teams,
+    lens.settings.source,
+    agents,
+    finding.check_id,
+    check?.instruction ?? lens.id,
+    finding.title.trim().toLowerCase(),
+  ]);
+}
+
 export function inboxRows(lenses: readonly Lens[]): InboxRow[] {
   const open = lenses.flatMap((lens) =>
     lens.findings
       .filter((f) => f.status === "open" && f.kind === "issue")
       .map((finding) => ({ lens, finding, agents: findingAgents(lens, finding) })),
   );
-  const grouped = groupBy(open, ({ agents, finding }) => `${agents.join(",")}::${finding.title.trim().toLowerCase()}`);
-  return [...grouped.entries()]
-    .map(([key, sources]): InboxRow => {
+  const grouped = groupBy(open, ({ lens, agents, finding }) => inboxGroupKey(lens, finding, agents));
+  return [...grouped.values()]
+    .map((sources): InboxRow => {
       const best = sources.reduce((a, b) =>
         priorityRank[a.finding.priority ?? "medium"] <= priorityRank[b.finding.priority ?? "medium"] ? a : b,
       );
       return {
-        key,
+        key: findingKey(sources[0].lens, sources[0].finding),
         title: best.finding.title,
         agents: best.agents,
         priority: best.finding.priority ?? "medium",

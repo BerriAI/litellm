@@ -4,7 +4,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { renderWithLens, stubGateway } from "@/../tests/lens-test-utils";
 import { testQueryClient } from "@/../tests/test-utils";
 import { createLensDemoData } from "../data/demo/fixtures";
-import { inboxRows } from "../model/inbox";
+import { findingKey, inboxRows } from "../model/inbox";
 import type { Lens } from "../model/types";
 import { FindingsView } from "./FindingsView";
 
@@ -88,4 +88,30 @@ it("retains feedback and the open finding when a grouped review fails", async ()
   expect(await screen.findByText("Review could not be saved")).toBeVisible();
   expect(screen.getByRole("textbox")).toHaveValue("Keep this feedback");
   expect(screen.getByRole("button", { name: "Mark resolved" })).toBeEnabled();
+});
+
+it("reviews only the selected check when two findings have the same title", async () => {
+  const other = { ...issue, id: "different-check", check_id: "different-check" };
+  proxy.get.mockImplementation(async (path) =>
+    path === "/lens"
+      ? { lenses: [{ ...support, findings: [issue, other] }], workers: [], tracing_enabled: true }
+      : { data: [] },
+  );
+  const user = userEvent.setup();
+  renderWithLens(<FindingsView />, { searchParams: "?tab=findings" });
+  const rows = await screen.findAllByRole("row", { name: issue.title });
+  expect(rows).toHaveLength(2);
+  await user.click(rows[0]);
+  await user.click(await screen.findByRole("button", { name: "Mark resolved" }));
+  await waitFor(() => expect(proxy.patch).toHaveBeenCalledTimes(1));
+  expect(proxy.patch.mock.calls[0][0]).toBe(`/lens/support/findings/${issue.id}`);
+});
+
+it("opens a grouped finding from a link to any of its owning investigations", async () => {
+  renderWithLens(<FindingsView readOnly />, {
+    searchParams: `?tab=findings&issue=${encodeURIComponent(findingKey(twin, issue))}`,
+  });
+  const panel = await screen.findByRole("complementary", { name: "Finding details" });
+  expect(within(panel).getByRole("heading", { name: issue.title })).toBeVisible();
+  expect(screen.getByRole("row", { name: issue.title })).toHaveAttribute("aria-selected", "true");
 });

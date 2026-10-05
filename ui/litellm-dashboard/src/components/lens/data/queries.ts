@@ -18,8 +18,8 @@ export const lensKeys = {
   runs: () => [...lensKeys.all, "run"] as const,
   run: (scope: string, lensId: string | undefined, batchId: string) =>
     [...lensKeys.runs(), { scope, lensId, batchId }] as const,
-  reviews: (scope: string, lensId: string, jobId: string, after: number) =>
-    [...lensKeys.all, "reviews", { scope, lensId, jobId, after }] as const,
+  reviews: (scope: string, page: { lensId: string; jobId: string; attempt: number; after: number }) =>
+    [...lensKeys.all, "reviews", { scope, ...page }] as const,
   evidence: (scope: string, lensId: string | undefined, evidenceId: string | undefined, offset: number) =>
     [...lensKeys.all, "evidence", { scope, lensId, evidenceId, offset }] as const,
   models: (scope: string) => [...lensKeys.all, "models", { scope }] as const,
@@ -76,10 +76,17 @@ export const lensQueries = {
   },
   reviews(
     api: LensApi,
-    { lensId, jobId, after, live }: { lensId: string; jobId: string; after: number; live: boolean },
+    {
+      lensId,
+      jobId,
+      attempt,
+      after,
+      live,
+    }: { lensId: string; jobId: string; attempt: number; after: number; live: boolean },
   ) {
+    const cursor = { lensId, jobId, attempt, after };
     const options = {
-      queryKey: lensKeys.reviews(api.scope, lensId, jobId, after),
+      queryKey: lensKeys.reviews(api.scope, cursor),
       queryFn: () => api.reviews(lensId, jobId, after),
       refetchInterval: live ? LIVE_REVIEW_POLL_MS : (false as const),
     };

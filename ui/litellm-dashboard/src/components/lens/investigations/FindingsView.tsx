@@ -14,6 +14,7 @@ import { agoLabel } from "../model/format";
 import {
   ALL_AGENTS,
   filterInbox,
+  findingKey,
   inboxAgents,
   inboxFinding,
   inboxRows,
@@ -113,7 +114,8 @@ export function FindingsView({ readOnly = false }: { readOnly?: boolean }) {
   const now = useNow(30000);
   const all = inboxRows(list.data?.lenses ?? []);
   const rows = filterInbox(all, filters);
-  const selected = all.find((row) => row.key === issueKey) ?? null;
+  const selected =
+    all.find((row) => row.sources.some(({ lens, finding }) => findingKey(lens, finding) === issueKey)) ?? null;
   const agents = [
     { value: ALL_AGENTS, label: "All agents" },
     ...inboxAgents(all).map((agent) => ({ value: agent, label: agent })),

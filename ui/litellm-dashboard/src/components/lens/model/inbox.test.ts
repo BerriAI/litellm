@@ -45,7 +45,16 @@ const lens = (
     findings,
     jobs: [{ sample: { executions: runs } }],
     next_run_at: "2026-10-03T12:10:00Z",
-    settings: { name: id, agent_name: agent, service: "", enabled: true, interval_minutes: 15, ...settings },
+    scope: { all_teams: true, team_id: "", api_key_hash: "" },
+    settings: {
+      name: id,
+      agent_name: agent,
+      service: "",
+      enabled: true,
+      interval_minutes: 15,
+      checks: [{ id: "c", instruction: "Check tool errors" }],
+      ...settings,
+    },
   }) as unknown as Lens;
 
 describe("findingAgents", () => {
@@ -193,4 +202,16 @@ it("keeps only open issues in the cross-investigation inbox", () => {
       ]),
     ]),
   ).toEqual([]);
+});
+
+it("keeps identical titles separate when their checks or visibility scopes differ", () => {
+  const first = lens("a", "support", [finding({})]);
+  const otherCheck = lens("b", "support", [finding({ check_id: "other" })]);
+  const otherInstruction = lens("c", "support", [finding({})], {
+    settings: { checks: [{ id: "c", instruction: "A different review criterion" }] },
+  });
+  const otherTeam = { ...first, id: "d", scope: { ...first.scope, team_id: "another-team" } };
+  const rows = inboxRows([first, otherCheck, otherInstruction, otherTeam]);
+  expect(rows).toHaveLength(4);
+  expect(rows.map((row) => row.sources.map(({ lens }) => lens.id))).toEqual([["a"], ["b"], ["c"], ["d"]]);
 });

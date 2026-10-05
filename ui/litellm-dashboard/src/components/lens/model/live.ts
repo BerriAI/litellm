@@ -93,8 +93,8 @@ export interface ReviewFeed {
 export const EMPTY_FEED: ReviewFeed = { reviews: [], cursor: 0 };
 
 export function appendPage(feed: ReviewFeed, page: { reviews: readonly Review[]; reviewed: number }): ReviewFeed {
-  if (page.reviewed === feed.cursor && !page.reviews.length) return feed;
   const added = unseen(page.reviews, new Set(feed.reviews.map(reviewKey)));
+  if (page.reviewed === feed.cursor && !added.length) return feed;
   return { reviews: [...feed.reviews, ...added].slice(-KEPT_REVIEWS), cursor: page.reviewed };
 }
 
