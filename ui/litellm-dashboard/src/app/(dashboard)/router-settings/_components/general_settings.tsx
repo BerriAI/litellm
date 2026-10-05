@@ -167,7 +167,7 @@ export const PromptCachingPanel: React.FC<{
       <CardContent>
         <CardTitle>Prompt Caching</CardTitle>
 
-        <div className="mt-6 flex items-start justify-between gap-8">
+        <div className="mt-6 flex items-start justify-between gap-8 max-md:flex-wrap max-md:gap-4">
           <div className="min-w-0 max-w-2xl">
             <p className="font-medium">Automatic Anthropic prompt caching</p>
             <p className="mt-1 break-words text-xs text-muted-foreground">{enableSetting.field_description}</p>
@@ -176,7 +176,7 @@ export const PromptCachingPanel: React.FC<{
         </div>
 
         {ttlSetting && (
-          <div className="mt-6 flex items-start justify-between gap-8">
+          <div className="mt-6 flex items-start justify-between gap-8 max-md:flex-wrap max-md:gap-4">
             <div className="min-w-0 max-w-2xl">
               <p className={`font-medium ${enabled ? "" : "text-muted-foreground"}`}>Cache lifetime (TTL)</p>
               <p className="mt-1 break-words text-xs text-muted-foreground">{ttlSetting.field_description}</p>
@@ -202,7 +202,7 @@ export const PromptCachingPanel: React.FC<{
         )}
 
         {systemFirstSetting && (
-          <div className="mt-6 flex items-start justify-between gap-8">
+          <div className="mt-6 flex items-start justify-between gap-8 max-md:flex-wrap max-md:gap-4">
             <div className="min-w-0 max-w-2xl">
               <p className="font-medium">System messages first for OpenAI</p>
               <p className="mt-1 break-words text-xs text-muted-foreground">{systemFirstSetting.field_description}</p>
@@ -292,26 +292,26 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
   return (
     <div className="w-full">
       <Tabs defaultValue="loadbalancing" className="h-[75vh] w-full">
-        <TabsList variant="line" className="mx-8 mt-4">
+        <TabsList variant="line" className="mx-8 mt-4 max-md:mx-4 max-md:max-w-[calc(100%-2rem)]">
           <TabsTrigger value="loadbalancing">Loadbalancing</TabsTrigger>
           <TabsTrigger value="routing-groups">Routing Groups</TabsTrigger>
           <TabsTrigger value="fallbacks">Fallbacks</TabsTrigger>
           <TabsTrigger value="prompt-caching">Prompt Caching</TabsTrigger>
           <TabsTrigger value="general">General</TabsTrigger>
         </TabsList>
-        <TabsContent value="loadbalancing" className="px-8 py-6" keepMounted>
+        <TabsContent value="loadbalancing" className="px-8 py-6 max-md:px-4" keepMounted>
           <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
         </TabsContent>
-        <TabsContent value="routing-groups" className="px-8 py-6" keepMounted>
+        <TabsContent value="routing-groups" className="px-8 py-6 max-md:px-4" keepMounted>
           <RoutingGroups />
         </TabsContent>
-        <TabsContent value="fallbacks" className="px-8 py-6" keepMounted>
+        <TabsContent value="fallbacks" className="px-8 py-6 max-md:px-4" keepMounted>
           <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
         </TabsContent>
-        <TabsContent value="prompt-caching" className="px-8 py-6" keepMounted>
+        <TabsContent value="prompt-caching" className="px-8 py-6 max-md:px-4" keepMounted>
           <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
         </TabsContent>
-        <TabsContent value="general" className="px-8 py-6" keepMounted>
+        <TabsContent value="general" className="px-8 py-6 max-md:px-4" keepMounted>
           <Card>
             <CardContent>
               <Table>

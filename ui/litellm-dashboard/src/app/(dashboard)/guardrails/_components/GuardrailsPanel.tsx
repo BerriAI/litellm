@@ -160,7 +160,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
             </TabsContent>
 
             <TabsContent value="guardrails" keepMounted>
-              <div className="flex justify-between items-center mb-4">
+              <div className="flex justify-between items-center mb-4 max-md:flex-wrap max-md:gap-3">
                 <DropdownMenu>
                   <DropdownMenuTrigger disabled={!accessToken} className={cn(buttonVariants({ variant: "default" }))}>
                     <Plus />

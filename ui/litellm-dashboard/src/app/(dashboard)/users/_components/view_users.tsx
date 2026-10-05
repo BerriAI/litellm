@@ -316,9 +316,9 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
   );
 
   return (
-    <div className="w-full overflow-hidden p-8">
-      <div className="mb-4 flex items-center justify-between">
-        <div className="flex space-x-3">
+    <div className="w-full overflow-hidden p-8 max-md:min-w-0 max-md:overflow-visible max-md:p-4">
+      <div className="mb-4 flex items-center justify-between max-md:flex-wrap max-md:gap-3">
+        <div className="flex space-x-3 max-md:flex-wrap max-md:gap-3 max-md:space-x-0">
           {userListQuery.isLoading && (
             <>
               <Skeleton className="h-9 w-28" />

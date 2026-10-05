@@ -456,7 +456,7 @@ export default function AgentBuilderView({
   return (
     <div className="flex h-full flex-col bg-card text-foreground">
       <div className="flex shrink-0 flex-col border-b border-border">
-        <div className="flex h-12 items-center justify-between px-4">
+        <div className="flex h-12 items-center justify-between px-4 max-md:h-auto max-md:min-h-12 max-md:flex-wrap max-md:gap-2 max-md:py-2">
           <span className="text-sm font-medium text-foreground">Agent Builder</span>
           {isNewAgent ? (
             <Button onClick={handleSaveAgent} disabled={saving || !draftName?.trim() || !draftUnderlyingModel}>
@@ -480,9 +480,9 @@ export default function AgentBuilderView({
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden max-md:min-h-0 max-md:flex-col">
         {/* Roster */}
-        <div className="w-60 shrink-0 border-r border-border bg-card flex flex-col">
+        <div className="w-60 shrink-0 border-r border-border bg-card flex flex-col max-md:max-h-[40%] max-md:w-full max-md:border-r-0 max-md:border-b">
           <div className="flex items-center justify-between border-b border-border p-3">
             <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Agents</span>
             <Button variant="ghost" size="icon-sm" onClick={handleAddAgent} aria-label="Add agent">
@@ -525,7 +525,7 @@ export default function AgentBuilderView({
         </div>
 
         {/* Main content */}
-        <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex flex-1 flex-col overflow-hidden max-md:min-h-0 max-md:min-w-0">
           {selectedId === null && !isNewAgent && agentModels.length === 0 && !loadingAgents && (
             <div className="flex flex-1 items-center justify-center p-8 text-muted-foreground">
               No agents yet. Add an agent to get started.
@@ -536,7 +536,7 @@ export default function AgentBuilderView({
               <Tabs
                 value={activeTab}
                 onValueChange={(value) => goToTab(value as AgentTab)}
-                className="flex flex-1 flex-col overflow-hidden"
+                className="flex flex-1 flex-col overflow-hidden max-md:min-h-0 max-md:min-w-0"
               >
                 <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0 pl-4">
                   <TabsTrigger value="configure" className="flex-none rounded-none px-4 py-2">

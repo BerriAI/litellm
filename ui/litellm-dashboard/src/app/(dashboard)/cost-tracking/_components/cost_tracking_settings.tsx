@@ -181,7 +181,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
   }
 
   return (
-    <div className="w-full p-8">
+    <div className="w-full p-8 max-md:min-w-0 max-md:p-4">
       {/* Header Section - Outside the card */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-6">
         <div>

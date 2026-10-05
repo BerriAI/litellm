@@ -139,8 +139,8 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
           editTag={editTag}
         />
       ) : (
-        <div className="flex h-full w-full flex-col p-8 pt-10">
-          <div className="mt-2 mb-4 flex w-full items-center justify-between">
+        <div className="flex h-full w-full flex-col p-8 pt-10 max-md:min-w-0 max-md:p-4">
+          <div className="mt-2 mb-4 flex w-full items-center justify-between max-md:flex-wrap max-md:gap-3">
             <h1>Tag Management</h1>
             <div className="flex items-center space-x-2">
               {lastRefreshed && <p className="text-sm">Last Refreshed: {lastRefreshed}</p>}

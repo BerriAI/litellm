@@ -446,11 +446,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   );
 
   return (
-    <div style={{ width: "100%" }} className="p-8 relative">
+    <div style={{ width: "100%" }} className="p-8 relative max-md:min-w-0 max-md:p-4">
       {/* Global Date Picker and Tabs - Single Row */}
       <div className="flex items-end justify-between gap-6 mb-6">
-        <div className="flex-1">
-          <div className="flex items-end justify-between gap-6 mb-4 w-full">
+        <div className="flex-1 max-md:min-w-0">
+          <div className="flex items-end justify-between gap-6 mb-4 w-full max-md:flex-wrap max-md:gap-3">
             <UsageViewSelect
               value={usageView}
               onChange={(value) => setUsageView(value)}
@@ -478,7 +478,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 </div>
               )}
               <Tabs defaultValue="cost">
-                <div className="flex justify-between items-center">
+                <div className="flex justify-between items-center max-md:flex-wrap max-md:gap-3">
                   <TabsList className="mt-1">
                     <TabsTrigger value="cost" className="flex-none px-3">
                       Cost
@@ -547,7 +547,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <ShadcnCard>
                         <CardContent>
                           <h3 className="text-lg font-medium text-foreground">Usage Metrics</h3>
-                          <div className="grid grid-cols-5 gap-4 mt-4">
+                          <div className="grid grid-cols-5 gap-4 mt-4 max-md:grid-cols-1">
                             <ShadcnCard>
                               <CardContent>
                                 <h3 className="text-lg font-medium text-foreground">Total Requests</h3>
@@ -652,7 +652,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                             </ShadcnCard>
                           </div>
                           {showTokenBreakdown && (
-                            <div className="grid grid-cols-4 gap-4 mt-4">
+                            <div className="grid grid-cols-4 gap-4 mt-4 max-md:grid-cols-1">
                               <ShadcnCard>
                                 <CardContent>
                                   <h3 className="text-lg font-medium text-foreground">Input Tokens</h3>

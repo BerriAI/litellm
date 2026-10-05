@@ -140,7 +140,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
     <OnboardingProvider value={onboarding}>
       <main className="flex h-full w-full min-w-0 flex-1 flex-col px-4 pt-3 pb-4">
         <Tabs value={activeTab} onValueChange={(value) => setTab(value as LensTab)} className="min-h-0 flex-1 gap-0">
-          <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
+          <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3 max-md:grid-cols-1">
             <div className="flex min-w-0 flex-col gap-1 pb-3">
               <h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
                 <Aperture aria-hidden="true" className="size-5" strokeWidth={2} />
@@ -165,7 +165,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
               workers={workers}
               setup={activeTab === "investigations" && dialog ? SETUP_LABELS[dialog] : undefined}
             />
-            <div className="flex min-w-0 flex-wrap items-center justify-end gap-3 pb-3">
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-3 pb-3 max-md:justify-start">
               <div ref={setPreviewTarget} />
               <DemoToggle demo={demo} onChange={(next) => (next ? enterDemo() : setDemo(false))} />
             </div>

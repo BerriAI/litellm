@@ -162,9 +162,9 @@ export default function ModelsAndEndpointsPage() {
   }
 
   return (
-    <div className="mx-4">
-      <div className="mt-2 flex w-full flex-col gap-2 p-8">
-        <div className="mb-4 flex items-center justify-between">
+    <div className="mx-4 max-md:min-w-0">
+      <div className="mt-2 flex w-full flex-col gap-2 p-8 max-md:min-w-0 max-md:px-0 max-md:py-4">
+        <div className="mb-4 flex items-center justify-between max-md:flex-wrap max-md:gap-3">
           <div>
             <h2 className="text-lg font-semibold">Model Management</h2>
             {isAdmin ? (
@@ -192,7 +192,7 @@ export default function ModelsAndEndpointsPage() {
           />
         ) : (
           <Tabs value={activeKey} onValueChange={setActiveKey}>
-            <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
+            <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b max-md:flex-col max-md:items-stretch">
               <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
                 <TabsList variant="line" className="w-max justify-start">
                   {visibleSlugs.map((slug) => {

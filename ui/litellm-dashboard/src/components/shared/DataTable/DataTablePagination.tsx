@@ -61,7 +61,7 @@ export function DataTablePagination({
         </Select>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 max-md:flex-wrap max-md:gap-y-2">
         <span data-testid="pagination-range" className="text-sm text-muted-foreground tabular-nums">
           {rowCount === 0 ? "No results" : `Showing ${start}-${end} of ${rowCount}`}
         </span>

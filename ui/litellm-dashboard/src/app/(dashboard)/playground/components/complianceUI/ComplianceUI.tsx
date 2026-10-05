@@ -851,9 +851,9 @@ export default function ComplianceUI({
         </div>
 
         {/* Panels */}
-        <div className="flex flex-1 min-h-0 overflow-hidden">
+        <div className="flex flex-1 min-h-0 overflow-hidden max-md:flex-col">
           {/* Left: Prompt library */}
-          <div className="w-[400px] shrink-0 border-r border-border flex flex-col bg-card overflow-hidden">
+          <div className="w-[400px] shrink-0 border-r border-border flex flex-col bg-card overflow-hidden max-md:max-h-[40%] max-md:w-full max-md:border-r-0 max-md:border-b">
             <div className="flex-1 overflow-y-auto min-h-0">
               <div className="px-4 pt-4 pb-2">
                 <div className="flex items-center justify-between mb-2.5">

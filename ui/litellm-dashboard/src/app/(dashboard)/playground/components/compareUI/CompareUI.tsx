@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { v4 as uuidv4 } from "uuid";
 import ChatImageUpload from "../chat_ui/ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "../chat_ui/ChatImageUtils";
@@ -754,10 +754,8 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
         </div>
 
         <div
-          className="grid flex-1 min-h-0 auto-rows-fr"
-          style={{
-            gridTemplateColumns: `repeat(${comparisons.length}, minmax(0, 1fr))`,
-          }}
+          className="grid min-h-0 flex-1 auto-rows-fr grid-cols-1 md:grid-cols-[var(--comparison-columns)]"
+          style={{ "--comparison-columns": `repeat(${comparisons.length}, minmax(0, 1fr))` } as CSSProperties}
         >
           {comparisons.map((comparison) => (
             <ComparisonPanel
