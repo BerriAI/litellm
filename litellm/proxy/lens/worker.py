@@ -9,8 +9,10 @@ from typing import Final
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from .analysis import AnalysisResponseError, analyze_sample, validation_details
+from .analysis import AnalysisResponseError, AnalyzeSample, validation_details
+from .context_pipeline import analyze_sample
 from .models import (
+    Activity,
     Claim,
     Coverage,
     ExecutionContent,
@@ -113,10 +115,12 @@ class LensWorker:
         client: httpx.AsyncClient,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         heartbeat_wait: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        analysis: AnalyzeSample = analyze_sample,
     ) -> None:
         self.client: Final = client
         self.sleep: Final = sleep
         self.heartbeat_wait: Final = heartbeat_wait
+        self.analysis: Final = analysis
 
     async def model_request(self, path: str, body: ModelRequest, attempt: int = 0) -> ModelResult:
         try:
@@ -208,15 +212,18 @@ class LensWorker:
             return ExecutionContent.model_validate(result.json())
 
         async def progress(
-            stage: str,
-            coverage: Coverage,
+            stage: str | None,
+            coverage: Coverage | None,
             review: Review | None = None,
             reading: tuple[InFlight, ...] | None = None,
+            activity: Activity | None = None,
             /,
         ) -> None:
             result: Final = await self.client.post(
                 prefix + "/progress",
-                json=Progress(stage=stage, coverage=coverage, review=review, reading=reading).model_dump(mode="json"),
+                json=Progress(
+                    stage=stage, coverage=coverage, review=review, reading=reading, activity=activity
+                ).model_dump(mode="json"),
             )
             result.raise_for_status()
 
@@ -236,7 +243,7 @@ class LensWorker:
             data: Final = await self.client.get(prefix + "/sample")
             data.raise_for_status()
             sample: Final = Sample.model_validate(data.json())
-            result: Final = await analyze_sample(claim, sample, read, model, progress)
+            result: Final = await self.analysis(claim, sample, read, model, progress)
             saved: Final = await self.client.post(prefix + "/result", json=result.model_dump(mode="json"))
             saved.raise_for_status()
 

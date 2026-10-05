@@ -6,7 +6,8 @@ import { useTracesApi } from "../../api";
 import type { Span, SpanDetail, UIContent } from "../../types";
 import { parseMessages, prettyPayload } from "../../utils";
 import { Payload, TextBody } from "./PayloadBody";
-import { payloadView } from "./payload";
+import { ToolArguments } from "./ToolContent";
+import { payloadView, toolInput } from "./payload";
 import { Section } from "./Section";
 import { ErrorBlock, StoredDiagnostic } from "./SpanError";
 
@@ -41,7 +42,12 @@ function PayloadSection({
   span: Span;
   role: "input" | "output";
 }) {
-  const view = payloadView(raw, content, span.type === "tool" && role === "output");
+  const view = payloadView(
+    raw,
+    content,
+    span.type === "tool" && role === "output",
+    span.type !== "tool" && role === "output",
+  );
   const count = role === "input" ? messageCount(raw, content) : undefined;
   return (
     <Section
@@ -50,13 +56,11 @@ function PayloadSection({
       count={count}
       defaultOpen={!count || count <= COLLAPSE_INPUT_ABOVE}
     >
-      {(mode) =>
-        mode === "Raw" ? (
-          <TextBody text={prettyPayload(raw)} format="code" />
-        ) : (
-          <Payload view={view} name={span.name} failed={span.status === "error"} />
-        )
-      }
+      {(mode) => {
+        if (mode === "Raw") return <TextBody text={prettyPayload(raw)} format="code" />;
+        if (span.type === "tool" && role === "input") return <ToolArguments args={toolInput(raw, content)} />;
+        return <Payload view={view} name={span.name} failed={span.status === "error"} />;
+      }}
     </Section>
   );
 }

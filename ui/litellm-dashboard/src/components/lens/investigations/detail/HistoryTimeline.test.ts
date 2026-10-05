@@ -19,6 +19,10 @@ const coverage: Job["coverage"] = {
 const job: Job = {
   assessments: [],
   steps: [],
+  reviews: [],
+  reviewed: 0,
+  reading: [],
+  activities: [],
   trigger: "schedule",
   coverage,
   attempts: 0,

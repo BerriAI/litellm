@@ -6,6 +6,7 @@ from typing import Final, Literal
 from litellm.proxy.lens.models import (
     MAX_REVIEWS,
     MAX_STEPS,
+    Activity,
     Finding,
     FindingDraft,
     Job,
@@ -90,7 +91,7 @@ def add_step(job: Job, step: Step) -> Job:
 def end_job(job: Job, status: Literal["completed", "failed", "cancelled"], now: datetime) -> Job:
     stage: Final = {"completed": "Complete", "failed": "Failed", "cancelled": "Cancelled"}[status]
     return job.model_copy(
-        update=MappingProxyType({"status": status, "stage": stage, "finished_at": now, "reading": ()})
+        update=MappingProxyType({"status": status, "stage": stage, "finished_at": now, "reading": (), "activities": ()})
     )
 
 
@@ -106,16 +107,27 @@ def cancel_job(lens: Lens, now: datetime) -> Lens:
 def apply_progress(job: Job, progress: Progress, now: datetime) -> Job:
     updates: Final = MappingProxyType(
         {
-            "stage": progress.stage,
-            "coverage": progress.coverage,
+            "stage": job.stage if progress.stage is None else progress.stage,
+            "coverage": job.coverage if progress.coverage is None else progress.coverage,
             "lease_until": now + timedelta(minutes=5),
             "reading": job.reading if progress.reading is None else progress.reading,
+            "activities": update_activity(job.activities, progress.activity),
         }
     )
     renewed: Final = add_review(job.model_copy(update=updates), progress.review)
-    if progress.stage == job.stage:
+    if renewed.stage == job.stage:
         return renewed
-    return add_step(renewed, Step(at=now, kind="stage", label=progress.stage))
+    return add_step(renewed, Step(at=now, kind="stage", label=renewed.stage))
+
+
+def update_activity(activities: tuple[Activity, ...], activity: Activity | None) -> tuple[Activity, ...]:
+    if activity is None:
+        return activities
+    if activity.finished:
+        return tuple(item for item in activities if item.id != activity.id)
+    if any(item.id == activity.id for item in activities):
+        return tuple(activity if item.id == activity.id else item for item in activities)
+    return (*activities, activity)
 
 
 def add_review(job: Job, review: Review | None) -> Job:
@@ -152,6 +164,7 @@ def claim_job(lens: Lens, worker: Worker, now: datetime) -> Lens:
                     "reviews": (),
                     "reviewed": 0,
                     "reading": (),
+                    "activities": (),
                 }
             )
         ),
