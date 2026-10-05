@@ -61,3 +61,32 @@ async def test_broken_pagination_fails_explicitly_instead_of_losing_evidence() -
 
     with pytest.raises(ValueError, match="repeated a pagination cursor"):
         await load_workspace(Sample(executions=(run,), eligible=1), read, 1)
+
+
+def test_reviewer_catalog_search_and_ranges_keep_both_review_rounds_accessible() -> None:
+    from litellm.proxy.lens.agent_workspace import EvidenceWorkspace, ReviewRecord
+
+    records: Final = (
+        ReviewRecord(execution_id="one", phase="initial", content="First interpretation with a shared clue"),
+        ReviewRecord(execution_id="one", phase="revisited", content="Revised interpretation with a shared clue"),
+        ReviewRecord(execution_id="two", phase="revisited", content="A different explanation"),
+    )
+    workspace: Final = EvidenceWorkspace(reviews=records)
+    catalog: Final = workspace.respond(EvidenceRequest(action="review_catalog")).review_catalog
+    assert tuple((item.execution_id, item.phase, item.characters) for item in catalog) == tuple(
+        (record.execution_id, record.phase, len(record.content)) for record in records
+    )
+    assert workspace.respond(EvidenceRequest(action="search_reviews", query="SHARED CLUE")).reviews == records[:2]
+    assert workspace.respond(EvidenceRequest(action="read_reviews", review_phase="revisited")).reviews == records[1:]
+    selected: Final = workspace.respond(
+        EvidenceRequest(
+            action="read_reviews",
+            execution_id="one",
+            review_phase="initial",
+            char_start=6,
+            char_end=20,
+        )
+    ).reviews
+    assert len(selected) == 1
+    assert selected[0].content == records[0].content[6:20]
+    assert workspace.respond(EvidenceRequest(action="read_reviews")).reviews == records

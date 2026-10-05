@@ -67,7 +67,16 @@ async def test_broadcast_revisits_clean_sessions_and_final_aggregator_can_read_o
                 cost=0,
             )
         if stage == "provisional_aggregation":
-            assert "r0" in payload["supplied"] and "r1" in payload["supplied"]
+            if not payload["dialogue"]:
+                assert payload["supplied"] == "" and payload["available_review_records"] == 2
+                return ModelResult(
+                    content=AgentTurn[Broadcast](
+                        tools=(EvidenceRequest(action="read_reviews", review_phase="initial"),)
+                    ).model_dump_json(),
+                    cost=0,
+                )
+            initial_reviews: Final = json.loads(payload["dialogue"][0]["tool_results"][0])["reviews"]
+            assert {review["execution_id"] for review in initial_reviews} == {"r0", "r1"}
             return ModelResult(
                 content=AgentTurn[Broadcast](
                     result=Broadcast(
@@ -92,15 +101,26 @@ async def test_broadcast_revisits_clean_sessions_and_final_aggregator_can_read_o
                 cost=0,
             )
         assert stage == "final_aggregation"
-        assert new_hunch.hypothesis in payload["supplied"]
         if not payload["dialogue"]:
+            assert new_hunch.hypothesis not in request.prompt
+            assert payload["available_review_records"] == 4
+            return ModelResult(
+                content=AgentTurn[Findings](
+                    tools=(EvidenceRequest(action="read_reviews", review_phase="revisited"),)
+                ).model_dump_json(),
+                cost=0,
+            )
+        if len(payload["dialogue"]) == 1:
+            revised_reviews: Final = json.loads(payload["dialogue"][0]["tool_results"][0])["reviews"]
+            assert {review["execution_id"] for review in revised_reviews} == {"r0", "r1"}
+            assert new_hunch.hypothesis in json.dumps(revised_reviews)
             return ModelResult(
                 content=AgentTurn[Findings](
                     tools=(EvidenceRequest(action="read", execution_id="r1", span_ids=("child",)),)
                 ).model_dump_json(),
                 cost=0,
             )
-        content: Final = json.loads(payload["dialogue"][0]["tool_results"][0])["parts"][0]
+        content: Final = json.loads(payload["dialogue"][1]["tool_results"][0])["parts"][0]
         assert content["content"] == child.content and content["parent_span_id"] == "root"
         original_reads.put(content["execution_id"])
         return ModelResult(

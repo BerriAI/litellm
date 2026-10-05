@@ -115,3 +115,103 @@ async def test_initial_session_review_does_not_eagerly_embed_other_session_span_
             parts
         )
     assert prompts.get_nowait() == prompts.get_nowait()
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_replaces_context_but_preserves_review_records_full_history_and_valid_citations() -> None:
+    from litellm.proxy.lens.agent_review import Findings, validate_findings
+    from litellm.proxy.lens.agent_workspace import ReviewRecord
+    from litellm.proxy.lens.models import FindingDraft
+    from tests.unit.proxy.lens.test_state import issue_brief
+
+    first: Final = execution("assigned")
+    other: Final = execution("other")
+    initial: Final = TracePart(
+        execution_id=first.id, span_id="root", name="coordinator", kind="agent", content="Original initial material"
+    )
+    evidence: Final = TracePart(
+        execution_id=other.id,
+        span_id="child",
+        parent_span_id="root",
+        name="child",
+        kind="agent",
+        content="Required operation failed with no recovery",
+    )
+    review: Final = ReviewRecord(
+        execution_id=other.id, phase="initial", content="Review identifies a child operation failure"
+    )
+    workspace: Final = EvidenceWorkspace(
+        sessions=(
+            SessionContent(execution=first, parts=(initial,), partial=False),
+            SessionContent(execution=other, parts=(evidence,), partial=False),
+        ),
+        reviews=(review,),
+    )
+    turns: Final = iter(range(4))
+    expected: Final = Findings(
+        findings=(
+            FindingDraft(
+                title="Required operation failed",
+                description="A required child operation failed before completion",
+                check_id="retries",
+                brief=issue_brief("The required child operation failed"),
+                evidence=(Evidence(execution_id=other.id, span_id="child", quote=evidence.content),),
+            ),
+        )
+    )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        turn: Final = next(turns)
+        payload: Final = json.loads(request.prompt)
+        if turn == 0:
+            return ModelResult(
+                content=AgentTurn[Findings](
+                    tools=(
+                        EvidenceRequest(action="read_reviews", execution_id=other.id, review_phase="initial"),
+                        EvidenceRequest(action="read", execution_id=other.id),
+                    )
+                ).model_dump_json(),
+                cost=0,
+            )
+        if turn == 1:
+            assert evidence.content in request.prompt and review.content in request.prompt
+            return ModelResult(
+                content=AgentTurn[Findings](
+                    checkpoint="Reviewed other; investigate child; assigned still pending"
+                ).model_dump_json(),
+                cost=0,
+            )
+        if turn == 2:
+            assert payload["initial_evidence"] == [] and payload["supplied"] == ""
+            assert evidence.content not in request.prompt and review.content not in request.prompt
+            assert payload["working_notes"] == "Reviewed other; investigate child; assigned still pending"
+            assert payload["journal_turns"] == 2
+            return ModelResult(
+                content=AgentTurn[Findings](
+                    tools=(
+                        EvidenceRequest(action="history", turn_start=0, turn_end=1, include_initial=True),
+                        EvidenceRequest(action="read_reviews", execution_id=other.id),
+                    )
+                ).model_dump_json(),
+                cost=0,
+            )
+        archived: Final = json.loads(payload["dialogue"][-1]["tool_results"][0])
+        assert archived["initial_context"] == {"evidence": [initial.model_dump()], "supplied": "Initial assignment"}
+        assert json.loads(archived["turns"][0]["tool_results"][1])["parts"] == [evidence.model_dump()]
+        assert json.loads(payload["dialogue"][-1]["tool_results"][1])["reviews"] == [review.model_dump()]
+        return ModelResult(content=AgentTurn[Findings](result=expected).model_dump_json(), cost=0)
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    result: Final = await run_agent(
+        stage="aggregate",
+        task="Examine all reviews",
+        purpose="investigate",
+        claim=claim,
+        workspace=workspace,
+        model=model,
+        schema=Findings,
+        initial_evidence=(initial,),
+        supplied="Initial assignment",
+        validate=lambda findings: validate_findings(claim, workspace, findings),
+    )
+    assert result == expected
