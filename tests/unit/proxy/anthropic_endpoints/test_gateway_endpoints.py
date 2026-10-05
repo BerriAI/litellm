@@ -418,6 +418,22 @@ def test_token_mint_failure_leaves_the_login_unconsumed():
     assert retry.json()["access_token"] == "sk-session"
 
 
+def test_token_refresh_mint_failure_leaves_the_login_unconsumed():
+    oversized_user: Final = {**_COMPLETED_SESSION, "user_id": "u" * 5000}
+    with _gateway_env() as (client, cache):
+        device_code = _start_device_flow(client)
+        _complete_flow(cache, device_code, session_data=oversized_user)
+        with patch(_MINT, return_value="sk-session"):
+            failed = _request_token(client, device_code)
+        _complete_flow(cache, device_code)
+        with patch(_MINT, return_value="sk-session"):
+            retry = _request_token(client, device_code)
+    assert failed.status_code == 500
+    assert failed.json()["error"] == "server_error"
+    assert retry.status_code == 200
+    assert retry.json()["refresh_token"].startswith(SESSION_REFRESH_PREFIX)
+
+
 def test_token_unknown_team_grants_is_invalid_grant():
     with _gateway_env() as (client, cache):
         device_code = _start_device_flow(client)

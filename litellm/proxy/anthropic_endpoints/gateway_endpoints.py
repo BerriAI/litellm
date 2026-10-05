@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Annotated, Final
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
@@ -338,15 +338,10 @@ async def _handle_device_code_grant(device_code: str | None) -> Response:
     signing: Final = resolve_session_signing(master_key, f"{CLAUDE_CODE_CLIENT_ID} token grant")
     if isinstance(signing, Response):
         return signing
-    access_token: Final = _mint_access_token(login)
-    if not await _claim_device_code(login_id, cli_sso_session_cache):
-        return _oauth_error_response(_OAuthError(status_code=400, error="expired_token"))
-
-    await cli_sso_session_cache.async_delete_cache(key=_get_cli_sso_flow_cache_key(login_id))
     user_id: Final = login.user_info.user_id
-    return proxy_credential_response(
+    credential: Final = proxy_credential_response(
         MintedProxyCredential(
-            key=access_token,
+            key=_mint_access_token(login),
             expires_in=CLI_JWT_EXPIRATION_HOURS * _SECONDS_PER_HOUR,
             user_id=user_id,
             team_id=login.team_id,
@@ -356,6 +351,13 @@ async def _handle_device_code_grant(device_code: str | None) -> Response:
         ),
         signing,
     )
+    if credential.status_code != status.HTTP_200_OK:
+        return credential
+    if not await _claim_device_code(login_id, cli_sso_session_cache):
+        return _oauth_error_response(_OAuthError(status_code=400, error="expired_token"))
+
+    await cli_sso_session_cache.async_delete_cache(key=_get_cli_sso_flow_cache_key(login_id))
+    return credential
 
 
 @router.post("/oauth/token", include_in_schema=False)
