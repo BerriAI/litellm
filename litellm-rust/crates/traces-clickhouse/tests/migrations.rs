@@ -1394,9 +1394,8 @@ async fn lens_content_keeps_original_span_and_request_timestamps(
     )
     .await?;
     let actual: serde_json::Value = serde_json::from_str(&body)?;
-    let format_string = format!(
-        "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:{precision}]"
-    );
+    let format_string =
+        format!("[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:{precision}]");
     let format = time::format_description::parse_borrowed::<2>(&format_string)?;
     let timestamp = |nanos: i64| -> TestResult<String> {
         Ok(time::OffsetDateTime::from_unix_timestamp_nanos(nanos.into())?.format(&format)?)
