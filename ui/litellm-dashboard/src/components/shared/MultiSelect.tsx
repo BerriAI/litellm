@@ -34,6 +34,7 @@ interface MultiSelectProps {
   disabled?: boolean;
   loading?: boolean;
   allowCustomValues?: boolean;
+  searchDescriptions?: boolean;
   className?: string;
 }
 
@@ -43,13 +44,13 @@ const splitOnCommas = (raw: string): string[] =>
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
 
-const matchesQuery = (option: MultiSelectOption, query: string): boolean => {
+const matchesQuery = (option: MultiSelectOption, query: string, searchDescriptions: boolean): boolean => {
   const normalizedQuery = query.trim().toLowerCase();
-  return (
-    !normalizedQuery ||
-    option.label.toLowerCase().includes(normalizedQuery) ||
-    option.value.toLowerCase().includes(normalizedQuery)
-  );
+  const matchesLabelOrValue =
+    option.label.toLowerCase().includes(normalizedQuery) || option.value.toLowerCase().includes(normalizedQuery);
+  const matchesDescription =
+    searchDescriptions && (option.description?.toLowerCase().includes(normalizedQuery) ?? false);
+  return !normalizedQuery || matchesLabelOrValue || matchesDescription;
 };
 
 export function MultiSelect({
@@ -62,6 +63,7 @@ export function MultiSelect({
   disabled = false,
   loading = false,
   allowCustomValues = false,
+  searchDescriptions = true,
   className,
 }: MultiSelectProps) {
   const anchor = useComboboxAnchor();
@@ -75,8 +77,8 @@ export function MultiSelect({
     [options],
   );
   const matchingOptions = useMemo(
-    () => safeOptions.filter((option) => matchesQuery(option, query)),
-    [safeOptions, query],
+    () => safeOptions.filter((option) => matchesQuery(option, query, searchDescriptions)),
+    [safeOptions, query, searchDescriptions],
   );
   const visibleOptions = matchingOptions.slice(0, MAX_VISIBLE_OPTIONS);
   const selectedOptions = value

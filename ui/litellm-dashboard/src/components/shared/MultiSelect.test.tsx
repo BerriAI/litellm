@@ -84,8 +84,16 @@ describe("MultiSelect", () => {
     expect(screen.getByText("Showing first 100 of 5000 matches. Type to narrow results.")).toBeInTheDocument();
   });
 
-  it("does not match the option description", async () => {
-    const { input } = renderMultiSelect({ options: LARGE_OPTIONS });
+  it("matches option descriptions by default", async () => {
+    const { input } = renderMultiSelect();
+    await userEvent.type(input, "second store");
+
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option", { name: /beta-kb/ })).toBeInTheDocument();
+  });
+
+  it("skips descriptions when searchDescriptions is false", async () => {
+    const { input } = renderMultiSelect({ options: LARGE_OPTIONS, searchDescriptions: false });
     await userEvent.type(input, "shared spend");
 
     expect(screen.queryAllByRole("option")).toHaveLength(0);
