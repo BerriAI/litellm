@@ -2,6 +2,8 @@
 pub enum Error {
     #[error("invalid ClickHouse insert row")]
     InvalidRow,
+    #[error("{0} must be a positive integer")]
+    InvalidLimit(&'static str),
     #[error("invalid ClickHouse insert table")]
     InvalidTable,
     #[error("database must be a nonempty SQL identifier and retention must be positive")]
@@ -30,6 +32,10 @@ pub enum Error {
     ProvisionFailed(u16),
     #[error("ClickHouse reader provisioning transport failed")]
     ProvisionTransport,
+    #[error(transparent)]
+    Decode(#[from] litellm_traces::Error),
+    #[error("trace ingestion task failed")]
+    Task,
     #[error(transparent)]
     Storage(#[from] litellm_storage_clickhouse::Error),
     #[error(transparent)]

@@ -26,6 +26,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -44,6 +45,7 @@ from litellm.proxy.auth.password_policy import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
     object_permission_cache_key,
     user_object_permission_id_cache_key,
 )
@@ -1428,6 +1430,7 @@ def _clears_object_permission(user_request: UpdateUserRequest) -> bool:
     return sent is None or not sent.model_dump(exclude_unset=True, exclude_none=True)
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _invalidate_cached_user_entitlement(user_id: str | None, object_permission_ids: tuple[str, ...]) -> None:
     """Drop the cache entries an entitlement change makes stale.
 

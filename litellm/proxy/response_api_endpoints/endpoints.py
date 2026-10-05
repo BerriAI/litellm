@@ -310,7 +310,7 @@ async def responses_api(
                 route_type="aresponses",
                 llm_router=llm_router,
             )
-            raise_if_required_body_param_missing(route_type="aresponses", data=data)
+            raise_if_required_body_param_missing(route_type="aresponses", data=data, llm_router=llm_router)
         except Exception as e:
             raise await processor._handle_llm_api_exception(
                 e=e,

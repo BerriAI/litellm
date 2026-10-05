@@ -1,8 +1,9 @@
 from collections.abc import Mapping
+from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, StrictFloat, StrictInt, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, StrictFloat, StrictInt, ValidationInfo, field_validator
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 DEFAULT_PROMPT: Final = (
@@ -11,18 +12,27 @@ DEFAULT_PROMPT: Final = (
 )
 
 
-def _normalize_login(value: str) -> str:
+def normalize_source_login(value: str, provider: str = "github") -> str:
     import re
 
     login: Final = value.strip().casefold()
-    if re.fullmatch(r"[A-Za-z0-9_\[\]-]+", login) is None:
-        raise ValueError("Enter a valid GitHub username.")
+    pattern: Final = r"[A-Za-z0-9_.-]+" if provider == "gitlab" else r"[A-Za-z0-9_\[\]-]+"
+    if re.fullmatch(pattern, login) is None:
+        raise ValueError("Enter a valid source-control username.")
     return login
 
 
 class ROISettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    report_mode: Literal["legacy", "observed"] = "legacy"
+    source_provider: Literal["github", "gitlab"] = "github"
+    connection_type: Literal["token", "app"] = "token"
+    oauth_refresh_token: SecretStr = SecretStr("")
+    oauth_expires_at: datetime | None = None
+    ignored_logins: tuple[str, ...] = ()
+    gitlab_api_url: str = "https://gitlab.com/api/v4"
+    gitlab_token: SecretStr = SecretStr("")
     github_api_url: str = "https://api.github.com"
     github_token: SecretStr = SecretStr("")
     estimator_key: SecretStr = SecretStr("")
@@ -33,6 +43,10 @@ class ROISettings(BaseModel):
     update_interval_minutes: float = Field(default=1440, ge=0, le=43200, allow_inf_nan=False)
     identity_map: Mapping[str, str] = Field(default_factory=lambda: MappingProxyType({}))
 
+    @property
+    def source_api_url(self) -> str:
+        return self.gitlab_api_url if self.source_provider == "gitlab" else self.github_api_url
+
     @field_validator("update_interval_minutes")
     @classmethod
     def validate_update_interval(cls, value: float) -> float:
@@ -40,14 +54,14 @@ class ROISettings(BaseModel):
             raise ValueError("Choose manual updates (0), or an interval of at least 5 minutes.")
         return value
 
-    @field_validator("github_api_url")
+    @field_validator("github_api_url", "gitlab_api_url")
     @classmethod
     def normalize_github_api_url(cls, value: str) -> str:
         from urllib.parse import urlsplit
 
         normalized: Final[str] = value.strip().rstrip("/")
         if not normalized:
-            raise ValueError("A GitHub API URL is required.")
+            raise ValueError("A source API URL is required.")
         parsed: Final = urlsplit(normalized)
         if (
             parsed.scheme != "https"
@@ -57,26 +71,35 @@ class ROISettings(BaseModel):
             or parsed.query
             or parsed.fragment
         ):
-            raise ValueError("Use an HTTPS GitHub API URL without credentials, query, or fragment.")
+            raise ValueError("Use an HTTPS source API URL without credentials, query, or fragment.")
         return normalized
 
     @field_validator("repos")
     @classmethod
-    def validate_repositories(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+    def validate_repositories(cls, values: tuple[str, ...], info: ValidationInfo) -> tuple[str, ...]:
         import re
 
         normalized_values: Final = tuple(repo.strip().rstrip("/").removesuffix(".git") for repo in values)
+        repository_keys: Final = tuple(
+            repo.casefold() if info.data.get("source_provider") != "gitlab" else repo for repo in normalized_values
+        )
         normalized: Final = tuple(
-            repo for index, repo in enumerate(normalized_values) if repo not in normalized_values[:index]
+            repo
+            for index, repo in enumerate(normalized_values)
+            if repository_keys[index] not in repository_keys[:index]
+        )
+        pattern: Final = (
+            r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+"
+            if info.data.get("source_provider") == "gitlab"
+            else r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
         )
         invalid_repositories: Final = tuple(
             repo
             for repo in normalized
-            if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) is None
-            or any(part in (".", "..") for part in repo.split("/"))
+            if re.fullmatch(pattern, repo) is None or any(part in (".", "..") for part in repo.split("/"))
         )
         if invalid_repositories:
-            raise ValueError("Repositories must use owner/repo format.")
+            raise ValueError("Use owner/repo format, or group/subgroup/project for GitLab.")
         return normalized
 
     @field_validator("estimator_prompt")
@@ -89,24 +112,30 @@ class ROISettings(BaseModel):
 
     @field_validator("identity_map")
     @classmethod
-    def normalize_identity_map(cls, values: Mapping[str, str]) -> Mapping[str, str]:
+    def normalize_identity_map(cls, values: Mapping[str, str], info: ValidationInfo) -> Mapping[str, str]:
         from litellm.proxy.roi_calculator.analytics import normalize_email
 
         normalized: Final[Mapping[str, str]] = MappingProxyType(
             {
-                _normalize_login(login): normalize_email(address)
+                normalize_source_login(
+                    login, "gitlab" if info.data.get("source_provider") == "gitlab" else "github"
+                ): normalize_email(address)
                 for login, address in values.items()
                 if normalize_email(address)
             }
         )
         if len(normalized) != len(values):
-            raise ValueError("Each identity needs a GitHub username and a valid gateway email.")
+            raise ValueError("Each identity needs a source-control username and a valid gateway email.")
         return normalized
 
 
 class ROISettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    report_mode: Literal["legacy", "observed"] | None = None
+    source_provider: Literal["github", "gitlab"] | None = None
+    gitlab_api_url: str | None = None
+    gitlab_token: str | None = None
     github_api_url: str | None = None
     github_token: str | None = None
     estimator_key: str | None = None
@@ -117,7 +146,16 @@ class ROISettingsUpdate(BaseModel):
     update_interval_minutes: float | None = Field(default=None, ge=0, le=43200, allow_inf_nan=False)
 
 
+class ROIEstimatorModel(BaseModel):
+    model_name: str
+    provider_models: tuple[str, ...]
+
+
 class ROISettingsResponse(BaseModel):
+    report_mode: Literal["legacy", "observed"] = "legacy"
+    source_provider: Literal["github", "gitlab"] = "github"
+    gitlab_api_url: str = "https://gitlab.com/api/v4"
+    has_gitlab_token: bool = False
     github_api_url: str
     repos: tuple[str, ...]
     estimator_model: str
@@ -129,6 +167,7 @@ class ROISettingsResponse(BaseModel):
     has_github_token: bool
     default_prompt: str
     available_models: tuple[str, ...]
+    estimator_models: tuple[ROIEstimatorModel, ...] = ()
     ready: bool
 
 
@@ -180,6 +219,8 @@ class ROIEstimate(TypedDict):
 
 
 class ROIPullRecord(TypedDict):
+    source_repo: NotRequired[ReadOnly[str]]
+    source_branch: NotRequired[ReadOnly[str]]
     repo: ReadOnly[str]
     number: ReadOnly[int]
     title: ReadOnly[str]
@@ -199,7 +240,34 @@ class ROIPullRecord(TypedDict):
     cache_key: ReadOnly[str | None]
 
 
+class ROIBranchSpend(BaseModel):
+    repo: str
+    branch: str
+    spend: float
+    requests: int
+
+
+class ROIBranchAttribution(BaseModel):
+    repo: str
+    branch: str
+    spend: float | None = None
+    requests: int = 0
+    status: Literal["matched", "unattributed", "ambiguous", "unavailable"] = "unattributed"
+
+
+class ROIBranchMetrics(BaseModel):
+    spend: float = 0
+    hours: float = 0
+    cost_per_hour: float | None = None
+    matched_pulls: int = 0
+    total_tagged_spend: float = 0
+    unlinked_spend: float = 0
+
+
 class ROIReport(TypedDict):
+    source_api_url: NotRequired[ReadOnly[str]]
+    source_provider: NotRequired[ReadOnly[Literal["github", "gitlab"]]]
+    branch_spend: NotRequired[ReadOnly[tuple[ROIBranchSpend, ...]]]
     mode: ReadOnly[str]
     start: ReadOnly[str]
     end: ReadOnly[str]
@@ -232,6 +300,8 @@ class ROIPullCommit(TypedDict):
 
 
 class ROIPullEvidence(TypedDict):
+    source_repo: NotRequired[ReadOnly[str]]
+    source_branch: NotRequired[ReadOnly[str]]
     repo: ReadOnly[str]
     number: ReadOnly[int]
     title: ReadOnly[str]
@@ -273,6 +343,9 @@ class ROIPersonSummary(TypedDict):
 
 
 class ROIPullSummary(TypedDict):
+    branch_cost: ReadOnly[ROIBranchAttribution]
+    source_repo: NotRequired[ReadOnly[str]]
+    source_branch: NotRequired[ReadOnly[str]]
     repo: ReadOnly[str]
     number: ReadOnly[int]
     title: ReadOnly[str]
@@ -318,6 +391,9 @@ class ROITrendDay(TypedDict):
 
 
 class ROISummary(TypedDict):
+    source_provider: ReadOnly[Literal["github", "gitlab"]]
+    branch_metrics: ReadOnly[ROIBranchMetrics]
+    unlinked_branches: ReadOnly[tuple[ROIBranchSpend, ...]]
     id: ReadOnly[str | None]
     mode: ReadOnly[str]
     start: ReadOnly[str]
@@ -375,6 +451,9 @@ class ROIEstimateResponse(BaseModel):
 
 
 class ROIPullResponse(BaseModel):
+    source_repo: str = ""
+    source_branch: str = ""
+    branch_cost: ROIBranchAttribution = Field(default_factory=lambda: ROIBranchAttribution(repo="", branch=""))
     repo: str
     number: int
     title: str
@@ -404,6 +483,9 @@ class ROITrendResponse(BaseModel):
 
 
 class ROISummaryResponse(BaseModel):
+    source_provider: Literal["github", "gitlab"] = "github"
+    branch_metrics: ROIBranchMetrics = Field(default_factory=ROIBranchMetrics)
+    unlinked_branches: tuple[ROIBranchSpend, ...] = ()
     id: str | None
     mode: str
     start: str
@@ -431,7 +513,7 @@ class ROIIdentityMapUpdate(BaseModel):
     @field_validator("github_login")
     @classmethod
     def normalize_login(cls, value: str) -> str:
-        return _normalize_login(value)
+        return value.strip().casefold()
 
 
 class ROIIdentityMapResponse(BaseModel):
@@ -478,7 +560,6 @@ class ROICompletionMessage(TypedDict):
 
 class ROICompletionMetadata(TypedDict):
     tags: ReadOnly[tuple[str, ...]]
-    litellm_roi_estimator: ReadOnly[bool]
 
 
 class ROIResponseFormat(TypedDict):

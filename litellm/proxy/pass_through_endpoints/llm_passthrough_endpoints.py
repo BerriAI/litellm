@@ -22,6 +22,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 
 import httpx
+import openai
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
 from fastapi.responses import StreamingResponse
 from pydantic import ConfigDict, TypeAdapter
@@ -44,7 +45,7 @@ from litellm.constants import (
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo, merge_anthropic_beta_headers
 from litellm.llms.azure.passthrough.transformation import (
     foreign_azure_deployment,
     is_azure_body_model_inference_endpoint,
@@ -58,8 +59,10 @@ from litellm.llms.deepgram.common_utils import (
     deepgram_listen_websocket_target,
 )
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
-from litellm.llms.laya.common_utils import laya_connection, validate_laya_request
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
+from litellm.llms.openai.common_utils import OpenAIError as LiteLLMOpenAIError
+from litellm.llms.openai.workload_identity import get_workload_identity_bearer_token_for_api_base
+from litellm.llms.oss_decision import OssDecisionProvider, oss_connection, validate_oss_request
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
 from litellm.proxy._types import *
@@ -101,7 +104,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     get_litellm_managed_vector_store,
     is_allowed_to_call_vector_store_endpoint,
 )
-from litellm.secret_managers.main import get_secret_str, str_to_bool
+from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str, str_to_bool
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
@@ -647,16 +650,31 @@ async def laya_proxy_route(
     fastapi_response: Response,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> Response:
+    return await _oss_decision_proxy_route("laya", request, fastapi_response, user_api_key_dict)
+
+
+@router.post("/bespoke/v1/systemone", tags=["Bespoke Nimble Pass-through", "pass-through"])
+async def bespoke_proxy_route(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Response:
+    return await _oss_decision_proxy_route("bespoke", request, fastapi_response, user_api_key_dict)
+
+
+async def _oss_decision_proxy_route(
+    provider: OssDecisionProvider, request: Request, fastapi_response: Response, user_api_key_dict: UserAPIKeyAuth
+) -> Response:
     body: Final = TypeAdapter(dict[str, object]).validate_python(await _read_request_body(request))
     try:
-        _ = validate_laya_request(body)
+        _ = validate_oss_request(provider, body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     try:
-        connection: Final = laya_connection()
+        connection: Final = oss_connection(provider)
     except ValueError as exc:
         raise HTTPException(
-            status_code=503, detail="Laya server is not configured correctly; check LAYA_API_BASE"
+            status_code=503, detail=f"{provider} server is not configured correctly; check {provider.upper()}_API_BASE"
         ) from exc
     base_url: Final = httpx.URL(connection.api_base)
     updated_url: Final = base_url.copy_with(
@@ -671,7 +689,7 @@ async def laya_proxy_route(
         endpoint="v1/systemone",
         target=str(updated_url),
         custom_headers=MappingProxyType({**authorization, "Content-Type": "application/json"}),
-        custom_llm_provider="laya",
+        custom_llm_provider=provider,
         is_streaming_request=False,
     )
     return TypeAdapter(Response, config=ConfigDict(arbitrary_types_allowed=True)).validate_python(
@@ -896,7 +914,9 @@ async def anthropic_proxy_route(
     is_streaming_request: Final = await is_streaming_request_fn(request)
 
     ## CREATE PASS-THROUGH
-    auth_header: Final = AnthropicModelInfo.get_auth_header(anthropic_api_key or None)
+    auth_header: Final = await AnthropicModelInfo.aget_auth_header(
+        anthropic_api_key or None, allow_workload_identity=True
+    )
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
@@ -2627,9 +2647,20 @@ def _upstream_headers_for_anthropic_route(
     caller_headers: Final = _caller_headers_without_litellm_secrets(
         request, user_api_key_dict, _HEADERS_NEVER_FORWARDED_TO_ANTHROPIC
     )
-    if proxy_auth_header is None and _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(caller_headers):
-        raise HTTPException(status_code=401, detail=_CREDENTIALLESS_ANTHROPIC_MISSING_CREDENTIAL_DETAIL)
-    return MappingProxyType({**caller_headers, **(proxy_auth_header or {})})
+    if proxy_auth_header is None:
+        if _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS.isdisjoint(caller_headers):
+            raise HTTPException(status_code=401, detail=_CREDENTIALLESS_ANTHROPIC_MISSING_CREDENTIAL_DETAIL)
+        return caller_headers
+    forwarded: Final = MappingProxyType(
+        {name: value for name, value in caller_headers.items() if name not in _ANTHROPIC_UPSTREAM_CREDENTIAL_HEADERS}
+    )
+    caller_beta, credential_beta = caller_headers.get("anthropic-beta"), proxy_auth_header.get("anthropic-beta")
+    merged_beta: Final = (
+        {"anthropic-beta": merge_anthropic_beta_headers(caller_beta, credential_beta)}
+        if caller_beta and credential_beta
+        else {}
+    )
+    return MappingProxyType({**forwarded, **proxy_auth_header, **merged_beta})
 
 
 def _upstream_headers_for_bedrock_agent_runtime_route(
@@ -2963,6 +2994,21 @@ async def vertex_proxy_route(
     )
 
 
+_OPENAI_WS_TOKEN_EXCHANGE_FAILED_REASON: Final = "OpenAI workload identity token exchange failed"
+
+
+async def _openai_passthrough_credential(base_target_url: str) -> str | None:
+    static_api_key: Final = normalize_nonempty_secret_str(
+        passthrough_endpoint_router.get_credentials(
+            custom_llm_provider=litellm.LlmProviders.OPENAI.value,
+            region_name=None,
+        )
+    )
+    if static_api_key is not None:
+        return static_api_key
+    return await get_workload_identity_bearer_token_for_api_base(base_target_url)
+
+
 @router.api_route(
     "/openai/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -2998,11 +3044,7 @@ async def openai_proxy_route(
     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
     """
     base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
-    # Add or update query parameters
-    openai_api_key: Final = passthrough_endpoint_router.get_credentials(
-        custom_llm_provider=litellm.LlmProviders.OPENAI.value,
-        region_name=None,
-    )
+    openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
     if openai_api_key is None:
         raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
 
@@ -3170,10 +3212,12 @@ async def openai_websocket_proxy_route(
         return
 
     base_target_url: Final = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
-    openai_api_key: Final = passthrough_endpoint_router.get_credentials(
-        custom_llm_provider=litellm.LlmProviders.OPENAI.value,
-        region_name=None,
-    )
+    try:
+        openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
+    except (openai.OpenAIError, httpx.HTTPError, LiteLLMOpenAIError):
+        verbose_proxy_logger.exception("OpenAI workload identity token exchange failed for websocket passthrough")
+        await websocket.close(code=1011, reason=_OPENAI_WS_TOKEN_EXCHANGE_FAILED_REASON)
+        return
     if openai_api_key is None:
         await websocket.close(
             code=1011,
