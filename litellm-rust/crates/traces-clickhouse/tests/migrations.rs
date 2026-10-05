@@ -366,11 +366,7 @@ async fn keyed_rollup_keeps_same_trace_ids_separate_by_api_key(
         }))?,
     ];
     insert_rows(&database, "otel_traces", rows).await?;
-    execute_write(
-        &database,
-        "OPTIMIZE TABLE trace_test.trace_rollup FINAL",
-    )
-    .await?;
+    execute_write(&database, "OPTIMIZE TABLE trace_test.trace_rollup FINAL").await?;
     let rows = read_json(
         &database,
         "SELECT ApiKeyHash, argMinMerge(RootInput) AS RootInput \
@@ -576,11 +572,7 @@ async fn rollup_finalizes_a_run_across_days_when_its_root_arrives_last(
     }))?;
     insert_rows(&database, "otel_traces", vec![child]).await?;
     insert_rows(&database, "otel_traces", vec![root]).await?;
-    execute_write(
-        &database,
-        "OPTIMIZE TABLE trace_test.trace_rollup FINAL",
-    )
-    .await?;
+    execute_write(&database, "OPTIMIZE TABLE trace_test.trace_rollup FINAL").await?;
     let response = read_json(
         &database,
         "SELECT argMinMerge(Name) AS Name, argMinMerge(RootInput) AS RootInput, \
@@ -736,11 +728,7 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     execute_write(&database, "OPTIMIZE TABLE trace_test.otel_traces FINAL").await?;
-    execute_write(
-        &database,
-        "OPTIMIZE TABLE trace_test.trace_rollup FINAL",
-    )
-    .await?;
+    execute_write(&database, "OPTIMIZE TABLE trace_test.trace_rollup FINAL").await?;
     execute_write(&database, "OPTIMIZE TABLE trace_test.spend_logs FINAL").await?;
     assert_eq!(table_rows(&database, "otel_traces").await?, 0);
     assert_eq!(table_rows(&database, "trace_rollup").await?, 0);
@@ -1622,7 +1610,12 @@ async fn listed_runs_include_a_user_only_when_the_user_wrote_every_span(
         ],
     )
     .await?;
-    insert_rows(&database, "otel_traces", vec![span(4, "mixed", "llm", "other")?]).await?;
+    insert_rows(
+        &database,
+        "otel_traces",
+        vec![span(4, "mixed", "llm", "other")?],
+    )
+    .await?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     let reader = Connection::reader(&database.url, "trace_test")?;
     let window = timestamp / 1_000_000 - 1..timestamp / 1_000_000 + 1;

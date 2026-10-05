@@ -24,7 +24,8 @@ describe("demoHistogram", () => {
     expect(buckets).toHaveLength(10);
     expect(buckets[0].start_ms).toBe(range.startMs);
     expect(buckets.at(-1)?.end_ms).toBe(range.endMs);
-    expect(buckets[3]).toMatchObject({ start_ms: START + 3 * HOUR, end_ms: START + 4 * HOUR, total: 0, failed: 0 });
+    const fourthBucket = { start_ms: START + 3 * HOUR, end_ms: START + 4 * HOUR, total: 0, failed: 0 };
+    expect(buckets[3]).toMatchObject(fourthBucket);
   });
 
   it("puts each run in the bucket covering its start time", () => {

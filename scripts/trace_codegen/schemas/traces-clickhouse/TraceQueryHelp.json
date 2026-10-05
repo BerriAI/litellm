@@ -268,7 +268,7 @@
         "spans",
         "calls",
         "otel_traces",
-        "agent_traces_by_key",
+        "trace_rollup",
         "spend_logs"
       ],
       "type": "string"

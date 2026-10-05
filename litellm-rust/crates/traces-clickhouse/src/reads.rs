@@ -42,7 +42,9 @@ impl ClickHouseTraces {
             .map_err(|error| match error {
                 StorageError::ResponseTooLarge => StoreError::TooLarge,
                 StorageError::QueryFailed(failure)
-                    if failure.code.is_some_and(|code| LIMIT_EXCEEDED.contains(&code)) =>
+                    if failure
+                        .code
+                        .is_some_and(|code| LIMIT_EXCEEDED.contains(&code)) =>
                 {
                     StoreError::TooLarge
                 }
@@ -75,7 +77,10 @@ impl ClickHouseTraces {
         let mut width = FIRST_RANGE_MS;
         while !range.is_empty() && rows.len() < query.limit as usize {
             let remaining = query.limit - rows.len() as u32;
-            rows.extend(self.runs_page(&params.within(range.clone(), remaining)).await?);
+            rows.extend(
+                self.runs_page(&params.within(range.clone(), remaining))
+                    .await?,
+            );
             width = width.saturating_mul(2);
             range = if query.order.descending {
                 window.start.max(range.start.saturating_sub(width))..range.start

@@ -52,7 +52,7 @@ class NativeTraceStorage:
         cursor: str | None,
         limit: int,
         order: RunOrder,
-        trace_refs: Sequence[str] = (),
+        trace_refs: Sequence[str] = ...,
         as_of_ms: int | None = None,
     ) -> Future[JsonValue]: ...
     def count_traces(
@@ -61,7 +61,7 @@ class NativeTraceStorage:
         start_ms: int | None,
         end_ms: int | None,
         q: str,
-        trace_refs: Sequence[str] = (),
+        trace_refs: Sequence[str] = ...,
         as_of_ms: int | None = None,
     ) -> Future[JsonValue]: ...
     def span_text(

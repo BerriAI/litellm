@@ -11,9 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.rust_bridge.trace.generated.types import TraceScope
-from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
-from litellm.tracing import otlp_http
+from litellm.rust_bridge.trace.generated.types import QueryScope
+from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError, otlp_http
 from litellm.tracing.otlp_http import InvalidOTLPPayloadError
 from litellm.tracing.receiver import TracingOverloadedError
 
@@ -64,7 +63,7 @@ async def test_ingest_rejects_oversized_body_before_storage() -> None:
 @pytest.mark.parametrize("cursor,page_size", ((None, None), ("next", 200)))
 async def test_reads_delegate_to_storage(cursor: str | None, page_size: int | None) -> None:
     storage: Final = _fake_storage()
-    scope: Final[TraceScope] = {"all_teams": 0, "user_id": "", "team_ids": ("team-research",)}
+    scope: Final[QueryScope] = {"kind": "owned", "user_id": "", "team_ids": ("team-research",)}
     assert await TraceReceiver(storage).get_trace("t1", scope, "", cursor, page_size) is None
     storage.get_trace.assert_awaited_once_with("t1", scope, "", cursor, page_size)
 
