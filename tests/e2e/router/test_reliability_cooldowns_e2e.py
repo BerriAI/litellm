@@ -23,16 +23,38 @@ is the recovery, since a benched deployment is one the router will try again,
 not one it forgot. Its deadline counts from the last failure a stale replica
 caused, because every failure re-arms the cooldown.
 
-The sibling cell is the one that asserts the speed. It addresses two gateways
-from PROXY_REPLICA_URLS by name, warms the second with a healthy call so its
-router has already read the failing deployment's cooldown key from Redis and
-started the read interval on it, trips the deployment through the first, waits
-the interval plus a margin, and then sends the second replica exactly one call,
-which has to come back from the backup. One call, because a poll that reached
-the failing deployment through the second replica would bench it there too and
-hide whether the first replica's bench ever travelled. A stack addressed only
-through its load balancer cannot pin which replica takes a call, so the cell is
-skipped at collection unless LITELLM_PROXY_REPLICA_URLS names at least two.
+The sibling cell is the one that asserts the speed, and it sends every call
+through the stack's front door the way a customer does, never to a gateway pod
+by address. The litellm-e2e-pr gate runs one worker per gateway pod behind an
+nginx ingress (project-releaser's .github/scripts/src/releng/ingress_nginx.py)
+that emits a plain proxy_pass to the Service with no upstream block and no
+keepalive, so every request opens a fresh upstream connection and the Service
+picks the pod per connection: each call is an independent draw over the two
+routers, with seven other xdist workers sharing them. The cell first sends
+COOLDOWN_WARM_CALLS healthy calls to CHEAP_OPENAI_MODEL, so every pod's router
+has read the failing deployment's cooldown key from Redis and started the read
+interval on it; a pod the warm never reached (odds 2^(1-COOLDOWN_WARM_CALLS)
+at two pods) would read Redis on its first touch of the key and pass even under
+a regressed interval. The warm follows the registrations because their
+propagation wait is what puts the group on every pod, and a pod that has not
+loaded the deployment holds no read timer for it. Then one call, retries off,
+trips the deployment, the cell waits the interval plus a margin, and it sends
+SIBLING_PROBES calls, every one of which has to come back from the backup: a
+pod that has not seen the bench answers a 500 to any probe it takes, and the
+odds that no probe reaches it are 2^-SIBLING_PROBES, 0.1% at ten. That is the
+miss rate for a pod that never catches up. A pod whose interval regressed to I
+seconds catches up on its own at its next Redis read, which other workers'
+traffic schedules anywhere within I of the trip, so under the full suite such a
+regression is caught on the runs whose first probe lands on the stale pod
+before that read, while the per-file run (loadfile keeps this file on one
+worker, so nothing else touches the key meanwhile) catches it every time, as
+did the two-process rig the cell was proven on. The bench for this cell is
+SIBLING_COOLDOWN_SECONDS rather than COOLDOWN_SECONDS because it never waits
+for the recovery and its probes, ten live calls to the backup, have to land
+before the bench can lapse. Pinning the tripping and the sibling gateway by
+address was dropped because the gate exports only the router URL, so the
+pinned cell skipped on every PR build, and a pod addressed by name is not the
+surface a customer ever uses.
 
 The failures are the same real ones the retry tests use: a 1ms deadline and a
 bogus key on the real backend, and this proxy standing in as the upstream for
@@ -49,7 +71,7 @@ from dataclasses import dataclass
 
 import pytest
 from complexity_router_client import ComplexityRouterClient
-from e2e_config import CHEAP_OPENAI_MODEL, PROXY_REPLICA_URLS, unique_marker
+from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import StreamingResponse
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, RouterSettingsOverride
@@ -57,7 +79,6 @@ from reliability_support import (
     COOLDOWN_SECONDS,
     REPLICA_PROPAGATION_SECONDS,
     chat_override,
-    chat_override_via,
     create_always_5xx_deployment,
     create_always_rate_limited_deployment,
     create_always_timing_out_deployment,
@@ -67,7 +88,6 @@ from reliability_support import (
     model_id_of,
     spend_only_request_of,
 )
-from transport import Transport
 
 pytestmark = pytest.mark.e2e
 
@@ -76,6 +96,9 @@ PROPAGATION_POLL_SECONDS = 0.25
 BENCH_MARGIN_SECONDS = 4.0
 COOLDOWN_REDIS_READ_INTERVAL_SECONDS = 1.0
 SIBLING_READ_MARGIN_SECONDS = 1.0
+COOLDOWN_WARM_CALLS = 10
+SIBLING_PROBES = 10
+SIBLING_COOLDOWN_SECONDS = 120.0
 
 
 def _call_without_retries(client: ComplexityRouterClient, key: str, group: str) -> StreamingResponse:
@@ -84,29 +107,13 @@ def _call_without_retries(client: ComplexityRouterClient, key: str, group: str) 
     )
 
 
-def _call_replica_without_retries(transport: Transport, key: str, group: str) -> StreamingResponse:
-    return chat_override_via(
-        transport, key, group, f"say hi {unique_marker()}", override=RouterSettingsOverride(num_retries=0)
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class _Replica:
-    url: str
-    transport: Transport
-
-
-def _two_replicas(client: ComplexityRouterClient) -> tuple[_Replica, _Replica]:
-    first, second, *_ = (_Replica(url, transport) for url, transport in client.proxy.replicas.items())
-    return first, second
-
-
-def _warm_cooldown_reads(replica: _Replica, key: str) -> None:
-    warmed = chat_override_via(replica.transport, key, CHEAP_OPENAI_MODEL, f"say hi {unique_marker()}")
-    assert warmed.status_code == 200, (
-        f"{replica.url} should have answered a healthy {CHEAP_OPENAI_MODEL} call before the trip, got "
-        f"{warmed.status_code}: {warmed.body[:300]}"
-    )
+def _warm_cooldown_reads(client: ComplexityRouterClient, key: str) -> None:
+    for call in range(1, COOLDOWN_WARM_CALLS + 1):
+        warmed = chat_override(client.proxy, key, CHEAP_OPENAI_MODEL, f"say hi {unique_marker()}")
+        assert warmed.status_code == 200, (
+            f"warm call {call} of {COOLDOWN_WARM_CALLS} to {CHEAP_OPENAI_MODEL} should have answered 200 before "
+            f"the trip, got {warmed.status_code}: {warmed.body[:300]}"
+        )
 
 
 def _assert_served_by_backup(resp: StreamingResponse, backup: str, when: str) -> None:
@@ -218,45 +225,43 @@ class TestReliabilityCooldowns:
         _assert_trips_then_recovers(client, scoped_key, group, failing, backup, failure_status=500)
 
     @pytest.mark.covers("reliability.cooldown.sibling_replica.serves_backup_within_read_interval")
-    @pytest.mark.skipif(
-        len(PROXY_REPLICA_URLS) < 2,
-        reason=(
-            "this cell trips a deployment through one gateway and reads the bench from another, so "
-            f"LITELLM_PROXY_REPLICA_URLS has to name at least two distinct gateways, got {PROXY_REPLICA_URLS}"
-        ),
-    )
     def test_sibling_replica_serves_backup_within_redis_read_interval(
         self, client: ComplexityRouterClient, resources: ResourceManager, scoped_key: str
     ) -> None:
-        tripping, sibling = _two_replicas(client)
-
         upstream = f"reliability-cooldown-sibling-upstream-{unique_marker()}"
         upstream_id = create_bad_base_deployment(client.proxy, upstream)
         resources.defer(lambda: client.proxy.delete_model(upstream_id))
 
         group = f"reliability-cooldown-sibling-{unique_marker()}"
         failing = create_always_5xx_deployment(
-            client.proxy, group, upstream, scoped_key, cooldown_time=COOLDOWN_SECONDS
+            client.proxy, group, upstream, scoped_key, cooldown_time=SIBLING_COOLDOWN_SECONDS
         )
         resources.defer(lambda: client.proxy.delete_model(failing))
         backup = create_zero_weight_backup_deployment(client.proxy, group)
         resources.defer(lambda: client.proxy.delete_model(backup))
 
-        _warm_cooldown_reads(sibling, scoped_key)
+        _warm_cooldown_reads(client, scoped_key)
 
-        tripped = _call_replica_without_retries(tripping.transport, scoped_key, group)
+        tripped = _call_without_retries(client, scoped_key, group)
         assert tripped.status_code == 500, (
-            f"the first call through {tripping.url} should have surfaced the deployment's own 500, got "
-            f"{tripped.status_code}: {tripped.body[:300]}"
+            f"the first call should have surfaced the deployment's own 500, got {tripped.status_code}: "
+            f"{tripped.body[:300]}"
         )
         tripped_at = time.monotonic()
 
         time.sleep(COOLDOWN_REDIS_READ_INTERVAL_SECONDS + SIBLING_READ_MARGIN_SECONDS)
-        _assert_served_by_backup(
-            _call_replica_without_retries(sibling.transport, scoped_key, group),
-            backup,
-            f"{time.monotonic() - tripped_at:.1f}s after {tripping.url} benched {failing}, on {sibling.url}",
-        )
+        bench_lapses_at = tripped_at + SIBLING_COOLDOWN_SECONDS - BENCH_MARGIN_SECONDS
+        for probe in range(1, SIBLING_PROBES + 1):
+            assert time.monotonic() < bench_lapses_at, (
+                f"probe {probe} of {SIBLING_PROBES} would start after the {SIBLING_COOLDOWN_SECONDS:.0f}s bench can "
+                "lapse, so the earlier probes answered too slowly for this run to say anything about the read interval"
+            )
+            _assert_served_by_backup(
+                _call_without_retries(client, scoped_key, group),
+                backup,
+                f"probe {probe} of {SIBLING_PROBES}, {time.monotonic() - tripped_at:.1f}s after the trip benched "
+                f"{failing},",
+            )
 
     @pytest.mark.covers("reliability.cooldown.429.trips_then_recovers")
     def test_429_trips_cooldown_then_recovers(
