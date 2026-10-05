@@ -37,10 +37,15 @@ fn to_python(value: Value) -> Result<Value, Error> {
 }
 
 pub(crate) enum CacheCall {
+    ResolveKey {
+        reply: Reply<Result<String, Error>>,
+    },
     Lookup {
+        key: String,
         reply: Reply<Result<Option<Value>, Error>>,
     },
     Store {
+        key: String,
         value: Value,
         reply: Reply<Result<(), Error>>,
     },
@@ -75,14 +80,29 @@ where
         &self.config
     }
 
-    fn lookup<'a>(
+    fn resolve_key<'a>(
         &'a self,
         _: &'a ResponseCacheRequest,
-        _: Duration,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, Error>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String, Error>> + Send + 'a>> {
         Box::pin(async move {
             self.services
-                .call(|reply| CacheCall::Lookup { reply })
+                .call(|reply| CacheCall::ResolveKey { reply })
+                .await
+                .map_err(|_| Error::Unavailable)?
+        })
+    }
+
+    fn lookup<'a>(
+        &'a self,
+        request: &'a ResponseCacheRequest,
+        _: Duration,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, Error>> + Send + 'a>> {
+        let Some(key) = request.key.preset.clone() else {
+            return Box::pin(async { Err(Error::Unavailable) });
+        };
+        Box::pin(async move {
+            self.services
+                .call(|reply| CacheCall::Lookup { key, reply })
                 .await
                 .map_err(|_| Error::Unavailable)??
                 .map(from_python)
@@ -92,14 +112,17 @@ where
 
     fn store<'a>(
         &'a self,
-        _: &'a ResponseCacheRequest,
+        request: &'a ResponseCacheRequest,
         value: Value,
         _: Duration,
     ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
+        let Some(key) = request.key.preset.clone() else {
+            return Box::pin(async { Err(Error::Unavailable) });
+        };
         Box::pin(async move {
             let value = to_python(value)?;
             self.services
-                .call(|reply| CacheCall::Store { value, reply })
+                .call(|reply| CacheCall::Store { key, value, reply })
                 .await
                 .map_err(|_| Error::Unavailable)?
         })

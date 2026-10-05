@@ -373,6 +373,70 @@ impl ResponseCacheService for InvalidEntryCache {
     }
 }
 
+struct ResolveFailureCache {
+    config: ResponseCacheConfig,
+    lookups: AtomicUsize,
+    stores: AtomicUsize,
+}
+
+impl ResponseCacheService for ResolveFailureCache {
+    fn config(&self) -> &ResponseCacheConfig {
+        &self.config
+    }
+
+    fn resolve_key<'a>(
+        &'a self,
+        _: &'a litellm_cache_response::ResponseCacheRequest,
+    ) -> futures_util::future::BoxFuture<'a, Result<String, litellm_cache::Error>> {
+        Box::pin(async { Err(litellm_cache::Error::Unavailable) })
+    }
+
+    fn lookup<'a>(
+        &'a self,
+        _: &'a litellm_cache_response::ResponseCacheRequest,
+        _: Duration,
+    ) -> futures_util::future::BoxFuture<'a, Result<Option<Value>, litellm_cache::Error>> {
+        self.lookups.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(None) })
+    }
+
+    fn store<'a>(
+        &'a self,
+        _: &'a litellm_cache_response::ResponseCacheRequest,
+        _: Value,
+        _: Duration,
+    ) -> futures_util::future::BoxFuture<'a, Result<(), litellm_cache::Error>> {
+        self.stores.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn key_resolution_failure_skips_cache_and_runs_provider() {
+    let cache = Arc::new(ResolveFailureCache {
+        config: ResponseCacheConfig {
+            namespace: "test".into(),
+            max_entry_bytes: 4096,
+        },
+        lookups: AtomicUsize::new(0),
+        stores: AtomicUsize::new(0),
+    });
+    let service: Arc<dyn ResponseCacheService> = cache.clone();
+    let calls = AtomicUsize::new(0);
+    let response = call(
+        &service,
+        Some(CacheOptions::new(CacheScope::Shared)),
+        &calls,
+        json!({}),
+    )
+    .await;
+    assert_eq!(response["call"], json!(0));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(cache.lookups.load(Ordering::SeqCst), 0);
+    assert_eq!(cache.stores.load(Ordering::SeqCst), 0);
+}
+
 #[rstest]
 #[case::legacy(json!({"unexpected":"old-format"}))]
 #[case::wrong_version(json!({"version":2,"surface":"test","output":{"kind":"Response","value":{"call":100}}}))]

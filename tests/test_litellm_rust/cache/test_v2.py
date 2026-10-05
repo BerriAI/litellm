@@ -1,7 +1,8 @@
 import asyncio
+import datetime
 from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 import pytest
 from pydantic import BaseModel, TypeAdapter
@@ -755,6 +756,115 @@ async def test_rust_messages_legacy_cache_honors_request_namespaces(
     assert cache_key(second) is None
     assert cache_key(first_hit) is not None
     assert cache_key(second_hit) is not None
+    assert len(recording_server.requests) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("backend", "options"),
+    (
+        ("legacy", {"litellm_params": {"preset_cache_key": "shared-preset"}, "cache": {"namespace": "request"}}),
+        ("legacy", {"cache": {"namespace": "request"}}),
+        ("native", {}),
+        ("native-namespaced", {}),
+    ),
+    ids=("legacy-preset-and-namespace", "legacy-namespace", "native-default-key", "native-configured-namespace"),
+)
+async def test_rust_cache_reports_the_key_used_for_python_cache(
+    recording_server: RecordingServer,
+    backend: Literal["legacy", "native", "native-namespaced"],
+    options: Mapping[str, object],
+    redis_url: str,
+) -> None:
+    recording_server.expected_requests = 1
+    litellm.cache = (
+        Cache()
+        if backend == "legacy"
+        else _v2.Cache.memory()
+        if backend == "native"
+        else _v2.Cache.redis(redis_url, namespace="key-resolution")
+    )
+    recorder: Final = RecordingLogger()
+    response_options: Final = {**options, "callbacks": [recorder]}
+    first: Final = await invoke("messages", recording_server, response_options)
+    second: Final = await invoke("messages", recording_server, response_options)
+    successes: Final = await recorder.wait_for_async("async_log_success_event", count=2)
+    callback_metadata: Final = TypeAdapter(dict[str, object]).validate_python(successes[-1].kwargs)
+    reported: Final = cache_key(second)
+    assert isinstance(reported, str)
+    assert callback_metadata["cache_key"] == reported
+    assert get_hidden_params_dict(second)["cache_key"] == reported
+    assert litellm.cache.get_cache(cache_key=reported) is not None
+    assert payload(first) == payload(second)
+    assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_rust_cache_hit_refreshes_call_metadata_without_rewriting_the_entry(
+    recording_server: RecordingServer,
+) -> None:
+    litellm.cache = Cache()
+    recorder: Final = RecordingLogger()
+    options: Final = {
+        "litellm_params": {"preset_cache_key": "metadata-cache-key"},
+        "cache": {"namespace": "request"},
+        "callbacks": [recorder],
+    }
+    first: Final = await invoke("messages", recording_server, options)
+    entry_before: Final = TypeAdapter(dict[str, object]).validate_python(
+        litellm.cache.cache.get_cache("metadata-cache-key")
+    )
+    write_time: Final = TypeAdapter(float).validate_python(entry_before["timestamp"])
+    marker: Final = datetime.datetime.now()
+    second: Final = await invoke(
+        "messages",
+        recording_server,
+        {**options, "litellm_call_id": "provided-cache-hit-id"},
+    )
+    entry_after: Final = TypeAdapter(dict[str, object]).validate_python(
+        litellm.cache.cache.get_cache("metadata-cache-key")
+    )
+    successes: Final = await recorder.wait_for_async("async_log_success_event", count=2)
+    hit_event: Final = successes[-1]
+    hit_kwargs: Final = TypeAdapter(dict[str, object]).validate_python(hit_event.kwargs)
+    hit_start: Final = hit_event.start_time
+    hit_end: Final = hit_event.end_time
+    first_kwargs: Final = TypeAdapter(dict[str, object]).validate_python(successes[0].kwargs)
+    first_call_id: Final = first_kwargs["litellm_call_id"]
+    hit_call_id: Final = hit_kwargs["litellm_call_id"]
+    first_payload: Final = TypeAdapter(dict[str, object]).validate_python(first)
+    second_payload: Final = TypeAdapter(dict[str, object]).validate_python(second)
+    assert entry_after["timestamp"] == write_time
+    assert first_call_id != hit_call_id
+    assert hit_call_id == "provided-cache-hit-id"
+    assert first_payload["id"] == second_payload["id"]
+    assert isinstance(hit_start, datetime.datetime)
+    assert isinstance(hit_end, datetime.datetime)
+    assert hit_start >= marker and hit_end >= marker
+    assert hit_start.timestamp() >= write_time and hit_end.timestamp() >= write_time
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    ("exception", "non-string"),
+    ids=("python-exception", "non-string-key"),
+)
+async def test_rust_cache_key_resolution_failure_skips_caching(
+    recording_server: RecordingServer,
+    failure: Literal["exception", "non-string"],
+) -> None:
+    class FailingKeyCache(Cache):
+        def get_cache_key(self, **kwargs: object) -> str:
+            if failure == "exception":
+                raise ValueError("cache key unavailable")
+            return cast(str, 123)
+
+    recording_server.expected_requests = 2
+    litellm.cache = FailingKeyCache()
+    first: Final = await invoke("messages", recording_server, {})
+    second: Final = await invoke("messages", recording_server, {})
+    assert payload(first) == payload(second)
     assert len(recording_server.requests) == 2
 
 

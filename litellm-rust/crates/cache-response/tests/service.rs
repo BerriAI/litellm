@@ -10,7 +10,7 @@ use litellm_cache::ExactCacheContext;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
     CacheEntry, CacheKeyInput, ResponseCache, ResponseCacheConfig, ResponseCacheRequest,
-    ResponseCacheService,
+    ResponseCacheService, cache_key,
 };
 use rstest::rstest;
 use serde_json::json;
@@ -68,6 +68,22 @@ async fn service_honors_per_call_expiry_and_freshness() {
             .await
             .unwrap(),
         None
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn default_key_resolution_preserves_the_native_cache_key() {
+    let cache: Arc<dyn ResponseCacheService> = Arc::new(ResponseCache::new(Arc::new(
+        InMemoryCache::<CacheEntry>::default(),
+    )));
+    let request = ResponseCacheRequest::new(CacheKeyInput {
+        namespace: Some("namespace".into()),
+        ..Default::default()
+    });
+    assert_eq!(
+        cache.resolve_key(&request).await.unwrap(),
+        cache_key(&request.key)
     );
 }
 

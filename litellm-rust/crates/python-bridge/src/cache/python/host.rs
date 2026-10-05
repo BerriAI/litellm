@@ -11,6 +11,7 @@ use serde_json::Value;
 use super::service::CacheCall;
 
 enum Pending {
+    ResolveKey(Reply<Result<String, Error>>),
     Lookup(Reply<Result<Option<Value>, Error>>),
     Store(Reply<Result<(), Error>>),
 }
@@ -55,9 +56,15 @@ impl PythonCache {
             })?
             .bind(py)
             .copy()?;
+        let await_result = self.asynchronous && !matches!(&call, CacheCall::ResolveKey { .. });
         let (method, result) = match call {
-            CacheCall::Lookup { reply } => {
+            CacheCall::ResolveKey { reply } => {
+                self.pending = Some(Pending::ResolveKey(reply));
+                ("get_cache_key", None)
+            }
+            CacheCall::Lookup { key, reply } => {
                 self.pending = Some(Pending::Lookup(reply));
+                arguments.set_item("cache_key", key)?;
                 (
                     if self.asynchronous {
                         "async_get_cache"
@@ -67,8 +74,9 @@ impl PythonCache {
                     None,
                 )
             }
-            CacheCall::Store { value, reply } => {
+            CacheCall::Store { key, value, reply } => {
                 self.pending = Some(Pending::Store(reply));
+                arguments.set_item("cache_key", key)?;
                 (
                     if self.asynchronous {
                         "async_add_cache"
@@ -86,7 +94,7 @@ impl PythonCache {
             None => cache.bind(py).call_method(method, (), Some(&arguments)),
         }
         .map(Bound::unbind);
-        if self.asynchronous && result.is_ok() {
+        if await_result && result.is_ok() {
             return result.map(Some);
         }
         self.resume(py, result)
@@ -104,6 +112,12 @@ impl PythonCache {
             return Err(result.err().unwrap());
         }
         match self.pending.take() {
+            Some(Pending::ResolveKey(reply)) => {
+                let key = result
+                    .and_then(|value| value.bind(py).extract::<String>())
+                    .map_err(|_| Error::Unavailable);
+                reply.send(key);
+            }
             Some(Pending::Lookup(reply)) => {
                 let value = result.map_err(|_| Error::Unavailable).and_then(|value| {
                     if value.bind(py).is_none() {

@@ -78,7 +78,8 @@ impl MessagesRoute {
                 context.cache,
                 &request.identity,
                 &request.wire,
-            );
+            )
+            .await;
             let identity = request.identity.clone();
             let (output, source) = match cache.lookup().await {
                 Some(hit) => hit,
