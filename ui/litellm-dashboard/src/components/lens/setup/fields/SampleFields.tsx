@@ -7,6 +7,7 @@ import { DurationInput } from "@/components/shared/DurationInput";
 import { FieldError } from "@/components/ui/field";
 import { Slider } from "@/components/ui/slider";
 import type { InvestigationInput } from "../investigationSchema";
+import { useDropPicks } from "../useMatchingActivity";
 
 /** Runs the sampling percentage keeps out of `eligible`, before any cap. */
 export const sampledRuns = (eligible: number, percent: number): number => Math.ceil((eligible * percent) / 100);
@@ -16,6 +17,62 @@ const capFromText = (text: string): number | null => {
   return digits ? Number(digits) : null;
 };
 
+interface RunCountProps {
+  /** The cap the user typed, or null to analyze every sampled run. */
+  readonly cap: number | null;
+  /** Sampled runs before any cap; undefined while the preview loads. */
+  readonly sampled: number | undefined;
+  readonly onCapChange: (cap: number | null) => void;
+  readonly onBlur: () => void;
+}
+
+/** Shows how many runs will be analyzed; typing a smaller number caps it, and a cap that limits nothing is dropped. */
+function RunCount({ cap, sampled, onCapChange, onBlur }: RunCountProps) {
+  const [typing, setTyping] = useState<string | null>(null);
+  const analyzed = sampled === undefined ? cap : Math.min(sampled, cap ?? Infinity);
+  const capped = cap != null && (sampled === undefined || cap < sampled);
+  const shown = typing ?? analyzed?.toLocaleString() ?? "";
+  const finishTyping = () => {
+    setTyping(null);
+    if (cap != null && sampled !== undefined && cap >= sampled) onCapChange(null);
+    onBlur();
+  };
+  return (
+    <div className="grid justify-items-end gap-0.5">
+      <label className="flex items-baseline gap-1.5">
+        <input
+          inputMode="numeric"
+          aria-label="Runs to analyze"
+          value={shown}
+          placeholder="All"
+          onFocus={(event) => event.target.select()}
+          onChange={(event) => {
+            setTyping(event.target.value);
+            onCapChange(capFromText(event.target.value));
+          }}
+          onBlur={finishTyping}
+          style={{ width: `${Math.max((shown || "All").length, 2) + 1}ch` }}
+          className="-mr-1 rounded-sm border-0 bg-transparent px-1 py-0 shadow-none focus:ring-0 text-right text-xl font-semibold tabular-nums tracking-tight outline-none hover:bg-muted/60 focus:bg-muted/60"
+        />
+        <span className="text-sm text-muted-foreground">runs</span>
+      </label>
+      {capped ? (
+        <button
+          type="button"
+          aria-label="Remove cap"
+          onClick={() => onCapChange(null)}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+        >
+          Capped
+          <X aria-hidden="true" className="size-3" />
+        </button>
+      ) : (
+        <span className="text-xs text-muted-foreground">Type a number to cap</span>
+      )}
+    </div>
+  );
+}
+
 export interface SampleFieldsProps {
   /** Runs the search matches; undefined while the preview loads. */
   readonly eligible: number | undefined;
@@ -24,22 +81,13 @@ export interface SampleFieldsProps {
 export function SampleFields({ eligible }: SampleFieldsProps) {
   const {
     control,
-    setValue,
     formState: { errors },
   } = useFormContext<InvestigationInput>();
-  const [percentValue, cap] = useWatch({ control, name: ["selection.sample_percent", "selection.sample_size"] });
+  const dropPicks = useDropPicks();
+  const percentValue = useWatch({ control, name: "selection.sample_percent" });
   const selectionErrors = errors.selection;
   const percent = Number.isFinite(percentValue) ? percentValue : 100;
   const sampled = eligible === undefined ? undefined : sampledRuns(eligible, percent);
-  const capped = cap != null && (sampled === undefined || cap < sampled);
-  const analyzed = sampled === undefined ? cap : Math.min(sampled, cap ?? Infinity);
-  const setCap = (next: number | null) => setValue("selection.sample_size", next, { shouldValidate: true });
-  const [typing, setTyping] = useState<string | null>(null);
-  const shown = typing ?? analyzed?.toLocaleString() ?? "";
-  const finishTyping = () => {
-    setTyping(null);
-    if (cap != null && sampled !== undefined && cap >= sampled) setCap(null);
-  };
   return (
     <>
       <div className="grid gap-2">
@@ -47,7 +95,15 @@ export function SampleFields({ eligible }: SampleFieldsProps) {
           control={control}
           name="selection.lookback_hours"
           render={({ field }) => (
-            <DurationInput label="Review the last" value={field.value ?? 24} base="hours" onChange={field.onChange} />
+            <DurationInput
+              label="Review the last"
+              value={field.value ?? 24}
+              base="hours"
+              onChange={(hours) => {
+                if (hours !== field.value) dropPicks();
+                field.onChange(hours);
+              }}
+            />
           )}
         />
         <FieldError>{selectionErrors?.lookback_hours?.message}</FieldError>
@@ -60,38 +116,18 @@ export function SampleFields({ eligible }: SampleFieldsProps) {
               {eligible === undefined ? `${percent}% of matching runs` : `${percent}% of ${eligible.toLocaleString()}`}
             </span>
           </div>
-          <div className="grid justify-items-end gap-0.5">
-            <label className="flex items-baseline gap-1.5">
-              <input
-                inputMode="numeric"
-                aria-label="Runs to analyze"
-                value={shown}
-                placeholder="All"
-                onFocus={(event) => event.target.select()}
-                onChange={(event) => {
-                  setTyping(event.target.value);
-                  setCap(capFromText(event.target.value));
-                }}
-                onBlur={finishTyping}
-                style={{ width: `${Math.max((shown || "All").length, 2) + 1}ch` }}
-                className="-mr-1 rounded-sm border-0 bg-transparent px-1 py-0 shadow-none focus:ring-0 text-right text-xl font-semibold tabular-nums tracking-tight outline-none hover:bg-muted/60 focus:bg-muted/60"
+          <Controller
+            control={control}
+            name="selection.sample_size"
+            render={({ field }) => (
+              <RunCount
+                cap={field.value ?? null}
+                sampled={sampled}
+                onCapChange={field.onChange}
+                onBlur={field.onBlur}
               />
-              <span className="text-sm text-muted-foreground">runs</span>
-            </label>
-            {capped ? (
-              <button
-                type="button"
-                aria-label="Remove cap"
-                onClick={() => setCap(null)}
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-              >
-                Capped
-                <X aria-hidden="true" className="size-3" />
-              </button>
-            ) : (
-              <span className="text-xs text-muted-foreground">Type a number to cap</span>
             )}
-          </div>
+          />
         </div>
         <Controller
           control={control}

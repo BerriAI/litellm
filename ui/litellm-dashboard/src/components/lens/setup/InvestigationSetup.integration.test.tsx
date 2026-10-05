@@ -129,6 +129,29 @@ describe("Investigation setup", () => {
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
   });
 
+  it.each([
+    ["search", () => userEvent.type(screen.getByRole("combobox", { name: "Search runs" }), "x")],
+    [
+      "window",
+      async () =>
+        fireEvent.change(screen.getByRole("spinbutton", { name: "Review the last" }), { target: { value: "3" } }),
+    ],
+  ])("drops saved hand-picked runs once the %s changes, and only then", async (_, change) => {
+    proxy.post.mockResolvedValue({ eligible: 2, selected: 2, executions: [run("Saved run", 1), run("Other run", 2)] });
+    renderWithProviders(
+      <InvestigationSetup
+        mode="edit"
+        initial={{ ...settings, execution_ids: [run("Saved run", 1).id] }}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+    const preview = within(screen.getByRole("region", { name: "Matching activity" }));
+    expect(await preview.findByRole("button", { name: "Clear 1 selected runs" })).toBeVisible();
+    await change();
+    await waitFor(() => expect(preview.queryByRole("button", { name: /Clear/ })).not.toBeInTheDocument());
+  });
+
   it("preserves check identity and disabled state when a check is edited", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();

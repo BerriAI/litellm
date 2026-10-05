@@ -124,7 +124,7 @@ function SetupEditor({
   const [step, setStep] = useSetupStepRoute();
   const [error, setError] = useState("");
   const [trace, setTrace] = useState<TraceRef | null>(null);
-  const { control, register, setValue, subscribe, trigger, formState } = form;
+  const { control, register, trigger, formState } = form;
   const [selectedModel, repeat] = useWatch({ control, name: ["selectedModel", "repeat"] });
   const activity = useMatchingActivity();
   const { executions } = activity.preview.page;
@@ -133,17 +133,6 @@ function SetupEditor({
     [executions],
   );
   const model = selectedModel ?? analysis.defaultModel ?? "";
-  useEffect(
-    () =>
-      subscribe({
-        name: ["selection.q", "selection.lookback_hours"],
-        formState: { values: true },
-        callback: ({ values }) => {
-          if (values.selection.execution_ids.length) setValue("selection.execution_ids", []);
-        },
-      }),
-    [setValue, subscribe],
-  );
   const next = async () => {
     const following = nextSetupStep(step);
     if (following && (await trigger(investigationStepFields[step]))) setStep(following);

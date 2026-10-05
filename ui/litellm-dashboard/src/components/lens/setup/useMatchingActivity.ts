@@ -18,6 +18,14 @@ type PreviewPageData = Pick<Sample, "eligible" | "selected">;
 
 export type { Execution };
 
+/** Hand-picked runs belong to the search and window they were picked from, so changing either drops them. */
+export function useDropPicks(): () => void {
+  const { getValues, setValue } = useFormContext<InvestigationInput>();
+  return useCallback(() => {
+    if (getValues("selection.execution_ids").length) setValue("selection.execution_ids", []);
+  }, [getValues, setValue]);
+}
+
 /** What the search box needs: the runs already previewed suggest values, and the window bounds the copied query. */
 export interface ScopeOptions {
   readonly runs: readonly TraceSummary[];

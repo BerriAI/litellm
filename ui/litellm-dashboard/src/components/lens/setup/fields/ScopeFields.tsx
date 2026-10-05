@@ -4,11 +4,12 @@ import { Controller, useFormContext } from "react-hook-form";
 
 import { RunSearch } from "../../traces/list/runSearch/RunSearch";
 import type { InvestigationInput } from "../investigationSchema";
-import type { ScopeOptions } from "../useMatchingActivity";
+import { useDropPicks, type ScopeOptions } from "../useMatchingActivity";
 
 /** Which runs to review, written in the same search language as the Traces tab. */
 export function ScopeFields({ runs, range }: ScopeOptions) {
   const { control } = useFormContext<InvestigationInput>();
+  const dropPicks = useDropPicks();
   return (
     <div className="grid gap-2">
       <span className="text-sm font-medium">Runs to review</span>
@@ -16,7 +17,17 @@ export function ScopeFields({ runs, range }: ScopeOptions) {
         <Controller
           control={control}
           name="selection.q"
-          render={({ field }) => <RunSearch value={field.value} onChange={field.onChange} runs={runs} range={range} />}
+          render={({ field }) => (
+            <RunSearch
+              value={field.value}
+              onChange={(q) => {
+                if (q !== field.value) dropPicks();
+                field.onChange(q);
+              }}
+              runs={runs}
+              range={range}
+            />
+          )}
         />
       </div>
       <p className="text-xs text-muted-foreground">
