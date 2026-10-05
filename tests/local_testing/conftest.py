@@ -19,6 +19,7 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.utils import _invalidate_model_cost_lowercase_map
 
 # ``litellm.model_cost`` is loaded at import time from the URL pinned to ``main``
 # (``LITELLM_MODEL_COST_MAP_URL``).  The in-tree backup ships with this branch
@@ -232,6 +233,7 @@ def isolate_litellm_state():
     for attr, original_value in original_state.items():
         if hasattr(litellm, attr):
             setattr(litellm, attr, original_value)
+    _invalidate_model_cost_lowercase_map()
 
 
 @pytest.fixture(scope="module", autouse=True)

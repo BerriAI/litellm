@@ -15,6 +15,9 @@ from redis import Redis
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
+from tests.integration._support.provider import SharedProvider, shared_provider
+from tests.integration._support.routing import RoutingPlugin
+from tests.integration.run import GITHUB_FILES
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
@@ -29,6 +32,8 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "covers(*ids): legacy contract IDs kept for existing tests, not enforced")
     config.stash[REPORTS] = []
     config.pluginmanager.register(IntegrationReportPlugin(config))
+    if os.environ.get("INTEGRATION_ROUTING"):
+        config.pluginmanager.register(RoutingPlugin(config))
 
 
 class IntegrationReportPlugin:
@@ -48,18 +53,28 @@ def _owned(nodeid: str) -> bool:
     return parts[:2] == ("tests", "integration") and len(parts) > 3 and parts[2] in OWNED_DIRECTORIES
 
 
+def _digest(seed: int, identity: str) -> bytes:
+    return hashlib.sha256(f"{seed}:{identity}".encode()).digest()
+
+
+def _order_key(seed: int, nodeid: str) -> tuple[bytes, bytes]:
+    return _digest(seed, nodeid.split("::", 1)[0]), _digest(seed, nodeid)
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     order_seed: Final = config.getoption("integration_order_seed")
     if order_seed:
-        # rebind-ok: pytest requires this hook to reorder its shared collection list in place.
-        items.sort(key=lambda item: hashlib.sha256(f"{order_seed}:{item.nodeid}".encode()).digest())
+        items.sort(key=lambda item: _order_key(order_seed, item.nodeid))
     root: Final = Path(__file__).parent
     owned: Final = tuple(
         item
         for item in items
         if item.path.is_relative_to(root) and item.path.relative_to(root).parts[0] in OWNED_DIRECTORIES
     )
-    if owned and os.environ.get("GITHUB_ACTIONS") == "true":
+    circleci_only: Final = tuple(
+        item for item in owned if item.path.relative_to(root.parents[1]).as_posix() not in GITHUB_FILES
+    )
+    if circleci_only and os.environ.get("GITHUB_ACTIONS") == "true":
         raise pytest.UsageError("Integration contracts are owned by CircleCI")
     for item in owned:
         item.add_marker(pytest.mark.integration)
@@ -114,6 +129,33 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 def gateway() -> Iterator[Gateway]:
     with gateway_from_environment() as value:
         yield value
+
+
+@pytest.fixture(scope="session")
+def shared_provider_server() -> Iterator[SharedProvider]:
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        pytest.fail("the shared fake provider needs tests to run one at a time; this group runs under pytest-xdist")
+    with shared_provider() as server:
+        yield server
+        late: Final = server.received()
+        assert late == (), f"the shared fake provider got {[item.target for item in late]} after {server.last_test} finished"
+
+
+@pytest.fixture
+def provider(shared_provider_server: SharedProvider, request: pytest.FixtureRequest) -> Iterator[SharedProvider]:
+    stray: Final = shared_provider_server.received()
+    shared_provider_server.replies.clear()
+    assert stray == (), (
+        f"the shared fake provider got {[item.target for item in stray]} "
+        f"after {shared_provider_server.last_test} finished"
+    )
+    yield shared_provider_server
+    shared_provider_server.last_test = request.node.nodeid
+    unused: Final = len(shared_provider_server.replies)
+    unread: Final = shared_provider_server.received()
+    shared_provider_server.replies.clear()
+    assert unused == 0, f"{unused} queued provider replies were never requested"
+    assert unread == (), f"the test never read the provider requests {[item.target for item in unread]}"
 
 
 @pytest.fixture

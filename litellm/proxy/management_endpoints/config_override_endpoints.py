@@ -308,13 +308,13 @@ async def _persist_cyberark_config(
     encrypted_data: Final = proxy_config._encrypt_env_variables(dict(config_data))  # pyright: ignore[reportPrivateUsage]  # proxy-internal helper, mirrors hashicorp endpoint usage
     config_value: Final = safe_dumps(encrypted_data)
     await _config_overrides_table(prisma_client).upsert(
-        where={"config_type": "cyberark"},  # mutable-ok: prisma upsert payload
-        data={  # mutable-ok: prisma upsert payload
-            "create": {  # mutable-ok: prisma upsert payload
+        where={"config_type": "cyberark"},
+        data={
+            "create": {
                 "config_type": "cyberark",
                 "config_value": config_value,
             },
-            "update": {  # mutable-ok: prisma upsert payload
+            "update": {
                 "config_value": config_value,
             },
         },
@@ -650,8 +650,8 @@ async def test_hashicorp_vault_connection(
 
 @router.post(
     "/config_overrides/cyberark",
-    tags=["Config Overrides"],  # mutable-ok: FastAPI route decorator metadata
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI route decorator metadata
+    tags=["Config Overrides"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def update_cyberark_config(
     config: CyberArkConfig,
@@ -684,9 +684,7 @@ async def update_cyberark_config(
 
     # Merge ALL fields the user didn't send: try DB first, fall back to env vars.
     # Omitted field = keep existing; empty string = clear/remove the field.
-    existing_record: Final = await _config_overrides_table(prisma_client).find_unique(
-        where={"config_type": "cyberark"}  # mutable-ok: prisma where clause
-    )
+    existing_record: Final = await _config_overrides_table(prisma_client).find_unique(where={"config_type": "cyberark"})
     existing_decrypted: dict[str, object] | None = None  # mutable-ok: DB payload  # rebind-ok: set when record exists
     env_values: dict[str, str | None] = {}  # mutable-ok: env snapshot  # rebind-ok: populated when no DB record exists
     if existing_record is not None and existing_record.config_value is not None:
@@ -701,7 +699,7 @@ async def update_cyberark_config(
             if field not in config_data and env_values.get(field):
                 config_data[field] = env_values[field]
 
-    config_data = {k: v for k, v in config_data.items() if v != ""}  # mutable-ok: dict  # rebind-ok: "" means clear
+    config_data = {k: v for k, v in config_data.items() if v != ""}  # rebind-ok: "" means clear
 
     has_api_base: Final = bool(config_data.get("cyberark_api_base"))
     has_api_key_auth: Final = bool(config_data.get("cyberark_api_key"))
@@ -757,7 +755,7 @@ async def update_cyberark_config(
         litellm_changed_by=litellm_changed_by,
     )
 
-    return {  # mutable-ok: JSON response payload
+    return {
         "message": "CyberArk configuration updated successfully",
         "status": "success",
     }
@@ -765,8 +763,8 @@ async def update_cyberark_config(
 
 @router.get(
     "/config_overrides/cyberark",
-    tags=["Config Overrides"],  # mutable-ok: FastAPI route decorator metadata
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI route decorator metadata
+    tags=["Config Overrides"],
+    dependencies=[Depends(user_api_key_auth)],
     response_model=ConfigOverrideSettingsResponse,
 )
 async def get_cyberark_config(
@@ -796,9 +794,7 @@ async def get_cyberark_config(
 
     field_schema: Final = _build_field_schema(CyberArkConfig)
 
-    db_record: Final = await _config_overrides_table(prisma_client).find_unique(
-        where={"config_type": "cyberark"}
-    )  # mutable-ok: prisma where clause
+    db_record: Final = await _config_overrides_table(prisma_client).find_unique(where={"config_type": "cyberark"})
 
     if db_record is not None and db_record.config_value is not None:
         config_data: Final = _parse_config_value(db_record.config_value)
@@ -823,8 +819,8 @@ async def get_cyberark_config(
 
 @router.delete(
     "/config_overrides/cyberark",
-    tags=["Config Overrides"],  # mutable-ok: FastAPI route decorator metadata
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI route decorator metadata
+    tags=["Config Overrides"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def delete_cyberark_config(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
@@ -848,9 +844,7 @@ async def delete_cyberark_config(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
 
-    existing_record: Final = await _config_overrides_table(prisma_client).find_unique(
-        where={"config_type": "cyberark"}  # mutable-ok: prisma where clause
-    )
+    existing_record: Final = await _config_overrides_table(prisma_client).find_unique(where={"config_type": "cyberark"})
     before_config: dict[str, object] | None = None  # mutable-ok: audit snapshot  # rebind-ok: set when decrypts
     if existing_record is not None and existing_record.config_value is not None:
         try:
@@ -860,9 +854,7 @@ async def delete_cyberark_config(
 
     deleted = False  # rebind-ok: set true once the DB row is removed
     try:
-        await _config_overrides_table(prisma_client).delete(
-            where={"config_type": "cyberark"}
-        )  # mutable-ok: prisma where clause
+        await _config_overrides_table(prisma_client).delete(where={"config_type": "cyberark"})
         deleted = True  # rebind-ok: set true once the DB row is removed
     except RecordNotFoundError:
         verbose_proxy_logger.debug("No existing CyberArk config record to delete")
@@ -879,7 +871,7 @@ async def delete_cyberark_config(
             litellm_changed_by=litellm_changed_by,
         )
 
-    return {  # mutable-ok: JSON response payload
+    return {
         "message": "CyberArk configuration deleted successfully",
         "status": "success",
     }
@@ -887,8 +879,8 @@ async def delete_cyberark_config(
 
 @router.post(
     "/config_overrides/cyberark/test_connection",
-    tags=["Config Overrides"],  # mutable-ok: FastAPI route decorator metadata
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI route decorator metadata
+    tags=["Config Overrides"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def test_cyberark_connection(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
@@ -923,7 +915,7 @@ async def test_cyberark_connection(
     try:
         async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
-            params={"ssl_verify": client.ssl_verify},  # mutable-ok: httpx client params
+            params={"ssl_verify": client.ssl_verify},
         )
         whoami_url: Final = f"{client.conjur_addr}/whoami"
         response: Final = await async_client.get(whoami_url, headers=headers)
@@ -934,7 +926,7 @@ async def test_cyberark_connection(
             detail=f"CyberArk token validation failed: {e}",
         )
 
-    return {  # mutable-ok: JSON response payload
+    return {
         "status": "success",
         "message": f"Successfully connected to CyberArk Conjur at {client.conjur_addr}",
     }

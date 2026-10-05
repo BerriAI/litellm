@@ -105,7 +105,7 @@ export async function runLiteAdmin(options: LiteAdminOptions, client?: OpenAI): 
     max_tokens: 2_048,
   };
   const runnerOptions = { signal: options.signal, maxChatCompletions: 6, maxRetries: 0, timeout: 60_000 };
-  const runner = modelClient.beta.chat.completions.runTools(parameters, runnerOptions);
+  const runner = modelClient.chat.completions.runTools(parameters, runnerOptions);
   runner.on("chatCompletion", (completion) => {
     active();
     const message = completion.choices[0]?.message;

@@ -21,20 +21,18 @@ class JSONFragmentAccumulator:
 
     def __init__(self) -> None:
         self._chunks: list[str] = []  # mutable-ok: O(1) append; string concat would copy the buffer each time
-        self._buffer: str = (
-            ""  # mutable-ok: lazily materialized join of _chunks, rebuilt only when _chunks is non-empty
-        )
-        self._offset: int = 0  # mutable-ok: cursor past already-consumed values; avoids re-slicing on every pop
-        self._could_close: bool = False  # mutable-ok: cached heuristic; rescanning past fragments was itself O(n^2)
+        self._buffer: str = ""
+        self._offset: int = 0
+        self._could_close: bool = False
 
     def __bool__(self) -> bool:
         return bool(self._chunks) or self._offset < len(self._buffer)
 
     def append(self, fragment: str) -> None:
-        self._chunks.append(fragment)  # mutable-ok: see __init__
+        self._chunks.append(fragment)
         stripped: Final = fragment.rstrip()
         if stripped:
-            self._could_close = stripped[-1] in ("}", "]")  # mutable-ok: see __init__
+            self._could_close = stripped[-1] in ("}", "]")
 
     def could_close_json(self) -> bool:
         """
@@ -50,9 +48,9 @@ class JSONFragmentAccumulator:
         if not self._chunks:
             return
         unconsumed: Final = self._buffer[self._offset :]
-        self._buffer = unconsumed + "".join(self._chunks)  # mutable-ok: merge pending fragments, once per append batch
-        self._offset = 0  # mutable-ok: see __init__
-        self._chunks = []  # mutable-ok: see __init__
+        self._buffer = unconsumed + "".join(self._chunks)
+        self._offset = 0
+        self._chunks = []
 
     def pop_next_value(self) -> tuple[bool, object]:
         """
@@ -69,7 +67,7 @@ class JSONFragmentAccumulator:
         while start < length and self._buffer[start].isspace():
             start += 1
         if start >= length:
-            self._offset = start  # mutable-ok: see __init__
+            self._offset = start
             return False, None
         decoder: Final = json.JSONDecoder()
         try:
@@ -77,11 +75,11 @@ class JSONFragmentAccumulator:
         except json.JSONDecodeError:
             return False, None
         decoded, end_index = cast("tuple[object, int]", raw_value)  # cast-ok: raw_decode returns tuple[Any, int]
-        self._offset = end_index  # mutable-ok: see __init__
+        self._offset = end_index
         if self._offset >= len(self._buffer):
-            self._buffer = ""  # mutable-ok: see __init__
-            self._offset = 0  # mutable-ok: see __init__
-            self._could_close = False  # mutable-ok: buffer is empty, nothing can close
+            self._buffer = ""
+            self._offset = 0
+            self._could_close = False
         return True, decoded
 
     def snapshot(self) -> str:
@@ -90,8 +88,8 @@ class JSONFragmentAccumulator:
 
     def set(self, value: str) -> None:
         """Replace the buffer's contents with a single fragment."""
-        self._chunks = []  # mutable-ok: see __init__
-        self._buffer = value  # mutable-ok: see __init__
-        self._offset = 0  # mutable-ok: see __init__
+        self._chunks = []
+        self._buffer = value
+        self._offset = 0
         stripped: Final = value.rstrip()
-        self._could_close = bool(stripped) and stripped[-1] in ("}", "]")  # mutable-ok: see __init__
+        self._could_close = bool(stripped) and stripped[-1] in ("}", "]")

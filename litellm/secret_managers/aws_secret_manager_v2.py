@@ -31,6 +31,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.proxy._types import KeyManagementSystem
+from litellm.rust_bridge.secret_manager import resolve_native_provider_reader
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.secret_managers.main import KeyManagementSettings
@@ -140,6 +141,10 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 secret_name=secret_name, primary_secret_name=primary_secret_name
             )
 
+        native: Final = resolve_native_provider_reader(self, "aws_secret_manager")
+        if native is not None:
+            return await native.async_read_secret(secret_name, optional_params, timeout)
+
         endpoint_url, headers, body = self._prepare_request(
             action="GetSecretValue",
             secret_name=secret_name,
@@ -191,6 +196,10 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             return self.sync_read_secret_from_primary_secret(
                 secret_name=secret_name, primary_secret_name=primary_secret_name
             )
+
+        native: Final = resolve_native_provider_reader(self, "aws_secret_manager")
+        if native is not None:
+            return native.sync_read_secret(secret_name, optional_params, timeout)
 
         endpoint_url, headers, body = self._prepare_request(
             action="GetSecretValue",

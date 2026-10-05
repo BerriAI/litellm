@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { usePathname } from "next/navigation";
 import { AuthProvider } from "@/contexts/AuthContext";
 import Layout from "./layout";
 
@@ -10,7 +11,11 @@ let searchParamsValue = new URLSearchParams();
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({ push: vi.fn(), replace: replaceMock })),
   useSearchParams: vi.fn(() => searchParamsValue),
-  usePathname: vi.fn(() => "/ui/guardrails"),
+  usePathname: vi.fn(),
+}));
+
+vi.mock("@/components/liteadmin/LiteAdmin", () => ({
+  LiteAdminFrame: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock("@/components/DashboardHeader", () => ({
@@ -18,7 +23,9 @@ vi.mock("@/components/DashboardHeader", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/components/SidebarProvider", () => ({
-  default: () => <div data-testid="sidebar" />,
+  default: ({ sidebarCollapsed }: { sidebarCollapsed: boolean }) => (
+    <div data-testid="sidebar" data-collapsed={String(sidebarCollapsed)} />
+  ),
 }));
 
 vi.mock("@/components/DebugWarningBanner", () => ({
@@ -79,6 +86,28 @@ describe("(dashboard) Layout", () => {
     vi.clearAllMocks();
     pendingUiConfig = createDeferred();
     searchParamsValue = new URLSearchParams();
+    vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
+  });
+
+  it("collapses the sidebar on Logs for a full-screen view and expands it again after leaving", async () => {
+    const dashboard = () => (
+      <AuthProvider>
+        <Layout>
+          <div data-testid="page-content" />
+        </Layout>
+      </AuthProvider>
+    );
+    const { rerender } = render(dashboard());
+    pendingUiConfig.resolve();
+    expect(await screen.findByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
+
+    vi.mocked(usePathname).mockReturnValue("/ui/logs");
+    rerender(dashboard());
+    expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "true");
+
+    vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
+    rerender(dashboard());
+    expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
   });
 
   it("does not mount route content until getUiConfig has resolved", async () => {
