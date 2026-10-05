@@ -554,14 +554,17 @@ class AmazonConverseConfig(BaseConfig):
             reasoning_config: Final = self._transform_reasoning_effort_to_reasoning_config(reasoning_effort)
             optional_params.update(reasoning_config)
         else:
-            mapped_thinking = AnthropicConfig._map_reasoning_effort(
+            uncapped_thinking: Final = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort,
                 model=model,
                 custom_llm_provider="bedrock",
                 llm_provider="bedrock_converse",
             )
-            if mapped_thinking is not None:
-                mapped_thinking = AnthropicConfig.cap_thinking_budget_to_max_tokens(mapped_thinking, max_tokens)
+            mapped_thinking: Final = (
+                AnthropicConfig.cap_thinking_budget_to_max_tokens(uncapped_thinking, max_tokens)
+                if uncapped_thinking is not None
+                else None
+            )
             if mapped_thinking is None:
                 optional_params.pop("thinking", None)
                 optional_params.pop("output_config", None)
