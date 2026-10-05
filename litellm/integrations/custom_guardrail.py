@@ -1008,16 +1008,23 @@ class CustomGuardrail(CustomLogger):
     def _copy_scratch_request_fields(
         self,
         kwargs: Mapping[str, object],
-    ) -> tuple[object, object]:
+    ) -> tuple[object, object] | None:
         optional_params: Final = kwargs.get("optional_params")
         try:
             return (
                 copy.deepcopy(kwargs.get("messages") or kwargs.get("input")),
                 copy.deepcopy(optional_params.get("tools") if isinstance(optional_params, Mapping) else None),
             )
-        except Exception:
+        except Exception as e:
             if self.logging_only_scope == "output":
-                return None, None
+                return None
+            if self.logging_only_scope == "both":
+                verbose_logger.warning(
+                    "Guardrail %s: logging_only request copy failed, skipping request scan: %s",
+                    self.guardrail_name,
+                    e,
+                )
+                return None
             raise
 
     async def _scan_logged_call(
@@ -1028,7 +1035,8 @@ class CustomGuardrail(CustomLogger):
         output_translation: "BaseTranslation",
         scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
     ) -> None:
-        scratch_input, scratch_tools = self._copy_scratch_request_fields(kwargs)
+        scratch_fields: Final = self._copy_scratch_request_fields(kwargs)
+        scratch_input, scratch_tools = scratch_fields or (None, None)
         scratch_request: Final = {
             "model": kwargs.get("model"),
             "messages": scratch_input,
@@ -1037,13 +1045,8 @@ class CustomGuardrail(CustomLogger):
             "litellm_call_id": kwargs.get("litellm_call_id"),
             "metadata": scratch_metadata,
         }
-        if self.logging_only_scope != "output":
+        if self.logging_only_scope != "output" and scratch_fields is not None:
             if self.logging_only_scope == "both":
-                # An explicitly configured "both" observer asked for a verdict on
-                # each direction, so a failed request scan must not silently drop
-                # the response verdict. The implicit default (logging_only_scope
-                # None) keeps the abort semantics of a logging_only hook whose
-                # scan raised.
                 try:
                     await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
                 except Exception as e:  # noqa: BLE001  # one direction's scan failure must not drop the other direction's verdict
