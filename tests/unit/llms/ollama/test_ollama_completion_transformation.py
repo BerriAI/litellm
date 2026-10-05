@@ -1100,3 +1100,15 @@ def test_reasoning_effort_ollama_honors_does_not_warn(
 
     assert result["think"] == think
     assert _reasoning_effort_warnings(caplog) == ()
+
+
+def test_map_openai_params_forwards_presence_penalty() -> None:
+    config = OllamaConfig()
+
+    assert "presence_penalty" in config.get_supported_openai_params("test-model")
+    assert config.map_openai_params(
+        non_default_params={"presence_penalty": 0.5},
+        optional_params={},
+        model="test-model",
+        drop_params=False,
+    ) == {"presence_penalty": 0.5}
