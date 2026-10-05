@@ -707,6 +707,7 @@ def test_lens_reads_from_injected_storage_without_receiver() -> None:
     assert response.status_code == 200, response.text
     assert response.json()["executions"] == []
     storage.count_traces.assert_awaited_once()
+    assert storage.count_traces.await_args.args[3] == "service:checkout"
 
 
 @pytest.mark.parametrize(
