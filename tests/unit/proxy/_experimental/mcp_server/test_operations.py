@@ -819,3 +819,37 @@ async def test_discovery_keeps_one_catalog_revision_across_concurrent_listings(m
     assert observed == ["before"] * 4
     async with manager.catalog.operation():
         assert manager.get_mcp_server_by_id(original.server_id).name == "after"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed_server_id", ["private", "allowed"])
+async def test_local_handler_freshness_tracks_registered_owner_with_overlapping_alias(monkeypatch, changed_server_id):
+    from datetime import datetime, timedelta, timezone
+
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    manager = MCPServerManager()
+    now = datetime.now(timezone.utc)
+    private = MCPServer(server_id="private", name="billing", alias="billing", transport=MCPTransport.http, updated_at=now)
+    allowed = MCPServer(server_id="allowed", name="billing_admin", alias="billing-admin", transport=MCPTransport.http, updated_at=now)
+    manager.config_mcp_servers = {server.server_id: server for server in (private, allowed)}
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    handler = AsyncMock(return_value="private result")
+    global_mcp_tool_registry.register_tool("billing-admin-export", "export", {}, handler, server_id=private.server_id)
+
+    async with manager.catalog.operation():
+        manager.config_mcp_servers[changed_server_id] = manager.config_mcp_servers[changed_server_id].model_copy(update={"updated_at": now + timedelta(seconds=1)})
+        if changed_server_id == "private":
+            with pytest.raises(HTTPException) as denied:
+                await operations._handle_local_mcp_tool("billing-admin-export", {})
+            assert denied.value.status_code == 503
+            handler.assert_not_awaited()
+        else:
+            result = await operations._handle_local_mcp_tool("billing-admin-export", {})
+            assert result.is_error is False
+            handler.assert_awaited_once_with()

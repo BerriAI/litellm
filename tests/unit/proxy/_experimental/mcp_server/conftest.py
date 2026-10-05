@@ -87,6 +87,10 @@ def _hermetic_mcp_server_registry():
         global_mcp_server_manager,
     )
 
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+    saved_tools = global_mcp_tool_registry.published_tools
+    global_mcp_tool_registry.published_tools = {}
     saved_catalog = global_mcp_server_manager.catalog
     global_mcp_server_manager.catalog = TargetCatalog(global_mcp_server_manager)
     saved_registry = dict(global_mcp_server_manager.registry)
@@ -108,6 +112,7 @@ def _hermetic_mcp_server_registry():
         global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.update(saved_tool_mapping)
         global_mcp_server_manager._oauth_discovery_slots = saved_oauth_slots
         global_mcp_server_manager.catalog = saved_catalog
+        global_mcp_tool_registry.published_tools = saved_tools
 
 
 @pytest.fixture(autouse=True)

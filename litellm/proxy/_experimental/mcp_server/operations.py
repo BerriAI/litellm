@@ -2697,12 +2697,16 @@ async def _handle_local_mcp_tool(
     """
     import inspect
 
-    server: Final = global_mcp_server_manager.server_owning_tool_name_prefix(name)
-    if server is not None:
-        global_mcp_server_manager.catalog.assert_current(server)
     tool: Final = global_mcp_tool_registry.get_tool(name)
     if not tool:
         raise HTTPException(status_code=404, detail=f"Tool '{name}' not found")
+    server: Final = (
+        global_mcp_server_manager.get_mcp_server_by_id(tool.server_id)
+        if tool.server_id is not None
+        else global_mcp_server_manager.server_owning_tool_name_prefix(name)
+    )
+    if server is not None:
+        global_mcp_server_manager.catalog.assert_current(server)
 
     try:
         if inspect.iscoroutinefunction(tool.handler):
