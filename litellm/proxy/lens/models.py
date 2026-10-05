@@ -1,9 +1,7 @@
-import base64
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from litellm.rust_bridge.trace.generated.types import TraceSummary
 
@@ -53,56 +51,6 @@ def parse_execution(value: str) -> tuple[str, str]:
     return trace_ref, trace_id
 
 
-_LEGACY_ID: Final[TypeAdapter[tuple[str, str, str] | tuple[str, str, str, str]]] = TypeAdapter(
-    tuple[str, str, str] | tuple[str, str, str, str]
-)
-
-
-def _legacy_execution_id(value: str) -> str | None:
-    """Selections saved before executions were runs named them by source, team, trace id and reference."""
-    try:
-        parts: Final = _LEGACY_ID.validate_json(base64.urlsafe_b64decode(value))
-    except (ValueError, ValidationError):
-        return value
-    trace_ref: Final = parts[3] if len(parts) == 4 else ""
-    return execution_id(trace_ref, parts[2]) if parts[0] == "traces" and trace_ref else None
-
-
-def _term(key: str, value: str) -> str:
-    return f'{key}:"{value}"' if any(c.isspace() for c in value) else f"{key}:{value}"
-
-
-class _LegacyFilter(BaseModel):
-    key: str
-    value: str
-
-
-class _LegacySelection(BaseModel):
-    model_config = ConfigDict(extra="allow")
-    q: str = ""
-    source: str = ""
-    service: str = ""
-    agent_name: str = ""
-    filters: tuple[_LegacyFilter, ...] = ()
-    team_id: str = ""
-    execution_ids: tuple[str, ...] = ()
-
-    def current(self) -> dict[str, object]:
-        terms: Final = (
-            self.q,
-            _term("agent", self.agent_name) if self.agent_name else "",
-            _term("service", self.service) if self.service else "",
-            _term("team", self.team_id) if self.team_id else "",
-            *(_term(f"attr.{f.key}", f.value) for f in self.filters),
-        )
-        ids: Final = tuple(i for i in map(_legacy_execution_id, self.execution_ids) if i is not None)
-        return {**(self.model_extra or {}), "q": " ".join(t for t in terms if t), "execution_ids": ids}
-
-
-_LEGACY_KEYS: Final = frozenset({"source", "service", "agent_name", "filters", "team_id"})
-_FIELDS: Final = TypeAdapter(dict[str, object])
-
-
 class Check(Record):
     id: str = Field(min_length=1)
     instruction: str = Field(min_length=3)
@@ -114,18 +62,6 @@ class ActivitySelection(Record):
     sample_size: int | None = Field(default=None, ge=1)
     sample_percent: float = Field(default=100, gt=0, le=100, allow_inf_nan=False)
     execution_ids: tuple[str, ...] = ()
-
-    @model_validator(mode="before")
-    @classmethod
-    def from_saved_filters(cls, data: object) -> object:
-        """Selections saved with separate agent, service, team and attribute filters load as `q`."""
-        try:
-            fields: Final = _FIELDS.validate_python(data)
-        except ValidationError:
-            return data
-        if not _LEGACY_KEYS & fields.keys():
-            return data
-        return _LegacySelection.model_validate(fields).current()
 
 
 class LensSettings(ActivitySelection):
@@ -254,17 +190,6 @@ class ActivityAvailability(Record):
     traces: bool = False
 
 
-class _SavedSample(TypedDict, total=False):
-    executions: ReadOnly[list[dict[str, object]]]
-
-
-class _SavedJob(TypedDict, total=False):
-    sample: ReadOnly[_SavedSample | None]
-
-
-_SAVED_JOB: Final = TypeAdapter(_SavedJob)
-
-
 class RunAssessment(Record):
     execution_id: str
     issue_checks: tuple[str, ...] = ()
@@ -287,20 +212,6 @@ class Step(Record):
 
 
 class Job(Record):
-    @model_validator(mode="before")
-    @classmethod
-    def without_legacy_sample(cls, data: object) -> object:
-        """Samples saved before executions were runs no longer resolve, so they load as absent."""
-        try:
-            saved: Final = _SAVED_JOB.validate_python(data)
-            fields: Final = _FIELDS.validate_python(data)
-        except ValidationError:
-            return data
-        sample: Final = saved.get("sample") or {}
-        if not any("source" in e for e in sample.get("executions", [])):
-            return data
-        return {**fields, "sample": None}
-
     id: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
     stage: str = "Queued"

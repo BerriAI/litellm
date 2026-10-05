@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use litellm_http::ClientVariant;
 use litellm_traces::{
@@ -6,7 +10,7 @@ use litellm_traces::{
     search::{RunField, RunFilter, RunSearch},
     store::{RunOrder, SpanPart, TextRange},
 };
-use litellm_traces_cache::{PageRequest, ReadError, TraceReader};
+use litellm_traces_cache::{PageRequest, ReadError, TraceReader, resolve_run_window};
 use litellm_traces_clickhouse::{ClickHouseTraces, Config, Error, InsertTable, QueryReaders};
 use prost::Message;
 use pyo3::{
@@ -16,6 +20,7 @@ use pyo3::{
 };
 
 pyo3::import_exception!(litellm.rust_bridge.trace.errors, TraceChanged);
+pyo3::import_exception!(litellm.rust_bridge.trace.errors, TraceQueryError);
 
 #[derive(Message)]
 struct OtlpErrorStatus {
@@ -109,11 +114,44 @@ fn parsed<T: std::str::FromStr>(kind: &str, value: &str) -> PyResult<T> {
 }
 
 fn map_sql_error(error: Error) -> PyErr {
+    map_sql_error_ref(&error)
+}
+
+fn map_sql_error_ref(error: &Error) -> PyErr {
     match error {
-        Error::Storage(litellm_storage_clickhouse::Error::QueryFailed(400 | 404)) => {
-            PyValueError::new_err(error.to_string())
+        Error::Storage(litellm_storage_clickhouse::Error::QueryFailed(failure)) => {
+            TraceQueryError::new_err((
+                sql_failure_kind(failure),
+                failure.code,
+                failure.message.clone(),
+            ))
         }
-        error => map_error(error),
+        Error::Storage(litellm_storage_clickhouse::Error::ResponseTooLarge) => {
+            TraceQueryError::new_err((
+                "limited",
+                None::<u32>,
+                "Query exceeded the response size limit",
+            ))
+        }
+        Error::Cached(source) => map_sql_error_ref(source),
+        error => map_error_ref(error),
+    }
+}
+
+fn sql_failure_kind(failure: &litellm_storage_clickhouse::QueryFailure) -> &'static str {
+    // https://github.com/ClickHouse/ClickHouse/blob/v26.9.6.6-stable/src/Common/ErrorCodes.cpp
+    match failure.code {
+        Some(158 | 159 | 160 | 167 | 168 | 191 | 202 | 229 | 241 | 290 | 307 | 396 | 776) => {
+            "limited"
+        }
+        Some(
+            6 | 34 | 35 | 36 | 42 | 43 | 44 | 46 | 47 | 48 | 50 | 53 | 60 | 62 | 63 | 69 | 70 | 72
+            | 73 | 78 | 80 | 81 | 115 | 164 | 291 | 344 | 392 | 452 | 472 | 497,
+        ) => "rejected",
+        Some(192 | 193 | 194 | 516) => "unavailable",
+        _ if matches!(failure.status, 408 | 413 | 429) => "limited",
+        _ if matches!(failure.status, 400 | 404 | 405 | 406 | 411 | 415 | 422) => "rejected",
+        _ => "unavailable",
     }
 }
 
@@ -249,15 +287,26 @@ impl NativeTraceStorage {
         &self,
         py: Python<'py>,
         #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
-        start_ms: i64,
-        end_ms: i64,
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
         q: &str,
         cursor: Option<String>,
         limit: u32,
         #[pyo3(from_py_with = litellm_host_python::from_py_argument)] order: RunOrder,
         trace_refs: Vec<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let filter = run_filter(start_ms, end_ms, q, trace_refs);
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        let window = resolve_run_window(
+            start_ms,
+            end_ms,
+            cursor.as_deref(),
+            (now_ms - 86_400_000, now_ms),
+        )
+        .map_err(map_read_error)?;
+        let filter = run_filter(window.0, window.1, q, trace_refs);
         let page = PageRequest { cursor, limit };
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
@@ -533,7 +582,7 @@ impl NativeTraceStorage {
                 let connection = readers.connection(&client, &scope, &secret).await?;
                 litellm_traces_clickhouse::query_help(&client, &connection).await
             },
-            map_sql_error,
+            map_error,
         )
     }
 }
@@ -562,6 +611,21 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    fn initialize_python_path(py: Python<'_>) {
+        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        pyo3::types::PyModule::import(py, "sys")
+            .unwrap()
+            .getattr("path")
+            .unwrap()
+            .call_method1("insert", (0, repository))
+            .unwrap();
+    }
 
     #[rstest]
     #[case::row(Error::InvalidRow, "ValueError")]
@@ -598,23 +662,68 @@ mod tests {
     }
 
     #[rstest]
-    #[case::invalid_sql(400, "ValueError")]
-    #[case::missing_table(404, "ValueError")]
-    #[case::unavailable(503, "RuntimeError")]
-    fn wrapped_query_status_preserves_public_exception_type(
+    #[case::syntax(500, Some(62), "rejected")]
+    #[case::unknown_column(500, Some(47), "rejected")]
+    #[case::readonly(500, Some(164), "rejected")]
+    #[case::denied_table(403, Some(497), "rejected")]
+    #[case::settings_constraint(500, Some(452), "rejected")]
+    #[case::memory_limit(500, Some(241), "limited")]
+    #[case::timeout(408, Some(159), "limited")]
+    #[case::result_limit(500, Some(396), "limited")]
+    #[case::invalid_sql_status(400, None, "rejected")]
+    #[case::unavailable(503, None, "unavailable")]
+    #[case::invalid_reader_credentials(403, Some(516), "unavailable")]
+    fn raw_query_failures_preserve_diagnostics_and_curated_exception_type(
         #[case] status: u16,
-        #[case] exception_name: &str,
+        #[case] code: Option<u32>,
+        #[case] kind: &str,
     ) {
         Python::initialize();
         Python::attach(|py| {
-            let error = Error::Storage(litellm_storage_clickhouse::Error::QueryFailed(status));
-            let message = error.to_string();
+            initialize_python_path(py);
+            let error = Error::Storage(litellm_storage_clickhouse::Error::QueryFailed(
+                litellm_storage_clickhouse::QueryFailure {
+                    status,
+                    code,
+                    message: "engine diagnostic".into(),
+                },
+            ));
+            let curated = map_error_ref(&error);
+            assert_eq!(curated.get_type(py).name().unwrap(), "RuntimeError");
             let exception = map_sql_error(error);
-            assert_eq!(exception.get_type(py).name().unwrap(), exception_name);
+            assert_eq!(exception.get_type(py).name().unwrap(), "TraceQueryError");
+            assert_eq!(
+                exception
+                    .value(py)
+                    .getattr("kind")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                kind
+            );
+            assert_eq!(
+                exception
+                    .value(py)
+                    .getattr("database_code")
+                    .unwrap()
+                    .extract::<Option<u32>>()
+                    .unwrap(),
+                code
+            );
             assert_eq!(
                 exception.value(py).str().unwrap().to_str().unwrap(),
-                message
+                "engine diagnostic"
             );
+        });
+    }
+
+    #[rstest]
+    fn raw_query_transport_failures_preserve_generic_exception_type() {
+        Python::initialize();
+        Python::attach(|py| {
+            let exception =
+                map_sql_error(Error::Storage(litellm_storage_clickhouse::Error::Transport));
+            assert_eq!(exception.get_type(py).name().unwrap(), "RuntimeError");
         });
     }
 
@@ -655,18 +764,7 @@ mod tests {
     ) {
         Python::initialize();
         Python::attach(|py| {
-            let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .ancestors()
-                .nth(3)
-                .unwrap()
-                .to_str()
-                .unwrap();
-            pyo3::types::PyModule::import(py, "sys")
-                .unwrap()
-                .getattr("path")
-                .unwrap()
-                .call_method1("insert", (0, repository))
-                .unwrap();
+            initialize_python_path(py);
             let message = error.to_string();
             let exception = map_read_error(error);
             assert_eq!(exception.get_type(py).name().unwrap(), exception_name);

@@ -30,7 +30,7 @@ pub enum RunField {
 
 /// What a `key:value` filter matches: a run field, or `attr.<key>`, a span or resource
 /// attribute that any span of the run carries.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub enum SearchKey {
     Field(RunField),
     Attribute(String),
@@ -48,7 +48,7 @@ impl SearchKey {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct RunFilter {
     pub start_ms: i64,
     pub end_ms: i64,
@@ -57,7 +57,7 @@ pub struct RunFilter {
     pub trace_refs: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct FieldFilter {
     pub key: SearchKey,
     /// Matched against the whole value, ignoring case; `*` matches any run of characters.
@@ -66,7 +66,7 @@ pub struct FieldFilter {
 }
 
 /// The parsed `q` of the runs list. Every text term and every filter must hold.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct RunSearch {
     /// Each must appear in the trace id, input or name, ignoring case.
     pub text: Vec<String>,

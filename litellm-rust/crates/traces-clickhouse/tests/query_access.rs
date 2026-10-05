@@ -6,6 +6,7 @@ use litellm_traces_clickhouse::{
 };
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
+use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 mod support;
 
 use support::{ClickHouseDatabase, database as start_database};
@@ -104,6 +105,45 @@ async fn queries_and_help_are_scoped_by_the_database(
 
 #[rstest]
 #[tokio::test]
+async fn reader_cache_reprovisions_after_credential_rotation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    let client = Client::no_redirect_for_test();
+    let readers = QueryReaders::new(Connection::writer(&server.uri())?, "trace_test".into());
+    let old_reader = readers
+        .connection(&client, &QueryScope::All, "old-master-secret")
+        .await?;
+    let provisioned = server.received_requests().await.unwrap().len();
+    assert!(provisioned > 0);
+
+    let cached_old = readers
+        .connection(&client, &QueryScope::All, "old-master-secret")
+        .await?;
+    assert!(cached_old.url() == old_reader.url());
+    assert_eq!(server.received_requests().await.unwrap().len(), provisioned);
+
+    let new_reader = readers
+        .connection(&client, &QueryScope::All, "new-master-secret")
+        .await?;
+    let rotated = server.received_requests().await.unwrap().len();
+    assert!(rotated > provisioned);
+    assert_eq!(old_reader.url().username(), new_reader.url().username());
+    assert!(old_reader.url().password() != new_reader.url().password());
+
+    let cached_new = readers
+        .connection(&client, &QueryScope::All, "new-master-secret")
+        .await?;
+    assert!(cached_new.url() == new_reader.url());
+    assert_eq!(server.received_requests().await.unwrap().len(), rotated);
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
 async fn rotating_master_secret_revokes_previous_reader_credentials(
     #[future(awt)] database: Result<Database, Box<dyn std::error::Error>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -125,8 +165,8 @@ async fn rotating_master_secret_revokes_previous_reader_credentials(
     let old_rows: Value = serde_json::from_str(&old_result)?;
     assert_eq!(old_rows["data"], json!([{ "id": "a1" }, { "id": "a2" }]));
 
-    let rotated_readers = QueryReaders::new(database.writer.clone(), "trace_test".into());
-    let new_reader = rotated_readers
+    let new_reader = database
+        .readers
         .connection(&database.client, &scope, "new-master-secret")
         .await?;
     assert!(

@@ -1,4 +1,12 @@
 #[derive(Debug, thiserror::Error)]
+#[error("ClickHouse query failed with HTTP status {status}: {message}")]
+pub struct QueryFailure {
+    pub status: u16,
+    pub code: Option<u32>,
+    pub message: String,
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("invalid ClickHouse insert row")]
     InvalidRow,
@@ -16,8 +24,8 @@ pub enum Error {
     InvalidParameters,
     #[error("unknown ClickHouse read query")]
     InvalidQuery,
-    #[error("ClickHouse query failed with HTTP status {0}")]
-    QueryFailed(u16),
+    #[error(transparent)]
+    QueryFailed(QueryFailure),
     #[error("ClickHouse insert failed with HTTP status {0}")]
     InsertFailed(u16),
     #[error("ClickHouse insert exceeds the encoded size limit")]

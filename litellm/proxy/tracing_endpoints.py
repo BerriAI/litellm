@@ -29,7 +29,7 @@ from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependenc
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
-from litellm.rust_bridge.trace.errors import TraceChanged
+from litellm.rust_bridge.trace.errors import TraceChanged, TraceQueryError
 from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
 from litellm.rust_bridge.trace.generated.types import (
     AllQueryScope,
@@ -182,7 +182,8 @@ RunQuery = Annotated[
     Query(
         max_length=1000,
         description='Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. '
-        "Keys: name, agent, status, model, input, trace_id. `*` globs and a leading `-` negates",
+        "Keys: name, agent, status, model, input, trace_id, service, team and attr.<key>. "
+        "`*` globs and a leading `-` negates",
     ),
 ]
 
@@ -204,7 +205,8 @@ def trace_window(start_ms: StartMs = None, end_ms: EndMs = None) -> TraceWindow:
 @router.get("/v1/traces", response_model=TracePage)
 async def list_agent_traces(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
-    window: Annotated[TraceWindow, Depends(trace_window)],
+    start_ms: StartMs = None,
+    end_ms: EndMs = None,
     q: RunQuery = "",
     cursor: Annotated[str | None, Query(max_length=512)] = None,
     sort_by: Literal["start_ms", "duration_ms", "span_count", "error_count"] = "start_ms",
@@ -213,9 +215,7 @@ async def list_agent_traces(
     order: Final = RunOrder(key=sort_by, descending=sort_dir == "desc")
     try:
         tracing, scope = context.reader()
-        return await tracing.list_traces(
-            scope=scope, start_ms=window.start_ms, end_ms=window.end_ms, q=q, cursor=cursor, order=order
-        )
+        return await tracing.list_traces(scope=scope, start_ms=start_ms, end_ms=end_ms, q=q, cursor=cursor, order=order)
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
         raise read_failure(error) from error
 
@@ -293,6 +293,16 @@ async def provide_trace_query_access(
     return TraceQueryAccess(storage, scope, secret)
 
 
+def sql_failure_status(error: TraceQueryError) -> tuple[int, str]:
+    match error.kind:
+        case "rejected":
+            return 400, "query_rejected"
+        case "limited":
+            return 422, "query_limit_exceeded"
+        case "unavailable":
+            return 503, "query_unavailable"
+
+
 @router.post("/v1/traces/query", response_model=TraceSQLResponse, response_model_exclude_unset=True)
 async def query_agent_traces(
     body: TraceQueryRequest,
@@ -300,11 +310,27 @@ async def query_agent_traces(
 ) -> TraceSQLResponse:
     try:
         return await access.storage.query_sql(body.sql, read_access(access.scope), access.secret)
+    except TraceQueryError as error:
+        status, code = sql_failure_status(error)
+        raise HTTPException(
+            status_code=status,
+            detail={"code": code, "database_code": error.database_code, "message": error.message},
+        ) from error
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "query_rejected", "database_code": None, "message": str(error)},
+        ) from error
     except RuntimeError as error:
         verbose_proxy_logger.warning("Trace SQL query unavailable: %s", error)
-        raise HTTPException(status_code=503, detail="Trace SQL query failed or exceeded reader limits") from error
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "query_unavailable",
+                "database_code": None,
+                "message": "Trace SQL is temporarily unavailable",
+            },
+        ) from error
 
 
 @router.get("/v1/traces/query/help", response_model=TraceQueryHelp, response_model_exclude_unset=True)

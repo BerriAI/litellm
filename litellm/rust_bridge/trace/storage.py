@@ -52,8 +52,8 @@ class NativeStore(Protocol):
     def list_traces(
         self,
         scope: QueryScope,
-        start_ms: int,
-        end_ms: int,
+        start_ms: int | None,
+        end_ms: int | None,
         q: str,
         cursor: str | None,
         limit: int,
@@ -201,8 +201,8 @@ class ClickHouseStorage:
     async def list_traces(
         self,
         scope: QueryScope,
-        start_ms: int,
-        end_ms: int,
+        start_ms: int | None,
+        end_ms: int | None,
         q: str = "",
         cursor: str | None = None,
         limit: int = AGENT_TRACING_LIST_PAGE_SIZE,

@@ -11,7 +11,7 @@ from litellm.rust_bridge.embeddings.entrypoints import LiteLLMEmbeddingRequest
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
-from litellm.rust_bridge.trace.generated.types import QueryScope
+from litellm.rust_bridge.trace.generated.types import QueryScope, RunOrder
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import EmbeddingResponse, ModelResponse
@@ -45,12 +45,12 @@ class NativeTraceStorage:
     def list_traces(
         self,
         scope: QueryScope,
-        start_ms: int,
-        end_ms: int,
+        start_ms: int | None,
+        end_ms: int | None,
         q: str,
         cursor: str | None,
         limit: int,
-        order: str = "newest",
+        order: RunOrder,
         trace_refs: Sequence[str] = (),
     ) -> Future[JsonValue]: ...
     def count_traces(

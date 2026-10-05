@@ -86,7 +86,13 @@ impl TraceReader {
         if page.limit == 0 || filter.start_ms >= filter.end_ms {
             return Err(ReadError::InvalidParameters);
         }
-        let after = run_position(page.cursor.as_deref(), order)?;
+        let query_scope = SnapshotKey::run_page_scope(store.source(), access, filter)?;
+        let after = run_position(
+            page.cursor.as_deref(),
+            order,
+            &query_scope,
+            (filter.start_ms, filter.end_ms),
+        )?;
         let scope = SnapshotKey::scope(store.source(), access)?;
         let accepted = self.lists.limits.get(&scope).await.unwrap_or(u32::MAX);
         let mut page_size = page.limit.min(500).min(accepted);
@@ -108,10 +114,15 @@ impl TraceReader {
         };
         let more = rows.len() > page_size as usize;
         rows.truncate(page_size as usize);
-        let next_cursor = rows
-            .last()
-            .filter(|_| more)
-            .map(|last| Cursor::Run(RunPosition::after(order, last)).encode());
+        let next_cursor = rows.last().filter(|_| more).map(|last| {
+            Cursor::Run(RunPosition::after(
+                order,
+                last,
+                &query_scope,
+                (filter.start_ms, filter.end_ms),
+            ))
+            .encode()
+        });
         let data = {
             let mut summaries = Vec::with_capacity(rows.len());
             for batch in run_batches(&rows) {

@@ -2,7 +2,7 @@ mod error;
 mod insert;
 mod read;
 
-pub use error::Error;
+pub use error::{Error, QueryFailure};
 pub use insert::{insert_compressed_rows, insert_encoded_rows};
 pub use read::{Parameter, Query, READ_LIMITS, ReadLimits, execute_read, fetch, fetch_json};
 use url::Url;

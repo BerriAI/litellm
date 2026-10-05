@@ -41,9 +41,16 @@ fn cache_key<E>(
 }
 
 fn summary(row: &RunRow, listed: Option<&ListedRun>) -> TraceSummary {
-    match listed {
+    let summary = match listed {
         Some(ListedRun::Resolved(summary, _)) => (**summary).clone(),
         Some(ListedRun::Limited) | None => listed_summary(row),
+    };
+    TraceSummary {
+        start_time: litellm_traces::iso_time(row.start_ms),
+        duration_ms: row.duration_ns as f64 / 1_000_000.0,
+        span_count: row.span_count,
+        error_count: row.error_count,
+        ..summary
     }
 }
 
@@ -98,7 +105,11 @@ async fn resolve_runs<S: TraceStore>(
     let (Some(start_ms), Some(end_ms)) = (
         runs.iter().map(|row| row.start_ms).min(),
         runs.iter()
-            .map(|row| row.start_ms.saturating_add(row.duration_ms))
+            .map(|row| {
+                row.start_ms.saturating_add(
+                    i64::try_from(row.duration_ns.div_ceil(1_000_000)).unwrap_or(i64::MAX),
+                )
+            })
             .max(),
     ) else {
         return Ok(Vec::new());

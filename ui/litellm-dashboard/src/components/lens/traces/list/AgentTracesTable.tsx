@@ -290,7 +290,8 @@ export function AgentTracesTable({
 }: AgentTracesTableProps) {
   const settled = !isLoading && !error;
   const isEmpty = settled && !hasMore && traces.length === 0;
-  const autoContinue = settled && hasMore && traces.length > 0 && !isPlaceholder;
+  const canContinue = settled && hasMore && !isPlaceholder;
+  const autoContinue = canContinue && traces.length > 0;
   const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility("lens-traces");
   const sorting = useMemo(() => toSorting(order), [order]);
   const columns = useMemo(() => (picks ? [pickColumn(picks), ...RUN_COLUMNS] : RUN_COLUMNS), [picks]);

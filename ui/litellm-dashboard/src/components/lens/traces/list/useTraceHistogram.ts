@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 
 import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 import { type RunSelection, useTracesApi } from "../api";
@@ -40,12 +40,13 @@ export function useTraceHistogram(
 ): TraceHistogramResult {
   const traces = useTracesApi(accessToken);
   const { window, q } = selection;
-  const histogram = useQuery({
+  const histogramOptions = {
     queryKey: ["agentTraceHistogram", traces.scope, window.startMs, window.endMs, q],
     queryFn: () => traces.histogram(selection, BUCKETS),
     enabled,
     placeholderData: keepPreviousData,
     select: toBuckets,
-  });
+  } satisfies UseQueryOptions<TraceHistogram, Error, TimeBucket[]>;
+  const histogram = useQuery(histogramOptions);
   return { buckets: histogram.data ?? emptyBuckets(window), isLoading: histogram.isLoading };
 }

@@ -56,7 +56,7 @@ impl RunOrder {
         let count = |count: u64| i64::try_from(count).unwrap_or(i64::MAX);
         match self.key {
             RunSortKey::StartMs => row.start_ms,
-            RunSortKey::DurationMs => row.duration_ms,
+            RunSortKey::DurationMs => count(row.duration_ns),
             RunSortKey::SpanCount => count(row.span_count),
             RunSortKey::ErrorCount => count(row.error_count),
             RunSortKey::TraceRef => 0,
@@ -108,7 +108,7 @@ pub struct RunRow {
     #[serde(serialize_with = "crate::wire::serialize_status")]
     pub status: crate::SpanStatus,
     pub start_ms: i64,
-    pub duration_ms: i64,
+    pub duration_ns: u64,
     pub span_count: u64,
     pub agent_count: u64,
     pub agent_invocations: u64,
@@ -139,15 +139,14 @@ pub enum CountValue {
 /// Each dimension left unset collapses to one group: bucket 0, not failed, or an empty value.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CountBy {
-    /// Equal-width slices of the filter window; run `i` lands in
-    /// `(start_ms - window.start) * buckets / window.len()`.
+    /// Equal-width slices of the filter window, using the histogram's integer boundaries.
     pub buckets: Option<u32>,
     pub failed: bool,
     pub value: Option<CountValue>,
 }
 
 /// Matching runs per group, most runs first. A run with several values for a field, such as
-/// several models, counts once under each; empty values are not counted.
+/// several models, counts once under each; totals and primary-agent groups retain empty values.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunCountQuery {
     pub filter: RunFilter,

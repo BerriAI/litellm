@@ -77,11 +77,9 @@ impl QueryReaders {
             .map_err(|_| Error::InvalidScope)?;
         let user = format!("litellm_traces_{:x}", Sha256::digest(&identity));
         let password = credential(secret, b"password", &identity)?;
+        let cache_key = format!("{user}:{:x}", Sha256::digest(&password));
         self.readers
-            .try_get_with(
-                user.clone(),
-                self.provision(client, scope, &user, &password),
-            )
+            .try_get_with(cache_key, self.provision(client, scope, &user, &password))
             .await
             .map_err(Error::Cached)
     }

@@ -1,8 +1,8 @@
 page AS (
 SELECT * EXCEPT (search_status),
-       multiIf({sort_key:String} = 'duration_ms', duration_ms,
-               {sort_key:String} = 'span_count', toInt64(span_count),
-               {sort_key:String} = 'error_count', toInt64(error_count),
+       multiIf({sort_key:String} = 'duration_ms', toInt64(least(duration_ns, toUInt64(9223372036854775807))),
+               {sort_key:String} = 'span_count', toInt64(least(span_count, toUInt64(9223372036854775807))),
+               {sort_key:String} = 'error_count', toInt64(least(error_count, toUInt64(9223372036854775807))),
                {sort_key:String} = 'trace_ref', toInt64(0),
                start_ms) AS sort_value
 FROM runs

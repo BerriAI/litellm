@@ -517,7 +517,7 @@ async fn listed_agent_names_preserve_scope_and_cursor(
         .collect::<BTreeMap<_, _>>();
     assert_eq!(
         names["shared"],
-        serde_json::json!(["research_agent", "reviewer"])
+        serde_json::json!(["research_agent", "reviewer", "unnamed"])
     );
     assert_eq!(names["second"], serde_json::json!(["support_agent"]));
     let frameworks = [&first["data"][0], &second["data"][0]]

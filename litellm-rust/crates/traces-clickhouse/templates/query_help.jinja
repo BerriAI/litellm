@@ -153,6 +153,7 @@ Filter calls by nested metadata
 
 {% block time_window -%}
 Always bound Timestamp or start_time and use LIMIT; add TeamId/ApiKeyHash or team_id/api_key filters when investigating one tenant
+Raw SQL returns one bounded response without a cursor. Callers own ORDER BY, LIMIT and keyset predicates for pagination
 {%- endblock %}
 
 {% block reader_limits -%}
@@ -164,7 +165,7 @@ LiteLLM provisions SELECT-only readers from the configured ClickHouse connection
 {%- endblock %}
 
 {% block output_format -%}
-Do not add FORMAT clauses; the endpoint requires ClickHouse JSON output
+The endpoint fixes output to ClickHouse JSON, overriding any SQL FORMAT clause. Trace SQL queries require ClickHouse 26.8 or later
 {%- endblock %}
 
 {% block json_values -%}
@@ -197,6 +198,8 @@ Use spend_logs FINAL to collapse replacement rows before totals. Shared response
 
 {% block trace_rollups -%}
 agent_traces_by_key uses SimpleAggregateFunction columns; group by TeamId, ApiKeyHash and TraceId, using min(StartTs), max(EndTs), sum(SpanCount) and groupUniqArrayArray(Models). Do not use Merge combinators
+Rollup counts and raw span reads can include repeated exports. Curated trace metrics select one copy per TeamId, ApiKeyHash, TraceId and SpanId, ordered by Timestamp, EngineReceivedMs, StatusMessage, Duration and StatusCode, before filtering status or aggregating
+AgentNames contains searchable agent labels, including SpanName for unnamed agents. AgentIdentities contains distinct labels from agent spans, and Frameworks contains observed framework names
 {%- endblock %}
 
 {% block sampling -%}

@@ -188,21 +188,23 @@ class SourceReader:
     ) -> Mapping[tuple[str, SpanPart], SpanText]:
         if not span_ids:
             return {}
-        reads: Final[list[tuple[SpanPart, tuple[SpanText, ...]]]] = [
-            (
-                part,
-                await self.storage.span_text(
-                    execution.trace_id,
-                    execution.trace_ref,
-                    span_ids,
+        reads: Final[tuple[tuple[SpanPart, tuple[SpanText, ...]], ...]] = tuple(
+            [
+                (
                     part,
-                    access,
-                    max_chars=max_chars if not tail else budget - budget // 3,
-                    tail=tail,
-                ),
-            )
-            for part, _, budget in PARTS
-        ]
+                    await self.storage.span_text(
+                        execution.trace_id,
+                        execution.trace_ref,
+                        span_ids,
+                        part,
+                        access,
+                        max_chars=max_chars if not tail else budget - budget // 3,
+                        tail=tail,
+                    ),
+                )
+                for part, _, budget in PARTS
+            ]
+        )
         return {
             (text["span_id"], part): text for part, texts in reads for text in texts
         }  # comprehension-ok: flatten one read per part
@@ -222,12 +224,7 @@ class SourceReader:
         heads: Final = await self._texts(access, execution, page_ids, BUDGET)
         long: Final = tuple(span["span_id"] for span in page if offset == 0 and _total(_pieces(span, heads)) > BUDGET)
         tails: Final = await self._texts(access, execution, long, 0, tail=True)
-        parts: Final = tuple(
-            [
-                await self._part(access, execution, span, heads, tails, offset)
-                for span in page  # comprehension-ok: sequential reads keep storage load bounded
-            ]
-        )
+        parts: Final = tuple([await self._part(access, execution, span, heads, tails, offset) for span in page])
         root_seen: Final = any(span.get("parent_span_id") is None for span in spans)
         return ExecutionContent(
             execution=execution,

@@ -7,32 +7,33 @@ import type { TracePage, TraceSummary } from "../types";
 const template = (traceList as TracePage).data[0] as TraceSummary;
 const run = (overrides: Partial<TraceSummary>): TraceSummary => ({ ...template, ...overrides });
 
-const RUNS: TraceSummary[] = [
-  run({
+const RUN_OVERRIDES: readonly Partial<TraceSummary>[] = [
+  {
     trace_id: "a",
     trace_ref: "ref-a",
     start_time: "2026-09-30T06:00:00Z",
     duration_ms: 500,
     span_count: 3,
     error_count: 0,
-  }),
-  run({
+  },
+  {
     trace_id: "b",
     trace_ref: "ref-b",
     start_time: "2026-09-30T07:00:00Z",
     duration_ms: 500,
     span_count: 9,
     error_count: 2,
-  }),
-  run({
+  },
+  {
     trace_id: "c",
     trace_ref: "ref-c",
     start_time: "2026-09-30T05:00:00Z",
     duration_ms: 50,
     span_count: 1,
     error_count: 1,
-  }),
+  },
 ];
+const RUNS: TraceSummary[] = RUN_OVERRIDES.map(run);
 
 const ids = (runs: readonly TraceSummary[]) => runs.map((item) => item.trace_id);
 

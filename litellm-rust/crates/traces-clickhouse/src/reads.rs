@@ -32,6 +32,9 @@ impl ClickHouseTraces {
             .await
             .map_err(|error| match error {
                 StorageError::ResponseTooLarge => StoreError::TooLarge,
+                StorageError::QueryFailed(failure) if failure.code == Some(396) => {
+                    StoreError::TooLarge
+                }
                 error => StoreError::Failed(Error::Storage(error)),
             })
     }

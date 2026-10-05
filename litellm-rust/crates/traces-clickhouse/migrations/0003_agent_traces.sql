@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS {database}.agent_traces_by_key
     OutputTokens  SimpleAggregateFunction(sum, UInt64),
     Models        SimpleAggregateFunction(groupUniqArrayArray, Array(String)),
     AgentNames    SimpleAggregateFunction(groupUniqArrayArray, Array(String)),
+    AgentIdentities SimpleAggregateFunction(groupUniqArrayArray, Array(String)),
+    Frameworks    SimpleAggregateFunction(groupUniqArrayArray, Array(String)),
     RequestIds    SimpleAggregateFunction(groupArrayArray, Array(String))
 )
 ENGINE = AggregatingMergeTree

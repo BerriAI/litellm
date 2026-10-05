@@ -14,6 +14,6 @@ FROM (
     FROM owned_spans
     WHERE TraceId = {trace_id:String} AND SpanId IN {span_ids:Array(String)}
       AND hex(SHA256(concat(TeamId, char(0), ApiKeyHash, char(0), TraceId))) = {trace_ref:String}
-    ORDER BY Timestamp, EngineReceivedMs, StatusMessage
+ORDER BY Timestamp, EngineReceivedMs, StatusMessage, Duration, StatusCode
     LIMIT 1 BY SpanId
 )

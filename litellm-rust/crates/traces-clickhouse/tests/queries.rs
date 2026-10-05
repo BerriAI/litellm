@@ -8,7 +8,7 @@ use litellm_traces_cache::{StoreResult, TraceStore};
 use litellm_traces_clickhouse::{ClickHouseTraces, Error, QueryScope, query_help, query_sql};
 use rstest::{fixture, rstest};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[path = "queries/support.rs"]
 mod fixtures;
@@ -119,6 +119,59 @@ async fn documented_queries_render_and_return_expected_rows(
             .ok_or("missing expected scope")?,
         "{}: {sql}",
         scope.as_ref()
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn documented_failed_spans_filters_status_after_selecting_the_canonical_copy(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    fixture_clock: TestResult<u64>,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let clock = fixture_clock?;
+    let writer = litellm_traces_clickhouse::Connection::writer(&fixture.database.url)?;
+    let rows = [
+        ("changed-status", "STATUS_CODE_OK", "", 1),
+        ("changed-status", "STATUS_CODE_ERROR", "", 2),
+        ("stable-error", "STATUS_CODE_ERROR", "first", 1),
+        ("stable-error", "STATUS_CODE_ERROR", "later", 1),
+    ]
+    .map(|(span_id, status, message, duration)| {
+        BTreeMap::from([
+            ("Timestamp".into(), json!(clock * 1_000_000_000)),
+            ("TeamId".into(), json!("team-a")),
+            ("ApiKeyHash".into(), json!("key-a")),
+            ("TraceId".into(), json!("duplicates")),
+            ("SpanId".into(), json!(span_id)),
+            ("StatusCode".into(), json!(status)),
+            ("StatusMessage".into(), json!(message)),
+            ("Duration".into(), json!(duration)),
+        ])
+    });
+    litellm_traces_clickhouse::insert_rows(
+        &fixture.database.client,
+        &writer,
+        fixtures::DATABASE,
+        litellm_traces_clickhouse::InsertTable::OtelTraces,
+        rows.to_vec(),
+    )
+    .await?;
+    let reader = fixture
+        .readers
+        .connection(&fixture.database.client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let sql = include_str!("../query/help/failed_spans.sql")
+        .replace("now()", &format!("toDateTime({clock})"));
+    let result: QueryResult =
+        serde_json::from_str(&query_sql(&fixture.database.client, &reader, &sql).await?)?;
+    assert_eq!(
+        result.data,
+        [json!({
+            "team": "team-a", "api_key": "key-a", "trace_id": "duplicates",
+            "span_id": "stable-error", "message": "first"
+        })]
     );
     Ok(())
 }

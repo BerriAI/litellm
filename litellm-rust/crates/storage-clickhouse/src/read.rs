@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, time::Duration};
 use litellm_http::Client;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::{Connection, Error};
+use crate::{Connection, Error, QueryFailure};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReadLimits {
@@ -107,17 +107,38 @@ pub async fn execute_read(
     let request = client
         .post(url)
         .timeout(Duration::from_secs(15))
+        .header("X-ClickHouse-Format", "JSON")
         .body(sql.to_owned());
     let mut response = request.send().await.map_err(|_| Error::Transport)?;
-    if !response.status().is_success() {
-        if response
-            .headers()
-            .get("x-clickhouse-exception-code")
-            .is_some_and(|code| code == "396")
-        {
-            return Err(Error::ResponseTooLarge);
+    let status = response.status().as_u16();
+    let code = response
+        .headers()
+        .get("x-clickhouse-exception-code")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok());
+    if !response.status().is_success() || code.is_some() {
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| Error::Transport)? {
+            let remaining = DIAGNOSTIC_BYTES - body.len();
+            body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+            if body.len() == DIAGNOSTIC_BYTES {
+                break;
+            }
         }
-        return Err(Error::QueryFailed(response.status().as_u16()));
+        let message = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|json| {
+                json.get("exception")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| {
+                let valid = std::str::from_utf8(&body)
+                    .err()
+                    .map_or(body.len(), |error| error.valid_up_to());
+                String::from_utf8_lossy(&body[..valid]).into_owned()
+            });
+        return Err(query_failure(status, code, &message));
     }
 
     let mut body = Vec::new();
@@ -130,11 +151,40 @@ pub async fn execute_read(
 
     let json: serde_json::Value =
         serde_json::from_slice(&body).map_err(|_| Error::InvalidResponse)?;
-    if json.get("exception").is_some() || !json.get("data").is_some_and(serde_json::Value::is_array)
-    {
+    if let Some(message) = json.get("exception").and_then(serde_json::Value::as_str) {
+        return Err(query_failure(status, code, message));
+    }
+    if !json.get("data").is_some_and(serde_json::Value::is_array) {
         return Err(Error::InvalidResponse);
     }
     String::from_utf8(body).map_err(|_| Error::InvalidResponse)
+}
+
+const DIAGNOSTIC_BYTES: usize = 4096;
+
+fn query_failure(status: u16, code: Option<u32>, message: &str) -> Error {
+    let code = code.or_else(|| {
+        message
+            .strip_prefix("Code: ")?
+            .split_once('.')?
+            .0
+            .parse()
+            .ok()
+    });
+    let message = if message.is_empty() {
+        "ClickHouse query failed".to_owned()
+    } else {
+        let end = (0..=DIAGNOSTIC_BYTES.min(message.len()))
+            .rev()
+            .find(|&end| message.is_char_boundary(end))
+            .unwrap_or(0);
+        message[..end].to_owned()
+    };
+    Error::QueryFailed(QueryFailure {
+        status,
+        code,
+        message,
+    })
 }
 
 pub trait Query {

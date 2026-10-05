@@ -54,9 +54,12 @@ async fn database() -> Result<Database, Box<dyn std::error::Error>> {
 }
 
 #[rstest]
+#[case::default_format("")]
+#[case::explicit_csv(" FORMAT CSV")]
 #[tokio::test]
 async fn admin_sql_reads_rows_with_enforced_settings(
     #[future(awt)] database: Result<Database, Box<dyn std::error::Error>>,
+    #[case] format: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let database = database?;
     let connection = Connection::parse(&format!(
@@ -67,7 +70,7 @@ async fn admin_sql_reads_rows_with_enforced_settings(
     let result = read(
         &database.client,
         &connection,
-        "SELECT n AS answer FROM otel_traces",
+        &format!("SELECT n AS answer FROM otel_traces{format}"),
     )
     .await?;
     let json: Value = serde_json::from_str(&result)?;
@@ -76,7 +79,7 @@ async fn admin_sql_reads_rows_with_enforced_settings(
     let result = read(
         &database.client,
         &connection,
-        "SELECT n AS answer FROM agent_traces_by_key",
+        &format!("SELECT n AS answer FROM agent_traces_by_key{format}"),
     )
     .await?;
     let json: Value = serde_json::from_str(&result)?;
@@ -145,7 +148,7 @@ async fn admin_sql_rejects_errors_after_output_starts(
         matches!(
             result,
             Err(Error::Storage(
-                litellm_storage_clickhouse::Error::InvalidResponse
+                litellm_storage_clickhouse::Error::QueryFailed(_)
             ))
         ),
         "expected an error embedded in a successful HTTP response: {result:?}"
@@ -175,7 +178,7 @@ async fn admin_sql_enforces_result_row_limit(
         matches!(
             result,
             Err(Error::Storage(
-                litellm_storage_clickhouse::Error::ResponseTooLarge
+                litellm_storage_clickhouse::Error::QueryFailed(_)
             ))
         ),
         "{result:?}"

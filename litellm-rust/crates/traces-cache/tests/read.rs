@@ -8,18 +8,18 @@ use std::{
 };
 
 use litellm_traces::{
-    CallEvidenceKind, CallKey, ObservationType, QueryScope, SpanStatus,
+    CallEvidenceKind, CallKey, ObservationType, QueryScope, SpanStatus, TraceSummary,
     search::{AgentRuns, HistogramBucket, RunField, RunFilter, RunSearch},
     store::{
         CallQuery, CallRow, CountBy, CountValue, RunCount, RunCountQuery, RunOrder, RunQuery,
-        RunRow, RunSelection, SpanPart, SpanQuery, SpanRow, SpanSelection, SpanText, SpanTextQuery,
-        TextRange,
+        RunRow, RunSelection, RunSortKey, SpanPart, SpanQuery, SpanRow, SpanSelection, SpanText,
+        SpanTextQuery, TextRange,
     },
 };
 use litellm_traces_cache::{
     LIVE_TTL, PageRequest, ReadError, StoreError, StoreResult, TraceReader, TraceStore,
 };
-use rstest::rstest;
+use rstest::{fixture, rstest};
 
 const START_NS: i64 = 1_790_742_989_000_000_000;
 
@@ -61,6 +61,7 @@ struct State {
 
 #[derive(Default)]
 struct FakeStore {
+    source: Option<&'static str>,
     state: Mutex<State>,
     calls: Mutex<HashMap<Operation, AtomicUsize>>,
 }
@@ -68,6 +69,7 @@ struct FakeStore {
 impl FakeStore {
     fn with_spans(trace_ref: &str, spans: Vec<SpanRow>) -> Self {
         Self {
+            source: None,
             state: Mutex::new(State {
                 trace_spans: HashMap::from([(trace_ref.to_owned(), spans)]),
                 ..State::default()
@@ -166,7 +168,7 @@ impl TraceStore for FakeStore {
     type Error = FakeError;
 
     fn source(&self) -> &str {
-        "fake"
+        self.source.unwrap_or("fake")
     }
 
     async fn runs(&self, _: &QueryScope, query: &RunQuery) -> StoreResult<Vec<RunRow>, FakeError> {
@@ -189,12 +191,25 @@ impl TraceStore for FakeStore {
         {
             return Err(StoreError::TooLarge);
         }
-        Ok(state
+        let mut rows: Vec<_> = state
             .list_runs
             .iter()
-            .take(query.limit as usize)
+            .filter(|row| {
+                query.after.as_ref().is_none_or(|after| {
+                    let value = (query.order.value(row), &row.trace_ref);
+                    let cursor = (after.value, &after.trace_ref);
+                    if query.order.descending {
+                        value < cursor
+                    } else {
+                        value > cursor
+                    }
+                })
+            })
             .cloned()
-            .collect())
+            .collect();
+        rows.sort_by(|left, right| query.order.compare(left, right));
+        rows.truncate(query.limit as usize);
+        Ok(rows)
     }
 
     async fn run_counts(
@@ -227,10 +242,18 @@ impl TraceStore for FakeStore {
                     .cloned()
                     .unwrap_or_default()
             }
-            SpanSelection::Runs { .. } => {
+            SpanSelection::Runs { window, .. } => {
                 self.record(Operation::RunSpans);
                 Self::failure(&state, Operation::RunSpans)?;
-                state.run_spans.clone()
+                state
+                    .run_spans
+                    .iter()
+                    .filter(|row| {
+                        i128::from(row.start_ns) >= i128::from(window.start) * 1_000_000
+                            && i128::from(row.start_ns) < i128::from(window.end) * 1_000_000
+                    })
+                    .cloned()
+                    .collect()
             }
         };
         Ok(keyset(
@@ -328,7 +351,6 @@ fn newest(limit: u32) -> PageRequest {
     PageRequest {
         cursor: None,
         limit,
-        ..Default::default()
     }
 }
 
@@ -378,7 +400,7 @@ fn run(trace_id: &str, trace_ref: &str) -> RunRow {
         input_preview: String::new(),
         status: SpanStatus::Ok,
         start_ms: 1_790_742_989_000,
-        duration_ms: 10,
+        duration_ns: 10_000_000,
         span_count: 1,
         agent_count: 1,
         agent_invocations: 1,
@@ -528,6 +550,55 @@ async fn response_size_splits_pages_and_rejects_a_single_oversized_span() {
 
 #[rstest]
 #[tokio::test]
+async fn listed_run_resolution_keeps_spans_crossing_a_fractional_millisecond() {
+    let store = FakeStore::default();
+    let root = SpanRow {
+        start_ns: START_NS + 900_000,
+        duration_ns: 900_000,
+        ..span(0)
+    };
+    let child = SpanRow {
+        start_ns: START_NS + 1_200_000,
+        duration_ns: 100_000,
+        status: SpanStatus::Error,
+        agent: "child".into(),
+        ..span(1)
+    };
+    let listed = RunRow {
+        duration_ns: root.duration_ns,
+        span_count: 2,
+        error_count: 1,
+        agent_count: 2,
+        agent_invocations: 2,
+        agent_names: vec!["agent".into(), "child".into()],
+        ..run("trace", "ref")
+    };
+    store.set_list_runs(vec![listed.clone()]);
+    store.set_run_spans(vec![root, child]);
+    let page = TraceReader::new(usize::MAX)
+        .list_traces(
+            &store,
+            &access(),
+            &everything(),
+            RunOrder::NEWEST,
+            &newest(1),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.data.len(), 1);
+    assert_eq!(page.data[0].span_count, listed.span_count);
+    assert_eq!(page.data[0].error_count, listed.error_count);
+    assert_eq!(page.data[0].agent_count, listed.agent_count);
+    assert_eq!(page.data[0].agent_names, listed.agent_names);
+    assert_eq!(
+        page.data[0].duration_ms,
+        listed.duration_ns as f64 / 1_000_000.0
+    );
+    assert!(!page.data[0].resolution_limited);
+}
+
+#[rstest]
+#[tokio::test]
 async fn list_run_budget_halves_the_limit_and_cursor_requires_a_run_past_the_page() {
     let runs = |count: usize| {
         (0..count)
@@ -559,6 +630,120 @@ async fn list_run_budget_halves_the_limit_and_cursor_requires_a_run_past_the_pag
         assert!(page.next_cursor.is_none());
         assert_eq!(rest.calls(Operation::ListRuns), 1);
     }
+}
+
+#[fixture]
+fn paging_scope() -> QueryScope {
+    QueryScope::Owned {
+        user_id: "user".into(),
+        team_ids: vec!["team".into()],
+    }
+}
+
+#[rstest]
+#[case::start(window(1, i64::MAX, ""), paging_scope(), "fake", RunOrder::NEWEST)]
+#[case::end(window(0, i64::MAX - 1, ""), paging_scope(), "fake", RunOrder::NEWEST)]
+#[case::text(window(0, i64::MAX, "find"), paging_scope(), "fake", RunOrder::NEWEST)]
+#[case::field(
+    window(0, i64::MAX, "agent:worker"),
+    paging_scope(),
+    "fake",
+    RunOrder::NEWEST
+)]
+#[case::attribute(
+    window(0, i64::MAX, "attr.stage:production"),
+    paging_scope(),
+    "fake",
+    RunOrder::NEWEST
+)]
+#[case::trace_refs(RunFilter { trace_refs: vec!["ref".into()], ..everything() }, paging_scope(), "fake", RunOrder::NEWEST)]
+#[case::user(everything(), QueryScope::Owned { user_id: "another-user".into(), team_ids: vec!["team".into()] }, "fake", RunOrder::NEWEST)]
+#[case::teams(everything(), QueryScope::Owned { user_id: "user".into(), team_ids: vec!["another-team".into()] }, "fake", RunOrder::NEWEST)]
+#[case::source(everything(), paging_scope(), "other", RunOrder::NEWEST)]
+#[case::sort(everything(), paging_scope(), "fake", RunOrder { descending: false, ..RunOrder::NEWEST })]
+#[tokio::test]
+async fn run_cursors_reject_a_changed_query_before_reading_storage(
+    #[case] filter: RunFilter,
+    #[case] scope: QueryScope,
+    #[case] source: &'static str,
+    #[case] order: RunOrder,
+) {
+    let original = FakeStore::default();
+    original.set_list_runs(vec![run("trace-a", "ref-a"), run("trace-b", "ref-b")]);
+    let reader = TraceReader::new(usize::MAX);
+    let first = reader
+        .list_traces(
+            &original,
+            &paging_scope(),
+            &everything(),
+            RunOrder::NEWEST,
+            &newest(1),
+        )
+        .await
+        .unwrap();
+    let changed = FakeStore {
+        source: Some(source),
+        ..Default::default()
+    };
+    let result = reader
+        .list_traces(
+            &changed,
+            &scope,
+            &filter,
+            order,
+            &PageRequest {
+                cursor: first.next_cursor,
+                limit: 1,
+            },
+        )
+        .await;
+    assert!(matches!(result, Err(ReadError::InvalidCursor("trace"))));
+    assert_eq!(changed.calls(Operation::ListRuns), 0);
+}
+
+#[rstest]
+#[tokio::test]
+async fn run_cursors_continue_without_gaps_when_page_size_changes() {
+    let store = FakeStore::default();
+    store.set_list_runs(vec![
+        run("trace-a", "ref-a"),
+        run("trace-b", "ref-b"),
+        run("trace-c", "ref-c"),
+    ]);
+    let reader = TraceReader::new(usize::MAX);
+    let first = reader
+        .list_traces(
+            &store,
+            &access(),
+            &everything(),
+            RunOrder::NEWEST,
+            &newest(1),
+        )
+        .await
+        .unwrap();
+    let cursor = first.next_cursor.unwrap();
+    let second = reader
+        .list_traces(
+            &store,
+            &access(),
+            &everything(),
+            RunOrder::NEWEST,
+            &PageRequest {
+                cursor: Some(cursor),
+                limit: 2,
+            },
+        )
+        .await
+        .unwrap();
+    let refs: Vec<_> = first
+        .data
+        .iter()
+        .chain(&second.data)
+        .map(|run| run.trace_ref.as_str())
+        .collect();
+    assert_eq!(refs, ["ref-c", "ref-b", "ref-a"]);
+    assert!(second.next_cursor.is_none());
+    assert_eq!(store.calls(Operation::ListRuns), 2);
 }
 
 #[rstest]
@@ -956,6 +1141,71 @@ async fn failed_reads_are_not_cached() {
 }
 
 #[rstest]
+#[case::start(RunSortKey::StartMs)]
+#[case::duration(RunSortKey::DurationMs)]
+#[case::spans(RunSortKey::SpanCount)]
+#[case::errors(RunSortKey::ErrorCount)]
+#[case::reference(RunSortKey::TraceRef)]
+#[tokio::test]
+async fn cached_run_keeps_all_canonical_metrics_current_for_every_sort(#[case] key: RunSortKey) {
+    let store = FakeStore::default();
+    store.set_list_runs(vec![run("trace", "ref")]);
+    store.set_run_spans(vec![SpanRow {
+        kind: ObservationType::Llm,
+        litellm_request_id: "response".into(),
+        call_keys: vec![CallKey::ProviderResponse("response".into())],
+        call_evidence: Some(CallEvidenceKind::Complete),
+        ..span(0)
+    }]);
+    store.state.lock().unwrap().spend = vec![spend_row("response", 1.5)];
+    let reader = TraceReader::new(usize::MAX);
+    let first = reader
+        .list_traces(
+            &store,
+            &access(),
+            &everything(),
+            RunOrder::NEWEST,
+            &newest(1),
+        )
+        .await
+        .unwrap();
+    let changed = RunRow {
+        start_ms: START_NS / 1_000_000 + 20,
+        duration_ns: 23_000_000,
+        span_count: 7,
+        error_count: 3,
+        agent_names: vec!["new-agent".into()],
+        frameworks: vec!["new-framework".into()],
+        ..run("trace", "ref")
+    };
+    store.set_list_runs(vec![changed.clone()]);
+    let second = reader
+        .list_traces(
+            &store,
+            &access(),
+            &everything(),
+            RunOrder {
+                key,
+                descending: false,
+            },
+            &newest(1),
+        )
+        .await
+        .unwrap();
+    let expected = TraceSummary {
+        start_time: litellm_traces::iso_time(changed.start_ms),
+        duration_ms: changed.duration_ns as f64 / 1_000_000.0,
+        span_count: changed.span_count,
+        error_count: changed.error_count,
+        ..first.data[0].clone()
+    };
+    assert_eq!(expected.spend, Some(1.5));
+    assert_eq!(second.data, vec![expected]);
+    assert_eq!(store.calls(Operation::RunSpans), 1);
+    assert_eq!(store.calls(Operation::Spend), 1);
+}
+
+#[rstest]
 #[tokio::test]
 async fn listed_runs_are_read_once_until_a_live_run_expires() {
     let live = SpanRow {
@@ -969,7 +1219,10 @@ async fn listed_runs_are_read_once_until_a_live_run_expires() {
     };
     let store = FakeStore::default();
     store.set_list_runs(vec![
-        run("trace-live", "ref-live"),
+        RunRow {
+            start_ms: live.start_ns / 1_000_000,
+            ..run("trace-live", "ref-live")
+        },
         run("trace-settled", "ref-settled"),
     ]);
     store.set_run_spans(vec![live, settled]);

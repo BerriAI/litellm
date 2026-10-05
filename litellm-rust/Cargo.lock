@@ -3933,22 +3933,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-gateway-traces"
-version = "0.1.0"
-dependencies = [
- "axum",
- "litellm-traces",
- "litellm-traces-cache",
- "rstest",
- "serde",
- "serde_json",
- "thiserror 2.0.19",
- "tokio",
- "tower",
- "tracing",
-]
-
-[[package]]
 name = "litellm-gateway-ui"
 version = "0.1.0"
 dependencies = [

@@ -9,7 +9,7 @@ use litellm_traces::{
 };
 use litellm_traces_cache::{PageRequest, TraceReader, TraceStore};
 use litellm_traces_clickhouse::{
-    ClickHouseTraces, Connection, InsertTable, QueryScope, insert_rows,
+    ClickHouseTraces, Connection, InsertTable, QueryScope, encode_rows, insert_rows,
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -38,11 +38,7 @@ fn filter(start_ms: i64, q: &str) -> RunFilter {
 }
 
 fn page(cursor: Option<String>, limit: u32) -> PageRequest {
-    PageRequest {
-        cursor,
-        limit,
-        ..Default::default()
-    }
+    PageRequest { cursor, limit }
 }
 
 fn reader() -> TraceReader {
@@ -295,6 +291,56 @@ async fn list_q_pages_through_matches_only(
 }
 
 #[rstest]
+#[tokio::test]
+async fn named_and_unnamed_agents_in_one_run_remain_searchable(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let store = seed(&fixture).await?;
+    let writer = Connection::writer(&fixture.database.url)?;
+    insert_rows(
+        &fixture.database.client,
+        &writer,
+        DATABASE,
+        InsertTable::OtelTraces,
+        vec![span_row(
+            &runs()[0],
+            5,
+            &step("alpha-unnamed", "helper", "agent"),
+            "alpha-root",
+        )],
+    )
+    .await?;
+    let reader = reader();
+    let values = reader
+        .values(
+            &store,
+            &team_a(),
+            &filter(T0_MS, "trace_id:alpha"),
+            RunField::Agent,
+            "",
+            10,
+        )
+        .await?;
+    assert_eq!(values.values, ["helper", "researcher"]);
+    for agent in values.values {
+        let listed = reader
+            .list_traces(
+                &store,
+                &team_a(),
+                &filter(T0_MS, &format!("agent:{agent}")),
+                RunOrder::NEWEST,
+                &page(None, 10),
+            )
+            .await?;
+        assert_eq!(listed.data.len(), 1);
+        assert_eq!(listed.data[0].trace_id, "alpha");
+        assert!(listed.data[0].agent_names.contains(&agent));
+    }
+    Ok(())
+}
+
+#[rstest]
 #[case::all("", [
     (1, 0, vec![("researcher", 1)]),
     (1, 1, vec![]),
@@ -334,6 +380,123 @@ async fn histogram_counts_matching_runs_per_bucket(
         })
         .collect();
     assert_eq!(histogram.buckets, expected);
+    Ok(())
+}
+
+#[rstest]
+#[case::successful(false)]
+#[case::failed(true)]
+#[tokio::test]
+async fn histogram_counts_runs_without_an_agent_or_service(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] failed: bool,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let store = seed(&fixture).await?;
+    let writer = Connection::writer(&fixture.database.url)?;
+    insert_rows(
+        &fixture.database.client,
+        &writer,
+        DATABASE,
+        InsertTable::OtelTraces,
+        vec![BTreeMap::from([
+            ("Timestamp".into(), json!(T0_MS * 1_000_000)),
+            ("TraceId".into(), json!("unlabelled")),
+            ("SpanId".into(), json!("root")),
+            ("ParentSpanId".into(), json!("")),
+            ("SpanName".into(), json!("run")),
+            ("ServiceName".into(), json!("")),
+            ("ObservationType".into(), json!("chain")),
+            ("TeamId".into(), json!("team-a")),
+            ("ApiKeyHash".into(), json!("key-a")),
+            (
+                "StatusCode".into(),
+                json!(if failed {
+                    "STATUS_CODE_ERROR"
+                } else {
+                    "STATUS_CODE_OK"
+                }),
+            ),
+        ])],
+    )
+    .await?;
+    let reader = reader();
+    let filter = filter(T0_MS, "trace_id:unlabelled");
+    let histogram = reader.histogram(&store, &team_a(), &filter, 3).await?;
+    let count = reader.count_traces(&store, &team_a(), &filter).await?;
+    let bucket = &histogram.buckets[0];
+    assert_eq!(count, 1);
+    assert_eq!(bucket.total, count);
+    assert_eq!(bucket.failed, u64::from(failed));
+    assert_eq!(
+        bucket.total,
+        bucket.failed + bucket.agents.iter().map(|agent| agent.runs).sum::<u64>()
+    );
+    Ok(())
+}
+
+#[rstest]
+#[case::agent(CountValue::PrimaryAgent)]
+#[case::attribute(CountValue::Attribute("bucket.tag".into()))]
+#[tokio::test]
+async fn histogram_counts_use_the_displayed_bucket_boundaries(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] value: CountValue,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let store = seed(&fixture).await?;
+    let writer = Connection::writer(&fixture.database.url)?;
+    insert_rows(
+        &fixture.database.client,
+        &writer,
+        DATABASE,
+        InsertTable::OtelTraces,
+        (0..10)
+            .map(|offset| {
+                BTreeMap::from([
+                    ("Timestamp".into(), json!((T0_MS + offset) * 1_000_000)),
+                    ("TraceId".into(), json!(format!("bucket-{offset}"))),
+                    ("SpanId".into(), json!("root")),
+                    ("ParentSpanId".into(), json!("")),
+                    ("SpanName".into(), json!("run")),
+                    ("ServiceName".into(), json!("svc")),
+                    ("ObservationType".into(), json!("chain")),
+                    ("TeamId".into(), json!("team-a")),
+                    ("ApiKeyHash".into(), json!("key-a")),
+                    ("SpanAttributes".into(), json!({"bucket.tag": "tag"})),
+                ])
+            })
+            .collect(),
+    )
+    .await?;
+    let filter = RunFilter {
+        start_ms: T0_MS,
+        end_ms: T0_MS + 10,
+        search: RunSearch::parse("trace_id:bucket*"),
+        ..Default::default()
+    };
+    let counts = store
+        .run_counts(
+            &team_a(),
+            &RunCountQuery {
+                filter: filter.clone(),
+                by: CountBy {
+                    buckets: Some(3),
+                    value: Some(value),
+                    ..Default::default()
+                },
+                contains: String::new(),
+                limit: None,
+            },
+        )
+        .await?;
+    let histogram = litellm_traces::search::histogram(&counts, filter.start_ms, filter.end_ms, 3);
+    for bucket in histogram.buckets {
+        let expected = (T0_MS..T0_MS + 10)
+            .filter(|start| (bucket.start_ms..bucket.end_ms).contains(start))
+            .count() as u64;
+        assert_eq!(bucket.total, expected);
+    }
     Ok(())
 }
 
@@ -551,25 +714,50 @@ async fn listed_runs_name_the_agent_they_matched_even_when_resolution_is_limited
 
 #[rstest]
 #[tokio::test]
-async fn listing_runs_scans_the_rollup_once(
+async fn listing_runs_skips_out_of_window_span_rows(
     #[future(awt)] migrated_database: TestResult<SeededDatabase>,
 ) -> TestResult {
     let fixture = migrated_database?;
     let store = seed(&fixture).await?;
+    let writer = Connection::writer(&fixture.database.url)?;
+    insert_rows(
+        &fixture.database.client,
+        &writer,
+        DATABASE,
+        InsertTable::OtelTraces,
+        (0..5000)
+            .map(|index| {
+                BTreeMap::from([
+                    (
+                        "Timestamp".into(),
+                        json!((T0_MS - 24 * HOUR_MS) * 1_000_000),
+                    ),
+                    ("TraceId".into(), json!("historical")),
+                    ("SpanId".into(), json!(format!("historical-{index}"))),
+                    ("ParentSpanId".into(), json!("")),
+                    ("SpanName".into(), json!("run")),
+                    ("ObservationType".into(), json!("chain")),
+                    ("TeamId".into(), json!("team-a")),
+                    ("ApiKeyHash".into(), json!("key-a")),
+                ])
+            })
+            .collect(),
+    )
+    .await?;
     let query = RunQuery {
-        selection: RunSelection::Matching(filter(0, "")),
+        selection: RunSelection::Matching(filter(T0_MS, "")),
         order: RunOrder::NEWEST,
         after: None,
         limit: 50,
     };
     let listed = store.runs(&QueryScope::All, &query).await?;
     assert_eq!(listed.len(), 4);
-    let budget = table_rows(&fixture, "agent_traces_by_key").await?
-        + table_rows(&fixture, "otel_traces").await?;
+    let budget = 2 * table_rows(&fixture, "agent_traces_by_key").await?
+        + runs().iter().flat_map(rows).count() as u64;
     let read = rows_read_by(&fixture, "FROM owned_runs").await?;
     assert!(
         read <= budget,
-        "listing 4 runs read {read} rows, more than the {budget} rollup and span rows that exist"
+        "listing current runs read {read} rows, exceeding their {budget} rollup and in-window span rows"
     );
     Ok(())
 }
@@ -701,6 +889,9 @@ async fn add_attributes(fixture: &SeededDatabase) -> TestResult {
 #[case::span_attribute("attr.tenant.tier:gold", &["alpha"])]
 #[case::resource_attribute("attr.tenant.tier:SILV*", &["beta"])]
 #[case::excluded_attribute("-attr.tenant.tier:gold", &["gamma", "beta"])]
+#[case::any_attribute("attr.tenant.tier:*", &["beta", "alpha"])]
+#[case::missing_attribute("-attr.tenant.tier:*", &["gamma"])]
+#[case::missing_wildcard("attr.missing:*", &[])]
 #[case::two_attributes("attr.tenant.tier:gold attr.tenant.tier:silver", &[])]
 #[case::attribute_and_field("attr.tenant.tier:* status:error", &["beta"])]
 #[case::unknown_attribute("attr.missing:gold", &[])]
@@ -724,6 +915,176 @@ async fn service_team_and_attribute_filters_select_runs(
         .await?;
     let listed: Vec<&str> = page.data.iter().map(|run| run.trace_id.as_str()).collect();
     assert_eq!(listed, expected);
+    Ok(())
+}
+
+#[rstest]
+#[case::duration_ascending(RunSortKey::DurationMs, false)]
+#[case::duration_descending(RunSortKey::DurationMs, true)]
+#[case::span_count_ascending(RunSortKey::SpanCount, false)]
+#[case::span_count_descending(RunSortKey::SpanCount, true)]
+#[case::error_count_ascending(RunSortKey::ErrorCount, false)]
+#[case::error_count_descending(RunSortKey::ErrorCount, true)]
+#[case::start_ascending(RunSortKey::StartMs, false)]
+#[case::start_descending(RunSortKey::StartMs, true)]
+#[case::reference_ascending(RunSortKey::TraceRef, false)]
+#[case::reference_descending(RunSortKey::TraceRef, true)]
+#[tokio::test]
+async fn metric_sorting_pages_by_the_deduplicated_displayed_values(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] key: RunSortKey,
+    #[case] descending: bool,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let store = seed(&fixture).await?;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let span = |trace: &str, id: &str, duration: u64, failed: bool| {
+        BTreeMap::from([
+            ("Timestamp".into(), json!(T0_MS * 1_000_000)),
+            ("TraceId".into(), json!(trace)),
+            ("SpanId".into(), json!(id)),
+            (
+                "ParentSpanId".into(),
+                json!(if id == "root" { "" } else { "root" }),
+            ),
+            ("SpanName".into(), json!(id)),
+            ("ServiceName".into(), json!("svc")),
+            (
+                "ObservationType".into(),
+                json!(if id == "root" { "chain" } else { "tool" }),
+            ),
+            ("TeamId".into(), json!("team-a")),
+            ("ApiKeyHash".into(), json!("key-a")),
+            ("Duration".into(), json!(duration)),
+            ("EngineReceivedMs".into(), json!(1)),
+            (
+                "StatusCode".into(),
+                json!(if failed {
+                    "STATUS_CODE_ERROR"
+                } else {
+                    "STATUS_CODE_OK"
+                }),
+            ),
+        ])
+    };
+    let duplicate = |changes: [(&str, serde_json::Value); 1]| {
+        BTreeMap::from_iter(
+            span("metric-a", "root", 50_000_000, true)
+                .into_iter()
+                .chain(changes.into_iter().map(|(key, value)| (key.into(), value))),
+        )
+    };
+    fixture
+        .database
+        .client
+        .post(writer.url().clone())
+        .query(&[(
+            "query",
+            format!("INSERT INTO {DATABASE}.otel_traces FORMAT JSONEachRow"),
+        )])
+        .body(encode_rows(vec![
+            span("metric-a", "root", 400_000, false),
+            span("metric-b", "root", 900_000, false),
+            span("metric-b", "child", 200_000, false),
+            span("metric-c", "root", 1_100_000, false),
+            span("metric-c", "child-one", 200_000, true),
+            span("metric-c", "child-two", 300_000, true),
+            duplicate([("EngineReceivedMs", json!(2))]),
+            duplicate([("Timestamp", json!((T0_MS + 1) * 1_000_000))]),
+            duplicate([("StatusMessage", json!("later"))]),
+            span("metric-b", "root", 800_000, false),
+            span("metric-b", "root", 800_000, true),
+        ])?)
+        .send()
+        .await?
+        .error_for_status()?;
+    let reader = reader();
+    let order = RunOrder { key, descending };
+    let filter = filter(T0_MS, "trace_id:metric*");
+    let mut listed = Vec::new();
+    let mut cursor = None;
+    loop {
+        let result = reader
+            .list_traces(&store, &team_a(), &filter, order, &page(cursor.take(), 1))
+            .await?;
+        listed.extend(result.data);
+        let Some(next) = result.next_cursor else {
+            break;
+        };
+        cursor = Some(next);
+    }
+    let expected = if descending {
+        ["metric-c", "metric-b", "metric-a"]
+    } else {
+        ["metric-a", "metric-b", "metric-c"]
+    };
+    if matches!(key, RunSortKey::StartMs | RunSortKey::TraceRef) {
+        assert_eq!(
+            listed
+                .iter()
+                .map(|run| run.trace_id.as_str())
+                .collect::<BTreeSet<_>>(),
+            expected.into_iter().collect()
+        );
+    } else {
+        assert_eq!(
+            listed
+                .iter()
+                .map(|run| run.trace_id.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+    for run in listed {
+        let (duration_ns, span_count, error_count) = match run.trace_id.as_str() {
+            "metric-a" => (400_000, 1, 0),
+            "metric-b" => (800_000, 2, 1),
+            "metric-c" => (1_100_000, 3, 2),
+            other => return Err(format!("unexpected run {other}").into()),
+        };
+        assert_eq!(run.duration_ms, f64::from(duration_ns) / 1_000_000.0);
+        assert_eq!(run.span_count, span_count);
+        assert_eq!(run.error_count, error_count);
+    }
+    let errors = RunFilter {
+        search: RunSearch::parse("trace_id:metric* status:error"),
+        ..filter.clone()
+    };
+    let filtered = reader
+        .list_traces(&store, &team_a(), &errors, order, &page(None, 10))
+        .await?;
+    assert_eq!(
+        filtered
+            .data
+            .iter()
+            .map(|run| run.trace_id.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["metric-b", "metric-c"])
+    );
+    let count = reader.count_traces(&store, &team_a(), &errors).await?;
+    let histogram = reader.histogram(&store, &team_a(), &errors, 3).await?;
+    assert_eq!(count, filtered.data.len() as u64);
+    assert_eq!(
+        histogram
+            .buckets
+            .iter()
+            .map(|bucket| bucket.total)
+            .sum::<u64>(),
+        count
+    );
+    assert_eq!(
+        histogram
+            .buckets
+            .iter()
+            .map(|bucket| bucket.failed)
+            .sum::<u64>(),
+        count
+    );
+    let all = reader.histogram(&store, &team_a(), &filter, 3).await?;
+    assert_eq!(
+        all.buckets.iter().map(|bucket| bucket.failed).sum::<u64>(),
+        count
+    );
     Ok(())
 }
 

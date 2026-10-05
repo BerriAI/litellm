@@ -18,10 +18,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
-from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES
+from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE, OTLP_MAX_ATTRIBUTE_VALUE_BYTES
 from litellm.rust_bridge._native import NativeTraceConfig, NativeTraceStorage
-from litellm.rust_bridge.trace.generated.models import ActivityAvailability, LensAccessParams, TraceQueryHelp
-from litellm.rust_bridge.trace.generated.types import Trace, TraceScope
+from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
+from litellm.rust_bridge.trace.generated.types import AllQueryScope, Trace, TracePage
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig, span_rows
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.types import SpendLogRecord
@@ -45,6 +45,7 @@ from tests.test_litellm_rust.support.recording_server import RecordingServer, Re
 
 pytestmark = pytest.mark.requires_rust_extension
 QUERY_ROWS: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
+_TRACE_PAGE: Final = TypeAdapter(TracePage)
 
 
 class CapturedSpendRow(BaseModel):
@@ -90,23 +91,20 @@ def span_row() -> dict[str, JsonValue]:
     }
 
 
-@pytest.fixture
-def span_params() -> dict[str, str | int | list[str]]:
-    return {"trace_id": "trace-1", "trace_ref": "", "all_teams": 1, "user_id": "", "team_ids": []}
-
-
 @pytest.mark.asyncio
 async def test_trace_reader_projects_connection_and_parameters(
-    recording_server: RecordingServer, span_row: dict[str, JsonValue], span_params: dict[str, str | int | list[str]]
+    recording_server: RecordingServer,
+    span_row: dict[str, JsonValue],
 ) -> None:
     recording_server.enqueue(ResponseSpec(body={"data": [span_row]}))
     url: Final = recording_server.base_url.replace("http://", "http://reader:p%40ss%2Fword%25@")
     storage: Final = _native_storage("trace_test", url + "?database=wrong")
-    rows: Final = json.loads(await storage.query("trace_spans", span_params))
+    trace: Final = TypeAdapter(Trace).validate_python(
+        await storage.get_trace("trace-1", AllQueryScope(kind="all"), "ref")
+    )
     request: Final = recording_server.requests[0]
     parameters: Final = parse_qs(urlsplit(request.path).query)
-    assert rows == {"data": [span_row]}
-    assert b"o.TraceId = {trace_id:String}" in request.raw_body
+    assert trace["spans"][0]["span_id"] == span_row["span_id"]
     assert parameters["database"] == ["trace_test"]
     assert parameters["param_trace_id"] == ["trace-1"]
     assert parameters["readonly"] == ["1"]
@@ -116,21 +114,11 @@ async def test_trace_reader_projects_connection_and_parameters(
 
 
 @pytest.mark.asyncio
-async def test_trace_reader_rejects_success_status_with_embedded_error(
-    recording_server: RecordingServer, span_params: dict[str, str | int | list[str]]
-) -> None:
+async def test_trace_reader_rejects_success_status_with_embedded_error(recording_server: RecordingServer) -> None:
     recording_server.enqueue(ResponseSpec(body={"data": [], "exception": "query failed"}))
     storage: Final = _native_storage("trace_test", recording_server.base_url)
-    with pytest.raises(RuntimeError, match="invalid or failed JSON"):
-        await storage.query("trace_spans", span_params)
-
-
-@pytest.mark.asyncio
-async def test_reader_rejects_arbitrary_sql_before_sending(recording_server: RecordingServer) -> None:
-    recording_server.expected_requests = 0
-    storage: Final = _native_storage("trace_test", recording_server.base_url)
-    with pytest.raises(ValueError, match="unknown ClickHouse read query"):
-        await storage.query("SELECT 1", {})
+    with pytest.raises(RuntimeError, match="query failed"):
+        await storage.get_trace("trace-1", AllQueryScope(kind="all"), "ref")
 
 
 @pytest.mark.asyncio
@@ -158,10 +146,95 @@ async def test_from_env_reads_with_clickhouse_url(
     recording_server.enqueue(ResponseSpec(body={"data": []}))
     monkeypatch.setenv("CLICKHOUSE_URL", recording_server.base_url)
     monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
-    scope: Final[TraceScope] = {"all_teams": 1, "user_id": "", "team_ids": ()}
+    scope: Final = AllQueryScope(kind="all")
     page: Final = await TraceReceiver.from_env().list_traces(scope, 0, 1)
     assert page == {"data": (), "next_cursor": None}
     assert len(recording_server.requests) == 1
+
+
+@pytest.fixture
+def run_row() -> dict[str, JsonValue]:
+    return {
+        "trace_id": "trace",
+        "trace_ref": "ref",
+        "team_id": "",
+        "api_key_hash": "",
+        "user_id": "",
+        "name": "run",
+        "service": "test",
+        "input_preview": "",
+        "status": "STATUS_CODE_OK",
+        "start_ms": 1000,
+        "duration_ns": 1_000_000,
+        "span_count": 0,
+        "agent_count": 0,
+        "agent_invocations": 0,
+        "agent_names": [],
+        "frameworks": [],
+        "llm_calls": 0,
+        "tool_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "models": [],
+        "error_count": 0,
+    }
+
+
+@pytest.mark.parametrize("params", ({}, {"start_ms": 1}))
+def test_trace_pages_keep_the_effective_window_through_the_http_native_boundary(
+    recording_server: RecordingServer,
+    run_row: dict[str, JsonValue],
+    params: dict[str, int],
+) -> None:
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.tracing_endpoints import provide_receiver, router
+
+    recording_server.expected_requests = None
+    recording_server.default_response = ResponseSpec(body={"data": []})
+    rows: Final = tuple(
+        {**run_row, "trace_id": f"trace-{index:03d}", "trace_ref": f"ref-{index:03d}"}
+        for index in range(AGENT_TRACING_LIST_PAGE_SIZE + 1)
+    )
+    recording_server.enqueue(ResponseSpec(body={"data": rows}))
+    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, token="test"
+    )
+    app.dependency_overrides[provide_receiver] = lambda: TraceReceiver(storage)
+    with TestClient(app) as client:
+        first: Final = client.get("/v1/traces", params=params)
+        assert first.status_code == 200, first.text
+        first_body: Final = _TRACE_PAGE.validate_python(first.json())
+        first_parameters: Final = parse_qs(urlsplit(recording_server.requests[0].path).query)
+        cursor: Final = first_body["next_cursor"]
+        assert cursor
+        assert len(first_body["data"]) == AGENT_TRACING_LIST_PAGE_SIZE
+        recording_server.enqueue(ResponseSpec(body={"data": [rows[0]]}))
+        second: Final = client.get("/v1/traces", params={**params, "cursor": cursor})
+        assert second.status_code == 200, second.text
+        second_body: Final = _TRACE_PAGE.validate_python(second.json())
+        refs: Final = tuple(row["trace_ref"] for row in (*first_body["data"], *second_body["data"]))
+        assert refs == tuple(row["trace_ref"] for row in reversed(rows))
+        assert second_body["next_cursor"] is None
+        run_parameters: Final = tuple(
+            parse_qs(urlsplit(request.path).query)
+            for request in recording_server.requests
+            if "param_sort_key" in parse_qs(urlsplit(request.path).query)
+        )
+        assert len(run_parameters) == 2
+        assert (run_parameters[1]["param_start_ms"], run_parameters[1]["param_end_ms"]) == (
+            first_parameters["param_start_ms"],
+            first_parameters["param_end_ms"],
+        )
+        sent: Final = len(recording_server.requests)
+        changed: Final = client.get(
+            "/v1/traces", params={"cursor": cursor, "end_ms": int(first_parameters["param_end_ms"][0]) + 1}
+        )
+        assert changed.status_code == 400, changed.text
+        assert len(recording_server.requests) == sent
 
 
 @pytest.mark.asyncio
@@ -395,17 +468,24 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(
 
 
 @pytest.mark.parametrize(
-    ("clickhouse_status", "body", "expected_status"),
+    ("clickhouse_status", "body", "expected_status", "database_code"),
     (
-        (400, b"ClickHouse rejected the query", 400),
-        (404, b"ClickHouse rejected the query", 400),
-        (500, b"ClickHouse rejected the query", 503),
-        (503, b"ClickHouse rejected the query", 503),
-        (200, b'{"data":[]}', 503),
+        (400, b"ClickHouse rejected the query", 400, None),
+        (404, b"ClickHouse rejected the query", 400, None),
+        (500, b"Code: 62. Invalid syntax", 400, 62),
+        (403, b"Code: 497. Access denied", 400, 497),
+        (500, b"Code: 241. Memory limit exceeded", 422, 241),
+        (500, b"ClickHouse rejected the query", 503, None),
+        (503, b"ClickHouse rejected the query", 503, None),
+        (200, b'{"data":[]}', 503, None),
     ),
 )
 def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
-    recording_server: RecordingServer, clickhouse_status: int, body: bytes, expected_status: int
+    recording_server: RecordingServer,
+    clickhouse_status: int,
+    body: bytes,
+    expected_status: int,
+    database_code: int | None,
 ) -> None:
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -434,6 +514,13 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
     with TestClient(app) as client:
         failed: Final = client.post("/v1/traces/query", json={"sql": "SELEC 42"})
         assert failed.status_code == expected_status, failed.text
+        assert failed.json()["detail"]["database_code"] == database_code
+        assert (
+            failed.json()["detail"]["code"]
+            == {400: "query_rejected", 422: "query_limit_exceeded", 503: "query_unavailable"}[expected_status]
+        )
+        if database_code is not None:
+            assert failed.json()["detail"]["message"] == body.decode()
         recovered: Final = client.post("/v1/traces/query", json={"sql": "SELECT 42 AS answer"})
         assert recovered.status_code == 200, recovered.text
         assert recovered.json() == envelope
@@ -445,34 +532,19 @@ async def test_trace_receiver_reads_with_only_one_clickhouse_url(
     recording_server: RecordingServer,
     monkeypatch: pytest.MonkeyPatch,
     span_row: dict[str, JsonValue],
-    span_params: dict[str, str | int | list[str]],
 ) -> None:
     monkeypatch.setenv("CLICKHOUSE_URL", recording_server.base_url)
     monkeypatch.setenv("CLICKHOUSE_DATABASE", "trace_test")
     monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
     recording_server.enqueue(ResponseSpec(body={"data": [span_row]}))
     receiver: Final = TraceReceiver.from_env()
-    trace: Final = await receiver.get_trace("trace-1", {"all_teams": 1, "user_id": "", "team_ids": ()}, "ref")
+    trace: Final = await receiver.get_trace("trace-1", AllQueryScope(kind="all"), "ref")
     assert trace is not None
     assert trace["spans"][0]["span_id"] == span_row["span_id"]
     assert trace["spans"][0]["duration_ms"] == int(str(span_row["duration_ns"])) / 1_000_000
     parameters: Final = parse_qs(urlsplit(recording_server.requests[0].path).query)
     assert parameters["database"] == ["trace_test"]
     assert parameters["readonly"] == ["1"]
-
-
-@pytest.mark.asyncio
-async def test_lens_read_uses_the_shared_native_query_and_returns_typed_rows(
-    recording_server: RecordingServer,
-) -> None:
-    recording_server.enqueue(ResponseSpec(body={"data": [{"traces": 0, "requests": 1}]}))
-    storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
-    rows: Final = await storage.lens_availability(LensAccessParams(all_teams=0, team="team-a", key_hash="key-a"))
-    assert rows == (ActivityAvailability(traces=False, requests=True),)
-    parameters: Final = parse_qs(urlsplit(recording_server.requests[0].path).query)
-    assert parameters["param_all_teams"] == ["0"]
-    assert parameters["param_team"] == ["team-a"]
-    assert parameters["param_key_hash"] == ["key-a"]
 
 
 @dataclass(frozen=True, slots=True)

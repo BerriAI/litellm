@@ -1,6 +1,6 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
-use litellm_traces::{QueryScope, Trace, TraceSummary, store::SpanRow};
+use litellm_traces::{QueryScope, Trace, TraceSummary, search::RunFilter, store::SpanRow};
 use moka::{Expiry, future::Cache};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -48,6 +48,14 @@ impl SnapshotKey {
         run: (&str, &str, &str, &str),
     ) -> Result<Self, Error> {
         Self::digest(&("run", source, access, run))
+    }
+
+    pub(crate) fn run_page_scope(
+        source: &str,
+        access: &QueryScope,
+        filter: &RunFilter,
+    ) -> Result<String, Error> {
+        Self::digest(&("run_page_v1", source, access, filter)).map(|key| key.0)
     }
 
     pub(crate) fn scope(source: &str, access: &QueryScope) -> Result<Self, Error> {

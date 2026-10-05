@@ -2,7 +2,7 @@ SELECT bucket, failed, value, uniqExact(team_id, api_key_hash, trace_id) AS runs
 FROM (
     SELECT runs.team_id AS team_id, runs.api_key_hash AS api_key_hash, runs.trace_id AS trace_id,
            if({buckets:UInt32} = 0, toUInt32(0),
-              toUInt32(intDiv((runs.start_ms - {start_ms:Int64}) * {buckets:UInt32}, {end_ms:Int64} - {start_ms:Int64}))) AS bucket,
+              toUInt32(intDiv((runs.start_ms - {start_ms:Int64} + 1) * {buckets:UInt32} - 1, {end_ms:Int64} - {start_ms:Int64}))) AS bucket,
            toUInt8({by_failed:UInt8} = 1 AND runs.error_count > 0) AS failed,
            value
     FROM owned_spans AS spans

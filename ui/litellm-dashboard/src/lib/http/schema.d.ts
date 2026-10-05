@@ -81305,13 +81305,15 @@ export interface operations {
     list_agent_traces_v1_traces_get: {
         parameters: {
             query?: {
-                /** @description Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. Keys: name, agent, status, model, input, trace_id. `*` globs and a leading `-` negates */
-                q?: string;
-                cursor?: string | null;
                 /** @description Window start, unix ms. Default: 24h ago */
                 start_ms?: number | null;
                 /** @description Window end, unix ms. Default: now */
                 end_ms?: number | null;
+                /** @description Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. Keys: name, agent, status, model, input, trace_id, service, team and attr.<key>. `*` globs and a leading `-` negates */
+                q?: string;
+                cursor?: string | null;
+                sort_by?: "start_ms" | "duration_ms" | "span_count" | "error_count";
+                sort_dir?: "asc" | "desc";
             };
             header?: never;
             path?: never;
@@ -81362,7 +81364,7 @@ export interface operations {
     agent_trace_histogram_v1_traces_histogram_get: {
         parameters: {
             query?: {
-                /** @description Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. Keys: name, agent, status, model, input, trace_id. `*` globs and a leading `-` negates */
+                /** @description Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. Keys: name, agent, status, model, input, trace_id, service, team and attr.<key>. `*` globs and a leading `-` negates */
                 q?: string;
                 buckets?: number;
                 /** @description Window start, unix ms. Default: 24h ago */
@@ -81452,7 +81454,7 @@ export interface operations {
     agent_trace_values_v1_traces_values__field__get: {
         parameters: {
             query?: {
-                /** @description Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. Keys: name, agent, status, model, input, trace_id. `*` globs and a leading `-` negates */
+                /** @description Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. Keys: name, agent, status, model, input, trace_id, service, team and attr.<key>. `*` globs and a leading `-` negates */
                 q?: string;
                 contains?: string;
                 limit?: number;

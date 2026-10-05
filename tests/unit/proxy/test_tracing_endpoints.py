@@ -20,7 +20,7 @@ from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.tracing_runtime import manage_tracing, provide_storage
 from litellm.rust_bridge import loader
-from litellm.rust_bridge.trace.errors import TraceChanged
+from litellm.rust_bridge.trace.errors import TraceChanged, TraceQueryError
 from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
 from litellm.rust_bridge.trace.generated.types import AllQueryScope, OwnedQueryScope, QueryScope
 from litellm.rust_bridge.trace.queries import TraceSQLResponse
@@ -340,11 +340,27 @@ def test_histogram_and_values_failures_map_to_read_statuses(
     assert client.get("/v1/traces/values/name").status_code == status
 
 
-def test_list_traces_defaults_to_last_24h(client, receiver):
-    client.get("/v1/traces")
-    kwargs = receiver.list_traces.call_args.kwargs
-    assert kwargs["end_ms"] - kwargs["start_ms"] == tracing_endpoints.MS_PER_DAY
-    assert kwargs["cursor"] is None
+@pytest.mark.parametrize(
+    ("params", "start_ms", "end_ms", "cursor"),
+    (
+        ({}, None, None, None),
+        ({"cursor": "next"}, None, None, "next"),
+        ({"start_ms": 10, "cursor": "next"}, 10, None, "next"),
+        ({"end_ms": 20, "cursor": "next"}, None, 20, "next"),
+    ),
+)
+def test_list_traces_preserves_omitted_bounds_for_cursor_window(
+    client: TestClient,
+    receiver: MagicMock,
+    params: Mapping[str, str | int],
+    start_ms: int | None,
+    end_ms: int | None,
+    cursor: str | None,
+) -> None:
+    response: Final = client.get("/v1/traces", params=params)
+    assert response.status_code == 200
+    kwargs: Final = receiver.list_traces.call_args.kwargs
+    assert (kwargs["start_ms"], kwargs["end_ms"], kwargs["cursor"]) == (start_ms, end_ms, cursor)
     assert kwargs["q"] == ""
 
 
@@ -723,15 +739,57 @@ def test_sql_rejects_missing_identity_without_querying(
 
 
 @pytest.mark.parametrize(
-    ("error", "status"), ((ValueError("invalid SQL"), 400), (RuntimeError("reader unavailable"), 503))
+    ("error", "status", "detail"),
+    (
+        (
+            TraceQueryError("rejected", 10, "Syntax error at SELECT"),
+            400,
+            {"code": "query_rejected", "database_code": 10, "message": "Syntax error at SELECT"},
+        ),
+        (
+            TraceQueryError("rejected", 20, "INSERT is denied by readonly mode"),
+            400,
+            {"code": "query_rejected", "database_code": 20, "message": "INSERT is denied by readonly mode"},
+        ),
+        (
+            TraceQueryError("limited", 30, "Memory limit exceeded"),
+            422,
+            {"code": "query_limit_exceeded", "database_code": 30, "message": "Memory limit exceeded"},
+        ),
+        (
+            TraceQueryError("limited", None, "Query exceeded the response size limit"),
+            422,
+            {
+                "code": "query_limit_exceeded",
+                "database_code": None,
+                "message": "Query exceeded the response size limit",
+            },
+        ),
+        (
+            TraceQueryError("unavailable", 40, "Database temporarily unavailable"),
+            503,
+            {"code": "query_unavailable", "database_code": 40, "message": "Database temporarily unavailable"},
+        ),
+        (
+            RuntimeError("private transport or credential details"),
+            503,
+            {"code": "query_unavailable", "database_code": None, "message": "Trace SQL is temporarily unavailable"},
+        ),
+        (
+            ValueError("SQL query must not be empty"),
+            400,
+            {"code": "query_rejected", "database_code": None, "message": "SQL query must not be empty"},
+        ),
+    ),
 )
 def test_sql_reports_rejected_queries_and_unavailable_readers(
-    client: TestClient, receiver: MagicMock, error: Exception, status: int
+    client: TestClient, receiver: MagicMock, error: Exception, status: int, detail: str | Mapping[str, object]
 ) -> None:
     client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
     receiver.storage.query_sql = AsyncMock(side_effect=error)
     result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1"})
     assert result.status_code == status, result.text
+    assert result.json()["detail"] == detail
     receiver.storage.query_sql.assert_awaited_once_with(
         "SELECT 1", {"kind": "owned", "user_id": "user", "team_ids": ()}, "test-secret"
     )

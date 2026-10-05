@@ -159,7 +159,7 @@ struct RunRowEncoding {
     #[serde(deserialize_with = "super::number::deserialize")]
     pub start_ms: i64,
     #[serde(deserialize_with = "super::number::deserialize")]
-    pub duration_ms: i64,
+    pub duration_ns: u64,
     #[serde(deserialize_with = "super::number::deserialize")]
     pub span_count: u64,
     #[serde(deserialize_with = "super::number::deserialize")]
@@ -667,7 +667,7 @@ mod tests {
     #[case::unquoted(false)]
     #[case::quoted(true)]
     fn rows_decode_clickhouse_numbers(#[case] quoted: bool) {
-        let run = json!({"trace_id": "trace", "trace_ref": "ref", "team_id": "team", "api_key_hash": "key", "user_id": "user", "name": "agent", "service": "service", "input_preview": "input", "status": "STATUS_CODE_OK", "start_ms": -1, "duration_ms": 20, "span_count": u64::MAX, "agent_count": 1, "agent_invocations": 2, "agent_names": ["agent"], "frameworks": ["claude-agent-sdk"], "llm_calls": 3, "tool_calls": 4, "input_tokens": 5, "output_tokens": 6, "models": ["model"], "error_count": 0});
+        let run = json!({"trace_id": "trace", "trace_ref": "ref", "team_id": "team", "api_key_hash": "key", "user_id": "user", "name": "agent", "service": "service", "input_preview": "input", "status": "STATUS_CODE_OK", "start_ms": -1, "duration_ns": 20_000_000, "span_count": u64::MAX, "agent_count": 1, "agent_invocations": 2, "agent_names": ["agent"], "frameworks": ["claude-agent-sdk"], "llm_calls": 3, "tool_calls": 4, "input_tokens": 5, "output_tokens": 6, "models": ["model"], "error_count": 0});
         assert_eq!(decoded::<RunRowWire>(run.clone(), quoted), run);
         let span = json!({"trace_id": "trace", "span_id": "span", "parent_span_id": "parent", "name": "agent", "type": "agent", "wrapper_candidate": 1, "agent": "agent", "framework": "claude-agent-sdk", "status": "STATUS_CODE_ERROR", "status_message": "error", "error_truncated": 1, "start_ns": -1, "duration_ns": u64::MAX, "service": "service", "input_preview": "input", "model": "model", "input_tokens": u32::MAX, "output_tokens": 6, "litellm_request_id": "request", "call_keys": ["provider_response:request"], "call_evidence": "complete", "tool_call_id": "call", "team_id": "team", "api_key_hash": "key", "user_id": "user"});
         assert_eq!(decoded::<SpanRowWire>(span.clone(), quoted), span);

@@ -1,10 +1,9 @@
-import base64
-import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.proxy.lens.models import (
     ActivitySelection,
@@ -300,27 +299,15 @@ def test_lens_scope_reads_with_the_same_access_as_traces(scope: Scope, access: Q
 
 def test_execution_ids_carry_reference_and_trace_id() -> None:
     assert parse_execution(execution_id(REF, "trace:with:colons")) == (REF, "trace:with:colons")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"^Not an execution ID$"):
         parse_execution("short:trace")
 
 
-def legacy_id(*parts: str) -> str:
-    return base64.urlsafe_b64encode(json.dumps(parts).encode()).decode()
-
-
-def test_saved_filters_load_as_one_search() -> None:
+def test_current_selection_preserves_search_and_execution_ids() -> None:
     selection: Final = ActivitySelection.model_validate(
         {
-            "source": "both",
-            "agent_name": "research agent",
-            "service": "billing",
-            "team_id": "alpha",
-            "filters": [{"key": "tenant.tier", "value": "gold"}],
-            "execution_ids": [
-                legacy_id("traces", "alpha", "trace", REF),
-                legacy_id("requests", "alpha", "request", ""),
-                legacy_id("traces", "alpha", "old"),
-            ],
+            "q": 'agent:"research agent" service:billing team:alpha attr.tenant.tier:gold',
+            "execution_ids": [execution_id(REF, "trace")],
             "sample_percent": 50,
         }
     )
@@ -329,17 +316,53 @@ def test_saved_filters_load_as_one_search() -> None:
     assert selection.sample_percent == 50
 
 
-def test_saved_job_samples_from_before_runs_load_as_absent() -> None:
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("source", "both"),
+        ("agent_name", "research agent"),
+        ("service", "billing"),
+        ("team_id", "alpha"),
+        ("filters", ({"key": "tenant.tier", "value": "gold"},)),
+    ),
+)
+def test_selection_rejects_obsolete_fields(field: str, value: str | tuple[Mapping[str, str], ...]) -> None:
+    with pytest.raises(ValidationError, match=field):
+        ActivitySelection.model_validate({"q": "agent:research", field: value})
+
+
+def test_saved_job_preserves_its_current_sample() -> None:
     job: Final = Job.model_validate(
         {
             "id": "job",
             "created_at": NOW,
             "start": NOW,
             "end": NOW,
-            "settings": {"name": "Research", "model": "analysis", "context": "Find failures", "agent_name": "a"},
+            "settings": {"name": "Research", "model": "analysis", "context": "Find failures", "q": "agent:a"},
             "revision": 1,
-            "sample": {"executions": [{"id": "x", "source": "traces"}], "eligible": 1},
+            "sample": {
+                "executions": [{"id": execution_id(REF, "trace"), "trace_id": "trace", "trace_ref": REF}],
+                "eligible": 1,
+            },
         }
     )
-    assert job.sample is None
+    assert job.sample is not None
+    assert job.sample.executions == (Execution(id=execution_id(REF, "trace"), trace_id="trace", trace_ref=REF),)
+    assert job.sample.eligible == 1
     assert job.settings.q == "agent:a"
+    assert Job.model_validate_json(job.model_dump_json()) == job
+
+
+def test_saved_job_rejects_an_obsolete_execution_shape() -> None:
+    with pytest.raises(ValidationError, match="source"):
+        Job.model_validate(
+            {
+                "id": "job",
+                "created_at": NOW,
+                "start": NOW,
+                "end": NOW,
+                "settings": {"name": "Research", "model": "analysis", "context": "Find failures"},
+                "revision": 1,
+                "sample": {"executions": [{"id": "x", "source": "traces"}], "eligible": 1},
+            }
+        )

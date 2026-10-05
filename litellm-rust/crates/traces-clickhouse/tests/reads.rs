@@ -110,7 +110,6 @@ async fn list_costs_match_each_run_when_response_ids_are_reused(
             &PageRequest {
                 cursor: None,
                 limit: 50,
-                ..Default::default()
             },
         )
         .await?;
@@ -248,7 +247,6 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             &PageRequest {
                 cursor: None,
                 limit: 500,
-                ..Default::default()
             },
         )
         .await?;
@@ -410,7 +408,6 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
             &PageRequest {
                 cursor: None,
                 limit: 10,
-                ..Default::default()
             },
         )
         .await?;
@@ -578,7 +575,6 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
             &PageRequest {
                 cursor: None,
                 limit: 50,
-                ..Default::default()
             },
         )
         .await?;
@@ -617,7 +613,6 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
             &PageRequest {
                 cursor: None,
                 limit: 50,
-                ..Default::default()
             },
         )
         .await?;
@@ -632,7 +627,6 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
             &PageRequest {
                 cursor: None,
                 limit: 50,
-                ..Default::default()
             },
         )
         .await?;
@@ -760,7 +754,6 @@ async fn gateway_ids_resolve_through_detail_and_batch_reads_with_legacy_fallback
             &PageRequest {
                 cursor: None,
                 limit: 50,
-                ..Default::default()
             },
         )
         .await?;
@@ -827,7 +820,6 @@ async fn a_run_shared_with_another_user_stays_hidden_before_its_rollup_rows_merg
     let page = PageRequest {
         cursor: None,
         limit: 50,
-        ..Default::default()
     };
     let team = QueryScope::Owned {
         user_id: String::new(),

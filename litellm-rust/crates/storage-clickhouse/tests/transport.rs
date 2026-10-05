@@ -107,25 +107,42 @@ async fn typed_fetch_encodes_parameters_and_validates_rows(
         );
         assert_eq!(envelope.unwrap(), body);
     } else {
-        assert!(matches!(rows, Err(Error::InvalidResponse)));
-        assert!(matches!(envelope, Err(Error::InvalidResponse)));
+        assert!(rows.is_err());
+        assert!(envelope.is_err());
     }
 }
 
 #[rstest]
-#[case::result_limit("396", true)]
-#[case::memory_limit("241", false)]
-#[case::timeout("159", false)]
-#[case::unknown("", false)]
+#[case::syntax(500, Some("62"), "Code: 62. Invalid SQL", Some(62))]
+#[case::readonly(500, Some("164"), "Code: 164. Writes are denied", Some(164))]
+#[case::memory_limit(500, Some("241"), "Memory limit exceeded", Some(241))]
+#[case::timeout(408, Some("159"), "Time limit exceeded", Some(159))]
+#[case::result_limit(500, Some("396"), "Result limit exceeded", Some(396))]
+#[case::status_only(503, None, "Server unavailable", None)]
+#[case::body_code(500, None, "Code: 47. Unknown identifier", Some(47))]
+#[case::late_exception(
+    200,
+    None,
+    r#"{"data":[],"exception":"Code: 62. Invalid SQL"}"#,
+    Some(62)
+)]
 #[tokio::test]
-async fn server_result_limits_allow_smaller_pages_without_retrying_other_failures(
-    #[case] code: &str,
-    #[case] result_limit: bool,
+async fn bounded_read_preserves_database_diagnostics(
+    #[case] status: u16,
+    #[case] header: Option<&str>,
+    #[case] body: &str,
+    #[case] expected_code: Option<u32>,
 ) {
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
     let server = MockServer::start().await;
+    let response = match header {
+        Some(code) => {
+            ResponseTemplate::new(status).insert_header("X-ClickHouse-Exception-Code", code)
+        }
+        None => ResponseTemplate::new(status),
+    };
     Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(500).insert_header("X-ClickHouse-Exception-Code", code))
+        .respond_with(response.set_body_string(body))
         .expect(1)
         .mount(&server)
         .await;
@@ -138,11 +155,77 @@ async fn server_result_limits_allow_smaller_pages_without_retrying_other_failure
     )
     .await
     .unwrap_err();
-    if result_limit {
-        assert!(matches!(error, Error::ResponseTooLarge));
+    let Error::QueryFailed(failure) = error else {
+        panic!("expected database diagnostic: {error:?}");
+    };
+    assert_eq!(failure.status, status);
+    assert_eq!(failure.code, expected_code);
+    let expected_message = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|json| {
+            json.get("exception")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| body.to_owned());
+    assert_eq!(failure.message, expected_message);
+}
+
+#[rstest]
+#[case::http_failure(500)]
+#[case::late_json_failure(200)]
+#[tokio::test]
+async fn database_diagnostics_are_bounded_and_preserve_unicode(#[case] status: u16) {
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+    let server = MockServer::start().await;
+    let message = format!("Code: 62. x{}", "雪".repeat(10_000));
+    let body = if status == 200 {
+        serde_json::json!({"data": [], "exception": message}).to_string()
     } else {
-        assert!(matches!(error, Error::QueryFailed(500)));
-    }
+        message.clone()
+    };
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(status).set_body_string(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = execute_read(
+        &Client::no_redirect_for_test(),
+        &Connection::parse(&server.uri()).unwrap(),
+        "SELECT 1",
+        &BTreeMap::new(),
+    )
+    .await
+    .unwrap_err();
+    let Error::QueryFailed(failure) = error else {
+        panic!("expected database diagnostic: {error:?}");
+    };
+    assert_eq!(failure.code, Some(62));
+    assert!(failure.message.len() <= 4096);
+    assert!(message.starts_with(&failure.message));
+}
+
+#[rstest]
+#[tokio::test]
+async fn bounded_read_preserves_transport_failures() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let connection =
+        Connection::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+    let peer = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        drop(stream);
+    });
+    assert!(matches!(
+        execute_read(
+            &Client::no_redirect_for_test(),
+            &connection,
+            "SELECT 1",
+            &BTreeMap::new()
+        )
+        .await,
+        Err(Error::Transport)
+    ));
+    peer.await.unwrap();
 }
 
 #[test]

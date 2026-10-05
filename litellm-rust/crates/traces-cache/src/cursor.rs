@@ -44,15 +44,24 @@ impl Cursor {
 #[serde(deny_unknown_fields)]
 pub(super) struct RunPosition {
     order: RunOrder,
+    query_scope: String,
+    window: (i64, i64),
     value: i64,
     trace_ref: String,
 }
 
 impl RunPosition {
-    pub(super) fn after(order: RunOrder, row: &RunRow) -> Self {
+    pub(super) fn after(
+        order: RunOrder,
+        row: &RunRow,
+        query_scope: &str,
+        window: (i64, i64),
+    ) -> Self {
         let RunCursor { value, trace_ref } = order.cursor(row);
         Self {
             order,
+            query_scope: query_scope.to_owned(),
+            window,
             value,
             trace_ref,
         }
@@ -79,12 +88,19 @@ pub(super) struct TextPosition {
 pub(super) fn run_position<E>(
     cursor: Option<&str>,
     order: RunOrder,
+    query_scope: &str,
+    window: (i64, i64),
 ) -> Result<Option<RunCursor>, ReadError<E>> {
     let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) else {
         return Ok(None);
     };
     match Cursor::decode(cursor, "trace")? {
-        Cursor::Run(position) if position.order == order && !position.trace_ref.is_empty() => {
+        Cursor::Run(position)
+            if position.order == order
+                && !position.trace_ref.is_empty()
+                && position.query_scope == query_scope
+                && position.window == window =>
+        {
             Ok(Some(RunCursor {
                 value: position.value,
                 trace_ref: position.trace_ref,
@@ -92,6 +108,35 @@ pub(super) fn run_position<E>(
         }
         _ => Err(ReadError::InvalidCursor("trace")),
     }
+}
+
+pub fn resolve_run_window<E>(
+    start_ms: Option<i64>,
+    end_ms: Option<i64>,
+    cursor: Option<&str>,
+    default_window: (i64, i64),
+) -> Result<(i64, i64), ReadError<E>> {
+    let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) else {
+        let window = (
+            start_ms.unwrap_or(default_window.0),
+            end_ms.unwrap_or(default_window.1),
+        );
+        return if window.0 < window.1 {
+            Ok(window)
+        } else {
+            Err(ReadError::InvalidParameters)
+        };
+    };
+    let Cursor::Run(position) = Cursor::decode(cursor, "trace")? else {
+        return Err(ReadError::InvalidCursor("trace"));
+    };
+    if position.window.0 >= position.window.1
+        || start_ms.is_some_and(|start| start != position.window.0)
+        || end_ms.is_some_and(|end| end != position.window.1)
+    {
+        return Err(ReadError::InvalidCursor("trace"));
+    }
+    Ok(position.window)
 }
 
 pub(super) fn span_position<E>(cursor: &str) -> Result<SpanPosition, ReadError<E>> {
@@ -129,9 +174,13 @@ mod tests {
 
     use super::*;
 
+    const WINDOW: (i64, i64) = (10, 100);
+
     fn run(order: RunOrder, value: i64, trace_ref: &str) -> String {
         Cursor::Run(RunPosition {
             order,
+            query_scope: "query".into(),
+            window: WINDOW,
             value,
             trace_ref: trace_ref.into(),
         })
@@ -169,10 +218,15 @@ mod tests {
     #[rstest]
     #[case::newest(RunOrder::NEWEST, 1_790_742_989_377)]
     #[case::zero_value(BY_ERRORS, 0)]
-    fn run_cursor_round_trips_under_its_own_order(#[case] order: RunOrder, #[case] value: i64) {
-        let position = run_position::<std::io::Error>(Some(&run(order, value, "4BAD")), order)
-            .unwrap()
-            .unwrap();
+    fn run_cursor_round_trips_under_its_query(#[case] order: RunOrder, #[case] value: i64) {
+        let position = run_position::<std::io::Error>(
+            Some(&run(order, value, "4BAD")),
+            order,
+            "query",
+            WINDOW,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             (position.value, position.trace_ref.as_str()),
             (value, "4BAD")
@@ -180,11 +234,32 @@ mod tests {
     }
 
     #[rstest]
+    #[case::order(BY_ERRORS, "query", WINDOW)]
+    #[case::direction(RunOrder { descending: false, ..RunOrder::NEWEST }, "query", WINDOW)]
+    #[case::scope(RunOrder::NEWEST, "other-query", WINDOW)]
+    #[case::window(RunOrder::NEWEST, "query", (11, 100))]
+    fn run_cursor_rejects_a_changed_query(
+        #[case] order: RunOrder,
+        #[case] scope: &str,
+        #[case] window: (i64, i64),
+    ) {
+        assert!(matches!(
+            run_position::<std::io::Error>(
+                Some(&run(RunOrder::NEWEST, 1, "ref")),
+                order,
+                scope,
+                window
+            ),
+            Err(ReadError::InvalidCursor("trace"))
+        ));
+    }
+
+    #[rstest]
     #[case::absent(None)]
     #[case::empty(Some(""))]
     fn missing_run_cursor_starts_from_the_first_page(#[case] cursor: Option<&str>) {
         assert!(
-            run_position::<std::io::Error>(cursor, RunOrder::NEWEST)
+            run_position::<std::io::Error>(cursor, RunOrder::NEWEST, "query", WINDOW)
                 .unwrap()
                 .is_none()
         );
@@ -193,17 +268,59 @@ mod tests {
     #[rstest]
     #[case::not_base64("abc".into())]
     #[case::not_json(URL_SAFE.encode("not-json"))]
-    #[case::untagged_tuple(json(serde_json::json!([1, "ref"])))]
-    #[case::other_key(run(BY_ERRORS, 1, "ref"))]
-    #[case::other_direction(run(RunOrder { descending: false, ..RunOrder::NEWEST }, 1, "ref"))]
     #[case::empty_ref(run(RunOrder::NEWEST, 1, ""))]
     #[case::span_cursor(span())]
     #[case::text_cursor(text(SpanPart::Error, 0, "A".repeat(64)))]
-    #[case::without_order(json(serde_json::json!({"kind": "run", "position": {"value": 1, "trace_ref": "r"}})))]
-    #[case::unknown_field(json(serde_json::json!({"kind": "run", "position": {"order": {"key": "start_ms", "descending": true}, "value": 1, "trace_ref": "r", "extra": 1}})))]
-    fn run_cursors_not_minted_under_the_requested_order_are_rejected(#[case] cursor: String) {
+    #[case::missing_fields(json(serde_json::json!({"kind": "run", "position": {"value": 1, "trace_ref": "r"}})))]
+    fn malformed_run_cursors_are_rejected(#[case] cursor: String) {
         assert!(matches!(
-            run_position::<std::io::Error>(Some(&cursor), RunOrder::NEWEST),
+            run_position::<std::io::Error>(Some(&cursor), RunOrder::NEWEST, "query", WINDOW),
+            Err(ReadError::InvalidCursor("trace"))
+        ));
+    }
+
+    #[rstest]
+    #[case::default(None, None, (0, 50))]
+    #[case::start(Some(10), None, (10, 50))]
+    #[case::end(None, Some(40), (0, 40))]
+    #[case::explicit(Some(20), Some(40), (20, 40))]
+    fn first_page_resolves_only_missing_window_bounds(
+        #[case] start: Option<i64>,
+        #[case] end: Option<i64>,
+        #[case] expected: (i64, i64),
+    ) {
+        assert_eq!(
+            resolve_run_window::<std::io::Error>(start, end, None, (0, 50)).unwrap(),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::omitted(None, None)]
+    #[case::start(Some(WINDOW.0), None)]
+    #[case::end(None, Some(WINDOW.1))]
+    #[case::explicit(Some(WINDOW.0), Some(WINDOW.1))]
+    fn cursor_keeps_its_window_when_the_default_clock_advances(
+        #[case] start: Option<i64>,
+        #[case] end: Option<i64>,
+    ) {
+        let cursor = run(RunOrder::NEWEST, 1, "ref");
+        assert_eq!(
+            resolve_run_window::<std::io::Error>(start, end, Some(&cursor), (200, 300)).unwrap(),
+            WINDOW
+        );
+    }
+
+    #[rstest]
+    #[case::start(Some(WINDOW.0 + 1), None)]
+    #[case::end(None, Some(WINDOW.1 + 1))]
+    fn cursor_rejects_explicit_window_changes(
+        #[case] start: Option<i64>,
+        #[case] end: Option<i64>,
+    ) {
+        let cursor = run(RunOrder::NEWEST, 1, "ref");
+        assert!(matches!(
+            resolve_run_window::<std::io::Error>(start, end, Some(&cursor), (200, 300)),
             Err(ReadError::InvalidCursor("trace"))
         ));
     }

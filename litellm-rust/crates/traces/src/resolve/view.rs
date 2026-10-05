@@ -224,7 +224,7 @@ pub fn listed_summary(row: &RunRow) -> TraceSummary {
         frameworks: row.frameworks.clone(),
         input_preview: row.input_preview.clone(),
         start_time: iso_time(row.start_ms),
-        duration_ms: row.duration_ms as f64,
+        duration_ms: row.duration_ns as f64 / NANOS_PER_MS,
         status: row.status,
         span_count: row.span_count,
         agent_count: row.agent_count,

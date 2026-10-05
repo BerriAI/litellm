@@ -779,7 +779,9 @@ fn gateway_id_miss_only_vetoes_rows_that_carry_a_call_id(
 }
 
 #[rstest]
-fn listed_summary_keeps_rollup_counts_with_unknown_cost() {
+#[case::whole_milliseconds(51_385_000_000)]
+#[case::fractional_milliseconds(51_385_123_456)]
+fn listed_summary_keeps_rollup_counts_with_unknown_cost(#[case] duration_ns: u64) {
     let summary = listed_summary(&RunRow {
         trace_id: "t1".into(),
         trace_ref: "ref".into(),
@@ -791,7 +793,7 @@ fn listed_summary_keeps_rollup_counts_with_unknown_cost() {
         input_preview: "hi".into(),
         status: SpanStatus::Ok,
         start_ms: 1_790_742_989_377,
-        duration_ms: 51_385,
+        duration_ns,
         span_count: 126,
         agent_count: 2,
         agent_invocations: 0,
@@ -805,6 +807,7 @@ fn listed_summary_keeps_rollup_counts_with_unknown_cost() {
         error_count: 1,
     });
     assert_eq!(summary.spend, None);
+    assert_eq!(summary.duration_ms, duration_ns as f64 / 1_000_000.0);
     assert_eq!(summary.status, SpanStatus::Ok);
     assert_eq!(
         (
