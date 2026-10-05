@@ -978,14 +978,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         base_request: BedrockRequest,
         request_data: dict | None,  # mutable-ok: proxy request body dict, read by the dynamic-params helper
-    ) -> tuple[dict, str | None]:
+    ) -> tuple[dict, str | None]:  # mutable-ok: ApplyGuardrail JSON request body
         """Merge the request's dynamic ApplyGuardrail params into `base_request` and pick up its api_key."""
         bedrock_request_data: Final[dict] = dict(base_request)  # mutable-ok: JSON request body
         api_key: str | None = None
         if request_data:
             dynamic_request_body_params = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
             bedrock_request_data.update(
-                {  # mutable-ok: JSON request body
+                {
                     key: value
                     for key, value in dynamic_request_body_params.items()
                     if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST
@@ -1279,7 +1279,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         headers_dict: Final = dict(prepared_request.headers)
         verbose_proxy_logger.debug(
             "Bedrock AI request body: %s, url %s, headers: %s",
-            {**bedrock_request_data, "content": _without_image_bytes(content)}  # mutable-ok: JSON request body
+            {**bedrock_request_data, "content": _without_image_bytes(content)}
             if any("image" in item for item in content)
             else bedrock_request_data,
             prepared_request.url,
@@ -2538,7 +2538,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     async def async_scan_request_attachments(
         self,
-        data: dict,
+        data: dict,  # mutable-ok: proxy request body dict, mutated by the logging helper
         call_type: CallTypesLiteral,
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
     ) -> None:
@@ -2611,7 +2611,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """Scan text documents like a user turn and block when the guardrail intervenes on them."""
         response: Final = await self.make_bedrock_api_request(
             source="INPUT",
-            messages=[{"role": "user", "content": text} for text in document_texts],  # mutable-ok: API message payload
+            messages=[{"role": "user", "content": text} for text in document_texts],
             request_data=request_data,
             logging_event_type=event_type,
         )
@@ -2636,7 +2636,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         now: Final = datetime.now(timezone.utc).timestamp()
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
-            guardrail_json_response={"unscannable_attachments": list(unscannable)},  # mutable-ok: JSON wire format
+            guardrail_json_response={"unscannable_attachments": list(unscannable)},
             request_data=request_data,
             guardrail_status="guardrail_intervened",
             start_time=now,

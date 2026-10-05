@@ -50,9 +50,9 @@ class _Block(NamedTuple):
 
 
 _Classified = _Image | _Unscannable | _DocumentText | None
-_BlockClassifier = Callable[[Mapping[str, object]], _Classified]  # mutable-ok: Callable parameter list
+_BlockClassifier = Callable[[Mapping[str, object]], _Classified]
 _NestedToolBlocks = Callable[
-    [Mapping[str, object]],  # mutable-ok: Callable parameter list
+    [Mapping[str, object]],
     tuple[Mapping[str, object], ...],
 ]
 
@@ -167,7 +167,7 @@ def _is_mapping(value: object) -> TypeGuard[Mapping[str, object]]:  # guard-ok: 
     return isinstance(value, Mapping)
 
 
-def _is_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
+def _is_list(value: object) -> TypeGuard[Sequence[object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
     return isinstance(value, list)
 
 
