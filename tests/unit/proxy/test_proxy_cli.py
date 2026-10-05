@@ -1,6 +1,5 @@
 import inspect
 from collections.abc import Callable
-from typing import Final
 import os
 from contextlib import nullcontext
 from pathlib import Path
