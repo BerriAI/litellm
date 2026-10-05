@@ -330,7 +330,7 @@ async def extract_stored(
         content: Final = await read(execution.id, previous, request.offset)
         return tuple(p for p in content.parts if p.span_id == request.span_id)
 
-    async def examine(catalog: tuple[tuple[str, str, str, str, str], ...]) -> Examined:
+    async def examine(catalog: tuple[tuple[str, str, str, str, str, str, str], ...]) -> Examined:
         feedback_page = 0  # rebind-ok: navigate bounded feedback pages
         feedback_seen: set[int] = {0}  # mutable-ok: detect feedback navigation loops
         must_decide = False  # rebind-ok: unavailable evidence requires a final decision
@@ -356,7 +356,15 @@ async def extract_stored(
                     "checks": tuple(c.model_dump() for c in claim.job.settings.analysis_checks),
                     "execution": execution.model_dump(),
                     "catalog_complete": page.next_cursor is None and len(catalog) == span_count,
-                    "catalog_fields": ("span_id", "parent_span_id", "name", "kind", "preview"),
+                    "catalog_fields": (
+                        "span_id",
+                        "parent_span_id",
+                        "name",
+                        "kind",
+                        "preview",
+                        "start_time",
+                        "end_time",
+                    ),
                     "catalog": catalog,
                     "task_and_outcome": tuple(
                         p.model_copy(update=MappingProxyType({"content": overview_content(p, root_count)})).model_dump()

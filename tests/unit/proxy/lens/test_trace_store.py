@@ -17,6 +17,8 @@ def test_trace_store_pages_large_payloads_and_recovers_exact_evidence() -> None:
                         name="tool",
                         kind="tool",
                         content="x" * 8000,
+                        start_time="2026-10-03 10:00:00.123456789",
+                        end_time="2026-10-03 10:00:00.123456790",
                     ),
                 )
             )
@@ -25,6 +27,7 @@ def test_trace_store_pages_large_payloads_and_recovers_exact_evidence() -> None:
         assert len(catalogs) > 1
         assert all(len(json.dumps(page)) < 25000 for page in catalogs)
         assert sum(len(page) for page in catalogs) == 1001
+        assert catalogs[0][0][-2:] == ("2026-10-03 10:00:00.123456789", "2026-10-03 10:00:00.123456790")
         assert store.previous("1000") == "0999"
         assert store.previous("0000") == ""
         assert store.get("missing") is None

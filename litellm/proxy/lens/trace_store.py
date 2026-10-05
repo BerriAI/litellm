@@ -66,11 +66,19 @@ class TraceStore:
     def count(self) -> int:
         return _COUNT.validate_python(self.connection.execute("SELECT count(*) FROM spans").fetchone())[0]
 
-    def catalogs(self, root_count: int) -> Iterator[tuple[tuple[str, str, str, str, str], ...]]:
-        rows: list[tuple[str, str, str, str, str]] = []  # mutable-ok: one bounded catalog window
+    def catalogs(self, root_count: int) -> Iterator[tuple[tuple[str, str, str, str, str, str, str], ...]]:
+        rows: list[tuple[str, str, str, str, str, str, str]] = []  # mutable-ok: one bounded catalog window
         size = 0  # rebind-ok: track the current window's serialized size
         for part in self.parts():
-            row = (part.span_id, part.parent_span_id, part.name, part.kind, overview_content(part, root_count))
+            row = (
+                part.span_id,
+                part.parent_span_id,
+                part.name,
+                part.kind,
+                overview_content(part, root_count),
+                part.start_time,
+                part.end_time,
+            )
             width = len(json.dumps(row))
             if rows and size + width > 24000:
                 yield tuple(rows)

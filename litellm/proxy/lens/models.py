@@ -169,6 +169,8 @@ class TracePart(Record):
     kind: str
     content: str
     truncated: bool = False
+    start_time: str = ""
+    end_time: str = ""
 
 
 class ExecutionContent(Record):

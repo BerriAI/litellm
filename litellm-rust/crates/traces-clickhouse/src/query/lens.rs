@@ -216,6 +216,8 @@ pub struct LensContentRow {
     pub parent_span_id: String,
     pub name: String,
     pub kind: String,
+    pub start_time: String,
+    pub end_time: String,
     pub content: String,
     #[serde(deserialize_with = "super::number::flag")]
     #[cfg_attr(
