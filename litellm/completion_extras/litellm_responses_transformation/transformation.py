@@ -1117,7 +1117,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     if original_type == "text":
                         converted = with_prompt_cache_breakpoint(
                             self._convert_content_str_to_input_text(item.get("text", ""), role),
-                            item.get("prompt_cache_breakpoint"),
+                            cast(dict[str, object], item).get(  # cast-ok: isinstance confirms the content block is a mapping
+                                "prompt_cache_breakpoint"
+                            ),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   text -> %s", converted)
@@ -1130,7 +1132,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                     role,
                                 )
                             ),
-                            item.get("prompt_cache_breakpoint"),
+                            cast(dict[str, object], item).get(  # cast-ok: isinstance confirms the content block is a mapping
+                                "prompt_cache_breakpoint"
+                            ),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   image_url -> %s", converted)
@@ -1146,7 +1150,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                 _input_file_from_file_value(
                                     cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
                                 ),
-                                item.get("prompt_cache_breakpoint"),
+                                cast(dict[str, object], item).get(  # cast-ok: isinstance confirms the content block is a mapping
+                                    "prompt_cache_breakpoint"
+                                ),
                             )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   file -> %s", converted)
