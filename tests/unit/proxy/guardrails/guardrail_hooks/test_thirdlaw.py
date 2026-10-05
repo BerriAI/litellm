@@ -1345,22 +1345,38 @@ def _redacting_modify_decision() -> httpx.Response:
     )
 
 
-async def test_masking_guardrail_does_not_buffer_and_replay_originals():
-    """Buffered replay hands back the unredacted chunks, so a masking guardrail must not buffer."""
+def _emitted_text(out: Sequence[object]) -> str:
+    return "".join(
+        choice.delta.content or ""
+        for chunk in out
+        if isinstance(chunk, ModelResponseStream)
+        for choice in chunk.choices
+    )
+
+
+async def test_masking_guardrail_streams_only_the_redacted_rewrite():
+    """Masking must keep the stream buffered: unbuffered, every original chunk reaches the client
+    before the scan decides and the redaction arrives too late to apply."""
     g = _make_guardrail(decisions=[_redacting_modify_decision()], mask_response_content=True)
     out = await _collect(
         g.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(), response=_aiter(_stream_chunks()), request_data=_request_data()
         )
     )
-    emitted = "".join(
-        choice.delta.content or ""
-        for chunk in out
-        if isinstance(chunk, ModelResponseStream)
-        for choice in chunk.choices
+    emitted = _emitted_text(out)
+    assert emitted == "the secret is [REDACTED]"
+    assert "sk-leak" not in emitted
+
+
+async def test_masking_guardrail_releases_the_original_stream_on_allow():
+    g = _make_guardrail(decisions=[_decision_response({"action": "allow"})], mask_response_content=True)
+    chunks = _stream_chunks()
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(), response=_aiter(chunks), request_data=_request_data()
+        )
     )
-    assert emitted == "the secret is sk-leak"
-    assert "[REDACTED]" not in emitted
+    assert out == chunks
 
 
 async def test_streaming_buffered_block_raises_streaming_callback_error():
