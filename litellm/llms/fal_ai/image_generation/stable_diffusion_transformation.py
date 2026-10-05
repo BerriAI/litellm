@@ -270,10 +270,10 @@ class FalAIStableDiffusionConfig(FalAIBaseConfig):
         # Add additional metadata from Stable Diffusion response
         if hasattr(model_response, "_hidden_params"):
             if "seed" in response_object:
-                model_response._hidden_params["seed"] = response_object["seed"]
+                model_response.hidden_params["seed"] = response_object["seed"]
             if "timings" in response_object:
-                model_response._hidden_params["timings"] = response_object["timings"]
+                model_response.hidden_params["timings"] = response_object["timings"]
             if "has_nsfw_concepts" in response_object:
-                model_response._hidden_params["has_nsfw_concepts"] = response_object["has_nsfw_concepts"]
+                model_response.hidden_params["has_nsfw_concepts"] = response_object["has_nsfw_concepts"]
 
         return model_response

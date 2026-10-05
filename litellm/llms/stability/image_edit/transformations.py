@@ -300,14 +300,14 @@ class StabilityImageEditConfig(BaseImageEditConfig):
             )
 
         if not hasattr(model_response, "_hidden_params"):
-            model_response._hidden_params = {}
-        if "additional_headers" not in model_response._hidden_params:
-            model_response._hidden_params["additional_headers"] = {}
+            model_response.hidden_params = {}
+        if "additional_headers" not in model_response.hidden_params:
+            model_response.hidden_params["additional_headers"] = {}
         # Override: fetch model-cost from model_cost map based on the provided model name
         model_info: Final = get_model_info(model, custom_llm_provider="stability")
         cost_per_image: Final = model_info.get("output_cost_per_image", 0)
         if cost_per_image is not None:
-            model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
+            model_response.hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
                 cost_per_image
             )
         return model_response

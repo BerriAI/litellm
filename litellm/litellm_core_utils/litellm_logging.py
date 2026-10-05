@@ -3253,8 +3253,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
             should_compute_batch_data: Final = not has_explicit_batch_data and batch_cost_is_final(result)
             if has_explicit_batch_data:
-                result._hidden_params["response_cost"] = batch_cost
-                result._hidden_params["batch_models"] = batch_models
+                result.hidden_params["response_cost"] = batch_cost
+                result.hidden_params["batch_models"] = batch_models
                 result._hidden_params["batch_successful_requests"] = batch_successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same result._hidden_params pattern as response_cost/batch_models above
                 result._hidden_params["batch_failed_requests"] = batch_failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result.usage = batch_usage
@@ -3281,8 +3281,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     model_info=self.get_router_deployment_model_info(),
                 )
 
-                result._hidden_params["response_cost"] = batch_result.cost
-                result._hidden_params["batch_models"] = batch_result.models
+                result.hidden_params["response_cost"] = batch_result.cost
+                result.hidden_params["batch_models"] = batch_result.models
                 result._hidden_params["batch_successful_requests"] = batch_result.successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result._hidden_params["batch_failed_requests"] = batch_result.failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result.usage = batch_result.usage

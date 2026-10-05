@@ -414,7 +414,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     model=model,
                     custom_llm_provider=custom_llm_provider,
                 )
-                litellm_model_response._hidden_params["response_cost"] = response_cost
+                litellm_model_response.hidden_params["response_cost"] = response_cost
             elif is_image_generation:
                 # Handle image generation cost calculation
                 response_cost = OpenAIPassthroughLoggingHandler._calculate_image_generation_cost(
@@ -434,8 +434,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 )
                 # Set the calculated cost in _hidden_params to prevent recalculation
                 if not hasattr(litellm_model_response, "_hidden_params"):
-                    litellm_model_response._hidden_params = {}
-                litellm_model_response._hidden_params["response_cost"] = response_cost
+                    litellm_model_response.hidden_params = {}
+                litellm_model_response.hidden_params["response_cost"] = response_cost
             elif is_image_editing:
                 # Handle image editing cost calculation
                 response_cost = OpenAIPassthroughLoggingHandler._calculate_image_editing_cost(
@@ -455,8 +455,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 )
                 # Set the calculated cost in _hidden_params to prevent recalculation
                 if not hasattr(litellm_model_response, "_hidden_params"):
-                    litellm_model_response._hidden_params = {}
-                litellm_model_response._hidden_params["response_cost"] = response_cost
+                    litellm_model_response.hidden_params = {}
+                litellm_model_response.hidden_params["response_cost"] = response_cost
             elif is_responses:
                 # Responses-API cost tracking — see
                 # `_build_responses_api_response_and_cost` for why this needs

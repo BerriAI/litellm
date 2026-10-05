@@ -591,8 +591,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Store processed headers in additional_headers so they get returned to the client
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
         return response
 
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
@@ -839,8 +839,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         raw_response_headers: Final = dict(raw_response.headers)
         processed_headers: Final = process_response_headers(raw_response_headers)
         response: Final = ResponsesAPIResponse.model_validate(raw_response_json)
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
 
         return response
 
@@ -921,8 +921,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         processed_headers: Final = process_response_headers(raw_response_headers)
 
         response: Final = ResponsesAPIResponse.model_validate(raw_response_json)
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
 
         return response
 
@@ -991,7 +991,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
 
         return response

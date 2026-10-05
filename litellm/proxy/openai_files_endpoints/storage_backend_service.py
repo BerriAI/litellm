@@ -170,9 +170,9 @@ class StorageBackendFileService:
         )
 
         # Store storage metadata in hidden params
-        if not hasattr(file_object, "_hidden_params") or file_object._hidden_params is None:
-            file_object._hidden_params = {}
-        file_object._hidden_params.update(
+        if not hasattr(file_object, "_hidden_params") or file_object.hidden_params is None:
+            file_object.hidden_params = {}
+        file_object.hidden_params.update(
             {
                 "storage_backend": target_storage,
                 "storage_url": storage_url,

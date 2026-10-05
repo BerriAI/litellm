@@ -649,9 +649,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             ),
         )
         if response is not None and self._accumulated_provider_specific_fields:
-            if not hasattr(response, "_hidden_params") or response._hidden_params is None:
-                response._hidden_params = {}
-            response._hidden_params.setdefault("provider_specific_fields", {}).update(
+            if not hasattr(response, "_hidden_params") or response.hidden_params is None:
+                response.hidden_params = {}
+            response.hidden_params.setdefault("provider_specific_fields", {}).update(
                 self._accumulated_provider_specific_fields
             )
         return response

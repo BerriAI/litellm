@@ -236,6 +236,6 @@ class FalAIImagen4Config(FalAIBaseConfig):
         # Add seed metadata from Imagen4 response
         if hasattr(model_response, "_hidden_params"):
             if "seed" in response_data:
-                model_response._hidden_params["seed"] = response_data["seed"]
+                model_response.hidden_params["seed"] = response_data["seed"]
 
         return model_response

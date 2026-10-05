@@ -165,7 +165,7 @@ class _CombinedChunkSplitter:
             chunk.usage = None
         hidden_params: Final = getattr(chunk, "_hidden_params", None)
         if isinstance(hidden_params, dict) and "usage" in hidden_params:
-            chunk._hidden_params = {key: value for key, value in hidden_params.items() if key != "usage"}
+            chunk.hidden_params = {key: value for key, value in hidden_params.items() if key != "usage"}
 
     @staticmethod
     def _split_by_payload_kind(chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":

@@ -1,5 +1,5 @@
 import asyncio
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -7,7 +7,7 @@ import pytest
 import json
 
 import litellm
-from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 
 
 @pytest.mark.parametrize("stream", (False, True))
@@ -589,3 +589,20 @@ def test_set_response_cost_none_leaves_hidden_params_empty():
     binary_response.set_response_cost(None)
 
     assert "response_cost" not in binary_response._hidden_params
+
+
+def test_responses_api_response_hidden_params_public_accessor_is_instance_scoped() -> None:
+    first: Final = ResponsesAPIResponse(id="resp_first", created_at=1, output=[])
+    second: Final = ResponsesAPIResponse(id="resp_second", created_at=2, output=[])
+
+    assert first.hidden_params is first._hidden_params
+
+    first.hidden_params["public_key"] = "visible"
+    assert first._hidden_params["public_key"] == "visible"
+    assert first.hidden_params is not second.hidden_params
+    assert "public_key" not in second.hidden_params
+
+    replacement: Final = {"replacement_key": "replacement_value"}
+    first.hidden_params = replacement
+    assert first._hidden_params is replacement
+    assert first.hidden_params is replacement

@@ -115,8 +115,8 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
                 # Set the calculated cost in _hidden_params to prevent recalculation
                 if not hasattr(litellm_model_response, "_hidden_params"):
-                    litellm_model_response._hidden_params = {}
-                litellm_model_response._hidden_params["response_cost"] = response_cost
+                    litellm_model_response.hidden_params = {}
+                litellm_model_response.hidden_params["response_cost"] = response_cost
 
                 kwargs["response_cost"] = response_cost
                 kwargs["model"] = model

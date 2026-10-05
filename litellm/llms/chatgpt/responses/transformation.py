@@ -239,8 +239,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         processed_headers: Final = process_response_headers(raw_headers)
         if not hasattr(completed_response, "_hidden_params"):
             setattr(completed_response, "_hidden_params", {})
-        completed_response._hidden_params["additional_headers"] = processed_headers
-        completed_response._hidden_params["headers"] = raw_headers
+        completed_response.hidden_params["additional_headers"] = processed_headers
+        completed_response.hidden_params["headers"] = raw_headers
 
     def get_complete_url(
         self,

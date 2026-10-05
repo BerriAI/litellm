@@ -1,4 +1,5 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -125,10 +126,12 @@ def test_apply_fallback_hidden_params_to_item_none_item():
 
 
 def test_apply_fallback_hidden_params_to_item_no_existing_additional_headers():
-    class FakeChunk:
-        _hidden_params = {"model_id": "test-id"}
-
-    chunk = FakeChunk()
+    chunk: Final = litellm.ModelResponseStream(
+        id="test",
+        model="openai/internal-fallback",
+        choices=[],
+    )
+    chunk.hidden_params["model_id"] = "test-id"
     Router._apply_fallback_hidden_params_to_item(
         chunk,
         (
@@ -137,9 +140,9 @@ def test_apply_fallback_hidden_params_to_item_no_existing_additional_headers():
         ),
     )
 
-    assert chunk._hidden_params["api_base"] == "http://fallback.example"
-    assert chunk._hidden_params["model_id"] == "test-id"
-    assert chunk._hidden_params["additional_headers"] == {
+    assert chunk.hidden_params["api_base"] == "http://fallback.example"
+    assert chunk.hidden_params["model_id"] == "test-id"
+    assert chunk.hidden_params["additional_headers"] == {
         "x-litellm-attempted-fallbacks": 1
     }
 

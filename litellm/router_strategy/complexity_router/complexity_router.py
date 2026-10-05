@@ -410,7 +410,7 @@ def _parent_session_kwargs(request_kwargs: Mapping[str, object] | None) -> Mappi
 
 
 def _response_cost_or_none(response: ModelResponse | ResponsesAPIResponse) -> float | None:
-    hidden_params: Final = response._hidden_params
+    hidden_params: Final = response.hidden_params
     if not isinstance(hidden_params, dict):
         return None
     cost: Final = hidden_params.get("response_cost")

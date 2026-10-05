@@ -211,7 +211,7 @@ async def _create_provider_batch_for_managed_file(
     }
     response: Final = await llm_router.acreate_batch(**request)
     response.input_file_id = input_file_id
-    response._hidden_params["unified_file_id"] = unified_file_id
+    response.hidden_params["unified_file_id"] = unified_file_id
     return response
 
 
@@ -484,7 +484,7 @@ async def create_batch(
                     **_create_batch_data,
                 )
 
-        response._hidden_params[BATCH_CREATE_HIDDEN_PARAM] = True
+        response.hidden_params[BATCH_CREATE_HIDDEN_PARAM] = True
 
         ### CALL HOOKS ### - modify outgoing data
         response = await proxy_logging_obj.post_call_success_hook(
@@ -736,11 +736,11 @@ async def retrieve_batch(
                 )
 
             response = await llm_router.aretrieve_batch(**data)
-            response._hidden_params["unified_batch_id"] = unified_batch_id
+            response.hidden_params["unified_batch_id"] = unified_batch_id
             if unified_batch_id:
                 model_id_from_batch: Final = get_model_id_from_unified_batch_id(unified_batch_id)
                 if model_id_from_batch:
-                    response._hidden_params["model_id"] = model_id_from_batch
+                    response.hidden_params["model_id"] = model_id_from_batch
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
@@ -1168,10 +1168,10 @@ async def cancel_batch(
             data["model"] = model_id_from_batch
             data["batch_id"] = get_batch_id_from_unified_batch_id(unified_batch_id)
             response = await llm_router.acancel_batch(**data)
-            response._hidden_params["unified_batch_id"] = unified_batch_id
+            response.hidden_params["unified_batch_id"] = unified_batch_id
 
-            if not response._hidden_params.get("model_id") and data.get("model"):
-                response._hidden_params["model_id"] = data["model"]
+            if not response.hidden_params.get("model_id") and data.get("model"):
+                response.hidden_params["model_id"] = data["model"]
 
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:

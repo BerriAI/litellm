@@ -2098,10 +2098,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> None:
         setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
         if grounding_metadata:
-            model_response._hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
+            model_response.hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
         setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)
         if url_context_metadata:
-            model_response._hidden_params["vertex_ai_url_context_metadata"] = url_context_metadata
+            model_response.hidden_params["vertex_ai_url_context_metadata"] = url_context_metadata
         setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)
         setattr(model_response, "vertex_ai_safety_results", safety_ratings)
         if safety_ratings:
@@ -2128,7 +2128,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     merged.append(value)
             if merged:
                 setattr(response, field_name, merged)
-                response._hidden_params[field_name] = merged
+                response.hidden_params[field_name] = merged
 
     @staticmethod
     def _convert_grounding_metadata_to_annotations(
@@ -2470,27 +2470,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ## ADD METADATA TO RESPONSE ##
 
             setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
-            model_response._hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
+            model_response.hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
 
             setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)
 
-            model_response._hidden_params["vertex_ai_url_context_metadata"] = url_context_metadata
+            model_response.hidden_params["vertex_ai_url_context_metadata"] = url_context_metadata
 
             setattr(model_response, "vertex_ai_safety_results", safety_ratings)
-            model_response._hidden_params["vertex_ai_safety_results"] = (
+            model_response.hidden_params["vertex_ai_safety_results"] = (
                 safety_ratings  # older approach - maintaining to prevent regressions
             )
 
             ## ADD CITATION METADATA ##
             setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)
-            model_response._hidden_params["vertex_ai_citation_metadata"] = (
+            model_response.hidden_params["vertex_ai_citation_metadata"] = (
                 citation_metadata  # older approach - maintaining to prevent regressions
             )
 
             ## ADD TRAFFIC TYPE ##
             traffic_type: Final = completion_response.get("usageMetadata", {}).get("trafficType")
             if traffic_type:
-                model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
+                model_response.hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
             ## ADD SERVICE TIER ##
             if getattr(raw_response, "headers", None):
@@ -3221,7 +3221,7 @@ class ModelResponseIterator:
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:
-            model_response._hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
+            model_response.hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
         service_tier: Final = self.response_headers.get("x-gemini-service-tier")
         if service_tier:
@@ -3278,7 +3278,7 @@ class ModelResponseIterator:
 
             setattr(model_response, "usage", usage)
 
-            model_response._hidden_params["is_finished"] = False
+            model_response.hidden_params["is_finished"] = False
             return model_response
 
         except json.JSONDecodeError:

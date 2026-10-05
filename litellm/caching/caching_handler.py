@@ -527,7 +527,7 @@ class LLMCachingHandler:
                 model=model_name,
                 data=[None] * len(kwargs_input_as_list),
             )
-            final_embedding_cached_response._hidden_params["cache_hit"] = True
+            final_embedding_cached_response.hidden_params["cache_hit"] = True
 
             prompt_tokens = 0
             aggregated_details: dict | None = None
@@ -712,7 +712,7 @@ class LLMCachingHandler:
             ],
             usage=merged_usage,
             hidden_params={
-                **cached._hidden_params,
+                **cached.hidden_params,
                 "cache_hit": True,
             },
             _response_headers=cached._response_headers,
@@ -971,10 +971,10 @@ class LLMCachingHandler:
                 response_obj: Final = ResponsesAPIResponse(**cached_result)
                 if (
                     hasattr(response_obj, "_hidden_params")
-                    and response_obj._hidden_params is not None
-                    and isinstance(response_obj._hidden_params, dict)
+                    and response_obj.hidden_params is not None
+                    and isinstance(response_obj.hidden_params, dict)
                 ):
-                    response_obj._hidden_params["cache_hit"] = True
+                    response_obj.hidden_params["cache_hit"] = True
 
                 if _stream_replay_requested(kwargs):
                     cached_result = CachedResponsesAPIStreamingIterator(

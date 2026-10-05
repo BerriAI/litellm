@@ -105,8 +105,8 @@ class AzureAIRerankConfig(CohereRerankConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        base_model: Final = self._get_base_model(rerank_response._hidden_params.get("llm_provider-azureml-model-group"))
-        rerank_response._hidden_params["model"] = base_model
+        base_model: Final = self._get_base_model(rerank_response.hidden_params.get("llm_provider-azureml-model-group"))
+        rerank_response.hidden_params["model"] = base_model
         return rerank_response
 
     def _get_base_model(self, azure_model_group: str | None) -> str | None:

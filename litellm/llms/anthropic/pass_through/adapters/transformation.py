@@ -1739,8 +1739,8 @@ class LiteLLMAnthropicMessagesAdapter:
             )
             if getattr(response, "usage", None) is not None:
                 litellm_usage_chunk: Usage | None = response.usage
-            elif hasattr(response, "_hidden_params") and "usage" in response._hidden_params:
-                litellm_usage_chunk = response._hidden_params["usage"]
+            elif hasattr(response, "_hidden_params") and "usage" in response.hidden_params:
+                litellm_usage_chunk = response.hidden_params["usage"]
             else:
                 litellm_usage_chunk = None
             if litellm_usage_chunk is not None:

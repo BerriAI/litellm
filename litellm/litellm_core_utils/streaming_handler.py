@@ -205,6 +205,14 @@ def _provider_hidden_params(
 
 
 class CustomStreamWrapper:
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     def __init__(
         self,
         completion_stream,
@@ -757,14 +765,14 @@ class CustomStreamWrapper:
         # must win over both caller-supplied hidden_params and the computed
         # custom_llm_provider/created_at values, so it comes last.
         if hidden_params is not None:
-            model_response._hidden_params = {
+            model_response.hidden_params = {
                 **hidden_params,
                 "custom_llm_provider": _logging_obj_llm_provider,
                 "created_at": time.time(),
                 **self._base_hidden_params,
             }
         else:
-            model_response._hidden_params = {
+            model_response.hidden_params = {
                 "custom_llm_provider": _logging_obj_llm_provider,
                 "created_at": time.time(),
                 **self._base_hidden_params,
@@ -795,7 +803,7 @@ class CustomStreamWrapper:
             self.response_id = id
 
         if id and isinstance(id, str) and id.strip():
-            model_response._hidden_params["received_model_id"] = id
+            model_response.hidden_params["received_model_id"] = id
 
         if self.response_id is not None and isinstance(self.response_id, str):
             model_response.id = self.response_id
@@ -1761,9 +1769,9 @@ class CustomStreamWrapper:
         _usage: Final[Usage | None] = getattr(response, "usage", None)
         _cost: Final = CustomStreamWrapper._resolve_provider_reported_cost(getattr(_usage, "cost", None))
         if _cost is not None:
-            if "additional_headers" not in response._hidden_params:
-                response._hidden_params["additional_headers"] = {}
-            response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
+            if "additional_headers" not in response.hidden_params:
+                response.hidden_params["additional_headers"] = {}
+            response.hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = _cost
 
     def __next__(self) -> "ModelResponseStream":
         cache_hit = False
@@ -1822,14 +1830,14 @@ class CustomStreamWrapper:
                     if getattr(response, "usage", None) is not None:
                         usage_to_preserve = response.usage
                         if usage_to_preserve:
-                            response._hidden_params["usage"] = usage_to_preserve
+                            response.hidden_params["usage"] = usage_to_preserve
 
                         obj_dict = response.model_dump()
 
                         if "usage" in obj_dict:
                             del obj_dict["usage"]
 
-                        response = self.model_response_creator(chunk=obj_dict, hidden_params=response._hidden_params)
+                        response = self.model_response_creator(chunk=obj_dict, hidden_params=response.hidden_params)
                         ## check if empty
                         is_empty = is_model_response_stream_empty(model_response=cast(ModelResponseStream, response))
 
@@ -1838,8 +1846,8 @@ class CustomStreamWrapper:
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
-                        response._hidden_params["usage"] = usage
-                        self._last_returned_hidden_params = response._hidden_params
+                        response.hidden_params["usage"] = usage
+                        self._last_returned_hidden_params = response.hidden_params
                         # Add MCP metadata to final chunk if present
                         response = self._add_mcp_metadata_to_final_chunk(response)
                     # RETURN RESULT
@@ -1936,7 +1944,7 @@ class CustomStreamWrapper:
                     self.chunks.append(processed_chunk)
                 if self.stream_options is None:  # add usage as hidden param
                     usage = calculate_total_usage(chunks=self.chunks)
-                    processed_chunk._hidden_params["usage"] = usage
+                    processed_chunk.hidden_params["usage"] = usage
                 ## LOGGING
                 executor.submit(
                     self.run_success_logging_and_cache_storage,
@@ -2034,7 +2042,7 @@ class CustomStreamWrapper:
                         if "usage" in obj_dict:
                             del obj_dict["usage"]
                         processed_chunk = self.model_response_creator(
-                            chunk=obj_dict, hidden_params=processed_chunk._hidden_params
+                            chunk=obj_dict, hidden_params=processed_chunk.hidden_params
                         )
                         is_empty = is_model_response_stream_empty(
                             model_response=cast(ModelResponseStream, processed_chunk)
@@ -2048,8 +2056,8 @@ class CustomStreamWrapper:
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
-                        processed_chunk._hidden_params["usage"] = usage
-                        self._last_returned_hidden_params = processed_chunk._hidden_params
+                        processed_chunk.hidden_params["usage"] = usage
+                        self._last_returned_hidden_params = processed_chunk.hidden_params
 
                     # Call post-call streaming deployment hook for final chunk
                     if self.sent_last_chunk is True:

@@ -5,9 +5,12 @@ import pytest
 
 
 from litellm.types.utils import (
+    EmbeddingResponse,
     HiddenParams,
     ImageObject,
     ImageResponse,
+    ModelResponse,
+    ModelResponseStream,
     all_litellm_params,
     text_tokens_without_nested_reasoning,
 )
@@ -22,6 +25,26 @@ def test_hidden_params_response_ms():
     setattr(hidden_params, "_response_ms", 100)
     hidden_params_dict = hidden_params.model_dump()
     assert hidden_params_dict.get("_response_ms") == 100
+
+
+@pytest.mark.parametrize("response_type", (ModelResponse, ModelResponseStream, EmbeddingResponse))
+def test_hidden_params_public_accessor_preserves_identity_and_instance_isolation(
+    response_type: type[ModelResponse] | type[ModelResponseStream] | type[EmbeddingResponse],
+) -> None:
+    response: Final = response_type()
+    other_response: Final = response_type()
+
+    assert response.hidden_params is response._hidden_params
+
+    response.hidden_params["public_key"] = "visible"
+    assert response._hidden_params["public_key"] == "visible"
+    assert response.hidden_params is not other_response.hidden_params
+    assert "public_key" not in other_response.hidden_params
+
+    replacement: Final = {"replacement_key": "replacement_value"}
+    response.hidden_params = replacement
+    assert response._hidden_params is replacement
+    assert response.hidden_params is replacement
 
 
 def test_chat_completion_delta_tool_call():

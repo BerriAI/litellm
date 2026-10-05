@@ -25,6 +25,14 @@ class ContainerObject(BaseModel):
     name: str | None = None
     _hidden_params: dict[str, Any] = {}
 
+    @property
+    def hidden_params(self) -> dict[str, Any]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, Any]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
@@ -141,6 +149,14 @@ class ContainerFileObject(BaseModel):
     path: str
     source: str
     _hidden_params: dict[str, builtins.object] = {}
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __contains__(self, key: str) -> bool:
         return hasattr(self, key)

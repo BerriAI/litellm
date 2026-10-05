@@ -43,7 +43,7 @@ def _add_mcp_metadata_to_response(
         # CustomStreamWrapper._add_mcp_metadata_to_final_chunk() will automatically
         # add it to the final chunk's delta.provider_specific_fields
         if not hasattr(response, "_hidden_params"):
-            response._hidden_params = {}
+            response.hidden_params = {}
 
         mcp_metadata: Final = {}
         if openai_tools:
@@ -54,7 +54,7 @@ def _add_mcp_metadata_to_response(
             mcp_metadata["mcp_call_results"] = tool_results
 
         if mcp_metadata:
-            response._hidden_params["mcp_metadata"] = mcp_metadata
+            response.hidden_params["mcp_metadata"] = mcp_metadata
         return
 
     if not isinstance(response, ModelResponse):

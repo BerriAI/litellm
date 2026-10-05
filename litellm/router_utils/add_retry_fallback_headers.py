@@ -17,6 +17,12 @@ class FallbackErrorInfo(TypedDict):
 class _HiddenParamsHost(Protocol):
     _hidden_params: dict[str, object]
 
+    @property
+    def hidden_params(self) -> dict[str, object]: ...  # mutable-ok: API requires mutation
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None: ...  # mutable-ok: API requires mutation
+
 
 _EMPTY_OBJECT_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 _ROUTING_HEADER_MAPPING: Final = TypeAdapter(Mapping[str, object])
@@ -213,7 +219,9 @@ def _write_hidden_params(response: object, hidden_params: dict[str, object]) -> 
     if isinstance(response, dict):
         response["_hidden_params"] = hidden_params
     elif hasattr(response, "_hidden_params"):
-        cast(_HiddenParamsHost, response)._hidden_params = hidden_params
+        host: Final = cast(_HiddenParamsHost, response)
+        if get_hidden_params_dict(response) is not hidden_params:
+            host.hidden_params = hidden_params
 
 
 def _ensure_additional_headers_dict(

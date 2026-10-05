@@ -217,10 +217,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
                 if response_cost is not None:
                     # Store cost in hidden params for the cost calculator to use
                     if not hasattr(model_response, "_hidden_params"):
-                        model_response._hidden_params = {}
-                    if "additional_headers" not in model_response._hidden_params:
-                        model_response._hidden_params["additional_headers"] = {}
-                    model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
+                        model_response.hidden_params = {}
+                    if "additional_headers" not in model_response.hidden_params:
+                        model_response.hidden_params["additional_headers"] = {}
+                    model_response.hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
                         response_cost
                     )
         except Exception:

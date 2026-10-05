@@ -265,7 +265,7 @@ class ChunkProcessor:
             return model_response
         # set hidden params from chunk to model_response
         if model_response is not None and hasattr(model_response, "_hidden_params"):
-            model_response._hidden_params = chunk.get("_hidden_params", {})
+            model_response.hidden_params = chunk.get("_hidden_params", {})
         return model_response
 
     @staticmethod
@@ -841,7 +841,7 @@ class ChunkProcessor:
         elif (isinstance(chunk, ModelResponse) or isinstance(chunk, ModelResponseStream)) and hasattr(
             chunk, "_hidden_params"
         ):
-            usage_chunk = chunk._hidden_params.get("usage", None)
+            usage_chunk = chunk.hidden_params.get("usage", None)
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)

@@ -90,7 +90,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
                 "domain": data.get("domain") or E2B_DEFAULT_DOMAIN,
             }
         )
-        handle._hidden_params = {
+        handle.hidden_params = {
             "envd_access_token": data.get("envdAccessToken"),
             "traffic_access_token": data.get("trafficAccessToken"),
             "api_key": key,
@@ -110,7 +110,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
     ) -> CodeExecutionResult:
         handle: Final = self._as_handle(container)
 
-        token: Final = handle._hidden_params.get("envd_access_token")
+        token: Final = handle.hidden_params.get("envd_access_token")
         if not token:
             raise ValueError(
                 "Cannot run code from a sandbox id alone. e2b secure sandboxes "
@@ -119,7 +119,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
             )
 
         headers: Final = {"Content-Type": "application/json", "X-Access-Token": token}
-        traffic_token: Final = handle._hidden_params.get("traffic_access_token")
+        traffic_token: Final = handle.hidden_params.get("traffic_access_token")
         if traffic_token:
             headers["E2B-Traffic-Access-Token"] = traffic_token
 
@@ -143,8 +143,8 @@ class E2BSandboxConfig(BaseSandboxConfig):
         **kwargs,
     ) -> bool:
         handle: Final = self._as_handle(container)
-        key: Final = api_key or handle._hidden_params.get("api_key") or self.validate_environment()
-        base: Final = api_base or handle._hidden_params.get("api_base") or E2B_API_BASE
+        key: Final = api_key or handle.hidden_params.get("api_key") or self.validate_environment()
+        base: Final = api_base or handle.hidden_params.get("api_base") or E2B_API_BASE
         try:
             response: Final = await self._http(client).delete(
                 url=f"{base}/sandboxes/{handle.id}",
@@ -161,7 +161,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         if isinstance(container, ContainerHandle):
             return container
         handle: Final = ContainerHandle(id=str(container), provider="e2b", domain=E2B_DEFAULT_DOMAIN)
-        handle._hidden_params = {}
+        handle.hidden_params = {}
         return handle
 
     @staticmethod

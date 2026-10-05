@@ -190,6 +190,6 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
                 )
 
         if hasattr(model_response, "_hidden_params") and "seed" in response_object:
-            model_response._hidden_params["seed"] = response_object["seed"]
+            model_response.hidden_params["seed"] = response_object["seed"]
 
         return model_response

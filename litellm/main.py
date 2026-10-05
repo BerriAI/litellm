@@ -1035,11 +1035,11 @@ def mock_completion(
         )
 
         if custom_llm_provider is not None:
-            model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            model_response.hidden_params["custom_llm_provider"] = custom_llm_provider
         else:
             try:
                 _, inferred_provider, _, _ = litellm.utils.get_llm_provider(model=model)
-                model_response._hidden_params["custom_llm_provider"] = inferred_provider
+                model_response.hidden_params["custom_llm_provider"] = inferred_provider
             except Exception:
                 # dont let setting a hidden param block a mock_respose
                 pass
@@ -5516,8 +5516,8 @@ def completion(
             )
 
         if model_response is not None and hasattr(model_response, "_hidden_params"):
-            model_response._hidden_params["custom_llm_provider"] = custom_llm_provider
-            model_response._hidden_params["region_name"] = kwargs.get(
+            model_response.hidden_params["custom_llm_provider"] = custom_llm_provider
+            model_response.hidden_params["region_name"] = kwargs.get(
                 "aws_region_name", None
             )  # support region-based pricing for bedrock
 
@@ -6243,7 +6243,7 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
         elif asyncio.iscoroutine(init_response):
             response = await init_response
         if response is not None and isinstance(response, EmbeddingResponse) and hasattr(response, "_hidden_params"):
-            response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            response.hidden_params["custom_llm_provider"] = custom_llm_provider
 
         if response is None:
             raise ValueError("Unable to get Embedding Response. Please pass a valid llm_provider.")
@@ -7360,7 +7360,7 @@ def embedding(
         else:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
         if response is not None and hasattr(response, "_hidden_params") and isinstance(response, EmbeddingResponse):
-            response._hidden_params["custom_llm_provider"] = custom_llm_provider
+            response.hidden_params["custom_llm_provider"] = custom_llm_provider
 
         if response is None:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
@@ -7925,7 +7925,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
             if existing_duration is None:
                 calculated_duration: Final = calculate_request_duration(file)
                 if calculated_duration is not None:
-                    response._hidden_params["audio_transcription_duration"] = calculated_duration
+                    response.hidden_params["audio_transcription_duration"] = calculated_duration
 
         return response
     except Exception as e:
@@ -8198,7 +8198,7 @@ def transcription(
         if existing_duration is None:
             calculated_duration: Final = calculate_request_duration(file)
             if calculated_duration is not None:
-                response._hidden_params["audio_transcription_duration"] = calculated_duration
+                response.hidden_params["audio_transcription_duration"] = calculated_duration
 
     if response is None:
         raise ValueError("Unmapped provider passed in. Unable to get the response.")
@@ -9074,7 +9074,7 @@ def stream_chunk_builder(
                 else:
                     hidden = getattr(chunk, "_hidden_params", None)
                 if isinstance(hidden, dict) and "provider_specific_fields" in hidden:
-                    response._hidden_params.setdefault("provider_specific_fields", {}).update(
+                    response.hidden_params.setdefault("provider_specific_fields", {}).update(
                         hidden["provider_specific_fields"]
                     )
                     break
@@ -9253,7 +9253,7 @@ def stream_chunk_builder(
             else:
                 hidden = getattr(chunk, "_hidden_params", None)
             if isinstance(hidden, dict) and "provider_specific_fields" in hidden:
-                response._hidden_params.setdefault("provider_specific_fields", {}).update(
+                response.hidden_params.setdefault("provider_specific_fields", {}).update(
                     hidden["provider_specific_fields"]
                 )
                 break

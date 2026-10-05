@@ -165,11 +165,11 @@ class OpenAIContainerConfig(BaseContainerConfig):
             provider="openai",
         )
 
-        if not hasattr(container_obj, "_hidden_params") or container_obj._hidden_params is None:
-            container_obj._hidden_params = {}
-        if "additional_headers" not in container_obj._hidden_params:
-            container_obj._hidden_params["additional_headers"] = {}
-        container_obj._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = container_cost
+        if not hasattr(container_obj, "_hidden_params") or container_obj.hidden_params is None:
+            container_obj.hidden_params = {}
+        if "additional_headers" not in container_obj.hidden_params:
+            container_obj.hidden_params["additional_headers"] = {}
+        container_obj.hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = container_cost
 
         return container_obj
 

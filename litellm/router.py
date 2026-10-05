@@ -2909,7 +2909,7 @@ class Router:
         if not isinstance(item_headers, dict):
             item_headers = {}
 
-        cast(_HiddenParamsHost, fallback_item)._hidden_params = {
+        cast(_HiddenParamsHost, fallback_item).hidden_params = {
             **item_hidden_params,
             **fallback_hidden_params,
             "additional_headers": {**item_headers, **fallback_headers},
@@ -4393,7 +4393,7 @@ class Router:
 
                 if result is not None:
                     # Return the first successful result
-                    result._hidden_params["fastest_response_batch_completion"] = True
+                    result.hidden_params["fastest_response_batch_completion"] = True
                     return result
 
         # If we exit the loop without returning, all tasks failed
@@ -4462,8 +4462,8 @@ class Router:
         if make_request:
             try:
                 _response: Final = await self.acompletion(model=model, messages=messages, stream=stream, **kwargs)
-                _response._hidden_params.setdefault("additional_headers", {})
-                _response._hidden_params["additional_headers"].update({"x-litellm-request-prioritization-used": True})
+                _response.hidden_params.setdefault("additional_headers", {})
+                _response.hidden_params["additional_headers"].update({"x-litellm-request-prioritization-used": True})
                 return _response
             except Exception as e:
                 setattr(e, "priority", priority)
@@ -4522,9 +4522,9 @@ class Router:
         if make_request:
             try:
                 _response: Final = await original_function(*args, **kwargs)
-                if isinstance(_response._hidden_params, dict):
-                    _response._hidden_params.setdefault("additional_headers", {})
-                    _response._hidden_params["additional_headers"].update(
+                if isinstance(_response.hidden_params, dict):
+                    _response.hidden_params.setdefault("additional_headers", {})
+                    _response.hidden_params["additional_headers"].update(
                         {"x-litellm-request-prioritization-used": True}
                     )
                 return _response
@@ -6151,7 +6151,7 @@ class Router:
                 healthy_deployments=healthy_deployments, responses=responses
             )
             returned_response: Final = cast(OpenAIFileObject, responses[0])
-            returned_response._hidden_params["model_file_id_mapping"] = model_file_id_mapping
+            returned_response.hidden_params["model_file_id_mapping"] = model_file_id_mapping
             return returned_response
         except Exception as e:
             verbose_router_logger.exception(
