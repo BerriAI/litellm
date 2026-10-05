@@ -836,7 +836,7 @@ it("clears the open live stage when a worker reclaims the same investigation", a
       tracing_enabled: true,
     });
   });
-  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   fireEvent.click(screen.getByRole("button", { name: "View run" }));
   const restarted = within(await screen.findByRole("dialog"));
   expect(restarted.getByText("Current worker trace")).toBeVisible();
