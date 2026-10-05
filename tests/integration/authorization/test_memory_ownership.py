@@ -1,0 +1,244 @@
+from typing import Final
+
+import httpx
+from integration._support.client import Gateway, Scenario
+from integration._support.database import read_rows, write_rows
+from pydantic import JsonValue, TypeAdapter
+
+from litellm.types.memory_management import LiteLLM_MemoryRow, MemoryDeleteResponse, MemoryListResponse
+
+_MEMORY_ROUTE: Final = ["/v1/memory"]
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _admin_only_error(route: str, user_id: str) -> dict[str, JsonValue]:
+    masked_user_id: Final = f"{user_id[:6]}{'*' * (len(user_id) - 8)}{user_id[-2:]}"
+    return {
+        "error": {
+            "message": (
+                "Authentication Error, Only proxy admin can be used to generate, delete, update info for new "
+                f"keys/users/teams. Route={route}. Your role=internal_user. Your user_id={masked_user_id}"
+            ),
+            "type": "auth_error",
+            "param": "None",
+            "code": "401",
+        }
+    }
+
+
+def _delete_memory_row(key: str) -> None:
+    write_rows('DELETE FROM "LiteLLM_MemoryTable" WHERE key = %s', (key,))
+
+
+def _memory_rows(key: str) -> list[dict[str, JsonValue]]:
+    return read_rows(
+        'SELECT key, value, user_id, team_id, created_by, updated_by FROM "LiteLLM_MemoryTable" WHERE key = %s',
+        (key,),
+    )
+
+
+def _memory_request(
+    gateway: Gateway,
+    method: str,
+    key: str,
+    *,
+    caller: str,
+    body: dict[str, JsonValue] | None = None,
+) -> httpx.Response:
+    return gateway.request(method, f"/v1/memory/{key}", body, key=caller)
+
+
+def _register_memory_cleanup(scenario: Scenario, key: str) -> None:
+    scenario.cleanups.callback(_delete_memory_row, key)
+
+
+def test_memory_routes_enforce_personal_and_team_write_ownership(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team()
+        member_a: Final = scenario.member(team)
+        member_b: Final = scenario.member(team)
+        team_admin: Final = scenario.member(team, role="admin")
+        outsider: Final = scenario.user(user_role="internal_user")
+        default_key: Final = scenario.key(user_id=member_a)
+        key_a: Final = scenario.key(user_id=member_a, team_id=team, allowed_routes=_MEMORY_ROUTE)
+        key_b: Final = scenario.key(user_id=member_b, team_id=team, allowed_routes=_MEMORY_ROUTE)
+        admin_key: Final = scenario.key(user_id=team_admin, team_id=team, allowed_routes=_MEMORY_ROUTE)
+        team_key: Final = scenario.key(team_id=team, allowed_routes=_MEMORY_ROUTE)
+        outsider_key: Final = scenario.key(user_id=outsider, allowed_routes=_MEMORY_ROUTE)
+        personal_key: Final = f"agent/{team}-{member_a}-alpha"
+        team_only_key: Final = f"agent/{team}-shared"
+
+        default_access: Final = _memory_request(
+            gateway,
+            "PUT",
+            personal_key,
+            caller=default_key,
+            body={"value": "default access"},
+        )
+        assert default_access.status_code == 401, default_access.text
+        assert _JSON_OBJECT.validate_json(default_access.content) == _admin_only_error(
+            f"/v1/memory/{personal_key}", member_a
+        ), default_access.text
+
+        created: Final = _memory_request(
+            gateway,
+            "PUT",
+            personal_key,
+            caller=key_a,
+            body={"value": "a1"},
+        )
+        assert created.status_code == 200, created.text
+        _register_memory_cleanup(scenario, personal_key)
+        created_row: Final = LiteLLM_MemoryRow.model_validate_json(created.content)
+        assert (created_row.key, created_row.value, created_row.user_id, created_row.team_id) == (
+            personal_key,
+            "a1",
+            member_a,
+            team,
+        ), created.text
+        assert _memory_rows(personal_key) == [
+            {
+                "key": personal_key,
+                "value": "a1",
+                "user_id": member_a,
+                "team_id": team,
+                "created_by": member_a,
+                "updated_by": member_a,
+            }
+        ]
+
+        visible_to_member: Final = _memory_request(gateway, "GET", personal_key, caller=key_b)
+        assert visible_to_member.status_code == 200, visible_to_member.text
+        assert LiteLLM_MemoryRow.model_validate_json(visible_to_member.content).value == "a1", visible_to_member.text
+        overwrite_refused: Final = _memory_request(
+            gateway,
+            "PUT",
+            personal_key,
+            caller=key_b,
+            body={"value": "b-overwrite"},
+        )
+        assert overwrite_refused.status_code == 403, overwrite_refused.text
+        assert overwrite_refused.text == ('{"detail":"You do not have permission to modify this memory entry."}'), (
+            overwrite_refused.text
+        )
+        delete_refused: Final = _memory_request(gateway, "DELETE", personal_key, caller=key_b)
+        assert delete_refused.status_code == 403, delete_refused.text
+        assert _memory_rows(personal_key) == [
+            {
+                "key": personal_key,
+                "value": "a1",
+                "user_id": member_a,
+                "team_id": team,
+                "created_by": member_a,
+                "updated_by": member_a,
+            }
+        ]
+
+        outsider_read: Final = _memory_request(gateway, "GET", personal_key, caller=outsider_key)
+        assert outsider_read.status_code == 404, outsider_read.text
+        assert outsider_read.text == f"""{{"detail":"Memory with key '{personal_key}' not found"}}""", (
+            outsider_read.text
+        )
+        outsider_list: Final = gateway.request("GET", "/v1/memory", key=outsider_key)
+        assert outsider_list.status_code == 200, outsider_list.text
+        outsider_memories: Final = MemoryListResponse.model_validate_json(outsider_list.content)
+        assert outsider_memories.total == 0 and outsider_memories.memories == [], outsider_list.text
+
+        overwritten: Final = _memory_request(
+            gateway,
+            "PUT",
+            personal_key,
+            caller=key_a,
+            body={"value": "a2"},
+        )
+        assert overwritten.status_code == 200, overwritten.text
+        assert LiteLLM_MemoryRow.model_validate_json(overwritten.content).value == "a2", overwritten.text
+        assert _memory_rows(personal_key) == [
+            {
+                "key": personal_key,
+                "value": "a2",
+                "user_id": member_a,
+                "team_id": team,
+                "created_by": member_a,
+                "updated_by": member_a,
+            }
+        ]
+
+        team_created: Final = _memory_request(
+            gateway,
+            "PUT",
+            team_only_key,
+            caller=team_key,
+            body={"value": "team value"},
+        )
+        assert team_created.status_code == 200, team_created.text
+        _register_memory_cleanup(scenario, team_only_key)
+        team_row: Final = LiteLLM_MemoryRow.model_validate_json(team_created.content)
+        assert (team_row.value, team_row.user_id, team_row.team_id) == ("team value", None, team), team_created.text
+        assert _memory_rows(team_only_key) == [
+            {
+                "key": team_only_key,
+                "value": "team value",
+                "user_id": None,
+                "team_id": team,
+                "created_by": None,
+                "updated_by": None,
+            }
+        ]
+        member_team_write: Final = _memory_request(
+            gateway,
+            "PUT",
+            team_only_key,
+            caller=key_a,
+            body={"value": "member overwrite"},
+        )
+        assert member_team_write.status_code == 403, member_team_write.text
+        assert _memory_rows(team_only_key) == [
+            {
+                "key": team_only_key,
+                "value": "team value",
+                "user_id": None,
+                "team_id": team,
+                "created_by": None,
+                "updated_by": None,
+            }
+        ]
+        admin_write: Final = _memory_request(
+            gateway,
+            "PUT",
+            team_only_key,
+            caller=admin_key,
+            body={"value": "admin overwrite"},
+        )
+        assert admin_write.status_code == 200, admin_write.text
+        assert LiteLLM_MemoryRow.model_validate_json(admin_write.content).value == "admin overwrite", admin_write.text
+
+        master_read: Final = _memory_request(gateway, "GET", personal_key, caller=gateway.key)
+        assert master_read.status_code == 200, master_read.text
+        assert LiteLLM_MemoryRow.model_validate_json(master_read.content).value == "a2", master_read.text
+        master_write: Final = _memory_request(
+            gateway,
+            "PUT",
+            personal_key,
+            caller=gateway.key,
+            body={"value": "master overwrite"},
+        )
+        assert master_write.status_code == 200, master_write.text
+        assert _memory_rows(personal_key) == [
+            {
+                "key": personal_key,
+                "value": "master overwrite",
+                "user_id": member_a,
+                "team_id": team,
+                "created_by": member_a,
+                "updated_by": "default_user_id",
+            }
+        ]
+
+        deleted: Final = _memory_request(gateway, "DELETE", personal_key, caller=key_a)
+        assert deleted.status_code == 200, deleted.text
+        assert MemoryDeleteResponse.model_validate_json(deleted.content).deleted is True, deleted.text
+        assert _memory_rows(personal_key) == []
+        missing: Final = _memory_request(gateway, "GET", personal_key, caller=key_a)
+        assert missing.status_code == 404, missing.text
+        assert missing.text == f"""{{"detail":"Memory with key '{personal_key}' not found"}}""", missing.text
