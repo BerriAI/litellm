@@ -294,6 +294,15 @@ def test_event_hook_always_includes_pre_and_post():
 
 
 @pytest.mark.asyncio
+async def test_engine_missing_privaite_recommends_safe_minimum(monkeypatch: pytest.MonkeyPatch) -> None:
+    guardrail = _make_guardrail()
+    monkeypatch.setitem(sys.modules, "privaite.config.schema", None)
+
+    with pytest.raises(RuntimeError, match=r"pip install 'privaite>=0\.7\.2'"):
+        await guardrail._engine_for(["en"])
+
+
+@pytest.mark.asyncio
 async def test_engine_is_cached():
     gr = _make_guardrail()
     engine_a = await gr._engine_for(["en"])
