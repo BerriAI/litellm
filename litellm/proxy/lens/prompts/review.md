@@ -20,7 +20,6 @@ Respect prior feedback about accepted behavior, but do not suppress different pr
 Request reads with span_id and offset=0 for initial evidence.
 If an excerpt omits content, offset=1 reads the original beginning; later offsets advance by 8000 characters through the original stored span.
 Do not repeat a completed read.
-At most two reads per turn.
 Return observations using an enabled check ID, exact quotes, and the correct execution_id/span_id.
 Never quote an omission marker or join text from either side of one.
 If you need more evidence, return reads; otherwise return reads=[] and your final observations.

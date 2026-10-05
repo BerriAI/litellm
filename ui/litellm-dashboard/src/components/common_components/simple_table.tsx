@@ -28,7 +28,7 @@ interface SimpleTableProps<T> {
 
 /**
  * Simple table component for forms and settings pages
- * For complex tables with sorting/filtering, use DataTable from view_logs
+ * For complex tables with sorting/filtering, use DataTable from shared/DataTable
  */
 export function SimpleTable<T>({
   data,

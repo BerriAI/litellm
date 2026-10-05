@@ -22,7 +22,7 @@ TESTS_ROOT = REPO_ROOT / "tests"
 
 ALLOWLIST_KEYS = frozenset({"description", "test_paths", "dockerfiles"})
 PATH_FILTER_KEYS = frozenset({"paths", "paths-ignore"})
-TEST_PATH_KEYS = frozenset({"test-path", "test-paths"})
+TEST_PATH_KEYS = frozenset({"test-path", "test-paths", "test_path"})
 DOCKERFILE_INPUT_KEYS = frozenset({"file", "dockerfile"})
 TEST_RUNNER_RE = re.compile(r"\bpytest\b|\bcircleci tests\b|\bhelm unittest\b|\bplaywright test\b|\bpython[0-9.]*\s")
 IMAGE_BUILD_RE = re.compile(r"\bdocker\s+(?:buildx\s+)?build\b")
@@ -130,37 +130,24 @@ def _unit_selection_arms(repo_root: pathlib.Path = REPO_ROOT) -> Mapping[str, fr
     text: Final = _uncommented(script.read_text())
     return MappingProxyType(
         {
-            label: frozenset(
-                match.group(0).rstrip("/") for match in TEST_TOKEN_RE.finditer(body)
-            )
+            label: frozenset(match.group(0).rstrip("/") for match in TEST_TOKEN_RE.finditer(body))
             for label, body in SELECTION_ARM_RE.findall(text)
         }
     )
 
 
 def _unit_selection_tokens(repo_root: pathlib.Path = REPO_ROOT) -> frozenset[str]:
-    return frozenset(
-        token for tokens in _unit_selection_arms(repo_root).values() for token in tokens
-    )
+    return frozenset(token for tokens in _unit_selection_arms(repo_root).values() for token in tokens)
 
 
 def _wired_unit_flags(scalars: Iterable[Scalar]) -> frozenset[str]:
-    return frozenset(
-        scalar.value
-        for scalar in scalars
-        if scalar.key == "unit-flag" and "${{" not in scalar.value
-    )
+    return frozenset(scalar.value for scalar in scalars if scalar.key == "unit-flag" and "${{" not in scalar.value)
 
 
-def _shard_tokens(
-    scalars: Iterable[Scalar], arms: Mapping[str, frozenset[str]]
-) -> frozenset[str]:
+def _shard_tokens(scalars: Iterable[Scalar], arms: Mapping[str, frozenset[str]]) -> frozenset[str]:
     wired: Final = _wired_unit_flags(scalars)
     return _invoked_test_tokens(scalars) | frozenset(
-        token
-        for label, tokens in arms.items()
-        if label in wired
-        for token in tokens
+        token for label, tokens in arms.items() if label in wired for token in tokens
     )
 
 
@@ -544,23 +531,46 @@ def _integration_groups(runner: pathlib.Path) -> dict[str, tuple[str, ...]]:
     return {group: tuple(folders) for group, folders in ast.literal_eval(mapping).items()}
 
 
+def _integration_github_files(runner: pathlib.Path) -> frozenset[str]:
+    module: Final = ast.parse(runner.read_text())
+    literal: Final = next(
+        (
+            node.value
+            for node in module.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "GITHUB_FILES"
+        ),
+        None,
+    )
+    if literal is None:
+        return frozenset()
+    values: Final = literal.args[0] if isinstance(literal, ast.Call) else literal
+    return frozenset(ast.literal_eval(values))
+
+
 def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozenset[str], tuple[Finding, ...]]:
     runner: Final = repo_root / "tests/integration/run.py"
     if not runner.exists():
         return frozenset(), ()
     groups: Final = _integration_groups(runner)
+    github_files: Final = _integration_github_files(runner)
     integration_root: Final = repo_root / "tests/integration"
     paths: Final = frozenset(
         str(path.relative_to(repo_root))
         for folders in groups.values()
         for folder in folders
         for path in (integration_root / folder).rglob("test_*.py")
+        if str(path.relative_to(repo_root)) not in github_files
     )
     browser_manifest: Final = repo_root / "tests/e2e/ui/tests/integrationCritical/expected.json"
     browser_nodes: Final = json.loads(browser_manifest.read_text()) if browser_manifest.exists() else ()
     browser_paths: Final = frozenset(node.split("::", 1)[0] for node in browser_nodes)
     circle_path: Final = repo_root / ".circleci/config.yml"
     circle: Final = yaml.safe_load(circle_path.read_text()) if circle_path.exists() else {}
+    circle_test_path_tokens: Final = _invoked_test_tokens(
+        scalar for scalar in _scalars(circle, "config.yml") if scalar.key == "test_path"
+    )
     steps: Final = circle.get("jobs", {}).get("integration_contracts", {}).get("steps", ())
     invoked: Final = any(
         ".circleci/scripts/run_integration.sh" in scalar.value
@@ -595,10 +605,22 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
         for path in (repo_root / ".github/workflows").glob("*.y*ml")
         for scalar in _scalars(yaml.safe_load(path.read_text()), path.name)
     )
-    findings: Final = tuple(
-        Finding(path, "integration contract is also selected by GitHub Actions")
-        for path in paths
-        if any(_token_covers(token, path) for token in gha_tokens)
+    findings: Final = (
+        tuple(
+            Finding(path, "integration contract is also selected by GitHub Actions")
+            for path in paths
+            if any(_token_covers(token, path) for token in gha_tokens)
+        )
+        + tuple(
+            Finding(path, "GitHub-owned integration contract has no invoking job")
+            for path in sorted(github_files)
+            if not any(_token_covers(token, path) for token in gha_tokens | circle_test_path_tokens)
+        )
+        + tuple(
+            Finding(path, "GitHub-owned integration file is missing")
+            for path in sorted(github_files)
+            if not (repo_root / path).is_file()
+        )
     )
     browser_commands: Final = tuple(
         scalar.value
@@ -642,7 +664,7 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
         return frozenset(), findings + (
             Finding(str(runner.relative_to(repo_root)), "dedicated CircleCI runner is missing"),
         )
-    return paths | browser_paths, findings + group_findings + browser_findings + exclusion_findings
+    return paths | browser_paths | github_files, findings + group_findings + browser_findings + exclusion_findings
 
 
 def main() -> int:

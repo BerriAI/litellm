@@ -17,9 +17,11 @@ export function InvestigationFailure({ job, connected, className, ...props }: In
       className={cn("space-y-2 rounded-md border border-destructive/20 p-3 text-sm", className)}
     >
       <p className="font-medium text-destructive">This investigation did not finish</p>
-      <p>{job.error}</p>
-      <details>
-        <summary className="cursor-pointer text-xs text-muted-foreground">Troubleshooting details</summary>
+      <pre className="whitespace-pre-wrap break-words font-mono text-xs" aria-label="Investigation error">
+        {job.error}
+      </pre>
+      <details open>
+        <summary className="cursor-pointer text-xs text-muted-foreground">Run details</summary>
         <dl className="mt-2 space-y-1 text-xs text-muted-foreground">
           <div>
             <dt className="inline">Run: </dt>
@@ -38,10 +40,6 @@ export function InvestigationFailure({ job, connected, className, ...props }: In
             <dd className="inline">{runTime(job.created_at)}</dd>
           </div>
         </dl>
-        <p className="mt-2 text-xs text-muted-foreground">
-          Use the run ID to find the error in proxy and worker logs. Check the worker key&apos;s model permissions and
-          budget before retrying.
-        </p>
       </details>
     </div>
   );
