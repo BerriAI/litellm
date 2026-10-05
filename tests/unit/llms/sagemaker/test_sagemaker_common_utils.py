@@ -70,6 +70,19 @@ def test_sagemaker_response_stream_shape_load_failure_returns_none():
         assert shape is None
 
 
+@pytest.mark.parametrize("service_model", [["shapes"], None])
+def test_sagemaker_response_stream_shape_is_none_for_a_service_model_that_is_not_a_mapping(
+    service_model: object,
+):
+    pytest.importorskip("botocore")
+    from unittest.mock import patch
+
+    import litellm.llms.sagemaker.common_utils as mod
+
+    with patch("botocore.loaders.Loader.load_service_model", return_value=service_model):
+        assert mod._load_sagemaker_response_stream_shape() is None
+
+
 def test_sagemaker_response_stream_shape_is_structure_shape():
     """
     The loaded shape should be the botocore StructureShape for

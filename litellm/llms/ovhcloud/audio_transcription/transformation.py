@@ -5,9 +5,11 @@ Our unified API follows the OpenAI standard.
 More information on our website: https://endpoints.ai.cloud.ovh.net
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -23,6 +25,8 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
 from ..utils import OVHCloudException
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -145,7 +149,8 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 headers=raw_response.headers,
             )
 
-        text: Final = response_json.get("text") or response_json.get("transcript") or ""
+        payload: Final = _JSON_OBJECT.validate_python(response_json)
+        text: Final = payload.get("text") or payload.get("transcript") or ""
         response: Final = TranscriptionResponse(text=text)
 
         # OVHCloud field migration (deadline: 2026-05-11):
@@ -153,9 +158,7 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         # Prefer `seconds`, fall back to `duration`, normalize to `duration`
         # so downstream consumers see a consistent key.
         duration: Final = (
-            response_json["seconds"]
-            if "seconds" in response_json and response_json["seconds"] is not None
-            else response_json.get("duration")
+            payload["seconds"] if "seconds" in payload and payload["seconds"] is not None else payload.get("duration")
         )
         if duration is not None:
             response_json["duration"] = duration

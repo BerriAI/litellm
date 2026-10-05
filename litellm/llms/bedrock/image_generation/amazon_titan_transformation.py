@@ -80,9 +80,7 @@ class AmazonTitanImageGenerationConfig:
         non_default_params: dict,
         optional_params: dict,
     ):
-        from typing import Any
-
-        image_generation_config: Final[dict[str, Any]] = {}
+        image_generation_config: Final[dict[str, object]] = {}
         for k, v in non_default_params.items():
             if k == "size" and v is not None:
                 width, height = v.split("x")
@@ -106,11 +104,9 @@ class AmazonTitanImageGenerationConfig:
         text: str,
         optional_params: dict,
     ) -> AmazonTitanImageGenerationRequestBody:
-        from typing import Any
-
         image_generation_config = optional_params.pop("imageGenerationConfig", {})
         negative_text: Final = optional_params.pop("negativeText", None)
-        text_to_image_params: Final[dict[str, Any]] = {"text": text}
+        text_to_image_params: Final = AmazonTitanTextToImageParams(text=text)
         if negative_text:
             text_to_image_params["negativeText"] = negative_text
         task_type: Final = optional_params.pop("taskType", "TEXT_IMAGE")
@@ -121,7 +117,7 @@ class AmazonTitanImageGenerationConfig:
         }
         return AmazonTitanImageGenerationRequestBody(
             taskType=task_type,
-            textToImageParams=AmazonTitanTextToImageParams(**text_to_image_params),
+            textToImageParams=text_to_image_params,
             imageGenerationConfig=AmazonNovaCanvasImageGenerationConfig(**image_generation_config),
         )
 

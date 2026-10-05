@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.llms.vertex_ai.text_to_speech.transformation import (
@@ -633,3 +634,32 @@ def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_
     assert "headers" in call_kwargs
     assert "Authorization" in call_kwargs["headers"]
     assert call_kwargs["headers"]["Authorization"] == "Bearer mock-token"
+
+
+@pytest.mark.parametrize("payload", [{}, {"audioContent": ""}, {"audioContent": None}, {"audioContent": []}])
+def test_transform_text_to_speech_response_without_audio_content_reports_it_missing(payload: dict[str, object]):
+    with pytest.raises(ValueError, match="No audioContent in Vertex AI TTS response"):
+        VertexAITextToSpeechConfig().transform_text_to_speech_response(
+            model="vertex_ai/chirp",
+            raw_response=httpx.Response(200, json=payload),
+            logging_obj=MagicMock(),
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["not", "an", "object"],
+        {"audioContent": 7},
+        {"audioContent": ["UklGRiQAAABXQVZFZm10IA=="]},
+    ],
+)
+def test_transform_text_to_speech_response_rejects_malformed_payloads_without_echoing_them(payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        VertexAITextToSpeechConfig().transform_text_to_speech_response(
+            model="vertex_ai/chirp",
+            raw_response=httpx.Response(200, json=payload),
+            logging_obj=MagicMock(),
+        )
+
+    assert "input_value" not in str(exc_info.value)

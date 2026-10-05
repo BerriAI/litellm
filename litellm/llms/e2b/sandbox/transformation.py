@@ -8,9 +8,11 @@ Talks to e2b's REST API directly over httpx (no e2b SDK dependency):
 """
 
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.sandbox.transformation import (
     SANDBOX_MAX_OUTPUT_BYTES,
@@ -31,6 +33,12 @@ E2B_DEFAULT_DOMAIN: Final = "e2b.app"
 JUPYTER_PORT: Final = 49999
 DEFAULT_SANDBOX_TIMEOUT: Final = 300
 MAX_OUTPUT_BYTES: Final = SANDBOX_MAX_OUTPUT_BYTES
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_MESSAGE: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
+    Mapping[str, object] | None, config=ConfigDict(hide_input_in_errors=True)
+)
+_TEXT: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class E2BSandboxConfig(BaseSandboxConfig):
@@ -73,12 +81,14 @@ class E2BSandboxConfig(BaseSandboxConfig):
             headers={"X-API-Key": key, "Content-Type": "application/json"},
             json=body,
         )
-        data: Final = response.json()
+        data: Final = _JSON_OBJECT.validate_python(response.json())
 
-        handle: Final = ContainerHandle(
-            id=data["sandboxID"],
-            provider="e2b",
-            domain=data.get("domain") or E2B_DEFAULT_DOMAIN,
+        handle: Final = ContainerHandle.model_validate(
+            {
+                "id": data["sandboxID"],
+                "provider": "e2b",
+                "domain": data.get("domain") or E2B_DEFAULT_DOMAIN,
+            }
         )
         handle._hidden_params = {
             "envd_access_token": data.get("envdAccessToken"),
@@ -158,7 +168,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
     def _parse_lines(lines: list[str]) -> CodeExecutionResult:
         def _try_parse(stripped: str):
             try:
-                return json.loads(stripped)
+                return _MESSAGE.validate_python(json.loads(stripped))
             except json.JSONDecodeError:
                 return None
 
@@ -178,10 +188,12 @@ class E2BSandboxConfig(BaseSandboxConfig):
             None,
         )
 
-        return CodeExecutionResult(
-            stdout="".join(m.get("text", "") for m in of_type("stdout")),
-            stderr="".join(m.get("text", "") for m in of_type("stderr")),
-            results=[{k: v for k, v in m.items() if k != "type"} for m in of_type("result")],
-            error=error,
-            execution_count=execution_count,
+        return CodeExecutionResult.model_validate(
+            {
+                "stdout": "".join(_TEXT.validate_python(m.get("text", "")) for m in of_type("stdout")),
+                "stderr": "".join(_TEXT.validate_python(m.get("text", "")) for m in of_type("stderr")),
+                "results": [{k: v for k, v in m.items() if k != "type"} for m in of_type("result")],
+                "error": error,
+                "execution_count": execution_count,
+            }
         )

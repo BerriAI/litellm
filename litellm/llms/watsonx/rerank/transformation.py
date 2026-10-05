@@ -5,10 +5,11 @@ Docs - https://cloud.ibm.com/apidocs/watsonx-ai#text-rerank
 """
 
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
@@ -23,6 +24,11 @@ from litellm.types.rerank import (
 )
 
 from ..common_utils import IBMWatsonXMixin, _generate_watsonx_token, _get_api_params
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_OPTIONAL_INT: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
+_STR: Final = TypeAdapter(str)
 
 
 class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
@@ -171,13 +177,14 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
                 headers=raw_response.headers,
             )
 
-        _results: Final[list[dict] | None] = raw_response_json.get("results")
+        payload: Final = _JSON_OBJECT.validate_python(raw_response_json)
+        _results: Final = payload.get("results")
         if _results is None:
             raise ValueError(f"No results found in the response={raw_response_json}")
 
         transformed_results: Final = []
 
-        for result in _results:
+        for result in _JSON_OBJECTS.validate_python(_results):
             transformed_result: dict[str, object] = {
                 "index": result["index"],
                 "relevance_score": result["score"],
@@ -191,11 +198,11 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
 
             transformed_results.append(transformed_result)
 
-        response_id: Final = raw_response_json.get("id") or str(uuid.uuid4())
+        response_id: Final = _STR.validate_python(payload.get("id") or str(uuid.uuid4()))
 
         # Extract usage information
         _tokens: Final = RerankTokens(
-            input_tokens=raw_response_json.get("input_token_count", 0),
+            input_tokens=_OPTIONAL_INT.validate_python(payload.get("input_token_count", 0)),
         )
         rerank_meta: Final = RerankResponseMeta(tokens=_tokens)
 

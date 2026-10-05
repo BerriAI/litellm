@@ -6168,6 +6168,53 @@ class TestStrategyRouterWriteValidation:
                 assert hasattr(table, "create")
 
     @pytest.mark.asyncio
+    async def test_slot_counts_tuned_routers_whose_stored_params_are_json_strings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from fastapi import HTTPException
+
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
+        from litellm.router_utils.auto_router_tuning_baseline import snapshot_tuning_baselines
+
+        fake = self._FakeDb([])
+        fake.tx_obj.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[
+                {
+                    "model_id": "a",
+                    "model_name": "router-a",
+                    "litellm_params": json.dumps(
+                        {"model": "auto_router/complexity_router", "complexity_router_config": self._TUNED_A_EDITED}
+                    ),
+                    "model_info": json.dumps({"id": "a"}),
+                }
+            ]
+        )
+        monkeypatch.setattr(proxy_server._license_check, "auto_router_capability_limit", lambda: 1)
+        monkeypatch.setattr(proxy_server, "llm_router", None)
+        monkeypatch.setattr(
+            proxy_server,
+            "heuristic_v1_tuning_baselines",
+            snapshot_tuning_baselines(
+                [self._db_router_row("a", self._TUNED_A), self._db_router_row("b", self._TUNED_B)]
+            ),
+        )
+
+        with pytest.raises(HTTPException) as refused:
+            async with _auto_router_capability_slot(
+                fake,
+                effective_params={
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": self._TUNED_B_EDITED,
+                },
+                model_id="b",
+            ):
+                pass
+
+        assert refused.value.status_code == 403
+        assert "changed heuristic scoring rules" in str(refused.value.detail)
+
+    @pytest.mark.asyncio
     async def test_add_new_model_refuses_a_second_tuned_heuristic_v1_router_without_a_model_id(self) -> None:
         """A create request carries no model_info at all, yet the quota still judges it: Deployment mints the
         row id before the slot is entered, so a second tuned router is refused before its DB write."""

@@ -307,7 +307,7 @@ class GenAIMetricRecorder:
 
         return common_attrs
 
-    def _bounded_attributes(self, kwargs: Mapping[str, Any]) -> MetricAttributes:
+    def _bounded_attributes(self, kwargs: Mapping[str, object]) -> MetricAttributes:
         """The datapoint attributes, capped at :data:`METRIC_ATTRIBUTE_CEILING`.
 
         The cap runs BEFORE the operator's include/exclude filter so the filter can
@@ -322,7 +322,7 @@ class GenAIMetricRecorder:
         attributes = None
         if self._callback_name in (None, "otel"):
             otel_settings: Final = (litellm.callback_settings or {}).get("otel") or {}
-            raw: Final = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
+            raw: Final[object] = otel_settings.get("attributes") if isinstance(otel_settings, dict) else None
             if raw is not None:
                 attributes = _build_metric_attribute_filter(raw)
         # A bad filter (include_list + exclude_list both set, an unfilterable name)

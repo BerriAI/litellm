@@ -2533,3 +2533,22 @@ class TestRecordPartialUsageForFailure:
 
         assert "combined_usage_object" not in logging_obj.model_call_details
         assert "response_cost" not in logging_obj.model_call_details
+
+
+@pytest.mark.parametrize(
+    ("all_chunks", "interrupted"),
+    [
+        (['data: {"type": "content_block_delta"}'], True),
+        (['data: {"type": "message_delta"}', 'data: {"type": "message_stop"}'], False),
+        ([b'data: {"type": "message_delta"}\ndata: {"type": "message_stop"}\n'], False),
+        (['data: {"type": "message_delta"}', "data: [1, 2]", 'data: "text"', "data: 7", "data: null"], False),
+        (['data: {"type": "content_block_stop"}', "data: [1, 2]", "data: not json"], True),
+        (['data: {"type": "message_start"}', 'data: {"type": ["message_delta"]}', "data: {}"], True),
+        (["data: [1, 2]", "data: null", "event: message_delta"], True),
+        ([], True),
+    ],
+)
+def test_stream_was_interrupted_skips_data_lines_that_are_not_json_objects(
+    all_chunks: list[str | bytes], interrupted: bool
+):
+    assert AnthropicPassthroughLoggingHandler._stream_was_interrupted(all_chunks) is interrupted

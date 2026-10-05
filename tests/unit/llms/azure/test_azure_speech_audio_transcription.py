@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.llms.azure.audio_transcription.transformation import (
@@ -226,3 +227,22 @@ def test_azure_speech_transcription_routes_through_provider_config(monkeypatch):
     assert audio_handler.call_args.kwargs["custom_llm_provider"] == "azure"
 
 
+def test_azure_speech_audio_transcription_response_keeps_the_raw_payload_as_hidden_params():
+    payload = {"RecognitionStatus": "Success", "NBest": [{"Lexical": "hello world", "Confidence": 0.9}], "Offset": 3}
+
+    response = AzureSpeechAudioTranscriptionConfig().transform_audio_transcription_response(
+        httpx.Response(200, json=payload)
+    )
+
+    assert response.text == "hello world"
+    assert response._hidden_params == payload
+
+
+@pytest.mark.parametrize("payload", [7, "spoken secret", [{"DisplayText": "spoken secret"}]])
+def test_azure_speech_audio_transcription_response_rejects_non_object_bodies(payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        AzureSpeechAudioTranscriptionConfig().transform_audio_transcription_response(
+            httpx.Response(200, json=payload)
+        )
+
+    assert "spoken secret" not in str(exc_info.value)

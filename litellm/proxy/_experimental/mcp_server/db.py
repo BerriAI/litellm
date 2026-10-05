@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, cast
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
@@ -161,6 +161,8 @@ _CLIENT_FORWARDED_AUTH_TYPES: Final["frozenset[str]"] = frozenset({"true_passthr
 
 # Minted token material that must never survive a client rotation on a persisted row.
 _MINTED_TOKEN_CREDENTIAL_FIELDS: Final["frozenset[str]"] = frozenset({"access_token", "refresh_token", "expires_in"})
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def _bind_submitted_oauth_client(
@@ -1916,7 +1918,7 @@ def mcp_oauth_token_identity(server: object) -> tuple[object, ...]:
     creds: Final = getattr(server, "credentials", None)
     if isinstance(creds, str):
         try:
-            parsed: dict[str, object] | None = json.loads(creds)
+            parsed: Mapping[str, object] | None = _JSON_OBJECT.validate_python(json.loads(creds))
         except ValueError:
             parsed = None
     else:
@@ -2382,12 +2384,9 @@ def _decode_user_env_vars(stored: str) -> dict[str, str]:
                 "re-enter them rather than silently forwarding ciphertext"
             )
         return {}
-    parsed: dict[str, object] | None
     try:
-        parsed = json.loads(decrypted)
+        parsed: Final = _JSON_OBJECT.validate_python(json.loads(decrypted))
     except (ValueError, TypeError):
-        return {}
-    if not isinstance(parsed, dict):
         return {}
     return {str(k): str(v) for k, v in parsed.items()}
 

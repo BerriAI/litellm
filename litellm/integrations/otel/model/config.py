@@ -2,7 +2,7 @@
 
 from enum import Enum
 from functools import lru_cache
-from typing import Annotated, Any, Final
+from typing import Annotated, Final
 
 from pydantic import AliasChoices, BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
 from pydantic.fields import FieldInfo
@@ -315,7 +315,7 @@ class OpenTelemetryV2Config(BaseSettings):
         mode="before",
     )
     @classmethod
-    def _split_csv(cls, value: Any) -> Any:
+    def _split_csv(cls, value: object) -> object:
         """Accept a comma-separated string for list fields.
 
         Env vars are strings, but these fields are lists. Pydantic-settings would

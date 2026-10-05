@@ -6,11 +6,21 @@ without needing a running proxy.
 """
 
 import pytest
+from fastapi import Request
 
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.policy_endpoints.endpoints import (
     GuardrailTestResultEntry,
     _compute_overall_action,
     _test_guardrail_definitions,
+    list_policies,
+)
+from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+from litellm.types.proxy.policy_engine import (
+    PolicyGuardrailsResponse,
+    PolicyListResponse,
+    PolicyScopeResponse,
+    PolicySummaryItem,
 )
 
 
@@ -293,3 +303,68 @@ class TestEnrichPolicyTemplateStreamKeepalive:
         assert b": ping\n\n" not in chunks
         assert chunks[0] == b'data: {"type": "competitor", "name": "Rival Air"}\n\n'
         assert chunks[-1].startswith(b'data: {"type": "done"')
+
+
+def _policy_list_request() -> Request:
+    return Request({"type": "http", "method": "GET", "path": "/policy/list", "headers": []})
+
+
+def _summary_item(inherit, resolved_guardrails, inheritance_chain) -> PolicySummaryItem:
+    return PolicySummaryItem(
+        inherit=inherit,
+        scope=PolicyScopeResponse(),
+        guardrails=PolicyGuardrailsResponse(),
+        resolved_guardrails=resolved_guardrails,
+        inheritance_chain=inheritance_chain,
+    )
+
+
+@pytest.fixture
+def policy_registry():
+    registry = get_policy_registry()
+    registry.clear()
+    yield registry
+    registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_policies_is_empty_before_any_policy_is_loaded(policy_registry):
+    response = await list_policies(request=_policy_list_request(), user_api_key_dict=UserAPIKeyAuth())
+
+    assert response == PolicyListResponse(policies={}, total_count=0)
+
+
+@pytest.mark.parametrize(
+    ("policies_config", "expected_policies"),
+    [
+        ({}, {}),
+        (
+            {"solo": {"description": "standalone", "guardrails": {"add": ["pii"]}}},
+            {"solo": _summary_item(None, ["pii"], ["solo"])},
+        ),
+        (
+            {
+                "base": {"guardrails": {"add": ["pii"]}},
+                "child": {"inherit": "base", "guardrails": {"add": ["audit"], "remove": ["pii"]}},
+                "conditional": {"guardrails": {"add": ["toxicity"]}, "condition": {"model": "gpt-4.*"}},
+                "empty": {"guardrails": {"remove": ["pii"]}},
+            },
+            {
+                "base": _summary_item(None, ["pii"], ["base"]),
+                "child": _summary_item("base", ["audit"], ["base", "child"]),
+                "conditional": _summary_item(None, ["toxicity"], ["conditional"]),
+                "empty": _summary_item(None, [], ["empty"]),
+            },
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_list_policies_reports_each_loaded_policy_with_its_resolved_guardrails(
+    policy_registry, policies_config, expected_policies
+):
+    policy_registry.load_policies(policies_config)
+
+    response = await list_policies(request=_policy_list_request(), user_api_key_dict=UserAPIKeyAuth())
+
+    assert response == PolicyListResponse(policies=expected_policies, total_count=0)
+    assert list(response.policies) == list(expected_policies)

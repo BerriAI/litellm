@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.llms.dashscope.image_generation.transformation import (
@@ -455,3 +456,98 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
             assert "input" in body
             assert "messages" in body["input"]
             assert body["parameters"]["size"] == "1024*1024"
+
+
+def _transform_response(payload: object) -> ImageResponse:
+    return DashScopeImageGenerationConfig().transform_image_generation_response(
+        model="qwen-image-2.0",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=ImageResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"output": {}},
+        {"output": {"choices": []}},
+        {"output": {"choices": ""}},
+        {"output": {"choices": [{}]}},
+        {"output": {"choices": [{"message": {}}]}},
+        {"output": {"choices": [{"message": {"content": {}}}]}},
+        {"output": {"choices": [{"message": {"content": [{}]}}]}},
+        {"output": {"choices": [{"message": {"content": [{"image": ""}]}}]}},
+        {"output": {"choices": [{"message": {"content": [{"text": "hi"}]}}]}},
+        {"code": "Partial", "output": {"choices": []}},
+    ],
+)
+def test_transform_response_without_image_content_has_no_images(
+    payload: dict[str, object],
+):
+    assert _transform_response(payload).data == []
+
+
+def test_transform_response_skips_content_items_without_an_image():
+    response = _transform_response(
+        {
+            "output": {
+                "choices": [
+                    {"message": {"content": [{"text": "caption"}, {"image": "https://a.example/1.png"}]}},
+                    {"message": {"content": [{"image": None}, {"image": "https://a.example/2.png"}]}},
+                ]
+            }
+        }
+    )
+
+    assert [image.url for image in response.data] == [
+        "https://a.example/1.png",
+        "https://a.example/2.png",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"code": "InvalidParameter", "message": "Size not supported"}, "Size not supported"),
+        ({"code": "Throttled"}, "{'code': 'Throttled'}"),
+        ({"code": 429, "message": {"detail": "slow down"}}, "{'detail': 'slow down'}"),
+    ],
+)
+def test_transform_response_reports_api_error_bodies(
+    payload: dict[str, object], message: str
+):
+    with pytest.raises(BaseLLMException) as exc_info:
+        _transform_response(payload)
+
+    assert exc_info.value.message == message
+    assert exc_info.value.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["code"],
+        "code",
+        7,
+        {"output": None},
+        {"output": ["not", "an", "object"]},
+        {"output": {"choices": 7}},
+        {"output": {"choices": ["not an object"]}},
+        {"output": {"choices": [{"message": "not an object"}]}},
+        {"output": {"choices": [{"message": {"content": None}}]}},
+        {"output": {"choices": [{"message": {"content": ["not an object"]}}]}},
+    ],
+)
+def test_transform_response_rejects_malformed_payloads_without_echoing_them(
+    payload: object,
+):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_response(payload)
+
+    assert "input_value" not in str(exc_info.value)

@@ -165,7 +165,7 @@ def _as_dict(value: object) -> Mapping[str, Any]:
     return value if isinstance(value, dict) else MappingProxyType({})
 
 
-def _tool_events(part: Mapping[str, Any]) -> Sequence[Event]:
+def _tool_events(part: Mapping[str, object]) -> Sequence[Event]:
     native = str(part.get("tool") or "")
     call_id = str(part.get("callID") or part.get("id") or "")
     state = _as_dict(part.get("state"))
@@ -195,7 +195,7 @@ def _error_message(error: object) -> str:
     return str(error.get("name") or "opencode reported an error")
 
 
-def validate_user_config(config: Mapping[str, Any]) -> None:
+def validate_user_config(config: Mapping[str, object]) -> None:
     """Reject OpenCodeOptions.config keys LiteLLM manages (or that bypass permissions)."""
     for key in config:
         if key in MANAGED_CONFIG_KEYS:
@@ -241,7 +241,7 @@ def build_opencode_config(
     user_config: Mapping[str, Any] | None = None,
     instructions_path: str | None = None,
     skills_path: str | None = None,
-) -> Mapping[str, Any]:
+) -> Mapping[str, object]:
     """The full opencode config: user config underneath, LiteLLM-managed keys on top."""
     user: Final = user_config or MappingProxyType({})
     validate_user_config(user)
@@ -379,7 +379,7 @@ class OpenCodeHarnessConfig(BaseCLIHarnessConfig):
     def create_stream_state(self) -> OpenCodeStreamState:
         return OpenCodeStreamState()
 
-    def transform_stream_line(self, line: Mapping[str, Any], state: OpenCodeStreamState) -> Sequence[Event]:
+    def transform_stream_line(self, line: Mapping[str, object], state: OpenCodeStreamState) -> Sequence[Event]:
         """step_finish token counts are ignored on purpose: the session endpoint accounts usage."""
         session_id = line.get("sessionID")
         if session_id and state.session_id is None:

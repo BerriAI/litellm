@@ -10,6 +10,8 @@ from typing import (
     get_args,
 )
 
+from pydantic import ConfigDict, TypeAdapter
+
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
 from litellm.repositories.table_repositories import (
@@ -29,6 +31,8 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 else:
     PrismaClient = Any
+
+_DB_ROW: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class VectorStoreIndexRegistry:
@@ -95,7 +99,9 @@ class VectorStoreIndexRegistry:
             )
             for vector_store in _vector_stores_from_db:
                 _dict_vector_store = dict(vector_store)
-                _litellm_managed_vector_store = LiteLLM_ManagedVectorStoreIndex(**_dict_vector_store)
+                _litellm_managed_vector_store = LiteLLM_ManagedVectorStoreIndex.model_validate(
+                    _DB_ROW.validate_python(_dict_vector_store)
+                )
                 vector_stores_from_db.append(_litellm_managed_vector_store)
         return vector_stores_from_db
 

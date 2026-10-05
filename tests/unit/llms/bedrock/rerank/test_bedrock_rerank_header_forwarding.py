@@ -8,7 +8,9 @@ forward_client_headers_to_llm_api were not being passed to Bedrock rerank provid
 import json
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.llms.bedrock.base_aws_llm import Boto3CredentialsInfo
@@ -506,3 +508,60 @@ async def test_bedrock_rerank_records_llm_api_duration():
 
     assert response._hidden_params["litellm_overhead_time_ms"] is not None
     assert response._hidden_params["_response_ms"] >= response._hidden_params["litellm_overhead_time_ms"]
+
+
+RERANK_MODEL_ARN = "arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0"
+NON_OBJECT_BODIES = [7, "sensitive-document", [{"index": 0, "relevanceScore": 0.9, "id": "sensitive-document"}]]
+
+
+def _rerank_through_transport(payload: object, *, is_async: bool):
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    client = (
+        AsyncHTTPHandler(transport=transport) if is_async else HTTPHandler(client=httpx.Client(transport=transport))
+    )
+    return BedrockRerankHandler().rerank(
+        model=RERANK_MODEL_ARN,
+        query=test_query,
+        documents=test_documents,
+        optional_params={
+            "aws_access_key_id": "AKIAEXAMPLE",
+            "aws_secret_access_key": "example-secret",
+            "aws_region_name": "us-west-2",
+        },
+        logging_obj=Mock(),
+        _is_async=is_async,
+        client=client,
+    )
+
+
+def _assert_is_the_bedrock_ranking(response: litellm.RerankResponse) -> None:
+    assert response.results == [
+        {"index": 2, "relevance_score": 0.95},
+        {"index": 0, "relevance_score": 0.1},
+        {"index": 1, "relevance_score": 0.05},
+    ]
+    assert response.meta == {"billed_units": {"search_units": 1}, "tokens": {}}
+
+
+def test_bedrock_rerank_maps_the_upstream_ranking():
+    _assert_is_the_bedrock_ranking(_rerank_through_transport(bedrock_rerank_response, is_async=False))
+
+
+async def test_bedrock_arerank_maps_the_upstream_ranking():
+    _assert_is_the_bedrock_ranking(await _rerank_through_transport(bedrock_rerank_response, is_async=True))
+
+
+@pytest.mark.parametrize("payload", NON_OBJECT_BODIES)
+def test_bedrock_rerank_rejects_non_object_bodies(payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        _rerank_through_transport(payload, is_async=False)
+
+    assert "sensitive-document" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("payload", NON_OBJECT_BODIES)
+async def test_bedrock_arerank_rejects_non_object_bodies(payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        await _rerank_through_transport(payload, is_async=True)
+
+    assert "sensitive-document" not in str(exc_info.value)

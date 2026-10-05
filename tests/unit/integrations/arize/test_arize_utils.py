@@ -5,6 +5,7 @@ from typing import Optional
 
 import asyncio
 
+import httpx
 import pytest
 
 import litellm
@@ -13,6 +14,7 @@ from litellm.integrations._types.open_inference import (
     SpanAttributes,
     ToolCallAttributes,
 )
+from litellm.integrations.arize._utils import _coerce_response_obj_for_attrs, _parse_passthrough_response
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import Choices, StandardCallbackDynamicParams
@@ -1513,3 +1515,42 @@ def test_arize_mcp_emitter_is_inert_without_a_standard_logging_object():
 
     written = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
     assert SpanAttributes.TOOL_NAME not in written
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ('{"id": "msg_1", "usage": {"input_tokens": 3}}', {"id": "msg_1", "usage": {"input_tokens": 3}}),
+        ("{}", {}),
+    ],
+)
+def test_coerce_response_obj_decodes_a_json_object_body(text: str, expected: dict[str, object]):
+    assert _coerce_response_obj_for_attrs(httpx.Response(200, text=text)) == expected
+
+
+@pytest.mark.parametrize("text", ["[1, 2]", '"text"', "7", "null", "true", "not json"])
+def test_coerce_response_obj_keeps_the_response_when_the_body_is_not_a_json_object(text: str):
+    response = httpx.Response(200, text=text)
+
+    assert _coerce_response_obj_for_attrs(response) is response
+
+
+@pytest.mark.parametrize(
+    ("raw", "coerced", "kwargs", "expected"),
+    [
+        (None, {"response": '{"id": "wrapped"}'}, {}, {"id": "wrapped"}),
+        (None, {"response": "[1, 2]"}, {}, None),
+        ({"id": "raw"}, {"response": "[1, 2]"}, {}, {"id": "raw"}),
+        ({"id": "raw"}, {"response": "not json"}, {}, {"id": "raw"}),
+        (None, {"response": "7"}, {"original_response": '{"id": "original"}'}, {"id": "original"}),
+        (None, None, {"original_response": '{"id": "original"}'}, {"id": "original"}),
+        (None, None, {"original_response": "[1, 2]"}, None),
+        (None, None, {"original_response": '"text"'}, None),
+        (None, None, {"original_response": "null"}, None),
+        (None, None, {"original_response": "not json"}, None),
+    ],
+)
+def test_parse_passthrough_response_reads_only_json_objects_from_text(
+    raw: object, coerced: object, kwargs: dict[str, object], expected: dict[str, object] | None
+):
+    assert _parse_passthrough_response(raw, coerced, kwargs) == expected

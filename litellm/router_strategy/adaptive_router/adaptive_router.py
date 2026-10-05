@@ -123,6 +123,9 @@ class AdaptiveRouter:
                 prefs = self.model_to_prefs.get(model) or _default_prefs()
                 self._cells[(rt, model)] = initial_cell(prefs, rt)
 
+    def cell(self, request_type: RequestType, model: str) -> BanditCell:
+        return self._cells[(request_type, model)]
+
     async def load_state_from_db(self, prisma_client: object) -> None:
         """Add each row's persisted delta to a freshly computed cold-start prior.
 

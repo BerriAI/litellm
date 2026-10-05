@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from litellm.llms.a2a.chat.streaming_iterator import A2AModelResponseIterator
 from litellm.llms.a2a.chat.transformation import A2AConfig
 from litellm.types.utils import ModelResponse
 
@@ -85,3 +86,38 @@ def test_transform_request_tags_the_message_with_its_kind(optional_params: dict)
     )
 
     assert request["params"]["message"]["kind"] == "message"
+
+
+def test_get_model_response_iterator_parses_the_agent_stream():
+    iterator = A2AConfig().get_model_response_iterator(
+        streaming_response=iter(
+            [
+                '{"jsonrpc":"2.0","id":"1","result":{"kind":"task","status":{"state":"completed"},'
+                '"artifacts":[{"parts":[{"kind":"text","text":"7"}]}]}}'
+            ]
+        ),
+        sync_stream=True,
+    )
+
+    chunk = next(iterator)
+
+    assert isinstance(iterator, A2AModelResponseIterator)
+    assert chunk["text"] == "7"
+    assert chunk["finish_reason"] == "stop"
+
+
+def test_resolve_agent_config_from_registry_returns_the_explicit_headers_object_untouched():
+    headers: dict[str, object] = {"X-Test": "value"}
+    optional_params: dict[str, object] = {"stream": True}
+
+    resolved = A2AConfig.resolve_agent_config_from_registry(
+        agent_name="test-agent",
+        api_base="http://explicit.example",
+        api_key="explicit-key",
+        headers=headers,
+        optional_params=optional_params,
+    )
+
+    assert resolved[2] is headers
+    assert resolved[:2] == ("http://explicit.example", "explicit-key")
+    assert optional_params == {"stream": True}

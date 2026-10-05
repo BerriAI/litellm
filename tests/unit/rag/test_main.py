@@ -12,12 +12,14 @@ aquery carries the completion response with real usage and cost.
 
 import asyncio
 import json
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import patch
 
 import httpx
 import pytest
 import respx
+from pydantic import ValidationError
 
 import litellm
 from litellm._internal_context import is_internal_call
@@ -536,6 +538,91 @@ async def test_aquery_forwards_vector_store_params_to_search_but_not_completion(
     assert completion_kwargs["api_key"] == "sk-llm-key"
     assert completion_kwargs["api_base"] == "https://llm.example.com"
     assert not ({"milvus_text_field", "outputFields"} & set(completion_kwargs))
+
+
+_UNDECODABLE_FILE: Final = {"filename": "notes.txt", "content": "x"}
+
+
+@pytest.mark.parametrize(
+    ("ingest_options", "expected_provider"),
+    [
+        ({"vector_store": {"custom_llm_provider": "bedrock"}}, "bedrock"),
+        ({"vector_store": MappingProxyType({"custom_llm_provider": "bedrock"})}, "bedrock"),
+        ({"vector_store": {"vector_store_id": "vs_1", 7: "ignored"}}, None),
+        ({}, None),
+    ],
+)
+def test_ingest_failure_is_attributed_to_the_vector_store_provider(
+    ingest_options: dict[str, object], expected_provider: str | None
+) -> None:
+    with pytest.raises(litellm.APIConnectionError, match="Invalid base64-encoded string") as raised:
+        litellm.ingest(ingest_options=ingest_options, file=_UNDECODABLE_FILE)
+
+    assert raised.value.llm_provider == expected_provider
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("ingest_options", "expected_provider"),
+    [
+        ({"vector_store": {"custom_llm_provider": "bedrock"}}, "bedrock"),
+        ({"vector_store": MappingProxyType({"custom_llm_provider": "bedrock"})}, "bedrock"),
+        ({"vector_store": {"vector_store_id": "vs_1", 7: "ignored"}}, None),
+        ({}, None),
+    ],
+)
+async def test_aingest_failure_is_attributed_to_the_vector_store_provider(
+    ingest_options: dict[str, object], expected_provider: str | None
+) -> None:
+    with pytest.raises(litellm.APIConnectionError, match="Invalid base64-encoded string") as raised:
+        await litellm.aingest(ingest_options=ingest_options, file=_UNDECODABLE_FILE)
+
+    assert raised.value.llm_provider == expected_provider
+
+
+@pytest.mark.parametrize("vector_store", [None, "openai", ["openai"], [{"api_key": "sk-test"}]])
+def test_ingest_failure_with_a_vector_store_that_is_not_a_mapping_raises_a_validation_error(
+    vector_store: object,
+) -> None:
+    with pytest.raises(ValidationError) as raised:
+        litellm.ingest(ingest_options={"vector_store": vector_store}, file=_UNDECODABLE_FILE)
+
+    assert "sk-test" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("vector_store", [None, "openai", ["openai"], [{"api_key": "sk-test"}]])
+async def test_aingest_failure_with_a_vector_store_that_is_not_a_mapping_raises_a_validation_error(
+    vector_store: object,
+) -> None:
+    with pytest.raises(ValidationError) as raised:
+        await litellm.aingest(ingest_options={"vector_store": vector_store}, file=_UNDECODABLE_FILE)
+
+    assert "sk-test" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", [None, 5])
+async def test_aquery_with_a_provider_that_is_not_a_string_bills_only_the_completion(provider: object) -> None:
+    messages: Final = [{"role": "user", "content": "hello"}]
+    default_provider_response: Final = await litellm.aquery(
+        model="gpt-4o-mini",
+        messages=messages,
+        retrieval_config={"vector_store_id": "vs_test_123"},
+        mock_response="hi there",
+    )
+
+    response: Final = await litellm.aquery(
+        model="gpt-4o-mini",
+        messages=messages,
+        retrieval_config={"vector_store_id": "vs_test_123", "custom_llm_provider": provider},
+        mock_response="hi there",
+    )
+
+    await _drain_logging_worker()
+
+    assert response._hidden_params["response_cost"] > 0
+    assert response._hidden_params["response_cost"] == default_provider_response._hidden_params["response_cost"]
 
 
 def test_rag_call_types_are_registered():

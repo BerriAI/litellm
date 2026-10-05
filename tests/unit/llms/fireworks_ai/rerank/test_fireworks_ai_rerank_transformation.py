@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from litellm.llms.fireworks_ai.rerank.transformation import FireworksAIRerankConfig
 from litellm.types.rerank import RerankResponse
@@ -341,3 +342,68 @@ class TestFireworksAIRerankTransform:
 
         assert headers["Authorization"] == "Bearer test-api-key"
         assert headers["Content-Type"] == "application/json"
+
+
+def _transform(payload: object) -> RerankResponse:
+    return FireworksAIRerankConfig().transform_rerank_response(
+        model="fireworks_ai/fireworks/qwen3-reranker-8b",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=RerankResponse(),
+        logging_obj=MagicMock(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ({"index": "1", "relevance_score": "0.5"}, {"index": 1, "relevance_score": 0.5}),
+        ({"index": 2, "relevance_score": 1}, {"index": 2, "relevance_score": 1.0}),
+    ],
+)
+def test_transform_rerank_response_converts_index_and_score_with_int_and_float(
+    result: dict[str, object], expected: dict[str, object]
+):
+    assert _transform({"id": "rerank-1", "data": [result]}).results == [expected]
+
+
+@pytest.mark.parametrize("usage_fields", [{}, {"usage": {}}])
+def test_transform_rerank_response_without_usage_counters_reports_zero_tokens(usage_fields: dict[str, object]):
+    response = _transform({"id": "rerank-1", "data": [{"index": 0, "relevance_score": 0.5}], **usage_fields})
+
+    assert response.meta == {"billed_units": {"search_units": 0}, "tokens": {"input_tokens": 0, "output_tokens": 0}}
+
+
+def test_transform_rerank_response_keeps_provider_id_and_falls_back_to_results_key():
+    response = _transform({"id": "rerank-1", "data": [], "results": [{"index": 3, "relevance_score": 0.25}]})
+
+    assert response.id == "rerank-1"
+    assert response.results == [{"index": 3, "relevance_score": 0.25}]
+
+
+def test_transform_rerank_response_empty_results_list_yields_no_results():
+    assert _transform({"id": "rerank-1", "results": []}).results == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["not", "an", "object"],
+        {"data": [{"index": 0, "relevance_score": 0.5}], "usage": None},
+        {"data": [{"index": 0, "relevance_score": 0.5}], "usage": {"total_tokens": 1.5}},
+        {"data": 7},
+        {"data": ["not an object"]},
+        {"data": [{"index": None, "relevance_score": 0.5}]},
+        {"data": [{"index": 0, "relevance_score": [0.5]}]},
+        {"id": 7, "data": [{"index": 0, "relevance_score": 0.5}]},
+    ],
+)
+def test_transform_rerank_response_rejects_malformed_payloads(payload: object):
+    with pytest.raises(ValidationError):
+        _transform(payload)
+
+
+def test_transform_rerank_response_shape_errors_do_not_echo_the_payload():
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"data": [{"index": {"leaked": "document text"}, "relevance_score": 0.5}]})
+
+    assert "document text" not in str(exc_info.value)

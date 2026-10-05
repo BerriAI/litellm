@@ -1647,7 +1647,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         owner_filter: Final = build_owner_filter(user_api_key_dict)
         if owner_filter is None:
-            return FileListPage(**build_list_page([]))
+            return FileListPage.model_validate(build_list_page([]))
 
         if after:
             cursor_row = await _managed_file_table(self.prisma_client).find_first(
@@ -1686,7 +1686,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             cursor_id = chunk[-1].unified_file_id
             chunk_size = max(chunk_size, FILE_LIST_CONTINUATION_CHUNK_SIZE)
 
-        return FileListPage(**build_list_page(matches[:page_size], has_more=len(matches) > page_size))
+        return FileListPage.model_validate(build_list_page(matches[:page_size], has_more=len(matches) > page_size))
 
     def _is_batch_polling_enabled(self) -> bool:
         """

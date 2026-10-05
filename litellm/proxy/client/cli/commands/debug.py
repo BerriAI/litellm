@@ -115,6 +115,7 @@ class RequestResponsePayload(BaseModel):
 _SESSION_PAGE: Final = TypeAdapter(SessionLogsPage)
 _PAYLOAD: Final[TypeAdapter[RequestResponsePayload | None]] = TypeAdapter(RequestResponsePayload | None)
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_BACKTICK_RUNS: Final = TypeAdapter(tuple[str, ...])
 
 _SESSION_PAGE_SIZE: Final = 100
 _TRANSPORT_BODY_CHARS: Final = 500
@@ -192,7 +193,7 @@ def _fmt_json(value: JsonValue, max_chars: int) -> str:
 
 
 def _fenced(text: str, info: str = "") -> tuple[str, str, str]:
-    longest_run: Final = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    longest_run: Final = max((len(run) for run in _BACKTICK_RUNS.validate_python(re.findall(r"`+", text))), default=0)
     fence: Final = "`" * max(3, longest_run + 1)
     return (f"{fence}{info}", text, fence)
 

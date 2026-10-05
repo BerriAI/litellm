@@ -331,7 +331,7 @@ async def afile_retrieve(
         else:
             response = init_response
 
-        return OpenAIFileObject(**response.model_dump())
+        return OpenAIFileObject.model_validate(response.model_dump())
     except Exception as e:
         raise e
 

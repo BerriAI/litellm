@@ -595,7 +595,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     and not (self.s3_drop_on_terminal_error and _is_terminal(response))
                     and attempt < max_retries - 1
                 ):
-                    wait_time = 2**attempt  # 1s, 2s
+                    wait_time = 1 << attempt  # 1s, 2s
                     verbose_logger.log(
                         logging.DEBUG if _in_flush.get() else logging.WARNING,
                         "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
@@ -897,7 +897,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     and not (self.s3_drop_on_terminal_error and _is_terminal(response))
                     and attempt < max_retries - 1
                 ):
-                    wait_time = 2**attempt  # 1s, 2s
+                    wait_time = 1 << attempt  # 1s, 2s
                     verbose_logger.warning(
                         "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
                         response.status_code,

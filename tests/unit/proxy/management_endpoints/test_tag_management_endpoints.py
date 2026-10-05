@@ -2,6 +2,7 @@ import inspect
 import json
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
+from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, Mock, patch
@@ -1521,3 +1522,67 @@ async def test_add_tag_to_deployment_model_not_found():
 
         assert exc_info.value.status_code == 500
         assert "not found in database" in str(exc_info.value.detail)
+
+
+class _StoredTagTable:
+    def __init__(self, model_info: object) -> None:
+        self.model_info = model_info
+
+    async def find_many(self, where: object = None, include: object = None) -> list[SimpleNamespace]:
+        return [
+            SimpleNamespace(
+                tag_name="routed-tag",
+                description="Routes to one model",
+                models=["model-1"],
+                model_info=self.model_info,
+                budget_id=None,
+                created_at=datetime(2025, 1, 1),
+                updated_at=datetime(2025, 1, 2),
+                created_by="user-123",
+                litellm_budget_table=None,
+            )
+        ]
+
+
+class _NoDynamicTagSpend:
+    async def group_by(self, by: object, where: object, min: object, max: object) -> list[object]:
+        return []
+
+
+@pytest.mark.parametrize(
+    ("stored_model_info", "returned_model_info"),
+    [
+        ('{"model-1": "gpt-4o"}', {"model-1": "gpt-4o"}),
+        ({"model-1": "gpt-4o"}, {"model-1": "gpt-4o"}),
+        (None, {}),
+    ],
+)
+def test_tag_info_and_tag_list_return_the_stored_model_info_decoded(
+    monkeypatch, stored_model_info, returned_model_info
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    monkeypatch.setattr(
+        proxy_server,
+        "prisma_client",
+        SimpleNamespace(
+            db=SimpleNamespace(
+                litellm_tagtable=_StoredTagTable(stored_model_info),
+                litellm_dailytagspend=_NoDynamicTagSpend(),
+            )
+        ),
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        info_response = client.post("/tag/info", json={"names": ["routed-tag"]})
+        list_response = client.get("/tag/list")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert info_response.status_code == 200
+    assert info_response.json()["routed-tag"]["model_info"] == returned_model_info
+    assert list_response.status_code == 200
+    assert [tag["model_info"] for tag in list_response.json()] == [returned_model_info]

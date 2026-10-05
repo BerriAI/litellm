@@ -18,7 +18,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar
 
 from litellm.harness.errors import HarnessError, OptionsMismatch
 from litellm.harness.types import Capabilities, Event, Harness
@@ -133,7 +133,7 @@ class BaseCLIHarnessConfig(BaseHarnessConfig[OptionsT], Generic[OptionsT, Stream
         """Fresh per-turn parser state."""
 
     @abstractmethod
-    def transform_stream_line(self, line: Mapping[str, Any], state: StreamStateT) -> Sequence[Event]:
+    def transform_stream_line(self, line: Mapping[str, object], state: StreamStateT) -> Sequence[Event]:
         """One decoded JSON line from stdout to zero or more events. Pure."""
 
     @abstractmethod

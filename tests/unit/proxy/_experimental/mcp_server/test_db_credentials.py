@@ -173,6 +173,49 @@ def test_mcp_oauth_token_identity_detects_change_under_encryption():
     assert mcp_oauth_token_identity(unchanged) != mcp_oauth_token_identity(changed)
 
 
+def test_mcp_oauth_token_identity_reads_client_and_scopes_from_json_string_credentials():
+    from litellm.proxy._experimental.mcp_server.db import mcp_oauth_token_identity
+
+    credentials: Final = json.dumps(
+        {"client_id": "cid", "client_secret": "csec", "scopes": ["a"], "upstream_resource": "api://audience"}
+    )
+
+    assert mcp_oauth_token_identity(_identity_server(credentials=credentials)) == (
+        "https://up.example.com/mcp",
+        None,
+        "oauth2",
+        "authorization_code",
+        None,
+        "https://idp.example.com/authorize",
+        "https://idp.example.com/token",
+        "https://idp.example.com/register",
+        "cid",
+        "csec",
+        ["a"],
+        "api://audience",
+    )
+
+
+@pytest.mark.parametrize("credentials", ["[]", '["client_id"]', '"cid"', "5", "null", "not json"])
+def test_mcp_oauth_token_identity_treats_stored_credentials_that_are_not_a_json_object_as_empty(credentials):
+    from litellm.proxy._experimental.mcp_server.db import mcp_oauth_token_identity
+
+    assert mcp_oauth_token_identity(_identity_server(credentials=credentials)) == (
+        "https://up.example.com/mcp",
+        None,
+        "oauth2",
+        "authorization_code",
+        None,
+        "https://idp.example.com/authorize",
+        "https://idp.example.com/token",
+        "https://idp.example.com/register",
+        None,
+        None,
+        None,
+        None,
+    )
+
+
 def _oauth_row(user_id: str, server_id: str = "srv-1"):
     """A stored per-user OAuth token row (payload tagged type=oauth2, legacy plain-base64 encoding)."""
     row = _legacy_row(json.dumps({"type": "oauth2", "access_token": "tok-" + user_id}))
