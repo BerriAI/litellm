@@ -455,6 +455,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     providerKey: "Repelloai",
   },
   {
+    id: "thirdlaw",
+    name: "ThirdLaw",
+    description:
+      "Runtime policy enforcement for LiteLLM traffic. Evaluates requests and responses against centrally managed policies called Laws, then returns a decision to continue, modify, or block.",
+    category: "partner",
+    logo: guardrailLogoMap["ThirdLaw"],
+    tags: ["Policy Enforcement", "Runtime Security", "Intervention"],
+    providerKey: "ThirdLaw",
+  },
+  {
     id: "straiker",
     name: "Straiker",
     description:

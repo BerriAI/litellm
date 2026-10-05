@@ -209,6 +209,20 @@ describe("guardrail_info_helpers", () => {
       expect(result.displayName).toBe("RepelloAI Argus");
       expect(result.logo).toContain("repelloai.png");
     });
+
+    it("should return thirdlaw logo when ui_friendly_name is ThirdLaw", () => {
+      populateGuardrailProviders({
+        thirdlaw: { ui_friendly_name: "ThirdLaw" },
+      });
+      populateGuardrailProviderMap({
+        thirdlaw: { ui_friendly_name: "ThirdLaw" },
+      });
+
+      const result = getGuardrailLogoAndName("thirdlaw");
+
+      expect(result.displayName).toBe("ThirdLaw");
+      expect(result.logo).toContain("thirdlaw.svg");
+    });
   });
 
   describe("formatGuardrailMode", () => {
