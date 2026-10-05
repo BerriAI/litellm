@@ -102,6 +102,25 @@ fn standard_json_and_protobuf_preserve_the_same_identifiers(
     span: opentelemetry_proto::tonic::trace::v1::Span,
 ) {
     use prost::Message;
+    use opentelemetry_proto::tonic::{
+        common::v1::{AnyValue, KeyValue, any_value::Value as AnyValueKind},
+        trace::v1::span::Event,
+    };
+    let span = Span {
+        events: vec![Event {
+            time_unix_nano: 1_234_567_890,
+            name: "operation.event".to_owned(),
+            attributes: vec![KeyValue {
+                key: "event.marker".to_owned(),
+                value: Some(AnyValue {
+                    value: Some(AnyValueKind::StringValue("event-value".to_owned())),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..span
+    };
     let request = request_with(span);
     let json = serde_json::to_vec(&request).unwrap();
     let binary = request.encode_to_vec();
@@ -152,6 +171,26 @@ fn rejects_ids_and_timestamps_that_cannot_be_stored(
         start_time_unix_nano: start,
         end_time_unix_nano: end,
         ..Default::default()
+    };
+    assert!(matches!(
+        decode_otlp(&request_with(span).encode_to_vec(), None),
+        Err(litellm_traces::Error::InvalidPayload)
+    ));
+}
+
+#[rstest]
+fn rejects_event_timestamps_outside_clickhouse_range(
+    span: opentelemetry_proto::tonic::trace::v1::Span,
+) {
+    use opentelemetry_proto::tonic::trace::v1::span::Event;
+    use prost::Message;
+
+    let span = opentelemetry_proto::tonic::trace::v1::Span {
+        events: vec![Event {
+            time_unix_nano: i64::MAX as u64 + 1,
+            ..Default::default()
+        }],
+        ..span
     };
     assert!(matches!(
         decode_otlp(&request_with(span).encode_to_vec(), None),

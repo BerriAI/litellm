@@ -129,6 +129,44 @@ fn status_message_falls_back_to_the_exception_event(
 }
 
 #[rstest]
+fn span_rows_preserve_event_names_attributes_and_timestamps(tenant: Tenant) {
+    let exported = span(
+        &"02".repeat(8),
+        vec![],
+        json!({
+            "events": [
+                {"name": "generic.event", "timeUnixNano": "2000", "attributes": [
+                    attribute("event.marker", "kept"),
+                    attribute("large", &"x".repeat(300)),
+                ]},
+                {"name": "exception", "timeUnixNano": "3000", "attributes": [
+                    attribute("exception.message", "failed"),
+                    attribute("exception.marker", "also kept"),
+                ]},
+            ],
+        }),
+    );
+    let row = &rows(&export(vec![(vec![], vec![exported])]), &tenant, 200)[0];
+
+    assert_eq!(row["Events.Timestamp"], json!([2000, 3000]));
+    assert_eq!(row["Events.Name"], json!(["generic.event", "exception"]));
+    assert_eq!(
+        row["Events.Attributes"],
+        json!([
+            {
+                "event.marker": "kept",
+                "large": format!("{}…[truncated 100 bytes]", "x".repeat(200)),
+            },
+            {
+                "exception.message": "failed",
+                "exception.marker": "also kept",
+            },
+        ])
+    );
+    assert_eq!(row["StatusMessage"], "failed");
+}
+
+#[rstest]
 fn consumed_payloads_leave_span_attributes_and_long_values_are_capped(tenant: Tenant) {
     let messages = json!([
         {"role": "system", "content": "be brief"},

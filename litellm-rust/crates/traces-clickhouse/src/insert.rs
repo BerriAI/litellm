@@ -215,6 +215,14 @@ impl Serialize for EncodedRow<'_> {
 }
 
 fn insert_value<'a>(name: &str, value: &'a Value) -> Result<Cow<'a, Value>, Error> {
+    if name == "Events.Timestamp" {
+        let timestamps = value.as_array().ok_or(Error::InvalidRow)?;
+        let encoded = timestamps
+            .iter()
+            .map(|timestamp| format_timestamp(timestamp, 1))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(Cow::Owned(Value::Array(encoded)));
+    }
     let multiplier = match name {
         "Timestamp" => 1,
         "start_time" | "end_time" | "completion_start_time" => 1_000_000,
@@ -223,12 +231,16 @@ fn insert_value<'a>(name: &str, value: &'a Value) -> Result<Cow<'a, Value>, Erro
     if name == "completion_start_time" && value.is_null() {
         return Ok(Cow::Borrowed(value));
     }
+    Ok(Cow::Owned(format_timestamp(value, multiplier)?))
+}
+
+fn format_timestamp(value: &Value, multiplier: i128) -> Result<Value, Error> {
     let timestamp = value.as_i64().ok_or(Error::InvalidRow)?;
     let datetime = OffsetDateTime::from_unix_timestamp_nanos(i128::from(timestamp) * multiplier)
         .map_err(|_| Error::InvalidRow)?;
     datetime
         .format(&Rfc3339)
-        .map(|value| Cow::Owned(Value::String(value)))
+        .map(Value::String)
         .map_err(|_| Error::InvalidRow)
 }
 
