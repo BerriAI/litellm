@@ -224,3 +224,77 @@ def test_spend_log_routes_preserve_user_and_permitted_team_access(
         admin: Final = gateway.request("GET", f"/spend/logs/ui/{rows[2].request_id}")
         assert admin.status_code == 200, admin.text
         assert admin.json()["messages"] == [{"role": "user", "content": rows[2].request_id + " payload"}], admin.text
+
+
+def _chat_request_id(gateway: Gateway, model: str, key: str) -> str:
+    response: Final = gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "max_tokens": 20, "messages": [{"role": "user", "content": f"scope {uuid.uuid4().hex}"}]},
+        key=key,
+    )
+    assert response.status_code == 200, response.text
+    body: Final = TypeAdapter(dict[str, object]).validate_python(response.json())
+    return str(body["id"])
+
+
+def _legacy_spend_rows(gateway: Gateway, key: str, params: dict[str, str]) -> list[dict[str, object]]:
+    response: Final = gateway.request("GET", "/spend/logs", key=key, params=params)
+    assert response.status_code == 200, response.text
+    return TypeAdapter(list[dict[str, object]]).validate_python(response.json())
+
+
+def test_legacy_spend_logs_clamp_internal_user_filters_to_their_own_user(gateway: Gateway) -> None:
+    from integration._support.client import eventually, object_value, string_value
+    from integration._support.database import read_rows
+
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        user_a: Final = scenario.user(user_role="internal_user")
+        user_b: Final = scenario.user(user_role="internal_user")
+        key_a: Final = scenario.key(user_id=user_a, models=[model])
+        key_b: Final = scenario.key(user_id=user_b, models=[model])
+        request_a: Final = _chat_request_id(gateway, model, key_a)
+        request_b: Final = _chat_request_id(gateway, model, key_b)
+        for request_id in (request_a, request_b):
+            eventually(
+                lambda request_id=request_id: read_rows(
+                    'SELECT request_id, "user" FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (request_id,)
+                ),
+                lambda rows: len(rows) == 1,
+                seconds=70,
+            )
+
+        # a foreign user_id filter still returns only A's rows
+        filtered: Final = _legacy_spend_rows(gateway, key_a, {"user_id": user_b})
+        assert filtered != [], filtered
+        assert {string_value(object_value(row)["user"]) for row in filtered} == {user_a}, filtered
+        assert request_b not in {string_value(object_value(row)["request_id"]) for row in filtered}
+        assert request_a in {string_value(object_value(row)["request_id"]) for row in filtered}
+
+        # a foreign api_key filter returns nothing
+        by_key: Final = _legacy_spend_rows(gateway, key_a, {"api_key": key_b})
+        assert by_key == [], by_key
+
+        # a foreign request_id returns nothing
+        by_request: Final = _legacy_spend_rows(gateway, key_a, {"request_id": request_b})
+        assert all(string_value(object_value(row)["request_id"]) != request_b for row in by_request), by_request
+
+        # the date-window forms clamp the same way
+        now: Final = datetime.now(timezone.utc)
+        window: Final = {
+            "start_date": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
+            "end_date": (now + timedelta(days=1)).strftime("%Y-%m-%d"),
+        }
+        summarized: Final = _legacy_spend_rows(gateway, key_a, {**window, "summarize": "true"})
+        assert user_b not in {
+            name for row in summarized for name in object_value(object_value(row)["users"])
+        }, summarized
+        assert sum(float(str(object_value(row)["spend"])) for row in summarized) == pytest.approx(0.06), summarized
+        unsummarized: Final = _legacy_spend_rows(gateway, key_a, {**window, "summarize": "false"})
+        assert unsummarized != [], unsummarized
+        assert {string_value(object_value(row)["user"]) for row in unsummarized} == {user_a}, unsummarized
+
+        # the master key sees B's rows under the same filter
+        master: Final = _legacy_spend_rows(gateway, gateway.key, {"user_id": user_b, "request_id": request_b})
+        assert [string_value(object_value(row)["request_id"]) for row in master] == [request_b], master

@@ -82,3 +82,60 @@ def test_raising_a_spent_keys_budget_restores_serving(gateway: Gateway) -> None:
         served: Final = tuple(_bounded_chat(gateway, model, key) for _ in range(3))
         assert [response.status_code for response in served] == [200, 200, 200], [response.text for response in served]
         assert len(upstream.get("/__observations").json()["requests"]) == 3
+
+
+def _denied_with_budget_exceeded(gateway: Gateway, model: str, key: str) -> None:
+    denied: Final = _bounded_chat(gateway, model, key)
+    assert denied.status_code == 422, denied.text
+    assert object_value(denied.json()["error"])["type"] == "budget_exceeded"
+
+
+def test_raising_and_lowering_a_keys_tier_budget_moves_serving(gateway: Gateway) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        budget_id: Final = scenario.budget(budget_id=f"tier-{uuid.uuid4().hex}", max_budget=0.06, budget_duration="30d")
+        key: Final = scenario.key(models=[model], budget_id=budget_id)
+        info: Final = object_value(gateway.get("/key/info", {"key": key})["info"])
+        assert info["budget_id"] == budget_id, info
+        tier_rows: Final = read_rows(
+            'SELECT max_budget, budget_duration FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (budget_id,)
+        )
+        assert len(tier_rows) == 1
+        assert float(str(tier_rows[0]["max_budget"])) == 0.06
+        assert tier_rows[0]["budget_duration"] == "30d"
+        first: Final = _bounded_chat(gateway, model, key)
+        assert first.status_code == 200, first.text
+        eventually(
+            lambda: read_rows(
+                'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (sha256(key.encode()).hexdigest(),)
+            ),
+            lambda rows: len(rows) == 1 and float(str(rows[0]["spend"])) >= 0.06,
+            seconds=70,
+        )
+        upstream.get("/__observations").raise_for_status()
+        _denied_with_budget_exceeded(gateway, model, key)
+        assert upstream.get("/__observations").json()["requests"] == []
+        gateway.post("/budget/update", {"budget_id": budget_id, "max_budget": 1.0})
+        updated_rows: Final = read_rows(
+            'SELECT max_budget FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (budget_id,)
+        )
+        assert float(str(updated_rows[0]["max_budget"])) == 1.0, updated_rows
+        served: Final = eventually(
+            lambda: _bounded_chat(gateway, model, key), lambda response: response.status_code == 200, seconds=90
+        )
+        assert served.status_code == 200, served.text
+        assert len(upstream.get("/__observations").json()["requests"]) == 1
+        upstream.get("/__observations").raise_for_status()
+        gateway.post("/budget/update", {"budget_id": budget_id, "max_budget": 0.01})
+        eventually(
+            lambda: _bounded_chat(gateway, model, key),
+            lambda response: response.status_code == 422
+            and object_value(response.json()["error"])["type"] == "budget_exceeded",
+            seconds=90,
+        )
+        upstream.get("/__observations").raise_for_status()
+        _denied_with_budget_exceeded(gateway, model, key)
+        assert upstream.get("/__observations").json()["requests"] == []
