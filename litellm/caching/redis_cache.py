@@ -565,10 +565,7 @@ def redact_redis_error(exc: BaseException) -> str:
     if match is None:
         return message
     command_name: Final = match["command"].split(" ", 1)[0].strip() or _REDACTED
-    return (
-        f"Command # {match['index']} ({command_name} {_REDACTED}) "
-        f"of pipeline caused error: {match['detail']}"
-    )
+    return f"Command # {match['index']} ({command_name} {_REDACTED}) of pipeline caused error: {match['detail']}"
 
 
 def log_redis_failure(
