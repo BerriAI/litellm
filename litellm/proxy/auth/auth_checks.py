@@ -5368,12 +5368,13 @@ def can_customer_access_model(
     team_model_aliases: Final = team_model_aliases_for_auth_check(valid_token) if valid_token is not None else None
     team_id: Final = valid_token.team_id if valid_token is not None else None
     key_model_aliases: Final = key_model_aliases_for_auth_check(valid_token)
-    for name in (model,) if isinstance(model, str) else model:
+
+    def check(name: str) -> None:
         team_target: Final = (
             _live_team_alias_target(name, team_model_aliases, team_id, llm_router) if team_model_aliases else name
         )
         if team_target != name and name in (end_user_object.models or ()):
-            continue
+            return
         _can_object_call_model(
             model=team_target,
             llm_router=llm_router,
@@ -5381,6 +5382,9 @@ def can_customer_access_model(
             key_model_aliases=key_model_aliases,
             object_type="customer",
         )
+
+    for name in (model,) if isinstance(model, str) else model:
+        check(name)
     return True
 
 
