@@ -2386,15 +2386,17 @@ class TestRehashPasswordIfNeeded:
     @pytest.mark.asyncio
     async def test_pbkdf2_row_triggers_no_update(self):
         from litellm.proxy.auth.login_utils import _rehash_password_if_needed
-        from litellm.proxy.utils import hash_password
+        from litellm.proxy.utils import hash_password, verify_password
 
+        stored = hash_password("rehash-me-1")
         mock_prisma_client = MagicMock()
         mock_prisma_client.db.litellm_usertable.update_many = AsyncMock()
         with patch(  # test-quality-ok: the rehash writes to the database; faked so no DB is needed
             "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
         ):
-            await _rehash_password_if_needed("u-1", "rehash-me-1", hash_password("rehash-me-1"))
+            await _rehash_password_if_needed("u-1", "rehash-me-1", stored)
 
+        assert verify_password("rehash-me-1", stored)
         mock_prisma_client.db.litellm_usertable.update_many.assert_not_called()
 
     @pytest.mark.asyncio
