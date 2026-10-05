@@ -1013,13 +1013,24 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         request is therefore neither read from nor written to the cache. Inside the proxy
         this hook does not redact -- the proxy's pre-call hook already ran -- and caching
         is left alone, because the proxy restores after the cache write.
+
+        A streamed request is refused once redacted. No hook restores an SDK stream, and the
+        stream's cache writer reads the request from before this hook, so it would also be
+        cached despite the bypass.
         """
         before: Final = self._minted_session_id(kwargs)
-        # The parent rewrites `kwargs` in place and hands the same dict back.
         _ = await super().async_pre_call_deployment_hook(kwargs, call_type)
         session_id: Final = self._minted_session_id(kwargs)
         if session_id is None or session_id == before:
             return kwargs
+        if kwargs.get("stream") is True:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message=(
+                    "LLM Shield Proxy cannot restore a streamed reply for a model-level guardrail "
+                    "outside the LiteLLM proxy; send the request through the proxy or without stream=True."
+                ),
+            )
         metadata: Final = _as_object(kwargs.get("litellm_metadata"))
         if metadata is not None:
             metadata[_DEPLOYMENT_RESTORE_KEY] = session_id
@@ -1251,7 +1262,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
     # fix: a fragment is an arbitrary slice of a JSON document, so the code cannot tell
     # whether the position it writes is inside a string literal, and escaping
     # unconditionally would corrupt the values that are not.
-    @log_guardrail_information
     async def async_post_call_success_hook(
         self,
         data: MutableRequest,

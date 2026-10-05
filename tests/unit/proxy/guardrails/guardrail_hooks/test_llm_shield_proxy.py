@@ -1938,6 +1938,41 @@ class TestProxyWiring:
         assert reply.choices[0].message.content == "Repeat alice@example.com"
         assert cache.cache_dict == {}, "the redacted request's reply must not be cached"
 
+    @pytest.mark.asyncio
+    async def test_model_level_streaming_outside_the_proxy_is_refused(self, monkeypatch):
+        """No hook restores an SDK stream, and its cache writer misses the bypass, so it fails closed."""
+        guardrail = _guardrail(event_hook=["pre_call", "post_call"], default_on=False)
+        _mock_post(guardrail, {"texts": ["Repeat [EMAIL_1]"]})
+        cache = InMemoryCache()
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
+        monkeypatch.setattr(litellm.cache, "cache", cache)
+
+        with pytest.raises(GuardrailRaisedException, match="cannot restore a streamed reply"):
+            await litellm.acompletion(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "Repeat alice@example.com"}],
+                mock_response="Repeat [EMAIL_1]",
+                stream=True,
+                guardrails=[GUARDRAIL_NAME],
+            )
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+        assert cache.cache_dict == {}
+
+    @pytest.mark.asyncio
+    async def test_restored_values_are_not_recorded_as_guardrail_telemetry(self):
+        """Guardrail logging is exported to traces even with message logging off, so the
+        restored reply must not land in it."""
+        guardrail, _ = _shielded({"[EMAIL_1]": "alice@example.com"})
+        reply = ModelResponse(choices=[Choices(index=0, message=Message(role="assistant", content="[EMAIL_1]"))])
+        data = {"messages": [], "metadata": {}}
+
+        restored = await guardrail.async_post_call_success_hook(data=data, user_api_key_dict=None, response=reply)
+
+        assert restored.choices[0].message.content == "alice@example.com"
+        assert "alice@example.com" not in json.dumps(data, default=str)
+
 
 class TestStreamUsage:
     @pytest.mark.asyncio
