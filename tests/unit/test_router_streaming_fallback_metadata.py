@@ -55,6 +55,37 @@ def test_apply_fallback_hidden_params_copies_from_fallback_response():
     }
 
 
+def test_apply_fallback_hidden_params_updates_plain_duck_chunk():
+    class PlainChunk:
+        def __init__(self) -> None:
+            self._hidden_params = {
+                "additional_headers": {"x-existing-chunk-header": "keep"},
+                "model_id": "chunk-model-id",
+            }
+
+    chunk: Final = PlainChunk()
+    fallback_response = {
+        "_hidden_params": {
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 1,
+            },
+            "api_base": "https://fallback.example",
+        }
+    }
+
+    Router._apply_fallback_hidden_params_to_item(
+        fallback_item=chunk,
+        prepared_fallback_hidden_params=Router._prepare_fallback_hidden_params(fallback_response),
+    )
+
+    assert chunk._hidden_params["api_base"] == "https://fallback.example"
+    assert chunk._hidden_params["model_id"] == "chunk-model-id"
+    assert chunk._hidden_params["additional_headers"] == {
+        "x-existing-chunk-header": "keep",
+        "x-litellm-attempted-fallbacks": 1,
+    }
+
+
 def _two_group_fallback_router() -> Router:
     return litellm.Router(
         model_list=[

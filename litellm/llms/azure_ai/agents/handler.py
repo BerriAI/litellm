@@ -34,6 +34,7 @@ from litellm.llms.azure_ai.agents.transformation import (
     AzureAIAgentsConfig,
     AzureAIAgentsError,
 )
+from litellm.router_utils.add_retry_fallback_headers import get_or_create_hidden_params
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionAnnotationURLCitation,
@@ -231,9 +232,8 @@ class AzureAIAgentsHandler:
         model_response.model = model
 
         # Store thread_id for conversation continuity
-        if not hasattr(model_response, "_hidden_params") or model_response.hidden_params is None:
-            model_response.hidden_params = {}
-        model_response.hidden_params["thread_id"] = thread_id
+        model_response_hidden_params: Final = get_or_create_hidden_params(model_response)
+        model_response_hidden_params["thread_id"] = thread_id
 
         # Estimate token usage
         try:

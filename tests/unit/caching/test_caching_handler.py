@@ -2141,6 +2141,49 @@ async def test_cache_hit_records_the_looked_up_key_as_the_preset_cache_key(monke
 
 
 @pytest.mark.asyncio
+async def test_text_completion_cache_hit_records_cache_key_in_hidden_params(monkeypatch):
+    import litellm
+    from litellm.caching.caching import Cache
+    from litellm.types.utils import CallTypes
+
+    async def atext_completion(**kwargs):
+        return None
+
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    kwargs = {"model": "gpt-5.4", "prompt": "hello", "caching": True}
+    await litellm.cache.async_add_cache(
+        litellm.TextCompletionResponse(
+            id="cached-text-response",
+            choices=[litellm.utils.TextChoices(text="cached")],
+            model="gpt-5.4",
+        ),
+        **kwargs,
+    )
+    handler = LLMCachingHandler(
+        original_function=atext_completion,
+        request_kwargs=kwargs,
+        start_time=datetime.now(),
+    )
+    logging_obj = _build_logging_obj(CallTypes.atext_completion.value, stream=False)
+    logging_obj.async_success_handler = AsyncMock()
+
+    hit = await handler._async_get_cache(
+        model="gpt-5.4",
+        original_function=atext_completion,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.atext_completion.value,
+        kwargs=kwargs,
+        args=(),
+    )
+
+    assert hit.cached_result is not None
+    assert isinstance(hit.cached_result, litellm.TextCompletionResponse)
+    assert handler.preset_cache_key is not None
+    assert hit.cached_result.hidden_params.get("cache_key") == handler.preset_cache_key
+
+
+@pytest.mark.asyncio
 async def test_converted_stream_cache_hit_replayed_as_plain_object_logs_at_hit_time(monkeypatch):
     import litellm
     from litellm.caching.caching import Cache

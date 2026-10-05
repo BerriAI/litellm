@@ -17,6 +17,7 @@ from litellm.llms.cohere.common_utils import (
 )
 from litellm.llms.cohere.embed.v1_transformation import CohereEmbeddingConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+from litellm.router_utils.add_retry_fallback_headers import get_or_create_hidden_params
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
@@ -114,9 +115,8 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 )
 
                 # Set the calculated cost in _hidden_params to prevent recalculation
-                if not hasattr(litellm_model_response, "_hidden_params"):
-                    litellm_model_response.hidden_params = {}
-                litellm_model_response.hidden_params["response_cost"] = response_cost
+                litellm_model_response_hidden_params: Final = get_or_create_hidden_params(litellm_model_response)
+                litellm_model_response_hidden_params["response_cost"] = response_cost
 
                 kwargs["response_cost"] = response_cost
                 kwargs["model"] = model

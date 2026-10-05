@@ -2,7 +2,7 @@ import json
 import math
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final, Protocol, TypedDict, cast
+from typing import Any, Final, TypedDict, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
@@ -14,16 +14,7 @@ class FallbackErrorInfo(TypedDict):
     code: str | None
 
 
-class _HiddenParamsHost(Protocol):
-    _hidden_params: dict[str, object]
-
-    @property
-    def hidden_params(self) -> dict[str, object]: ...  # mutable-ok: API requires mutation
-
-    @hidden_params.setter
-    def hidden_params(self, hidden_params: dict[str, object]) -> None: ...  # mutable-ok: API requires mutation
-
-
+_HIDDEN_PARAMS_ATTR: Final = "_hidden_params"
 _EMPTY_OBJECT_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 _ROUTING_HEADER_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _COMPLEXITY_ROUTER_HEADER_PREFIX: Final = "x-litellm-complexity-router-"
@@ -215,13 +206,32 @@ def get_hidden_params_dict(
     return hidden_params
 
 
+def get_hidden_params(obj: object) -> dict[str, object] | None:
+    hidden_params: Final = (
+        obj.get(_HIDDEN_PARAMS_ATTR) if isinstance(obj, dict) else getattr(obj, _HIDDEN_PARAMS_ATTR, None)
+    )
+    return hidden_params if isinstance(hidden_params, dict) else None
+
+
+def set_hidden_params(obj: object, hidden_params: dict[str, object]) -> None:
+    if isinstance(obj, dict):
+        obj[_HIDDEN_PARAMS_ATTR] = hidden_params
+    else:
+        setattr(obj, _HIDDEN_PARAMS_ATTR, hidden_params)
+
+
+def get_or_create_hidden_params(obj: object) -> dict[str, object]:
+    hidden_params: Final = get_hidden_params(obj)
+    if hidden_params is not None:
+        return hidden_params
+    created_hidden_params: Final[dict[str, object]] = {}
+    set_hidden_params(obj, created_hidden_params)
+    return created_hidden_params
+
+
 def _write_hidden_params(response: object, hidden_params: dict[str, object]) -> None:
-    if isinstance(response, dict):
-        response["_hidden_params"] = hidden_params
-    elif hasattr(response, "_hidden_params"):
-        host: Final = cast(_HiddenParamsHost, response)
-        if get_hidden_params_dict(response) is not hidden_params:
-            host.hidden_params = hidden_params
+    if isinstance(response, dict) or hasattr(response, _HIDDEN_PARAMS_ATTR):
+        set_hidden_params(response, hidden_params)
 
 
 def _ensure_additional_headers_dict(

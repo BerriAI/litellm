@@ -37,6 +37,7 @@ from litellm.responses.sse_output_recovery import (
     record_output_text_chunk,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils, normalize_responses_api_stream_options
+from litellm.router_utils.add_retry_fallback_headers import get_or_create_hidden_params
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
@@ -994,18 +995,19 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # which contain important provider information like x-request-id
         raw_response_hidden_params: Final = getattr(raw_response, "_hidden_params", {})
         if raw_response_hidden_params:
-            if not hasattr(model_response, "_hidden_params") or model_response.hidden_params is None:
-                model_response.hidden_params = {}
+            model_response_hidden_params: Final = get_or_create_hidden_params(model_response)
             # Merge the raw_response hidden params with model_response hidden params
             # Preserve existing keys in model_response but add/override with raw_response params
             for key, value in raw_response_hidden_params.items():
-                if key == "additional_headers" and key in model_response.hidden_params:
-                    # Merge additional_headers to preserve both sets
-                    existing_additional_headers = model_response.hidden_params.get("additional_headers", {})
-                    merged_headers = {**value, **existing_additional_headers}
-                    model_response.hidden_params[key] = merged_headers
+                if key == "additional_headers" and key in model_response_hidden_params:
+                    existing_additional_headers = model_response_hidden_params.get("additional_headers", {})
+                    merged_headers = {
+                        **cast("dict[str, object]", value),
+                        **cast("dict[str, object]", existing_additional_headers),
+                    }
+                    model_response_hidden_params[key] = merged_headers
                 else:
-                    model_response.hidden_params[key] = value
+                    model_response_hidden_params[key] = value
 
         return model_response
 

@@ -9,11 +9,15 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     add_retry_headers_to_response,
     complexity_router_decision_headers,
+    ensure_response_additional_headers,
     get_fallback_errors_from_headers,
+    get_hidden_params,
     get_hidden_params_dict,
     replace_complexity_router_headers,
+    set_hidden_params,
 )
 from litellm.types.decisions import DecisionsResponse
+from litellm.types.utils import ModelResponse
 
 
 class StreamingWrapper:
@@ -219,6 +223,38 @@ def test_get_hidden_params_dict_with_no_hidden_params():
     assert get_hidden_params_dict(PlainResponse()) == {}
 
 
+def test_get_and_set_hidden_params_on_plain_object() -> None:
+    class PlainResponse:
+        def __init__(self) -> None:
+            self._hidden_params = {"existing": True}
+
+    response: Final = PlainResponse()
+    stored: Final = get_hidden_params(response)
+    assert stored is response._hidden_params
+
+    replacement: Final = {"replacement": True}
+    set_hidden_params(response, replacement)
+
+    assert response._hidden_params is replacement
+    assert get_hidden_params(response) is replacement
+
+
+def test_get_hidden_params_preserves_model_response_identity() -> None:
+    response: Final = ModelResponse()
+
+    assert get_hidden_params(response) is response.hidden_params
+
+
+def test_set_hidden_params_replaces_frozen_decisions_response_private_attr() -> None:
+    response: Final = DecisionsResponse(model="decider", answers={}, usage=None)
+    replacement: Final = {"replacement": True}
+
+    set_hidden_params(response, replacement)
+
+    assert response.hidden_params is replacement
+    assert response._hidden_params is replacement
+
+
 def test_add_fallback_headers_when_no_existing_additional_headers():
     class NoHeadersWrapper:
         def __init__(self):
@@ -238,6 +274,15 @@ def test_add_fallback_headers_to_frozen_decisions_response() -> None:
 
     assert result is response
     assert response.hidden_params["additional_headers"] == {"x-litellm-attempted-fallbacks": 1}
+
+
+def test_ensure_response_additional_headers_updates_frozen_decisions_response() -> None:
+    response: Final = DecisionsResponse(model="decider", answers={}, usage=None)
+
+    additional_headers: Final = ensure_response_additional_headers(response)
+
+    assert additional_headers == {}
+    assert response.hidden_params["additional_headers"] is additional_headers
 
 
 def test_add_fallback_headers_returns_none_when_response_is_none():

@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.logging_utils import (
     _assemble_complete_response_from_streaming_chunks,
 )
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params
 from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -170,6 +171,15 @@ def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "as
 def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
     """Read the caller-supplied ``cache_key`` off the request kwargs."""
     return request_kwargs.get("cache_key", None)
+
+
+def _set_cached_hidden_param(response: object, key: str, value: object) -> None:
+    if isinstance(response, TextCompletionResponse):
+        setattr(response.hidden_params, key, value)
+        return
+    hidden_params: Final = get_hidden_params(response)
+    if hidden_params is not None:
+        hidden_params[key] = value
 
 
 class _CachedEmbeddingRecord(BaseModel):
@@ -331,8 +341,7 @@ class LLMCachingHandler:
                         or self.request_kwargs.get("cache_key")
                         or litellm.cache.get_cache_key(**self.request_kwargs)
                     )
-                    if hasattr(cached_result, "_hidden_params"):
-                        cached_result._hidden_params["cache_key"] = cache_key
+                    _set_cached_hidden_param(cached_result, "cache_key", cache_key)
                     return CachingHandlerResponse(cached_result=cached_result)
                 elif (
                     call_type == CallTypes.aembedding.value
@@ -448,8 +457,7 @@ class LLMCachingHandler:
                         or self.request_kwargs.get("cache_key")
                         or litellm.cache.get_cache_key(**self.request_kwargs)
                     )
-                    if hasattr(cached_result, "_hidden_params"):
-                        cached_result._hidden_params["cache_key"] = cache_key
+                    _set_cached_hidden_param(cached_result, "cache_key", cache_key)
                     return CachingHandlerResponse(cached_result=cached_result)
         return CachingHandlerResponse(cached_result=cached_result)
 
@@ -969,12 +977,7 @@ class LLMCachingHandler:
                 )
 
                 response_obj: Final = ResponsesAPIResponse(**cached_result)
-                if (
-                    hasattr(response_obj, "_hidden_params")
-                    and response_obj.hidden_params is not None
-                    and isinstance(response_obj.hidden_params, dict)
-                ):
-                    response_obj.hidden_params["cache_hit"] = True
+                _set_cached_hidden_param(response_obj, "cache_hit", True)
 
                 if _stream_replay_requested(kwargs):
                     cached_result = CachedResponsesAPIStreamingIterator(
@@ -986,12 +989,7 @@ class LLMCachingHandler:
                 else:
                     cached_result = response_obj
 
-        if (
-            hasattr(cached_result, "_hidden_params")
-            and cached_result._hidden_params is not None
-            and isinstance(cached_result._hidden_params, dict)
-        ):
-            cached_result._hidden_params["cache_hit"] = True
+        _set_cached_hidden_param(cached_result, "cache_hit", True)
 
         #########################################################
         # Add final timing metrics to the cached result

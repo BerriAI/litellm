@@ -17,6 +17,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 )
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.add_retry_fallback_headers import get_or_create_hidden_params
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
     BaseLiteLLMOpenAIResponseObject,
@@ -649,9 +650,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             ),
         )
         if response is not None and self._accumulated_provider_specific_fields:
-            if not hasattr(response, "_hidden_params") or response.hidden_params is None:
-                response.hidden_params = {}
-            response.hidden_params.setdefault("provider_specific_fields", {}).update(
+            response_hidden_params: Final = get_or_create_hidden_params(response)
+            response_hidden_params.setdefault("provider_specific_fields", {}).update(
                 self._accumulated_provider_specific_fields
             )
         return response
