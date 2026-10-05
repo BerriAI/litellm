@@ -8,8 +8,9 @@ import json
 import re
 import signal
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from itertools import cycle, product
 from pathlib import Path
@@ -21,6 +22,7 @@ import httpx
 import psutil
 import pytest
 from integration._support.client import eventually, object_value, string_value
+from integration._support.process import owned_gateway_image, setup_only_proxy_run
 from integration._support.prometheus_series import (
     AGENT_HEADERS,
     PROXY_FAILURES,
@@ -31,12 +33,14 @@ from integration._support.prometheus_series import (
     Key,
     Sample,
     SpendRow,
+    alias_total,
     alias_values,
     expect_spend_rows,
     families_over,
     label_values,
     overflow_total,
     scrape,
+    series_cap_config,
     series_cap_rig,
     spend_rows,
     sse_data,
@@ -140,6 +144,13 @@ def _rows_by_alias(keys: Sequence[Key]) -> Mapping[str, tuple[SpendRow, ...]]:
     return MappingProxyType({key.alias: spend_rows(key.alias) for key in keys})
 
 
+def _landed(before: Sequence[Sample], after: Sequence[Sample], growth: Mapping[str, int]) -> bool:
+    """Every counter the cell asserts on has counted its calls on `other`: the request and failure counters of
+    one call increment at different points of the logging callback, so a scrape between them is not the end
+    state."""
+    return all(overflow_total(after, name) - overflow_total(before, name) >= by for name, by in growth.items())
+
+
 class TestBurst:
     def test_concurrent_burst_across_every_endpoint_while_scraping(self, capped: CapRig) -> None:
         """C1: 30 concurrent calls from ten keys across chat, messages, and responses, streamed and not, with
@@ -164,11 +175,12 @@ class TestBurst:
             (item.route, item.status, item.text[:200]) for item in served if item.status != 200
         ]
         extra_requests: Final = EXTRA_KEYS * len(ROUTES)
+        off_route: Final = len(capped.warm) * (len(ROUTES) - 1)
+        growth: Final = {REQUESTS: extra_requests, PROXY_REQUESTS: extra_requests + off_route}
         samples: Final = eventually(
             lambda: scrape(capped.gateway),
             lambda after: (
-                overflow_total(after, REQUESTS) - overflow_total(before, REQUESTS) >= extra_requests
-                or any(key.alias in alias_values(after, REQUESTS) for key in extra)
+                _landed(before, after, growth) or any(key.alias in alias_values(after, REQUESTS) for key in extra)
             ),
             seconds=90,
         )
@@ -176,7 +188,6 @@ class TestBurst:
         assert not families_over(samples, CAP), families_over(samples, CAP)
         assert overflow_total(samples, REQUESTS) - overflow_total(before, REQUESTS) == extra_requests
         assert alias_values(samples, PROXY_REQUESTS) == capped.warm_aliases
-        off_route: Final = len(capped.warm) * (len(ROUTES) - 1)
         assert overflow_total(samples, PROXY_REQUESTS) - overflow_total(before, PROXY_REQUESTS) == (
             extra_requests + off_route
         )
@@ -209,7 +220,7 @@ class TestBurst:
         samples: Final = eventually(
             lambda: scrape(capped.gateway),
             lambda after: (
-                overflow_total(after, PROXY_FAILURES) - overflow_total(before, PROXY_FAILURES) >= 2
+                _landed(before, after, {PROXY_FAILURES: 2, REQUESTS: 4})
                 or extra.alias in alias_values(after, PROXY_FAILURES)
             ),
             seconds=90,
@@ -330,3 +341,118 @@ def test_restart_with_one_worker_and_an_operator_directory_starts_the_cap_over(t
             seconds=60,
         )
         assert extra.alias not in label_values(after)
+
+
+def test_setup_only_run_leaves_a_live_proxy_samples_alone(tmp_path: Path) -> None:
+    """P1: a `--skip_server_startup` run of the proxy CLI (the image's setup step) pointed at a live two-worker
+    proxy's operator-set `PROMETHEUS_MULTIPROC_DIR` leaves the live samples alone: the warm keys keep their series
+    and their totals, and a fourth key still lands on `other`."""
+    operator_dir: Final = tmp_path / "prom-operator"
+    settings: Final = {"prometheus_metrics_max_series_per_metric": CAP}
+    with series_cap_rig(tmp_path, settings, workers=2, warm_keys=3, multiproc_dir=operator_dir) as rig:
+        before: Final = scrape(rig.gateway)
+        assert alias_values(before, REQUESTS) == rig.warm_aliases
+        completed: Final = setup_only_proxy_run(
+            rig.gateway,
+            {"PROMETHEUS_MULTIPROC_DIR": str(operator_dir)},
+            config=series_cap_config(tmp_path, settings),
+            workers=2,
+        )
+        assert completed.returncode == 0, completed.stdout[-2000:] + completed.stderr[-2000:]
+        assert "Skipping server startup" in completed.stdout, completed.stdout[-2000:]
+        after_setup: Final = scrape(rig.gateway)
+        assert alias_values(after_setup, REQUESTS) == rig.warm_aliases
+        assert all(
+            alias_total(after_setup, REQUESTS, alias) == alias_total(before, REQUESTS, alias)
+            for alias in rig.warm_aliases
+        )
+        extra: Final = rig.key("p1")
+        assert rig.chat(extra, Call.new()).status_code == 200
+        after: Final = eventually(
+            lambda: scrape(rig.gateway),
+            lambda now: (
+                overflow_total(now, REQUESTS) - overflow_total(after_setup, REQUESTS) >= 1
+                or extra.alias in alias_values(now, REQUESTS)
+            ),
+            seconds=60,
+        )
+        assert extra.alias not in label_values(after)
+        assert alias_values(after, REQUESTS) == rig.warm_aliases
+
+
+IMAGE_MODEL: Final = "series-cap-image"
+
+
+def _image_deployment(provider_url: str) -> tuple[dict[str, JsonValue], ...]:
+    return (
+        {
+            "model_name": IMAGE_MODEL,
+            "litellm_params": {
+                "model": f"openai/gpt-{IMAGE_MODEL}",
+                "api_base": provider_url + "/v1",
+                "api_key": "synthetic-provider-key",
+            },
+        },
+    )
+
+
+@contextmanager
+def _gateway_image(control: CapRig, config: Path, prom_dir: Path) -> Iterator[CapRig]:
+    """One container life of the gateway image on `prom_dir`: two workers serving the keys the control plane proxy
+    mints in the database both read."""
+    with owned_gateway_image(
+        control.gateway, config.parent, {"PROMETHEUS_MULTIPROC_DIR": str(prom_dir)}, config=config, workers=2
+    ) as image:
+        yield CapRig(image, control.scenario, IMAGE_MODEL, control.provider, control.outage, (), prom_dir)
+
+
+def _fill_the_cap(image: CapRig, cell: str) -> frozenset[str]:
+    """Three new keys call once each on a boot that has counted nothing yet, and each gets its own series."""
+    keys: Final = tuple(image.key(cell) for _ in range(CAP))
+    assert all(image.chat(key, Call.new()).status_code == 200 for key in keys)
+    aliases: Final = frozenset(key.alias for key in keys)
+    samples: Final = eventually(
+        lambda: scrape(image.gateway),
+        lambda now: sum(sample.value for sample in now if sample.name == REQUESTS) >= CAP,
+        seconds=60,
+    )
+    assert alias_values(samples, REQUESTS) == aliases, (alias_values(samples, REQUESTS), aliases)
+    return aliases
+
+
+@pytest.mark.timeout(420)
+def test_gateway_image_restart_on_a_kept_directory_starts_the_cap_over(tmp_path: Path) -> None:
+    """D1: the gateway image's launcher (`docker/component_entrypoint.sh` running `python -m gateway.launch`, two
+    workers) restarted on a kept PROMETHEUS_MULTIPROC_DIR: the entrypoint removes the previous container's samples
+    and admitted series before the workers fork, so the second boot shows only its own three keys and a fourth
+    lands on `other`."""
+    control_dir: Final = tmp_path / "control"
+    image_dir: Final = tmp_path / "image"
+    control_dir.mkdir()
+    image_dir.mkdir()
+    prom_dir: Final = tmp_path / "prom-image"
+    with series_cap_rig(control_dir, {}, workers=1, warm_keys=0) as control:
+        config: Final = series_cap_config(
+            image_dir,
+            {"prometheus_metrics_max_series_per_metric": CAP},
+            model_list=_image_deployment(control.provider.url),
+        )
+        with _gateway_image(control, config, prom_dir) as first_boot:
+            old_aliases: Final = _fill_the_cap(first_boot, "d1-old")
+        with _gateway_image(control, config, prom_dir) as second_boot:
+            assert not old_aliases & label_values(scrape(second_boot.gateway))
+            new_aliases: Final = _fill_the_cap(second_boot, "d1-new")
+            extra: Final = second_boot.key("d1")
+            before: Final = scrape(second_boot.gateway)
+            assert second_boot.chat(extra, Call.new()).status_code == 200
+            after: Final = eventually(
+                lambda: scrape(second_boot.gateway),
+                lambda now: (
+                    overflow_total(now, REQUESTS) - overflow_total(before, REQUESTS) >= 1
+                    or extra.alias in alias_values(now, REQUESTS)
+                ),
+                seconds=60,
+            )
+            assert extra.alias not in label_values(after)
+            assert alias_values(after, REQUESTS) == new_aliases
+            assert not old_aliases & label_values(after)
