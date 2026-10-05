@@ -104,6 +104,10 @@ def _sum_increments_by_key(operations: Sequence[RedisPipelineIncrementOperation]
     return MappingProxyType({key: sum(operation["increment_value"] for operation in group) for key, group in by_key})
 
 
+def _is_over_budget(spend: float, max_budget: float | None) -> bool:
+    return max_budget is not None and spend >= max_budget
+
+
 class RouterBudgetLimiting(CustomLogger):
     def __init__(
         self,
@@ -239,16 +243,15 @@ class RouterBudgetLimiting(CustomLogger):
                     provider = self._get_llm_provider_for_deployment(deployment)
                 if provider in provider_configs:
                     config = provider_configs[provider]
-                    if config.max_budget is None:
-                        continue
                     current_spend = spend_map.get(f"provider_spend:{provider}:{config.budget_duration}", 0.0)
-                    self._track_provider_remaining_budget_prometheus(
-                        provider=provider,
-                        spend=current_spend,
-                        budget_limit=config.max_budget,
-                    )
+                    if config.max_budget is not None:
+                        self._track_provider_remaining_budget_prometheus(
+                            provider=provider,
+                            spend=current_spend,
+                            budget_limit=config.max_budget,
+                        )
 
-                    if config.max_budget and current_spend >= config.max_budget:
+                    if _is_over_budget(current_spend, config.max_budget):
                         debug_msg = f"Exceeded budget for provider {provider}: {current_spend} >= {config.max_budget}"
                         deployment_above_budget_info += f"{debug_msg}\n"
                         is_within_budget = False
@@ -263,8 +266,8 @@ class RouterBudgetLimiting(CustomLogger):
                 if model_id in deployment_configs:
                     config = deployment_configs[model_id]
                     current_spend = spend_map.get(f"deployment_spend:{model_id}:{config.budget_duration}", 0.0)
-                    if config.max_budget and current_spend >= config.max_budget:
-                        debug_msg = f"Exceeded budget for deployment model_name: {_model_name}, litellm_params.model: {_litellm_model_name}, model_id: {model_id}: {current_spend} >= {config.budget_duration}"
+                    if _is_over_budget(current_spend, config.max_budget):
+                        debug_msg = f"Exceeded budget for deployment model_name: {_model_name}, litellm_params.model: {_litellm_model_name}, model_id: {model_id}: {current_spend} >= {config.max_budget}"
                         verbose_router_logger.debug(debug_msg)
                         deployment_above_budget_info += f"{debug_msg}\n"
                         is_within_budget = False
@@ -278,7 +281,7 @@ class RouterBudgetLimiting(CustomLogger):
                             f"tag_spend:{_tag}:{_tag_budget_config.budget_duration}",
                             0.0,
                         )
-                        if _tag_budget_config.max_budget and _tag_spend >= _tag_budget_config.max_budget:
+                        if _is_over_budget(_tag_spend, _tag_budget_config.max_budget):
                             debug_msg = f"Exceeded budget for tag='{_tag}', tag_spend={_tag_spend}, tag_budget_limit={_tag_budget_config.max_budget}"
                             verbose_router_logger.debug(debug_msg)
                             deployment_above_budget_info += f"{debug_msg}\n"
