@@ -1,7 +1,16 @@
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    WrapValidator,
+    model_validator,
+)
 
 from litellm.rust_bridge.trace.generated.types import TraceSummary
 
@@ -155,11 +164,19 @@ class Coverage(Record):
     unassessable: int = 0
 
 
+def _current_summary(value: object, handler: ValidatorFunctionWrapHandler) -> TraceSummary | None:
+    try:
+        return handler(value)
+    except ValidationError:
+        return None
+
+
 class Execution(Record):
     id: str
     trace_id: str
     trace_ref: str
-    summary: TraceSummary | None = None
+    # Stored Lens documents keep summaries in older trace API shapes; the summary is optional, so drop stale ones.
+    summary: Annotated[TraceSummary | None, WrapValidator(_current_summary)] = None
 
 
 class TracePart(Record):

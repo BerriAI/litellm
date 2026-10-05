@@ -345,6 +345,19 @@ def test_execution_ids_carry_reference_and_trace_id() -> None:
         parse_execution("short:trace")
 
 
+def test_stored_execution_drops_a_summary_in_an_older_trace_api_shape() -> None:
+    current: Final = summary(REF)
+    stale: Final = {
+        **{k: v for k, v in current.items() if k not in ("id", "root_status", "has_error")},
+        "status": "unset",
+        "trace_ref": REF,
+    }
+    stored: Final = {"id": execution_id(REF, "trace"), "trace_id": "trace", "trace_ref": REF}
+
+    assert Execution.model_validate({**stored, "summary": stale}).summary is None
+    assert Execution.model_validate({**stored, "summary": current}).summary == current
+
+
 def test_current_selection_preserves_search_and_execution_ids() -> None:
     selection: Final = ActivitySelection.model_validate(
         {
