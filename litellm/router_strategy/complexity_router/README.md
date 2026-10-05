@@ -1,6 +1,6 @@
 # Complexity Router
 
-A rule-based routing strategy that classifies requests by complexity and routes them to appropriate models - with zero API calls and sub-millisecond latency.
+A routing strategy that classifies requests by complexity and routes them to appropriate models. The default rule-based classifier scores requests locally. Optional classifiers and cache-aware routing can make provider calls
 
 ## Overview
 
@@ -67,6 +67,45 @@ still resolve to a deployment in `model_list`; this configuration does not creat
                 reasoning_effort: xhigh
             - abc
 ```
+
+### Opt in to prompt-cache costs
+
+Set `cache_aware_routing: true` to consider observed prompt-cache savings after classification. This is disabled by default. A warm model in the same or a higher tier can replace the classified model when its estimated input and output cost is strictly lower. Cache savings never lower the required tier
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        cache_aware_routing: true
+        cache_aware_routing_output_tokens: 1024
+        cache_aware_routing_timeout_ms: 2000
+        context_compaction: false
+        tiers:
+          SIMPLE: haiku
+          COMPLEX: sonnet
+  - model_name: haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+This first version supports the proxy's native `POST /v1/messages` endpoint with Anthropic, text and client tools, and one explicit message-content `cache_control` breakpoint. Each tier must name one model group with one deployment. The default v3 rate limiter must be enabled. It uses the same observations and token counting as `/cost/predict-cache`; it does not prewarm caches or enable provider caching on the application's behalf
+
+The proxy must have observed a successful cache read or write for the candidate's matching prefix, under the same caller key, deployment, provider key and model. A fresh observation allows a cache discount; missing or expired evidence does not. Provider eviction can still turn an expected hit into a miss
+
+The comparison includes uncached input, cache writes at the requested TTL, cache reads and expected output tokens. Set `cache_aware_routing_output_tokens` to your workload's expected response length; it defaults to 1024 and is capped separately by each model's effective output limit. With `max_tokens_from_tier_model: true` (the default), this is the model's known output ceiling; when disabled or unknown, the caller's `max_tokens` applies. The full effective output limit, together with the counted input, must fit the candidate's known limits. Custom deployment prices are respected
+
+Prediction makes up to two token-count requests per compared model. These use rate and concurrency capacity and add latency. The default total timeout is two seconds; timeout, missing counts or prices, and prediction failures preserve the classified route. No provider count requests run when there is no warm eligible alternative
+
+Session affinity, user-turn classification, adaptive routing, routing plugins, custom tier ladders, tier pools and per-tier parameter overrides keep their existing behavior without a cache adjustment. The same applies to unsupported providers or prompt shapes, beta headers, custom provider endpoints, request transforms, and pending context compaction. Disable context compaction as in the example so it cannot rewrite the predicted prompt. Alias markers should contain only routing configuration and rate, timeout or tag settings
+
+When cache costs change the model, the routing decision reports `cause: prompt_cache_cost`. Its signals include the original model, classification cause and both estimated costs
 
 ### Capability forecasting
 

@@ -56,7 +56,7 @@ async fn hashicorp_handler_resolves_found_missing_and_failed_values() {
             },
         )),
         Arc::new(|_: &str| None),
-        litellm_secrets::OidcResolver::default(),
+        litellm_secrets::OidcResolver::new(litellm_http::Client::plain_for_test()),
     );
     assert_eq!(
         found_resolver
@@ -131,7 +131,7 @@ async fn hashicorp_handler_resolves_found_missing_and_failed_values() {
     let failed_resolver = SecretResolver::new_python_compatible(
         Arc::new(failed_state),
         Arc::new(|_: &str| None),
-        litellm_secrets::OidcResolver::default(),
+        litellm_secrets::OidcResolver::new(litellm_http::Client::plain_for_test()),
     )
     .with_failure_policy(FailurePolicy::Propagate);
     assert!(matches!(

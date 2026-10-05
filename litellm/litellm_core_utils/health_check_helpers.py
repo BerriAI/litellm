@@ -6,8 +6,10 @@ import base64
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Final, Literal
 
-from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, DocumentType
-from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS, LlmProviders
+from litellm.llms.base_llm.ocr.transformation import DocumentType
+from litellm.rust_bridge import runtime
+from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
+from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -22,6 +24,32 @@ IMAGE_EDIT_HEALTH_CHECK_PROMPT: Final = (
     "Add a small yellow star in the top right corner of this simple drawing of a blue circle on a white background"
 )
 
+ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS: Final = 16
+
+
+def native_health_check_mode(model: str, custom_llm_provider: str | None) -> Literal["anthropic_messages"] | None:
+    if custom_llm_provider != "bedrock_mantle":
+        return None
+    from litellm.llms.bedrock_mantle.common_utils import mantle_health_check_mode
+
+    return mantle_health_check_mode(model)
+
+
+def _cost_map_mode(model: str) -> str | None:
+    import litellm
+    from litellm.litellm_core_utils.health_check_utils import OPTIONAL_STR
+
+    return OPTIONAL_STR.validate_python(litellm.model_cost.get(model, {}).get("mode"))
+
+
+def default_health_check_mode(requested_model: str, model: str, custom_llm_provider: str) -> str:
+    return (
+        native_health_check_mode(model=model, custom_llm_provider=custom_llm_provider)
+        or _cost_map_mode(requested_model)
+        or _cost_map_mode(model)
+        or "chat"
+    )
+
 
 def get_image_file_for_health_check() -> bytes:
     """Return the image used for health checks."""
@@ -29,11 +57,12 @@ def get_image_file_for_health_check() -> bytes:
 
 
 def _ocr_health_check_document(model: str, custom_llm_provider: str) -> DocumentType:
-    from litellm.utils import ProviderConfigManager
-
-    provider: Final = next((known for known in LlmProviders if known.value == custom_llm_provider), None)
-    config: Final = ProviderConfigManager.get_provider_ocr_config(model=model, provider=provider) if provider else None
-    return (config or BaseOCRConfig()).get_health_check_document()
+    native: Final = NATIVE_OCR_HEALTH_CHECK_DOCUMENT.load()
+    if native is None:
+        raise runtime.NoPythonImplementationError(
+            "ocr health check documents are resolved by the Rust extension, which is not available"
+        )
+    return native(model, custom_llm_provider)
 
 
 class HealthCheckHelpers:
@@ -111,10 +140,9 @@ class HealthCheckHelpers:
         """
         Health check for batch mode.
 
-        Calls list_batches for providers that support it (openai, hosted_vllm, azure,
-        vertex_ai). For all other providers (e.g. bedrock) the batch API surface doesn't
-        include list_batches, so we fall back to acompletion to verify connectivity and
-        credential validity instead.
+        Calls list_batches for providers that support it. For all other providers (e.g. bedrock)
+        the batch API surface doesn't include list_batches, so we fall back to acompletion to
+        verify connectivity and credential validity instead.
         """
         import litellm
 
@@ -129,10 +157,9 @@ class HealthCheckHelpers:
                 litellm_params={"api_base": api_base} if api_base else None,
             )
 
-        if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS:
-            return await litellm.alist_batches(**filtered_model_params)
-        else:
+        if custom_llm_provider not in LIST_BATCHES_SUPPORTED_PROVIDERS:
             return await litellm.acompletion(**model_params)
+        return await litellm.alist_batches(**{**filtered_model_params, "custom_llm_provider": custom_llm_provider})
 
     @staticmethod
     async def _image_edit_health_check(edit_request: Callable[[], Awaitable["ImageResponse"]]) -> "ImageResponse":
@@ -166,7 +193,9 @@ class HealthCheckHelpers:
             "realtime",
             "batch",
             "responses",
+            "anthropic_messages",
             "ocr",
+            "evaluation",
         ],
         Callable,
     ]:
@@ -189,7 +218,7 @@ class HealthCheckHelpers:
         from litellm.litellm_core_utils.audio_utils.utils import (
             get_audio_file_for_health_check,
         )
-        from litellm.litellm_core_utils.health_check_utils import _filter_model_params
+        from litellm.litellm_core_utils.health_check_utils import DECISIONS_CALL_PARAMS, _filter_model_params
         from litellm.realtime_api.main import _realtime_health_check
 
         return {
@@ -252,8 +281,24 @@ class HealthCheckHelpers:
                 **_filter_model_params(model_params=model_params),
                 input=prompt or "test",
             ),
+            "anthropic_messages": lambda: litellm.anthropic_messages(
+                **{
+                    "max_tokens": ANTHROPIC_MESSAGES_HEALTH_CHECK_MAX_TOKENS,
+                    "messages": [{"role": "user", "content": prompt or "test"}],
+                    **model_params,
+                }
+            ),
             "ocr": lambda: litellm.aocr(
                 **_filter_model_params(model_params=model_params),
                 document=_ocr_health_check_document(model=model, custom_llm_provider=custom_llm_provider),
+            ),
+            "evaluation": lambda: litellm.adecisions(
+                **DECISIONS_CALL_PARAMS.validate_python(
+                    {
+                        "state": prompt or "health check",
+                        "questions": {"reachable": {"type": "noul", "instructions": "Is the service reachable?"}},
+                        **_filter_model_params(model_params=model_params),
+                    }
+                )
             ),
         }

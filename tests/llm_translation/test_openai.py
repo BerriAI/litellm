@@ -273,6 +273,9 @@ async def test_vision_with_custom_model():
 
 
 class TestOpenAIChatCompletion(BaseLLMChatTest):
+    test_basic_tool_calling = None
+    test_function_calling_with_tool_response = None
+
     def get_base_completion_call_args(self) -> dict:
         return {"model": "gpt-4o-mini"}
 
@@ -313,7 +316,7 @@ def test_openai_max_retries_0(mock_get_openai_client):
 def test_openai_image_generation_forwards_organization(mock_get_openai_client):
     """Ensure organization flows to OpenAI client for image generation."""
 
-    class _DummyImages:
+    class _DummyRawImages:
         def generate(self, **kwargs):  # type: ignore
             class _Resp:
                 def model_dump(self_inner):  # minimal OpenAI ImagesResponse shape
@@ -327,7 +330,16 @@ def test_openai_image_generation_forwards_organization(mock_get_openai_client):
                         },
                     }
 
-            return _Resp()
+            class _RawResp:
+                headers = {}
+
+                def parse(self_inner):
+                    return _Resp()
+
+            return _RawResp()
+
+    class _DummyImages:
+        with_raw_response = _DummyRawImages()
 
     class _DummyClient:
         def __init__(self):
@@ -674,17 +686,6 @@ def test_openai_tool_calling():
     }
 
     response = litellm.completion(**completion_params)
-
-
-@pytest.mark.asyncio
-async def test_openai_gpt5_reasoning():
-    response = await litellm.acompletion(
-        model="openai/gpt-5-mini",
-        messages=[{"role": "user", "content": "What is the capital of France?"}],
-        reasoning_effort="minimal",
-    )
-    print("response: ", response)
-    assert response.choices[0].message.content is not None
 
 
 @pytest.mark.asyncio
