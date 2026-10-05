@@ -9,7 +9,8 @@ from typing import Final
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from .analysis import AnalysisResponseError, AnalyzeSample, analyze_sample, validation_details
+from .analysis import AnalysisResponseError, AnalyzeSample, validation_details
+from .context_pipeline import analyze_sample
 from .models import Claim, Coverage, ExecutionContent, ModelRequest, ModelResult, Progress, Result, Sample
 from .release import PROTOCOL_VERSION, release_tag
 

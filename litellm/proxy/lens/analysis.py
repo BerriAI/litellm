@@ -617,7 +617,7 @@ ExtractExecution: TypeAlias = Callable[[Claim, Execution, ReadContent, ModelCall
 async def analyze_sample(
     claim: Claim, sample: Sample, read: ReadContent, model: ModelCall, progress: ReportProgress
 ) -> Result:
-    return await analyze_with(claim, sample, read, model, progress, _analyze_sample)
+    return await analyze_with(claim, sample, read, model, progress, analyze_executions)
 
 
 async def analyze_with(
@@ -675,7 +675,7 @@ async def analyze_with(
     )
 
 
-async def _analyze_sample(
+async def analyze_executions(
     claim: Claim,
     sample: Sample,
     read: ReadContent,
