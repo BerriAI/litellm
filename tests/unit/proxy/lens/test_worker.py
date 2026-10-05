@@ -6,6 +6,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from litellm.proxy.lens.analysis import analyze_sample
 from litellm.proxy.lens.models import (
     Claim,
     Execution,
@@ -41,7 +42,7 @@ async def test_model_retries_transient_failures_but_not_budget_or_revocation(fai
         delays.put(delay)
 
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
-        worker: Final = LensWorker(client, sleep=sleep)
+        worker: Final = LensWorker(client, analysis=analyze_sample, sleep=sleep)
         if failure in (402, 409, 401):
             with pytest.raises(httpx.HTTPStatusError):
                 await worker.model_request("/model", ModelRequest(purpose="extract", prompt="review"))
@@ -66,7 +67,7 @@ async def test_transient_retries_are_bounded() -> None:
 
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
         with pytest.raises(httpx.HTTPStatusError):
-            await LensWorker(client, sleep=sleep).model_request(
+            await LensWorker(client, analysis=analyze_sample, sleep=sleep).model_request(
                 "/model", ModelRequest(purpose="extract", prompt="review")
             )
     assert attempts.qsize() == 3
@@ -80,7 +81,7 @@ async def test_idle_worker_does_not_start_an_analysis() -> None:
         return httpx.Response(200, content="null")
 
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
-        assert await LensWorker(client).run_once() is False
+        assert await LensWorker(client, analysis=analyze_sample).run_once() is False
 
 
 @pytest.mark.asyncio
@@ -105,7 +106,7 @@ async def test_incompatible_claim_reports_failure_instead_of_leaving_the_investi
         return httpx.Response(result_status, json=True)
 
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
-        assert await LensWorker(client).run_once() is True
+        assert await LensWorker(client, analysis=analyze_sample).run_once() is True
     assert saved.get_nowait().error == (
         "The worker could not read this investigation. Update the worker to match the gateway, then retry."
     )
@@ -120,7 +121,7 @@ async def test_claim_without_an_identity_does_not_report_failure_for_another_inv
 
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
         with pytest.raises(ValidationError):
-            await LensWorker(client).run_once()
+            await LensWorker(client, analysis=analyze_sample).run_once()
 
 
 @pytest.mark.asyncio
@@ -160,7 +161,7 @@ async def test_worker_reads_claimed_activity_and_reports_analysis_or_failure(mod
                 pytest.fail(f"Unexpected analyzer request: {request.url.path}")
 
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
-        assert await LensWorker(client).run_once() is True
+        assert await LensWorker(client, analysis=analyze_sample).run_once() is True
     result: Final = saved.get_nowait()
     assert saved.empty()
     if model_status == 200:
@@ -278,7 +279,7 @@ async def test_worker_saves_validation_errors_from_every_analysis_stage(purpose:
                 pytest.fail(f"Unexpected worker request: {request.url.path}")
 
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
-        assert await LensWorker(client).run_once()
+        assert await LensWorker(client, analysis=analyze_sample).run_once()
     message: Final = saved.get_nowait().error
     assert message.startswith(f"{stage} failed: {schema} response invalid after 2 attempts.")
     assert "finish_reason=length" in message
@@ -348,7 +349,7 @@ async def test_losing_the_lease_interrupts_an_in_flight_model_request(heartbeat_
     async with httpx.AsyncClient(
         base_url="https://proxy.test", transport=httpx.MockTransport(handle), timeout=13
     ) as client:
-        assert await LensWorker(client, heartbeat_wait=heartbeat_wait).run_once()
+        assert await LensWorker(client, analysis=analyze_sample, heartbeat_wait=heartbeat_wait).run_once()
     assert cancelled.is_set()
     assert f"HTTP {heartbeat_status}" in saved.get_nowait().error
     assert saved.empty()
@@ -412,7 +413,7 @@ async def test_transient_heartbeat_failure_recovers_without_cancelling_analysis(
                 pytest.fail(f"Unexpected worker request: {request.url.path}")
 
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
-        assert await LensWorker(client, heartbeat_wait=heartbeat_wait).run_once()
+        assert await LensWorker(client, analysis=analyze_sample, heartbeat_wait=heartbeat_wait).run_once()
     result: Final = saved.get_nowait()
     assert result.error == ""
     assert result.coverage.screened == 1 and result.coverage.unassessable == 0
@@ -434,5 +435,5 @@ async def test_worker_announces_release_and_waits_on_incompatible_gateway(
         return httpx.Response(409, json={"detail": "Upgrade the Lens worker to v1.2.4"})
 
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
-        assert not await LensWorker(client).run_once()
+        assert not await LensWorker(client, analysis=analyze_sample).run_once()
     assert "Upgrade the Lens worker to v1.2.4" in caplog.text
