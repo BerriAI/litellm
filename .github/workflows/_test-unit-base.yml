@@ -69,6 +69,11 @@ on:
         description: "Unique name for the coverage artifact (must be unique per run)"
         required: true
         type: string
+      rust-bridge-artifact:
+        description: "Prebuilt editable Rust bridge artifact"
+        required: false
+        type: string
+        default: ""
 permissions:
   contents: read
 
@@ -119,17 +124,46 @@ jobs:
         uses: ./.github/actions/cache-uv-downloads
 
       - name: Cache the Rust build
-        if: steps.changes.outputs.decision != 'skip'
+        if: steps.changes.outputs.decision != 'skip' && inputs.rust-bridge-artifact == ''
         timeout-minutes: 5
         uses: ./.github/actions/cache-cargo-build
 
+      - name: Download Rust bridge artifact
+        if: steps.changes.outputs.decision != 'skip' && inputs.rust-bridge-artifact != ''
+        timeout-minutes: 5
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: ${{ inputs.rust-bridge-artifact }}
+          path: rust-bridge-dist
+
       - name: Install dependencies
-        if: steps.changes.outputs.decision != 'skip'
+        if: steps.changes.outputs.decision != 'skip' && inputs.rust-bridge-artifact == ''
         timeout-minutes: 8
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
           .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime
           uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
+
+      - name: Install dependencies without the project
+        if: steps.changes.outputs.decision != 'skip' && inputs.rust-bridge-artifact != ''
+        timeout-minutes: 8
+        run: |
+          diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --no-install-project
+          uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
+
+      - name: Install prebuilt Rust bridge
+        if: steps.changes.outputs.decision != 'skip' && inputs.rust-bridge-artifact != ''
+        timeout-minutes: 5
+        run: |
+          uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
+          cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
+
+      - name: Verify prebuilt Rust bridge
+        if: steps.changes.outputs.decision != 'skip' && inputs.rust-bridge-artifact != ''
+        timeout-minutes: 3
+        run: |
+          uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
