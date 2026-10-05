@@ -22642,7 +22642,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Execute read-only ClickHouse SQL under authenticated row policies and fixed resource limits. Bind params with native {name:Type} placeholders. Results are always ClickHouse JSON; 64-bit integers may be strings. SQL callers control ORDER BY, LIMIT and keyset continuation. Exceeding a resource limit fails instead of returning partial success */
+        /** @description Execute read-only ClickHouse SQL under authenticated row policies and fixed resource limits. Bind params with native {name:Type} placeholders. Results are always ClickHouse JSON; 64-bit and larger integers in result data are decimal strings to preserve precision. SQL callers control ORDER BY, LIMIT and keyset continuation. Exceeding a resource limit fails instead of returning partial success */
         post: operations["trace_query"];
         delete?: never;
         options?: never;
