@@ -3,7 +3,15 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.lens.agent_workspace import EvidenceRequest, load_workspace
+from litellm.proxy.lens.agent_workspace import (
+    EvidenceRequest,
+    EvidenceWorkspace,
+    PythonData,
+    PythonRequest,
+    ReviewRecord,
+    SessionContent,
+    load_workspace,
+)
 from litellm.proxy.lens.models import Evidence, Execution, ExecutionContent, Sample, TracePart
 
 
@@ -61,3 +69,65 @@ async def test_broken_pagination_fails_explicitly_instead_of_losing_evidence() -
 
     with pytest.raises(ValueError, match="repeated a pagination cursor"):
         await load_workspace(Sample(executions=(run,), eligible=1), read, 1)
+
+
+def test_python_scopes_sessions_spans_and_reviewer_records_without_changing_original_evidence() -> None:
+    first: Final = SessionContent(
+        execution=execution("one"),
+        partial=False,
+        parts=(
+            TracePart(execution_id="one", span_id="shared", name="tool", kind="tool", content="first"),
+            TracePart(execution_id="one", span_id="extra", name="tool", kind="tool", content="other part"),
+        ),
+    )
+    second: Final = SessionContent(
+        execution=execution("two"),
+        partial=False,
+        parts=(TracePart(execution_id="two", span_id="shared", name="tool", kind="tool", content="second"),),
+    )
+    review: Final = ReviewRecord(execution_id="one", phase="initial", content="first findings")
+    workspace: Final = EvidenceWorkspace(
+        sessions=(first, second),
+        reviews=(
+            review,
+            ReviewRecord(execution_id="two", phase="initial", content="second findings"),
+        ),
+    )
+    selected: Final = workspace.python_data(
+        PythonRequest(
+            action="python",
+            code="print(data)",
+            execution_ids=("one",),
+            span_ids=("shared",),
+        )
+    )
+    assert selected == PythonData(
+        sessions=(first.model_copy(update={"parts": (first.parts[0],)}),),
+        reviews=(review,),
+    )
+    assert workspace.parts == (*first.parts, *second.parts)
+    assert workspace.python_data(PythonRequest(action="python", code="print(data)")) == PythonData(
+        sessions=workspace.sessions,
+        reviews=workspace.reviews,
+    )
+    assert (
+        workspace.python_data(
+            PythonRequest(
+                action="python",
+                code="print(data)",
+                execution_ids=("missing",),
+            )
+        )
+        == "Unknown execution IDs: missing"
+    )
+    assert (
+        workspace.python_data(
+            PythonRequest(
+                action="python",
+                code="print(data)",
+                execution_ids=("two",),
+                span_ids=("extra",),
+            )
+        )
+        == "Unknown span IDs: extra"
+    )

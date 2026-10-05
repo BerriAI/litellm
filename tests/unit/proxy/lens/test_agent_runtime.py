@@ -4,8 +4,8 @@ from typing import Final
 
 import pytest
 
-from litellm.proxy.lens.agent_runtime import AgentTurn, run_agent
-from litellm.proxy.lens.agent_workspace import EvidenceRequest, EvidenceWorkspace, SessionContent
+from litellm.proxy.lens.agent_runtime import AgentTurn, PythonAgentTurn, run_agent
+from litellm.proxy.lens.agent_workspace import EvidenceRequest, EvidenceWorkspace, PythonRequest, SessionContent
 from litellm.proxy.lens.analysis import Extraction, Observation
 from litellm.proxy.lens.models import Claim, Evidence, ModelRequest, ModelResult, TracePart
 from litellm.proxy.lens.state import queue_job
@@ -115,3 +115,125 @@ async def test_initial_session_review_does_not_eagerly_embed_other_session_span_
             parts
         )
     assert prompts.get_nowait() == prompts.get_nowait()
+
+
+@pytest.mark.asyncio
+async def test_disabled_python_rejects_python_call_before_execution_and_omits_python_schema() -> None:
+    turns: Final = iter((0, 1))
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if next(turns) == 0:
+            assert "PythonRequest" not in json.loads(request.prompt)["response_schema"].get("$defs", {})
+            return ModelResult(
+                content=PythonAgentTurn[Extraction](
+                    tools=(
+                        PythonRequest(
+                            action="python",
+                            code="raise AssertionError('must not execute')",
+                        ),
+                    )
+                ).model_dump_json(),
+                cost=0,
+            )
+        assert "did not match the required response contract" in request.prompt
+        return ModelResult(content=AgentTurn[Extraction](result=Extraction()).model_dump_json(), cost=0)
+
+    result: Final = await run_agent(
+        stage="review",
+        task="Review",
+        purpose="extract",
+        claim=Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=()),
+        workspace=EvidenceWorkspace(),
+        model=model,
+        schema=Extraction,
+    )
+    assert result == Extraction()
+
+
+@pytest.mark.asyncio
+async def test_python_unknown_scope_returns_error_without_running_code() -> None:
+    turns: Final = iter((0, 1))
+    tool: Final = PythonRequest(
+        action="python", code="raise AssertionError('must not execute')", execution_ids=("bad",)
+    )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        payload: Final = json.loads(request.prompt)
+        assert "PythonRequest" in payload["response_schema"]["$defs"]
+        if next(turns) == 0:
+            return ModelResult(content=PythonAgentTurn[Extraction](tools=(tool,)).model_dump_json(), cost=0)
+        assert json.loads(payload["dialogue"][0]["tool_results"][0]) == {
+            "request": tool.model_dump(mode="json"),
+            "error": "Unknown execution IDs: bad",
+        }
+        return ModelResult(content=PythonAgentTurn[Extraction](result=Extraction()).model_dump_json(), cost=0)
+
+    result: Final = await run_agent(
+        stage="review",
+        task="Review",
+        purpose="extract",
+        claim=Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=()),
+        workspace=EvidenceWorkspace(),
+        model=model,
+        schema=Extraction,
+        enable_python=True,
+    )
+    assert result == Extraction()
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_replaces_active_context_and_history_preserves_original_evidence() -> None:
+    part: Final = TracePart(execution_id="one", span_id="span", name="tool", kind="tool", content="original evidence")
+    workspace: Final = EvidenceWorkspace(
+        sessions=(SessionContent(execution=execution("one"), parts=(part,), partial=False),)
+    )
+    turns: Final = iter(range(4))
+
+    async def model(request: ModelRequest) -> ModelResult:
+        payload: Final = json.loads(request.prompt)
+        turn: Final = next(turns)
+        if turn == 0:
+            return ModelResult(
+                content=AgentTurn[Extraction](tools=(EvidenceRequest(action="read"),)).model_dump_json(), cost=0
+            )
+        if turn == 1:
+            assert json.loads(payload["dialogue"][0]["tool_results"][0])["parts"][0]["content"] == part.content
+            return ModelResult(
+                content=AgentTurn[Extraction](checkpoint="keep exact span reference").model_dump_json(), cost=0
+            )
+        assert payload["initial_evidence"] == [] and payload["supplied"] == ""
+        assert payload["working_notes"] == "keep exact span reference"
+        if turn == 2:
+            assert len(payload["dialogue"]) == 1
+            return ModelResult(
+                content=AgentTurn[Extraction](
+                    tools=(
+                        EvidenceRequest(
+                            action="history",
+                            turn_end=1,
+                            include_initial=True,
+                        ),
+                    )
+                ).model_dump_json(),
+                cost=0,
+            )
+        history: Final = json.loads(payload["dialogue"][-1]["tool_results"][0])
+        assert history["initial_context"] == {
+            "evidence": [part.model_dump(mode="json")],
+            "supplied": "original instructions",
+        }
+        assert json.loads(history["turns"][0]["tool_results"][0])["parts"] == [part.model_dump(mode="json")]
+        return ModelResult(content=AgentTurn[Extraction](result=Extraction()).model_dump_json(), cost=0)
+
+    result: Final = await run_agent(
+        stage="review",
+        task="Review",
+        purpose="extract",
+        claim=Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=()),
+        workspace=workspace,
+        model=model,
+        schema=Extraction,
+        initial_evidence=(part,),
+        supplied="original instructions",
+    )
+    assert result == Extraction()

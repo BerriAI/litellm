@@ -16,12 +16,28 @@ class SessionContent(Record):
 
 
 class EvidenceRequest(Record):
-    action: Literal["catalog", "read", "search"]
+    action: Literal["catalog", "read", "search", "review_catalog", "read_reviews", "search_reviews", "history"]
     execution_id: str | None = None
     span_ids: tuple[str, ...] = ()
     query: str = ""
     char_start: int = Field(default=0, ge=0)
     char_end: int | None = Field(default=None, ge=0)
+    review_phase: Literal["initial", "revisited"] | None = None
+    turn_start: int = Field(default=0, ge=0)
+    turn_end: int | None = Field(default=None, ge=0)
+    include_initial: bool = False
+
+
+class PythonRequest(Record):
+    action: Literal["python"]
+    code: str = Field(min_length=1)
+    execution_ids: tuple[str, ...] = ()
+    span_ids: tuple[str, ...] = ()
+
+
+class PythonData(Record):
+    sessions: tuple[SessionContent, ...]
+    reviews: tuple["ReviewRecord", ...]
 
 
 class CatalogEntry(Record):
@@ -31,15 +47,30 @@ class CatalogEntry(Record):
     characters: int
 
 
+class ReviewRecord(Record):
+    execution_id: str
+    phase: Literal["initial", "revisited"]
+    content: str
+
+
+class ReviewIndex(Record):
+    execution_id: str
+    phase: Literal["initial", "revisited"]
+    characters: int
+
+
 class EvidenceReply(Record):
     request: EvidenceRequest
     catalog: tuple[CatalogEntry, ...] = ()
     parts: tuple[TracePart, ...] = ()
     error: str = ""
+    review_catalog: tuple[ReviewIndex, ...] = ()
+    reviews: tuple[ReviewRecord, ...] = ()
 
 
 class EvidenceWorkspace(Record):
     sessions: tuple[SessionContent, ...] = Field(default=())
+    reviews: tuple[ReviewRecord, ...] = ()
 
     @property
     def parts(self) -> tuple[TracePart, ...]:
@@ -57,10 +88,81 @@ class EvidenceWorkspace(Record):
             for session in self.sessions
         )
 
+    def python_data(self, request: PythonRequest) -> PythonData | str:
+        sessions: Final = tuple(
+            session
+            for session in self.sessions
+            if not request.execution_ids or session.execution.id in request.execution_ids
+        )
+        missing_sessions: Final = frozenset(request.execution_ids) - frozenset(s.execution.id for s in sessions)
+        if missing_sessions:
+            return "Unknown execution IDs: " + ", ".join(sorted(missing_sessions))
+        selected: Final = tuple(
+            session.model_copy(
+                update=MappingProxyType(
+                    {
+                        "parts": tuple(
+                            part for part in session.parts if not request.span_ids or part.span_id in request.span_ids
+                        )
+                    }
+                )
+            )
+            for session in sessions
+        )
+        known_spans: Final = frozenset(part.span_id for part in chain.from_iterable(s.parts for s in selected))
+        missing_spans: Final = frozenset(request.span_ids) - known_spans
+        if missing_spans:
+            return "Unknown span IDs: " + ", ".join(sorted(missing_spans))
+        return PythonData(
+            sessions=selected,
+            reviews=tuple(
+                review
+                for review in self.reviews
+                if not request.execution_ids or review.execution_id in request.execution_ids
+            ),
+        )
+
     def valid(self, evidence: Evidence) -> bool:
         return evidence_valid(evidence, self.parts)
 
+    def review_reply(self, request: EvidenceRequest) -> EvidenceReply:
+        records: Final = tuple(
+            review
+            for review in self.reviews
+            if request.execution_id in (None, review.execution_id) and request.review_phase in (None, review.phase)
+        )
+        if request.action == "review_catalog":
+            return EvidenceReply(
+                request=request,
+                review_catalog=tuple(
+                    ReviewIndex(execution_id=record.execution_id, phase=record.phase, characters=len(record.content))
+                    for record in records
+                ),
+            )
+        if request.action == "search_reviews" and not request.query:
+            return EvidenceReply(request=request, error="Review search requires a nonempty literal text query.")
+        selected: Final = tuple(
+            record
+            for record in records
+            if request.action != "search_reviews" or request.query.casefold() in record.content.casefold()
+        )
+        return EvidenceReply(
+            request=request,
+            reviews=tuple(
+                record.model_copy(
+                    update=MappingProxyType({"content": record.content[request.char_start : request.char_end]})
+                )
+                for record in selected
+            ),
+        )
+
     def respond(self, request: EvidenceRequest) -> EvidenceReply:
+        if request.char_end is not None and request.char_end < request.char_start:
+            return EvidenceReply(request=request, error="char_end must be at least char_start.")
+        if request.action in ("review_catalog", "read_reviews", "search_reviews"):
+            return self.review_reply(request)
+        if request.action == "history":
+            return EvidenceReply(request=request, error="History is available through the agent runtime.")
         sessions: Final = tuple(
             session for session in self.sessions if request.execution_id in (None, session.execution.id)
         )
@@ -77,8 +179,6 @@ class EvidenceWorkspace(Record):
             )
         if request.action == "search" and not request.query:
             return EvidenceReply(request=request, error="Search requires a nonempty literal text query.")
-        if request.char_end is not None and request.char_end < request.char_start:
-            return EvidenceReply(request=request, error="char_end must be at least char_start.")
         parts: Final = tuple(chain.from_iterable(session.parts for session in sessions))
         selected: Final = tuple(p for p in parts if not request.span_ids or p.span_id in request.span_ids)
         matches: Final = (
@@ -112,9 +212,7 @@ async def complete_page(execution: Execution, cursor: str, read: ReadContent) ->
     pending = frozenset(p.span_id for p in initial.parts if p.truncated)  # rebind-ok: track unfinished source spans
     while pending:
         page: ExecutionContent = await read(execution.id, cursor, offset)
-        received: tuple[TracePart, ...] = tuple(
-            p for p in page.parts if p.span_id in pending and p.content
-        )
+        received: tuple[TracePart, ...] = tuple(p for p in page.parts if p.span_id in pending and p.content)
         if frozenset(p.span_id for p in received) != pending:
             raise ValueError("Original trace content ended before all truncated spans were read")
         pages = (*pages, page.model_copy(update=MappingProxyType({"parts": received})))
@@ -129,7 +227,10 @@ async def complete_page(execution: Execution, cursor: str, read: ReadContent) ->
         )
         for part in initial.parts
     )
-    return initial.model_copy(update=MappingProxyType({"parts": assembled}))
+    partial: Final = not execution.root_seen or any(
+        page.partial and not any(part.truncated for part in page.parts) for page in pages
+    )
+    return initial.model_copy(update=MappingProxyType({"parts": assembled, "partial": partial}))
 
 
 async def load_session(execution: Execution, read: ReadContent) -> SessionContent:
