@@ -1,3 +1,4 @@
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -6,6 +7,7 @@ import pytest
 from httpx import Request, Response
 
 import litellm
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy.guardrails.guardrail_hooks.llm_shield_proxy.llm_shield_proxy import (
@@ -1875,19 +1877,62 @@ class TestProxyWiring:
         assert {"api_key", "api_base"} <= set(model.model_fields)
 
     @pytest.mark.asyncio
-    async def test_the_deployment_hook_leaves_the_reply_for_the_cache_untouched(self):
-        """LiteLLM caches what the deployment hook returns, so restoring there caches plaintext.
+    async def test_the_deployment_hook_leaves_a_proxy_reply_for_the_proxy_hook(self):
+        """Inside the proxy the deployment hook must not restore: LiteLLM caches what it returns.
 
-        The proxy's post-call hook, which runs after the cache write, restores model-level
-        guardrails instead.
+        A proxy request was redacted by the proxy's pre-call hook, so it carries no
+        deployment-restore marker, and the proxy's post-call hook restores it after the cache
+        write. A caller-sent marker that does not match the minted vault id is ignored.
         """
         guardrail, shield = _shielded({"[EMAIL_1]": "a@example.com"})
         reply = ModelResponse(choices=[Choices(index=0, message=Message(role="assistant", content="[EMAIL_1]"))])
+        data = {"messages": [], "guardrails": [GUARDRAIL_NAME], "litellm_metadata": {}}
+        LLMShieldProxyGuardrail._mint_session_id(data)
+        data["litellm_metadata"]["llm_shield_restore_at_deployment"] = "caller-chosen"
 
         result = await guardrail.async_post_call_success_deployment_hook(
-            request_data={"messages": [], "guardrails": [GUARDRAIL_NAME]}, response=reply, call_type=None
+            request_data=data, response=reply, call_type=None
         )
 
         assert result is None
         assert reply.choices[0].message.content == "[EMAIL_1]"
         assert shield.urls == []
+
+    @pytest.mark.asyncio
+    async def test_model_level_use_outside_the_proxy_is_restored_and_never_cached(self, monkeypatch):
+        """SDK use with model-level `guardrails`: the deployment hooks are the only redact and
+        restore steps, so the reply is restored there, and the request bypasses the cache --
+        its key is built from the redacted request, and a cache hit would skip restoration.
+        """
+        vault = {"[EMAIL_1]": "alice@example.com"}
+
+        async def shield(url: str, headers: dict, json: dict, timeout: float) -> Response:
+            texts = json["texts"]
+            if url.endswith("/redact"):
+                return _response({"texts": [t.replace("alice@example.com", "[EMAIL_1]") for t in texts]})
+            restored = []
+            for text in texts:
+                for placeholder, original in vault.items():
+                    text = text.replace(placeholder, original)
+                restored.append(text)
+            return _response({"texts": restored})
+
+        guardrail = _guardrail(event_hook=["pre_call", "post_call"], default_on=False)
+        guardrail.async_handler.post = shield  # type: ignore[method-assign]
+        cache = InMemoryCache()
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        monkeypatch.setattr(litellm, "cache", litellm.Cache(type="local"))
+        monkeypatch.setattr(litellm.cache, "cache", cache)
+
+        reply = await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "Repeat alice@example.com"}],
+            mock_response="Repeat [EMAIL_1]",
+            guardrails=[GUARDRAIL_NAME],
+        )
+
+        # LiteLLM writes the cache from background tasks; let them land before looking.
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+        assert reply.choices[0].message.content == "Repeat alice@example.com"
+        assert cache.cache_dict == {}, "the redacted request's reply must not be cached"
