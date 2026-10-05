@@ -3,6 +3,7 @@ from hashlib import sha256
 from typing import Final
 
 import httpx
+import pytest
 from integration._support.client import Gateway, Scenario, object_value, string_value
 from integration._support.database import read_rows
 from pydantic import BaseModel, JsonValue
@@ -34,6 +35,14 @@ class ScimUserResponse(BaseModel):
     emails: list[ScimEmail] | None = None
     groups: list[ScimGroupRef] | None = None
     active: bool
+
+
+class ScimListResponse(BaseModel):
+    schemas: list[str]
+    totalResults: int
+    startIndex: int
+    itemsPerPage: int
+    Resources: list[ScimUserResponse]
 
 
 def _scim_request(
@@ -238,11 +247,13 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         alias_b: Final = string_value(team_b_info["team_alias"])
         suffix: Final = uuid.uuid4().hex
         user_name: Final = f"scim-move-{suffix}@example.com"
+        external_id: Final = f"entra-object-{suffix}"
         profile: Final[dict[str, JsonValue]] = {
             "schemas": [SCIM_CORE_USER_SCHEMA],
             "userName": user_name,
             "name": {"givenName": "Group", "familyName": "Member"},
             "emails": [{"value": user_name, "primary": True, "type": "work"}],
+            "externalId": external_id,
             "active": True,
         }
         created: Final = _scim_request(
@@ -260,6 +271,13 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
 
         without_groups: Final = _scim_request(gateway, "PUT", f"/scim/v2/Users/{user_name}", profile)
         assert without_groups.status_code == 200, without_groups.text
+        assert read_rows(
+            'SELECT sso_user_id FROM "LiteLLM_UserTable" WHERE user_id = %s',
+            (user_name,),
+        ) == [{"sso_user_id": external_id}], without_groups.text
+        assert object_value(gateway.get("/user/info", {"user_id": user_name})["user_info"])["sso_user_id"] == (
+            external_id
+        ), without_groups.text
         without_groups_user: Final = ScimUserResponse.model_validate(without_groups.json())
         assert without_groups_user.groups == [ScimGroupRef(value=team_a, display=alias_a)], without_groups.text
         without_groups_readback: Final = _scim_request(
@@ -330,3 +348,110 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         assert object_value(refused.json()) == expected_refusal, refused.text
         key_b: Final = _key_with_cleanup(scenario, user_id=user_name, team_id=team_b, models=[model_b])
         _assert_serving(gateway, model_b, key_b)
+
+
+def test_scim_create_persists_external_id_as_the_sso_user_id(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: POST /scim/v2/Users drops externalId, so the created user's sso_user_id is NULL and "
+        "/user/info returns sso_user_id null"
+    )
+    with gateway.scenario() as scenario:
+        suffix: Final = uuid.uuid4().hex
+        user_name: Final = f"scim-ext-{suffix}@example.com"
+        external_id: Final = f"okta-{suffix}"
+        created: Final = _scim_request(
+            gateway,
+            "POST",
+            "/scim/v2/Users",
+            {
+                "schemas": [SCIM_CORE_USER_SCHEMA],
+                "userName": user_name,
+                "emails": [{"value": user_name, "primary": True, "type": "work"}],
+                "externalId": external_id,
+                "active": True,
+            },
+        )
+        scenario.cleanups.callback(_delete_user_if_present, gateway, user_name)
+        assert created.status_code == 201, created.text
+        assert read_rows(
+            'SELECT sso_user_id FROM "LiteLLM_UserTable" WHERE user_id = %s',
+            (user_name,),
+        ) == [{"sso_user_id": external_id}], created.text
+        assert object_value(gateway.get("/user/info", {"user_id": user_name})["user_info"])["sso_user_id"] == (
+            external_id
+        ), created.text
+
+
+def test_okta_username_filter_finds_users_by_email_and_by_id(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        suffix: Final = uuid.uuid4().hex
+        email_a: Final = f"filter-existing-{suffix}@example.com"
+        email_b: Final = f"filter-scim-{suffix}@example.com"
+        existing: Final = scenario.user(user_email=email_a, user_role="internal_user")
+        created: Final = _scim_request(
+            gateway,
+            "POST",
+            "/scim/v2/Users",
+            {
+                "schemas": [SCIM_CORE_USER_SCHEMA],
+                "userName": email_b,
+                "emails": [{"value": email_b, "primary": True, "type": "work"}],
+            },
+        )
+        scenario.cleanups.callback(_delete_user_if_present, gateway, email_b)
+        assert created.status_code == 201, created.text
+
+        def lookup(value: str) -> tuple[ScimListResponse, str]:
+            response: Final = gateway.request(
+                "GET",
+                "/scim/v2/Users",
+                params={"filter": f'userName eq "{value}"', "startIndex": "1", "count": "100"},
+                headers={"Accept": "application/scim+json"},
+            )
+            assert response.status_code == 200, response.text
+            return ScimListResponse.model_validate(response.json()), response.text
+
+        existing_results, existing_text = lookup(email_a)
+        assert (
+            existing_results.schemas,
+            existing_results.totalResults,
+            existing_results.startIndex,
+            existing_results.itemsPerPage,
+            [(resource.id, resource.userName) for resource in existing_results.Resources],
+        ) == (
+            ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+            1,
+            1,
+            1,
+            [(existing, email_a)],
+        ), existing_text
+
+        scim_results, scim_text = lookup(email_b)
+        assert (
+            scim_results.schemas,
+            scim_results.totalResults,
+            scim_results.startIndex,
+            scim_results.itemsPerPage,
+            [(resource.id, resource.userName) for resource in scim_results.Resources],
+        ) == (
+            ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+            1,
+            1,
+            1,
+            [(email_b, email_b)],
+        ), scim_text
+
+        absent_results, absent_text = lookup(f"absent-{suffix}@example.com")
+        assert (
+            absent_results.schemas,
+            absent_results.totalResults,
+            absent_results.startIndex,
+            absent_results.itemsPerPage,
+            absent_results.Resources,
+        ) == (
+            ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+            0,
+            1,
+            0,
+            [],
+        ), absent_text

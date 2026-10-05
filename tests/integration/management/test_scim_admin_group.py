@@ -1,6 +1,6 @@
 import uuid
 from pathlib import Path
-from typing import Final, Mapping
+from typing import Final, Literal, Mapping
 
 import httpx
 import pytest
@@ -73,6 +73,21 @@ def _database_user_role(user_id: str) -> str:
     return string_value(rows[0]["user_role"])
 
 
+def _group_membership_operations(
+    user_id: str,
+    spelling: Literal["okta", "entra"],
+) -> tuple[dict[str, JsonValue], dict[str, JsonValue]]:
+    if spelling == "okta":
+        return (
+            {"op": "add", "path": "members", "value": [{"value": user_id}]},
+            {"op": "remove", "path": f'members[value eq "{user_id}"]'},
+        )
+    return (
+        {"op": "Add", "path": "members", "value": [{"value": user_id}]},
+        {"op": "Remove", "path": "members", "value": [{"value": user_id}]},
+    )
+
+
 def _generate_key_for_user(
     scenario: Scenario, user_key: str, target_user: str
 ) -> httpx.Response:
@@ -89,7 +104,12 @@ def _generate_key_for_user(
 
 
 @pytest.mark.timeout(300)
-def test_scim_admin_group_promotes_and_demotes_group_members(gateway: Gateway, tmp_path: Path) -> None:
+@pytest.mark.parametrize("spelling", ["okta", "entra"], ids=["okta", "entra"])
+def test_scim_admin_group_promotes_and_demotes_group_members(
+    gateway: Gateway,
+    tmp_path: Path,
+    spelling: Literal["okta", "entra"],
+) -> None:
     group_name: Final = f"scim-admin-{uuid.uuid4().hex}"
     config: Final = _owned_scim_config(tmp_path / "scim-admin-group.yaml", {"scim_admin_group": group_name})
     with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned, owned.gateway.scenario() as scenario:
@@ -132,12 +152,13 @@ def test_scim_admin_group_promotes_and_demotes_group_members(gateway: Gateway, t
         initial_denial: Final = _generate_key_for_user(scenario, user_key, other_user)
         assert initial_denial.status_code == 401, initial_denial.text
 
+        add_op, remove_op = _group_membership_operations(user, spelling)
         added: Final = owned.gateway.request(
             "PATCH",
             f"/scim/v2/Groups/{group_id}",
             {
                 "schemas": [SCIM_PATCH_SCHEMA],
-                "Operations": [{"op": "add", "path": "members", "value": [{"value": user}]}],
+                "Operations": [add_op],
             },
             headers=SCIM_HEADERS,
         )
@@ -155,7 +176,7 @@ def test_scim_admin_group_promotes_and_demotes_group_members(gateway: Gateway, t
             f"/scim/v2/Groups/{group_id}",
             {
                 "schemas": [SCIM_PATCH_SCHEMA],
-                "Operations": [{"op": "remove", "path": f'members[value eq "{user}"]'}],
+                "Operations": [remove_op],
             },
             headers=SCIM_HEADERS,
         )

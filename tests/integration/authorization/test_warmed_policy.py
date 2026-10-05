@@ -166,18 +166,25 @@ def test_scim_deactivation_blocks_null_and_false_keys_but_preserves_other_owners
         ),
     ],
 )
+@pytest.mark.parametrize(
+    "warm_before_deactivation",
+    [True, False],
+    ids=["warmed", "first_used_while_deactivated"],
+)
 def test_scim_idp_deactivation_spelling_blocks_and_restores_the_users_key(
     gateway: Gateway,
     peer: Gateway,
     deactivate_operations: list[dict[str, JsonValue]],
     reactivate_operations: list[dict[str, JsonValue]],
+    warm_before_deactivation: bool,
 ) -> None:
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         user: Final = scenario.user(user_role="internal_user")
         key: Final = scenario.key(user_id=user, models=[model])
-        for worker in (gateway, peer):
-            assert_serving(worker, model, key, 200)
+        if warm_before_deactivation:
+            for worker in (gateway, peer):
+                assert_serving(worker, model, key, 200)
 
         deactivated: Final = gateway.request(
             "PATCH",
@@ -232,7 +239,7 @@ def test_scim_idp_deactivation_spelling_blocks_and_restores_the_users_key(
             assert_serving(worker, model, key, 200)
 
 
-def test_scim_put_without_active_keeps_a_deactivated_user_blocked(gateway: Gateway) -> None:
+def test_scim_put_without_active_keeps_a_deactivated_user_blocked(gateway: Gateway, peer: Gateway) -> None:
     with gateway.scenario() as scenario:
         model: Final = scenario.model()
         user: Final = scenario.user(user_role="internal_user")
@@ -259,7 +266,8 @@ def test_scim_put_without_active_keeps_a_deactivated_user_blocked(gateway: Gatew
         )
         assert blocked_key_rows[0]["blocked"] is True, blocked_key_rows
         assert object_value(blocked_key_rows[0]["metadata"]).get("scim_blocked") is True, blocked_key_rows
-        assert_serving(gateway, model, key, 401)
+        for worker in (gateway, peer):
+            assert_serving(worker, model, key, 401)
 
         without_active: Final[dict[str, JsonValue]] = {
             field: value for field, value in resource.items() if field != "active"
@@ -288,7 +296,8 @@ def test_scim_put_without_active_keeps_a_deactivated_user_blocked(gateway: Gatew
         )
         assert still_blocked_rows[0]["blocked"] is True, still_blocked_rows
         assert object_value(still_blocked_rows[0]["metadata"]).get("scim_blocked") is True, still_blocked_rows
-        assert_serving(gateway, model, key, 401)
+        for worker in (gateway, peer):
+            assert_serving(worker, model, key, 401)
 
 
 def _expected_scim_write_denial(route: str, user_id: str) -> dict[str, JsonValue]:
