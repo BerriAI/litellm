@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders } from "@/../tests/test-utils";
 import { copyToClipboard } from "@/utils/dataUtils";
 import { LensPreviewContext } from "../../ui/LensPreviewButton";
-import { agentTraceCall, apiClient, sendOtlpTraceCall } from "../../../networking";
+import { agentTraceListCall, apiClient, sendOtlpTraceCall } from "../../../networking";
 import {
   codingAgentCommand,
   codingAgentPrompt,
@@ -14,12 +14,12 @@ import {
   TracingSetupCard,
 } from "./TracingSetupCard";
 import { FRAMEWORKS } from "./tracingSetupGuides";
-import type { Trace } from "../../traces/types";
+import type { TracePage, TraceSummary } from "../../traces/types";
 
 vi.mock("../../../networking", () => ({
   getProxyBaseUrl: () => "http://proxy.test/",
   sendOtlpTraceCall: vi.fn(),
-  agentTraceCall: vi.fn(),
+  agentTraceListCall: vi.fn(),
   apiClient: { post: vi.fn() },
 }));
 vi.mock("@/utils/dataUtils", () => ({ copyToClipboard: vi.fn().mockResolvedValue(true) }));
@@ -184,18 +184,23 @@ describe("TracingSetupCard", () => {
     expect(copyToClipboard).toHaveBeenLastCalledWith(SECRET);
   });
 
-  it("sends a test trace, waits for it to land, then opens it", async () => {
+  it("finds the sent trace by its OTLP id and opens it by the canonical summary", async () => {
     const user = userEvent.setup();
-    const summary = { trace_id: "abc", name: "weather_agent" } as Trace["summary"];
+    const summary = { id: "team-a:abc", trace_id: "abc", name: "weather_agent" } as TraceSummary;
     vi.mocked(sendOtlpTraceCall).mockResolvedValue(undefined);
-    vi.mocked(agentTraceCall).mockResolvedValue({ summary, agents: [], spans: [] } as unknown as Trace);
+    vi.mocked(agentTraceListCall)
+      .mockResolvedValueOnce({ data: [] } as unknown as TracePage)
+      .mockResolvedValueOnce({ data: [summary] } as unknown as TracePage);
     const { onOpenTrace } = renderCard();
 
     await user.click(screen.getByRole("button", { name: "Send a test trace" }));
-    await user.click(await screen.findByRole("button", { name: /View trace/ }));
+    await user.click(await screen.findByRole("button", { name: /View trace/ }, { timeout: 3000 }));
 
     expect(sendOtlpTraceCall).toHaveBeenCalledOnce();
-    expect(vi.mocked(agentTraceCall).mock.calls[0][1]).toMatch(/^[0-9a-f]{32}$/);
+    expect(agentTraceListCall).toHaveBeenCalledTimes(2);
+    const { selection } = vi.mocked(agentTraceListCall).mock.calls[0][1];
+    expect(selection.q).toMatch(/^trace_id:[0-9a-f]{32}$/);
+    expect(selection.window.startMs).toBeLessThan(selection.window.endMs);
     expect(onOpenTrace).toHaveBeenCalledWith(summary);
   });
 
@@ -207,7 +212,7 @@ describe("TracingSetupCard", () => {
     await user.click(screen.getByRole("button", { name: "Send a test trace" }));
 
     expect(await screen.findByText("Could not send the test trace.")).toBeVisible();
-    expect(agentTraceCall).not.toHaveBeenCalled();
+    expect(agentTraceListCall).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /View trace/ })).not.toBeInTheDocument();
   });
 

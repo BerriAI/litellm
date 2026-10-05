@@ -13,7 +13,8 @@ import { copyToClipboard } from "@/utils/dataUtils";
 import anthropicLogo from "../../../../../public/assets/logos/anthropic.svg";
 import openaiLogo from "../../../../../public/assets/logos/openai_small.svg";
 import otelLogo from "../../../../../public/assets/logos/opentelemetry.svg";
-import { agentTraceCall, apiClient, getProxyBaseUrl, sendOtlpTraceCall } from "../../../networking";
+import { agentTraceListCall, apiClient, getProxyBaseUrl, sendOtlpTraceCall } from "../../../networking";
+import { NEWEST } from "../../traces/list/runOrder";
 import { ActiveDot } from "../../traces/ui/ActiveDot";
 import { sampleTraceExport } from "./sampleTrace";
 import { FRAMEWORKS, frameworkSnippet, type FrameworkGuide } from "./tracingSetupGuides";
@@ -191,13 +192,24 @@ const SEND_LABEL: Record<Exclude<SendState["kind"], "ready">, string> = {
 
 const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
-async function waitForTrace(accessToken: string, traceId: string): Promise<TraceSummary | null> {
+async function findTrace(accessToken: string, traceId: string, sentAtMs: number): Promise<TraceSummary | null> {
+  try {
+    const page = await agentTraceListCall(accessToken, {
+      selection: { window: { startMs: sentAtMs - 60_000, endMs: sentAtMs + 60_000 }, q: `trace_id:${traceId}` },
+      order: NEWEST,
+      page: { cursor: null },
+    });
+    return page.data[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function waitForTrace(accessToken: string, traceId: string, sentAtMs: number): Promise<TraceSummary | null> {
   for (let attempt = 0; attempt < SAMPLE_TRACE_POLL_ATTEMPTS; attempt++) {
-    try {
-      return (await agentTraceCall(accessToken, traceId)).summary;
-    } catch {
-      await delay(SAMPLE_TRACE_POLL_MS);
-    }
+    const trace = await findTrace(accessToken, traceId, sentAtMs);
+    if (trace) return trace;
+    await delay(SAMPLE_TRACE_POLL_MS);
   }
   return null;
 }
@@ -212,7 +224,8 @@ function SendTestTrace({
   const [state, setState] = useState<SendState>({ kind: "idle" });
   const send = async () => {
     setState({ kind: "sending" });
-    const sample = sampleTraceExport(Date.now());
+    const sentAtMs = Date.now();
+    const sample = sampleTraceExport(sentAtMs);
     try {
       await sendOtlpTraceCall(accessToken, sample.body);
     } catch {
@@ -220,7 +233,7 @@ function SendTestTrace({
       return;
     }
     setState({ kind: "waiting" });
-    const trace = await waitForTrace(accessToken, sample.traceId);
+    const trace = await waitForTrace(accessToken, sample.traceId, sentAtMs);
     setState(
       trace
         ? { kind: "ready", trace }
