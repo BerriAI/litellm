@@ -96,10 +96,8 @@ describe("MCPSubmissionsTab", () => {
 
   it("keeps the rules editor disabled until saved rules load", async () => {
     const user = userEvent.setup();
-    let resolveSettings: (settings: Awaited<ReturnType<typeof getGeneralSettingsCall>>) => void = () => {};
-    const settingsPromise = new Promise<Awaited<ReturnType<typeof getGeneralSettingsCall>>>((resolve) => {
-      resolveSettings = resolve;
-    });
+    const { promise: settingsPromise, resolve: resolveSettings } =
+      Promise.withResolvers<Awaited<ReturnType<typeof getGeneralSettingsCall>>>();
     vi.mocked(getGeneralSettingsCall).mockReturnValue(settingsPromise);
 
     render(<MCPSubmissionsTab accessToken={token} />);
