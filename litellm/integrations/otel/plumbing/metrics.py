@@ -33,6 +33,7 @@ from litellm.integrations.otel.model.semconv import (
     resolve_provider,
 )
 from litellm.integrations.otel.model.utils import to_seconds
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -226,13 +227,17 @@ class GenAIMetricRecorder:
         usage_is_replayed: Final = is_unbilled_non_inference_call_from_params(
             kwargs.get("call_type"), kwargs.get("litellm_params"), response_obj
         )
+        # A batch line item's tokens and cost are metered by the aggregate
+        # aretrieve_batch event; per-line samples here would double-count them.
+        # Duration samples for line items are still recorded.
+        batch_line_item: Final = is_batch_line_item_event(kwargs)
 
         self._metrics.operation_duration.record(duration_s, attributes=common_attrs)
-        if not usage_is_replayed:
+        if not usage_is_replayed and not batch_line_item:
             self._record_token_usage(response_obj, common_attrs)
 
         cost: Final = kwargs.get("response_cost")
-        if cost:
+        if cost and not batch_line_item:
             self._metrics.token_cost.record(cost, attributes=common_attrs)
 
         self._record_time_to_first_token(kwargs, common_attrs)

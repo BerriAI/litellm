@@ -14,6 +14,7 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_service,
     normalize_datadog_tag_value,
 )
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -72,6 +73,10 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         super().__init__(**kwargs)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        # A batch line item is billed by the aggregate aretrieve_batch event; a
+        # per-line FOCUS BilledCost row would double-count cloud spend.
+        if is_batch_line_item_event(kwargs):
+            return
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 

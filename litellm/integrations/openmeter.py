@@ -9,6 +9,7 @@ import httpx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
@@ -97,6 +98,9 @@ class OpenMeterLogger(CustomLogger):
         }
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        # A batch line item is billed by the aggregate aretrieve_batch event.
+        if is_batch_line_item_event(kwargs):
+            return
         _url = os.getenv("OPENMETER_API_ENDPOINT", "https://openmeter.cloud")
         if _url.endswith("/"):
             _url += "api/v1/events"
@@ -123,6 +127,8 @@ class OpenMeterLogger(CustomLogger):
             raise e
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_line_item_event(kwargs):
+            return
         _url = os.getenv("OPENMETER_API_ENDPOINT", "https://openmeter.cloud")
         if _url.endswith("/"):
             _url += "api/v1/events"
