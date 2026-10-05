@@ -328,7 +328,8 @@ describe("useTeam", () => {
   });
 
   it("should return team data when query is successful", async () => {
-    (teamInfoCall as any).mockResolvedValue(mockTeams[0]);
+    // /team/info answers with an envelope; the hook is typed as the team itself.
+    (teamInfoCall as any).mockResolvedValue({ team_id: "team-1", team_info: mockTeams[0], keys: [] });
 
     const { result } = renderHook(() => useTeam("team-1"), { wrapper });
 

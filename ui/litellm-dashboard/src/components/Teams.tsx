@@ -1,3 +1,4 @@
+import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import AvailableTeamsPanel from "@/components/team/AvailableTeamsPanel";
@@ -15,12 +16,13 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { labelWithDocsHint, labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TabsContent } from "@/components/ui/tabs";
 import { ChevronDown, Plus, Users } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
+import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button as UIButton } from "@/components/ui/button";
 import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { parseAsString, useQueryState } from "nuqs";
@@ -48,6 +50,7 @@ import BudgetDurationDropdown, {
 } from "./common_components/budget_duration_dropdown";
 import { Organization, getDefaultTeamSettings, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
+import { ModelMaxBudget, ModelMaxBudgetField } from "./key_team_helpers/ModelMaxBudgetEditor";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "./search_tools/SearchToolSelector";
 import SkillSelector from "./skills/SkillSelector";
@@ -77,6 +80,7 @@ const teamCreateFieldsSchema = z.object({
   budget_duration: z.string().nullish(),
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
+  tpd_limit: numericInputSchema,
   metadata: metadataPairsSchema.optional(),
   team_id: z.string().optional(),
   team_member_budget: z.number().optional(),
@@ -113,6 +117,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   budget_duration: undefined,
   tpm_limit: undefined,
   rpm_limit: undefined,
+  tpd_limit: undefined,
   metadata: [],
   team_id: undefined,
   team_member_budget: undefined,
@@ -269,6 +274,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
+  const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
@@ -346,6 +352,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     setSearchToolSettingsOpen(false);
     setLoggingSettings([]);
     setModelAliases({});
+    setModelMaxBudget({});
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
   };
@@ -523,6 +530,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           formValues.model_aliases = modelAliases;
         }
 
+        if (Object.keys(modelMaxBudget).length > 0) {
+          formValues.model_max_budget = modelMaxBudget;
+        }
+
         // Add router_settings if any are defined
         if (routerSettings?.router_settings) {
           // Only include router_settings if it has at least one non-null value
@@ -643,7 +654,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   ];
 
   return (
-    <main className={selectedTeamId ? "px-12 py-6" : "flex h-full flex-col p-8"}>
+    <Page className={selectedTeamId ? undefined : "h-full"}>
       {selectedTeamId ? (
         <TeamInfoView
           teamId={selectedTeamId}
@@ -663,43 +674,38 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           premiumUser={premiumUser}
         />
       ) : (
-        <Tabs defaultValue={tabItems[0].key} className="min-h-0 flex-1 gap-6">
-          <PageHeader
-            icon={<Users />}
-            title="Teams"
-            subtitle="Manage teams, members, and their access to models and budgets"
-            primaryAction={
-              canCreateOrManageTeams(userRole, userID, organizations) ? (
-                <UIButton onClick={openCreateTeamModal} data-testid="create-team-button">
-                  <Plus className="size-4" />
-                  Create Team
-                </UIButton>
-              ) : undefined
-            }
-            tabs={({ leadingControls }) => (
-              <TabsList
-                variant="line"
-                className="gap-0 p-0 [&>[data-slot=tabs-trigger]+[data-slot=tabs-trigger]]:ml-[22px]"
-              >
-                {leadingControls}
+        <PageTabs defaultValue={tabItems[0].key}>
+          <PageHeader>
+            <PageHeaderTitle>
+              <Users />
+              Teams
+            </PageHeaderTitle>
+            <PageHeaderDescription>Manage teams, members, and their access to models and budgets</PageHeaderDescription>
+            <PageHeaderControls>
+              <PageTabsList>
+                {canCreateOrManageTeams(userRole, userID, organizations) && (
+                  <>
+                    <UIButton onClick={openCreateTeamModal} data-testid="create-team-button">
+                      <Plus className="size-4" />
+                      Create Team
+                    </UIButton>
+                    <ToolbarSeparator className="mx-0 h-6" />
+                  </>
+                )}
                 {tabItems.map((item) => (
-                  <TabsTrigger
-                    key={item.key}
-                    value={item.key}
-                    className="flex-none px-0 py-[7px] data-active:font-semibold"
-                  >
+                  <PageTabsTrigger key={item.key} value={item.key}>
                     {item.label}
-                  </TabsTrigger>
+                  </PageTabsTrigger>
                 ))}
-              </TabsList>
-            )}
-          />
+              </PageTabsList>
+            </PageHeaderControls>
+          </PageHeader>
           {tabItems.map((item) => (
             <TabsContent key={item.key} value={item.key} className={item.className}>
               {item.children}
             </TabsContent>
           ))}
-        </Tabs>
+        </PageTabs>
       )}
 
       {canCreateOrManageTeams(userRole, userID, organizations) && (
@@ -807,16 +813,36 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                         showNeverResets
                         placeholder={budgetDurationPlaceholder}
                         value={value}
-                        onChange={onChange}
+                        onChange={(next) => onChange(next ?? undefined)}
                       />
                     )}
                   </FormField>
+                  <ModelMaxBudgetField
+                    key={`model-max-budget-${routerSettingsKey}`}
+                    premiumUser={premiumUser}
+                    value={modelMaxBudget}
+                    onChange={setModelMaxBudget}
+                    availableModels={userModels}
+                    hint="Cap this team's spend on individual models, each with its own reset window. Every key on the team shares the cap unless the key sets its own budget for that model."
+                  />
                   <FormField control={form.control} name="tpm_limit" label="Tokens per minute Limit (TPM)">
                     {({ ref, value, ...field }) => (
                       <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
                     )}
                   </FormField>
                   <FormField control={form.control} name="rpm_limit" label="Requests per minute Limit (RPM)">
+                    {({ ref, value, ...field }) => (
+                      <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
+                    )}
+                  </FormField>
+                  <FormField
+                    control={form.control}
+                    name="tpd_limit"
+                    label={labelWithHint(
+                      "Tokens per day Limit (TPD)",
+                      "Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the team's TPM/RPM limits. Online requests keep using TPM/RPM.",
+                    )}
+                  >
                     {({ ref, value, ...field }) => (
                       <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
                     )}
@@ -954,29 +980,31 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                             />
                           )}
                         </FormField>
-                        <FormField
-                          control={form.control}
-                          name="disable_global_guardrails"
-                          className="mt-4"
-                          label={labelWithHint(
-                            "Disable Global Guardrails",
-                            "When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)",
-                          )}
-                          description={
-                            premiumUser
-                              ? "Bypass global guardrails for this team"
-                              : "Premium feature - Upgrade to disable global guardrails by team"
-                          }
-                        >
-                          {({ id, value, onChange }) => (
-                            <Switch
-                              id={id}
-                              disabled={!premiumUser}
-                              checked={value === true}
-                              onCheckedChange={onChange}
-                            />
-                          )}
-                        </FormField>
+                        {isProxyAdminRole(userRole || "") && (
+                          <FormField
+                            control={form.control}
+                            name="disable_global_guardrails"
+                            className="mt-4"
+                            label={labelWithHint(
+                              "Disable Global Guardrails",
+                              "When enabled, this team will bypass any guardrails configured to run on every request (global guardrails)",
+                            )}
+                            description={
+                              premiumUser
+                                ? "Bypass global guardrails for this team"
+                                : "Premium feature - Upgrade to disable global guardrails by team"
+                            }
+                          >
+                            {({ id, value, onChange }) => (
+                              <Switch
+                                id={id}
+                                disabled={!premiumUser}
+                                checked={value === true}
+                                onCheckedChange={onChange}
+                              />
+                            )}
+                          </FormField>
+                        )}
                         {canViewPolicies && (
                           <FormField
                             control={form.control}
@@ -1281,7 +1309,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           </DialogContent>
         </Dialog>
       )}
-    </main>
+    </Page>
   );
 };
 

@@ -51,6 +51,21 @@ export async function sendChatCompletion(request: APIRequestContext, opts: ChatO
   return body.id as string;
 }
 
+export interface ServedChat {
+  requestId: string;
+  callId: string;
+}
+
+export async function sendChatCompletionWithCallId(request: APIRequestContext, opts: ChatOptions): Promise<ServedChat> {
+  const res = await postChatCompletion(request, opts);
+  expect(res.ok(), `chat completion for ${opts.model} failed (${res.status()}): ${await res.text()}`).toBe(true);
+  const callId = res.headers()["x-litellm-call-id"];
+  expect(callId, "proxy did not return an x-litellm-call-id header").toBeTruthy();
+  const body = await res.json();
+  expect(body.choices?.[0]?.message?.content).toContain(MOCK_RESPONSE_TEXT);
+  return { requestId: body.id as string, callId };
+}
+
 export interface ChatAttempt {
   status: number;
   body: string;
@@ -124,7 +139,7 @@ export async function waitForSpendLog(
     lastStatus = res.status();
     if (res.ok()) {
       const body = await res.json();
-      const rows = Array.isArray(body) ? body : (body?.data ?? []);
+      const rows = Array.isArray(body) ? body : body?.data ?? [];
       if (rows.length > 0) {
         return;
       }
