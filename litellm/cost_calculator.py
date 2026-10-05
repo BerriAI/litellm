@@ -1018,8 +1018,8 @@ def get_usage_object(
         Usage | ResponseAPIUsage | dict | BaseModel,
         (
             completion_response.get("usage")
-            if isinstance(completion_response, dict)
-            else getattr(completion_response, "get", lambda x: None)("usage")
+            if hasattr(completion_response, "get")
+            else getattr(completion_response, "usage", None)
         ),
     )
 
