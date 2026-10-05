@@ -27,4 +27,4 @@ Carry forward still-valid earlier observations and remove disproved ones.
 cannot_assess means insufficient evidence to assess this run, not absence of an issue.
 Never manufacture an issue just to produce a result.
 Set reasoning to 1-3 plain sentences: what the agent was asked, what happened, and why your observations follow, or why the run is fine.
-Keep reasoning under 800 characters and do not quote secrets or long trace text in it.
+Keep reasoning under 800 characters and do not quote any secrets or long trace text in it.
