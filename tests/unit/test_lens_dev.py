@@ -2,6 +2,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Final
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "lens_dev.sh"
@@ -123,6 +124,19 @@ def test_proxy_env_permits_the_weak_key_only_when_chosen(tmp_path):
     assert "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true" in proc.stdout
 
 
+def test_source_development_overrides_an_inherited_release_with_its_own_commit(tmp_path: Path) -> None:
+    proc: Final = _run(
+        tmp_path,
+        'proxy_env "export LITELLM_RELEASE_TAG=v0.0.0-old"; '
+        'test "$LITELLM_RELEASE_TAG" = "sha-$(git -C "$repo_root" rev-parse HEAD)"; '
+        'printf "%s" "$LENS_WORKER_IMAGE"',
+        LITELLM_RELEASE_TAG="v0.0.0-old",
+        LENS_WORKER_IMAGE="registry.example/lens-worker:old",
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "litellm-lens-worker:local"
+
+
 def test_external_database_url_never_starts_compose_postgres(tmp_path):
     docker = tmp_path / "bin" / "docker"
     proc = _run(
@@ -149,3 +163,83 @@ def test_cleanup_kills_child_process_trees(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert "lens-dev: stopping" in proc.stdout
     assert proc.stdout.strip().endswith("CLEAN")
+
+
+def test_seed_only_uses_local_credentials_and_profile(tmp_path: Path) -> None:
+    proc = _run(
+        tmp_path,
+        "parse_args --seed-only --seed large --copies 7; master_key=sk-local; "
+        'py() { env; printf "%s\\n" "$@"; }; py=py; seed_data',
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "LITELLM_MASTER_KEY=sk-local" in proc.stdout
+    assert "PROXY_BASE_URL=http://localhost:4000" in proc.stdout
+    assert "CLICKHOUSE_DATABASE=litellm" in proc.stdout
+    assert "--profile\nlarge\n--copies\n7" in proc.stdout
+
+
+def test_seed_arguments_reject_invalid_counts_before_startup(tmp_path: Path) -> None:
+    proc = _run(tmp_path, "parse_args --seed large --copies 0")
+    assert proc.returncode == 1
+    assert "positive integer" in proc.stderr
+
+
+def test_seed_only_defaults_to_small_profile(tmp_path: Path) -> None:
+    proc = _run(tmp_path, 'parse_args --seed-only; echo "$seed_profile $seed_only"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "default 1"
+
+
+def test_seed_only_with_no_cli_count_preserves_env_controls(tmp_path: Path) -> None:
+    proc = _run(
+        tmp_path,
+        "parse_args --seed-only; master_key=sk-local; py() { "
+        'printf "%s %s\\n" "$LENS_DEV_SEED_COPIES" "$@"; }; py=py; seed_data',
+        LENS_DEV_SEED_COPIES="3",
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.startswith("3 -m")
+
+
+def test_proxy_uses_this_checkouts_ui_build(tmp_path: Path) -> None:
+    proc = _run(tmp_path, 'proxy_env "export LITELLM_UI_PATH=/old/build"; echo "$LITELLM_UI_PATH"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == str(ROOT / "ui/litellm-dashboard/out")
+
+
+def test_dashboard_build_uses_same_origin_and_captures_failures(tmp_path: Path) -> None:
+    dashboard = tmp_path / "ui/litellm-dashboard"
+    dashboard.mkdir(parents=True)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    runner = scripts / "with_dashboard_node.sh"
+    runner.write_text('#!/bin/sh\nprintf "base=%s args=%s\\n" "$NEXT_PUBLIC_BASE_URL" "$*"\nexit "$BUILD_STATUS"\n')
+    runner.chmod(0o755)
+    snippet = f'repo_root="{tmp_path}"; mkdir -p "$log_dir"; build_dashboard'
+    success = _run(tmp_path, snippet, BUILD_STATUS="0", LENS_DEV_BUILD_UI="1", NEXT_PUBLIC_BASE_URL="http://old-proxy")
+    assert success.returncode == 0, success.stderr
+    log = tmp_path / "state/logs/ui-build.log"
+    assert log.read_text().strip() == "base= args=npm run build"
+    failure = _run(tmp_path, snippet, BUILD_STATUS="1", LENS_DEV_BUILD_UI="1")
+    assert failure.returncode == 1
+    assert "UI build failed" in failure.stderr
+
+
+def test_skipping_ui_build_needs_no_static_export(tmp_path: Path) -> None:
+    proc = _run(tmp_path, f'repo_root="{tmp_path}"; build_dashboard', LENS_DEV_BUILD_UI="0")
+    assert proc.returncode == 0, proc.stderr
+    assert not (tmp_path / "ui/litellm-dashboard/out").exists()
+
+
+def test_ui_readiness_uses_live_login_route(tmp_path: Path) -> None:
+    proc = _run(tmp_path, 'wait_for_ui "$$"', LENS_DEV_UI_PORT="3017")
+    assert proc.returncode == 0, proc.stderr
+    assert "http://localhost:3017/ui/login/" in _curl_calls(tmp_path)
+
+
+def test_ui_exit_fails_before_readiness_request(tmp_path: Path) -> None:
+    proc = _run(tmp_path, 'true & child=$!; wait "$child"; wait_for_ui "$child"')
+    assert proc.returncode == 1
+    assert "UI exited; see" in proc.stderr
+    assert "ui.log" in proc.stderr
+    assert _curl_calls(tmp_path) == ""

@@ -81,6 +81,7 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
     uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
     --extra proxy \
     --extra proxy-runtime \
+    --group admin-mcp \
     --extra extra_proxy \
     --extra semantic-router \
     --extra saml \
@@ -108,6 +109,7 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
     uv sync --frozen --no-default-groups --no-editable \
       --extra proxy \
       --extra proxy-runtime \
+      --group admin-mcp \
       --extra extra_proxy \
       --extra semantic-router \
       --extra saml \
@@ -122,6 +124,8 @@ RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
     sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
 FROM $LITELLM_RUNTIME_IMAGE AS runtime
+ARG LITELLM_RELEASE_TAG=""
+ENV LITELLM_RELEASE_TAG=${LITELLM_RELEASE_TAG}
 WORKDIR /app
 USER root
 

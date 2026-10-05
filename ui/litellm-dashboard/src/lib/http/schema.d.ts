@@ -2273,7 +2273,9 @@ export interface paths {
          *
          *     - A successful authorization response (``code`` + ``state``), which is
          *       forwarded back to the validated client ``redirect_uri`` with the
-         *       original (un-wrapped) ``state``.
+         *       original (un-wrapped) ``state``, once the RFC 9207 ``iss`` (when the
+         *       authorization server sent one) matches the issuer /authorize sealed
+         *       into the state.
          *     - An error response (``error``[+``error_description``/``error_uri``]), per
          *       RFC 6749 §4.1.2.1. When ``state`` is present and decodes to a trusted
          *       ``redirect_uri``, the error params are propagated back to the client so
@@ -3808,6 +3810,28 @@ export interface paths {
         patch: operations["update_credential_credentials__credential_name__patch"];
         trace?: never;
     };
+    "/credentials/{credential_name}/jwks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Credential Internal Issuer Jwks
+         * @description Export the public JWKS for an anthropic ``internal_issuer`` credential, so the operator can
+         *     register it on the Anthropic federation issuer from the UI. Never touches the private signing
+         *     key: only its derived public JWKS leaves this process. 404s for any other credential shape.
+         */
+        get: operations["get_credential_internal_issuer_jwks_credentials__credential_name__jwks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cursor/chat/completions": {
         parameters: {
             query?: never;
@@ -4277,6 +4301,7 @@ export interface paths {
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
+         *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
          *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
@@ -4308,6 +4333,7 @@ export interface paths {
          *             "user_id" : "ishaan-jaff-3",
          *             "allowed_region": "eu",
          *             "budget_id": "free_tier",
+         *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
          *         }'
          *
@@ -4387,6 +4413,7 @@ export interface paths {
          *     - default_model: Optional[str] = (
          *         None  # if no equivalent model in allowed region - default all requests to this model
          *     )
+         *     - models: Optional[list[str]] = None  # omitted or null leaves the allowlist unchanged; an empty list clears it
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
          *         Supported fields:
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
@@ -4402,7 +4429,8 @@ export interface paths {
          *     ```
          *     curl --location 'http://0.0.0.0:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "test-litellm-user-4",
-         *         "budget_id": "paid_tier"
+         *         "budget_id": "paid_tier",
+         *         "models": ["gpt-4o-mini"]
          *     }'
          *
          *     # Updating object permissions
@@ -4939,6 +4967,7 @@ export interface paths {
          *     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
          *     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
          *     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
+         *     - models: Optional[list[str]] - Restrict this customer's access to the listed models.
          *     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
          *     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
@@ -4970,6 +4999,7 @@ export interface paths {
          *             "user_id" : "ishaan-jaff-3",
          *             "allowed_region": "eu",
          *             "budget_id": "free_tier",
+         *             "models": ["gpt-4o-mini"],
          *             "default_model": "azure/gpt-3.5-turbo-eu"
          *         }'
          *
@@ -5049,6 +5079,7 @@ export interface paths {
          *     - default_model: Optional[str] = (
          *         None  # if no equivalent model in allowed region - default all requests to this model
          *     )
+         *     - models: Optional[list[str]] = None  # omitted or null leaves the allowlist unchanged; an empty list clears it
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
          *         Supported fields:
          *         * mcp_servers: List[str] - List of allowed MCP server IDs
@@ -5064,7 +5095,8 @@ export interface paths {
          *     ```
          *     curl --location 'http://0.0.0.0:4000/customer/update'     --header 'Authorization: Bearer sk-1234'     --header 'Content-Type: application/json'     --data '{
          *         "user_id": "test-litellm-user-4",
-         *         "budget_id": "paid_tier"
+         *         "budget_id": "paid_tier",
+         *         "models": ["gpt-4o-mini"]
          *     }'
          *
          *     # Updating object permissions
@@ -8968,6 +9000,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/watch-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Watch All */
+        post: operations["watch_all_lens_watch_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/worker/claim": {
         parameters: {
             query?: never;
@@ -9236,6 +9285,41 @@ export interface paths {
         get: operations["read_run_lens__lens_id__runs__job_id__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/{lens_id}/runs/{job_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Reviews */
+        get: operations["read_reviews_lens__lens_id__runs__job_id__reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/liteadmin/slack/connect/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Connect Page */
+        get: operations["connect_page_liteadmin_slack_connect__token__get"];
+        put?: never;
+        /** Connect Account */
+        post: operations["connect_account_liteadmin_slack_connect__token__post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -10463,6 +10547,11 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
+         *                     provider's model catalog. When present, the response is Codex's own
+         *                     catalog shape (`{"models": [...]}`) built from the same listing, with
+         *                     each model's `model_info.service_tiers` as its service tiers; absent,
+         *                     the OpenAI shape below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -14270,128 +14359,6 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/connections/test": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Test Roi Calculator Connections */
-        post: operations["test_roi_calculator_connections_roi_calculator_connections_test_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/identity-map": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Update Roi Calculator Identity Map */
-        put: operations["update_roi_calculator_identity_map_roi_calculator_identity_map_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/report": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Roi Calculator Report */
-        get: operations["get_roi_calculator_report_roi_calculator_report_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/repositories": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Roi Calculator Repositories */
-        get: operations["get_roi_calculator_repositories_roi_calculator_repositories_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/settings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Roi Calculator Settings */
-        get: operations["get_roi_calculator_settings_roi_calculator_settings_get"];
-        /** Update Roi Calculator Settings */
-        put: operations["update_roi_calculator_settings_roi_calculator_settings_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/setup/reset": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Reset Roi Calculator Setup */
-        post: operations["reset_roi_calculator_setup_roi_calculator_setup_reset_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/roi-calculator/sync": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Roi Calculator Sync Status */
-        get: operations["get_roi_calculator_sync_status_roi_calculator_sync_get"];
-        put?: never;
-        /** Start Roi Calculator Sync */
-        post: operations["start_roi_calculator_sync_roi_calculator_sync_post"];
-        /** Cancel Roi Calculator Sync */
-        delete: operations["cancel_roi_calculator_sync_roi_calculator_sync_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -21219,6 +21186,11 @@ export interface paths {
          *     This is just for compatibility with openai projects like aider.
          *
          *     Query Parameters:
+         *     - client_version: Sent by Codex CLI (`?client_version=0.159.3`) when it fetches a
+         *                     provider's model catalog. When present, the response is Codex's own
+         *                     catalog shape (`{"models": [...]}`) built from the same listing, with
+         *                     each model's `model_info.service_tiers` as its service tiers; absent,
+         *                     the OpenAI shape below is returned
          *     - include_metadata: Include additional metadata in the response with fallback information
          *     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
          *                     Defaults to "general" when include_metadata=true
@@ -25338,6 +25310,43 @@ export interface components {
             /** Results */
             results: components["schemas"]["TagActiveUsersResponse"][];
         };
+        /** Activity */
+        Activity: {
+            /**
+             * Execution Ids
+             * @default []
+             */
+            execution_ids: string[];
+            /**
+             * Finished
+             * @default false
+             */
+            finished: boolean;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Operations
+             * @default []
+             */
+            operations: ("model" | "read" | "search" | "python" | "catalog" | "review_catalog" | "read_reviews" | "search_reviews" | "history" | "checkpoint")[];
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "load" | "review" | "group" | "reconcile" | "investigate";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["ToolCount"][];
+        };
         /** ActivityAvailability */
         ActivityAvailability: {
             /**
@@ -25350,6 +25359,47 @@ export interface components {
              * @default false
              */
             traces: boolean;
+        };
+        /** ActivitySelection */
+        ActivitySelection: {
+            /**
+             * Agent Name
+             * @default
+             */
+            agent_name: string;
+            /**
+             * Execution Ids
+             * @default []
+             */
+            execution_ids: string[];
+            /**
+             * Filters
+             * @default []
+             */
+            filters: components["schemas"]["MetadataFilter"][];
+            /**
+             * Sample Percent
+             * @default 100
+             */
+            sample_percent: number;
+            /** Sample Size */
+            sample_size?: number | null;
+            /**
+             * Service
+             * @default
+             */
+            service: string;
+            /**
+             * Source
+             * @default traces
+             * @enum {string}
+             */
+            source: "traces" | "requests" | "both";
+            /**
+             * Team Id
+             * @default
+             */
+            team_id: string;
         };
         /** AdaptiveRouterWeights */
         AdaptiveRouterWeights: {
@@ -27257,9 +27307,9 @@ export interface components {
             };
             /**
              * Mode
-             * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
+             * @description The mode to test the model with. If not provided, resolved the way /health does: the deployment's model_info.mode (only while the request tests the deployment's own model), then the mode the provider requires for that model, then the model cost map.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -30901,6 +30951,8 @@ export interface components {
             /** Default Model */
             default_model?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | null;
+            /** Models */
+            models?: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -31304,6 +31356,8 @@ export interface components {
         };
         /** Deployment */
         Deployment: {
+            /** Blocked */
+            blocked?: boolean | null;
             litellm_params: components["schemas"]["LiteLLM_Params"];
             model_info: components["schemas"]["litellm__types__router__ModelInfo"];
             /** Model Name */
@@ -33016,6 +33070,20 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** InFlight */
+        InFlight: {
+            /** Agent */
+            agent: string;
+            /** Execution Id */
+            execution_id: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Trace Id */
+            trace_id: string;
+        };
         /**
          * IncompleteDetails
          * @description Details about why the response is incomplete.
@@ -33272,6 +33340,11 @@ export interface components {
         /** Job */
         Job: {
             /**
+             * Activities
+             * @default []
+             */
+            activities: components["schemas"]["Activity"][];
+            /**
              * Assessments
              * @default []
              */
@@ -33324,6 +33397,21 @@ export interface components {
             id: string;
             /** Lease Until */
             lease_until?: string | null;
+            /**
+             * Reading
+             * @default []
+             */
+            reading: components["schemas"]["InFlight"][];
+            /**
+             * Reviewed
+             * @default 0
+             */
+            reviewed: number;
+            /**
+             * Reviews
+             * @default []
+             */
+            reviews: components["schemas"]["Review"][];
             /** Revision */
             revision: number;
             sample?: components["schemas"]["Sample"] | null;
@@ -33344,6 +33432,17 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
+            /**
+             * Steps
+             * @default []
+             */
+            steps: components["schemas"]["Step"][];
+            /**
+             * Trigger
+             * @default schedule
+             * @enum {string}
+             */
+            trigger: "schedule" | "manual";
             /** Worker Id */
             worker_id?: string | null;
         };
@@ -34317,6 +34416,8 @@ export interface components {
             /** Default Model */
             default_model?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Models */
+            models?: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
             object_permission_id?: string | null;
@@ -34849,6 +34950,42 @@ export interface components {
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
             annotation_cost_per_page_batches?: number | null;
+            /** Anthropic Disable Workload Identity Federation */
+            anthropic_disable_workload_identity_federation?: boolean | null;
+            /** Anthropic Federation Rule Id */
+            anthropic_federation_rule_id?: string | null;
+            /** Anthropic Federation Workspace Id */
+            anthropic_federation_workspace_id?: string | null;
+            /** Anthropic Identity Source */
+            anthropic_identity_source?: string | null;
+            /** Anthropic Identity Token */
+            anthropic_identity_token?: string | null;
+            /** Anthropic Identity Token File */
+            anthropic_identity_token_file?: string | null;
+            /** Anthropic Issuer Audience */
+            anthropic_issuer_audience?: string | null;
+            /** Anthropic Issuer Signing Key Ref */
+            anthropic_issuer_signing_key_ref?: string | null;
+            /** Anthropic Issuer Subject */
+            anthropic_issuer_subject?: string | null;
+            /** Anthropic Issuer Ttl Seconds */
+            anthropic_issuer_ttl_seconds?: number | null;
+            /** Anthropic Issuer Url */
+            anthropic_issuer_url?: string | null;
+            /** Anthropic Keycloak Auth Method */
+            anthropic_keycloak_auth_method?: string | null;
+            /** Anthropic Keycloak Client Id */
+            anthropic_keycloak_client_id?: string | null;
+            /** Anthropic Keycloak Client Secret Ref */
+            anthropic_keycloak_client_secret_ref?: string | null;
+            /** Anthropic Keycloak Scope */
+            anthropic_keycloak_scope?: string | null;
+            /** Anthropic Keycloak Token Url */
+            anthropic_keycloak_token_url?: string | null;
+            /** Anthropic Organization Id */
+            anthropic_organization_id?: string | null;
+            /** Anthropic Service Account Id */
+            anthropic_service_account_id?: string | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -35112,6 +35249,12 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Ocr Cost Per Page Batches */
             ocr_cost_per_page_batches?: number | null;
+            /** Openai Identity Provider Id */
+            openai_identity_provider_id?: string | null;
+            /** Openai Identity Token File */
+            openai_identity_token_file?: string | null;
+            /** Openai Service Account Id */
+            openai_service_account_id?: string | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -37106,6 +37249,10 @@ export interface components {
             client_private_key_id?: string | null;
             /** Client Secret */
             client_secret?: string | null;
+            /** Dcr Issuer */
+            dcr_issuer?: string | null;
+            /** Dcr Server Url */
+            dcr_server_url?: string | null;
             /** Id Jag Resource */
             id_jag_resource?: string | null;
             /** Id Jag Resource Token Endpoint */
@@ -38119,6 +38266,16 @@ export interface components {
             /** Top Models */
             top_models: components["schemas"]["ModelInsightMetric"][];
         };
+        /** ModelMessage */
+        ModelMessage: {
+            /** Content */
+            content: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant";
+        };
         /** ModelParams */
         ModelParams: {
             /** Litellm Params */
@@ -38131,6 +38288,11 @@ export interface components {
         };
         /** ModelRequest */
         ModelRequest: {
+            /**
+             * Messages
+             * @default []
+             */
+            messages: components["schemas"]["ModelMessage"][];
             /** Prompt */
             prompt: string;
             /**
@@ -38160,6 +38322,11 @@ export interface components {
         ModelResult: {
             /** Content */
             content: string;
+            /**
+             * Context Exceeded
+             * @default false
+             */
+            context_exceeded: boolean;
             /** Cost */
             cost: number;
         };
@@ -38285,6 +38452,8 @@ export interface components {
             model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            /** Models */
+            models?: string[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /**
              * Rpm Limit
@@ -40842,27 +41011,17 @@ export interface components {
              * @default 0
              */
             offset: number;
-            settings: components["schemas"]["LensSettings"];
+            selection: components["schemas"]["ActivitySelection"];
         };
         /** Progress */
         Progress: {
-            /**
-             * @default {
-             *       "candidates": 0,
-             *       "eligible": 0,
-             *       "grouped_batches": 0,
-             *       "grouping_batches": 0,
-             *       "inconclusive": 0,
-             *       "investigated": 0,
-             *       "partial": 0,
-             *       "screened": 0,
-             *       "selected": 0,
-             *       "unassessable": 0
-             *     }
-             */
-            coverage: components["schemas"]["Coverage"];
+            activity?: components["schemas"]["Activity"] | null;
+            coverage?: components["schemas"]["Coverage"] | null;
+            /** Reading */
+            reading?: components["schemas"]["InFlight"][] | null;
+            review?: components["schemas"]["Review"] | null;
             /** Stage */
-            stage: string;
+            stage?: string | null;
         };
         /** Prompt */
         Prompt: {
@@ -41280,404 +41439,6 @@ export interface components {
                     [key: string]: unknown;
                 };
             } | null;
-        };
-        /** ROIBranchAttribution */
-        ROIBranchAttribution: {
-            /** Branch */
-            branch: string;
-            /** Repo */
-            repo: string;
-            /**
-             * Requests
-             * @default 0
-             */
-            requests: number;
-            /** Spend */
-            spend?: number | null;
-            /**
-             * Status
-             * @default unattributed
-             * @enum {string}
-             */
-            status: "matched" | "unattributed" | "ambiguous" | "unavailable";
-        };
-        /** ROIBranchMetrics */
-        ROIBranchMetrics: {
-            /** Cost Per Hour */
-            cost_per_hour?: number | null;
-            /**
-             * Hours
-             * @default 0
-             */
-            hours: number;
-            /**
-             * Matched Pulls
-             * @default 0
-             */
-            matched_pulls: number;
-            /**
-             * Spend
-             * @default 0
-             */
-            spend: number;
-            /**
-             * Total Tagged Spend
-             * @default 0
-             */
-            total_tagged_spend: number;
-            /**
-             * Unlinked Spend
-             * @default 0
-             */
-            unlinked_spend: number;
-        };
-        /** ROIBranchSpend */
-        ROIBranchSpend: {
-            /** Branch */
-            branch: string;
-            /** Repo */
-            repo: string;
-            /** Requests */
-            requests: number;
-            /** Spend */
-            spend: number;
-        };
-        /** ROIEstimateResponse */
-        ROIEstimateResponse: {
-            /**
-             * Cached
-             * @default false
-             */
-            cached: boolean;
-            /** Effort Basis */
-            effort_basis?: string | null;
-            /** Evidence Source */
-            evidence_source?: string | null;
-            /** Hours */
-            hours: number | null;
-            /** Model */
-            model?: string | null;
-            /** Reasoning */
-            reasoning: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "estimated" | "needs_review" | "error";
-        };
-        /** ROIEstimatorModel */
-        ROIEstimatorModel: {
-            /** Model Name */
-            model_name: string;
-            /** Provider Models */
-            provider_models: string[];
-        };
-        /** ROIIdentityMapResponse */
-        ROIIdentityMapResponse: {
-            /** Identity Map */
-            identity_map: {
-                [key: string]: string;
-            };
-            report: components["schemas"]["ROISummaryResponse"] | null;
-        };
-        /** ROIIdentityMapUpdate */
-        ROIIdentityMapUpdate: {
-            /** Email */
-            email: string | null;
-            /** Github Login */
-            github_login: string;
-        };
-        /** ROIMetricsResponse */
-        ROIMetricsResponse: {
-            /** Cohort People */
-            cohort_people: number;
-            /** Cost Per Hour */
-            cost_per_hour: number | null;
-            /** Estimated Prs */
-            estimated_prs: number;
-            /** Excluded Spend */
-            excluded_spend: number;
-            /** Hours Per Dollar */
-            hours_per_dollar: number | null;
-            /** Matched Prs */
-            matched_prs: number;
-            /** Matched Spend */
-            matched_spend: number;
-            /** Merged Prs */
-            merged_prs: number;
-            /** Output Hours */
-            output_hours: number;
-            /** Pending Prs */
-            pending_prs: number;
-            /** People With Prs */
-            people_with_prs: number;
-            /** Total Output Hours */
-            total_output_hours: number;
-            /** Total Spend */
-            total_spend: number;
-        };
-        /** ROIPersonResponse */
-        ROIPersonResponse: {
-            /** Cost Per Hour */
-            cost_per_hour: number | null;
-            /** Eligible */
-            eligible: boolean;
-            /** Email */
-            email: string;
-            /** Estimated Prs */
-            estimated_prs: number;
-            /** Hours */
-            hours: number;
-            /** Id */
-            id: string;
-            /** Logins */
-            logins: string[];
-            /** Match Methods */
-            match_methods: string[];
-            /** Pending Prs */
-            pending_prs: number;
-            /** Prs */
-            prs: number;
-            /** Spend */
-            spend: number | null;
-        };
-        /** ROIPullResponse */
-        ROIPullResponse: {
-            /** Additions */
-            additions: number;
-            branch_cost?: components["schemas"]["ROIBranchAttribution"];
-            /** Cache Key */
-            cache_key?: string | null;
-            /** Changed Files */
-            changed_files: number;
-            /** Commit Count */
-            commit_count: number;
-            /** Deletions */
-            deletions: number;
-            /** Email */
-            email: string;
-            /** Emails */
-            emails: string[];
-            estimate: components["schemas"]["ROIEstimateResponse"];
-            /** Head Sha */
-            head_sha: string;
-            /** Incomplete Metadata */
-            incomplete_metadata: boolean;
-            /** Login */
-            login: string;
-            /** Match Method */
-            match_method: string;
-            /** Matched */
-            matched: boolean;
-            /** Merged At */
-            merged_at: string;
-            /** Number */
-            number: number;
-            /** Profile Email */
-            profile_email: string;
-            /** Repo */
-            repo: string;
-            /**
-             * Source Branch
-             * @default
-             */
-            source_branch: string;
-            /**
-             * Source Repo
-             * @default
-             */
-            source_repo: string;
-            /** Title */
-            title: string;
-            /** Url */
-            url: string;
-        };
-        /** ROIReportResponse */
-        ROIReportResponse: {
-            report: components["schemas"]["ROISummaryResponse"] | null;
-        };
-        /** ROIRepositoriesResponse */
-        ROIRepositoriesResponse: {
-            /** Has More */
-            has_more: boolean;
-            /** Page */
-            page: number;
-            /** Repositories */
-            repositories: components["schemas"]["ROIRepository"][];
-        };
-        /** ROIRepository */
-        ROIRepository: {
-            /** Archived */
-            archived: boolean;
-            /** Name */
-            name: string;
-            /** Visibility */
-            visibility: string;
-        };
-        /** ROISettingsResponse */
-        ROISettingsResponse: {
-            /** Available Models */
-            available_models: string[];
-            /** Backfill Days */
-            backfill_days: number;
-            /** Default Prompt */
-            default_prompt: string;
-            /** Estimator Model */
-            estimator_model: string;
-            /**
-             * Estimator Models
-             * @default []
-             */
-            estimator_models: components["schemas"]["ROIEstimatorModel"][];
-            /** Estimator Prompt */
-            estimator_prompt: string;
-            /** Github Api Url */
-            github_api_url: string;
-            /**
-             * Gitlab Api Url
-             * @default https://gitlab.com/api/v4
-             */
-            gitlab_api_url: string;
-            /** Has Estimator Key */
-            has_estimator_key: boolean;
-            /** Has Github Token */
-            has_github_token: boolean;
-            /**
-             * Has Gitlab Token
-             * @default false
-             */
-            has_gitlab_token: boolean;
-            /** Identity Map */
-            identity_map: {
-                [key: string]: string;
-            };
-            /** Ready */
-            ready: boolean;
-            /** Repos */
-            repos: string[];
-            /**
-             * Source Provider
-             * @default github
-             * @enum {string}
-             */
-            source_provider: "github" | "gitlab";
-            /** Update Interval Minutes */
-            update_interval_minutes: number;
-        };
-        /** ROISettingsUpdate */
-        ROISettingsUpdate: {
-            /** Backfill Days */
-            backfill_days?: number | null;
-            /** Estimator Key */
-            estimator_key?: string | null;
-            /** Estimator Model */
-            estimator_model?: string | null;
-            /** Estimator Prompt */
-            estimator_prompt?: string | null;
-            /** Github Api Url */
-            github_api_url?: string | null;
-            /** Github Token */
-            github_token?: string | null;
-            /** Gitlab Api Url */
-            gitlab_api_url?: string | null;
-            /** Gitlab Token */
-            gitlab_token?: string | null;
-            /** Repos */
-            repos?: string[] | null;
-            /** Source Provider */
-            source_provider?: ("github" | "gitlab") | null;
-            /** Update Interval Minutes */
-            update_interval_minutes?: number | null;
-        };
-        /** ROISummaryResponse */
-        ROISummaryResponse: {
-            branch_metrics?: components["schemas"]["ROIBranchMetrics"];
-            /** Effort Basis */
-            effort_basis: string | null;
-            /** End */
-            end: string;
-            /** Estimator Model */
-            estimator_model: string;
-            /** Estimator Prompt */
-            estimator_prompt: string;
-            /** Id */
-            id: string | null;
-            metrics: components["schemas"]["ROIMetricsResponse"];
-            /** Mode */
-            mode: string;
-            /** People */
-            people: components["schemas"]["ROIPersonResponse"][];
-            /** Pulls */
-            pulls: components["schemas"]["ROIPullResponse"][];
-            /** Repos */
-            repos: string[];
-            /**
-             * Source Provider
-             * @default github
-             * @enum {string}
-             */
-            source_provider: "github" | "gitlab";
-            /** Start */
-            start: string;
-            /** Synced At */
-            synced_at: string;
-            /** Trend */
-            trend: components["schemas"]["ROITrendResponse"][];
-            /**
-             * Unlinked Branches
-             * @default []
-             */
-            unlinked_branches: components["schemas"]["ROIBranchSpend"][];
-            /** Warnings */
-            warnings: string[];
-        };
-        /** ROISyncStatus */
-        ROISyncStatus: {
-            /** Done */
-            done: number;
-            /**
-             * Elapsed Seconds
-             * @default 0
-             */
-            elapsed_seconds: number;
-            /** Error */
-            error: string | null;
-            /** Estimated */
-            estimated: number;
-            /** Finished At */
-            finished_at?: string | null;
-            /** Needs Attention */
-            needs_attention: number;
-            /** Next Update */
-            next_update?: string | null;
-            /**
-             * Phase
-             * @enum {string}
-             */
-            phase: "idle" | "spend" | "repositories" | "estimates" | "complete" | "cancelled" | "error";
-            /** Remaining Seconds */
-            remaining_seconds?: number | null;
-            /** Reused */
-            reused: number;
-            /** Running */
-            running: boolean;
-            /** Stage */
-            stage: string;
-            /** Started At */
-            started_at?: string | null;
-            /** Total */
-            total: number;
-        };
-        /** ROITrendResponse */
-        ROITrendResponse: {
-            /** Date */
-            date: string;
-            /** Hours */
-            hours: number;
-            /** Prs */
-            prs: number;
-            /** Spend */
-            spend: number;
         };
         /**
          * RankingOptions
@@ -44022,6 +43783,86 @@ export interface components {
             /** Timeouterrorretries */
             TimeoutErrorRetries?: number | null;
         };
+        /** Review */
+        Review: {
+            /** Agent */
+            agent: string;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Cannot Assess
+             * @default false
+             */
+            cannot_assess: boolean;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Execution Id */
+            execution_id: string;
+            /** Model */
+            model: string;
+            /** Name */
+            name: string;
+            /**
+             * Reasoning
+             * @default
+             */
+            reasoning: string;
+            /**
+             * Spans
+             * @default []
+             */
+            spans: components["schemas"]["ReviewSpan"][];
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["ToolCount"][];
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Verdicts
+             * @default []
+             */
+            verdicts: components["schemas"]["ReviewVerdict"][];
+        };
+        /** ReviewPage */
+        ReviewPage: {
+            /** Reviewed */
+            reviewed: number;
+            /** Reviews */
+            reviews: components["schemas"]["Review"][];
+        };
+        /** ReviewSpan */
+        ReviewSpan: {
+            /**
+             * Cited
+             * @default false
+             */
+            cited: boolean;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Preview */
+            preview: string;
+            /** Span Id */
+            span_id: string;
+        };
+        /** ReviewVerdict */
+        ReviewVerdict: {
+            /** Check Id */
+            check_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "issue" | "pattern";
+            /** Summary */
+            summary: string;
+        };
         /**
          * RoleMappings
          * @description Configuration for mapping SSO groups to LiteLLM roles.
@@ -44240,9 +44081,15 @@ export interface components {
         };
         /** RunRequest */
         RunRequest: {
+            /** Agent Name */
+            agent_name?: string | null;
+            /** End */
+            end?: string | null;
             /** Lookback Hours */
             lookback_hours?: number | null;
             settings?: components["schemas"]["LensSettings"] | null;
+            /** Start */
+            start?: string | null;
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
@@ -45573,6 +45420,46 @@ export interface components {
              */
             user_ids: string[];
         };
+        /** Step */
+        Step: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /**
+             * Cost
+             * @default 0
+             */
+            cost: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "stage" | "model" | "error";
+            /** Label */
+            label: string;
+            /**
+             * Model
+             * @default
+             */
+            model: string;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Purpose
+             * @default
+             */
+            purpose: string;
+        };
         /**
          * SuccessfulKeyUpdate
          * @description Successfully updated key with its updated information
@@ -46743,6 +46630,16 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** ToolCount */
+        ToolCount: {
+            /** Calls */
+            calls: number;
+            /**
+             * Name
+             * @enum {string}
+             */
+            name: "model" | "read" | "search" | "python" | "catalog" | "review_catalog" | "read_reviews" | "search_reviews" | "history" | "checkpoint";
+        };
         /** ToolDetailResponse */
         ToolDetailResponse: {
             /** Overrides */
@@ -47220,17 +47117,6 @@ export interface components {
             /** Sql */
             sql: string;
         };
-        /** TraceQueryStatistics */
-        TraceQueryStatistics: {
-            /** Bytes Read */
-            bytes_read: number | string;
-            /** Elapsed */
-            elapsed: number;
-            /** Rows Read */
-            rows_read: number | string;
-        } & {
-            [key: string]: unknown;
-        };
         /** TraceQueryTable */
         TraceQueryTable: {
             /** Columns */
@@ -47247,13 +47133,6 @@ export interface components {
             data: {
                 [key: string]: components["schemas"]["JsonValue"];
             }[];
-            /** Meta */
-            meta: components["schemas"]["TraceQueryColumn"][];
-            /** Rows */
-            rows: number | string;
-            statistics: components["schemas"]["TraceQueryStatistics"];
-        } & {
-            [key: string]: unknown;
         };
         /** TraceSummary */
         TraceSummary: {
@@ -47541,6 +47420,8 @@ export interface components {
             credential_values?: {
                 [key: string]: unknown;
             } | null;
+            /** Credential Values To Delete */
+            credential_values_to_delete?: string[] | null;
             /** Model Id */
             model_id?: string | null;
         };
@@ -47564,6 +47445,8 @@ export interface components {
             default_model?: string | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Models */
+            models?: string[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** User Id */
             user_id: string;
@@ -49334,6 +49217,25 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** WatchAllResult */
+        WatchAllResult: {
+            /**
+             * Skipped
+             * @default []
+             */
+            skipped: components["schemas"]["WatchSkipped"][];
+            /** Watching */
+            watching: string[];
+        };
+        /** WatchSkipped */
+        WatchSkipped: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Reason */
+            reason: string;
+        };
         /**
          * WebSearchInterceptionSettings
          * @description Configuration for server-side web search interception
@@ -49490,6 +49392,8 @@ export interface components {
         };
         /** WorkerCreated */
         WorkerCreated: {
+            /** Image */
+            image: string;
             /** Token */
             token: string;
             worker: components["schemas"]["Worker"];
@@ -49783,6 +49687,42 @@ export interface components {
             annotation_cost_per_page?: number | null;
             /** Annotation Cost Per Page Batches */
             annotation_cost_per_page_batches?: number | null;
+            /** Anthropic Disable Workload Identity Federation */
+            anthropic_disable_workload_identity_federation?: boolean | null;
+            /** Anthropic Federation Rule Id */
+            anthropic_federation_rule_id?: string | null;
+            /** Anthropic Federation Workspace Id */
+            anthropic_federation_workspace_id?: string | null;
+            /** Anthropic Identity Source */
+            anthropic_identity_source?: string | null;
+            /** Anthropic Identity Token */
+            anthropic_identity_token?: string | null;
+            /** Anthropic Identity Token File */
+            anthropic_identity_token_file?: string | null;
+            /** Anthropic Issuer Audience */
+            anthropic_issuer_audience?: string | null;
+            /** Anthropic Issuer Signing Key Ref */
+            anthropic_issuer_signing_key_ref?: string | null;
+            /** Anthropic Issuer Subject */
+            anthropic_issuer_subject?: string | null;
+            /** Anthropic Issuer Ttl Seconds */
+            anthropic_issuer_ttl_seconds?: number | null;
+            /** Anthropic Issuer Url */
+            anthropic_issuer_url?: string | null;
+            /** Anthropic Keycloak Auth Method */
+            anthropic_keycloak_auth_method?: string | null;
+            /** Anthropic Keycloak Client Id */
+            anthropic_keycloak_client_id?: string | null;
+            /** Anthropic Keycloak Client Secret Ref */
+            anthropic_keycloak_client_secret_ref?: string | null;
+            /** Anthropic Keycloak Scope */
+            anthropic_keycloak_scope?: string | null;
+            /** Anthropic Keycloak Token Url */
+            anthropic_keycloak_token_url?: string | null;
+            /** Anthropic Organization Id */
+            anthropic_organization_id?: string | null;
+            /** Anthropic Service Account Id */
+            anthropic_service_account_id?: string | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -50046,6 +49986,12 @@ export interface components {
             ocr_cost_per_page?: number | null;
             /** Ocr Cost Per Page Batches */
             ocr_cost_per_page_batches?: number | null;
+            /** Openai Identity Provider Id */
+            openai_identity_provider_id?: string | null;
+            /** Openai Identity Token File */
+            openai_identity_token_file?: string | null;
+            /** Openai Service Account Id */
+            openai_service_account_id?: string | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -53600,6 +53546,7 @@ export interface operations {
             query?: {
                 code?: string | null;
                 state?: string | null;
+                iss?: string | null;
                 error?: string | null;
                 error_description?: string | null;
                 error_uri?: string | null;
@@ -56058,6 +56005,38 @@ export interface operations {
                 "application/json": components["schemas"]["UpdateCredentialItem"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_credential_internal_issuer_jwks_credentials__credential_name__jwks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The credential name, percent-decoded; may contain slashes */
+                credential_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -62274,10 +62253,31 @@ export interface operations {
             };
         };
     };
+    watch_all_lens_watch_all_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WatchAllResult"];
+                };
+            };
+        };
+    };
     claim_lens_worker_claim_post: {
         parameters: {
             query?: {
                 protocol_version?: number;
+                worker_release?: string;
             };
             header?: never;
             path?: never;
@@ -62867,6 +62867,102 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_reviews_lens__lens_id__runs__job_id__reviews_get: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_page_liteadmin_slack_connect__token__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_account_liteadmin_slack_connect__token__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
                 };
             };
             /** @description Validation Error */
@@ -64549,6 +64645,7 @@ export interface operations {
                 fallback_type?: string | null;
                 scope?: string | null;
                 healthy_only?: boolean | null;
+                client_version?: string | null;
             };
             header?: never;
             path?: never;
@@ -69271,255 +69368,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-        };
-    };
-    test_roi_calculator_connections_roi_calculator_connections_test_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISettingsResponse"];
-                };
-            };
-        };
-    };
-    update_roi_calculator_identity_map_roi_calculator_identity_map_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ROIIdentityMapUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROIIdentityMapResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_roi_calculator_report_roi_calculator_report_get: {
-        parameters: {
-            query?: {
-                mode?: "live" | "demo";
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROIReportResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_roi_calculator_repositories_roi_calculator_repositories_get: {
-        parameters: {
-            query?: {
-                query?: string;
-                page?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROIRepositoriesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_roi_calculator_settings_roi_calculator_settings_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISettingsResponse"];
-                };
-            };
-        };
-    };
-    update_roi_calculator_settings_roi_calculator_settings_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ROISettingsUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISettingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reset_roi_calculator_setup_roi_calculator_setup_reset_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISettingsResponse"];
-                };
-            };
-        };
-    };
-    get_roi_calculator_sync_status_roi_calculator_sync_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISyncStatus"];
-                };
-            };
-        };
-    };
-    start_roi_calculator_sync_roi_calculator_sync_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISyncStatus"];
-                };
-            };
-        };
-    };
-    cancel_roi_calculator_sync_roi_calculator_sync_delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ROISyncStatus"];
                 };
             };
         };
@@ -78943,6 +78791,7 @@ export interface operations {
                 fallback_type?: string | null;
                 scope?: string | null;
                 healthy_only?: boolean | null;
+                client_version?: string | null;
             };
             header?: never;
             path?: never;

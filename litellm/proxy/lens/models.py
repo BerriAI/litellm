@@ -45,23 +45,26 @@ class Check(Record):
     enabled: bool = True
 
 
-class LensSettings(Record):
-    name: str = Field(min_length=1)
-    context: str = Field(default="")
+class ActivitySelection(Record):
     source: Literal["traces", "requests", "both"] = "traces"
-    lookback_hours: LookbackHours = 24
     service: str = Field(default="")
     agent_name: str = Field(default="")
     filters: tuple[MetadataFilter, ...] = Field(default=())
+    sample_size: int | None = Field(default=None, ge=1)
+    sample_percent: float = Field(default=100, gt=0, le=100, allow_inf_nan=False)
+    team_id: str = ""
+    execution_ids: tuple[str, ...] = ()
+
+
+class LensSettings(ActivitySelection):
+    name: str = Field(min_length=1)
+    context: str = Field(default="")
+    lookback_hours: LookbackHours = 24
     checks: tuple[Check, ...] = ()
     model: str = Field(min_length=1)
     enabled: bool = True
     interval_minutes: IntervalMinutes = 15
-    sample_size: int | None = Field(default=None, ge=1)
-    sample_percent: float = Field(default=100, gt=0, le=100, allow_inf_nan=False)
     concurrency: int = Field(default=8, ge=1)
-    team_id: str = ""
-    execution_ids: tuple[str, ...] = ()
     monthly_budget: float = Field(default=100, gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
@@ -190,6 +193,95 @@ class RunAssessment(Record):
     cannot_assess: bool = False
 
 
+MAX_STEPS = 200
+
+
+class Step(Record):
+    at: datetime
+    kind: Literal["stage", "model", "error"]
+    label: str = Field(max_length=200)
+    model: str = Field(default="", max_length=200)
+    purpose: str = Field(default="", max_length=40)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost: float = 0
+
+
+MAX_REVIEWS = 60
+
+
+ActivityOperation: TypeAlias = Literal[
+    "model",
+    "read",
+    "search",
+    "python",
+    "catalog",
+    "review_catalog",
+    "read_reviews",
+    "search_reviews",
+    "history",
+    "checkpoint",
+]
+ActivityPhase: TypeAlias = Literal["load", "review", "group", "reconcile", "investigate"]
+
+
+class ToolCount(Record):
+    name: ActivityOperation
+    calls: int = Field(ge=0)
+
+
+class Activity(Record):
+    id: str
+    phase: ActivityPhase
+    label: str
+    execution_ids: tuple[str, ...] = ()
+    started_at: datetime
+    operations: tuple[ActivityOperation, ...] = ()
+    tool_calls: tuple[ToolCount, ...] = ()
+    finished: bool = False
+
+
+class ReviewSpan(Record):
+    span_id: str
+    name: str = Field(max_length=120)
+    kind: str = Field(max_length=40)
+    preview: str = Field(max_length=240)
+    cited: bool = False
+
+
+class ReviewVerdict(Record):
+    check_id: str
+    kind: Literal["issue", "pattern"]
+    summary: str = Field(max_length=300)
+
+
+class Review(Record):
+    execution_id: str
+    trace_id: str
+    agent: str
+    name: str
+    spans: tuple[ReviewSpan, ...] = Field(default=(), max_length=8)
+    reasoning: str = Field(default="", max_length=800)
+    verdicts: tuple[ReviewVerdict, ...] = ()
+    cannot_assess: bool = False
+    model: str
+    duration_ms: int = Field(ge=0)
+    at: datetime
+    tool_calls: tuple[ToolCount, ...] = ()
+
+
+class ReviewPage(Record):
+    reviews: tuple[Review, ...]
+    reviewed: int
+
+
+class InFlight(Record):
+    execution_id: str
+    trace_id: str
+    agent: str
+    started_at: datetime
+
+
 class Job(Record):
     id: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
@@ -209,6 +301,12 @@ class Job(Record):
     cost: float = 0
     findings: tuple[Finding, ...] | None = None
     assessments: tuple[RunAssessment, ...] = ()
+    steps: tuple[Step, ...] = ()
+    reviews: tuple[Review, ...] = ()
+    reviewed: int = 0
+    reading: tuple[InFlight, ...] = ()
+    activities: tuple[Activity, ...] = ()
+    trigger: Literal["schedule", "manual"] = "schedule"
 
 
 class Lens(Record):
@@ -236,6 +334,7 @@ class Worker(Record):
 
 
 class WorkerCreated(Record):
+    image: str
     worker: Worker
     token: str
 
@@ -249,6 +348,28 @@ class LensList(Record):
 class RunRequest(Record):
     settings: LensSettings | None = None
     lookback_hours: LookbackHours | None = None
+    start: datetime | None = None
+    end: datetime | None = None
+    agent_name: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def ordered_window(self) -> "RunRequest":
+        if (self.start is None) != (self.end is None):
+            raise ValueError("Choose both a start and an end time")
+        if self.start is not None and self.end is not None and self.start >= self.end:
+            raise ValueError("Start time must be before end time")
+        return self
+
+
+class WatchSkipped(Record):
+    id: str
+    name: str
+    reason: str
+
+
+class WatchAllResult(Record):
+    watching: tuple[str, ...]
+    skipped: tuple[WatchSkipped, ...] = ()
 
 
 class FindingUpdate(Record):
@@ -263,8 +384,11 @@ class Claim(Record):
 
 
 class Progress(Record):
-    stage: str = Field()
-    coverage: Coverage = Coverage()
+    stage: str | None = None
+    coverage: Coverage | None = None
+    review: Review | None = None
+    reading: tuple[InFlight, ...] | None = None
+    activity: Activity | None = None
 
 
 class Result(Record):
@@ -274,12 +398,19 @@ class Result(Record):
     error: str = Field(default="")
 
 
+class ModelMessage(Record):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ModelRequest(Record):
     prompt: str = Field(min_length=1)
     purpose: Literal["extract", "cluster", "investigate"]
+    messages: tuple[ModelMessage, ...] = ()
 
 
 class ModelResult(Record):
     content: str
     cost: float
+    context_exceeded: bool = False
     finish_reason: Literal["length", "content_filter"] | None = Field(default=None, exclude=True)

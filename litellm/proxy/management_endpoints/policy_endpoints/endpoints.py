@@ -12,12 +12,12 @@ All /policy management endpoints
 import copy
 import json
 import os
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 import litellm
@@ -449,6 +449,23 @@ async def validate_policy(
     return result
 
 
+class _LoadedPolicy(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, hide_input_in_errors=True)
+
+    inherit: str | None = None
+    scope: PolicyScopeResponse = Field(default_factory=PolicyScopeResponse)
+    guardrails: PolicyGuardrailsResponse = Field(default_factory=PolicyGuardrailsResponse)
+    resolved_guardrails: tuple[str, ...] = ()
+    inheritance_chain: tuple[str, ...] = ()
+
+
+class _LoadedPolicies(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, hide_input_in_errors=True)
+
+    policies: Mapping[str, _LoadedPolicy] = Field(default_factory=dict)
+    total_count: int = 0
+
+
 @router.get(
     "/policy/list",
     tags=["policy management"],
@@ -472,19 +489,19 @@ async def list_policies(
     """
     from litellm.proxy.policy_engine.init_policies import get_policies_summary
 
-    summary: Final = get_policies_summary()
+    summary: Final = _LoadedPolicies.model_validate(get_policies_summary())
     return PolicyListResponse(
         policies={
             name: PolicySummaryItem(
-                inherit=data.get("inherit"),
-                scope=PolicyScopeResponse(**data.get("scope", {})),
-                guardrails=PolicyGuardrailsResponse(**data.get("guardrails", {})),
-                resolved_guardrails=data.get("resolved_guardrails", []),
-                inheritance_chain=data.get("inheritance_chain", []),
+                inherit=policy.inherit,
+                scope=policy.scope,
+                guardrails=policy.guardrails,
+                resolved_guardrails=list(policy.resolved_guardrails),
+                inheritance_chain=list(policy.inheritance_chain),
             )
-            for name, data in summary.get("policies", {}).items()
+            for name, policy in summary.policies.items()
         },
-        total_count=summary.get("total_count", 0),
+        total_count=summary.total_count,
     )
 
 

@@ -10,7 +10,7 @@ use std::{
 };
 
 use crate::{Error, otlp::DecodedEvent};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 mod format;
 mod instrumentation;
@@ -44,15 +44,24 @@ pub enum ObservationType {
 }
 
 /// A model request a span stands for, by the identifier its instrumentation recorded.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
-#[serde(try_from = "String")]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    serde_with::DeserializeFromStr,
+    serde_with::SerializeDisplay,
+)]
 pub enum CallKey {
-    /// LiteLLM's own id for the request (`spend_logs.request_id`).
+    /// LiteLLM's gateway call id, with a fallback to legacy spend request ids.
     LiteLlmRequest(String),
     /// The provider response id returned to the caller (`spend_logs.response_id`).
     ProviderResponse(String),
     /// The span is the HTTP request itself; LiteLLM logs its `traceparent` span id.
     Transport,
+    GatewayAttempt,
 }
 
 impl fmt::Display for CallKey {
@@ -61,6 +70,7 @@ impl fmt::Display for CallKey {
             Self::LiteLlmRequest(id) => write!(formatter, "litellm_request:{id}"),
             Self::ProviderResponse(id) => write!(formatter, "provider_response:{id}"),
             Self::Transport => formatter.write_str("transport:"),
+            Self::GatewayAttempt => formatter.write_str("gateway_attempt:"),
         }
     }
 }
@@ -77,6 +87,7 @@ impl FromStr for CallKey {
                 Ok(Self::LiteLlmRequest(id.to_owned()))
             }
             Some(("transport", "")) => Ok(Self::Transport),
+            Some(("gateway_attempt", "")) => Ok(Self::GatewayAttempt),
             _ => Err(crate::InvalidCallKey),
         }
     }
@@ -96,12 +107,6 @@ pub enum CallEvidenceKind {
     Unknown,
     Partial,
     Complete,
-}
-
-impl Serialize for CallKey {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
 }
 
 /// Which model requests a span accounts for. `Complete` comes only from an instrumentation's known
@@ -126,7 +131,7 @@ impl CallEvidence {
     pub(crate) fn from_row(row: &crate::query::named::TraceSpansRow) -> Self {
         let kind = row
             .call_evidence
-            .unwrap_or(if row.litellm_request_id.is_empty() {
+            .unwrap_or(if Self::row_keys(row).is_empty() {
                 CallEvidenceKind::Unknown
             } else {
                 CallEvidenceKind::Complete
@@ -146,7 +151,7 @@ impl CallEvidence {
     /// convention found, but says nothing about completeness.
     fn with(self, key: CallKey) -> Self {
         match self {
-            Self::Unknown => Self::complete(key),
+            Self::Unknown => Self::Partial(BTreeSet::from([key])),
             Self::Partial(keys) => Self::Partial(keys.into_iter().chain([key]).collect()),
             Self::Complete(keys) => Self::Complete(keys.into_iter().chain([key]).collect()),
         }
