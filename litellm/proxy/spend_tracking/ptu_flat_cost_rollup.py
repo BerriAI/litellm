@@ -20,6 +20,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     PTU_LAPSED_ALERT_LIMIT,
@@ -30,6 +31,7 @@ from litellm.constants import (
     PTU_SENTINEL_API_KEY,
 )
 from litellm.litellm_core_utils.ptu_pricing import ptu_terms
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import POD_LOCK_TARGET
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -248,8 +250,8 @@ async def _upsert_ptu_daily_row(
     rename must not move the row. ``model_group`` carries the operator-facing name, which
     is outside the key and is what the usage views display.
     """
-    where: Final = {  # mutable-ok: prisma upsert filter payload
-        "team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {  # mutable-ok: prisma composite-key filter
+    where: Final = {
+        "team_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {
             "team_id": team_id,
             "date": date_str,
             "api_key": PTU_SENTINEL_API_KEY,
@@ -262,8 +264,8 @@ async def _upsert_ptu_daily_row(
     now: Final = datetime.now(timezone.utc)
     await _daily_team_spend_table(prisma_client).upsert(
         where=where,
-        data={  # mutable-ok: prisma upsert data payload
-            "create": {  # mutable-ok: prisma create payload
+        data={
+            "create": {
                 "team_id": team_id,
                 "date": date_str,
                 "api_key": PTU_SENTINEL_API_KEY,
@@ -274,7 +276,7 @@ async def _upsert_ptu_daily_row(
                 "endpoint": "",
                 "ptu_flat_cost": flat_cost,
             },
-            "update": {  # mutable-ok: prisma update payload
+            "update": {
                 "model_group": model_name,
                 "ptu_flat_cost": flat_cost,
                 "updated_at": now,
@@ -522,9 +524,9 @@ async def _existing_sentinel_keys(
     The row's ``model`` column holds the deployment id, so this is an exact identity and
     survives a rename. Nothing here reads the display name.
     """
-    date_range: Final = {"gte": start.isoformat(), "lte": end.isoformat()}  # mutable-ok: prisma range filter
+    date_range: Final = {"gte": start.isoformat(), "lte": end.isoformat()}
     rows: Final = await _daily_team_spend_table(prisma_client).find_many(
-        where={"api_key": PTU_SENTINEL_API_KEY, "date": date_range}  # mutable-ok: prisma find filter
+        where={"api_key": PTU_SENTINEL_API_KEY, "date": date_range}
     )
     return frozenset(
         (
@@ -651,6 +653,7 @@ async def run_scheduled_ptu_rollup(
         await pod_lock_manager.release_lock(cronjob_id=PTU_ROLLUP_JOB_ID)
 
 
+@with_service_target(POD_LOCK_TARGET)
 async def _lock_is_held(pod_lock_manager: "PodLockManager") -> bool:
     """True only when the rollup lock is readable and someone is holding it.
 
@@ -748,11 +751,11 @@ def _prune_filter(*, date_str: str, cutoff: datetime, chunk: "tuple[str, ...]") 
     Returns a plain dict because the query builder serialises the mapping it is handed and
     rejects a read-only view of one.
     """
-    return {  # mutable-ok: prisma delete filter
+    return {
         "date": date_str,
         "api_key": PTU_SENTINEL_API_KEY,
-        "updated_at": {"lt": cutoff},  # mutable-ok: prisma comparison filter
-        "model": {"in": chunk},  # mutable-ok: prisma membership filter
+        "updated_at": {"lt": cutoff},
+        "model": {"in": chunk},
     }
 
 

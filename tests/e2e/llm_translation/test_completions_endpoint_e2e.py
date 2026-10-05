@@ -2,7 +2,7 @@
 
 The legacy text-completion endpoint (prompt-style, non-chat) is the second-busiest
 route in production yet was previously uncovered; the rest of the "completions"
-surface is chat only. Registers an OpenAI instruct deployment at runtime (deleted
+surface is chat only. Registers an OpenAI chat deployment at runtime (deleted
 on teardown), drives /v1/completions through the gateway with the real OpenAI SDK
 (LIT-4577), and asserts real generated text came back so a regression that empties
 the completion fails here.
@@ -29,7 +29,7 @@ class TestCompletionsEndpoint:
         model_id = proxy.create_model(
             model,
             LiteLLMParamsBody(
-                model="text-completion-openai/gpt-3.5-turbo-instruct",
+                model="openai/gpt-5.4-nano",
                 api_key="os.environ/OPENAI_API_KEY",
             ),
         )
@@ -40,7 +40,7 @@ class TestCompletionsEndpoint:
             model=model,
             prompt="Finish this sentence in a few words: the capital of France is",
             max_tokens=32,
-            extra_body=NO_PROXY_CACHE,
+            extra_body={**NO_PROXY_CACHE, "reasoning_effort": "none"},
         )
         assert completion.choices, f"/v1/completions returned no choices: {completion!r}"
         text = (completion.choices[0].text or "").strip()

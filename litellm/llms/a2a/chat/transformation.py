@@ -48,12 +48,12 @@ def _registry_api_key(agent_litellm_params: Mapping[str, object]) -> str | None:
     return configured_api_key if isinstance(configured_api_key, str) else None
 
 
-def _registry_headers(agent_litellm_params: Mapping[str, object]) -> dict[str, Any] | None:
+def _registry_headers(agent_litellm_params: Mapping[str, object]) -> dict[str, object] | None:
     stored_headers: Final = agent_litellm_params.get("headers")
     if not isinstance(stored_headers, Mapping):
         return None
     entra_owns_authorization: Final = _agent_authenticates_with_entra(agent_litellm_params)
-    return {  # mutable-ok: completion() and httpx take the request headers as a dict
+    return {
         name: value
         for name, value in stored_headers.items()
         if not (entra_owns_authorization and str(name).lower() == "authorization")

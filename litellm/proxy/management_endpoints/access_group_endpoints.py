@@ -7,6 +7,7 @@ from typing import Final, Protocol
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 from litellm.proxy._types import (
@@ -23,6 +24,7 @@ from litellm.proxy.auth.auth_checks import (
     _get_team_object_from_cache,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_helpers.access_group_team_sync import invalidate_access_group_cache
 from litellm.proxy.management_helpers.resource_display_names import (
@@ -260,9 +262,9 @@ async def _teams_touching(team_table: _TeamTable, records: Sequence[_AccessGroup
     """Team rows listed on any of the groups or carrying any of them in access_group_ids."""
     group_ids: Final = tuple(record.access_group_id for record in records)
     stored_team_ids: Final = _ids_across(records, lambda record: record.assigned_team_ids)
-    carrying: Final = {"access_group_ids": {"hasSome": group_ids}}  # mutable-ok: prisma where is a dict
-    listed: Final = {"team_id": {"in": stored_team_ids}}  # mutable-ok: prisma where is a dict
-    return await team_table.find_many(where={"OR": (carrying, listed)})  # mutable-ok: prisma where is a dict
+    carrying: Final = {"access_group_ids": {"hasSome": group_ids}}
+    listed: Final = {"team_id": {"in": stored_team_ids}}
+    return await team_table.find_many(where={"OR": (carrying, listed)})
 
 
 async def _attached_team_ids_for(
@@ -276,7 +278,7 @@ async def _attached_team_ids_for(
 async def _require_teams_exist(tx: _AccessGroupTx, team_ids: Sequence[str]) -> None:
     if not team_ids:
         return
-    where: Final = {"team_id": {"in": team_ids}}  # mutable-ok: prisma where is a dict
+    where: Final = {"team_id": {"in": team_ids}}
     found: Final = await tx.litellm_teamtable.find_many(where=where)
     missing: Final = frozenset(team_ids) - frozenset(team.team_id for team in found)
     if missing:
@@ -450,6 +452,7 @@ async def _patch_team_caches_remove_access_group(
             )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _patch_key_caches_add_access_group(
     key_tokens: list[str],
     access_group_id: str,
@@ -478,6 +481,7 @@ async def _patch_key_caches_add_access_group(
         )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _patch_key_caches_remove_access_group(
     key_tokens: list[str],
     access_group_id: str,

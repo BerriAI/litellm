@@ -47,14 +47,20 @@ impl ProviderAuthPolicy {
         if self.has_existing_credential(&headers) {
             return match self.existing_header_behavior {
                 ExistingHeaderBehavior::Preserve => Ok(headers),
-                ExistingHeaderBehavior::Reject => Err(Error::ExistingCredentialHeader),
+                ExistingHeaderBehavior::Reject => Err(Error::InvalidConfiguration(
+                    "credential header already exists".into(),
+                )),
             };
         }
         let rule = self
             .rules
             .iter()
             .find(|rule| rule.kind == kind)
-            .ok_or(Error::DisallowedCredentialPlan)?;
+            .ok_or_else(|| {
+                Error::InvalidConfiguration(
+                    "credential plan is not allowed by the provider auth policy".into(),
+                )
+            })?;
         apply_credential(headers, credential.secret().expose(), rule.placement)
     }
 }

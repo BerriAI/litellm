@@ -39,6 +39,7 @@ pub struct AwsSecretsManagerV2 {
 
 #[derive(Clone)]
 struct ContextClientFactory {
+    auth: litellm_auth_aws::AwsAuthService,
     settings: KeyManagementSettings,
     environment: Arc<dyn Lookup + Send + Sync>,
     endpoint_url: Option<String>,

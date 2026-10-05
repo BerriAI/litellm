@@ -1,5 +1,8 @@
 import re
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import Any, Final, cast
+
+import httpx
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -9,9 +12,9 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-
-if TYPE_CHECKING:
-    from litellm.types.llms.openai import AllMessageValues
+from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.llms.openai import AllMessageValues, ResponseInputParam
+from litellm.types.utils import CallTypes, CallTypesLiteral
 
 # Azure Content Safety APIs have a 10,000 character limit per request.
 AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH: Final = 10000
@@ -22,6 +25,8 @@ AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
 
 AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION: Final = "2024-09-01"
 JAVELIN_API_VERSION_STORED_BY_OLDER_RELEASES: Final = "v1"
+
+_RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
 
 
 def resolve_content_safety_api_version(configured: str | None) -> str:
@@ -49,6 +54,7 @@ class AzureGuardrailBase:
         # (typically CustomGuardrail).
         super().__init__(**kwargs)
 
+        self.timeout: float | httpx.Timeout | None
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key
         self.api_base = api_base
@@ -77,6 +83,7 @@ class AzureGuardrailBase:
             url=url,
             headers=headers,
             json=request_body,
+            timeout=self.timeout,
         )
         response_json: Final[dict[str, Any]] = response.json()
         verbose_proxy_logger.debug("Azure Content Safety response [%s]: %s", endpoint_path, response_json)
@@ -131,7 +138,7 @@ class AzureGuardrailBase:
 
         return chunks
 
-    def get_user_prompt(self, messages: list["AllMessageValues"]) -> str | None:
+    def get_user_prompt(self, messages: list[AllMessageValues]) -> str | None:
         """
         Get the last consecutive block of messages from the user.
 
@@ -144,3 +151,16 @@ class AzureGuardrailBase:
         get_user_prompt(messages) -> "What is the weather in Tokyo?"
         """
         return get_last_user_message(messages)
+
+    def get_user_prompt_from_request(self, data: Mapping[str, object], call_type: CallTypesLiteral) -> str | None:
+        if call_type in _RESPONSES_API_CALL_TYPES:
+            responses_input: Final = data.get("input")
+            if not isinstance(responses_input, (str, list)):
+                return None
+            validated_input: Final = cast(ResponseInputParam, responses_input)  # cast-ok: narrowed to str | list
+            return get_last_user_message(ResponsesAPIRequestUtils.responses_input_to_chat_messages(validated_input))
+
+        messages: Final = data.get("messages")
+        if messages is None:
+            return None
+        return self.get_user_prompt(cast(list[AllMessageValues], messages))  # cast-ok: sequence of request messages
