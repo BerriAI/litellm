@@ -428,7 +428,6 @@ def test_sync_guardrail_from_db_reject_flag_keeps_callback_order_on_noop_update(
         handler.initialize_guardrail(guardrail=_mode_following_db_row("123", "pre_call"), source="db")
         original = handler.guardrail_id_to_custom_guardrail["123"]
         assert original is not None
-        # Park another callback after the guardrail so a re-append would be visible.
         litellm.callbacks.append(sentinel)
         index_before = litellm.callbacks.index(original)
 

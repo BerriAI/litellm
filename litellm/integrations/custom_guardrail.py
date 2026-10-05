@@ -1038,7 +1038,18 @@ class CustomGuardrail(CustomLogger):
             "metadata": scratch_metadata,
         }
         if self.logging_only_scope != "output":
-            await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+            if self.logging_only_scope == "both":
+                # An explicitly configured "both" observer asked for a verdict on
+                # each direction, so a failed request scan must not silently drop
+                # the response verdict. The implicit default (logging_only_scope
+                # None) keeps the abort semantics of a logging_only hook whose
+                # scan raised.
+                try:
+                    await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+                except Exception as e:  # noqa: BLE001  # one direction's scan failure must not drop the other direction's verdict
+                    verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
+            else:
+                await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
         if response is None or self.logging_only_scope == "input":
             return
         await output_translation.process_output_response(

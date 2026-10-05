@@ -2654,9 +2654,6 @@ class TestLoggingOnlyApplyGuardrail:
 
         out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
 
-        # A raising input scan aborts the hook: the response scan must not run,
-        # and exactly one intervened verdict is recorded (base semantics for a
-        # guardrail that never selected a logging_only_scope).
         assert guardrail.calls == [("request", ["flagged content"])]
         entries = out_kwargs["standard_logging_object"]["guardrail_information"]
         assert [e["guardrail_status"] for e in entries] == ["guardrail_intervened"]
@@ -2679,6 +2676,26 @@ class TestLoggingOnlyApplyGuardrail:
         assert guardrail.calls == [("request", ["hello there"])]
         entries = out_kwargs["standard_logging_object"]["guardrail_information"]
         assert [e["guardrail_status"] for e in entries] == ["guardrail_failed_to_respond"]
+
+    @pytest.mark.asyncio
+    async def test_input_scan_error_does_not_drop_the_response_scan_for_explicit_both_scope(self):
+        class _FailingBothObserver(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                self.calls.append((input_type, list(inputs.get("texts") or [])))
+                if input_type == "request":
+                    raise RuntimeError("guardrail service unavailable")
+                return GenericGuardrailAPIInputs(texts=[])
+
+        guardrail = _FailingBothObserver()
+        guardrail.logging_only_scope = "both"
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
+        entries = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [e["guardrail_status"] for e in entries] == ["guardrail_failed_to_respond", "success"]
 
     @pytest.mark.asyncio
     async def test_call_type_without_translation_is_skipped(self):
