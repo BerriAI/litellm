@@ -324,3 +324,152 @@ async def test_provider_counting_does_not_hold_the_inference_response(
             assert _observation(await rig.capture.payload()).observation.plan is not None
     finally:
         release.set()
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses", "normalized_responses", "messages"))
+async def test_direct_openai_baseline_collects_provider_usage_across_api_surfaces(surface: str) -> None:
+    from litellm.proxy.hooks.autorouter_baseline_cache import finalize_baseline_cache
+    from litellm.proxy.spend_tracking.baseline_accounting import BaselineHistory, advance_baseline_history
+    from litellm.types.utils import ModelResponse, Usage
+
+    call_type: Final = {
+        "chat": CallTypes.acompletion,
+        "responses": CallTypes.aresponses,
+        "normalized_responses": CallTypes.aresponses,
+        "messages": CallTypes.anthropic_messages,
+    }[surface]
+    prompt: Final = "shared stable content " * 2000
+    body: Final = (
+        {"input": [{"role": "user", "content": prompt}]}
+        if "responses" in surface
+        else {"messages": [{"role": "user", "content": prompt}]}
+    )
+    request: Final[dict[str, object]] = {
+        **body,
+        "litellm_metadata": {"user_api_key_hash": "test-key", "session_id": "test-session"},
+    }
+    Router._record_routing_decision(
+        request,
+        StandardLoggingRoutingDecision(
+            router_model_name="test-router",
+            router_type="complexity",
+            routed_model="openai/gpt-6.1-sol",
+            savings_baseline_model="openai/gpt-6-astra",
+        ),
+    )
+    now: Final = datetime(2026, 1, 1)
+    logging: Final = Logging(
+        model="openai/gpt-6.1-sol",
+        messages=[],
+        stream=False,
+        call_type=call_type.value,
+        start_time=now,
+        litellm_call_id="openai-observation",
+        function_id="test",
+        kwargs={},
+    )
+    collector: Final = AutoRouterBaselineCache(None, router=lambda: None, clock=lambda: now.timestamp() + 1)
+    await collector.async_pre_call_deployment_hook({**request, "litellm_logging_obj": logging}, call_type)
+    assert logging.baseline_cache_context is not None
+    if surface == "messages":
+        await collector.async_pre_call_deployment_hook(
+            {**request, "litellm_logging_obj": logging}, CallTypes.aresponses
+        )
+    usage: Final = Usage(
+        prompt_tokens=10000,
+        completion_tokens=10,
+        total_tokens=10010,
+        prompt_tokens_details={"cached_tokens": 4000, "cache_creation_tokens": 6000},
+    )
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    normalized: Final = ResponsesAPIResponse(
+        id="resp-test",
+        created_at=1,
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=10000, output_tokens=10, total_tokens=10010),
+    ).model_copy(update={"usage": usage})
+    response: Final = (
+        normalized
+        if surface == "normalized_responses"
+        else (
+            {
+                "usage": {
+                    "input_tokens": 10000,
+                    "output_tokens": 10,
+                    "total_tokens": 10010,
+                    "input_tokens_details": {"cached_tokens": 4000, "cache_creation_tokens": 6000},
+                }
+            }
+            if surface == "responses"
+            else ModelResponse(usage=usage)
+        )
+    )
+    await finalize_baseline_cache(logging, response)
+    captured: Final = logging.baseline_observation
+    assert captured is not None and captured.provider == "openai"
+    assert captured.observation.outcome == "complete", captured.observation.reason
+    assert captured.observation.usage is not None and captured.observation.usage.prompt_tokens == 10000
+    assert captured.observation.usage.prompt_tokens_details.cached_tokens == 4000
+    assert captured.observation.plan is not None
+    assert prompt not in captured.model_dump_json()
+    _, estimates = advance_baseline_history(BaselineHistory(), (captured.observation,))
+    assert estimates[0].usage is not None and estimates[0].usage.prompt_tokens_details.cached_tokens == 0
+    assert estimates[0].usage.prompt_tokens_details.cache_creation_tokens == 10000
+
+
+async def test_openai_chat_success_logging_publishes_captured_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    call_id: Final = uuid4().hex
+    capture: Final = _Capture(call_id)
+    collector: Final = AutoRouterBaselineCache(None, router=lambda: None)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    monkeypatch.setattr(litellm, "_async_success_callback", [capture])
+    for name in ("success_callback", "failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, name, [])
+    request: Final[dict[str, object]] = {
+        "litellm_metadata": {"user_api_key_hash": "test-key", "session_id": "test-session"}
+    }
+    Router._record_routing_decision(
+        request,
+        StandardLoggingRoutingDecision(
+            router_model_name="test-router",
+            router_type="complexity",
+            routed_model="openai/gpt-6.1-sol",
+            savings_baseline_model="openai/gpt-6-astra",
+        ),
+    )
+    with respx.mock(assert_all_called=True) as transport:
+        transport.post("https://api.openai.com/v1/chat/completions").respond(
+            200,
+            json={
+                "id": "chatcmpl-baseline",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-6.1-sol",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 10000,
+                    "completion_tokens": 10,
+                    "total_tokens": 10010,
+                    "prompt_tokens_details": {"cached_tokens": 4000, "cache_creation_tokens": 6000},
+                },
+            },
+        )
+        await litellm.acompletion(
+            model="openai/gpt-6.1-sol",
+            api_base="https://api.openai.com/v1",
+            api_key="test-key",
+            messages=[{"role": "user", "content": "stable content " * 3000}],
+            litellm_call_id=call_id,
+            **request,
+        )
+        payload: Final = await capture.payload()
+    captured: Final = _observation(payload)
+    assert captured.observation.outcome == "complete" and captured.observation.plan is not None
+    assert (
+        captured.observation.usage is not None
+        and captured.observation.usage.prompt_tokens_details.cache_creation_tokens == 6000
+    )
+    assert _OBJECTS.validate_python(payload["autorouter_savings_estimate"])["reason"] == "pending_projection"
+    assert payload["autorouter_savings"] is None

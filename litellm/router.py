@@ -14189,9 +14189,7 @@ class Router:
             request_kwargs=request_kwargs,
             key="_autorouter_baseline_route",
             value=(
-                BaselineRouteStamp(router_name, baseline_model, baseline_id)
-                if router_name and baseline_model and baseline_id
-                else None
+                BaselineRouteStamp(router_name, baseline_model, baseline_id) if router_name and baseline_model else None
             ),
         )
         Router._stamp_or_clear_metadata_key(

@@ -123,6 +123,8 @@ class BaselinePublication(BaseModel):
     baseline_spend: float | None = None
     input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    assumptions: tuple[str, ...] = ()
     cache_creation_5m_input_tokens: int | None = None
     cache_creation_1h_input_tokens: int | None = None
 
@@ -138,7 +140,7 @@ def baseline_publication(
 ) -> BaselinePublication:
     costs: Final = price_baseline_comparison(record.pricing, estimate.usage, estimate.provenance)
     details: Final = estimate.usage.prompt_tokens_details if estimate.usage is not None else None
-    writes: Final = details.cache_creation_token_details if details is not None else None
+    writes: Final = getattr(details, "cache_creation_token_details", None) if details is not None else None
     return BaselinePublication(
         comparison_id=record.scope,
         comparison_started_at=first_at,
@@ -149,6 +151,8 @@ def baseline_publication(
         baseline_spend=costs.baseline if costs is not None else None,
         input_tokens=details.text_tokens if details is not None else None,
         cache_read_input_tokens=details.cached_tokens if details is not None else None,
+        assumptions=record.observation.assumptions,
+        cache_creation_input_tokens=details.cache_creation_tokens if details is not None else None,
         cache_creation_5m_input_tokens=writes.ephemeral_5m_input_tokens if writes is not None else None,
         cache_creation_1h_input_tokens=writes.ephemeral_1h_input_tokens if writes is not None else None,
     )

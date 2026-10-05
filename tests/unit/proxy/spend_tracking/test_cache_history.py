@@ -1,0 +1,282 @@
+from typing import Final
+
+import pytest
+
+import litellm
+from litellm.proxy.spend_tracking.baseline_accounting import (
+    BaselineHistory,
+    BaselineObservation,
+    advance_baseline_history,
+)
+from litellm.proxy.spend_tracking.cache_history import capture_cache_request, normalize_cache_usage
+from litellm.proxy.spend_tracking.savings import BaselineCostSnapshot, price_baseline_comparison
+from litellm.types.utils import ModelInfo, Usage
+
+_PRICES: Final[ModelInfo] = {
+    **litellm.get_model_info("gpt-6-astra", "openai"),
+    "input_cost_per_token": 0.01,
+    "output_cost_per_token": 0.03,
+    "cache_read_input_token_cost": 0.001,
+    "cache_creation_input_token_cost": 0.017,
+}
+_PROMPT: Final = "A long stable prefix with some reusable content. " * 1000
+
+
+def _request(**overrides: object) -> dict[str, object]:
+    return {"messages": [{"role": "user", "content": _PROMPT}], **overrides}
+
+
+def _usage(*, read: int = 0, write: int = 8000) -> Usage:
+    return normalize_cache_usage(
+        Usage(
+            prompt_tokens=8000,
+            completion_tokens=20,
+            total_tokens=8020,
+            prompt_tokens_details={"cached_tokens": read, "cache_creation_tokens": write},
+        )
+    )
+
+
+def _observation(request: dict[str, object], started: float = 10000.0, provider: str = "openai") -> BaselineObservation:
+    captured: Final = capture_cache_request(request, "gpt-6-astra", provider, _PRICES, {})
+    assert captured is not None
+    usage: Final = _usage()
+    return BaselineObservation(
+        request_id=str(started),
+        started_at=started,
+        available_at=started + 1,
+        outcome="complete",
+        baseline_equivalent=False,
+        usage=usage,
+        plan=captured.plan(usage),
+        cache_policy="estimated",
+        cache_write_pricing="standard",
+        assumptions=captured.assumptions,
+    )
+
+
+@pytest.mark.parametrize(
+    "provider", ("openai", "azure", "gemini", "vertex_ai", "deepseek", "mistral", "custom_provider")
+)
+def test_switched_model_pays_actual_cold_write_while_baseline_reads_its_own_history(provider: str) -> None:
+    first: Final = _observation(_request(), provider=provider)
+    history, initial = advance_baseline_history(BaselineHistory(), (first,))
+    _, second = advance_baseline_history(
+        history, (first.model_copy(update={"request_id": "switch", "started_at": 10002.0, "available_at": 10003.0}),)
+    )
+    assert initial[0].usage is not None and second[0].usage is not None
+    assert initial[0].usage.prompt_tokens_details.cache_creation_tokens == 8000
+    assert getattr(initial[0].usage.prompt_tokens_details, "cache_creation_token_details", None) is None
+    assert second[0].usage.prompt_tokens_details.cached_tokens == 8000
+    assert second[0].usage.prompt_tokens_details.cache_creation_tokens == 0
+    assert first.usage == _usage()
+    actual: Final = 8000 * _PRICES["cache_creation_input_token_cost"] + 20 * _PRICES["output_cost_per_token"]
+    snapshot: Final = BaselineCostSnapshot(
+        model="gpt-6-astra",
+        provider=provider,
+        prices=_PRICES,
+        actual_spend=actual,
+        actual_token_cost=actual,
+        classifier_cost=0.1,
+    )
+    priced: Final = price_baseline_comparison(snapshot, second[0].usage, second[0].provenance)
+    assert priced is not None
+    assert priced.actual == pytest.approx(actual + 0.1)
+    assert priced.baseline == pytest.approx(
+        8000 * _PRICES["cache_read_input_token_cost"] + 20 * _PRICES["output_cost_per_token"]
+    )
+    assert priced.savings < 0
+
+
+@pytest.mark.parametrize("seconds,expected_reads", ((1799, 8000), (1800, 0)))
+def test_unspecified_provider_lifetime_is_labeled_and_expires(seconds: int, expected_reads: int) -> None:
+    first: Final = _observation(_request(), provider="custom_provider")
+    assert "cache_lifetime_assumed_30m" in first.assumptions
+    history, _ = advance_baseline_history(BaselineHistory(), (first,))
+    _, estimates = advance_baseline_history(
+        history,
+        (
+            first.model_copy(
+                update={
+                    "request_id": "later",
+                    "started_at": first.started_at + seconds,
+                    "available_at": first.available_at + seconds,
+                }
+            ),
+        ),
+    )
+    assert estimates[0].usage is not None
+    assert estimates[0].usage.prompt_tokens_details.cached_tokens == expected_reads
+    assert estimates[0].usage.prompt_tokens_details.cache_creation_tokens == 8000 - expected_reads
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"messages": [{"role": "user", "content": "a changed prefix"}]},
+        {"tools": [{"type": "function", "function": {"name": "different_tool"}}]},
+        {"reasoning_effort": "high"},
+        {"extra_body": {"prompt_cache_key": "different_key"}},
+    ),
+)
+def test_changed_prefix_or_cache_settings_cannot_hit(changes: dict[str, object]) -> None:
+    history, _ = advance_baseline_history(BaselineHistory(), (_observation(_request()),))
+    _, estimates = advance_baseline_history(history, (_observation(_request(**changes), 10002.0),))
+    assert estimates[0].usage is not None
+    assert estimates[0].usage.prompt_tokens_details.cached_tokens == 0
+
+
+def test_growing_conversation_reuses_only_the_previously_written_prefix() -> None:
+    first: Final = _observation(_request())
+    history, _ = advance_baseline_history(BaselineHistory(), (first,))
+    request: Final = _request(
+        messages=[
+            {"role": "user", "content": _PROMPT},
+            {"role": "assistant", "content": "A result"},
+            {"role": "user", "content": "Continue"},
+        ]
+    )
+    usage: Final = normalize_cache_usage(Usage(prompt_tokens=8200, completion_tokens=20, total_tokens=8220))
+    captured: Final = capture_cache_request(request, "gpt-6-astra", "openai", _PRICES, {})
+    assert captured is not None
+    _, estimates = advance_baseline_history(
+        history, (_observation(request, 10002.0).model_copy(update={"usage": usage, "plan": captured.plan(usage)}),)
+    )
+    assert estimates[0].usage is not None
+    assert estimates[0].usage.prompt_tokens_details.cached_tokens == 8000
+    assert estimates[0].usage.prompt_tokens_details.cache_creation_tokens == 200
+
+
+def test_explicit_only_mode_does_not_write_without_markers_and_honors_ttl() -> None:
+    empty: Final = capture_cache_request(
+        _request(prompt_cache_options={"mode": "explicit"}), "gpt-6-astra", "openai", _PRICES, {}
+    )
+    assert empty is not None and empty.plan(_usage()).breakpoints == ()
+    request: Final = _request(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _PROMPT, "prompt_cache_breakpoint": {"mode": "explicit"}},
+                    {"type": "text", "text": "uncached suffix"},
+                ],
+            }
+        ],
+        prompt_cache_options={"mode": "explicit", "ttl": "1h"},
+    )
+    captured: Final = capture_cache_request(request, "test-model", "custom_provider", _PRICES, {})
+    assert captured is not None
+    plan: Final = captured.plan(_usage())
+    assert len(plan.breakpoints) == 1
+    assert plan.breakpoints[0].ttl_seconds == 3600
+    assert 0 < plan.breakpoints[0].prefix_tokens < plan.total_tokens
+    assert "cache_lifetime_assumed_30m" not in captured.assumptions
+    assert _PROMPT not in repr(captured)
+
+
+def test_failed_or_overlapping_request_does_not_manufacture_a_cache_hit() -> None:
+    first: Final = _observation(_request())
+    history, _ = advance_baseline_history(BaselineHistory(), (first,))
+    _, concurrent = advance_baseline_history(
+        history, (first.model_copy(update={"request_id": "concurrent", "started_at": 10000.5}),)
+    )
+    assert concurrent[0].usage is not None and concurrent[0].usage.prompt_tokens_details.cached_tokens == 0
+    failed: Final = first.model_copy(
+        update={
+            "request_id": "failed",
+            "started_at": 10002.0,
+            "available_at": 10003.0,
+            "outcome": "uncertain",
+            "reason": "retried_request",
+        }
+    )
+    invalidated, estimates = advance_baseline_history(history, (failed,))
+    assert estimates[0].usage is None
+    _, next_request = advance_baseline_history(invalidated, (_observation(_request(), 10004.0),))
+    assert next_request[0].usage is None and next_request[0].reason == "history_unavailable"
+
+
+def test_baseline_deployment_settings_override_selected_model_settings() -> None:
+    first: Final = capture_cache_request(
+        _request(reasoning_effort="low"), "gpt-6-astra", "openai", _PRICES, {"reasoning_effort": "high"}
+    )
+    second: Final = capture_cache_request(_request(reasoning_effort="high"), "gpt-6-astra", "openai", _PRICES, {})
+    assert first is not None and second is not None
+    assert first.plan(_usage()) == second.plan(_usage())
+
+
+def test_response_input_uses_shared_normalization_and_missing_server_history_stays_unknown() -> None:
+    request: Final = {"input": [{"role": "user", "content": _PROMPT}]}
+    captured: Final = capture_cache_request(request, "gpt-6-astra", "openai", _PRICES, {})
+    assert captured is not None and captured.plan(_usage()).breakpoints
+    assert (
+        capture_cache_request(
+            {**request, "previous_response_id": "unseen-history"}, "gpt-6-astra", "openai", _PRICES, {}
+        )
+        is None
+    )
+
+
+def test_missing_cache_write_rate_uses_ordinary_input_and_zero_rate_stays_free() -> None:
+    usage: Final = _usage()
+    for write_rate in (None, 0.0):
+        prices: Final[ModelInfo] = {**_PRICES, "cache_creation_input_token_cost": write_rate}
+        snapshot: Final = BaselineCostSnapshot(
+            model="gpt-6-astra", provider="openai", prices=prices, actual_spend=10.0, actual_token_cost=10.0
+        )
+        priced: Final = price_baseline_comparison(snapshot, usage, "modeled")
+        assert priced is not None
+        assert priced.baseline == pytest.approx(
+            8000 * (prices["input_cost_per_token"] if write_rate is None else write_rate)
+            + 20 * prices["output_cost_per_token"]
+        )
+
+
+def test_publication_retains_assumptions_and_generic_writes_after_storage_round_trip() -> None:
+    from litellm.proxy.db.baseline_accounting import BaselineAccountingRecord, baseline_publication
+    from litellm.proxy.spend_tracking.savings import baseline_cost_snapshot
+
+    observation: Final = _observation(_request(), provider="custom_provider")
+    snapshot: Final = baseline_cost_snapshot("gpt-6-astra", _PRICES, 10.0, None, None, "openai", 10.0)
+    record: Final = BaselineAccountingRecord(
+        scope="autorouter-baseline:v3:" + "a" * 64,
+        api_key="test",
+        session_id="test",
+        router_name="test",
+        baseline_model="openai/gpt-6-astra",
+        observation=observation,
+        pricing=snapshot,
+        turn=None,
+        daily=None,
+    )
+    restored: Final = BaselineAccountingRecord.model_validate_json(record.model_dump_json())
+    _, estimates = advance_baseline_history(BaselineHistory(), (restored.observation,))
+    publication: Final = baseline_publication(restored, estimates[0], observation.started_at)
+    assert publication.status == "estimated"
+    assert publication.baseline_spend == pytest.approx(
+        8000 * _PRICES["cache_creation_input_token_cost"] + 20 * _PRICES["output_cost_per_token"]
+    )
+    assert publication.cache_creation_input_tokens == 8000
+    assert publication.cache_creation_5m_input_tokens is None and publication.cache_creation_1h_input_tokens is None
+    assert "cache_lifetime_assumed_30m" in publication.assumptions
+    reported: Final = baseline_cost_snapshot(
+        "gpt-6-astra", _PRICES, 10.0, {"input_cost": 7.0, "output_cost": 2.0}, None, "openai", 10.0
+    )
+    assert reported.actual_token_cost == 9.0
+
+
+def test_openai_lookup_keeps_initial_developer_group_but_limits_earlier_user_endings() -> None:
+    initial: Final = [{"role": "developer", "content": "first instruction"}, {"role": "developer", "content": _PROMPT}]
+    later: Final = [{"role": "user", "content": str(index)} for index in range(25)]
+    first: Final = capture_cache_request(_request(messages=initial), "gpt-6-astra", "openai", _PRICES, {})
+    grown: Final = capture_cache_request(_request(messages=initial + later), "gpt-6-astra", "openai", _PRICES, {})
+    user: Final = capture_cache_request(_request(messages=later[:1]), "gpt-6-astra", "openai", _PRICES, {})
+    users: Final = capture_cache_request(_request(messages=later), "gpt-6-astra", "openai", _PRICES, {})
+    assert first is not None and grown is not None and user is not None and users is not None
+    assert (
+        first.plan(_usage()).breakpoints[-1].fingerprint in grown.plan(_usage()).breakpoints[-1].lookback_fingerprints
+    )
+    assert (
+        user.plan(_usage()).breakpoints[-1].fingerprint
+        not in users.plan(_usage()).breakpoints[-1].lookback_fingerprints
+    )

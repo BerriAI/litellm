@@ -140,14 +140,17 @@ def baseline_cost_snapshot(
     actual_spend: float,
     cost_breakdown: Mapping[str, object] | None,
     routing_decision: Mapping[str, object] | None,
+    provider: str = "anthropic",
+    actual_token_cost: float | None = None,
 ) -> BaselineCostSnapshot:
+    recorded: Final = _recorded_token_cost(cost_breakdown)
     return BaselineCostSnapshot(
         model=model,
-        provider="anthropic",
+        provider=provider,
         prices=prices,
         actual_spend=actual_spend,
         basis=_pricing_basis(cost_breakdown),
-        actual_token_cost=_recorded_token_cost(cost_breakdown),
+        actual_token_cost=recorded if recorded is not None else actual_token_cost,
         classifier_cost=classifier_cost_from_decision(routing_decision) or 0.0,
     )
 
@@ -174,7 +177,10 @@ def price_baseline_comparison(
     if snapshot.prices is None or snapshot.actual_token_cost is None:
         return None
     token_cost: Final = _cost_of_usage(
-        _ModelIdentity(snapshot.model, snapshot.provider), baseline_usage, snapshot.prices, snapshot.basis
+        _ModelIdentity(snapshot.model, snapshot.provider),
+        _baseline_usage(baseline_usage, snapshot.prices),
+        snapshot.prices,
+        snapshot.basis,
     )
     if token_cost is None or not isfinite(token_cost) or token_cost < 0:
         return None
@@ -275,19 +281,11 @@ def _cache_token_split(usage: Usage) -> tuple[int, int]:
 
 
 def _baseline_cache_rate_keys(baseline_info: ModelInfo | None) -> tuple[bool, bool]:
-    """Whether the baseline model has a ``(cache read, cache write)`` rate of its own.
-
-    A missing rate is not a free bucket. `_get_token_base_cost` resolves an absent
-    `cache_read_input_token_cost` or `cache_creation_input_token_cost` to 0.0, so a
-    baseline whose provider prices caching implicitly, which is every OpenAI, Azure and
-    Gemini entry for cache writes, would carry the whole prompt for nothing and turn a
-    profitable route into a reported loss. Such a model pays its plain input rate for
-    those tokens, so the buckets it cannot price become ordinary input below.
-    """
+    """Missing cache rates use ordinary input pricing; explicit zero rates stay free."""
     if baseline_info is None:
         return True, True
-    return bool(baseline_info.get("cache_read_input_token_cost")), bool(
-        baseline_info.get("cache_creation_input_token_cost")
+    return baseline_info.get("cache_read_input_token_cost") is not None, (
+        baseline_info.get("cache_creation_input_token_cost") is not None
     )
 
 

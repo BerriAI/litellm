@@ -19,6 +19,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import CountedBreakpoint, Co
 from litellm.types.utils import CacheCreationTokenDetails, PromptTokensDetailsWrapper, Usage
 
 MAX_CACHE_TTL: Final = 3600
+MAX_ESTIMATED_CACHE_TTL: Final = 86400
 MAX_CACHE_ENTRIES: Final = 1024
 
 
@@ -35,6 +36,9 @@ class BaselineObservation(BaseModel):
     plan: CountedPromptCachePlan | None = None
     minimum_cache_tokens: int = Field(default=0, ge=0)
     reason: str | None = None
+    cache_policy: Literal["anthropic", "estimated"] = "anthropic"
+    assumptions: tuple[str, ...] = ()
+    cache_write_pricing: Literal["duration", "standard"] = "duration"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +70,7 @@ class BaselineHistory:
     blocked_until: float = 0.0
 
 
-def _complete_usage(usage: Usage | None) -> bool:
+def _complete_usage(usage: Usage | None, policy: str = "anthropic") -> bool:
     if usage is None or usage.prompt_tokens < 0 or usage.completion_tokens < 0:
         return False
     details: Final = usage.prompt_tokens_details
@@ -75,13 +79,14 @@ def _complete_usage(usage: Usage | None) -> bool:
     values: Final = (details.text_tokens, details.cached_tokens, details.cache_creation_tokens)
     if any(value is None or value < 0 for value in values):
         return False
-    split: Final = details.cache_creation_token_details
+    split: Final = None if policy == "estimated" else details.cache_creation_token_details
     writes: Final = details.cache_creation_tokens or 0
     return (
         usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
         and sum(value or 0 for value in values) == usage.prompt_tokens
         and (
-            writes == 0
+            policy == "estimated"
+            or writes == 0
             or (
                 split is not None
                 and split.ephemeral_5m_input_tokens is not None
@@ -93,7 +98,7 @@ def _complete_usage(usage: Usage | None) -> bool:
     )
 
 
-def _valid_plan(plan: CountedPromptCachePlan | None) -> bool:
+def _valid_plan(plan: CountedPromptCachePlan | None, policy: str = "anthropic") -> bool:
     if plan is None or plan.total_tokens < 0 or len(plan.breakpoints) > 4:
         return False
     return all(
@@ -101,7 +106,11 @@ def _valid_plan(plan: CountedPromptCachePlan | None) -> bool:
         and marker.content_fingerprint
         and marker.fingerprint in marker.lookback_fingerprints
         and marker.content_fingerprint in marker.lookback_content_fingerprints
-        and marker.ttl_seconds in (300, 3600)
+        and (
+            0 < marker.ttl_seconds <= MAX_ESTIMATED_CACHE_TTL
+            if policy == "estimated"
+            else marker.ttl_seconds in (300, 3600)
+        )
         and 0 <= marker.prefix_tokens <= plan.total_tokens
         for marker in plan.breakpoints
     ) and all(
@@ -139,8 +148,10 @@ def _ambiguous(entry: CacheEntry, markers: tuple[CountedBreakpoint, ...], starte
     )
 
 
-def _usage_with_cache(usage: Usage, total: int, read: int, write_5m: int, write_1h: int) -> Usage:
-    writes: Final = write_5m + write_1h
+def _usage_with_cache(
+    usage: Usage, total: int, read: int, write_5m: int, write_1h: int, *, generic_writes: int | None = None
+) -> Usage:
+    writes: Final = write_5m + write_1h + (generic_writes or 0)
     original_details: Final = usage.prompt_tokens_details or PromptTokensDetailsWrapper()
     details: Final = original_details.model_copy(
         deep=True,
@@ -153,7 +164,9 @@ def _usage_with_cache(usage: Usage, total: int, read: int, write_5m: int, write_
                 "cache_creation_token_details": CacheCreationTokenDetails(
                     ephemeral_5m_input_tokens=write_5m,
                     ephemeral_1h_input_tokens=write_1h,
-                ),
+                )
+                if generic_writes is None
+                else None,
             }
         ),
     )
@@ -170,7 +183,7 @@ def _usage_with_cache(usage: Usage, total: int, read: int, write_5m: int, write_
 
 
 def _estimate(history: BaselineHistory, observation: BaselineObservation, equivalent: bool) -> BaselineEstimate:
-    if observation.outcome != "complete" or not _complete_usage(observation.usage):
+    if observation.outcome != "complete" or not _complete_usage(observation.usage, observation.cache_policy):
         return BaselineEstimate(observation.request_id, observation.reason or observation.outcome)
     usage: Final = observation.usage
     if usage is None:
@@ -182,7 +195,7 @@ def _estimate(history: BaselineHistory, observation: BaselineObservation, equiva
     if observation.started_at < history.blocked_until:
         return BaselineEstimate(observation.request_id, "concurrent_uncertainty")
     plan: Final = observation.plan
-    if not _valid_plan(plan) or plan is None:
+    if not _valid_plan(plan, observation.cache_policy) or plan is None:
         return BaselineEstimate(observation.request_id, observation.reason or "unsupported_cache_plan")
     markers: Final = _markers(observation)
     if any(_ambiguous(entry, markers, observation.started_at) for entry in history.entries):
@@ -196,10 +209,14 @@ def _estimate(history: BaselineHistory, observation: BaselineObservation, equiva
         default=0,
     )
     end: Final = markers[-1].prefix_tokens if markers else 0
-    if read < end and observation.started_at < history.uncertain_before + max(marker.ttl_seconds for marker in markers):
+    if (
+        read < end
+        and history.uncertain_before > 0
+        and observation.started_at < history.uncertain_before + max(marker.ttl_seconds for marker in markers)
+    ):
         return BaselineEstimate(observation.request_id, "history_unavailable")
     one_hour: Final = max(
-        (marker.prefix_tokens for marker in markers if marker.ttl_seconds == 3600 and marker.prefix_tokens > read),
+        (marker.prefix_tokens for marker in markers if marker.ttl_seconds >= 3600 and marker.prefix_tokens > read),
         default=read,
     )
     expired: Final = any(
@@ -222,7 +239,9 @@ def _estimate(history: BaselineHistory, observation: BaselineObservation, equiva
         observation.request_id,
         reason,
         "modeled",
-        _usage_with_cache(usage, plan.total_tokens, read, end - one_hour, one_hour - read),
+        _usage_with_cache(usage, plan.total_tokens, read, 0, 0, generic_writes=end - read)
+        if observation.cache_write_pricing == "standard"
+        else _usage_with_cache(usage, plan.total_tokens, read, end - one_hour, one_hour - read),
     )
 
 
@@ -230,8 +249,8 @@ def _writes(history: BaselineHistory, observation: BaselineObservation) -> tuple
     if (
         observation.outcome != "complete"
         or observation.started_at < history.blocked_until
-        or not _complete_usage(observation.usage)
-        or not _valid_plan(observation.plan)
+        or not _complete_usage(observation.usage, observation.cache_policy)
+        or not _valid_plan(observation.plan, observation.cache_policy)
     ):
         return ()
     markers: Final = _markers(observation)
@@ -322,7 +341,11 @@ def advance_baseline_history(
     if not valid_order:
         return history, tuple(BaselineEstimate(item.request_id, "invalid_observation_order") for item in simultaneous)
     first: Final = started if history.first_at is None else history.first_at
-    uncertain: Final = max(history.uncertain_before, first)
+    uncertain: Final = (
+        history.uncertain_before
+        if all(item.cache_policy == "estimated" for item in simultaneous)
+        else max(history.uncertain_before, first)
+    )
     relevant: Final = tuple(item for item in simultaneous if item.outcome != "response_cache")
     equivalent: Final = history.equivalent and all(item.baseline_equivalent for item in relevant)
     before: Final = BaselineHistory(
@@ -330,7 +353,10 @@ def advance_baseline_history(
     )
     estimates: Final = tuple(_estimate(before, item, equivalent) for item in simultaneous)
     invalidated: Final = any(
-        item.outcome != "complete" or not _complete_usage(item.usage) or not _valid_plan(item.plan) for item in relevant
+        item.outcome != "complete"
+        or not _complete_usage(item.usage, item.cache_policy)
+        or not _valid_plan(item.plan, item.cache_policy)
+        for item in relevant
     )
     blocked: Final = max((history.blocked_until, *(item.available_at for item in relevant if invalidated)))
     entries: Final = _compact_entries(
