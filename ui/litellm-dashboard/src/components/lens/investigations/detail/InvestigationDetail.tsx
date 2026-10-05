@@ -4,13 +4,9 @@ import { Button } from "@/components/ui/button";
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RunsTab } from "./RunsTab";
-import { InvestigationProgress } from "../InvestigationProgress";
-import { StepFeed } from "../StepFeed";
 import { InvestigationSummary } from "./InvestigationSummary";
-import { InvestigationFailure } from "./InvestigationFailure";
-import { scopeLabel } from "../../model/format";
+import { RunReport } from "./RunReport";
 import type { OwnedFinding } from "../../model/inbox";
-import { activeJob } from "../../model/status";
 import { type Finding, type Lens } from "../../model/types";
 import { FindingPanel } from "../FindingDetails";
 import { useSectionRoute } from "../../route";
@@ -44,21 +40,23 @@ export function InvestigationDetail({
   const { section, setSection } = useSectionRoute();
   const snapshot = useRunSnapshot(lens);
   const { job, batchId, batchSettings, batchFindings, missingSnapshot } = snapshot;
-  const active = activeJob(lens.jobs);
   return (
     <div>
       <section className="min-w-0 space-y-5">
         <div className="flex flex-wrap justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <h2 className="text-lg font-semibold">{lens.settings.name}</h2>
-            <p className="mt-1 text-xs text-muted-foreground">{scopeLabel(lens.settings)}</p>
+            <InvestigationSummary lens={lens} />
           </div>
           {!readOnly && <InvestigationActions lens={lens} ready={ready} busy={busy} {...intents} />}
         </div>
-        <InvestigationSummary lens={lens} connected={connected} />
-        {active && <InvestigationProgress key={active.id} job={active} onCancel={readOnly ? undefined : onCancelRun} />}
-        {active && <StepFeed job={active} />}
-        {job?.error && <InvestigationFailure job={job} connected={connected} />}
+        <RunReport
+          job={job}
+          findings={job?.findings}
+          connected={connected}
+          picker={<RunPicker lens={lens} job={job} />}
+          onCancel={readOnly ? undefined : onCancelRun}
+        />
         <Tabs value={section} onValueChange={setSection} key={lens.id}>
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b">
             <TabsList variant="line">
@@ -67,7 +65,6 @@ export function InvestigationDetail({
               <TabsTrigger value="runs">Runs</TabsTrigger>
               <TabsTrigger value="activity">History</TabsTrigger>
             </TabsList>
-            {section !== "activity" && <RunPicker lens={lens} job={job} />}
           </div>
           {snapshot.error && (
             <p role="alert" className="text-sm text-destructive">

@@ -736,6 +736,25 @@ it("shows the actual saved failure and run context without opening backend logs"
   expect(failure.queryByText(/find the error in proxy and worker logs/)).not.toBeInTheDocument();
 });
 
+it("reports what the selected run found, cost, and covered", async () => {
+  testQueryClient.clear();
+  const coverage = { ...lens.jobs[0].coverage, selected: 40, screened: 38, partial: 2 };
+  const job = { ...lens.jobs[0], cost: 1.25, coverage, finished_at: "2026-09-30T10:03:05Z" };
+  proxy.get.mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [{ ...lens, jobs: [job] }], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return [job];
+    return { data: [] };
+  });
+  renderWithProviders(<InvestigationsView readOnly />);
+  const report = within(await screen.findByRole("region", { name: "Run report" }));
+  expect(report.getByRole("heading", { name: "Found 1 issue and 1 pattern across 38 runs" })).toBeVisible();
+  const stat = (label: string) => report.getByText(label).parentElement;
+  expect(stat("Cost")).toHaveTextContent("$1.25");
+  expect(stat("Duration")).toHaveTextContent("3m 5s");
+  expect(stat("Runs reviewed")).toHaveTextContent("38 / 402 partial");
+  expect(stat("Issues")).toHaveTextContent("11 high priority");
+});
+
 it("keeps a finding open to retry when its update fails", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
