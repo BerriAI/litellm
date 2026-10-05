@@ -52,8 +52,7 @@ fn map_error_ref(error: &Error) -> PyErr {
         | Error::InvalidParameters
         | Error::InvalidScope => PyValueError::new_err(error.to_string()),
         Error::Task
-        | Error::SchemaFailed(_)
-        | Error::SchemaTransport
+        | Error::Migration(_)
         | Error::MissingSecret
         | Error::Busy
         | Error::ProvisionFailed(_)
@@ -452,7 +451,14 @@ mod tests {
     )]
     #[case::insert_budget(Error::InsertTooLarge, "OverflowError")]
     #[case::scope(Error::InvalidScope, "ValueError")]
-    #[case::schema(Error::SchemaFailed(503), "RuntimeError")]
+    #[case::schema(
+        Error::Storage(litellm_storage_clickhouse::Error::SchemaFailed(503)),
+        "RuntimeError"
+    )]
+    #[case::migration(
+        Error::Migration(sqlx::migrate::MigrateError::VersionMismatch(1)),
+        "RuntimeError"
+    )]
     #[case::reader(Error::MissingSecret, "RuntimeError")]
     #[case::storage(
         Error::Storage(litellm_storage_clickhouse::Error::InvalidUrl),

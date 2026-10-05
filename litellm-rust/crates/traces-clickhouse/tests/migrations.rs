@@ -1,11 +1,14 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
+use litellm_storage_clickhouse::Error as StorageError;
 use litellm_traces_clickhouse::{
     Connection, Error, InsertTable, NORMALIZED_FIELD_DEFINITIONS, Parameter, ReadQuery,
-    encode_rows, ensure_schema, execute_named_read, execute_read, schema_statements,
+    apply_migrations, encode_rows, ensure_schema, execute_named_read, execute_read,
+    reconcile_retention, schema_statements,
 };
 use rstest::rstest;
+use sqlx::migrate::MigrateError;
 mod support;
 
 use support::{ClickHouseDatabase, TestResult, database};
@@ -71,6 +74,44 @@ async fn mutation_rows(database: &ClickHouseDatabase) -> TestResult<u64> {
         .expect("ClickHouse returns mutation counts as unsigned integers"))
 }
 
+fn migration_versions() -> Vec<u64> {
+    let mut versions = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"))
+        .expect("migration directory exists")
+        .map(|entry| {
+            entry
+                .expect("migration directory entry is readable")
+                .file_name()
+                .into_string()
+                .expect("migration file name is UTF-8")
+        })
+        .filter_map(|name| {
+            name.strip_suffix(".sql")
+                .and_then(|stem| stem.split('_').next())
+                .and_then(|version| version.parse::<u64>().ok())
+        })
+        .collect::<Vec<_>>();
+    versions.sort_unstable();
+    versions
+}
+
+async fn migration_ledger_versions(database: &ClickHouseDatabase) -> TestResult<Vec<u64>> {
+    let response = read_json(
+        database,
+        "SELECT version FROM trace_test._sqlx_migrations GROUP BY version ORDER BY version",
+    )
+    .await?;
+    Ok(response["data"]
+        .as_array()
+        .expect("ClickHouse returns version rows")
+        .iter()
+        .map(|row| {
+            row["version"]
+                .as_u64()
+                .expect("ClickHouse returns versions as unsigned integers")
+        })
+        .collect())
+}
+
 #[rstest]
 #[tokio::test]
 async fn schema_supports_span_rollups_and_spend_joins(
@@ -80,6 +121,27 @@ async fn schema_supports_span_rollups_and_spend_joins(
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    let expected_versions = migration_versions();
+    let ledger = read_json(
+        &database,
+        "SELECT count() AS rows, uniqExact(version) AS versions, \
+         countIf(NOT match(checksum, '^[0-9a-f]{96}$')) AS invalid_checksums \
+         FROM trace_test._sqlx_migrations",
+    )
+    .await?;
+    assert_eq!(
+        ledger["data"][0]["rows"].as_u64(),
+        Some(expected_versions.len() as u64)
+    );
+    assert_eq!(
+        ledger["data"][0]["versions"].as_u64(),
+        Some(expected_versions.len() as u64)
+    );
+    assert_eq!(ledger["data"][0]["invalid_checksums"].as_u64(), Some(0));
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        expected_versions
+    );
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
     let span = serde_json::from_value(serde_json::json!({
         "Timestamp": timestamp, "TraceId": "trace-1", "SpanId": "span-1", "ParentSpanId": "",
@@ -198,6 +260,112 @@ async fn schema_supports_span_rollups_and_spend_joins(
     assert_eq!(
         body["data"],
         serde_json::json!([{"spans": 1, "tokens": 12}])
+    );
+    Ok(())
+}
+
+#[rstest]
+#[case::quoted_versions("output_format_json_quote_64bit_integers=1")]
+#[case::asynchronous_inserts(
+    "async_insert=1&wait_for_async_insert=0&async_insert_busy_timeout_ms=20000"
+)]
+#[tokio::test]
+async fn schema_setup_records_migrations_synchronously_with_configured_settings(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] settings: &str,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&format!("{}?{settings}", database.url))?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        migration_versions()
+    );
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        migration_versions()
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn changed_migration_is_rejected(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    execute_write(
+        &database,
+        "ALTER TABLE trace_test._sqlx_migrations UPDATE checksum = '00' \
+         WHERE version = 1 SETTINGS mutations_sync = 1",
+    )
+    .await?;
+
+    assert!(matches!(
+        ensure_schema(&database.client, &writer, "trace_test", 7).await,
+        Err(Error::Migration(MigrateError::VersionMismatch(1)))
+    ));
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn concurrent_schema_setup_succeeds(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    let (first, second, third, fourth) = tokio::join!(
+        ensure_schema(&database.client, &writer, "trace_test", 7),
+        ensure_schema(&database.client, &writer, "trace_test", 7),
+        ensure_schema(&database.client, &writer, "trace_test", 7),
+        ensure_schema(&database.client, &writer, "trace_test", 7),
+    );
+    for result in [first, second, third, fourth] {
+        result?;
+    }
+    let tables = read_json(
+        &database,
+        "SELECT count() AS tables FROM system.tables \
+         WHERE database = 'trace_test' AND name IN \
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs')",
+    )
+    .await?;
+    assert_eq!(tables["data"][0]["tables"].as_u64(), Some(3));
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        migration_versions()
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn existing_schema_without_ledger_is_adopted(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    for statement in schema_statements("trace_test", 7)? {
+        execute_write(&database, &statement).await?;
+    }
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let span = serde_json::from_value(serde_json::json!({
+        "Timestamp": timestamp, "TraceId": "trace-adopted", "SpanId": "span-adopted",
+        "ParentSpanId": "", "ServiceName": "proxy", "SpanName": "request",
+        "Input": "existing row", "ResourceAttributes": {}, "SpanAttributes": {}
+    }))?;
+    insert_rows(&database, "otel_traces", vec![span]).await?;
+
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+
+    assert_eq!(table_rows(&database, "otel_traces").await?, 1);
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        migration_versions()
     );
     Ok(())
 }
@@ -787,6 +955,60 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
 
 #[rstest]
 #[tokio::test]
+async fn retention_reconciliation_updates_each_table_ttl(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    apply_migrations(&database.client, &writer, "trace_test", 7).await?;
+    reconcile_retention(&database.client, &writer, "trace_test", 7).await?;
+    let ttl_queries = read_json(
+        &database,
+        "SELECT name, create_table_query FROM system.tables \
+         WHERE database = 'trace_test' AND name IN \
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs') ORDER BY name",
+    )
+    .await?;
+    let ttl_queries = ttl_queries["data"].as_array().expect("retention tables");
+    assert_eq!(
+        ttl_queries
+            .iter()
+            .map(|row| row["name"].as_str().expect("table name"))
+            .collect::<Vec<_>>(),
+        ["agent_traces_by_key", "otel_traces", "spend_logs"]
+    );
+    for row in ttl_queries {
+        let query = row["create_table_query"]
+            .as_str()
+            .expect("table creation query");
+        assert!(
+            query.contains("toIntervalDay(7)") || query.contains("INTERVAL 7 DAY"),
+            "{query}"
+        );
+    }
+
+    reconcile_retention(&database.client, &writer, "trace_test", 3).await?;
+    let ttl_queries = read_json(
+        &database,
+        "SELECT name, create_table_query FROM system.tables \
+         WHERE database = 'trace_test' AND name IN \
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs') ORDER BY name",
+    )
+    .await?;
+    for row in ttl_queries["data"].as_array().expect("retention tables") {
+        let query = row["create_table_query"]
+            .as_str()
+            .expect("table creation query");
+        assert!(
+            query.contains("toIntervalDay(3)") || query.contains("INTERVAL 3 DAY"),
+            "{query}"
+        );
+    }
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
 async fn schema_statement_timeout_maps_to_transport_error() -> TestResult {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
@@ -804,7 +1026,7 @@ async fn schema_statement_timeout_maps_to_transport_error() -> TestResult {
     .await;
     server.abort();
     assert!(
-        matches!(result, Ok(Err(Error::SchemaTransport))),
+        matches!(result, Ok(Err(Error::Storage(StorageError::Transport)))),
         "{result:?}"
     );
     Ok(())
