@@ -301,7 +301,7 @@ class XAIVideoConfig(BaseVideoConfig):
             seconds=seconds,
             usage=response_data.get("usage") if isinstance(response_data.get("usage"), dict) else {},
         )
-        video_obj._hidden_params["video_url"] = video_url
+        video_obj._hidden_params["video_url"] = video_url  # pyright: ignore[reportPrivateUsage]  # no public setter
         if custom_llm_provider and video_obj.id and video_obj.id != "unknown":
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, response_data.get("model"))
         return video_obj

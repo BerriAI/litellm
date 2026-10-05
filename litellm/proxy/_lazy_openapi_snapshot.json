@@ -18592,6 +18592,72 @@
           "title": "ApplyPatchTool",
           "type": "object"
         },
+        "Body_image_edit_api_openai_deployments__model__images_edits_post": {
+          "properties": {
+            "image": {
+              "anyOf": [
+                {
+                  "items": {
+                    "contentMediaType": "application/octet-stream",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Image"
+            },
+            "image[]": {
+              "anyOf": [
+                {
+                  "items": {
+                    "contentMediaType": "application/octet-stream",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Image[]"
+            },
+            "mask": {
+              "anyOf": [
+                {
+                  "items": {
+                    "contentMediaType": "application/octet-stream",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mask"
+            },
+            "mask[]": {
+              "anyOf": [
+                {
+                  "items": {
+                    "contentMediaType": "application/octet-stream",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mask[]"
+            }
+          },
+          "title": "Body_image_edit_api_openai_deployments__model__images_edits_post",
+          "type": "object"
+        },
         "CachedTokensDetails": {
           "properties": {
             "audio_tokens": {
@@ -28725,6 +28791,15 @@
               }
             }
           ],
+          "requestBody": {
+            "content": {
+              "multipart/form-data": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_image_edit_api_openai_deployments__model__images_edits_post"
+                }
+              }
+            }
+          },
           "responses": {
             "200": {
               "content": {
