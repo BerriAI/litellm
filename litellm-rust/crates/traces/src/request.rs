@@ -1,3 +1,6 @@
+pub const TRACE_PAGE_SIZE_MIN: u16 = 1;
+pub const TRACE_PAGE_SIZE_MAX: u16 = 500;
+
 #[macro_rules_attribute::apply(request_type)]
 #[derive(Clone, Debug)]
 pub struct TraceListRequest {
@@ -21,7 +24,10 @@ pub struct TraceDetailRequest {
     #[cfg_attr(feature = "schema", schemars(length(max = 512)))]
     pub cursor: Option<String>,
     #[serde(default)]
-    #[cfg_attr(feature = "schema", schemars(range(min = 1, max = 500)))]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(min = TRACE_PAGE_SIZE_MIN, max = TRACE_PAGE_SIZE_MAX))
+    )]
     pub page_size: Option<u16>,
 }
 
