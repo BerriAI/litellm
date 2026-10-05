@@ -185,6 +185,38 @@ def test_unsupported_capabilities_fail_explicitly(session: Mapping[str, object])
         _request(AlibabaTokenPlanRealtimeConfig(), {"type": "session.update", "session": session})
 
 
+@pytest.mark.parametrize("layout", ("beta", "ga"))
+@pytest.mark.parametrize("disabled_control", ("create_response", "interrupt_response"))
+def test_unsupported_turn_control_cannot_be_overwritten_or_reenabled(layout: str, disabled_control: str) -> None:
+    config: Final = AlibabaTokenPlanRealtimeConfig()
+    clean_session: Final = {"input_audio_format": "pcm", "turn_detection": {"type": "server_vad"}}
+    _request(config, {"type": "session.update", "session": clean_session})
+    disabled: Final = {"type": "server_vad", disabled_control: False}
+    enabled: Final = {"type": "server_vad"}
+    session: Final = {
+        "turn_detection": disabled if layout == "beta" else enabled,
+        "audio": {"input": {"turn_detection": disabled if layout == "ga" else enabled}},
+    }
+    with pytest.raises(RealtimeTranscriptionProtocolError):
+        _request(config, {"type": "session.update", "session": session})
+
+    _request(config, {"type": "session.update", "session": clean_session})
+    with pytest.raises(RealtimeTranscriptionProtocolError):
+        _audio_frames(config, b"\x00\x01" * 160)
+    with pytest.raises(RealtimeTranscriptionProtocolError):
+        _request(
+            config,
+            {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_audio", "audio": "AAAAAA=="}],
+                },
+            },
+        )
+
+
 @pytest.mark.parametrize(
     "event",
     (

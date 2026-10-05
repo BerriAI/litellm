@@ -64,15 +64,21 @@ def _tool(tool: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     return {"type": "function", "function": {key: value for key, value in function.items() if key != "type"}}
 
 
+def _disables_turn_control(value: JsonValue | None) -> bool:
+    return isinstance(value, dict) and (
+        value.get("create_response") is False or value.get("interrupt_response") is False
+    )
+
+
 def _turn_detection(value: JsonValue) -> Mapping[str, JsonValue] | None:
     if value is None:
         return None
     config: Final = json_mapping(value, "turn_detection")
     if config.get("type", "server_vad") not in ("server_vad", "smart_turn"):
         raise RealtimeTranscriptionProtocolError("Qwen Audio turn_detection supports server_vad, smart_turn, or null")
-    if config.get("create_response") is False or config.get("interrupt_response") is False:
+    if _disables_turn_control(value):
         raise RealtimeTranscriptionProtocolError(
-            "Qwen Audio VAD always creates responses and interrupts speech; use turn_detection=null for manual control"
+            "Qwen Audio cannot disable VAD responses or interruptions; transcription guardrails are not supported"
         )
     return {key: value for key, value in config.items() if key not in ("create_response", "interrupt_response")}
 
@@ -148,6 +154,7 @@ class AlibabaTokenPlanRealtimeConfig(BaseRealtimeConfig):
     def __init__(self) -> None:
         self._transcription_prefixes: Mapping[tuple[str, int], str] = MappingProxyType({})
         self._input_rate_declared = False
+        self._audio_blocked = False
 
     def validate_environment(
         self, headers: Mapping[str, str], model: str, api_key: str | None = None
@@ -159,6 +166,16 @@ class AlibabaTokenPlanRealtimeConfig(BaseRealtimeConfig):
         return f"{url.replace('https://', 'wss://', 1).replace('http://', 'ws://', 1)}?{urlencode({'model': model})}"
 
     def _session_request(self, session: Mapping[str, JsonValue]) -> Mapping[str, object]:
+        raw_audio: Final = session.get("audio")
+        raw_audio_input: Final = raw_audio.get("input") if isinstance(raw_audio, dict) else None
+        turn_controls: Final = (
+            session.get("turn_detection"),
+            raw_audio_input.get("turn_detection") if isinstance(raw_audio_input, dict) else None,
+        )
+        if any(_disables_turn_control(value) for value in turn_controls):
+            self._audio_blocked = True
+        for turn_control in turn_controls:
+            _turn_detection(turn_control)
         if session.get("type", "realtime") != "realtime":
             raise RealtimeTranscriptionProtocolError("Qwen Audio supports realtime conversation sessions only")
         if session.get("tool_choice", "auto") != "auto":
@@ -207,10 +224,14 @@ class AlibabaTokenPlanRealtimeConfig(BaseRealtimeConfig):
         if content.get("type") == "text":
             return {**content, "type": "output_text"}
         if content.get("type") == "input_audio":
-            self._require_declared_input_rate()
+            self._validate_audio_input()
         return content
 
-    def _require_declared_input_rate(self) -> None:
+    def _validate_audio_input(self) -> None:
+        if self._audio_blocked:
+            raise RealtimeTranscriptionProtocolError(
+                "Qwen Audio realtime audio is blocked because the session requested unsupported turn controls"
+            )
         if not self._input_rate_declared:
             raise RealtimeTranscriptionProtocolError(
                 "Qwen Audio realtime input is 16000 Hz PCM16; declare that input format in session.update before "
@@ -227,7 +248,7 @@ class AlibabaTokenPlanRealtimeConfig(BaseRealtimeConfig):
                 json.dumps({**event, "session": self._session_request(json_mapping(event.get("session"), "session"))}),
             )
         if event_type == "input_audio_buffer.append":
-            self._require_declared_input_rate()
+            self._validate_audio_input()
         if event_type == "conversation.item.create":
             return (json.dumps({**event, "item": self._item_request(json_mapping(event.get("item"), "item"))}),)
         if event_type == "response.create" and "response" in event:
