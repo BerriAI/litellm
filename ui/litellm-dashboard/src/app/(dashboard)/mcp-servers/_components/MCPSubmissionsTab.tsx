@@ -19,6 +19,7 @@ import {
   updateConfigFieldSetting,
 } from "@/components/networking";
 import { MCPServer, MCPSubmissionsSummary } from "@/components/mcp_tools/types";
+import type { generalSettingsItem } from "@/app/(dashboard)/router-settings/_components/general_settings";
 import { FIELD_GROUPS, MCP_REQUIRED_FIELD_DEFS, SETTINGS_KEY } from "./MCPStandardsSettings";
 import { toast } from "@/lib/toast";
 
@@ -485,10 +486,8 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
         }),
       ]);
       setSummary(res);
-      if (settings?.data && Array.isArray(settings.data)) {
-        const row = settings.data.find(
-          (r: { field_name: string; field_value: unknown }) => r.field_name === SETTINGS_KEY,
-        );
+      if (Array.isArray(settings)) {
+        const row = settings.find((r: generalSettingsItem) => r.field_name === SETTINGS_KEY);
         if (row && Array.isArray(row.field_value)) {
           setRequiredFields(row.field_value as string[]);
         }
