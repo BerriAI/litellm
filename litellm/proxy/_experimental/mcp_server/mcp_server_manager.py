@@ -4649,8 +4649,8 @@ class MCPServerManager:
         user_api_key_auth: UserAPIKeyAuth | None,
         *,
         mcp_auth_header: str | dict[str, str] | None = None,
-        extra_headers: dict[str, str] | None = None,
-        raw_headers: dict[str, str] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
+        raw_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
     ) -> "CatalogListResult":
         from mcp.types import ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult
