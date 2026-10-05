@@ -4,6 +4,7 @@ from typing import Final
 import pytest
 
 from litellm.proxy.lens.agent_workspace import (
+    EvidenceReadError,
     EvidenceRequest,
     EvidenceWorkspace,
     PythonRequest,
@@ -76,14 +77,15 @@ async def test_original_content_is_reassembled_across_character_and_span_pages()
 
 @pytest.mark.asyncio
 async def test_broken_pagination_fails_explicitly_instead_of_losing_evidence() -> None:
-    run: Final = execution("run")
+    run: Final = execution("run").model_copy(update=MappingProxyType({"root_seen": True}))
 
     async def read(_identity: str, _cursor: str, _offset: int) -> ExecutionContent:
         return ExecutionContent(execution=run, parts=(), next_cursor="repeat")
 
     workspace: Final = await load_workspace(Sample(executions=(run,), eligible=1), read, 1)
-    with pytest.raises(ValueError, match="repeated a pagination cursor"):
+    with pytest.raises(EvidenceReadError, match="repeated a pagination cursor"):
         await workspace.get_parts()
+    assert (await workspace.summary(run.id)).partial
 
 
 @pytest.mark.asyncio

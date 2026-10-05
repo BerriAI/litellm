@@ -7,7 +7,7 @@ from typing import Final, Literal
 from .activity import ActivityTracker, observed_model, track_activity
 from .agent_review import FINDINGS_TASK, Findings, review_context, validate_findings
 from .agent_runtime import run_agent
-from .agent_workspace import EvidenceWorkspace, ReviewRecord, load_workspace
+from .agent_workspace import EvidenceReadError, EvidenceWorkspace, ReviewRecord, load_workspace
 from .analysis import (
     AnalysisContextExceeded,
     AnalysisResponseError,
@@ -188,7 +188,7 @@ async def investigate_context_candidate(
             activity=activity,
         )
         return CandidateInvestigation(findings=response.findings)
-    except AnalysisResponseError as error:
+    except (AnalysisResponseError, EvidenceReadError) as error:
         return CandidateInvestigation(error=str(error))
 
 
@@ -237,7 +237,7 @@ async def analyze_context(
                     enable_python=access == "python",
                     activity=activity,
                 )
-            except AnalysisResponseError as error:
+            except (AnalysisResponseError, EvidenceReadError) as error:
                 return Examined(
                     execution=execution,
                     observations=(),

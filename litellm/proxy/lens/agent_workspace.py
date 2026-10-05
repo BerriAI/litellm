@@ -11,6 +11,10 @@ from .models import Evidence, Execution, ExecutionContent, Record, Sample, Trace
 from .python_tool import PythonInputError
 
 
+class EvidenceReadError(ValueError):
+    pass
+
+
 class SessionContent(Record):
     execution: Execution
     parts: tuple[TracePart, ...] = ()
@@ -90,6 +94,10 @@ class EvidenceWorkspace:
     def with_reviews(self, records: tuple[ReviewRecord, ...]) -> "EvidenceWorkspace":
         return replace(self, reviews=records)
 
+    def _content_error(self, execution: Execution, message: str) -> EvidenceReadError:
+        self.partial_sessions.add(execution.id)
+        return EvidenceReadError(message)
+
     async def summary(self, execution_id: str) -> SessionSummary:
         session: Final = next(session for session in self.sessions if session.execution.id == execution_id)
         return SessionSummary(
@@ -125,7 +133,9 @@ class EvidenceWorkspace:
             if page.next_cursor is None or (span_ids and not missing):
                 return
             if page.next_cursor in seen:
-                raise ValueError("Original trace content repeated a pagination cursor before completion")
+                raise self._content_error(
+                    session.execution, "Original trace content repeated a pagination cursor before completion"
+                )
             cursor = page.next_cursor
             seen = seen | frozenset((cursor,))
 
@@ -142,7 +152,9 @@ class EvidenceWorkspace:
             else source.part
         )
         if first is None:
-            raise ValueError("Original trace span disappeared while reading its character range")
+            raise self._content_error(
+                source.execution, "Original trace span disappeared while reading its character range"
+            )
         yield first
         pending = first.truncated  # rebind-ok: follow complete character pages for this span
         offset = start + 8001  # rebind-ok: gateway character offsets are one-based
@@ -151,7 +163,9 @@ class EvidenceWorkspace:
             if (
                 part := next((part for part in page.parts if part.span_id == source.part.span_id), None)
             ) is None or not part.content:
-                raise ValueError("Original trace content ended before all truncated spans were read")
+                raise self._content_error(
+                    source.execution, "Original trace content ended before all truncated spans were read"
+                )
             yield part
             pending = part.truncated
             offset += 8000

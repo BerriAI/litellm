@@ -534,7 +534,7 @@ async def test_candidate_investigator_rejects_fabricated_original_quotes() -> No
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ("source", "model"))
+@pytest.mark.parametrize("failure", ("source", "model", "content"))
 async def test_candidate_distinguishes_gateway_schema_failure_from_malformed_model_output(failure: str) -> None:
     run: Final = execution("run")
     calls: Final = SimpleQueue[ModelRequest]()
@@ -542,6 +542,8 @@ async def test_candidate_distinguishes_gateway_schema_failure_from_malformed_mod
 
     async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
         reads.put(identity)
+        if failure == "content":
+            return ExecutionContent(execution=run, parts=(), next_cursor="repeat")
         return ExecutionContent.model_validate({"execution": run.model_dump(), "parts": "malformed gateway evidence"})
 
     async def model(request: ModelRequest) -> ModelResult:
@@ -576,6 +578,12 @@ async def test_candidate_distinguishes_gateway_schema_failure_from_malformed_mod
         assert raised.value.errors()[0]["loc"] == ("parts",)
         assert calls.qsize() == 1
         assert reads.get_nowait() == run.id
+    elif failure == "content":
+        incomplete: Final = await investigate_context_candidate(claim, candidate, workspace, model)
+        assert incomplete.findings == ()
+        assert "repeated a pagination cursor" in incomplete.error
+        assert calls.qsize() == 1
+        assert tuple(reads.get_nowait() for _ in range(reads.qsize())) == (run.id, run.id)
     else:
         result: Final = await investigate_context_candidate(claim, candidate, workspace, model)
         assert result.findings == ()
@@ -617,7 +625,18 @@ async def test_investigator_only_injects_candidate_sessions_for_full_access(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("failure", "supported_finding"), (("invalid", True), ("context", True), ("invalid", False)))
+@pytest.mark.parametrize(
+    ("failure", "supported_finding"),
+    (
+        ("invalid", True),
+        ("context", True),
+        ("invalid", False),
+        ("cursor", True),
+        ("span", True),
+        ("eof", True),
+        ("cursor", False),
+    ),
+)
 async def test_failed_session_review_preserves_other_results_and_reports_its_error(
     failure: str, supported_finding: bool
 ) -> None:
@@ -627,6 +646,24 @@ async def test_failed_session_review_preserves_other_results_and_reports_its_err
     reviews: Final = SimpleQueue[Review]()
 
     async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        if identity == "failed" and failure == "cursor":
+            return ExecutionContent(execution=runs[0], parts=(), next_cursor="repeat")
+        if identity == "failed" and failure in ("span", "eof"):
+            return ExecutionContent(
+                execution=runs[0],
+                parts=(
+                    TracePart(
+                        execution_id=identity,
+                        span_id="child",
+                        name="tool",
+                        kind="tool",
+                        content="x" * 8000 if _offset == 1 else "",
+                        truncated=True,
+                    ),
+                )
+                if _offset == 1 or failure == "eof"
+                else (),
+            )
         return ExecutionContent(
             execution=next(run for run in runs if run.id == identity),
             parts=(TracePart(execution_id=identity, span_id="child", name="tool", kind="tool", content="timeout"),),
@@ -642,6 +679,17 @@ async def test_failed_session_review_preserves_other_results_and_reports_its_err
         if request.purpose == "extract":
             assigned: Final = AssignedSession.model_validate_json(payload.supplied).execution
             if assigned.name == "failed":
+                if failure in ("cursor", "span", "eof"):
+                    return ModelResult(
+                        content=AgentTurn[Extraction](
+                            tools=(
+                                EvidenceRequest(
+                                    action="read", execution_id=assigned.id, char_start=1 if failure == "span" else 0
+                                ),
+                            )
+                        ).model_dump_json(),
+                        cost=0,
+                    )
                 return ModelResult(
                     content="raw-private-response-sentinel", cost=0, context_exceeded=failure == "context"
                 )
@@ -703,10 +751,13 @@ async def test_failed_session_review_preserves_other_results_and_reports_its_err
     }
     assert result.coverage.screened == 2
     assert result.coverage.unassessable == 1
+    assert result.coverage.partial == int(failure in ("cursor", "span", "eof"))
     assert result.coverage.investigated == int(supported_finding)
     assert result.error
     assert "raw-private-response-sentinel" not in result.error
     assert ("context window" in result.error) is (failure == "context")
+    if failure in ("cursor", "span", "eof"):
+        assert "Original trace" in result.error
     completed: Final = tuple(reviews.get_nowait() for _ in range(reviews.qsize()))
     assert {review.execution_id: review.cannot_assess for review in completed} == {"failed": True, "valid": False}
 
@@ -793,7 +844,8 @@ async def test_cross_session_observations_attribute_assessments_and_candidates_o
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ("cancelled", "transport", "budget"))
-async def test_investigation_propagates_systemic_review_failures(failure: str) -> None:
+@pytest.mark.parametrize("boundary", ("model", "source"))
+async def test_investigation_propagates_systemic_review_failures(failure: str, boundary: str) -> None:
     request: Final = httpx.Request("POST", "https://worker.invalid/model")
     error: Final = (
         asyncio.CancelledError()
@@ -806,12 +858,18 @@ async def test_investigation_propagates_systemic_review_failures(failure: str) -
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
 
     async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        if boundary == "source":
+            raise error
         return ExecutionContent(
             execution=run,
             parts=(TracePart(execution_id=identity, span_id="span", name="tool", kind="tool", content="recorded"),),
         )
 
     async def model(_request: ModelRequest) -> ModelResult:
+        if boundary == "source":
+            return ModelResult(
+                content=AgentTurn[Extraction](tools=(EvidenceRequest(action="read"),)).model_dump_json(), cost=0
+            )
         raise error
 
     with pytest.raises(type(error)) as raised:
