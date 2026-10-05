@@ -33,7 +33,7 @@ class ScimUserResponse(BaseModel):
     name: ScimName | None = None
     emails: list[ScimEmail] | None = None
     groups: list[ScimGroupRef] | None = None
-    active: bool = True
+    active: bool
 
 
 def _scim_request(
