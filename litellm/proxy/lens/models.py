@@ -45,23 +45,26 @@ class Check(Record):
     enabled: bool = True
 
 
-class LensSettings(Record):
-    name: str = Field(min_length=1)
-    context: str = Field(default="")
+class ActivitySelection(Record):
     source: Literal["traces", "requests", "both"] = "traces"
-    lookback_hours: LookbackHours = 24
     service: str = Field(default="")
     agent_name: str = Field(default="")
     filters: tuple[MetadataFilter, ...] = Field(default=())
+    sample_size: int | None = Field(default=None, ge=1)
+    sample_percent: float = Field(default=100, gt=0, le=100, allow_inf_nan=False)
+    team_id: str = ""
+    execution_ids: tuple[str, ...] = ()
+
+
+class LensSettings(ActivitySelection):
+    name: str = Field(min_length=1)
+    context: str = Field(default="")
+    lookback_hours: LookbackHours = 24
     checks: tuple[Check, ...] = ()
     model: str = Field(min_length=1)
     enabled: bool = True
     interval_minutes: IntervalMinutes = 15
-    sample_size: int | None = Field(default=None, ge=1)
-    sample_percent: float = Field(default=100, gt=0, le=100, allow_inf_nan=False)
     concurrency: int = Field(default=8, ge=1)
-    team_id: str = ""
-    execution_ids: tuple[str, ...] = ()
     monthly_budget: float = Field(default=100, gt=0, allow_inf_nan=False)
 
     @model_validator(mode="after")
@@ -204,6 +207,49 @@ class Step(Record):
     cost: float = 0
 
 
+MAX_REVIEWS = 60
+
+
+class ReviewSpan(Record):
+    span_id: str
+    name: str = Field(max_length=120)
+    kind: str = Field(max_length=40)
+    preview: str = Field(max_length=240)
+    cited: bool = False
+
+
+class ReviewVerdict(Record):
+    check_id: str
+    kind: Literal["issue", "pattern"]
+    summary: str = Field(max_length=300)
+
+
+class Review(Record):
+    execution_id: str
+    trace_id: str
+    agent: str
+    name: str
+    spans: tuple[ReviewSpan, ...] = Field(default=(), max_length=8)
+    reasoning: str = Field(default="", max_length=800)
+    verdicts: tuple[ReviewVerdict, ...] = ()
+    cannot_assess: bool = False
+    model: str
+    duration_ms: int = Field(ge=0)
+    at: datetime
+
+
+class ReviewPage(Record):
+    reviews: tuple[Review, ...]
+    reviewed: int
+
+
+class InFlight(Record):
+    execution_id: str
+    trace_id: str
+    agent: str
+    started_at: datetime
+
+
 class Job(Record):
     id: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
@@ -224,6 +270,9 @@ class Job(Record):
     findings: tuple[Finding, ...] | None = None
     assessments: tuple[RunAssessment, ...] = ()
     steps: tuple[Step, ...] = ()
+    reviews: tuple[Review, ...] = ()
+    reviewed: int = 0
+    reading: tuple[InFlight, ...] = ()
     trigger: Literal["schedule", "manual"] = "schedule"
 
 
@@ -252,6 +301,7 @@ class Worker(Record):
 
 
 class WorkerCreated(Record):
+    image: str
     worker: Worker
     token: str
 
@@ -303,6 +353,8 @@ class Claim(Record):
 class Progress(Record):
     stage: str = Field()
     coverage: Coverage = Coverage()
+    review: Review | None = None
+    reading: tuple[InFlight, ...] | None = None
 
 
 class Result(Record):

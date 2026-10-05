@@ -29,6 +29,7 @@ export function sampledExecutions(lens: Lens) {
 }
 
 export function findingAgents(lens: Lens, finding: Finding): readonly string[] {
+  if (lens.settings.agent_name) return [lens.settings.agent_name];
   const services = new Map(sampledExecutions(lens).map((run) => [run.id, run.service] as const));
   const seen = new Set(finding.occurrences.map((id) => services.get(id)).filter((s): s is string => !!s));
   if (seen.size) return [...seen].sort();
@@ -43,20 +44,34 @@ function groupBy<T>(items: readonly T[], key: (item: T) => string): Map<string, 
   }, new Map<string, T[]>());
 }
 
+function inboxGroupKey(lens: Lens, finding: Finding, agents: readonly string[]): string {
+  const check = lens.settings.checks.find((candidate) => candidate.id === finding.check_id);
+  return JSON.stringify([
+    lens.scope.team_id,
+    lens.scope.api_key_hash,
+    lens.scope.all_teams,
+    lens.settings.source,
+    agents,
+    finding.check_id,
+    check?.instruction ?? lens.id,
+    finding.title.trim().toLowerCase(),
+  ]);
+}
+
 export function inboxRows(lenses: readonly Lens[]): InboxRow[] {
   const open = lenses.flatMap((lens) =>
     lens.findings
       .filter((f) => f.status === "open" && f.kind === "issue")
       .map((finding) => ({ lens, finding, agents: findingAgents(lens, finding) })),
   );
-  const grouped = groupBy(open, ({ agents, finding }) => `${agents.join(",")}::${finding.title.trim().toLowerCase()}`);
-  return [...grouped.entries()]
-    .map(([key, sources]): InboxRow => {
+  const grouped = groupBy(open, ({ lens, agents, finding }) => inboxGroupKey(lens, finding, agents));
+  return [...grouped.values()]
+    .map((sources): InboxRow => {
       const best = sources.reduce((a, b) =>
         priorityRank[a.finding.priority ?? "medium"] <= priorityRank[b.finding.priority ?? "medium"] ? a : b,
       );
       return {
-        key,
+        key: findingKey(sources[0].lens, sources[0].finding),
         title: best.finding.title,
         agents: best.agents,
         priority: best.finding.priority ?? "medium",
@@ -79,6 +94,29 @@ export function filterInbox(rows: readonly InboxRow[], { agent, priority }: Inbo
 
 export function inboxAgents(rows: readonly InboxRow[]): string[] {
   return [...new Set(rows.flatMap((row) => row.agents))].sort();
+}
+
+export function openFindings(lens: Lens): Finding[] {
+  return lens.findings
+    .filter((f) => f.status === "open" && f.kind === "issue")
+    .sort(
+      (a, b) =>
+        priorityRank[a.priority ?? "medium"] - priorityRank[b.priority ?? "medium"] ||
+        Date.parse(b.last_seen) - Date.parse(a.last_seen),
+    );
+}
+
+export const findingKey = (lens: Lens, finding: Finding) => `${lens.id}:${finding.id}`;
+
+export interface OwnedFinding {
+  readonly lens: Lens;
+  readonly finding: Finding;
+}
+
+export function findFinding(lenses: readonly Lens[], key: string): OwnedFinding | undefined {
+  return lenses
+    .flatMap((lens) => lens.findings.map((finding) => ({ lens, finding })))
+    .find(({ lens, finding }) => findingKey(lens, finding) === key);
 }
 
 export function stepLine(step: Step): string {
@@ -120,4 +158,16 @@ const WINDOW_FORMAT: Intl.DateTimeFormatOptions = {
 export function windowLabel(job: Job): string {
   const fmt = (iso: string) => new Date(iso).toLocaleString(undefined, WINDOW_FORMAT);
   return `${fmt(job.start)} → ${fmt(job.end)}`;
+}
+
+export function inboxFinding(row: InboxRow): Finding {
+  const primary = row.sources.find(({ finding }) => finding.priority === row.priority) ?? row.sources[0];
+  const evidence = row.sources.flatMap(({ finding }) => finding.evidence);
+  return {
+    ...primary.finding,
+    priority: row.priority,
+    last_seen: row.lastSeen,
+    occurrences: [...new Set(row.sources.flatMap(({ finding }) => finding.occurrences))],
+    evidence: [...new Map(evidence.map((quote) => [JSON.stringify(quote), quote])).values()],
+  };
 }

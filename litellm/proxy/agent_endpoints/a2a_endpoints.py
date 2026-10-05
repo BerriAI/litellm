@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -78,6 +78,9 @@ _PASCAL_TO_WIRE: Final[Mapping[str, str]] = {
 }
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 def _sse_event(payload: object) -> str:
     """Frame a JSON-RPC object as a single A2A SSE event (``data: <json>\\n\\n``)."""
     return f"data: {json.dumps(payload)}\n\n"
@@ -91,7 +94,7 @@ def _to_jsonrpc_object(chunk: object) -> object:
     """
     if isinstance(chunk, (str, bytes, bytearray)):
         try:
-            return json.loads(chunk)
+            return _DECODED_JSON.validate_python(json.loads(chunk))
         except (json.JSONDecodeError, UnicodeDecodeError):
             return chunk
     if hasattr(chunk, "model_dump"):

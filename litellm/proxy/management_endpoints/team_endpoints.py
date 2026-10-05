@@ -123,7 +123,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     build_model_max_budget_usage,
     resolve_model_budget,
 )
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_daily_activity import (
     InvalidDateRange,
@@ -1721,7 +1721,7 @@ async def new_team(
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
 
         # Serialize router_settings to JSON (matching key creation pattern)
-        router_settings_value: Final = getattr(data, "router_settings", None)
+        router_settings_value: Final = data.router_settings
         router_settings_json: Final = (
             safe_dumps(router_settings_value) if router_settings_value is not None else safe_dumps({})
         )

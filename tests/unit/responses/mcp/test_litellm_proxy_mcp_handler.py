@@ -1,10 +1,11 @@
+import asyncio
 import importlib
 import subprocess
 import sys
 import textwrap
 import types
-from typing import Any, Final, cast
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, Final, Literal, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -12,15 +13,26 @@ from mcp.types import CallToolResult, TextContent
 from mcp.types import Tool as MCPTool
 from openai.types.responses.tool_param import Mcp
 
+import litellm
+from litellm.caching.caching import DualCache
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller, MCPServerManager
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.utils import ProxyLogging
 from litellm.responses import main as responses_main
 from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_module
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.mcp import MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.responses.main import OutputFunctionToolCall
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 
 class _DummyMCPResult:
@@ -1308,6 +1320,167 @@ async def test_responses_discovery_logs_sanitized_caller_headers(monkeypatch: py
     logged: Final = setup.call_args.kwargs["metadata"]["headers"]
     assert logged == {"x-app-id": "app-a", "x-nuid": "user-a", "x-user-id": "identity-a"}
     assert headers["x-mcp-deepwiki-authorization"] == "upstream-sentinel"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("real_listing", [False, True])
+@pytest.mark.parametrize(
+    ("allowed_tools", "expected_names"),
+    [
+        ([], ["responses_slot-echo", "responses_slot-status"]),
+        (["echo"], ["responses_slot-echo"]),
+        (["responses_slot-echo"], ["responses_slot-echo"]),
+        (["absent"], []),
+    ],
+)
+async def test_bridge_listing_leaves_the_callers_catalog_unchanged(
+    monkeypatch: pytest.MonkeyPatch, allowed_tools: list[str], expected_names: list[str], real_listing: bool
+) -> None:
+    manager: Final = mcp_operations.global_mcp_server_manager
+    server: Final = MCPServer(
+        server_id="responses-slot", name="responses_slot", alias="responses_slot", transport=MCPTransport.http
+    )
+    user: Final = UserAPIKeyAuth(api_key="sk-responses-slot", user_id="responder")
+    upstream: Final = [
+        MCPTool(name="echo", description="Echo text back", inputSchema={"type": "object"}),
+        MCPTool(name="status", description="Report status", inputSchema={"type": "object"}),
+        MCPTool(name="echo", description="Duplicate echo", inputSchema={"type": "object", "properties": {}}),
+    ]
+    fake_manager: Final = types.SimpleNamespace(
+        get_registry=MagicMock(return_value={}),
+        get_allowed_mcp_servers=AsyncMock(return_value=[]),
+        get_mcp_servers_from_ids=MagicMock(return_value=[]),
+        get_mcp_server_by_name=MagicMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+    with (
+        patch.dict(manager.tool_name_to_mcp_server_name_mapping),
+        patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch.object(manager, "_create_mcp_client", AsyncMock(return_value=object())),
+        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
+    ):
+        try:
+            if real_listing:
+                await manager._get_tools_from_server(server, user_api_key_auth=user, record_listing=True)
+            caller: Final = ListedToolsCaller(user_api_key_auth=user)
+            before: Final = {
+                tool.name: (listed.description, listed.input_schema)
+                for tool in upstream
+                if (listed := manager.get_listed_tool(server, tool.name, caller)) is not None
+            }
+            assert bool(before) is real_listing
+            tools, _server_names = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+                user_api_key_auth=user,
+                mcp_tools_with_litellm_proxy=[
+                    {
+                        "type": "mcp",
+                        "server_url": "litellm_proxy/mcp/responses-slot",
+                        "allowed_tools": allowed_tools,
+                    }
+                ],
+            )
+            recorded: Final = {
+                tool.name: (listed.description, listed.input_schema)
+                for tool in upstream
+                if (listed := manager.get_listed_tool(server, tool.name, caller)) is not None
+            }
+            assert recorded == before
+            assert (
+                manager.get_listed_tool(
+                    server, "echo", ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(api_key="sk-other-caller"))
+                )
+                is None
+            )
+        finally:
+            manager._drop_listed_tools(server.server_id)
+
+    assert [tool.name for tool in tools] == expected_names
+
+
+class _BridgeMetadataGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="bridge-metadata", event_hook=GuardrailEventHooks.pre_mcp_call, default_on=True)
+        self.calls: tuple[tuple[object, object], ...] = ()
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Logging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        if request_data.get("mcp_arguments") == {"probe": "bridge"}:
+            self.calls += ((request_data.get("mcp_tool_description"), request_data.get("mcp_input_schema")),)
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_concurrent_bridge_calls_use_their_own_served_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(server_id="bridge", name="bridge", transport=MCPTransport.http, url="http://upstream")
+    manager.registry = {server.server_id: server}
+    user: Final = UserAPIKeyAuth(api_key="sk-bridge", user_id="bridge-user")
+    upstream: Final = [
+        MCPTool(
+            name="echo",
+            description="Echo text",
+            inputSchema={"type": "object", "properties": {"text": {"type": "string"}}},
+        ),
+        MCPTool(name="status", description="Read status", inputSchema={"type": "object"}),
+    ]
+    client: Final = AsyncMock()
+    client.call_tool.return_value = CallToolResult(content=[TextContent(type="text", text="ok")])
+    manager._create_mcp_client = AsyncMock(return_value=client)
+    manager._fetch_tools_with_timeout = AsyncMock(return_value=upstream)
+    guardrail: Final = _BridgeMetadataGuardrail()
+    logger: Final = ProxyLogging(user_api_key_cache=DualCache())
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", logger)
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server]))
+    monkeypatch.setattr("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+    first_listed: Final = asyncio.Event()
+    second_listed: Final = asyncio.Event()
+
+    async def bridge(name: str, first: bool) -> None:
+        if not first:
+            await first_listed.wait()
+        tools, server_map = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+            user_api_key_auth=user,
+            mcp_tools_with_litellm_proxy=[
+                {"type": "mcp", "server_url": "litellm_proxy/mcp/bridge", "allowed_tools": [name]}
+            ],
+        )
+        (first_listed if first else second_listed).set()
+        await second_listed.wait()
+        result: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+            tool_server_map=server_map,
+            tool_calls=[
+                {"type": "function_call", "name": f"bridge-{name}", "arguments": '{"probe":"bridge"}', "call_id": name}
+            ],
+            user_api_key_auth=user,
+            served_tools=tools,
+        )
+        assert [entry["result"] for entry in result] == ["ok"]
+
+    try:
+        await asyncio.gather(bridge("echo", True), bridge("status", False))
+        assert sorted(guardrail.calls, key=str) == sorted(
+            ((tool.description, tool.input_schema) for tool in upstream), key=str
+        )
+        await manager.call_tool("bridge", "echo", {"probe": "bridge"}, user_api_key_auth=user, proxy_logging_obj=logger)
+        assert guardrail.calls[-1] == (None, None)
+        await manager._get_tools_from_server(
+            server, user_api_key_auth=user, proxy_logging_obj=logger, record_listing=True
+        )
+        await manager.call_tool("bridge", "echo", {"probe": "bridge"}, user_api_key_auth=user, proxy_logging_obj=logger)
+        assert guardrail.calls[-1] == (upstream[0].description, upstream[0].input_schema)
+    finally:
+        manager._drop_listed_tools(server.server_id)
+        ProxyLogging._callback_capabilities_cache.clear()
 
 
 def _toolset_gateway_manager(toolset_id: str, server_id: str) -> types.SimpleNamespace:

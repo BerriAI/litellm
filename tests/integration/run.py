@@ -15,7 +15,7 @@ GROUPS: Final = MappingProxyType(
         "management": ("management", "authorization", "configuration"),
         "accounting": ("pricing", "spend"),
         "database": ("database",),
-        "providers": ("providers", "routing", "streaming", "messages_endpoint"),
+        "providers": ("providers", "routing", "streaming", "messages_endpoint", "translation"),
         "extensions": ("observability", "compatibility"),
         "mcp": ("mcp",),
         "sdk": ("sdk",),
@@ -23,6 +23,7 @@ GROUPS: Final = MappingProxyType(
         "security": ("security",),
     }
 )
+GITHUB_FILES: Final = frozenset({"tests/integration/database/test_roi_observed.py"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +64,7 @@ def main() -> int:
         str(path.relative_to(root))
         for folder in GROUPS[options.group]
         for path in sorted((root / "tests/integration" / folder).rglob("test_*.py"))
+        if str(path.relative_to(root)) not in GITHUB_FILES
     )
     if options.list:
         print("\n".join(group_files))

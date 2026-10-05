@@ -31,9 +31,10 @@ pub use litellm_storage_clickhouse::{Connection, Parameter};
 pub use litellm_traces::{QueryScope, ReadQuery};
 pub use query::{QueryHelp, execute_read, query_help, query_sql};
 pub use query_access::QueryReaders;
-pub use reads::{get_span, get_span_error, get_trace, get_trace_page, list_traces};
+pub use reads::ClickHouseTraces;
 pub use schema::{
-    NORMALIZED_FIELD_DEFINITIONS, NormalizedFieldDefinition, ensure_schema, schema_statements,
+    NORMALIZED_FIELD_DEFINITIONS, NormalizedFieldDefinition, apply_migrations, ensure_schema,
+    reconcile_retention, schema_statements,
 };
 pub use span_row::span_rows;
 pub use sql::execute_named_read;

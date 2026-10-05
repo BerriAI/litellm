@@ -399,6 +399,7 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     _is_azure_model_router_request,
     _should_return_raw_model_name,
+    close_guarded_stream,
     create_response,
     log_llm_api_exception,
     open_sse_before_first_byte,
@@ -413,6 +414,7 @@ from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_pr
 from litellm.proxy.common_utils.codex_model_catalog import codex_model_list_body
 from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
+from litellm.proxy.common_utils.credential_hydration import decrypted_or_stored
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
 from litellm.proxy.common_utils.discoverable_model_filter import discoverable_rows, undiscoverable_model_names
@@ -421,6 +423,14 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
+from litellm.proxy.common_utils.fips import (
+    FIPS_MODE_ENV_VAR,
+    SSL_VERIFY_ENV_VAR,
+    enforce_fips_boot_verdict,
+    fips_boot_verdict,
+    is_fips_mode,
+    openssl_enforces_fips,
+)
 from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
@@ -901,6 +911,7 @@ from litellm.types.router import (
     RoutingGroup,
     RoutingPlugin,
     SearchToolTypedDict,
+    holds_secret_pointer,
     updateDeployment,
 )
 from litellm.types.router import ModelInfo as RouterModelInfo
@@ -1327,6 +1338,16 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             if isinstance(worker_config, dict):
                 await initialize_from_worker_config(worker_config)
 
+    enforce_fips_boot_verdict(
+        fips_boot_verdict(
+            raw_fips_mode=os.getenv(FIPS_MODE_ENV_VAR),
+            provider_enforces_fips=openssl_enforces_fips,
+            ssl_verify_environment=os.getenv(SSL_VERIFY_ENV_VAR),
+            ssl_verify_setting=litellm.ssl_verify,
+        ),
+        announce=announce_on_stderr_at_exit,
+    )
+
     enforce_master_key_boot_verdict(
         await with_stored_secrets_counted(
             master_key_boot_verdict(
@@ -1366,10 +1387,21 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             try:
                 result: Final = await migrate_passwords_to_scrypt_async(prisma_client)
                 verbose_proxy_logger.info("Password migration: %s", result)
+            except ValueError as e:
+                verbose_proxy_logger.error(
+                    "Password migration failed, so plaintext passwords stay unhashed in the database: %s. "
+                    "This is what an OpenSSL FIPS provider reports when the hashing algorithm is not approved.",
+                    e,
+                )
+                if is_fips_mode():
+                    raise
             except Exception as e:
                 verbose_proxy_logger.warning("Password migration skipped: %s", e)
 
-        asyncio.create_task(_run_pw_migration())
+        if is_fips_mode():
+            await _run_pw_migration()
+        else:
+            asyncio.create_task(_run_pw_migration())
 
         async def _run_agent_grant_id_migration() -> None:
             from litellm.proxy.agent_endpoints.agent_registry import (
@@ -1571,11 +1603,6 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         )
         if not model_info_scheduler.running:
             model_info_scheduler.start()
-
-    if scheduler is not None and prisma_client is not None:
-        from litellm.proxy.management_endpoints.roi_calculator_endpoints import register_scheduled_sync
-
-        register_scheduled_sync(scheduler)
 
     tracing_settings: Final = cast(  # cast-ok: Pydantic validates the legacy untyped settings value
         dict[str, object] | None,
@@ -5793,11 +5820,11 @@ class ProxyConfig:
             return config
 
         return {
-            key: self._resolved_config_value(value=value, depth=depth, max_depth=max_depth)
+            key: self._resolved_config_value(key=key, value=value, depth=depth, max_depth=max_depth)
             for key, value in config.items()
         }
 
-    def _resolved_config_value(self, value: object, depth: int, max_depth: int) -> object:
+    def _resolved_config_value(self, key: str, value: object, depth: int, max_depth: int) -> object:
         if isinstance(value, dict):
             return self._check_for_os_environ_vars(config=value, depth=depth + 1, max_depth=max_depth)
         if isinstance(value, list):
@@ -5807,7 +5834,7 @@ class ProxyConfig:
                 else item
                 for item in value
             ]
-        if isinstance(value, str) and value.startswith("os.environ/"):
+        if isinstance(value, str) and value.startswith("os.environ/") and not holds_secret_pointer(key):
             resolved: Final = get_secret(value)
             if resolved is None and secret_manager_would_be_consulted(value):
                 verbose_proxy_logger.warning("%s is absent from the configured secret manager", value)
@@ -6938,7 +6965,7 @@ class ProxyConfig:
             for model in model_list:
                 ### LOAD FROM os.environ/ ###
                 for k, v in model["litellm_params"].items():
-                    if isinstance(v, str) and v.startswith("os.environ/"):
+                    if isinstance(v, str) and v.startswith("os.environ/") and not holds_secret_pointer(k):
                         model["litellm_params"][k] = get_secret(v)
                 validate_deployment_max_agentic_loops(model)
                 validate_deployment_complexity_router_placement(model)
@@ -7349,7 +7376,7 @@ class ProxyConfig:
             for model in model_list:
                 ### LOAD FROM os.environ/ ###
                 for k, v in model["litellm_params"].items():
-                    if isinstance(v, str) and v.startswith("os.environ/"):
+                    if isinstance(v, str) and v.startswith("os.environ/") and not holds_secret_pointer(k):
                         model["litellm_params"][k] = get_secret(v)
 
                 ## check if they have model-id's ##
@@ -7394,7 +7421,11 @@ class ProxyConfig:
             return value
 
         decrypted_value: Final = decrypt_value_helper(value=value, key=key, return_original_value=True)
-        if isinstance(decrypted_value, str) and decrypted_value.startswith("os.environ/"):
+        if (
+            isinstance(decrypted_value, str)
+            and decrypted_value.startswith("os.environ/")
+            and not holds_secret_pointer(key)
+        ):
             return get_secret(decrypted_value)
         return decrypted_value
 
@@ -8130,6 +8161,8 @@ class ProxyConfig:
         self,
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
+        *,
+        ui_settings_already_synced: bool = False,
     ) -> ReconcileOutcome:
         """
         - Check db for new models
@@ -8152,7 +8185,8 @@ class ProxyConfig:
         Also re-reads the UI settings that back runtime flags. That runs before the lock, so a
         setting written through one pod reaches the others without waiting on a model reconcile.
         """
-        await sync_ui_settings_to_general_settings(prisma_client)
+        if not ui_settings_already_synced:
+            await sync_ui_settings_to_general_settings(prisma_client)
 
         async with MODEL_RECONCILE_LOCK:
             return await self._add_deployment_locked(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
@@ -9118,7 +9152,7 @@ class ProxyConfig:
 
         decrypted_credential_values: Final = {}
         for k, v in credential_object.credential_values.items():
-            decrypted_credential_values[k] = decrypt_value_helper(value=v, key=k) or v
+            decrypted_credential_values[k] = decrypted_or_stored(k, v)
 
         credential_object.credential_values = decrypted_credential_values
         return credential_object
@@ -9876,6 +9910,17 @@ async def async_data_generator(
     stream_completed = False
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
+    needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
+    stream_iterator: Final[AsyncIterator[object]] = (
+        proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_data=request_data,
+        )
+        if needs_iterator_wrap
+        else response
+    )
+    stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -9900,20 +9945,10 @@ async def async_data_generator(
         # per-chunk hook. Coalescing them into a single flag forced wasted
         # ``get_response_string`` work per chunk on every deployment that
         # happened to ship a streaming-iterator override (the default).
-        needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
         needs_per_chunk_hook: Final = proxy_logging_obj.needs_per_chunk_streaming_hook()
         is_raw_sse_stream: Final = bool(request_data.get("_litellm_raw_sse_stream"))
         strip_stream_usage: Final = bool(request_data.get("_litellm_strip_stream_usage"))
         raw_sse_buffer = ""
-
-        if needs_iterator_wrap:
-            stream_iterator = proxy_logging_obj.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_data=request_data,
-            )
-        else:
-            stream_iterator = response
 
         # A stream can start on a deployment with keepalive off and fall back
         # mid-stream to one that enables it: only skip wrapping altogether when
@@ -9923,7 +9958,7 @@ async def async_data_generator(
         # happens to start with it off.
         resolve_keepalive_seconds: Final = _make_keepalive_resolver(request_data)
         initial_keepalive_seconds: Final = resolve_keepalive_seconds(response)
-        stream_source: Final = (
+        stream_source = (
             _iter_with_keepalive(
                 stream_iterator.__aiter__(),
                 resolve_keepalive_seconds,
@@ -10064,6 +10099,9 @@ async def async_data_generator(
         # (a nested iterator hook would only see GeneratorExit on GC).
         if not stream_completed:
             client_disconnected = True
+        for guarded_layer in (stream_source, stream_iterator):
+            if guarded_layer is not response:
+                await close_guarded_stream(guarded_layer)
         raise
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)

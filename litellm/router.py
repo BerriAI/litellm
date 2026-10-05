@@ -307,6 +307,7 @@ from litellm.types.router import (
     RoutingStrategy,
     SearchToolTypedDict,
     TaggedPreRoutingStrategy,
+    holds_secret_pointer,
 )
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -3987,7 +3988,7 @@ class Router:
         model_info["original_model_id"] = original_model_id
         deployment_pydantic_obj: Final = Deployment(
             model_name=model_group,
-            litellm_params=LiteLLM_Params(**dynamic_litellm_params),
+            litellm_params=LiteLLM_Params.model_validate(dynamic_litellm_params),
             model_info=model_info,
         )
         Router._register_deployment_pricing(deployment=deployment_pydantic_obj)
@@ -9000,13 +9001,10 @@ class Router:
             if access_windows_error is not None:
                 raise ValueError(access_windows_error)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
-            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(
-                **(  # pyright: ignore[reportArgumentType]  # untyped merged dict; already true for every field here
-                    _litellm_params
-                    if zeroed_pricing is None
-                    else MappingProxyType({**_litellm_params, **zeroed_pricing})
-                )
+            merged_params: Final[Mapping[str, Any]] = (
+                _litellm_params if zeroed_pricing is None else MappingProxyType({**_litellm_params, **zeroed_pricing})
             )
+            litellm_params: Final[LiteLLM_Params] = LiteLLM_Params(**merged_params)
             warn_on_provider_credential_mismatch(model_name=_model_name, litellm_params=_litellm_params)
             deployment = Deployment(
                 **deployment_info,
@@ -9212,23 +9210,13 @@ class Router:
             if limit_violation is not None:
                 raise ValueError(limit_violation)
 
-        default_model: str | None = deployment.litellm_params.complexity_router_default_model
-
-        # If no default model specified, try to get from config tiers. Derived from the
-        # validated model, not the raw dict, so normalization (e.g. fallback_tier
-        # whitespace) is applied by its one owner before the tiers lookup.
-        if default_model is None and complexity_router_config:
-            validated: Final = ComplexityRouterConfig.model_validate(complexity_router_config)
-            # Custom tier sets name their fallback tier; built-in sets default to MEDIUM or SIMPLE
-            derived: Final = (
-                (validated.tiers.get(validated.fallback_tier) if validated.fallback_tier is not None else None)
-                or validated.tiers.get("MEDIUM")
-                or validated.tiers.get("SIMPLE")
+        default_model: Final = (
+            ComplexityRouterConfig.model_validate(complexity_router_config).resolve_default_model(
+                deployment.litellm_params.complexity_router_default_model
             )
-            if isinstance(derived, list):
-                default_model = derived[0] if derived else None
-            else:
-                default_model = derived
+            if complexity_router_config
+            else deployment.litellm_params.complexity_router_default_model
+        )
 
         if default_model is None:
             raise ValueError(
@@ -9362,7 +9350,7 @@ class Router:
                 continue
             deployment = Deployment(
                 model_name=model_name,
-                litellm_params=(lp if not isinstance(lp, dict) else LiteLLM_Params(**lp)),
+                litellm_params=(lp if not isinstance(lp, dict) else LiteLLM_Params.model_validate(lp)),
                 model_info=(entry.get("model_info") if isinstance(entry, dict) else entry.model_info),
             )
             if self._has_registered_strategy(self.adaptive_routers, model_name, self._deployment_tags(deployment)):
@@ -9584,7 +9572,7 @@ class Router:
             ## check if litellm params in os.environ
             if isinstance(_litellm_params, dict):
                 for k, v in _litellm_params.items():
-                    if isinstance(v, str) and v.startswith("os.environ/"):
+                    if isinstance(v, str) and v.startswith("os.environ/") and not holds_secret_pointer(k):
                         _litellm_params[k] = get_secret(v)
 
             _model_info: dict = model.pop("model_info", {})
@@ -10791,7 +10779,7 @@ class Router:
         if isinstance(litellm_params_data, LiteLLM_Params):
             litellm_params = litellm_params_data
         elif isinstance(litellm_params_data, dict) and "model" in litellm_params_data:
-            litellm_params = LiteLLM_Params(**litellm_params_data)
+            litellm_params = LiteLLM_Params.model_validate(litellm_params_data)
         else:
             raise ValueError(
                 f"Deployment missing valid litellm_params. "
@@ -11246,13 +11234,13 @@ class Router:
 
         return model_group_info
 
-    def get_model_group_info(self, model_group: str) -> ModelGroupInfo | None:
+    def get_model_group_info(self, model_group: str, *, include_hidden: bool = False) -> ModelGroupInfo | None:
         """
         For a given model group name, return the combined model info
 
         Returns:
         - ModelGroupInfo if able to construct a model group
-        - None if error constructing model group info or hidden model group
+        - None if error constructing model group info or hidden model group (unless include_hidden)
         """
         ## Check if model group alias
         if model_group in self.model_group_alias:
@@ -11260,7 +11248,7 @@ class Router:
             if isinstance(item, str):
                 _router_model_group = item
             elif isinstance(item, dict):
-                if item["hidden"] is True:
+                if item["hidden"] is True and not include_hidden:
                     return None
                 else:
                     _router_model_group = item["model"]
@@ -12302,6 +12290,16 @@ class Router:
         ]
         return _settings_to_return
 
+    def _switch_routing_strategy(self, routing_strategy: str | None, kwargs: Mapping[str, object]) -> None:
+        if routing_strategy == "lar1":
+            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
+
+            apply_lar1_routing_strategy(self, kwargs.get("routing_strategy_args"))
+            return
+        self.routing_strategy_init(
+            routing_strategy=routing_strategy, routing_strategy_args=kwargs.get("routing_strategy_args", {})
+        )
+
     def update_settings(self, **kwargs):
         """
         Update the router settings.
@@ -12315,6 +12313,7 @@ class Router:
         ]
 
         _existing_router_settings: Final = self.get_settings()
+        model_group_alias_before: Final = self.model_group_alias
         rebuild_routing_groups = False
         routing_args_updated = False
         for var in kwargs:
@@ -12338,20 +12337,7 @@ class Router:
                     if var == "routing_strategy":
                         value = self._normalize_strategy(value)
                         if _existing_router_settings["routing_strategy"] != value:
-                            if value == "lar1":
-                                from litellm.router_strategy.lar1_routing import (
-                                    apply_lar1_routing_strategy,
-                                )
-
-                                apply_lar1_routing_strategy(
-                                    self,
-                                    kwargs.get("routing_strategy_args"),
-                                )
-                            else:
-                                self.routing_strategy_init(
-                                    routing_strategy=value,
-                                    routing_strategy_args=kwargs.get("routing_strategy_args", {}),
-                                )
+                            self._switch_routing_strategy(value, kwargs)
                             rebuild_routing_groups = True
                     elif var == "routing_strategy_args":
                         routing_args_updated = value != self.routing_strategy_args
@@ -12361,6 +12347,9 @@ class Router:
 
         if routing_args_updated:
             self._apply_updated_routing_strategy_args()
+
+        if self.model_group_alias != model_group_alias_before:
+            self._invalidate_model_group_info_cache()
 
         if rebuild_routing_groups:
             routing_groups_input: Final = kwargs.get("routing_groups", self._routing_groups_input)
@@ -12632,7 +12621,7 @@ class Router:
 
                 if allowed_model_region is not None:
                     if not is_region_allowed(
-                        litellm_params=LiteLLM_Params(**_litellm_params),
+                        litellm_params=LiteLLM_Params.model_validate(_litellm_params),
                         allowed_model_region=allowed_model_region,
                     ):
                         invalid_model_indices.add(idx)
@@ -12650,7 +12639,7 @@ class Router:
                         _,
                     ) = litellm.get_llm_provider(
                         model=_dep_model_for_params,
-                        litellm_params=LiteLLM_Params(**_litellm_params),
+                        litellm_params=LiteLLM_Params.model_validate(_litellm_params),
                     )
                 except Exception as e:  # noqa: BLE001  # best-effort filter: an unresolvable provider must not fail the request
                     verbose_router_logger.debug(

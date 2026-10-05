@@ -1,6 +1,8 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageResponse
@@ -14,6 +16,8 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
@@ -228,16 +232,17 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         if not model_response.data:
             model_response.data = []
 
-        images: Final = response_data.get("images", [])
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        images: Final = response_object.get("images", [])
         model_response.data.extend(fal_images_to_image_objects(images))
 
         # Add additional metadata from Flux Pro response
         if hasattr(model_response, "_hidden_params"):
-            if "seed" in response_data:
-                model_response._hidden_params["seed"] = response_data["seed"]
-            if "timings" in response_data:
-                model_response._hidden_params["timings"] = response_data["timings"]
-            if "has_nsfw_concepts" in response_data:
-                model_response._hidden_params["has_nsfw_concepts"] = response_data["has_nsfw_concepts"]
+            if "seed" in response_object:
+                model_response._hidden_params["seed"] = response_object["seed"]
+            if "timings" in response_object:
+                model_response._hidden_params["timings"] = response_object["timings"]
+            if "has_nsfw_concepts" in response_object:
+                model_response._hidden_params["has_nsfw_concepts"] = response_object["has_nsfw_concepts"]
 
         return model_response

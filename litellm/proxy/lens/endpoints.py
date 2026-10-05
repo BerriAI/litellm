@@ -20,6 +20,7 @@ from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.lens.billing import validate_key
 from litellm.proxy.lens.inference import Deployment, deployment_prices
 from litellm.proxy.lens.models import (
+    ActivitySelection,
     Claim,
     Execution,
     ExecutionContent,
@@ -34,28 +35,33 @@ from litellm.proxy.lens.models import (
     ModelResult,
     Progress,
     Result,
+    ReviewPage,
     RunRequest,
     Sample,
     Scope,
-    Step,
     WatchAllResult,
     WatchSkipped,
     Worker,
     WorkerCreated,
 )
+from litellm.proxy.lens.release import PROTOCOL_VERSION, release_tag, worker_image
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
 from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
-    add_step,
+    apply_progress,
     can_access,
+    cancel_job,
     claim_job,
     current_job,
+    end_job,
     merge_finding,
     next_scan_start,
     queue_job,
     replace_job,
+    reviews_after,
     scheduled_window,
     snapshot_finding,
+    summarized,
 )
 from litellm.proxy.tracing_runtime import provide_storage
 
@@ -128,7 +134,7 @@ def required(lens: Lens | None) -> Lens:
     return lens
 
 
-def validate_selection(settings: LensSettings) -> None:
+def validate_selection(settings: ActivitySelection) -> None:
     for identity in settings.execution_ids:
         try:
             source, _, _, _ = parse_execution(identity)
@@ -198,7 +204,7 @@ async def validate_workers(settings: LensSettings, scope: Scope) -> None:
 async def list_lenses(auth: Auth, storage: StorageDep) -> LensList:
     scope: Final = user_scope(auth)
     return LensList(
-        lenses=tuple(e for e in await repository().lenses() if can_access(scope, e.scope)),
+        lenses=tuple(summarized(e) for e in await repository().lenses() if can_access(scope, e.scope)),
         workers=tuple(w for w in await repository().workers() if can_access(scope, w.scope)),
         tracing_enabled=storage is not None,
     )
@@ -328,7 +334,7 @@ async def run_lens(lens_id: str, body: RunRequest, auth: Auth) -> Lens:
 
 @router.get("/{lens_id}", response_model=Lens)
 async def read_lens(lens_id: str, auth: Auth) -> Lens:
-    return await get_lens(lens_id, user_scope(auth))
+    return summarized(await get_lens(lens_id, user_scope(auth)))
 
 
 @router.get("/{lens_id}/runs", response_model=tuple[Job, ...])
@@ -349,23 +355,17 @@ async def read_run(lens_id: str, job_id: str, auth: Auth) -> Job:
     return job
 
 
+@router.get("/{lens_id}/runs/{job_id}/reviews", response_model=ReviewPage)
+async def read_reviews(lens_id: str, job_id: str, auth: Auth, after: int = Query(default=0, ge=0)) -> ReviewPage:
+    return reviews_after(await read_run(lens_id, job_id, auth), after)
+
+
 @router.post("/{lens_id}/cancel", response_model=Lens)
 async def cancel_lens(lens_id: str, auth: Auth) -> Lens:
     await get_lens(lens_id, user_scope(auth, write=True))
     now: Final = datetime.now(timezone.utc)
 
-    def cancel(e: Lens) -> Lens:
-        job: Final = current_job(e)
-        if job is None:
-            return e
-        cancelled: Final = job.model_copy(
-            update=MappingProxyType({"status": "cancelled", "stage": "Cancelled", "finished_at": now})
-        )
-        return replace_job(e, cancelled).model_copy(
-            update=MappingProxyType({"next_run_at": now + timedelta(minutes=e.settings.interval_minutes)})
-        )
-
-    return required(await repository().update(lens_id, cancel))
+    return required(await repository().update(lens_id, lambda e: cancel_job(e, now)))
 
 
 @router.patch("/{lens_id}/findings/{finding_id}", response_model=Lens)
@@ -390,13 +390,13 @@ async def update_finding(lens_id: str, finding_id: str, body: FindingUpdate, aut
 class Preview(BaseModel):
     as_of: AwareDatetime | None = None
     offset: int = Field(default=0, ge=0)
-    settings: LensSettings
+    selection: ActivitySelection
     lookback_hours: LookbackHours = 24
 
 
 @router.post("/preview/sample", response_model=Sample)
 async def preview_sample(body: Preview, auth: Auth, storage: StorageDep) -> Sample:
-    validate_selection(body.settings)
+    validate_selection(body.selection)
     now: Final = min(body.as_of or datetime.now(timezone.utc), datetime.now(timezone.utc))
     try:
         start: Final = int((now - timedelta(hours=body.lookback_hours)).timestamp() * 1000)
@@ -405,7 +405,7 @@ async def preview_sample(body: Preview, auth: Auth, storage: StorageDep) -> Samp
         raise HTTPException(422, "Preview window exceeds the supported calendar range") from error
     return await source_reader(storage).sample(
         user_scope(auth),
-        body.settings,
+        body.selection,
         start,
         end,
         offset=body.offset,
@@ -421,9 +421,20 @@ class WorkerName(WorkerBilling):
     name: str = Field(default="Lens worker", min_length=1)
 
 
+def configured_worker_image() -> str:
+    if image := worker_image():
+        return image
+    raise HTTPException(
+        503,
+        "This LiteLLM build has no release identity. Use a published release, make lens-dev, "
+        "or build the gateway and worker from the same commit with the same LITELLM_RELEASE_TAG.",
+    )
+
+
 @router.post("/workers/register", response_model=WorkerCreated)
 async def register_worker(body: WorkerName, auth: Auth) -> WorkerCreated:
     scope: Final = user_scope(auth, write=True)
+    image: Final = configured_worker_image()
     await validate_key(body.analysis_key_id)
     token: Final = "lens-" + secrets.token_urlsafe(40)
     worker: Final = Worker(
@@ -434,7 +445,7 @@ async def register_worker(body: WorkerName, auth: Auth) -> WorkerCreated:
         last_seen=datetime(1970, 1, 1, tzinfo=timezone.utc),
     )
     await repository().save_worker(worker, hashlib.sha256(token.encode()).hexdigest())
-    return WorkerCreated(worker=worker, token=token)
+    return WorkerCreated(worker=worker, token=token, image=image)
 
 
 @router.put("/workers/{worker_id}/billing-key", response_model=Worker)
@@ -466,9 +477,11 @@ async def revoke_worker(worker_id: str, auth: Auth) -> bool:
 
 
 @router.post("/worker/claim", response_model=Claim | None)
-async def claim(worker: WorkerAuth, protocol_version: int = 1) -> Claim | None:
-    if protocol_version not in (2, 3):
-        raise HTTPException(409, "Upgrade the Lens worker using the current Connect worker command")
+async def claim(worker: WorkerAuth, protocol_version: int = 1, worker_release: str = "") -> Claim | None:
+    image: Final = configured_worker_image()
+    expected: Final = release_tag()
+    if protocol_version != PROTOCOL_VERSION or worker_release != expected:
+        raise HTTPException(409, f"Upgrade the Lens worker to {image} and retry")
     if worker.analysis_key_id is None:
         raise HTTPException(409, "Assign an analysis key to this worker in Lens setup")
     now: Final = datetime.now(timezone.utc)
@@ -490,15 +503,7 @@ async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth
         job: Final = current_job(e)
         if job is None or job.id != job_id or job.worker_id != worker.id:
             return e
-        renewed: Final = job.model_copy(
-            update=MappingProxyType(
-                {"stage": body.stage, "coverage": body.coverage, "lease_until": now + timedelta(minutes=5)}
-            )
-        )
-        return replace_job(
-            e,
-            renewed if body.stage == job.stage else add_step(renewed, Step(at=now, kind="stage", label=body.stage)),
-        )
+        return replace_job(e, apply_progress(job, body, now))
 
     required(await repository().update(lens_id, renew))
     await repository().heartbeat(worker.id, now.isoformat())
@@ -624,12 +629,9 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
         merged_ids: Final = frozenset(f.id for f in merged)
         return replace_job(
             e,
-            active.model_copy(
+            end_job(active, "failed" if body.error else "completed", now).model_copy(
                 update=MappingProxyType(
                     {
-                        "status": "failed" if body.error else "completed",
-                        "stage": "Failed" if body.error else "Complete",
-                        "finished_at": now,
                         "coverage": active.coverage if body.error else body.coverage,
                         "error": body.error,
                         "assessments": body.assessments,

@@ -2259,17 +2259,24 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception:
             return True
 
-    def has_run_logging(
+    def mark_logging_complete(
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
     ) -> None:
-        if self.stream is not None and self.stream is True:
+        if self.stream is not None and self.stream is True and event_type in ["async_success", "sync_success"]:
             """
             Ignore check on stream, as there can be multiple chunks
             """
             return
         self.model_call_details[f"has_logged_{event_type}"] = True
         return
+
+    def has_run_logging(
+        self,
+        event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
+    ) -> None:
+        """Deprecated alias of mark_logging_complete, kept for callers of the old name"""
+        self.mark_logging_complete(event_type=event_type)
 
     def should_run_callback(self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str) -> bool:
         if litellm.global_disable_no_log_param:
@@ -2862,7 +2869,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         call_type=self.call_type,
                     )
 
-            self.has_run_logging(event_type="sync_success")
+            self.mark_logging_complete(event_type="sync_success")
             for callback in callbacks:
                 try:
                     should_run = self.should_run_callback(
@@ -3443,7 +3450,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 self._handle_callback_failure(callback=callback)
 
-        self.has_run_logging(event_type="async_success")
+        self.mark_logging_complete(event_type="async_success")
 
         for callback in callbacks:
             # check if callback can run for this request
@@ -3736,7 +3743,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
                 result=result,
             )
-            self.has_run_logging(event_type="sync_failure")
+            self.mark_logging_complete(event_type="sync_failure")
             for callback in callbacks:
                 try:
                     should_run = self.should_run_callback(
@@ -3928,7 +3935,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         result: Final = None  # result sent to all loggers, init this to None incase it's not created
 
-        self.has_run_logging(event_type="async_failure")
+        self.mark_logging_complete(event_type="async_failure")
         for callback in callbacks:
             try:
                 litellm_params = self.model_call_details.get("litellm_params", {})

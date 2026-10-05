@@ -7,11 +7,14 @@ import os
 from typing import Final
 
 from fastapi import APIRouter, Depends
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.logging_callback_manager import CallbacksByType
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router: Final = APIRouter()
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 @router.get(
@@ -51,6 +54,6 @@ async def get_callback_configs():
     )
 
     with open(config_path, "r") as f:
-        configs: Final = json.load(f)
+        configs: Final = _DECODED_JSON.validate_python(json.load(f))
 
     return configs
