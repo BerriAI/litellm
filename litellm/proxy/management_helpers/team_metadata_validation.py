@@ -111,19 +111,17 @@ async def run_team_metadata_validation(
     if premium_user is not True:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={  # mutable-ok: HTTPException.detail has no immutable form
+            detail={
                 "error": f"custom_team_metadata_validate is an Enterprise feature. {CommonProxyErrors.not_premium_user.value}"
             },
         )
-    if not (
-        inspect.iscoroutinefunction(validator) or inspect.iscoroutinefunction(getattr(validator, "__call__", None))
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={  # mutable-ok: HTTPException.detail has no immutable form
-                "error": "custom_team_metadata_validate must be an async function"
-            },
-        )
+    if not inspect.iscoroutinefunction(validator):
+        validator_call: Final = getattr(validator, "__call__", None)  # noqa: B004  # value unwrap for the functor check
+        if not inspect.iscoroutinefunction(validator_call):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": "custom_team_metadata_validate must be an async function"},
+            )
 
     try:
         raw_result: Final = await asyncio.wait_for(validator(payload), timeout=timeout_seconds)
@@ -131,15 +129,13 @@ async def run_team_metadata_validation(
     except Exception:  # noqa: BLE001  # fail closed: any validator failure must block the team write
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"error": unavailable_message},  # mutable-ok: HTTPException.detail has no immutable form
+            detail={"error": unavailable_message},
         )
 
     if not result.valid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={  # mutable-ok: HTTPException.detail has no immutable form
-                "error": result.error_message or DEFAULT_TEAM_METADATA_VALIDATION_REJECTED_MESSAGE
-            },
+            detail={"error": result.error_message or DEFAULT_TEAM_METADATA_VALIDATION_REJECTED_MESSAGE},
         )
 
 

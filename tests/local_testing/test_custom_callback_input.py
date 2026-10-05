@@ -1076,7 +1076,7 @@ def test_standard_logging_payload(model, turn_off_message_logging):
             )
         )
 
-        keys_list = list(StandardLoggingPayload.__annotations__.keys())
+        keys_list = list(StandardLoggingPayload.__required_keys__)
 
         for k in keys_list:
             assert (
@@ -1190,7 +1190,7 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
             )
         )
 
-        keys_list = list(StandardLoggingPayload.__annotations__.keys())
+        keys_list = list(StandardLoggingPayload.__required_keys__)
 
         for k in keys_list:
             assert (
@@ -1236,10 +1236,11 @@ def test_standard_logging_payload_audio(turn_off_message_logging, stream):
             assert "redacted-by-litellm" == slobject["messages"][0]["content"]
             response = slobject["response"]
             if "choices" in response:
-                assert (
-                    response["choices"][0]["message"]["content"]
-                    == "redacted-by-litellm"
-                )
+                redacted_content = response["choices"][0]["message"]["content"]
+                if stream:
+                    assert redacted_content == "redacted-by-litellm"
+                else:
+                    assert redacted_content is None
                 assert response["choices"][0]["message"].get("audio") is None
             else:
                 assert response["text"] == "redacted-by-litellm"

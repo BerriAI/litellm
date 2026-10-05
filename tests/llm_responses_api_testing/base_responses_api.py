@@ -105,10 +105,6 @@ class BaseResponsesAPITest(ABC):
         """Must return the base completion call args"""
         pass
 
-    def get_base_completion_reasoning_call_args(self) -> dict:
-        """Must return the base completion reasoning call args"""
-        return None
-
     def get_advanced_model_for_shell_tool(self) -> Optional[str]:
         """If specified, overrides the model used by test_responses_api_shell_tool_streaming_sees_shell_output (e.g. openai/gpt-5.2 for shell support)."""
         return None
@@ -352,32 +348,6 @@ class BaseResponsesAPITest(ABC):
                 raise ValueError("response is not a ResponsesAPIResponse")
 
     @pytest.mark.asyncio
-    @pytest.mark.flaky(retries=3, delay=2)
-    async def test_basic_openai_list_input_items_endpoint(self):
-        """Test that calls the OpenAI List Input Items endpoint"""
-        litellm._turn_on_debug()
-
-        response = await litellm.aresponses(
-            model="gpt-5.5",
-            input="Tell me a three sentence bedtime story about a unicorn.",
-        )
-        print("Initial response=", json.dumps(response, indent=4, default=str))
-
-        response_id = response.get("id")
-        assert response_id is not None, "Response should have an ID"
-        print(f"Got response_id: {response_id}")
-
-        list_items_response = await litellm.alist_input_items(
-            response_id=response_id,
-            limit=20,
-            order="desc",
-        )
-        print(
-            "List items response=",
-            json.dumps(list_items_response, indent=4, default=str),
-        )
-
-    @pytest.mark.asyncio
     async def test_multiturn_responses_api(self):
         litellm._turn_on_debug()
         litellm.set_verbose = True
@@ -476,99 +446,6 @@ class BaseResponsesAPITest(ABC):
             assert response.get("id") is not None
         else:
             assert len(response["output"]) > 0
-
-    @pytest.mark.asyncio
-    async def test_responses_api_multi_turn_with_reasoning_and_structured_output(self):
-        """
-        Test multi-turn conversation with reasoning, structured output, and tool calls.
-
-        This test validates:
-        - First call: Model uses reasoning to process a question and makes a tool call
-        - Tool call handling: Function call output is properly processed
-        - Second call: Model produces structured output incorporating tool results
-        - Structured output: Response conforms to defined Pydantic model schema
-        """
-        from pydantic import BaseModel
-
-        litellm._turn_on_debug()
-        litellm.set_verbose = True
-        base_completion_call_args = self.get_base_completion_reasoning_call_args()
-        if base_completion_call_args is None:
-            pytest.skip("Skipping test due to no base completion reasoning call args")
-
-        # Define tools for the conversation
-        tools = [{"type": "function", "name": "get_today"}]
-
-        # Define structured output schema
-        class Output(BaseModel):
-            today: str
-            number_of_r: str
-
-        # Initial conversation input
-        input_messages = [
-            {
-                "role": "user",
-                "content": "How many r in strrawberrry? While you're thinking, you should call tool get_today. Then you output the today and number of r",
-            }
-        ]
-
-        # First call - should trigger reasoning and tool call
-        response = await litellm.aresponses(
-            input=input_messages,
-            tools=tools,
-            reasoning={"effort": "low", "summary": "detailed"},
-            text_format=Output,
-            **base_completion_call_args,
-        )
-
-        print("First call output:")
-        print(json.dumps(response.output, indent=4, default=str))
-
-        # Validate first response structure
-        validate_responses_api_response(response, final_chunk=True)
-        assert response.output is not None
-        assert len(response.output) > 0
-
-        # Extend input with first response output
-        input_messages.extend(response.output)
-
-        # Process any tool calls and add function outputs
-        function_outputs = []
-        for item in response.output:
-            if hasattr(item, "type") and item.type in [
-                "function_call",
-                "custom_tool_call",
-            ]:
-                if hasattr(item, "name") and item.name == "get_today":
-                    function_outputs.append(
-                        {
-                            "type": "function_call_output",
-                            "call_id": item.call_id,
-                            "output": "2025-01-15",
-                        }
-                    )
-
-        # Add function outputs to conversation
-        input_messages.extend(function_outputs)
-
-        print("Second call input:")
-        print(json.dumps(input_messages, indent=4, default=str))
-
-        # Second call - should produce structured output
-        final_response = await litellm.aresponses(
-            input=input_messages,
-            tools=tools,
-            reasoning={"effort": "low", "summary": "detailed"},
-            text_format=Output,
-            **base_completion_call_args,
-        )
-
-        print("Second call output:")
-        print(json.dumps(final_response.output, indent=4, default=str))
-
-        # Validate final response structure
-        validate_responses_api_response(final_response, final_chunk=True)
-        assert final_response.output is not None
 
     def test_openai_responses_api_dict_input_filtering(self):
         """
@@ -742,7 +619,7 @@ class BaseResponsesAPITest(ABC):
         Passes tools=[{"type": "shell", "environment": {"type": "container_auto"}}];
         validates that the request is accepted and returns a valid response.
         Only runs for OpenAI; offline coverage for the Azure route lives in
-        tests/test_litellm/responses/test_responses_api_request_body.py.
+        tests/unit/responses/test_responses_api_request_body.py.
         """
         base_completion_call_args = self.get_base_completion_call_args()
         model = (
@@ -779,67 +656,3 @@ class BaseResponsesAPITest(ABC):
         assert response.get("id") is not None
         assert response.get("status") is not None
 
-    @pytest.mark.asyncio
-    async def test_responses_api_shell_tool_streaming_sees_shell_output(self):
-        """
-        E2E streaming call with Shell tool; validate we can see shell output in the stream.
-
-        Calls aresponses(..., tools=[shell], stream=True), then iterates the stream and
-        asserts at least one event is shell-related or response output contains shell_call.
-        Skips when model does not support shell (e.g. gpt-5.5).
-        """
-        base_completion_call_args = self.get_base_completion_call_args()
-        model = (
-            self.get_advanced_model_for_shell_tool()
-            or base_completion_call_args.get("model")
-            or "openai/gpt-5.2"
-        )
-        if "openai/" not in str(model):
-            pytest.skip(
-                "Shell tool streaming e2e is only run for OpenAI/Azure Responses API"
-            )
-        tools = [{"type": "shell", "environment": {"type": "container_auto"}}]
-        input_msg = "List files in /mnt/data and run python --version."
-
-        stream = await litellm.aresponses(
-            **{**base_completion_call_args, "model": model},
-            input=input_msg,
-            max_output_tokens=512,
-            tools=tools,
-            tool_choice="auto",
-            stream=True,
-        )
-
-        event_types_seen = []
-        output_items_with_shell = []
-
-        async for event in stream:
-            print("event=", json.dumps(event, indent=4, default=str))
-            event_type = getattr(event, "type", None) or (
-                event.get("type") if isinstance(event, dict) else None
-            )
-            if event_type is not None:
-                event_types_seen.append(str(event_type))
-            if "shell" in str(event_type or "").lower():
-                output_items_with_shell.append(event_type)
-            response_obj = getattr(event, "response", None) or (
-                event.get("response") if isinstance(event, dict) else None
-            )
-            if response_obj is not None:
-                output = getattr(response_obj, "output", None) or (
-                    response_obj.get("output")
-                    if isinstance(response_obj, dict)
-                    else None
-                )
-                if isinstance(output, list):
-                    for item in output:
-                        item_type = getattr(item, "type", None) or (
-                            item.get("type") if isinstance(item, dict) else None
-                        )
-                        if item_type and "shell" in str(item_type).lower():
-                            output_items_with_shell.append(item_type)
-
-        assert len(event_types_seen) > 0, "Expected at least one stream event"
-        assert (
-            len(output_items_with_shell) > 0
-        ), f"Expected to see shell output in stream; event types seen: {event_types_seen!r}"

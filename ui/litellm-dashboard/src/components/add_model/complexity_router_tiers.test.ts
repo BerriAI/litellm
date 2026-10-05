@@ -5,7 +5,9 @@ import {
   normalizeTierModels,
   pruneTierModelParams,
   serializeTierModelConfigs,
+  tierRowLabel,
   setTierModelReasoningEffort,
+  setTierModelParam,
 } from "./complexity_router_tiers";
 import { resolveComplexityDefaultModel } from "./tier_rows";
 
@@ -217,6 +219,28 @@ describe("setTierModelReasoningEffort", () => {
   });
 });
 
+describe("setTierModelParam", () => {
+  it.each(["reasoning_effort", "speed"] as const)("clears only %s and preserves the input", (key) => {
+    const params = { reasoning_effort: "high", speed: "fast", max_tokens: 512 };
+    const current = { COMPLEX: { primary: params, secondary: { speed: "fast" } }, REASONING: { primary: params } };
+    const cleared = setTierModelParam(current, "COMPLEX", "primary", [key, undefined]);
+    expect(cleared).toEqual({
+      ...current,
+      COMPLEX: {
+        ...current.COMPLEX,
+        primary: key === "speed" ? { reasoning_effort: "high", max_tokens: 512 } : { speed: "fast", max_tokens: 512 },
+      },
+    });
+    expect(current.COMPLEX.primary).toEqual({ reasoning_effort: "high", speed: "fast", max_tokens: 512 });
+  });
+
+  it("removes empty records when the only override is Fast", () => {
+    const enabled = setTierModelParam(undefined, "COMPLEX", "primary", ["speed", "fast"]);
+    expect(enabled).toEqual({ COMPLEX: { primary: { speed: "fast" } } });
+    expect(setTierModelParam(enabled, "COMPLEX", "primary", ["speed", undefined])).toBeUndefined();
+  });
+});
+
 describe("pruneTierModelParams", () => {
   it("drops params for models deselected from the tier", () => {
     expect(
@@ -232,5 +256,24 @@ describe("pruneTierModelParams", () => {
   it("returns the input unchanged when the tier holds no params", () => {
     const current = { COMPLEX: { opus: { reasoning_effort: "high" } } };
     expect(pruneTierModelParams(current, "MEDIUM", [])).toBe(current);
+  });
+});
+
+describe("tierRowLabel", () => {
+  it("shows a built-in row's display label while it is untouched", () => {
+    expect(tierRowLabel({ id: "COMPLEX", name: "COMPLEX" })).toBe("Complex");
+    expect(tierRowLabel({ id: "COMPLEX", name: "COMPLEX" }, { COMPLEX: "Deep" })).toBe("Deep");
+  });
+
+  it("shows the operator's name once a built-in row is renamed, since the id stays canonical", () => {
+    expect(tierRowLabel({ id: "COMPLEX", name: "SECURITY_REVIEW" })).toBe("SECURITY_REVIEW");
+  });
+
+  it("shows a custom row's name", () => {
+    expect(tierRowLabel({ id: "stored-1", name: "AUDIT" })).toBe("AUDIT");
+  });
+
+  it("calls an unnamed new row New rather than rendering an empty label", () => {
+    expect(tierRowLabel({ id: "uuid", name: "  " })).toBe("New");
   });
 });

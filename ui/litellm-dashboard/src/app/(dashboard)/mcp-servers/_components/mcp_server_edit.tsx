@@ -44,6 +44,7 @@ import TruePassthroughWarning from "./TruePassthroughWarning";
 import PassthroughAuthorizeSection from "./PassthroughAuthorizeSection";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
+import { StdioDisabledBanner, TransportSelectItems } from "./StdioAvailability";
 import TokenExchangeFormFields from "./TokenExchangeFormFields";
 import IdJagFormFields from "./IdJagFormFields";
 import OAuthFormFields from "./OAuthFormFields";
@@ -51,7 +52,9 @@ import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import { validateMCPServerUrl, validateMCPServerName, normalizeToolOverrideMap } from "./utils";
 import { EditServerFormValues, buildEditServerPayload, editPayloadErrorMessage } from "./editServerPayload";
+import { DUPLICATE_IDENTIFIER_MESSAGE, findDuplicateMcpServer, mcpSubmitErrorReason } from "./duplicateServerCheck";
 import { toast } from "@/lib/toast";
+import { getEditToolPreview } from "./editToolPreview";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import {
   MountedFormField,
@@ -87,6 +90,8 @@ interface MCPServerEditProps {
   onCancel: () => void;
   onSuccess: (server: MCPServer) => void;
   availableAccessGroups: string[];
+  existingServers?: MCPServer[];
+  stdioEnabled?: boolean;
 }
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
@@ -99,6 +104,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   onCancel,
   onSuccess,
   availableAccessGroups,
+  existingServers,
+  stdioEnabled = true,
 }) => {
   const initialStaticHeaders = React.useMemo(() => {
     if (!mcpServer.static_headers) {
@@ -449,14 +456,30 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   }, [mcpServer]);
 
-  // Fetch tools when component mounts for a saved server
+  const toolPreview = getEditToolPreview(allFieldsValue(form), initialValues);
+  const toolPreviewKey = JSON.stringify(toolPreview);
+
   useEffect(() => {
-    if (!mcpServer.server_id || mcpServer.server_id.trim() === "") {
+    const controller = new AbortController();
+    setTools([]);
+    setToolsError(null);
+    setIsLoadingTools(false);
+    if (!accessToken || !mcpServer.server_id) return;
+    if (toolPreview.kind === "incomplete") {
+      setToolsError(toolPreview.message ?? "Complete the URL, authentication, and header settings to load tools.");
       return;
     }
-    fetchTools();
+    setIsLoadingTools(true);
+    const timer = setTimeout(
+      () => fetchTools(() => !controller.signal.aborted),
+      toolPreview.kind === "preview" ? 500 : 0,
+    );
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mcpServer, accessToken, userID, oauthTokenResponse?.access_token]);
+  }, [mcpServer, accessToken, userID, oauthTokenResponse?.access_token, toolPreviewKey]);
 
   // Invalidate a token authorized in this edit session once any mint-relevant field diverges from the
   // identity it was minted against (url, auth_type, oauth_flow_type, client creds/scopes, or the
@@ -519,6 +542,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const previewWithStagedInteractiveToken = async (
     isPassthrough: boolean,
     isBrowserHeldTokenMode: boolean,
+    isCurrent: () => boolean,
   ): Promise<boolean> => {
     const stagedToken =
       !isPassthrough && !isBrowserHeldTokenMode && getEffectiveAuthType() === AUTH_TYPE.OAUTH2
@@ -550,6 +574,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         registration_url: values.registration_url,
       };
       const toolsResponse = await testMCPToolsListRequest(accessToken, previewConfig, stagedToken);
+      if (!isCurrent()) return true;
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
       } else {
@@ -557,15 +582,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         setToolsError(toolsResponse.message || "Failed to load tools");
       }
     } catch (error) {
+      if (!isCurrent()) return true;
       setTools([]);
       setToolsError(error instanceof Error ? error.message : "Failed to load tools");
     } finally {
-      setIsLoadingTools(false);
+      if (isCurrent()) setIsLoadingTools(false);
     }
     return true;
   };
 
-  const fetchTools = async () => {
+  const fetchTools = async (isCurrent: () => boolean) => {
     if (!accessToken || !mcpServer.server_id) return;
 
     // OBO/M2M/static auth is attached server-side from the stored credential, so
@@ -574,6 +600,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     // same way the Tools playground does.
     let customHeaders: Record<string, string> | undefined;
     const isPassthrough =
+      toolPreview.kind === "saved" &&
       getMcpOAuthMode({
         auth_type: mcpServer.auth_type,
         oauth2_flow: mcpServer.oauth2_flow,
@@ -581,9 +608,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }) === "passthrough";
     const isBrowserHeldTokenMode = isClientForwardedTokenMode(getEffectiveAuthType());
 
-    if (await previewWithStagedInteractiveToken(isPassthrough, isBrowserHeldTokenMode)) {
+    if (await previewWithStagedInteractiveToken(isPassthrough, isBrowserHeldTokenMode, isCurrent)) {
       return;
     }
+    if (!isCurrent()) return;
     if (isPassthrough || isBrowserHeldTokenMode) {
       const token =
         oauthTokenResponse?.access_token ??
@@ -591,6 +619,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           ? getToken(mcpServer.server_id, userID)?.access_token ?? null
           : null);
       if (!token) {
+        setIsLoadingTools(false);
         setTools([]);
         setToolsError(
           isBrowserHeldTokenMode
@@ -608,7 +637,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     try {
       // include_disabled_tools: configuring the allowlist needs the full server
       // catalog, so tools toggled off still render (as unchecked) instead of vanishing.
-      const toolsResponse = await listMCPTools(accessToken, mcpServer.server_id, customHeaders, true);
+      const toolsResponse =
+        toolPreview.kind === "preview"
+          ? await testMCPToolsListRequest(accessToken, {
+              ...toolPreview.config,
+              server_id: mcpServer.server_id,
+              server_name: mcpServer.server_name || mcpServer.alias,
+            })
+          : await listMCPTools(accessToken, mcpServer.server_id, customHeaders, true);
+      if (!isCurrent()) return;
 
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
@@ -617,10 +654,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         setToolsError(toolsResponse.message || "Failed to load tools");
       }
     } catch (error) {
+      if (!isCurrent()) return;
       setTools([]);
       setToolsError(error instanceof Error ? error.message : "Failed to load tools");
     } finally {
-      setIsLoadingTools(false);
+      if (isCurrent()) setIsLoadingTools(false);
     }
   };
 
@@ -692,6 +730,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
   const handleSave = async (values: EditServerFormValues) => {
     if (!accessToken) return;
+    const duplicate = findDuplicateMcpServer(
+      existingServers,
+      values.server_name || mcpServer.server_name,
+      (values.alias ?? mcpServer.alias) || null,
+      mcpServer.server_id,
+    );
+    if (duplicate) {
+      form.setError(duplicate.field, { type: "duplicate", message: DUPLICATE_IDENTIFIER_MESSAGE });
+      toast.fromError(DUPLICATE_IDENTIFIER_MESSAGE);
+      return;
+    }
     try {
       const built = buildEditServerPayload(values, {
         mcpServer,
@@ -751,7 +800,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       setAppMayNotMatchUpstream(false);
       onSuccess(updated);
     } catch (error: any) {
-      toast.fromError("Failed to update MCP Server" + (error?.message ? `: ${error.message}` : ""));
+      const reason = mcpSubmitErrorReason(error);
+      toast.fromError("Failed to update MCP Server" + (reason ? `: ${reason}` : ""));
     }
   };
 
@@ -775,6 +825,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   void submitForm();
                 }}
               >
+                {isStdioTransport && !stdioEnabled && <StdioDisabledBanner />}
                 <MountedFormField
                   label="MCP Server Name"
                   name="server_name"
@@ -828,11 +879,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {TRANSPORT_ITEMS.map((item) => (
-                          <SelectItem key={item.value} value={item.value}>
-                            {item.label}
-                          </SelectItem>
-                        ))}
+                        <TransportSelectItems stdioEnabled={stdioEnabled} />
                       </SelectContent>
                     </Select>
                   )}

@@ -3,7 +3,13 @@ from __future__ import annotations
 import time
 from collections import OrderedDict
 from threading import RLock
-from typing import Any, Final
+from typing import Final, Protocol
+
+
+class _RemovableMetric(Protocol):
+    """The one prometheus-client metric method this tracker calls."""
+
+    def remove(self, *labelvalues: object) -> None: ...
 
 
 class BoundedPrometheusSeriesTracker:
@@ -21,7 +27,7 @@ class BoundedPrometheusSeriesTracker:
 
     def track_series(
         self,
-        metric: Any,
+        metric: _RemovableMetric,
         metric_name: str,
         label_values: tuple[str | None, ...],
         max_series: int | None,
@@ -60,6 +66,10 @@ class BoundedPrometheusSeriesTracker:
                         break
                     del series[tracked_label_values]
 
+    def remove_series(self, metric: _RemovableMetric, label_values: tuple[str | None, ...]) -> bool:
+        """Drop one child series, True when it is gone (removed or never existed)."""
+        return self._remove_metric_child(metric, label_values)
+
     def _should_run_ttl_cleanup(
         self,
         metric_name: str,
@@ -78,7 +88,7 @@ class BoundedPrometheusSeriesTracker:
 
     def _remove_metric_series(
         self,
-        metric: Any,
+        metric: _RemovableMetric,
         series: OrderedDict[tuple[str | None, ...], float],
         label_values: tuple[str | None, ...],
     ) -> None:
@@ -86,7 +96,7 @@ class BoundedPrometheusSeriesTracker:
             series.pop(label_values, None)
 
     @staticmethod
-    def _remove_metric_child(metric: Any, label_values: tuple[str | None, ...]) -> bool:
+    def _remove_metric_child(metric: _RemovableMetric, label_values: tuple[str | None, ...]) -> bool:
         """
         Remove the Prometheus child for ``label_values`` and report whether the
         tracker should commit the matching state change.
