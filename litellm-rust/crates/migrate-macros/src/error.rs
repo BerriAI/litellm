@@ -8,6 +8,12 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
+    #[error("could not read migration file `{path}`")]
+    ReadFile {
+        path: String,
+        #[source]
+        source: io::Error,
+    },
     #[error(
         "migration name `{name}` must be `<digits>_<description>.sql` with a `[a-z0-9_]` description"
     )]

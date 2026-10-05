@@ -1,5 +1,9 @@
 # Migrations
 
-`litellm-migrate` exports the `Migration` struct and the `migrate!` macro that embeds a directory of `<digits>_<description>.sql` files at compile time, sorted by numeric version
+`litellm-migrate` embeds `<digits>_<description>.sql` files with checksums and computes pending migrations from caller-supplied applied versions
 
-The crate does not apply or track migrations; callers decide how and when the embedded SQL runs
+Applying and recording migrations is the caller's job
+
+Migration files are append-only, and changing an applied file is an error
+
+Recording happens after execution, so concurrent processes can both apply a pending migration. Every migration must be safe to run more than once

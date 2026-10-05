@@ -4091,6 +4091,8 @@ version = "0.1.0"
 dependencies = [
  "litellm-migrate-macros",
  "rstest",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -4100,6 +4102,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rstest",
+ "sha2 0.10.9",
  "syn 2.0.119",
  "tempfile",
  "thiserror 2.0.19",
@@ -4365,6 +4368,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "litellm-http",
+ "litellm-migrate",
  "rstest",
  "serde",
  "serde_json",

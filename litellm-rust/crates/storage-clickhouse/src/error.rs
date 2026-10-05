@@ -30,4 +30,6 @@ pub enum Error {
     InvalidResponse,
     #[error("ClickHouse query transport failed")]
     Transport,
+    #[error(transparent)]
+    Migration(#[from] litellm_migrate::ChangedMigration),
 }

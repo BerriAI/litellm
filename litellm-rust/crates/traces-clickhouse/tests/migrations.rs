@@ -1,6 +1,8 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
+use litellm_migrate::ChangedMigration;
+use litellm_storage_clickhouse::Error as StorageError;
 use litellm_traces_clickhouse::{
     Connection, Error, InsertTable, NORMALIZED_FIELD_DEFINITIONS, Parameter, ReadQuery,
     encode_rows, ensure_schema, execute_named_read, execute_read, schema_statements,
@@ -71,6 +73,44 @@ async fn mutation_rows(database: &ClickHouseDatabase) -> TestResult<u64> {
         .expect("ClickHouse returns mutation counts as unsigned integers"))
 }
 
+fn migration_versions() -> Vec<u64> {
+    let mut versions = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"))
+        .expect("migration directory exists")
+        .map(|entry| {
+            entry
+                .expect("migration directory entry is readable")
+                .file_name()
+                .into_string()
+                .expect("migration file name is UTF-8")
+        })
+        .filter_map(|name| {
+            name.strip_suffix(".sql")
+                .and_then(|stem| stem.split('_').next())
+                .and_then(|version| version.parse::<u64>().ok())
+        })
+        .collect::<Vec<_>>();
+    versions.sort_unstable();
+    versions
+}
+
+async fn migration_ledger_versions(database: &ClickHouseDatabase) -> TestResult<Vec<u64>> {
+    let response = read_json(
+        database,
+        "SELECT version FROM trace_test.schema_migrations GROUP BY version ORDER BY version",
+    )
+    .await?;
+    Ok(response["data"]
+        .as_array()
+        .expect("ClickHouse returns version rows")
+        .iter()
+        .map(|row| {
+            row["version"]
+                .as_u64()
+                .expect("ClickHouse returns versions as unsigned integers")
+        })
+        .collect())
+}
+
 #[rstest]
 #[tokio::test]
 async fn schema_supports_span_rollups_and_spend_joins(
@@ -80,6 +120,27 @@ async fn schema_supports_span_rollups_and_spend_joins(
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    let expected_versions = migration_versions();
+    let ledger = read_json(
+        &database,
+        "SELECT count() AS rows, uniqExact(version) AS versions, \
+         countIf(NOT match(checksum, '^[0-9a-f]{64}$')) AS invalid_checksums \
+         FROM trace_test.schema_migrations",
+    )
+    .await?;
+    assert_eq!(
+        ledger["data"][0]["rows"].as_u64(),
+        Some(expected_versions.len() as u64)
+    );
+    assert_eq!(
+        ledger["data"][0]["versions"].as_u64(),
+        Some(expected_versions.len() as u64)
+    );
+    assert_eq!(ledger["data"][0]["invalid_checksums"].as_u64(), Some(0));
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        expected_versions
+    );
     let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
     let span = serde_json::from_value(serde_json::json!({
         "Timestamp": timestamp, "TraceId": "trace-1", "SpanId": "span-1", "ParentSpanId": "",
@@ -198,6 +259,89 @@ async fn schema_supports_span_rollups_and_spend_joins(
     assert_eq!(
         body["data"],
         serde_json::json!([{"spans": 1, "tokens": 12}])
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn changed_migration_is_rejected(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    execute_write(
+        &database,
+        "INSERT INTO trace_test.schema_migrations (version, description, checksum) \
+         VALUES (1, 'otel_traces', 'tampered')",
+    )
+    .await?;
+
+    assert!(matches!(
+        ensure_schema(&database.client, &writer, "trace_test", 7).await,
+        Err(Error::Storage(StorageError::Migration(ChangedMigration {
+            version: 1
+        })))
+    ));
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn concurrent_schema_setup_succeeds(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    let (first, second, third, fourth) = tokio::join!(
+        ensure_schema(&database.client, &writer, "trace_test", 7),
+        ensure_schema(&database.client, &writer, "trace_test", 7),
+        ensure_schema(&database.client, &writer, "trace_test", 7),
+        ensure_schema(&database.client, &writer, "trace_test", 7),
+    );
+    for result in [first, second, third, fourth] {
+        result?;
+    }
+    let tables = read_json(
+        &database,
+        "SELECT count() AS tables FROM system.tables \
+         WHERE database = 'trace_test' AND name IN \
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs')",
+    )
+    .await?;
+    assert_eq!(tables["data"][0]["tables"].as_u64(), Some(3));
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        migration_versions()
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn existing_schema_without_ledger_is_adopted(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    for statement in schema_statements("trace_test", 7)? {
+        execute_write(&database, &statement).await?;
+    }
+    let timestamp = time::OffsetDateTime::now_utc().unix_timestamp_nanos() as i64;
+    let span = serde_json::from_value(serde_json::json!({
+        "Timestamp": timestamp, "TraceId": "trace-adopted", "SpanId": "span-adopted",
+        "ParentSpanId": "", "ServiceName": "proxy", "SpanName": "request",
+        "Input": "existing row", "ResourceAttributes": {}, "SpanAttributes": {}
+    }))?;
+    insert_rows(&database, "otel_traces", vec![span]).await?;
+
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+
+    assert_eq!(table_rows(&database, "otel_traces").await?, 1);
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        migration_versions()
     );
     Ok(())
 }
@@ -804,7 +948,7 @@ async fn schema_statement_timeout_maps_to_transport_error() -> TestResult {
     .await;
     server.abort();
     assert!(
-        matches!(result, Ok(Err(Error::SchemaTransport))),
+        matches!(result, Ok(Err(Error::Storage(StorageError::Transport)))),
         "{result:?}"
     );
     Ok(())

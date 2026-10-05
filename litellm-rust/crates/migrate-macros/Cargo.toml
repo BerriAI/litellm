@@ -11,6 +11,7 @@ proc-macro = true
 [dependencies]
 proc-macro2.workspace = true
 quote.workspace = true
+sha2.workspace = true
 syn = { workspace = true, features = ["parsing", "printing", "proc-macro"] }
 thiserror.workspace = true
 

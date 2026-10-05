@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use error::Error;
 use proc_macro::TokenStream;
 use quote::quote;
+use sha2::{Digest, Sha256};
 use syn::LitStr;
 
 struct Entry {
@@ -94,19 +95,28 @@ pub fn migrate(input: TokenStream) -> TokenStream {
             let migrations = entries.iter().map(|entry| {
                 let version = entry.version;
                 let description = &entry.description;
+                let contents = std::fs::read(&entry.path).map_err(|source| Error::ReadFile {
+                    path: entry.path.display().to_string(),
+                    source,
+                })?;
+                let checksum = format!("{:x}", Sha256::digest(contents));
                 let path = entry
                     .path
                     .to_str()
                     .expect("canonical migration path is UTF-8");
-                quote! {
+                Ok(quote! {
                     ::litellm_migrate::Migration {
                         version: #version,
                         description: #description,
                         sql: ::core::include_str!(#path),
+                        checksum: #checksum,
                     }
-                }
+                })
             });
-            quote! { &[#(#migrations),*] }.into()
+            match migrations.collect::<Result<Vec<_>, Error>>() {
+                Ok(migrations) => quote! { &[#(#migrations),*] }.into(),
+                Err(err) => syn::Error::new(lit.span(), err).to_compile_error().into(),
+            }
         }
         Err(err) => syn::Error::new(lit.span(), err).to_compile_error().into(),
     }

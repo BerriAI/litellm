@@ -1,5 +1,6 @@
 use litellm_http::Client;
 use litellm_migrate::Migration;
+use litellm_storage_clickhouse::{apply_migrations, execute_statement};
 use serde::Serialize;
 use std::time::Duration;
 
@@ -8,6 +9,11 @@ use super::{Connection, Error};
 const SCHEMA_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 const MIGRATIONS: &[Migration] = litellm_migrate::migrate!("migrations");
+const RETENTION: [(&str, &str); 3] = [
+    ("otel_traces", "toDateTime(Timestamp)"),
+    ("agent_traces_by_key", "toDateTime(StartTs)"),
+    ("spend_logs", "toDateTime(start_time)"),
+];
 
 pub fn schema_statements(database: &str, retention_days: u32) -> Result<Vec<String>, Error> {
     if database.is_empty()
@@ -54,17 +60,32 @@ async fn ensure_schema_with_timeout(
     retention_days: u32,
     request_timeout: Duration,
 ) -> Result<(), Error> {
-    for statement in schema_statements(database, retention_days)? {
-        let response = client
-            .post(connection.url().clone())
-            .timeout(request_timeout)
-            .body(statement)
-            .send()
-            .await
-            .map_err(|_| Error::SchemaTransport)?;
-        if !response.status().is_success() {
-            return Err(Error::SchemaFailed(response.status().as_u16()));
-        }
+    schema_statements(database, retention_days)?;
+    let quoted_database = format!("`{database}`");
+    apply_migrations(
+        client,
+        connection,
+        database,
+        MIGRATIONS,
+        |migration| {
+            migration
+                .sql
+                .replace("{database}", &quoted_database)
+                .replace("{retention_days}", &retention_days.to_string())
+        },
+        request_timeout,
+    )
+    .await?;
+    for (table, expression) in RETENTION {
+        execute_statement(
+            client,
+            connection,
+            &format!(
+                "ALTER TABLE {quoted_database}.{table} MODIFY TTL {expression} + INTERVAL {retention_days} DAY"
+            ),
+            request_timeout,
+        )
+        .await?;
     }
     Ok(())
 }
