@@ -1,6 +1,6 @@
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import * as networking from "@/components/networking";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -719,5 +719,79 @@ describe("TeamInfoView - member budget reset prompt", () => {
     expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].team_member_budget).toBe(20);
     expect(screen.queryByText("Reset member budgets?")).not.toBeInTheDocument();
     expect(bulkUpdatePOST).not.toHaveBeenCalled();
+  });
+});
+
+describe("TeamInfoView - settings save preserves models (#43845)", () => {
+  const props = {
+    teamId: "123",
+    onUpdate: vi.fn(),
+    onClose: vi.fn(),
+    accessToken: "test-token",
+    is_team_admin: true,
+    is_proxy_admin: true,
+    userModels: ["gpt-4.1", "claude-sonnet-4", "gpt-4o-mini"],
+    editTeam: false,
+    premiumUser: false,
+  };
+
+  beforeEach(() => {
+    seedDefaultMocks();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("omits models from /team/update when only max_budget is edited", async () => {
+    const user = userEvent.setup({ delay: null });
+    const teamModels = ["gpt-4.1", "claude-sonnet-4"];
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models: teamModels, max_budget: 10 }) as any,
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({
+      data: { team_id: "123", team_alias: "Test Team", models: teamModels },
+      team_id: "123",
+    });
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+    const budgetInput = await screen.findByLabelText("Max Budget (USD)");
+    fireEvent.change(budgetInput, { target: { value: "25" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+    expect(payload).not.toHaveProperty("models");
+    expect(Number(payload.max_budget)).toBe(25);
+  });
+
+  it("includes models in /team/update when Models is edited", async () => {
+    const user = userEvent.setup({ delay: null });
+    const teamModels = ["gpt-4.1", "claude-sonnet-4"];
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({ models: teamModels, max_budget: 10 }) as any,
+    );
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({
+      data: { team_id: "123", team_alias: "Test Team", models: ["gpt-4.1"] },
+      team_id: "123",
+    });
+
+    renderWithProviders(<TeamInfoView {...props} />);
+    await waitFor(() => expect(screen.queryAllByText("Test Team").length).toBeGreaterThan(0));
+    await user.click(screen.getByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+    await user.click(within(screen.getByLabelText("claude-sonnet-4")).getByRole("button"));
+    expect(screen.queryByLabelText("claude-sonnet-4")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
+    const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+    expect(payload.models).toEqual(["gpt-4.1"]);
   });
 });

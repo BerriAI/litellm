@@ -82,3 +82,19 @@ export function computeTeamModelBadges(
     ),
   ];
 }
+
+export function modelsFieldForTeamUpdate(
+  dirtyModels: unknown,
+  models: string[] | undefined,
+): { models: string[] } | Record<string, never> {
+  const isDirty =
+    dirtyModels === true ||
+    (Array.isArray(dirtyModels) && dirtyModels.some(Boolean)) ||
+    (dirtyModels !== null &&
+      typeof dirtyModels === "object" &&
+      Object.values(dirtyModels as Record<string, unknown>).some(Boolean));
+  if (!isDirty) {
+    return {};
+  }
+  return { models: normalizeTeamModelSelection(models) };
+}
