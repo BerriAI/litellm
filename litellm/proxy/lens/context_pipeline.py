@@ -39,7 +39,7 @@ from .models import (
     Sample,
 )
 
-ACCESS: Final[Literal["full", "tools", "python"]] = "tools"
+ACCESS: Final[Literal["full", "tools", "python"]] = "full"
 
 
 class CandidateInvestigation(Record):
