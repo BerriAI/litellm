@@ -18,6 +18,7 @@ opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "tra
 prost.workspace = true
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
+serde_with.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 time.workspace = true

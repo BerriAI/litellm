@@ -18,9 +18,18 @@ pub enum MessageContent {
     Blocks(Vec<ContentBlock>),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Eq, strum::Display, strum::EnumString)]
-#[serde(from = "String", into = "String")]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    strum::Display,
+    strum::EnumString,
+    serde_with::DeserializeFromStr,
+    serde_with::SerializeDisplay,
+)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(from = "String", into = "String"))]
 #[strum(serialize_all = "snake_case")]
 pub enum ContentBlockType {
     Text,

@@ -1,4 +1,4 @@
-use litellm_traces::{DecodedSpan, ObservationType, decode_otlp};
+use litellm_traces::{DecodedSpan, Integration, ObservationType, decode_otlp};
 use rstest::rstest;
 use serde_json::Value;
 
@@ -99,6 +99,38 @@ fn assert_invariants(span: &DecodedSpan) {
             );
         }
     }
+}
+
+#[rstest]
+#[case::known("claude-code", Integration::ClaudeCode)]
+#[case::unknown("future-agent", Integration::Other("future-agent".to_owned()))]
+#[case::case_sensitive("Claude-Code", Integration::Other("Claude-Code".to_owned()))]
+#[case::empty("", Integration::Other(String::new()))]
+#[case::escaped_unknown(
+    "future\"agent\\path\nnext",
+    Integration::Other("future\"agent\\path\nnext".to_owned())
+)]
+fn integration_string_round_trips(#[case] input: &str, #[case] expected: Integration) {
+    assert_eq!(
+        serde_json::from_value::<Integration>(serde_json::json!(input)).unwrap(),
+        expected
+    );
+    assert_eq!(
+        serde_json::to_value(&expected).unwrap(),
+        serde_json::json!(input)
+    );
+    assert_eq!(Integration::from(input.to_owned()), expected);
+    assert_eq!(String::from(expected), input);
+}
+
+#[rstest]
+#[case::null("null")]
+#[case::number("42")]
+#[case::boolean("true")]
+#[case::array("[]")]
+#[case::object("{}")]
+fn integration_rejects_non_string_json(#[case] input: &str) {
+    assert!(serde_json::from_str::<Integration>(input).is_err());
 }
 
 fn array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
@@ -261,6 +293,10 @@ fn call_keys_round_trip_through_storage(#[case] key: litellm_traces::CallKey) {
     );
     let encoded = serde_json::to_string(&key).unwrap();
     assert_eq!(
+        serde_json::from_str::<Value>(&encoded).unwrap(),
+        serde_json::json!(key.to_string())
+    );
+    assert_eq!(
         serde_json::from_str::<litellm_traces::CallKey>(&encoded).unwrap(),
         key
     );
@@ -277,4 +313,13 @@ fn call_keys_round_trip_through_storage(#[case] key: litellm_traces::CallKey) {
 fn malformed_call_keys_are_rejected_at_the_boundary(#[case] encoded: &str) {
     assert!(encoded.parse::<litellm_traces::CallKey>().is_err());
     assert!(serde_json::from_value::<litellm_traces::CallKey>(serde_json::json!(encoded)).is_err());
+}
+
+#[rstest]
+#[case::null(serde_json::Value::Null)]
+#[case::number(serde_json::json!(42))]
+#[case::object(serde_json::json!({}))]
+#[case::array(serde_json::json!([]))]
+fn call_keys_reject_non_string_json(#[case] value: Value) {
+    assert!(serde_json::from_value::<litellm_traces::CallKey>(value).is_err());
 }

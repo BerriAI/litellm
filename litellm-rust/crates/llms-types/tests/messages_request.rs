@@ -3,6 +3,27 @@ use rstest::rstest;
 use serde_json::{Value, json};
 
 #[rstest]
+#[case::null(json!(null))]
+#[case::number(json!(1))]
+#[case::boolean(json!(true))]
+#[case::array(json!(["tool_use"]))]
+#[case::object(json!({"type": "tool_use"}))]
+fn content_block_type_rejects_non_string_json(#[case] value: Value) {
+    assert!(serde_json::from_value::<ContentBlockType>(value).is_err());
+}
+
+#[cfg(feature = "schema")]
+#[rstest]
+fn content_block_type_schema_remains_a_string() {
+    let schema = schemars::schema_for!(ContentBlockType).to_value();
+    assert_eq!(schema.get("type"), Some(&json!("string")));
+    assert_eq!(
+        schema.get("title"),
+        Some(&json!(stringify!(ContentBlockType)))
+    );
+}
+
+#[rstest]
 #[case::text("text", ContentBlockType::Text)]
 #[case::thinking("thinking", ContentBlockType::Thinking)]
 #[case::redacted_thinking("redacted_thinking", ContentBlockType::RedactedThinking)]
