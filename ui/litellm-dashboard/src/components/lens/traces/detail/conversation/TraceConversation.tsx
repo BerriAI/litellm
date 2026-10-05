@@ -167,7 +167,7 @@ function ConversationStep({
                 {item.model}
               </span>
             )}
-            <span className="shrink-0 tabular-nums">{fmtMs(item.span.start_offset_ms)}</span>
+            <span className="shrink-0 tabular-nums">{fmtMs(item.time ?? item.span.start_offset_ms)}</span>
           </div>
           {item.toolResult === undefined && (
             <Button

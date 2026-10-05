@@ -84,6 +84,7 @@ export interface ConversationItem {
   branchId?: string;
   parentBranchId?: string;
   model?: string;
+  time?: number;
   showError?: boolean;
 }
 
@@ -272,7 +273,13 @@ export function buildConversation(
         completedOutputs,
         byId,
       );
-      const item = { id: `${span.span_id}-output`, span, messages: fresh, showError: span.status === "error" };
+      const item = {
+        id: `${span.span_id}-output`,
+        span,
+        time: event.time,
+        messages: fresh,
+        showError: span.status === "error",
+      };
       if (fresh.length || item.showError) items.push(item);
       completedOutputs.set(span.span_id, output);
       histories.set(key, [...history, ...fresh]);
@@ -292,7 +299,8 @@ export function buildConversation(
         : newConversationMessages(history, input);
     if (span.type === "agent" || span.parent_span_id === null) {
       histories.set(key, input);
-      if (fresh.length) items.push({ id: span.span_id, span, messages: fresh });
+      const item = { id: span.span_id, span, time: event.time, messages: fresh };
+      if (fresh.length) items.push(item);
       continue;
     }
     const combined = [...fresh, ...output];
@@ -305,6 +313,7 @@ export function buildConversation(
     const item = {
       id: span.span_id,
       span,
+      time: event.time,
       showError: span.status === "error",
       messages: combined.map((message) => ({
         ...message,

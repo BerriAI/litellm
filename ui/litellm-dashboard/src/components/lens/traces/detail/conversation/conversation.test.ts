@@ -554,6 +554,7 @@ describe("coding sessions", () => {
         },
       ],
     ]);
+    expect(buildConversation([root, llm, tool, response], details, true)[0].time).toBe(3);
     expect(buildConversation([root, llm, tool, response], details, true).map((item) => item.span.span_id)).toEqual([
       "reply",
       "tool",
