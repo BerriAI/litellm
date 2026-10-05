@@ -110,7 +110,7 @@ def _allowlist(holder: _Holder) -> list[dict[str, object]]:
             (holder.key,),
         )
     return read_rows(
-        f'SELECT models FROM "{holder.table}" WHERE "{holder.id_column}" = %s',  # noqa: S608
+        f'SELECT models FROM "{holder.table}" WHERE "{holder.id_column}" = %s',  # noqa: S608  # table and column come from the fixed _holders tuple, never from input
         (holder.object_id,),
     )
 
