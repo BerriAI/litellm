@@ -78,7 +78,7 @@ export function LensModeSwitch({
               }
               className={cn(
                 "relative z-raised inline-flex h-full items-center gap-2 rounded-full text-sm font-medium text-muted-foreground outline-none transition-colors duration-200 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-active:text-foreground",
-                view === "settings" ? "px-2.5" : "px-4",
+                view === "settings" ? "px-2.5" : "px-3 sm:px-4",
               )}
             >
               <span className="relative inline-flex">
