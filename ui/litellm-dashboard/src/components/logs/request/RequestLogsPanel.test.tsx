@@ -363,13 +363,19 @@ describe("RequestLogsPanel", () => {
       fireEvent.click(screen.getByTestId("pagination-next"));
       await waitFor(() => expect(lastCall()?.page).toBe(2));
 
+      const callCountBeforeAliasNavigation = vi.mocked(uiSpendLogsCall).mock.calls.length;
       view.rerender(tree("exclude_key_alias=noisy"));
 
       await waitFor(() => {
-        const call = lastCall();
-        expect(call?.page).toBe(1);
-        expect(call?.params?.exclude_key_alias).toBe("noisy");
-        expect(call?.params?.session_cursor).toBeUndefined();
+        const aliasCalls = vi
+          .mocked(uiSpendLogsCall)
+          .mock.calls.slice(callCountBeforeAliasNavigation)
+          .map(([options]) => options)
+          .filter((options) => options.params?.exclude_key_alias === "noisy");
+        expect(aliasCalls.length).toBeGreaterThan(0);
+        expect(aliasCalls.every((options) => options.page === 1 && options.params?.session_cursor === undefined)).toBe(
+          true,
+        );
       });
     });
 
