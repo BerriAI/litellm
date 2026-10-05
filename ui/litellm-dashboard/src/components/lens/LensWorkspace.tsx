@@ -154,7 +154,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
             if (value === "settings") leaveSetup();
             setTab(value as LensTab);
           }}
-          className="min-h-0 flex-1 gap-0"
+          className="@container/lens-frame min-h-0 flex-1 gap-0"
         >
           <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-1">
             <div className="contents">
@@ -175,7 +175,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                 </a>
               </p>
             </div>
-            <div className="col-span-2 row-start-3 mt-2 ml-3 justify-self-start">
+            <div className="col-span-2 row-start-3 mt-2 @min-[24rem]/lens-frame:ml-8 @min-[24rem]/lens-frame:justify-self-start">
               <LensModeSwitch
                 activity={activity}
                 demo={demo}

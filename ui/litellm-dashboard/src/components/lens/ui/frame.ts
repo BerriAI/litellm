@@ -1,15 +1,23 @@
 import { cva } from "@/lib/cva.config";
 
-export const frameCard = cva("flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-card", {
-  variants: { session: { live: "border border-foreground/15", demo: "border-2 border-info" } },
-  defaultVariants: { session: "live" },
-});
+export const frameCard = cva(
+  "flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-2xl bg-card @min-[24rem]/lens-frame:rounded-t-2xl",
+  {
+    variants: {
+      session: {
+        live: "border border-t-0 border-foreground/15 @min-[24rem]/lens-frame:border-t",
+        demo: "border-2 border-t-0 border-info @min-[24rem]/lens-frame:border-t-2",
+      },
+    },
+    defaultVariants: { session: "live" },
+  },
+);
 
 export const frameTab = cva("relative z-raised rounded-t-2xl bg-card", {
   variants: {
     session: {
-      live: "-mb-px border-x border-t border-foreground/15",
-      demo: "-mb-0.5 border-x-2 border-t-2 border-info",
+      live: "border-x border-t border-foreground/15 @min-[24rem]/lens-frame:-mb-px",
+      demo: "border-x-2 border-t-2 border-info @min-[24rem]/lens-frame:-mb-0.5",
     },
   },
   defaultVariants: { session: "live" },
