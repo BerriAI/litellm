@@ -46961,6 +46961,11 @@ export interface components {
         TracePart: {
             /** Content */
             content: string;
+            /**
+             * End Time
+             * @default
+             */
+            end_time: string;
             /** Execution Id */
             execution_id: string;
             /** Kind */
@@ -46974,6 +46979,11 @@ export interface components {
             parent_span_id: string;
             /** Span Id */
             span_id: string;
+            /**
+             * Start Time
+             * @default
+             */
+            start_time: string;
             /**
              * Truncated
              * @default false
