@@ -17,7 +17,10 @@ import httpx
 import pytest
 import respx
 
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.s3_v2 import S3BatchUploadError, S3Logger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 from litellm.types.utils import StandardLoggingPayload
@@ -5069,3 +5072,60 @@ async def test_send_batch_time_grows_linearly_with_the_batch() -> None:
     quadrupled: Final = await _timed_send_batch(8_000)
 
     assert quadrupled / baseline < 8, f"2k took {baseline:.3f}s, 8k took {quadrupled:.3f}s"
+
+
+class QueueOnlyS3LoggerWithoutCredentialsOrPeriodicFlush(S3Logger):
+    def __init__(self) -> None:
+        CustomLogger.__init__(self)
+        self.log_queue: list[s3BatchLoggingElement] = []
+        self.batch_size = 100
+        self.s3_strip_base64_files = False
+        self.s3_use_team_prefix = False
+        self.s3_use_key_prefix = False
+        self.s3_path = ""
+        self.s3_log_prompts_only = None
+        self.s3_batch_file_upload = False
+        self._upload_semaphore = asyncio.Semaphore(1)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("concurrent", [False, True])
+@pytest.mark.asyncio
+async def test_repeated_failure_notifications_upload_once(
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    concurrent: bool,
+) -> None:
+    sink: Final = QueueOnlyS3LoggerWithoutCredentialsOrPeriodicFlush()
+    upload: Final = AsyncMock(return_value=True)
+    monkeypatch.setattr(sink, "async_upload_data_to_s3", upload)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [sink])
+    logging_obj: Final = Logging(
+        model="openai/gpt-4o-mini",
+        messages=[],
+        stream=stream,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="synthetic-request",
+        function_id="synthetic-function",
+    )
+    error: Final = litellm.ServiceUnavailableError(
+        message="synthetic deployment-selection failure",
+        llm_provider="openai",
+        model="openai/gpt-4o-mini",
+    )
+
+    if concurrent:
+        await asyncio.gather(
+            *(logging_obj.async_failure_handler(error, "synthetic traceback") for _ in range(3))
+        )
+    else:
+        for _ in range(3):
+            await logging_obj.async_failure_handler(error, "synthetic traceback")
+
+    assert len(sink.log_queue) == 1
+    assert all(entry.payload["status"] == "failure" for entry in sink.log_queue)
+    await sink.async_send_batch()
+    await asyncio.sleep(0)
+    assert upload.await_count == 1

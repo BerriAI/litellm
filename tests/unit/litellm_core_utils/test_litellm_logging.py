@@ -1540,11 +1540,161 @@ def test_logging_prevent_double_logging(logging_obj):
     This is to avoid double logging.
     """
     logging_obj.stream = False
-    logging_obj.has_run_logging(event_type="sync_success")
-    assert logging_obj.should_run_logging(event_type="sync_success") == False
-    assert logging_obj.should_run_logging(event_type="sync_failure") == True
-    assert logging_obj.should_run_logging(event_type="async_success") == True
-    assert logging_obj.should_run_logging(event_type="async_failure") == True
+    logging_obj.mark_logging_complete(event_type="sync_success")
+    assert logging_obj.should_run_logging(event_type="sync_success") is False
+    assert logging_obj.should_run_logging(event_type="sync_failure") is True
+    assert logging_obj.should_run_logging(event_type="async_success") is True
+    assert logging_obj.should_run_logging(event_type="async_failure") is True
+
+
+class _FailureCountingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.async_failure_events: asyncio.Queue[None] = asyncio.Queue()
+        self.sync_failure_events: asyncio.Queue[None] = asyncio.Queue()
+
+    async def async_log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.async_failure_events.put_nowait(None)
+
+    def log_failure_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self.sync_failure_events.put_nowait(None)
+
+
+def _register_failure_counting_logger(
+    monkeypatch: pytest.MonkeyPatch,
+    logger: _FailureCountingLogger,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [logger])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [logger])
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "event",
+    ["async_success", "sync_success", "async_failure", "sync_failure"],
+)
+def test_mark_logging_complete_flags_by_stream_and_event(
+    logging_obj: LitellmLogging,
+    stream: bool,
+    event: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
+) -> None:
+    events: Final[tuple[Literal["async_success", "sync_success", "async_failure", "sync_failure"], ...]] = (
+        "async_success",
+        "sync_success",
+        "async_failure",
+        "sync_failure",
+    )
+    logging_obj.stream = stream
+
+    logging_obj.mark_logging_complete(event_type=event)
+
+    expected_to_run: Final = stream and event in ("async_success", "sync_success")
+    assert logging_obj.should_run_logging(event_type=event) is expected_to_run
+    assert all(logging_obj.should_run_logging(event_type=other_event) for other_event in events if other_event != event)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_has_run_logging_alias_marks_logging_complete(
+    logging_obj: LitellmLogging,
+    stream: bool,
+) -> None:
+    logging_obj.stream = stream
+
+    logging_obj.has_run_logging(event_type="async_failure")
+    assert logging_obj.should_run_logging(event_type="async_failure") is False
+
+    logging_obj.has_run_logging(event_type="async_success")
+    assert logging_obj.should_run_logging(event_type="async_success") is stream
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("concurrent", [False, True])
+async def test_async_failure_handler_dispatches_once_on_repeated_notifications(
+    logging_obj: LitellmLogging,
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    concurrent: bool,
+) -> None:
+    failure_logger: Final = _FailureCountingLogger()
+    _register_failure_counting_logger(monkeypatch, failure_logger)
+    logging_obj.stream = stream
+    logging_obj.model_call_details["litellm_params"] = {}
+    error: Final = litellm.ServiceUnavailableError("503", "anthropic", "claude")
+    failure_calls: Final = tuple(logging_obj.async_failure_handler(error, "tb") for _ in range(3))
+
+    if concurrent:
+        await asyncio.gather(*failure_calls)
+    else:
+        for failure_call in failure_calls:
+            await failure_call
+
+    assert failure_logger.async_failure_events.qsize() == 1
+
+
+def test_sync_failure_handler_dispatches_once_on_repeated_streaming_notifications(
+    logging_obj: LitellmLogging,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure_logger: Final = _FailureCountingLogger()
+    _register_failure_counting_logger(monkeypatch, failure_logger)
+    logging_obj.stream = True
+    logging_obj.call_type = "completion"
+    logging_obj.model_call_details["litellm_params"] = {}
+    error: Final = litellm.ServiceUnavailableError("503", "anthropic", "claude")
+
+    for _ in range(3):
+        logging_obj.failure_handler(error, "tb")
+
+    assert failure_logger.sync_failure_events.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_streaming_sync_and_async_failure_dedupe_independently(
+    logging_obj: LitellmLogging,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure_logger: Final = _FailureCountingLogger()
+    _register_failure_counting_logger(monkeypatch, failure_logger)
+    logging_obj.stream = True
+    logging_obj.call_type = "completion"
+    logging_obj.model_call_details["litellm_params"] = {}
+    error: Final = litellm.ServiceUnavailableError("503", "anthropic", "claude")
+
+    await logging_obj.async_failure_handler(error, "tb")
+    await logging_obj.async_failure_handler(error, "tb")
+    logging_obj.failure_handler(error, "tb")
+    logging_obj.failure_handler(error, "tb")
+
+    assert failure_logger.async_failure_events.qsize() == 1
+    assert failure_logger.sync_failure_events.qsize() == 1
+
+
+def test_streaming_success_is_not_marked_complete(logging_obj: LitellmLogging) -> None:
+    logging_obj.stream = True
+
+    logging_obj.mark_logging_complete(event_type="async_success")
+    logging_obj.mark_logging_complete(event_type="sync_success")
+
+    assert logging_obj.should_run_logging(event_type="async_success") is True
+    assert logging_obj.should_run_logging(event_type="sync_success") is True
+    assert "has_logged_async_success" not in logging_obj.model_call_details
+    assert "has_logged_sync_success" not in logging_obj.model_call_details
 
 
 @pytest.mark.asyncio

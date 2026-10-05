@@ -2286,8 +2286,8 @@ async def _run_post_mcp_call_guardrails(
 def suppress_completed_success_logging(logging_obj: LiteLLMLoggingObj) -> None:
     """An interim ``InputRequiredResult`` is not a completed call, so the ``@client`` wrapper
     on ``call_mcp_tool`` must not run the success handlers for it when the coroutine returns."""
-    logging_obj.has_run_logging(event_type="sync_success")
-    logging_obj.has_run_logging(event_type="async_success")
+    logging_obj.mark_logging_complete(event_type="sync_success")
+    logging_obj.mark_logging_complete(event_type="async_success")
 
 
 async def _fire_mcp_tool_call_logging(
@@ -2335,8 +2335,8 @@ async def _fire_mcp_tool_call_logging(
         await logging_obj.async_success_handler(result=result, start_time=start_time, end_time=end_time)
         return result
 
-    logging_obj.has_run_logging(event_type="sync_success")
-    logging_obj.has_run_logging(event_type="async_success")
+    logging_obj.mark_logging_complete(event_type="sync_success")
+    logging_obj.mark_logging_complete(event_type="async_success")
     tool_error: Final = MCPToolResultError(error_message)
     logging_obj.failure_handler(tool_error, "", start_time, end_time)
     await logging_obj.async_failure_handler(tool_error, "", start_time, end_time)
