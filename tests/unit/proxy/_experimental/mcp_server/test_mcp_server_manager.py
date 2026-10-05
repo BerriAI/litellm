@@ -18499,3 +18499,43 @@ async def test_cached_catalog_excludes_routes_for_servers_outside_its_snapshot(m
         assert "search" not in manager.tool_name_to_mcp_server_name_mapping
         assert manager._get_mcp_server_from_tool_name("known").server_id == "pinned"
     read_rows.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_overlapping_server_prefix_cannot_authorize_registered_openapi_handler(monkeypatch, tmp_path):
+    from datetime import datetime
+
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server import operations
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+    manager = MCPServerManager()
+    private = MCPServer(server_id="private", name="billing", alias="billing", transport=MCPTransport.http)
+    allowed = MCPServer(server_id="allowed", name="billing_admin", alias="billing-admin", transport=MCPTransport.http)
+    manager.config_mcp_servers = {server.server_id: server for server in (private, allowed)}
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({"openapi": "3.0.0", "paths": {"/export": {"get": {"operationId": "admin-export"}}}}))
+    await manager._register_openapi_tools(str(spec), private, "https://example.com")
+    tool = global_mcp_tool_registry.get_tool("billing-admin-export")
+    assert tool is not None
+    handler = AsyncMock(return_value="private result")
+    tool.handler = handler
+    check = AsyncMock(return_value={})
+    monkeypatch.setattr(manager, "pre_call_tool_check", check)
+
+    with pytest.raises(HTTPException) as denied:
+        await operations._execute_mcp_tool(
+            name="billing-admin-export", arguments={}, allowed_mcp_servers=[allowed], start_time=datetime.now()
+        )
+    assert denied.value.status_code == 403
+    handler.assert_not_awaited()
+    check.assert_not_awaited()
+    result = await operations._execute_mcp_tool(
+        name="billing-admin-export", arguments={}, allowed_mcp_servers=[private], start_time=datetime.now()
+    )
+    assert result.is_error is False
+    handler.assert_awaited_once_with()
+    assert check.await_args.kwargs["server"].server_id == private.server_id

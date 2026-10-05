@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from typing import Any, ClassVar
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MCPTool(BaseModel):
@@ -10,6 +10,7 @@ class MCPTool(BaseModel):
     description: str
     input_schema: dict[str, Any]
     handler: Callable
+    server_id: str | None = Field(default=None, frozen=True)
 
 
 class ToolSchema(BaseModel):

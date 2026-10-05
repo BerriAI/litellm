@@ -2899,6 +2899,7 @@ class MCPServerManager:
                         description=description,
                         input_schema=input_schema,
                         handler=tool_func,
+                        server_id=server.server_id,
                     )
 
                     # Update tool name to server name mapping (for both prefixed and base names)
@@ -6675,9 +6676,10 @@ class MCPServerManager:
         """
         from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 
-        # Local handlers belong to their registered namespace, even if a native
-        # discovery result or an older cached route claims the same spelling.
-        if global_mcp_tool_registry.get_tool(tool_name) is not None:
+        registered_tool: Final = global_mcp_tool_registry.get_tool(tool_name)
+        if registered_tool is not None:
+            if registered_tool.server_id is not None:
+                return self.get_mcp_server_by_id(registered_tool.server_id)
             return self.server_owning_tool_name_prefix(tool_name)
 
         registry_servers: Final = list(self.get_registry().values())

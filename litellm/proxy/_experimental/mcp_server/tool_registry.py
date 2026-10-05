@@ -58,6 +58,8 @@ class MCPToolRegistry:
         description: str,
         input_schema: dict[str, Any],
         handler: Callable,
+        *,
+        server_id: str | None = None,
     ) -> None:
         """
         Register a new tool in the registry
@@ -67,6 +69,7 @@ class MCPToolRegistry:
             description=description,
             input_schema=input_schema,
             handler=handler,
+            server_id=server_id,
         )
         verbose_logger.debug("Registered tool: %s", name)
 
