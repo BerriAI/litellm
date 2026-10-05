@@ -290,6 +290,7 @@ def test_killed_worker_is_replaced_by_one_that_reads_the_same_admissions(tmp_pat
         assert by_pid[new_pid].overflow > 0 and by_pid[new_pid].aliases <= rig.warm_aliases, by_pid[new_pid]
 
 
+@pytest.mark.timeout(420)
 def test_restart_with_two_workers_starts_the_cap_over(tmp_path: Path) -> None:
     """C4: a second boot on the same multiprocess directory wipes it: the old keys are gone, three new keys get
     their series, and a fourth lands on `other`."""
@@ -316,6 +317,7 @@ def test_restart_with_two_workers_starts_the_cap_over(tmp_path: Path) -> None:
         assert extra.alias not in label_values(after)
 
 
+@pytest.mark.timeout(420)
 def test_restart_with_one_worker_and_an_operator_directory_starts_the_cap_over(tmp_path: Path) -> None:
     """C5: one worker, no metrics port, PROMETHEUS_MULTIPROC_DIR set by the operator and kept across a restart:
     the directory is wiped at boot the way the multi-worker path wipes it, so the merged scrape shows only the
