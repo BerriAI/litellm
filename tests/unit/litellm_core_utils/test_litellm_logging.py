@@ -9574,3 +9574,23 @@ def test_optional_callback_dependency_is_not_silently_ignored(callback, monkeypa
         assert caught.value.__cause__.name == "pydantic_settings"
     finally:
         is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.parametrize("enabled", ("true", "false"))
+def test_optional_logger_lookup_dependency_is_not_silently_ignored(enabled, monkeypatch):
+    import sys
+    from litellm.integrations.otel.model.flags import is_otel_v2_enabled
+    from litellm.litellm_core_utils.litellm_logging import get_custom_logger_compatible_class
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", enabled)
+    monkeypatch.setitem(sys.modules, "pydantic_settings", None)
+    monkeypatch.delitem(sys.modules, "litellm.integrations.otel.model.config", raising=False)
+    monkeypatch.delitem(sys.modules, "litellm.integrations.otel.logger", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        with pytest.raises(ImportError, match=r"litellm\[integrations\]") as caught:
+            get_custom_logger_compatible_class("newrelic")
+        assert isinstance(caught.value.__cause__, ModuleNotFoundError)
+        assert caught.value.__cause__.name == "pydantic_settings"
+    finally:
+        is_otel_v2_enabled.cache_clear()

@@ -5573,6 +5573,8 @@ def get_custom_logger_compatible_class(
                     return callback
         return None
 
+    except MissingOptionalDependencyError:
+        raise
     except Exception as e:
         verbose_logger.exception("[Non-Blocking Error] Error getting custom logger: %s", e)
         return None
