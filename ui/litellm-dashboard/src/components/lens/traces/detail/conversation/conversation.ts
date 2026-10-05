@@ -1,6 +1,6 @@
 import type { Span, SpanDetail, TraceMessage, TraceToolCall, UIContent } from "../../types";
-import { isFrameworkSpan, parseJson, parseMessages, prettyPayload } from "../../utils";
-import { toTraceMessage } from "../content/payload";
+import { isFrameworkSpan, parseAssistantSummary, parseMessages, prettyPayload } from "../../utils";
+import { toTraceMessage, toolInput } from "../content/payload";
 
 export const CONVERSATION_PAGE_SIZE = 20;
 
@@ -24,7 +24,8 @@ function contentText(value: string, content?: UIContent): string {
 
 function messages(value: string, content: UIContent | undefined, role: string): TraceMessage[] {
   if (content?.kind === "messages") return content.messages.map(toTraceMessage);
-  const parsed = !content ? parseMessages(value) : null;
+  const source = content?.kind === "text" ? content.text : value;
+  const parsed = parseMessages(source) ?? (role === "assistant" ? parseAssistantSummary(source) : null);
   if (parsed) return parsed;
   const text = contentText(value, content);
   return text ? [{ role, content: text }] : [];
@@ -69,6 +70,8 @@ export interface ConversationItem {
   messages: TraceMessage[];
   toolCall?: TraceToolCall;
   toolResult?: string;
+  agentId?: string;
+  agentName?: string;
   showError?: boolean;
 }
 
@@ -78,16 +81,13 @@ function toolItem(
   pending: TraceToolCall[],
   items: ConversationItem[],
 ): ConversationItem {
-  const args =
-    parseJson(detail.input) ??
-    (detail.input_ui?.kind === "fields"
-      ? Object.fromEntries(detail.input_ui.fields.map((field) => [field.key, field.value]))
-      : detail.input);
+  const args = toolInput(detail.input, detail.input_ui);
   const call = { name: span.name, args };
   const match = pending.findIndex(
     (candidate) =>
       candidate.name === call.name &&
-      JSON.stringify(stableValue(candidate.args)) === JSON.stringify(stableValue(call.args)),
+      (candidate.args === undefined ||
+        JSON.stringify(stableValue(candidate.args)) === JSON.stringify(stableValue(call.args))),
   );
   if (match >= 0) {
     const [matched] = pending.splice(match, 1);
@@ -97,7 +97,10 @@ function toolItem(
           message.tool_calls = message.tool_calls.filter((call) => call !== matched);
       }
   }
-  const result = contentText(detail.output, detail.output_ui);
+  const result =
+    detail.output_ui?.kind === "text"
+      ? detail.output_ui.text
+      : prettyPayload(detail.output) || contentText(detail.output, detail.output_ui);
   return { id: span.span_id, span, messages: [], toolCall: call, toolResult: result };
 }
 
@@ -165,6 +168,17 @@ function withoutForwardedAnswers(
     (fresh, [childId, childOutput]) =>
       isDescendant(childId, spanId, byId) ? newConversationMessages(childOutput, fresh) : fresh,
     output,
+  );
+}
+
+function agentLabels(agents: readonly Span[]): ReadonlyMap<string, string> {
+  const named = agents.map((agent) => ({ agent, name: agent.name || agent.agent || "Agent" }));
+  return new Map(
+    Object.values(groupBy(named, ({ name }) => JSON.stringify(name))).flatMap((group) =>
+      orderBy(group, [({ agent }) => agent.start_offset_ms, ({ agent }) => agent.span_id], ["asc", "asc"]).map(
+        ({ agent, name }, index) => [agent.span_id, group.length > 1 ? `${name} (${index + 1})` : name] as const,
+      ),
+    ),
   );
 }
 
@@ -241,10 +255,18 @@ export function buildConversation(
     };
     if (combined.length || item.showError) items.push(item);
   }
+  const agents = [...new Set(conversationSteps(spans).map(branch))].flatMap((id) => {
+    const span = byId.get(id);
+    return span ? [span] : [];
+  });
+  const labels = agentLabels(agents);
   return items
     .map((item) => ({
       ...item,
+      agentId: branch(item.span),
+      agentName: labels.get(branch(item.span)) || item.span.agent,
       messages: item.messages.filter((message) => Boolean(message.content) || Boolean(message.tool_calls?.length)),
     }))
     .filter((item) => item.messages.length || item.toolResult !== undefined || item.showError);
 }
+import { groupBy, orderBy } from "es-toolkit";
