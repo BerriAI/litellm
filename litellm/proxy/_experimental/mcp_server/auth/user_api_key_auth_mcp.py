@@ -1222,6 +1222,7 @@ class MCPRequestHandler:
             refreshed.org_id = current.org_id
             refreshed.project_id = current.project_id
             refreshed.user_id = current.user_id
+            refreshed.access_group_ids = current.access_group_ids
         refreshed.requires_fresh_policy = True
         return refreshed
 

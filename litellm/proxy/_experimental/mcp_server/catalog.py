@@ -849,7 +849,7 @@ async def get_filtered_server_tools(
                 server=server,
                 mcp_auth_header=server_auth_header,
                 extra_headers=extra_headers,
-                add_prefix=True,  # Always add server prefix
+                add_prefix=True,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
                 user_api_key_auth=user_api_key_auth,

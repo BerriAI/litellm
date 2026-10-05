@@ -126,7 +126,8 @@ def test_no_salt_preserves_complete_lists_and_calls_but_rejects_continuations(tm
             asyncio.run(exercise(gateway))
 
 
-def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, monkeypatch):
+@pytest.mark.parametrize("grant", ["direct", "access_group"])
+def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, monkeypatch, grant: str):
     import os
     import subprocess
     import sys
@@ -136,7 +137,7 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
 
     assert os.environ.get("DATABASE_URL"), "This integration case requires disposable-database access"
 
-    async def exercise(a, b, peer, identity, owner, stranger):
+    async def exercise(a, b, peer, identity, owner, stranger, policy):
         owner_a = Gateway(a.client, owner, peer.url)
         owner_b = Gateway(b.client, owner, peer.url)
         stranger_b = Gateway(b.client, stranger, peer.url)
@@ -158,14 +159,24 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
                     )
                 assert not any(call["body"].get("method", "").endswith("/list") for call in peer.drain())
 
-        a.post("/key/update", {"key": owner, "object_permission": {"mcp_servers": ["no-mcp-servers"]}})
+        a.post(
+            "/key/update",
+            {
+                "key": owner,
+                **(
+                    {"access_group_ids": []}
+                    if grant == "access_group"
+                    else {"object_permission": {"mcp_servers": ["no-mcp-servers"]}}
+                ),
+            },
+        )
         for method, first in first_pages.items():
             async with catalog_session(owner_b) as session:
                 peer.drain()
                 with pytest.raises(MCPError, match="fresh listing"):
                     await getattr(session, method)(params=PaginatedRequestParams(cursor=first.next_cursor))
                 assert not any(call["body"].get("method", "").endswith("/list") for call in peer.drain())
-        a.post("/key/update", {"key": owner, "object_permission": {"mcp_servers": [identity]}})
+        a.post("/key/update", {"key": owner, **policy})
         changed = a.request("PUT", "/v1/mcp/server", {"server_id": identity, "description": "new catalog generation"})
         assert changed.status_code == 202, changed.text
         for method, first in first_pages.items():
@@ -219,10 +230,24 @@ def test_continuations_reauthorize_and_reject_registry_changes(tmp_path: Path, m
                 a.scenario() as scenario,
             ):
                 identity = register_mcp(scenario, peer, "pages")
-                owner = scenario.key(object_permission={"mcp_servers": [identity]})
+                group = a.request(
+                    "POST",
+                    "/v1/access_group",
+                    {
+                        "access_group_name": "pagination-grant",
+                        "access_mcp_server_ids": [identity],
+                    },
+                )
+                assert group.status_code == 201, group.text
+                policy = (
+                    {"access_group_ids": [group.json()["access_group_id"]]}
+                    if grant == "access_group"
+                    else {"object_permission": {"mcp_servers": [identity]}}
+                )
+                owner = scenario.key(**policy)
                 stranger = scenario.key(object_permission={"mcp_servers": [identity]})
                 assert owner != stranger
-                asyncio.run(exercise(a, b, peer, identity, owner, stranger))
+                asyncio.run(exercise(a, b, peer, identity, owner, stranger, policy))
 
 
 @pytest.mark.parametrize("changed", ["key", "snapshot"])

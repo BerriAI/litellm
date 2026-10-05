@@ -10286,12 +10286,13 @@ async def test_catalog_refresh_reads_current_user_org_without_losing_resource_sc
 
 
 @pytest.mark.asyncio
-async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session_scope(monkeypatch):
+@pytest.mark.parametrize("current_groups", [[], ["replacement-group"]])
+async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session_scope(monkeypatch, current_groups):
     permission = LiteLLM_ObjectPermissionTable(object_permission_id="current-policy", mcp_servers=["current-server"])
-    current = UserAPIKeyAuth(object_permission=permission, object_permission_id="current-policy", team_id="new-team", org_id="new-org", project_id="new-project", user_id="new-owner")
+    current = UserAPIKeyAuth(object_permission=permission, object_permission_id="current-policy", team_id="new-team", org_id="new-org", project_id="new-project", user_id="new-owner", access_group_ids=current_groups)
     reload_key = AsyncMock(return_value=current)
     monkeypatch.setattr(MCPRequestHandler, "_reload_admitted_key", reload_key)
-    caller = UserAPIKeyAuth(api_key="owned-key-hash", team_id="old-team", org_id="old-org", project_id="old-project", user_id="old-owner")
+    caller = UserAPIKeyAuth(api_key="owned-key-hash", team_id="old-team", org_id="old-org", project_id="old-project", user_id="old-owner", access_group_ids=["original-group"])
     caller.via_virtual_key = True
     caller.mcp_session_resource_server_id = "session-server"
     caller.mcp_toolset_id = "session-toolset"
@@ -10304,3 +10305,5 @@ async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session
     assert refreshed.mcp_toolset_id == "session-toolset"
     assert refreshed.via_virtual_key and refreshed.requires_fresh_policy
     assert caller.team_id == "old-team" and not caller.requires_fresh_policy
+    assert refreshed.access_group_ids == current_groups
+    assert caller.access_group_ids == ["original-group"]
