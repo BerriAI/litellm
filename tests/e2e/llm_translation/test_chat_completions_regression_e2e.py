@@ -52,6 +52,25 @@ AZURE_FOUNDRY_BACKEND: Final = "azure_ai/claude-haiku-4-5"
 OPENAI_BACKEND = "openai/gpt-5.6"
 ANTHROPIC_BACKEND = "anthropic/claude-haiku-4-5-20251001"
 BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+BEDROCK_NOVA_BACKEND: Final = "bedrock/us.amazon.nova-2-lite-v1:0"
+VERTEX_PARTNER_BACKENDS: Final = (
+    pytest.param(
+        "vertex_ai/mistral-small-2503",
+        marks=pytest.mark.skip(
+            reason="the e2e Vertex project has no access to mistral-small-2503 (404 publisher model not found)"
+        ),
+    ),
+    pytest.param(
+        "vertex_ai/openai/gpt-oss-120b-maas",
+        marks=pytest.mark.skip(reason="never served by the e2e Vertex project (60s read timeout, no headers)"),
+    ),
+)
+PDF_DOCUMENT_URL: Final = (
+    "https://cdn.jsdelivr.net/gh/BerriAI/litellm"
+    "@d769e81c90d453240c61fc572cdb27fae06a89d0"
+    "/tests/llm_translation/fixtures/dummy.pdf"
+)
+PDF_DOCUMENT_TEXT: Final = "test pdf file"
 
 
 class _StreamToolCallFunction(BaseModel):
@@ -981,6 +1000,92 @@ class TestBedrockConverseChatCompletions:
 
         response = unwrap(client.proxy.chat(key, ChatBody(model=model, messages=_vision_messages(), max_tokens=32)))
         _assert_describes_cat(response)
+
+    def test_bedrock_converse_reads_a_pdf_sent_by_url(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-bedrock-document-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model, _bedrock_params().model_copy(update={"model": BEDROCK_NOVA_BACKEND})
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=[
+                                TextContentPart(text="What title text is in this document? Reply with it only."),
+                                ImageContentPart(image_url=ImageUrl(url=PDF_DOCUMENT_URL)),
+                            ],
+                        )
+                    ],
+                    max_tokens=64,
+                ),
+            )
+        )
+        message = response.choices[0].message if response.choices else None
+        content = (message.content if message else "") or ""
+        assert PDF_DOCUMENT_TEXT in content.lower(), f"model did not read the PDF document block: {response}"
+
+
+class _PartnerDelta(BaseModel):
+    role: str | None = None
+    content: str | None = None
+
+
+class _PartnerChoice(BaseModel):
+    delta: _PartnerDelta = _PartnerDelta()
+    finish_reason: str | None = None
+
+
+class _PartnerChunk(BaseModel):
+    choices: list[_PartnerChoice] = []
+
+
+class TestVertexPartnerChatCompletions:
+    @pytest.mark.parametrize("backend", VERTEX_PARTNER_BACKENDS)
+    def test_vertex_partner_model_streams_openai_shaped_chunks(
+        self, client: PassthroughClient, resources: ResourceManager, backend: str
+    ) -> None:
+        model = f"e2e-vertex-partner-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model,
+            LiteLLMParamsBody(
+                model=backend, vertex_project="os.environ/VERTEXAI_PROJECT", vertex_location="us-central1"
+            ),
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        key = resources.key()
+
+        result = client.proxy.chat_stream(
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(role="user", content=f"Count from 1 to 5, one number per line. {unique_marker()}")
+                ],
+                max_tokens=256,
+                stream=True,
+            ),
+        )
+        assert result.ok and result.is_streaming, f"stream was not established: {result}"
+        assert result.stream_error is None, f"stream carried an error event: {result.stream_error}"
+        assert result.stream_done, "stream must terminate with [DONE]"
+        chunks = tuple(_PartnerChunk.model_validate_json(event) for event in result.stream_events)
+        choices = tuple(choice for chunk in chunks for choice in chunk.choices)
+        assert choices and choices[0].delta.role == "assistant", (
+            f"first chunk must carry the assistant role: {chunks[:2]}"
+        )
+        terminal = tuple(index for index, choice in enumerate(choices) if choice.finish_reason is not None)
+        assert len(terminal) == 1, f"expected exactly one terminal choice: {[c.finish_reason for c in choices]}"
+        text = "".join(choice.delta.content or "" for choice in choices[: terminal[0] + 1])
+        assert "5" in text, f"streamed text lost the requested content: {text!r}"
 
 
 class TestAnthropicChatCompletions:

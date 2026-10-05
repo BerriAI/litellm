@@ -887,7 +887,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 id=f"resp_{uuid.uuid4()}",
                 status="completed",
                 conversation_id=f"conv_{uuid.uuid4()}",
-                usage=dict(usage),  # mutable-ok: OpenAIRealtimeResponseDoneObject types usage as plain dict
+                usage=dict(usage),
             ),
         )
         return (leftover_done,)

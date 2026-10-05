@@ -7,20 +7,29 @@ repository.workspace = true
 
 [features]
 test-support = []
+mcp = ["dep:rmcp", "dep:reqwest-mcp"]
 
 [dependencies]
+rmcp = { version = "=3.4.1", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"], optional = true }
+reqwest-mcp = { package = "reqwest", version = "0.13.2", default-features = false, features = ["rustls-no-provider", "json", "stream", "http2"], optional = true }
 http.workspace = true
 litellm-core-utils.workspace = true
 hyper-util.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
+rustls-native-certs.workspace = true
+tokio-tungstenite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 veil.workspace = true
 webpki-roots.workspace = true
 
 [dev-dependencies]
+futures-util.workspace = true
+rcgen = "0.14.10"
+tempfile.workspace = true
 rstest.workspace = true
 tokio.workspace = true

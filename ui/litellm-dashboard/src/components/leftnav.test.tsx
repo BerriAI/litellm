@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
@@ -134,6 +134,37 @@ describe("Sidebar (leftnav)", () => {
     expect(classesOf(light).has("hidden")).toBe(false);
     expect(classesOf(dark).has("hidden")).toBe(true);
     expect(classesOf(dark).has("dark:block")).toBe(true);
+  });
+
+  const collapsedLogos = () => {
+    const home = within(screen.getByRole("link", { name: /litellm home/i }));
+    return {
+      light: home.getByRole("img", { name: "LiteLLM" }),
+      dark: home.getByRole("presentation", { hidden: true }),
+    };
+  };
+
+  it("requests the bundled monogram for both themes when collapsed", () => {
+    renderWithProviders(<Sidebar collapsed />);
+
+    const { light, dark } = collapsedLogos();
+
+    expect(light).toHaveAttribute("src", expect.stringMatching(/\/get_image\?variant=monogram$/));
+    expect(dark).toHaveAttribute("src", expect.stringMatching(/\/get_image\?theme=dark&variant=monogram$/));
+  });
+
+  it("keeps a configured custom logo when collapsed instead of the LiteLLM monogram", () => {
+    mockUseThemeImpl = () => ({
+      ...unbrandedTheme(),
+      logoUrl: "https://cdn.example.com/logo.png",
+      logoUrlDark: "https://cdn.example.com/logo-dark.png",
+    });
+    renderWithProviders(<Sidebar collapsed />);
+
+    const { light, dark } = collapsedLogos();
+
+    expect(light).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo-dark.png");
   });
 
   it("prefers a configured dark logo over the light one in dark mode", () => {
@@ -465,6 +496,7 @@ describe("Sidebar (leftnav)", () => {
 
       expect(screen.queryByText("Guardrails Monitor")).not.toBeInTheDocument();
       expect(screen.getByText("Usage")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Lens Beta" })).toHaveAttribute("href", "/ui/lens");
       expect(screen.getByText("Cost Optimization")).toBeInTheDocument();
     });
 
@@ -576,13 +608,13 @@ describe("Sidebar (leftnav)", () => {
     expect(label).toHaveClass("group-data-[collapsed=true]/sidebar:hidden");
   });
 
-  it("shows Cost Optimization with a Beta badge and no feature-flag gate", () => {
+  it("shows Cost Optimization without a Beta badge and no feature-flag gate", () => {
     const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI={false} />);
 
     const costOptimization = container.querySelector('a[href*="cost-optimization"]');
     expect(costOptimization).not.toBeNull();
-    expect(costOptimization!).toHaveTextContent(/Cost Optimization/);
-    expect(costOptimization!).toHaveTextContent(/Beta/);
+    expect(costOptimization!).toHaveTextContent("Cost Optimization");
+    expect(costOptimization!).not.toHaveTextContent("Beta");
 
     expect(container.querySelector('a[href*="projects"]')).toBeNull();
   });

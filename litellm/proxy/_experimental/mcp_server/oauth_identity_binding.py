@@ -33,11 +33,11 @@ _JWKS_CACHE_TTL_SECONDS: Final = 3600
 _jwks_cache: Final = InMemoryCache(default_ttl=_JWKS_CACHE_TTL_SECONDS)
 
 JwksFetcher: TypeAlias = Callable[
-    [MCPOAuthIdentityBinding],  # mutable-ok: Callable parameter syntax requires a list
+    [MCPOAuthIdentityBinding],
     Awaitable[Sequence[Mapping[str, object]]],
 ]
 CallerPrincipalLoader: TypeAlias = Callable[
-    [str, MCPOAuthIdentityBinding],  # mutable-ok: Callable parameter syntax requires a list
+    [str, MCPOAuthIdentityBinding],
     Awaitable[str | None],
 ]
 
@@ -49,7 +49,7 @@ class VerifiedRefreshToken:
 
 
 StoredRefreshTokenLoader: TypeAlias = Callable[
-    [str, str, MCPOAuthIdentityBinding],  # mutable-ok: Callable parameter syntax requires a list
+    [str, str, MCPOAuthIdentityBinding],
     Awaitable[VerifiedRefreshToken | None],
 ]
 
@@ -120,7 +120,7 @@ def _select_signing_key(id_token: str, keys: Sequence[Mapping[str, object]]) -> 
     kid: Final = header.get("kid")
     for key in jwks_keys_for(keys, _ALLOWED_ID_TOKEN_ALGORITHMS):
         if kid is None or key.get("kid") == kid:
-            return jwt.PyJWK(dict(key))  # mutable-ok: PyJWT requires a concrete JWK dictionary
+            return jwt.PyJWK(dict(key))
     return _BindingRejection(
         code="oauth_identity_binding_failed",
         description=f"id_token signing key (kid={kid!r}) not found in the issuer's JWKS",

@@ -13,34 +13,13 @@ LIT001  Mutable collection in a type annotation, anywhere it appears: function
         frozenset[X], or a frozen dataclass / NamedTuple / ReadOnly TypedDict) and
         build it functionally (comprehension / map, not append-in-a-loop).
         Suppress with `# mutable-ok: <reason>` on the offending line.
-LIT002  Mutable-collection *construction*: a list/dict/set literal or comprehension, or
-        a call to a mutable constructor (list/dict/set/deque/defaultdict/Counter/...).
-        Catches the unannotated seed-then-mutate pattern LIT001 cannot see (`acc = []`).
-        Build the value in one shot and freeze it: a `tuple`/`frozenset` wrapping a
-        generator (`tuple(f(x) for x in xs)`), a tuple literal, a frozen dataclass /
-        NamedTuple, a TypedDict-annotated dict literal, or (if it really must be
-        dynamic) a MappingProxyType wrapping a dict literal or comprehension. Generator
-        expressions and freezing-wrapper calls (`tuple(...)`, `frozenset(...)`,
-        `MappingProxyType(...)`) are not construction and pass, as does the value passed
-        directly to a wrapper: it is frozen before it can escape, though anything
-        mutable nested inside it still counts. Annotation-internal lists
-        (`Callable[[int], str]`) are exempt. A dict literal whose assignment is
-        annotated with a TypedDict (`x: Final[MyTD] = {...}`; bare `x: Final = {...}`
-        does not qualify) is a fixed-shape build basedpyright checks key-by-key against
-        fields LIT012 keeps ReadOnly, not a growable accumulator, so it is exempt along
-        with the dict literals nested in it (nested TypedDict fields); any other
-        construction inside still counts. Detection is name-based: Final/ClassVar/
-        Optional (and Annotated's first argument) unwrap, a PEP 604 union
-        (`MyTD | None`) qualifies through either arm, and any remaining named head
-        outside the mutable collections and Mapping/Any/object is taken to be a
-        TypedDict, since a dict literal assigned to any other named type would not
-        survive basedpyright. Suppress with `# mutable-ok: <reason>`.
 LIT003  noqa suppression without rule codes or without a reason.
         Required shape: `# noqa: TID251  # <reason>`
 LIT004  pyright/mypy ignore without bracketed codes or without a reason.
         Required shape: `# pyright: ignore[reportArgumentType]  # <reason>`
 LIT005  A `# mutable-ok` / `# cast-ok` / `# guard-ok` / `# kwargs-ok` /
-        `# rebind-ok` / `# writable-ok` suppression without a reason.
+        `# rebind-ok` / `# writable-ok` / `# comprehension-ok` suppression
+        without a reason.
 LIT006  `cast(...)` call. typing.cast is an unchecked assertion (the moral equivalent
         of TypeScript's `as`); it lies to the type checker with zero runtime guarantee.
         Validate into a concrete frozen type at the boundary instead.
@@ -88,7 +67,7 @@ LIT011  Function-argument mutation: a parameter that is re-bound (`param = ...`,
         annotations are evaluated in the enclosing scope and are attributed there.
         `self`/`cls` are exempt from the in-place-store check (methods own their
         instance), not from re-binding. Method-call mutation (`param.append(x)`) is
-        out of reach without type information; LIT001/LIT002 keep mutable collections
+        out of reach without type information; LIT001 keeps mutable collections
         off signatures instead. Suppress with `# rebind-ok: <reason>`.
 LIT012  TypedDict field without a `ReadOnly[...]` qualifier. A writable key lets any
         holder of the payload rewrite it after construction; qualify every field with
@@ -103,6 +82,15 @@ LIT013  A `# <token>-ok: <reason>` suppression on a line where none of the rules
         that token suppresses fires. Like ruff's RUF100: a marker that suppresses
         nothing rots in place and hides real violations that land on the line
         later. Delete it.
+LIT014  Comprehension with more than one `for` clause or more than one `if` clause,
+        in any of the four forms (list, set, dict, generator expression). Stacked
+        `for`s and `if`s read as nested loops and guards squashed onto one line;
+        split the comprehension into a helper generator, a named intermediate, or
+        a plain loop instead. A comprehension nested inside another's element or
+        iterable is its own node and is judged separately. Suppress with
+        `# comprehension-ok: <reason>` on any line the comprehension spans. The
+        marker belongs to the innermost violating comprehension spanning that
+        line, and also to any single-line violating comprehension on that line.
 
 LIT000  Setup failure: a target file could not be read, or contains a syntax error.
         Reported as a violation rather than crashing the run.
@@ -155,35 +143,6 @@ MUTABLE_COLLECTIONS = frozenset(
     )
 )
 
-# Callables whose result is a fresh *mutable* collection (LIT002). `tuple` and
-# `frozenset` are deliberately absent -- they are the wrappers you reach for, and
-# a generator expression fed to them is the blessed one-shot build.
-MUTABLE_CONSTRUCTORS = frozenset(
-    (
-        "dict",
-        "list",
-        "set",
-        "deque",
-        "defaultdict",
-        "OrderedDict",
-        "Counter",
-        "ChainMap",
-    )
-)
-# A *qualified* call (`x.deque()`) counts as construction only for names that are rarely
-# method names; `dict`/`list`/`set` are dropped here because `.dict()` / `.set()` / `.list()`
-# are common methods (e.g. pydantic's `model.dict()`), not collection construction. A
-# qualified `collections.deque(...)` still counts.
-QUALIFIED_CONSTRUCTORS = MUTABLE_CONSTRUCTORS - frozenset(("dict", "list", "set"))
-FREEZING_WRAPPERS = frozenset(("tuple", "frozenset", "MappingProxyType"))
-# Wrappers unwrapped when deciding whether an assignment's annotation names a
-# TypedDict (the LIT002 dict-literal exemption); bare, they name no type. Annotated
-# is handled separately: only its first argument is type syntax.
-TYPEDDICT_ANNOTATION_WRAPPERS = frozenset(("Final", "ClassVar", "Optional"))
-# Heads that can type a dict literal without being a TypedDict. Every other named
-# head counts as one: a dict literal assigned to any other named type would not
-# survive basedpyright, which is the second gate behind this name-based check.
-NON_TYPEDDICT_HEADS = MUTABLE_COLLECTIONS | frozenset(("Mapping", "Any", "object"))
 UNSAFE_GUARDS = frozenset(("TypeGuard", "TypeIs"))
 READONLY_QUALIFIER = "ReadOnly"
 # Qualifiers ReadOnly may nest under, in any order (PEP 705); for Annotated only the
@@ -206,6 +165,7 @@ GUARD_OK_RE = re.compile(r"#\s*guard-ok(?::\s*(?P<reason>.*))?")
 KWARGS_OK_RE = re.compile(r"#\s*kwargs-ok(?::\s*(?P<reason>.*))?")
 REBIND_OK_RE = re.compile(r"#\s*rebind-ok(?::\s*(?P<reason>.*))?")
 WRITABLE_OK_RE = re.compile(r"#\s*writable-ok(?::\s*(?P<reason>.*))?")
+COMPREHENSION_OK_RE = re.compile(r"#\s*comprehension-ok(?::\s*(?P<reason>.*))?")
 
 @dataclass(frozen=True, slots=True)
 class _OkToken:
@@ -218,12 +178,13 @@ class _OkToken:
 
 # Suppression tokens that must each carry a reason (LIT005).
 OK_SUPPRESSIONS: Final[tuple[_OkToken, ...]] = (
-    _OkToken("mutable-ok", MUTABLE_OK_RE, frozenset(("LIT001", "LIT002"))),
+    _OkToken("mutable-ok", MUTABLE_OK_RE, frozenset(("LIT001",))),
     _OkToken("cast-ok", CAST_OK_RE, frozenset(("LIT006",))),
     _OkToken("guard-ok", GUARD_OK_RE, frozenset(("LIT007",))),
     _OkToken("kwargs-ok", KWARGS_OK_RE, frozenset(("LIT008",))),
     _OkToken("rebind-ok", REBIND_OK_RE, frozenset(("LIT010", "LIT011"))),
     _OkToken("writable-ok", WRITABLE_OK_RE, frozenset(("LIT012",))),
+    _OkToken("comprehension-ok", COMPREHENSION_OK_RE, frozenset(("LIT014",))),
 )
 
 
@@ -463,169 +424,6 @@ def iter_guard_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
                     f"wrong guard silently corrupts types; parse into a concrete type instead "
                     f"(suppress: `# guard-ok: <reason>`)",
                 )
-
-
-# --------------------------------------------------------------------------- #
-# Mutable-collection construction (LIT002)
-# --------------------------------------------------------------------------- #
-
-
-def _annotations_of(node: ast.AST) -> tuple[ast.expr | None, ...]:
-    """The annotation expressions a node carries (signatures and `x: T`)."""
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        a = node.args
-        params = (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg)
-        return (*(p.annotation for p in params if p is not None), node.returns)
-    if isinstance(node, ast.AnnAssign):
-        return (node.annotation,)
-    return ()
-
-
-def _annotation_node_ids(tree: ast.AST) -> frozenset[int]:
-    """ids() of every node living inside an annotation.
-
-    A list display inside an annotation (`Callable[[int], str]`) is type syntax,
-    not construction, so the LIT002 walk must skip those subtrees.
-    """
-    return frozenset(
-        id(sub) for node in ast.walk(tree) for ann in _annotations_of(node) if ann is not None for sub in ast.walk(ann)
-    )
-
-
-def _is_freezing_wrapper(func: ast.expr) -> bool:
-    if isinstance(func, ast.Name):
-        return func.id in FREEZING_WRAPPERS
-    return (
-        isinstance(func, ast.Attribute)
-        and func.attr == "MappingProxyType"
-        and isinstance(func.value, ast.Name)
-        and func.value.id == "types"
-    )
-
-
-def _frozen_argument_ids(tree: ast.AST) -> frozenset[int]:
-    """ids() of every expression passed directly to a freezing wrapper.
-
-    `MappingProxyType({...})`, `frozenset({...})`, and `tuple([...])` freeze their
-    argument before it can escape, so the literal inside is a one-shot build, not a
-    mutable value anyone can grow later. Only the argument itself is exempt; a
-    mutable collection nested inside it still trips LIT002. Only bare names (plus
-    `types.MappingProxyType`) qualify, so an unrelated method that happens to share
-    a wrapper's name cannot exempt its argument.
-    """
-    return frozenset(
-        id(node.args[0])
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and len(node.args) == 1 and _is_freezing_wrapper(node.func)
-    )
-
-
-def _is_typeddict_annotation(annotation: ast.expr) -> bool:
-    """True iff the annotation names a TypedDict, by the name-based heuristic.
-
-    Final/ClassVar/Optional unwrap (as does Annotated's first argument, the only
-    one that is type syntax), a PEP 604 union qualifies through either arm, string
-    forward references are parsed, and whatever named head remains counts as a
-    TypedDict unless it is a mutable collection or Mapping/Any/object -- the heads
-    that can type a dict literal without being one. Bare wrappers
-    (`x: Final = ...`) name no type and never qualify.
-    """
-    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
-        try:
-            inner = ast.parse(annotation.value, mode="eval").body
-        except SyntaxError:
-            return False
-        return _is_typeddict_annotation(inner)
-    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
-        return _is_typeddict_annotation(annotation.left) or _is_typeddict_annotation(annotation.right)
-    if isinstance(annotation, ast.Subscript):
-        head = _head_name(annotation.value)
-        if head in TYPEDDICT_ANNOTATION_WRAPPERS:
-            return _is_typeddict_annotation(annotation.slice)
-        if head == "Annotated":
-            first = (
-                annotation.slice.elts[0] if isinstance(annotation.slice, ast.Tuple) and annotation.slice.elts else None
-            )
-            return first is not None and _is_typeddict_annotation(first)
-        return head is not None and head not in NON_TYPEDDICT_HEADS
-    name = _head_name(annotation)
-    return (
-        name is not None
-        and name not in NON_TYPEDDICT_HEADS
-        and name not in TYPEDDICT_ANNOTATION_WRAPPERS
-        and name != "Annotated"
-    )
-
-
-def _typeddict_build_ids(tree: ast.AST) -> frozenset[int]:
-    """ids() of every dict literal built under a TypedDict-annotated assignment.
-
-    `x: Final[MyTD] = {...}` is a fixed-shape build: basedpyright checks each key
-    against the declared fields, which LIT012 keeps ReadOnly, so nothing here is
-    the seed-then-mutate accumulator LIT002 hunts. Dict literals nested in the
-    value (nested TypedDict fields) share the exemption; any other construction
-    inside it still counts, and a bare `x: Final = {...}` stays flagged.
-    """
-    return frozenset(
-        id(sub)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.AnnAssign)
-        and isinstance(node.value, ast.Dict)
-        and _is_typeddict_annotation(node.annotation)
-        for sub in ast.walk(node.value)
-        if isinstance(sub, ast.Dict)
-    )
-
-
-def _construction_kind(node: ast.expr) -> str | None:
-    """Human label if `node` builds a mutable collection, else None."""
-    if isinstance(node, ast.List):
-        return "list literal"
-    if isinstance(node, ast.ListComp):
-        return "list comprehension"
-    if isinstance(node, ast.Set):
-        return "set literal"
-    if isinstance(node, ast.SetComp):
-        return "set comprehension"
-    if isinstance(node, ast.Dict):
-        return "dict literal"
-    if isinstance(node, ast.DictComp):
-        return "dict comprehension"
-    if isinstance(node, ast.Call):
-        func = node.func
-        if isinstance(func, ast.Name) and func.id in MUTABLE_CONSTRUCTORS:
-            return f"`{func.id}()` constructor"
-        if isinstance(func, ast.Attribute) and func.attr in QUALIFIED_CONSTRUCTORS:
-            return f"`{func.attr}()` constructor"
-    return None
-
-
-def iter_construction_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
-    in_annotation = _annotation_node_ids(tree)
-    frozen_arguments = _frozen_argument_ids(tree)
-    typeddict_builds = _typeddict_build_ids(tree)
-    for node in ast.walk(tree):
-        if (
-            not isinstance(node, ast.expr)
-            or id(node) in in_annotation
-            or id(node) in frozen_arguments
-            or id(node) in typeddict_builds
-        ):
-            continue
-        kind = _construction_kind(node)
-        if kind is None:
-            continue
-        yield Violation(
-            path,
-            node.lineno,
-            "LIT002",
-            f"mutable {kind}: this builds a collection that can be grown or rewritten. "
-            f"Build it in one shot and freeze it -- a tuple/frozenset wrapping a generator "
-            f"(`tuple(f(x) for x in xs)`), a tuple literal, a frozen dataclass / NamedTuple, "
-            f"a TypedDict-annotated dict literal (`x: Final[MyTD] = {{...}}`), or (if it "
-            f"really must be dynamic) a MappingProxyType wrapping a dict literal or "
-            f"comprehension (suppress: `# mutable-ok: <reason>`)",
-        )
 
 
 # --------------------------------------------------------------------------- #
@@ -1036,6 +834,83 @@ def iter_typeddict_violations(path: Path, tree: ast.AST) -> Iterator[Violation]:
 
 
 # --------------------------------------------------------------------------- #
+# Stacked comprehension clauses (LIT014)
+# --------------------------------------------------------------------------- #
+
+COMPREHENSION_NODES = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
+def _span(node: ast.expr) -> range:
+    return range(node.lineno, (node.end_lineno or node.lineno) + 1)
+
+
+def _clause_counts(node: ast.expr) -> tuple[int, int]:
+    return (
+        len(node.generators),
+        sum(len(g.ifs) for g in node.generators),
+    )
+
+
+def _violates(node: ast.expr) -> bool:
+    for_count, if_count = _clause_counts(node)
+    return for_count > 1 or if_count > 1
+
+
+def _comprehension_owners(tree: ast.AST, ok_lines: frozenset[int]) -> Mapping[int, int]:
+    """id(node) -> marker line for each `# comprehension-ok` line's owner.
+
+    Only violating comprehensions own markers. Each marker belongs to the
+    innermost violating comprehension whose span contains it (line span first,
+    column width breaks ties) plus every violating comprehension whose whole
+    span is that single line, so a comment inside a nested comprehension never
+    silences a multi-line enclosing one and a violation sharing its only line
+    can still be suppressed.
+    """
+    violating: Final = tuple(
+        n for n in ast.walk(tree) if isinstance(n, COMPREHENSION_NODES) and _violates(n)
+    )
+
+    def nesting_key(node: ast.expr) -> tuple[int, int]:
+        return (len(_span(node)), (node.end_col_offset or node.col_offset) - node.col_offset)
+
+    def owners(line: int) -> tuple[ast.expr, ...]:
+        containing: Final = tuple(n for n in violating if line in _span(n))
+        innermost: Final = min(containing, key=nesting_key, default=None)
+        single_line: Final = tuple(n for n in violating if len(_span(n)) == 1 and n.lineno == line)
+        return (*single_line, *(() if innermost is None else (innermost,)))
+
+    return MappingProxyType({id(o): line for line in ok_lines for o in owners(line)})
+
+
+def iter_comprehension_violations(
+    path: Path, tree: ast.AST, ok_lines: frozenset[int]
+) -> Iterator[tuple[Violation, bool]]:
+    """(violation, owned) pairs for every violating comprehension.
+
+    An owned comprehension reports at its marker's line so apply_suppressions
+    drops it and counts the marker as used; an unowned one reports at its own
+    line and is kept verbatim, since a marker suppresses only its owner even
+    when another violation shares that line.
+    """
+    owners: Final = _comprehension_owners(tree, ok_lines)
+    for node in ast.walk(tree):
+        if not isinstance(node, COMPREHENSION_NODES) or not _violates(node):
+            continue
+        for_count, if_count = _clause_counts(node)
+        yield (
+            Violation(
+                path,
+                owners.get(id(node), node.lineno),
+                "LIT014",
+                f"comprehension with {for_count} `for` clauses and {if_count} `if` clauses: "
+                f"at most one of each is allowed. Split it into a helper generator, a named "
+                f"intermediate, or a plain loop (suppress: `# comprehension-ok: <reason>`)",
+            ),
+            id(node) in owners,
+        )
+
+
+# --------------------------------------------------------------------------- #
 # Suppression application and unused suppressions (LIT013)
 # --------------------------------------------------------------------------- #
 
@@ -1087,18 +962,23 @@ def check_file(path: Path) -> tuple[Violation, ...]:
     except SyntaxError as exc:
         return (*violations, Violation(path, exc.lineno or 0, "LIT000", f"syntax error: {exc.msg}"))
 
+    comprehension_violations: Final = tuple(
+        iter_comprehension_violations(path, tree, suppressions["comprehension-ok"])
+    )
+
     return (
         *violations,
+        *(v for v, owned in comprehension_violations if not owned),
         *apply_suppressions(
             path,
             (
                 *iter_annotation_violations(path, tree),
                 *iter_cast_violations(path, tree),
                 *iter_guard_violations(path, tree),
-                *iter_construction_violations(path, tree),
                 *iter_final_violations(path, tree),
                 *iter_param_violations(path, tree),
                 *iter_typeddict_violations(path, tree),
+                *(v for v, owned in comprehension_violations if owned),
             ),
             suppressions,
         ),
