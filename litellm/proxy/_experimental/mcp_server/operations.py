@@ -14,9 +14,12 @@ from mcp.types import (
     CallToolRequest,
     CallToolRequestParams,
     CallToolResult,
+    DiscoverRequest,
+    DiscoverResult,
     GetPromptRequest,
     GetPromptRequestParams,
     GetPromptResult,
+    InputRequiredResult,
     ListPromptsRequest,
     ListPromptsResult,
     ListResourcesRequest,
@@ -27,10 +30,14 @@ from mcp.types import (
     ListToolsResult,
     PaginatedRequestParams,
     Prompt,
+    PromptsCapability,
     ReadResourceRequest,
     ReadResourceRequestParams,
+    ResourcesCapability,
     ResourceTemplate,
+    ServerCapabilities,
     TextContent,
+    ToolsCapability,
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, ConfigDict, Field, TypeAdapter
@@ -49,6 +56,11 @@ from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
     byok_credential_cache_key,
     cache_byok_credential,
     get_cached_byok_credential,
+)
+from litellm.proxy._experimental.mcp_server.capabilities import (
+    GATEWAY_OPERATIONS,
+    build_discovery,
+    configured_versions,
 )
 from litellm.proxy._experimental.mcp_server.contracts import (
     AuthorizedToolCall,
@@ -69,12 +81,14 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     outcome_wire_value,
 )
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    ListedToolsCaller,
     MCPServerManager,
     _caller_authorization_fans_out,
     _client_forwarded_authorization_headers,
     _resolve_openapi_tool_auth,
     _should_strip_caller_authorization,
     global_mcp_server_manager,
+    listed_tools_caller_for,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
@@ -84,6 +98,12 @@ from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     _request_auth_header,
     _request_extra_headers,
     _request_resolved_auth_headers,
+)
+from litellm.proxy._experimental.mcp_server.result_conversion import (
+    WireCompat,
+    complete_call_tool_result,
+    handler_outcome,
+    to_call_tool_result,
 )
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
@@ -115,7 +135,9 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.types.mcp import (
     DEFAULT_CREDENTIAL_HEADER,
+    MCP_LEGACY_VERSIONS,
     MCPAuth,
+    MCPTransport,
     without_header,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
@@ -162,7 +184,7 @@ __all__ = (
     "_run_post_mcp_call_guardrails",
     "_server_answers_to",
     "_tool_name_matches",
-    "apply_tool_overrides",
+    "apply_display_name_overrides",
     "call_mcp_tool",
     "execute_mcp_tool",
     "filter_tools_by_allowed_tools",
@@ -275,9 +297,7 @@ async def _dispatch_virtual_mcp_tool(
 
     if mcp_proxy_mode and name not in MCP_PROXY_TOOL_NAMES:
         return CallToolResult(
-            content=[  # mutable-ok: MCP result content
-                TextContent(type="text", text=f"Tool {name} is unavailable on /mcp/proxy")
-            ],
+            content=[TextContent(type="text", text=f"Tool {name} is unavailable on /mcp/proxy")],
             is_error=True,
         )
 
@@ -287,7 +307,7 @@ async def _dispatch_virtual_mcp_tool(
         proxy_logging_obj: Final = (
             await _build_virtual_call_logging_obj(
                 name=name,
-                arguments=arguments or {},  # mutable-ok: logging pipeline payload
+                arguments=arguments or {},
                 user_api_key_auth=user_api_key_auth,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
@@ -298,7 +318,7 @@ async def _dispatch_virtual_mcp_tool(
         try:
             proxy_result: Final = await handle_mcp_proxy_tool(
                 name=name,
-                arguments=arguments or {},  # mutable-ok: proxy handler payload
+                arguments=arguments or {},
                 user_api_key_dict=user_api_key_auth,
                 client_ip=client_ip,
                 mcp_servers=mcp_servers,
@@ -319,7 +339,7 @@ async def _dispatch_virtual_mcp_tool(
                     await proxy_logging_obj.async_failure_handler(exc, failure_traceback, proxy_call_start, failure_end)
                     if not isinstance(exc, MCPUpstreamAuthError):
                         await request_logging_obj.post_call_failure_hook(
-                            request_data={  # mutable-ok: failure hook mutates its request payload
+                            request_data={
                                 "name": name,
                                 "arguments": arguments,
                                 "litellm_logging_obj": proxy_logging_obj,
@@ -590,18 +610,13 @@ def filter_tools_by_allowed_tools(
     return tools_to_return
 
 
-def apply_tool_overrides(
+def apply_display_name_overrides(
     tools: list[MCPTool],
     mcp_server: MCPServer,
 ) -> list[MCPTool]:
-    """Apply admin-configured display name/description overrides to tools.
-
-    Overrides are keyed by the unprefixed tool name, same convention as
-    allowed_tools configuration.
-    """
+    """Apply admin-configured display name overrides, keyed by the unprefixed tool name like allowed_tools."""
     display_name_map: Final = mcp_server.tool_name_to_display_name or {}
-    description_map: Final = mcp_server.tool_name_to_description or {}
-    if not display_name_map and not description_map:
+    if not display_name_map:
         return tools
 
     for tool in tools:
@@ -609,8 +624,6 @@ def apply_tool_overrides(
         lookup_key = unprefixed or tool.name
         if lookup_key in display_name_map:
             tool.name = display_name_map[lookup_key]
-        if lookup_key in description_map:
-            tool.description = description_map[lookup_key]
     return tools
 
 
@@ -943,6 +956,8 @@ async def _get_tools_from_mcp_servers(
     request_tags: list[str] | None = None,
     client_ip: str | None = None,
     mcp_proxy_mode: bool = False,
+    *,
+    record_listing: bool = False,
 ) -> AggregateToolListing:
     """
     Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -953,6 +968,8 @@ async def _get_tools_from_mcp_servers(
         mcp_servers: Optional list of server names/aliases to filter by
         mcp_server_auth_headers: Optional dict of server-specific auth headers
         oauth2_headers: Optional dict of oauth2 headers
+        record_listing: Record each served catalog into the caller's listed-tools slot; only a
+            listing actually served to the caller sets it
 
     Returns:
         AggregateToolListing: Combined tools from filtered servers plus each server's
@@ -1100,19 +1117,28 @@ async def _get_tools_from_mcp_servers(
                     prefetched_creds=_prefetched_oauth_creds,
                 )
 
+            catalog_auth_header: Final = server_auth_header
             if server.is_byok and server.auth_type != MCPAuth.oauth2 and server_auth_header is None:
                 server_auth_header = await _get_byok_credential(server, user_api_key_auth)
 
             try:
-                tools: Final = await global_mcp_server_manager._get_tools_from_server(
-                    server=server,
-                    mcp_auth_header=server_auth_header,
-                    extra_headers=extra_headers,
-                    add_prefix=True,  # Always add server prefix
-                    raw_headers=raw_headers,
-                    client_ip=client_ip,
-                    user_api_key_auth=user_api_key_auth,
-                    oauth2_headers=oauth2_headers,
+                from litellm.proxy.proxy_server import proxy_logging_obj
+
+                listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
+                tools: Final = list(
+                    await global_mcp_server_manager._get_tools_from_server(
+                        server=server,
+                        mcp_auth_header=server_auth_header,
+                        extra_headers=extra_headers,
+                        add_prefix=True,  # Always add server prefix
+                        raw_headers=raw_headers,
+                        client_ip=client_ip,
+                        user_api_key_auth=user_api_key_auth,
+                        oauth2_headers=oauth2_headers,
+                        proxy_logging_obj=proxy_logging_obj,
+                        catalog_auth_header=catalog_auth_header,
+                        record_listing=False,
+                    )
                 )
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
@@ -1121,15 +1147,28 @@ async def _get_tools_from_mcp_servers(
                     server_id=server.server_id,
                     user_api_key_auth=user_api_key_auth,
                 )
+                global_mcp_server_manager.record_listed_tools(
+                    server,
+                    [
+                        tool.model_copy(update={"name": strip_known_server_prefix(tool.name, server)})
+                        for tool in filtered_tools
+                    ],
+                    ListedToolsCaller(
+                        user_api_key_auth=user_api_key_auth,
+                        mcp_auth_header=catalog_auth_header,
+                        raw_headers=raw_headers,
+                        oauth2_headers=oauth2_headers,
+                    ),
+                    listed_generation,
+                    record_listing=record_listing,
+                )
 
                 if mcp_proxy_mode:
                     from litellm.proxy._experimental.mcp_server.tool_search import with_mcp_proxy_identity
 
-                    filtered_tools = [  # mutable-ok: MCP tool pipeline
-                        with_mcp_proxy_identity(tool, server.server_id) for tool in filtered_tools
-                    ]
+                    filtered_tools = [with_mcp_proxy_identity(tool, server.server_id) for tool in filtered_tools]
                 else:
-                    filtered_tools = apply_tool_overrides(filtered_tools, server)
+                    filtered_tools = apply_display_name_overrides(filtered_tools, server)
 
                 verbose_logger.debug(
                     "Successfully fetched %s tools from server %s, %s after filtering",
@@ -1446,6 +1485,8 @@ async def _list_mcp_tools(
     list_tools_log_source: str | None = None,
     client_ip: str | None = None,
     mcp_proxy_mode: bool = False,
+    *,
+    record_listing: bool = False,
 ) -> AggregateToolListing:
     """
     List all available MCP tools.
@@ -1456,6 +1497,8 @@ async def _list_mcp_tools(
         mcp_servers: Optional list of server names/aliases to filter by
         mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
         client_ip: Client IP for IP-based server access control
+        record_listing: Record each served catalog into the caller's listed-tools slot; only a
+            listing actually served to the caller sets it
 
     Returns:
         AggregateToolListing: Combined tools from all accessible servers plus each server's
@@ -1474,6 +1517,7 @@ async def _list_mcp_tools(
             list_tools_log_source=list_tools_log_source,
             client_ip=client_ip,
             mcp_proxy_mode=mcp_proxy_mode,
+            record_listing=record_listing,
         )
         verbose_logger.debug("Successfully fetched %s tools from managed MCP servers", len(listing.tools))
         return listing
@@ -1786,6 +1830,7 @@ async def _list_tools_before_first_call(
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             client_ip=client_ip,
+            record_listing=False,
         )
     except Exception as e:  # noqa: BLE001  # best effort: resolution below answers as it did before
         verbose_logger.debug("MCP tools/call: listing %s before its first call failed: %s", server.name, e)
@@ -1804,8 +1849,9 @@ async def execute_mcp_tool(
     host_progress_callback: ProgressCallback | None = None,
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
+    wire_compat: WireCompat = WireCompat.LEGACY,
     **kwargs: object,  # kwargs-ok: preserves the existing REST and decorated logging call contract
-) -> CallToolResult:
+) -> CallToolResult | InputRequiredResult:
     context: Final = prepare_context(
         user_api_key_auth=user_api_key_auth,
         mcp_auth_header=mcp_auth_header,
@@ -1813,6 +1859,7 @@ async def execute_mcp_tool(
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
         client_ip=client_ip,
+        wire_compat=wire_compat,
     )
     operation: Final = AuthorizedToolCall(
         name=name,
@@ -1839,8 +1886,9 @@ async def _execute_mcp_tool(
     host_progress_callback: ProgressCallback | None = None,
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
+    wire_compat: WireCompat = WireCompat.LEGACY,
     **kwargs: Any,
-) -> CallToolResult:
+) -> CallToolResult | InputRequiredResult:
     """
     Execute MCP tool.
 
@@ -1986,6 +2034,7 @@ async def _execute_mcp_tool(
     if mcp_server is None:
         mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
 
+    client_auth_header: Final = mcp_auth_header
     if mcp_server:
         standard_logging_mcp_tool_call["mcp_server_cost_info"] = (mcp_server.mcp_info or {}).get("mcp_server_cost_info")
         if litellm_logging_obj:
@@ -2056,6 +2105,18 @@ async def _execute_mcp_tool(
             raw_headers=raw_headers,
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
+            tool=global_mcp_server_manager.get_listed_tool(
+                mcp_server,
+                original_tool_name,
+                listed_tools_caller_for(
+                    mcp_server,
+                    user_api_key_auth,
+                    client_auth_header,
+                    mcp_server_auth_headers,
+                    raw_headers,
+                    oauth2_headers,
+                ),
+            ),
         )
         # `pre_call_tool_check` may return guardrail-modified
         # arguments; honor them on the local path too.
@@ -2088,7 +2149,7 @@ async def _execute_mcp_tool(
         _extra_token: Final = _request_extra_headers.set(forwarded_headers)
         _resolved_token: Final = _request_resolved_auth_headers.set(resolved_auth_headers)
         try:
-            response = await _handle_local_mcp_tool(name, arguments)
+            response = await _handle_local_mcp_tool(name, arguments, wire_compat)
         finally:
             _request_auth_header.reset(_auth_token)
             _request_extra_headers.reset(_extra_token)
@@ -2105,6 +2166,7 @@ async def _execute_mcp_tool(
             arguments=arguments,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
+            catalog_auth_header=client_auth_header,
             mcp_server_auth_headers=mcp_server_auth_headers,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
@@ -2112,6 +2174,7 @@ async def _execute_mcp_tool(
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
             host_progress_callback=host_progress_callback,
+            wire_compat=wire_compat,
         )
 
     # Fall back to local tool registry with original name (legacy support)
@@ -2123,7 +2186,8 @@ async def _execute_mcp_tool(
         # not in the registry either, `_handle_local_mcp_tool` below reports
         # 404 and nothing runs, so demanding a server here would turn every
         # unknown tool name into a misleading 503.
-        if global_mcp_tool_registry.get_tool(original_tool_name) is not None:
+        registered_local_tool: Final = global_mcp_tool_registry.get_tool(original_tool_name)
+        if registered_local_tool is not None:
             # `mcp_server` is None here because the tool name is not in the
             # tool -> server mapping, but the name still carries a prefix
             # that the server-level check above compared against the
@@ -2165,14 +2229,29 @@ async def _execute_mcp_tool(
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
                 guardrail_context=guardrail_context,
+                tool=global_mcp_server_manager.get_listed_tool(
+                    prefix_server,
+                    original_tool_name,
+                    listed_tools_caller_for(
+                        prefix_server,
+                        user_api_key_auth,
+                        client_auth_header,
+                        mcp_server_auth_headers,
+                        raw_headers,
+                        oauth2_headers,
+                    ),
+                ),
             )
             if "arguments" in hook_result:
                 arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
 
-        response = await _handle_local_mcp_tool(original_tool_name, arguments)
+        response = await _handle_local_mcp_tool(original_tool_name, arguments, wire_compat)
 
+    converted: Final = to_call_tool_result(response, wire_compat)
+    if isinstance(converted, InputRequiredResult):
+        return converted
     return await _run_post_mcp_call_guardrails(
-        result=response,
+        result=converted,
         litellm_logging_obj=litellm_logging_obj,
         user_api_key_auth=user_api_key_auth,
         request_data=kwargs,
@@ -2204,6 +2283,13 @@ async def _run_post_mcp_call_guardrails(
         ),
         user_api_key_dict=user_api_key_auth,
     )
+
+
+def suppress_completed_success_logging(logging_obj: LiteLLMLoggingObj) -> None:
+    """An interim ``InputRequiredResult`` is not a completed call, so the ``@client`` wrapper
+    on ``call_mcp_tool`` must not run the success handlers for it when the coroutine returns."""
+    logging_obj.mark_logging_complete(event_type="sync_success")
+    logging_obj.mark_logging_complete(event_type="async_success")
 
 
 async def _fire_mcp_tool_call_logging(
@@ -2251,8 +2337,8 @@ async def _fire_mcp_tool_call_logging(
         await logging_obj.async_success_handler(result=result, start_time=start_time, end_time=end_time)
         return result
 
-    logging_obj.has_run_logging(event_type="sync_success")
-    logging_obj.has_run_logging(event_type="async_success")
+    logging_obj.mark_logging_complete(event_type="sync_success")
+    logging_obj.mark_logging_complete(event_type="async_success")
     tool_error: Final = MCPToolResultError(error_message)
     logging_obj.failure_handler(tool_error, "", start_time, end_time)
     await logging_obj.async_failure_handler(tool_error, "", start_time, end_time)
@@ -2322,10 +2408,14 @@ async def call_mcp_tool(
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
+    wire_compat: WireCompat = WireCompat.LEGACY,
     **kwargs: Any,
-) -> CallToolResult:
+) -> CallToolResult | InputRequiredResult:
     """
     Call a specific tool with the provided arguments (handles prefixed tool names).
+
+    A modern ``InputRequiredResult`` is an interim answer, so it is returned as is and skips the
+    completed-call logging below.
     """
     start_time: Final = datetime.now()
     litellm_logging_obj: Final[LiteLLMLoggingObj | None] = kwargs.get("litellm_logging_obj", None)
@@ -2376,12 +2466,17 @@ async def call_mcp_tool(
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             client_ip=client_ip,
+            wire_compat=wire_compat,
             **kwargs,
         )
     except Exception as e:
         await fire_mcp_tool_call_failure_logging(litellm_logging_obj, e, start_time, user_api_key_auth, kwargs)
         raise
 
+    if isinstance(response, InputRequiredResult):
+        if litellm_logging_obj:
+            suppress_completed_success_logging(litellm_logging_obj)
+        return response
     if litellm_logging_obj:
         response = await _fire_mcp_tool_call_logging(
             logging_obj=litellm_logging_obj,
@@ -2547,8 +2642,13 @@ async def _handle_managed_mcp_tool(
     host_progress_callback: ProgressCallback | None = None,
     guardrail_context: Mapping[str, object] | None = None,
     client_ip: str | None = None,
-) -> CallToolResult:
-    """Handle tool execution for managed server tools"""
+    wire_compat: WireCompat = WireCompat.LEGACY,
+    *,
+    catalog_auth_header: str | None,
+) -> CallToolResult | InputRequiredResult:
+    """Handle tool execution for managed server tools. ``catalog_auth_header`` is the header the client
+    supplied, which keys the caller's catalog slot; ``mcp_auth_header`` may already be the resolved
+    BYOK credential."""
     # Import here to avoid circular import
     from litellm.proxy.proxy_server import proxy_logging_obj
 
@@ -2558,6 +2658,7 @@ async def _handle_managed_mcp_tool(
         arguments=arguments,
         user_api_key_auth=user_api_key_auth,
         mcp_auth_header=mcp_auth_header,
+        catalog_auth_header=catalog_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
@@ -2566,12 +2667,15 @@ async def _handle_managed_mcp_tool(
         host_progress_callback=host_progress_callback,
         litellm_logging_obj=litellm_logging_obj,
         guardrail_context=guardrail_context,
+        wire_compat=wire_compat,
     )
     verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
     return call_tool_result
 
 
-async def _handle_local_mcp_tool(name: str, arguments: dict[str, object]) -> CallToolResult:
+async def _handle_local_mcp_tool(
+    name: str, arguments: dict[str, object], wire_compat: WireCompat = WireCompat.LEGACY
+) -> CallToolResult:
     """Execute a local-registry tool and report whether it succeeded.
 
     Returns the result rather than bare content because the verdict is part of it: the content
@@ -2601,13 +2705,10 @@ async def _handle_local_mcp_tool(name: str, arguments: dict[str, object]) -> Cal
     except Exception as e:
         verbose_logger.exception("Error executing local tool %s: %s", name, e)
         return CallToolResult(
-            content=[TextContent(text=f"Error: {e}", type="text")],  # mutable-ok: MCP result content
+            content=[TextContent(text=f"Error: {e}", type="text")],
             is_error=True,
         )
-    return CallToolResult(
-        content=[TextContent(text=str(result), type="text")],  # mutable-ok: MCP result content
-        is_error=False,
-    )
+    return complete_call_tool_result(handler_outcome(result), wire_compat)
 
 
 _MCP_CREDENTIAL_REQUEST_FIELDS: Final = frozenset(
@@ -2626,7 +2727,11 @@ class _McpDeniedDetail(TypedDict):
 
 
 async def _execute_handle_list_tools(
-    context: OperationContext, params: PaginatedRequestParams, host_progress_callback: ProgressCallback | None = None
+    context: OperationContext,
+    params: PaginatedRequestParams,
+    host_progress_callback: ProgressCallback | None = None,
+    *,
+    log_list_tools_to_spendlogs: bool = True,
 ) -> ListToolsResult:
     try:
         (
@@ -2669,9 +2774,10 @@ async def _execute_handle_list_tools(
             mcp_server_auth_headers=mcp_server_auth_headers,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
-            log_list_tools_to_spendlogs=True,
+            log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
             list_tools_log_source="mcp_protocol",
             client_ip=_client_ip,
+            record_listing=True,
         )
         verbose_logger.info("MCP list_tools - Successfully returned %s tools", len(listing.tools))
         if not listing.outcomes:
@@ -2689,12 +2795,12 @@ async def _execute_handle_list_tools(
         verbose_logger.exception("Error in list_tools endpoint: %s", e)
         # Return empty list instead of failing completely
         # This prevents the HTTP stream from failing and allows the client to get a response
-        return ListToolsResult(tools=[])  # mutable-ok: MCP result payload
+        return ListToolsResult(tools=[])
 
 
 async def _execute_mcp_server_tool_call(
     context: OperationContext, params: CallToolRequestParams, host_progress_callback: ProgressCallback | None = None
-) -> CallToolResult:
+) -> CallToolResult | InputRequiredResult:
     from mcp.types import CallToolResult
 
     from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
@@ -2737,7 +2843,7 @@ async def _execute_mcp_server_tool_call(
             return virtual_tool_result
 
         # Create a body date for logging
-        body_data: Final = {"name": params.name, "arguments": params.arguments}  # mutable-ok: logging payload
+        body_data: Final = {"name": params.name, "arguments": params.arguments}
         # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
         chain_id: Final = get_chain_id_from_headers(raw_headers)
         if chain_id:
@@ -2778,6 +2884,7 @@ async def _execute_mcp_server_tool_call(
             raw_headers=raw_headers,
             client_ip=_client_ip,
             host_progress_callback=host_progress_callback,
+            wire_compat=context.wire_compat,
             **data,  # for logging
         )
     except MCPMissingUserEnvVarsError as e:
@@ -2877,7 +2984,7 @@ async def _execute_list_prompts(
         verbose_logger.exception("Error in list_prompts endpoint: %s", e)
         # Return empty list instead of failing completely
         # This prevents the HTTP stream from failing and allows the client to get a response
-        return ListPromptsResult(prompts=[])  # mutable-ok: MCP result payload
+        return ListPromptsResult(prompts=[])
 
 
 async def _execute_get_prompt(
@@ -2944,7 +3051,7 @@ async def _execute_list_resources(
         return ListResourcesResult(resources=resources)
     except Exception as e:
         verbose_logger.exception("Error in list_resources endpoint: %s", e)
-        return ListResourcesResult(resources=[])  # mutable-ok: MCP result payload
+        return ListResourcesResult(resources=[])
 
 
 async def _execute_list_resource_templates(
@@ -2984,7 +3091,7 @@ async def _execute_list_resource_templates(
         return ListResourceTemplatesResult(resource_templates=resource_templates)
     except Exception as e:
         verbose_logger.exception("Error in list_resource_templates endpoint: %s", e)
-        return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
+        return ListResourceTemplatesResult(resource_templates=[])
 
 
 async def _execute_read_resource(
@@ -3032,6 +3139,8 @@ def prepare_context(
     raw_headers: Mapping[str, str] | None = None,
     client_ip: str | None = None,
     mcp_proxy_mode: bool = False,
+    wire_compat: WireCompat = WireCompat.LEGACY,
+    protocol_version: str | None = None,
 ) -> OperationContext:
     return OperationContext(
         _caller=user_api_key_auth,
@@ -3042,11 +3151,14 @@ def prepare_context(
         raw_headers=raw_headers,
         client_ip=client_ip,
         mcp_proxy_mode=mcp_proxy_mode,
+        wire_compat=wire_compat,
+        protocol_version=protocol_version,
     )
 
 
 GatewayOperation: TypeAlias = (
     AuthorizedToolCall
+    | DiscoverRequest
     | ListToolsRequest
     | CallToolRequest
     | ListPromptsRequest
@@ -3056,8 +3168,10 @@ GatewayOperation: TypeAlias = (
     | ReadResourceRequest
 )
 GatewayResult: TypeAlias = (
-    ListToolsResult
+    DiscoverResult
+    | ListToolsResult
     | CallToolResult
+    | InputRequiredResult
     | ListPromptsResult
     | GetPromptResult
     | ListResourcesResult
@@ -3071,13 +3185,20 @@ class GatewayOperations:
         self._host_progress_callback = host_progress_callback
 
     @overload
-    async def execute(self, operation: AuthorizedToolCall, context: OperationContext) -> CallToolResult: ...
+    async def execute(self, operation: DiscoverRequest, context: OperationContext) -> DiscoverResult: ...
+
+    @overload
+    async def execute(
+        self, operation: AuthorizedToolCall, context: OperationContext
+    ) -> CallToolResult | InputRequiredResult: ...
 
     @overload
     async def execute(self, operation: ListToolsRequest, context: OperationContext) -> ListToolsResult: ...
 
     @overload
-    async def execute(self, operation: CallToolRequest, context: OperationContext) -> CallToolResult: ...
+    async def execute(
+        self, operation: CallToolRequest, context: OperationContext
+    ) -> CallToolResult | InputRequiredResult: ...
 
     @overload
     async def execute(self, operation: ListPromptsRequest, context: OperationContext) -> ListPromptsResult: ...
@@ -3098,11 +3219,56 @@ class GatewayOperations:
 
     async def execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
+            case DiscoverRequest():
+                listings: Final = (
+                    ()
+                    if context.mcp_proxy_mode
+                    else (ListPromptsRequest(), ListResourcesRequest(), ListResourceTemplatesRequest())
+                )
+                tasks: Final = (
+                    asyncio.create_task(
+                        _execute_handle_list_tools(
+                            context,
+                            PaginatedRequestParams(),
+                            self._host_progress_callback,
+                            log_list_tools_to_spendlogs=False,
+                        )
+                    ),
+                    *(asyncio.create_task(self.execute(listing, context)) for listing in listings),
+                )
+                try:
+                    results: Final = await asyncio.gather(*tasks)
+                finally:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                return build_discovery(
+                    configured=configured_versions(),
+                    revision=context.protocol_version or "2025-11-25",
+                    transport=MCPTransport.http,
+                    authorized_operations=GATEWAY_OPERATIONS,
+                    upstream_versions=frozenset(MCP_LEGACY_VERSIONS),
+                    capabilities=ServerCapabilities(
+                        tools=ToolsCapability()
+                        if any(isinstance(result, ListToolsResult) and result.tools for result in results)
+                        else None,
+                        prompts=PromptsCapability()
+                        if any(isinstance(result, ListPromptsResult) and result.prompts for result in results)
+                        else None,
+                        resources=ResourcesCapability()
+                        if any(
+                            (isinstance(result, ListResourcesResult) and result.resources)
+                            or (isinstance(result, ListResourceTemplatesResult) and result.resource_templates)
+                            for result in results
+                        )
+                        else None,
+                    ),
+                )
             case AuthorizedToolCall():
                 auth, token, _servers, server_headers, oauth_headers, headers, _client_ip = context.legacy_auth()
                 return await _execute_mcp_tool(
                     name=operation.name,
-                    arguments=dict(operation.arguments),  # mutable-ok: existing tool hooks own mutable argument data
+                    arguments=dict(operation.arguments),
                     allowed_mcp_servers=list(operation.allowed_mcp_servers),
                     start_time=operation.start_time,
                     user_api_key_auth=auth,
@@ -3113,6 +3279,7 @@ class GatewayOperations:
                     client_ip=_client_ip,
                     host_progress_callback=operation.host_progress_callback,
                     guardrail_context=operation.guardrail_context,
+                    wire_compat=context.wire_compat,
                     **operation.logging_data,
                 )
             case ListToolsRequest(params=params):

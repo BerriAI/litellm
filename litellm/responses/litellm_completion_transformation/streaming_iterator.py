@@ -11,6 +11,7 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
     is_custom_tool_call,
     serialize_tool_call_arguments,
 )
+from litellm.responses.litellm_completion_transformation.reasoning_items import mint_reasoning_item_id
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -71,6 +72,11 @@ def _output_items_with_id(items: tuple[Any, ...], item_type: str, item_id: str |
     return tuple(
         item.model_copy(update={"id": item_id}) if index == target_index else item for index, item in enumerate(items)
     )
+
+
+def _delta_has_signed_thinking_block(delta: object) -> bool:
+    blocks: Final = getattr(delta, "thinking_blocks", None) or ()
+    return any(isinstance(b, dict) and (b.get("signature") or b.get("data")) for b in blocks)
 
 
 class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
@@ -205,7 +211,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 output_index = self._get_or_assign_tool_output_index(call_id)
                 self._web_search_calls[call_id] = item
                 if status == "in_progress":
-                    self._pending_tool_events = [  # mutable-ok: replaces speculative function events
+                    self._pending_tool_events = [
                         event
                         for event in self._pending_tool_events
                         if getattr(event, "output_index", None) != output_index
@@ -404,7 +410,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
             output_index=output_index,
             item=BaseLiteLLMOpenAIResponseObject(
-                **{  # mutable-ok: BaseLiteLLM object accepts dynamic item fields
+                **{
                     "id": item.id,
                     "type": item.type,
                     "status": "in_progress",
@@ -936,10 +942,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.sent_output_item_added_event = True
 
         # Reasoning-first
-        if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+        if (hasattr(delta, "reasoning_content") and delta.reasoning_content) or _delta_has_signed_thinking_block(delta):
             self._reasoning_active = True
             if self._cached_reasoning_item_id is None:
-                self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
+                self._cached_reasoning_item_id = mint_reasoning_item_id()
             self._reasoning_item_id = self._cached_reasoning_item_id
 
             event = OutputItemAddedEvent(
@@ -1022,7 +1028,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
                                 # Ensure we have a valid reasoning_item_id
                                 self._cached_reasoning_item_id = (
-                                    self._reasoning_item_id or self._cached_reasoning_item_id or f"rs_{uuid.uuid4()}"
+                                    self._reasoning_item_id
+                                    or self._cached_reasoning_item_id
+                                    or mint_reasoning_item_id()
                                 )
                                 reasoning_item_id = self._cached_reasoning_item_id
 
@@ -1181,7 +1189,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             reasoning_content: Final = chunk.choices[0].delta.reasoning_content
 
             if self._cached_reasoning_item_id is None:
-                self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
+                self._cached_reasoning_item_id = mint_reasoning_item_id()
 
             return ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,

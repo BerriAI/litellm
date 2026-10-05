@@ -11,6 +11,7 @@ from litellm.rust_bridge.embeddings.entrypoints import LiteLLMEmbeddingRequest
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
+from litellm.rust_bridge.trace.generated.types import QueryScope, ReadQueryName, TraceScope
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import EmbeddingResponse, ModelResponse
@@ -19,6 +20,41 @@ class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
 class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
+
+def trace_encode_error(message: str) -> bytes: ...
+def trace_span_rows(
+    body: bytes, content_type: str | None, tenant: Mapping[str, str], max_attribute_value_bytes: int
+) -> list[dict[str, JsonValue]]: ...
+
+@final
+class NativeTraceConfig:
+    def __new__(
+        cls,
+        database: str,
+        url: str,
+        retention_days: int,
+        max_attribute_value_bytes: int,
+    ) -> NativeTraceConfig: ...
+
+@final
+class NativeTraceStorage:
+    def __new__(cls, config: NativeTraceConfig) -> NativeTraceStorage: ...
+    def ensure_schema(self) -> Future[None]: ...
+    def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Future[None]: ...
+    def ingest(self, payload: bytes, content_type: str | None, tenant: Mapping[str, str]) -> Future[int]: ...
+    def list_traces(
+        self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
+    ) -> Future[JsonValue]: ...
+    def get_trace(
+        self, trace_id: str, scope: TraceScope, trace_ref: str, cursor: str | None = None, page_size: int | None = None
+    ) -> Future[JsonValue]: ...
+    def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str) -> Future[JsonValue]: ...
+    def get_span_error(
+        self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str, cursor: str | None
+    ) -> Future[JsonValue]: ...
+    def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Future[str]: ...
+    def query_help(self, scope: QueryScope, secret: str) -> Future[JsonValue]: ...
+    def query(self, query: ReadQueryName, parameters: Mapping[str, str | int | float | Sequence[str]]) -> Future[str]: ...
 
 @final
 class NativeDiagnosticProcessor:
@@ -108,12 +144,6 @@ def amessages(
     args: tuple[object, ...],
     kwargs: dict[str, object],
 ) -> Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator[bytes]]: ...
-def chat_completions_decline(
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object] | None = None,
-    custom_llm_provider: str | None = None,
-) -> str | None: ...
 def chat_completions(
     model: str,
     messages: Sequence[object],
@@ -207,85 +237,6 @@ class _ResponseCacheRuntime:
     ) -> Future[object]: ...
     def async_flush(self) -> Future[None]: ...
     def ping(self) -> Future[object]: ...
-
-@final
-class _CacheTestHandle:
-    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
-    @staticmethod
-    def memory(
-        *,
-        capacity: int = 200,
-        ttl_seconds: float = 600.0,
-        max_entry_bytes: int = 1048576,
-    ) -> _CacheTestHandle: ...
-    @staticmethod
-    def redis(
-        url: str,
-        *,
-        ttl_seconds: float = 60.0,
-        namespace: str | None = None,
-        startup_nodes: Sequence[tuple[str, int]] | None = None,
-    ) -> _CacheTestHandle: ...
-    @staticmethod
-    def disk(directory: str) -> _CacheTestHandle: ...
-    @staticmethod
-    def qdrant_semantic(
-        url: str,
-        *,
-        collection_name: str,
-        similarity_threshold: float,
-        vector_size: int,
-        embedding_model: str = "text-embedding-3-small",
-        api_key: str | None = None,
-        embedding_api_key: str | None = None,
-        embedding_api_base: str | None = None,
-        embedding_timeout_seconds: float | None = None,
-        quantization: str = "binary",
-    ) -> _CacheTestHandle: ...
-    @staticmethod
-    def azure_blob(account_url: str, container: str) -> _CacheTestHandle: ...
-    @staticmethod
-    def redis_semantic(backend: object) -> _CacheTestHandle: ...
-    @staticmethod
-    def valkey_semantic(
-        url: str,
-        similarity_threshold: float,
-        index_name: str,
-        embedder: object,
-    ) -> _CacheTestHandle: ...
-    @staticmethod
-    def gcs(
-        bucket_name: str,
-        *,
-        gcs_path: str | None = None,
-        path_service_account: str | None = None,
-        endpoint: str | None = None,
-        token: str | None = None,
-    ) -> _CacheTestHandle: ...
-    @staticmethod
-    def s3(
-        bucket: str,
-        *,
-        region: str,
-        endpoint_url: str | None = None,
-        key_prefix: str = "",
-        access_key_id: str | None = None,
-        secret_access_key: str | None = None,
-        session_token: str | None = None,
-    ) -> _CacheTestHandle: ...
-    @property
-    def backend(self) -> str: ...
-    def _bind_facade(self, facade: object) -> None: ...
-
-@final
-class _CacheResolver:
-    def __new__(cls, namespace: object) -> _CacheResolver: ...
-    def resolve(self) -> _ResponseCacheRuntime: ...
-
-@final
-class _CacheTestResolver:
-    def __new__(cls, namespace: object) -> _CacheTestResolver: ...
-    def resolve(self) -> _ResponseCacheRuntime: ...
 
 @final
 class TokenCounter:
@@ -399,6 +350,8 @@ __all__ = [
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
     "NativeDiagnosticProcessor",
+    "NativeTraceConfig",
+    "NativeTraceStorage",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
@@ -413,7 +366,6 @@ __all__ = [
     "aresponses",
     "atranscription",
     "chat_completions",
-    "chat_completions_decline",
     "completion",
     "embedding",
     "gil_stats",
@@ -424,6 +376,8 @@ __all__ = [
     "process_state_started",
     "reserve_process_for_forking",
     "responses",
+    "trace_encode_error",
+    "trace_span_rows",
     "transcription",
 ]
 
@@ -465,3 +419,25 @@ class _SecretManagerRuntime:
         self, secret_name: str, optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None, primary_secret_name: str | None = None,
     ) -> Future[JsonValue]: ...
+
+@final
+class NativeCacheHandle:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
+    @staticmethod
+    def memory(
+        *, ttl: float = 600.0, capacity: int = 200, max_entry_bytes: int = 4194304,
+    ) -> NativeCacheHandle: ...
+    @staticmethod
+    def redis(
+        url: str, *, namespace: str, ttl: float = 600.0, max_entry_bytes: int = 4194304,
+    ) -> NativeCacheHandle: ...
+    def get(self, key: str) -> object: ...
+    def set(self, key: str, value: object, *, ttl: float | None = None) -> None: ...
+    def async_get(self, key: str) -> Future[object]: ...
+    def async_set(self, key: str, value: object, *, ttl: float | None = None) -> Future[None]: ...
+    def async_set_many(self, entries: Sequence[tuple[str, object]], *, ttl: float | None = None) -> Future[None]: ...
+    def flush(self) -> None: ...
+    def async_flush(self) -> Future[None]: ...
+    def ping(self) -> Future[bool]: ...
+    def disconnect(self) -> Future[None]: ...
+    def delete(self, keys: Sequence[str]) -> Future[None]: ...

@@ -13,12 +13,13 @@ on:
           have its path existence-checked like any other token.
         required: true
         type: string
-      fork-flag:
+      unit-flag:
         description: >-
           Codecov flag of the `.circleci/tests.yml` job that now owns part of
-          this shard. CircleCI does not run on pull requests from forks, so on
-          those events this shard also runs the files
-          `.circleci/scripts/unit_selection.sh` lists for the flag.
+          this shard. The shard also runs the files
+          `.circleci/scripts/unit_selection.sh` lists for the flag, on every
+          event, because the CircleCI pipeline is manual-only while the tests
+          migrate.
         required: false
         type: string
         default: ""
@@ -131,12 +132,7 @@ jobs:
       - name: Cache uv dependencies
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ env.UV_CACHE_DIR }}
-          key: ${{ runner.os }}-uv-downloads-py${{ env.UV_PYTHON }}-${{ hashFiles('uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-uv-downloads-py${{ env.UV_PYTHON }}-
+        uses: ./.github/actions/cache-uv-downloads
 
       - name: Cache the Rust build
         if: steps.changes.outputs.decision != 'skip'
@@ -175,8 +171,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout-minutes }}
         env:
           TEST_PATH: ${{ inputs.test-path }}
-          FORK_FLAG: ${{ inputs.fork-flag }}
-          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          UNIT_FLAG: ${{ inputs.unit-flag }}
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
@@ -186,11 +181,11 @@ jobs:
         run: |
           echo "has-coverage=false" >> "$GITHUB_OUTPUT"
           selection="${TEST_PATH}"
-          if [ "${IS_FORK}" = "true" ] && [ -n "${FORK_FLAG}" ]; then
-            selection="${TEST_PATH} $(bash .circleci/scripts/unit_selection.sh "${FORK_FLAG}" | tr '\n' ' ')"
+          if [ -n "${UNIT_FLAG}" ]; then
+            selection="${TEST_PATH} $(bash .circleci/scripts/unit_selection.sh "${UNIT_FLAG}" | tr '\n' ' ')"
           fi
           if [ -z "${selection// /}" ]; then
-            echo "shard selection is empty on this event (CircleCI flag ${FORK_FLAG:-none} owns it); nothing to run"
+            echo "shard selection is empty; nothing to run"
             exit 0
           fi
           pytest_args=()
@@ -274,7 +269,7 @@ jobs:
       - name: Upload to Codecov
         id: codecov-upload
         continue-on-error: true
-        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           use_oidc: true
           directory: coverage-reports
@@ -285,7 +280,7 @@ jobs:
       - name: Upload to Codecov (retry)
         if: steps.codecov-upload.outcome == 'failure'
         continue-on-error: true
-        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           use_oidc: true
           directory: coverage-reports

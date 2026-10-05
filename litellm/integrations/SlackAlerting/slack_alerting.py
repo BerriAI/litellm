@@ -16,6 +16,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 import litellm.types
+from litellm._internal_context import service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -81,6 +82,9 @@ def _proxy_llm_router() -> Router | None:
     from litellm.proxy.proxy_server import llm_router
 
     return llm_router
+
+
+_DAILY_REPORT_TARGET: Final = "daily_report_schedule"
 
 
 class SlackAlerting(CustomBatchLogger):
@@ -376,8 +380,12 @@ class SlackAlerting(CustomBatchLogger):
         if combined_metrics_values is None:
             return False
 
+        metric_values: Final[list[float | None]] = [
+            val if isinstance(val, (int, float)) else None for val in combined_metrics_values
+        ]
+
         all_none = True
-        for val in combined_metrics_values:
+        for val in metric_values:
             if val is not None and val > 0:
                 all_none = False
                 break
@@ -385,8 +393,8 @@ class SlackAlerting(CustomBatchLogger):
         if all_none:
             return False
 
-        failed_request_values: Final = combined_metrics_values[: len(failed_request_keys)]  # # [1, 2, None, ..]
-        latency_values: Final = combined_metrics_values[len(failed_request_keys) :]
+        failed_request_values: Final = metric_values[: len(failed_request_keys)]  # # [1, 2, None, ..]
+        latency_values: Final = metric_values[len(failed_request_keys) :]
 
         # find top 5 failed
         ## Replace None values with a placeholder value (-1 in this case)
@@ -555,7 +563,11 @@ class SlackAlerting(CustomBatchLogger):
         budget_alert_class: Final = get_budget_alert_type(type)
         _id: Final = budget_alert_class.get_id(user_info)
         user_info_str: Final = self._get_user_info_str(user_info)
-        event_message = budget_alert_class.get_event_message()
+        event_message = (
+            "Team Member Budget: "
+            if user_info.event_group == Litellm_EntityType.TEAM_MEMBER
+            else budget_alert_class.get_event_message()
+        )
 
         # Set default event unless we're in projected_limit_exceeded
         event: (
@@ -1123,7 +1135,7 @@ Model Info:
             message=message,
             level=level,
             alert_type=AlertType.model_deprecation_warnings,
-            alerting_metadata={  # mutable-ok: send_alert takes a dict payload
+            alerting_metadata={
                 "deprecated_count": len(snapshot.deprecated),
                 "imminent_count": len(snapshot.imminent),
                 "upcoming_count": len(snapshot.upcoming),
@@ -1237,8 +1249,8 @@ Model Info:
         try:
             existing_invitations: Final = TypeAdapter(list[InvitationModel]).validate_python(
                 await InvitationLinkRepository(prisma_client).table.find_many(  # pyright: ignore[reportAny]  # untyped prisma boundary (any-ok), result validated by TypeAdapter
-                    where={"user_id": recipient_user_id},  # mutable-ok: prisma find_many requires a dict where filter
-                    order={"created_at": "desc"},  # mutable-ok: prisma find_many requires a dict order arg
+                    where={"user_id": recipient_user_id},
+                    order={"created_at": "desc"},
                 ),
                 from_attributes=True,
             )
@@ -1752,18 +1764,20 @@ Model Info:
         """
         report_sent_bool = False
 
-        report_sent: Final = await self.internal_usage_cache.async_get_cache(
-            key=SlackAlertingCacheKeys.report_sent_key.value,
-            parent_otel_span=None,
-        )  # None | float
+        with service_target(_DAILY_REPORT_TARGET):
+            report_sent: Final = await self.internal_usage_cache.async_get_cache(
+                key=SlackAlertingCacheKeys.report_sent_key.value,
+                parent_otel_span=None,
+            )  # None | float
 
         current_time: Final = time.time()
 
         if report_sent is None:
-            await self.internal_usage_cache.async_set_cache(
-                key=SlackAlertingCacheKeys.report_sent_key.value,
-                value=current_time,
-            )
+            with service_target(_DAILY_REPORT_TARGET):
+                await self.internal_usage_cache.async_set_cache(
+                    key=SlackAlertingCacheKeys.report_sent_key.value,
+                    value=current_time,
+                )
         elif isinstance(report_sent, float):
             # Check if current time - interval >= time last sent
             interval_seconds: Final = self.alerting_args.daily_report_frequency
@@ -1782,10 +1796,11 @@ Model Info:
                 # Sneak in the reporting logic here
                 await self.send_daily_reports(router=llm_router)
                 # Also, don't forget to update the report_sent time after sending the report!
-                await self.internal_usage_cache.async_set_cache(
-                    key=SlackAlertingCacheKeys.report_sent_key.value,
-                    value=current_time,
-                )
+                with service_target(_DAILY_REPORT_TARGET):
+                    await self.internal_usage_cache.async_set_cache(
+                        key=SlackAlertingCacheKeys.report_sent_key.value,
+                        value=current_time,
+                    )
                 report_sent_bool = True
 
         return report_sent_bool
@@ -2003,7 +2018,7 @@ Model Info:
                     message="\n\n".join(event.message for event in typed_events),
                     level="High",
                     alert_type=alert_type,
-                    alerting_metadata={},  # mutable-ok: send_alert takes a dict payload
+                    alerting_metadata={},
                 )
                 for event in typed_events:
                     await self.internal_usage_cache.async_set_cache(

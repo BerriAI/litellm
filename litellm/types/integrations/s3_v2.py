@@ -1,4 +1,8 @@
+from typing import Literal
+
 from pydantic import BaseModel
+
+S3PartitionGranularity = Literal["day", "hour"]
 
 
 class s3BatchLoggingElement(BaseModel):
@@ -11,3 +15,4 @@ class s3BatchLoggingElement(BaseModel):
     s3_object_download_filename: str
     body: str | None = None
     content_type: str = "application/json"
+    retrying_since: float | None = None
