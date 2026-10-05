@@ -6798,3 +6798,29 @@ def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identic
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[0]["messages"]] == ["user", "assistant", "user"]
     assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
+
+
+def test_disabled_thinking_on_sonnet_5_5_tool_result_turn_remaps_to_between_tools(local_model_cost_map, monkeypatch):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    messages: Final = [
+        {"role": "user", "content": "Look it up"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "found"},
+    ]
+    tools: Final = [
+        {"name": "lookup", "description": "Look something up", "input_schema": {"type": "object", "properties": {}}}
+    ]
+
+    request: Final = AnthropicConfig().transform_request(
+        model="claude-sonnet-5-5",
+        messages=messages,
+        optional_params={"tools": tools, "thinking": {"type": "disabled"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["thinking"] == {"type": "between_tools"}
