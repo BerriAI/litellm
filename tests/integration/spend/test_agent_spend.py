@@ -1,6 +1,5 @@
 import json
 import uuid
-from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Final
 
@@ -88,7 +87,13 @@ def test_a2a_send_and_stream_bill_cost_per_query_to_the_agent_the_key_and_daily_
         )
         assert created.status_code == 200, created.text
         agent: Final = created.json()["agent_id"]
-        scenario.cleanups.callback(lambda: gateway.request("DELETE", f"/v1/agents/{agent}"))
+
+        def cleanup() -> None:
+            deleted: Final = gateway.request("DELETE", f"/v1/agents/{agent}")
+            assert deleted.status_code == 200, deleted.text
+            assert read_rows('SELECT agent_id FROM "LiteLLM_AgentsTable" WHERE agent_id=%s', (agent,)) == []
+
+        scenario.cleanups.callback(cleanup)
         key: Final = scenario.key()
         digest: Final = sha256(key.encode()).hexdigest()
         message: Final = {
@@ -122,14 +127,15 @@ def test_a2a_send_and_stream_bill_cost_per_query_to_the_agent_the_key_and_daily_
 
         logs: Final = eventually(
             lambda: read_rows(
-                'SELECT request_id, agent_id, spend, api_key, call_type FROM "LiteLLM_SpendLogs" '
+                "SELECT request_id, agent_id, spend, api_key, call_type, "
+                """to_char("startTime", 'YYYY-MM-DD') AS day FROM "LiteLLM_SpendLogs" """
                 "WHERE api_key=%s ORDER BY request_id",
                 (digest,),
             ),
             lambda rows: len(rows) == 2,
             seconds=60,
         )
-        assert logs == [
+        assert [{name: value for name, value in row.items() if name != "day"} for row in logs] == [
             {
                 "request_id": marker + "-send",
                 "agent_id": agent,
@@ -155,37 +161,42 @@ def test_a2a_send_and_stream_bill_cost_per_query_to_the_agent_the_key_and_daily_
             lambda rows: rows == [{"spend": 0.5}],
             seconds=60,
         ) == [{"spend": 0.5}]
-        today: Final = datetime.now(UTC).date().isoformat()
+        requests_per_day: Final = {
+            day: sum(1 for row in logs if row["day"] == day) for day in sorted({str(row["day"]) for row in logs})
+        }
         daily: Final = eventually(
             lambda: read_rows(
                 "SELECT agent_id, date, api_key, spend, api_requests::text AS api_requests, "
-                'successful_requests::text AS successful_requests FROM "LiteLLM_DailyAgentSpend" WHERE agent_id=%s',
+                'successful_requests::text AS successful_requests FROM "LiteLLM_DailyAgentSpend" WHERE agent_id=%s '
+                "ORDER BY date",
                 (agent,),
             ),
-            lambda rows: len(rows) == 1 and rows[0]["api_requests"] == "2",
+            lambda rows: sum(int(str(row["api_requests"])) for row in rows) == 2,
             seconds=90,
         )
         assert daily == [
             {
                 "agent_id": agent,
-                "date": today,
+                "date": day,
                 "api_key": digest,
-                "spend": 0.5,
-                "api_requests": "2",
-                "successful_requests": "2",
+                "spend": 0.25 * count,
+                "api_requests": str(count),
+                "successful_requests": str(count),
             }
+            for day, count in requests_per_day.items()
         ], daily
         activity: Final = gateway.request(
-            "GET", "/agent/daily/activity", params={"agent_ids": agent, "start_date": today, "end_date": today}
+            "GET",
+            "/agent/daily/activity",
+            params={"agent_ids": agent, "start_date": min(requests_per_day), "end_date": max(requests_per_day)},
         )
         assert activity.status_code == 200, activity.text
         days: Final = _Activity.model_validate_json(activity.content).results
         assert [(day.date, day.metrics) for day in days] == [
-            (today, _ActivityMetrics(spend=0.5, api_requests=2, successful_requests=2))
+            (day, _ActivityMetrics(spend=0.25 * count, api_requests=count, successful_requests=count))
+            for day, count in requests_per_day.items()
         ], activity.text
-        assert (
-            activity.json()["results"][0]["breakdown"]["models"][f"a2a_agent/{marker}"]["api_key_breakdown"][digest][
-                "metrics"
-            ]["spend"]
-            == 0.5
-        ), activity.text
+        assert [
+            result["breakdown"]["models"][f"a2a_agent/{marker}"]["api_key_breakdown"][digest]["metrics"]["spend"]
+            for result in activity.json()["results"]
+        ] == [0.25 * count for count in requests_per_day.values()], activity.text

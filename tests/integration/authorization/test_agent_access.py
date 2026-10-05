@@ -78,7 +78,18 @@ def test_agent_permissions_on_keys_teams_and_access_groups_gate_a2a_send_and_car
         )
         assert group.status_code == 201, group.text
         group_id: Final = group.json()["access_group_id"]
-        scenario.cleanups.callback(lambda: gateway.request("DELETE", f"/v1/access_group/{group_id}"))
+
+        def delete_group() -> None:
+            deleted: Final = gateway.request("DELETE", f"/v1/access_group/{group_id}")
+            assert deleted.status_code == 204, deleted.text
+            assert (
+                read_rows(
+                    'SELECT access_group_id FROM "LiteLLM_AccessGroupTable" WHERE access_group_id=%s', (group_id,)
+                )
+                == []
+            )
+
+        scenario.cleanups.callback(delete_group)
         callers: Final = {
             "key grant": scenario.key(object_permission={"agents": [allowed]}),
             "team grant": scenario.key(team_id=scenario.team(object_permission={"agents": [allowed]})),
@@ -122,7 +133,7 @@ def test_agent_permissions_on_keys_teams_and_access_groups_gate_a2a_send_and_car
         for label, key in callers.items():
             assert send(key, denied) == (403, refusal), label
             assert card(key, denied) == (403, refusal), label
-            assert tuple(item for item in wire.drain() if item.method == "POST") == (), label
+            assert wire.drain() == (), label
             status, text = send(key, allowed)
             assert status == 200, f"{label}: {text}"
             assert _JsonRpcResult.model_validate_json(text).result["parts"] == [{"kind": "text", "text": "granted"}], (
