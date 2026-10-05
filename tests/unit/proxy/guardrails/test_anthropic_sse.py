@@ -8,7 +8,7 @@ of them.
 import json
 from collections.abc import Sequence
 
-from litellm.proxy.guardrails.anthropic_sse import assemble_anthropic_sse_body
+from litellm.proxy.guardrails.anthropic_sse import anthropic_sse_chunks_from_body, assemble_anthropic_sse_body
 
 
 def _frames(*events: tuple[str, dict[str, object]]) -> list[bytes]:
@@ -163,3 +163,28 @@ def test_an_undecodable_stream_assembles_to_nothing():
     unassembled rather than scanning a partial body."""
     frames = _frames(_message_start(), _text_block_start())
     assert assemble_anthropic_sse_body([*frames[:1], b"\xff\xfe\xfd", *frames[1:]]) is None
+
+
+def test_a_replayed_body_keeps_its_citations_and_redacted_thinking():
+    """A guardrail rewrite is replayed to the client from the body, so anything the replay drops is
+    lost to the caller even though the scan saw it: citations lose their sources, and a
+    redacted_thinking block without its data cannot be sent back on the next turn."""
+    citation = {"type": "char_location", "cited_text": "the sky is blue", "document_index": 0}
+    content = [
+        {"type": "redacted_thinking", "data": "opaque-blob"},
+        {"type": "text", "text": "The sky is blue.", "citations": [citation]},
+        {"type": "text", "text": "No source here."},
+    ]
+    body: dict[str, object] = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5",
+        "content": content,
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 3, "output_tokens": 7},
+    }
+    replayed = assemble_anthropic_sse_body(list(anthropic_sse_chunks_from_body(body)))
+    assert replayed is not None
+    assert json.loads(json.dumps(replayed["content"])) == content

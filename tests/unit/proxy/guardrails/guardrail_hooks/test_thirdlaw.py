@@ -1673,6 +1673,36 @@ async def test_a_messages_stream_rewrite_is_re_emitted_as_anthropic_frames():
     assert b"hello there" not in joined
 
 
+async def test_a_messages_stream_rewrite_keeps_the_citations_thirdlaw_returned():
+    from litellm.proxy.guardrails.anthropic_sse import assemble_anthropic_sse_body
+
+    citation = {"type": "char_location", "cited_text": "hello there", "document_index": 0}
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {
+                    "action": "modify_response",
+                    "response_body": {
+                        "content": [{"type": "text", "text": "hello [REDACTED]", "citations": [citation]}]
+                    },
+                }
+            )
+        ]
+    )
+    out = await _collect(
+        g.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_aiter(_anthropic_sse_frames()),
+            request_data=_request_data(),
+        )
+    )
+    replayed = assemble_anthropic_sse_body([item for item in out if isinstance(item, bytes)])
+    assert replayed is not None
+    assert json.loads(json.dumps(replayed["content"])) == [
+        {"type": "text", "text": "hello [REDACTED]", "citations": [citation]}
+    ]
+
+
 async def test_a_chat_shaped_rewrite_of_a_messages_stream_fails_closed():
     """The overlay is a shallow merge, so "choices" would land beside the untouched "content"
     and the re-emitted stream would carry the very text the rewrite asked to redact."""
