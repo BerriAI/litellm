@@ -55,7 +55,7 @@ impl StreamCachable for TestRoute {
     fn replay(data: Bytes) -> Option<OutputOf<Self>> {
         Some(CallOutput::Stream {
             head: (),
-            chunks: stream::iter(litellm_framer::sse::split_raw_blocks(data).map(Ok)).boxed(),
+            chunks: stream::iter(litellm_framer::sse::RawBlocks::new(data).map(Ok)).boxed(),
         })
     }
     fn bytes(chunk: &Bytes) -> &[u8] {
