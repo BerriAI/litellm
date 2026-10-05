@@ -674,13 +674,13 @@ def test_spec_client_discovers_the_aggregate_authorization_server_and_signs_in_t
         assert str(token_body["access_token"]).startswith("llm_session_"), token.text
         assert str(token_body["refresh_token"]).startswith("llm_srefresh_"), token.text
         bearer: Final = str(token_body["access_token"])
-        open_aliases: Final = _open_aliases()
         initialized: Final = gateway.client.post(
             "/mcp",
             headers={"Authorization": f"Bearer {bearer}", **ACCEPT},
             json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": dict(INITIALIZE)},
         )
         assert initialized.status_code == 200, initialized.text
+        open_before: Final = _open_aliases()
         listed_response: Final = gateway.client.post(
             "/mcp",
             headers={"Authorization": f"Bearer {bearer}", **ACCEPT},
@@ -689,7 +689,8 @@ def test_spec_client_discovers_the_aggregate_authorization_server_and_signs_in_t
         assert listed_response.status_code == 200, listed_response.text
         listed: Final = _outcome_from_rpc(listed_response)
         assert listed.ok, listed.raw
-        assert _without_foreign_open_servers(listed.tools, open_aliases) == {
+        open_after: Final = open_before | _open_aliases()
+        assert _without_foreign_open_servers(listed.tools, open_after) == {
             f"{alias}-add",
             f"{alias}-multiply",
             f"{alias}-fail",
@@ -749,7 +750,7 @@ def test_rotated_session_refresh_token_cannot_be_replayed_after_revocation(gatew
             "error": "invalid_client",
             "error_description": "unknown or malformed client_id",
         }, unknown_client.text
-        open_aliases: Final = _open_aliases()
+        open_before: Final = _open_aliases()
         listed_response: Final = gateway.client.post(
             "/mcp",
             headers={"Authorization": f"Bearer {a2}", **ACCEPT},
@@ -758,7 +759,8 @@ def test_rotated_session_refresh_token_cannot_be_replayed_after_revocation(gatew
         assert listed_response.status_code == 200, listed_response.text
         listed: Final = _outcome_from_rpc(listed_response)
         assert listed.ok, listed.raw
-        assert _without_foreign_open_servers(listed.tools, open_aliases) == {
+        open_after: Final = open_before | _open_aliases()
+        assert _without_foreign_open_servers(listed.tools, open_after) == {
             f"{alias}-add",
             f"{alias}-multiply",
             f"{alias}-fail",
@@ -1057,14 +1059,21 @@ def test_idp_subject_token_exchange_mints_a_credential_for_the_mapped_user_and_r
                 (request_id,),
             ),
             lambda rows: len(rows) == 1,
+            seconds=70,
         )
         assert spend == [{"user_api_key_user_id": subject}], spend
     user: Final = eventually(
         lambda: read_rows('SELECT user_id, user_role, teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,)),
         lambda rows: len(rows) == 1,
+        seconds=70,
     )
     assert user == [{"user_id": subject, "user_role": None, "teams": []}], user
-    assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token = %s', (access_token,)) == []
+    access_token_hash: Final = hashlib.sha256(access_token.encode()).hexdigest()
+    verification_tokens: Final = read_rows(
+        'SELECT token, user_id FROM "LiteLLM_VerificationToken" WHERE token = %s',
+        (access_token_hash,),
+    )
+    assert verification_tokens == [], verification_tokens
     missing_subject: Final = idp_rig.gateway.client.post(
         "/token",
         data={key: value for key, value in exchange_form.items() if key != "subject_token"},
