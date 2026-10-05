@@ -181,7 +181,10 @@ async def complete_page(execution: Execution, cursor: str, read: ReadContent) ->
         )
         for part in initial.parts
     )
-    return initial.model_copy(update=MappingProxyType({"parts": assembled}))
+    partial: Final = not execution.root_seen or any(
+        page.partial and not any(part.truncated for part in page.parts) for page in pages
+    )
+    return initial.model_copy(update=MappingProxyType({"parts": assembled, "partial": partial}))
 
 
 async def load_session(execution: Execution, read: ReadContent) -> SessionContent:

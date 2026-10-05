@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable
+from types import MappingProxyType
 from typing import Final, Generic, Literal, TypeVar
 
 from pydantic import Field
@@ -33,6 +34,23 @@ class JournalReply(Record):
     initial_context: InitialContext | None = None
     turns: tuple[DialogueTurn, ...] = ()
     error: str = ""
+
+
+class JournalReference(Record):
+    kind: Literal["history_reference"] = "history_reference"
+    request: EvidenceRequest
+    recorded_turns: int
+
+
+def archived_result(request: EvidenceRequest, result: str, journal_size: int) -> str:
+    if request.action != "history":
+        return result
+    if request.turn_start > journal_size or (request.turn_end is not None and request.turn_end < request.turn_start):
+        return result
+    end: Final = min(request.turn_end, journal_size) if request.turn_end is not None else journal_size
+    return JournalReference(
+        request=request.model_copy(update=MappingProxyType({"turn_end": end})), recorded_turns=journal_size
+    ).model_dump_json()
 
 
 def history_reply(request: EvidenceRequest, initial: InitialContext, journal: tuple[DialogueTurn, ...]) -> JournalReply:
@@ -96,7 +114,9 @@ async def run_agent(
                     "and next steps in your notes. Checkpoint when useful; no read, batch, or output quota applies. "
                     "History retrieves the full journal or an agent-chosen turn_start:turn_end range, zero-based with "
                     "exclusive end. Set include_initial=true to reread the original initial evidence and supplied "
-                    "material. Nothing is deleted by checkpointing, and all original evidence remains readable. "
+                    "material. Earlier history retrievals appear in the journal as stable history_reference records; "
+                    "issue the included request to resolve their original turn range. Original tool responses remain "
+                    "recorded in full. Nothing is deleted by checkpointing, and all original evidence remains readable. "
                     "An assigned session is your responsibility, not a restriction on evidence access. "
                     "Parent_span_id preserves subagent hierarchy; span ID order is not chronology. Reconstruct "
                     "timing from recorded evidence. A child failure can recover and root status alone is not success. "
@@ -131,6 +151,16 @@ async def run_agent(
                 for request in response.tools
             ),
         )
-        journal = (*journal, completed_turn)
+        archived_turn: DialogueTurn = completed_turn.model_copy(
+            update=MappingProxyType(
+                {
+                    "tool_results": tuple(
+                        archived_result(request, result, len(journal))
+                        for request, result in zip(response.tools, completed_turn.tool_results, strict=True)
+                    ),
+                }
+            )
+        )
+        journal = next_context(journal, archived_turn, False)
         active = next_context(active, completed_turn, response.checkpoint is not None)
         notes = response.checkpoint if response.checkpoint is not None else notes

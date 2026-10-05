@@ -215,3 +215,66 @@ async def test_checkpoint_replaces_context_but_preserves_review_records_full_his
         validate=lambda findings: validate_findings(claim, workspace, findings),
     )
     assert result == expected
+
+
+@pytest.mark.asyncio
+async def test_repeated_full_history_reads_keep_stable_references_without_recursive_copies() -> None:
+    run: Final = execution("session")
+    original: Final = TracePart(
+        execution_id=run.id, span_id="span", name="tool", kind="tool", content="Unique original evidence " + "x" * 1000
+    )
+    workspace: Final = EvidenceWorkspace(sessions=(SessionContent(execution=run, parts=(original,), partial=False),))
+    turns: Final = iter(range(9))
+    snapshots: Final = SimpleQueue[str]()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        turn: Final = next(turns)
+        payload: Final = json.loads(request.prompt)
+        if turn == 0:
+            return ModelResult(
+                content=AgentTurn[Extraction](tools=(EvidenceRequest(action="read"),)).model_dump_json(), cost=0
+            )
+        if turn == 8:
+            resolved: Final = json.loads(payload["dialogue"][-1]["tool_results"][0])
+            assert len(resolved["turns"]) == 1
+            assert json.loads(resolved["turns"][0]["tool_results"][0])["parts"] == [original.model_dump()]
+            return ModelResult(content=AgentTurn[Extraction](result=Extraction()).model_dump_json(), cost=0)
+        if turn > 1:
+            result_text: Final = payload["dialogue"][-1]["tool_results"][0]
+            snapshots.put(result_text)
+            assert result_text.count(original.content) == 1
+            history: Final = json.loads(result_text)
+            for index, recorded in enumerate(history["turns"][1:], start=1):
+                reference = json.loads(recorded["tool_results"][0])
+                assert reference["kind"] == "history_reference"
+                assert reference["request"]["turn_end"] == index
+                assert reference["recorded_turns"] == index
+            if turn == 7:
+                earliest: Final = json.loads(history["turns"][1]["tool_results"][0])
+                return ModelResult(
+                    content=AgentTurn[Extraction](
+                        checkpoint="Resolve the earliest history reference",
+                        tools=(EvidenceRequest.model_validate(earliest["request"]),),
+                    ).model_dump_json(),
+                    cost=0,
+                )
+        return ModelResult(
+            content=AgentTurn[Extraction](
+                checkpoint="Original evidence is in the first journal turn; retain its reference",
+                tools=(EvidenceRequest(action="history"),),
+            ).model_dump_json(),
+            cost=0,
+        )
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    result: Final = await run_agent(
+        stage="review",
+        task="Inspect the journal",
+        purpose="extract",
+        claim=claim,
+        workspace=workspace,
+        model=model,
+        schema=Extraction,
+    )
+    assert result.observations == ()
+    assert snapshots.qsize() == 6

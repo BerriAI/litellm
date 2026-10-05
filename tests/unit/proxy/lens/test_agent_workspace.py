@@ -90,3 +90,52 @@ def test_reviewer_catalog_search_and_ranges_keep_both_review_rounds_accessible()
     assert len(selected) == 1
     assert selected[0].content == records[0].content[6:20]
     assert workspace.respond(EvidenceRequest(action="read_reviews")).reviews == records
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "root_seen,explicit_partial,expected_partial",
+    ((True, False, False), (False, False, True), (True, True, True)),
+)
+async def test_complete_character_reassembly_preserves_only_missing_evidence_partial_signals(
+    root_seen: bool, explicit_partial: bool, expected_partial: bool
+) -> None:
+    run: Final = execution("long-session", 2).model_copy(update=MappingProxyType({"root_seen": root_seen}))
+    original: Final = "Beginning " + "x" * 16001 + " complete ending"
+    part: Final = TracePart(
+        execution_id=run.id,
+        span_id="root",
+        parent_span_id="" if root_seen else "missing-root",
+        name="coordinator",
+        kind="agent",
+        content=original,
+    )
+    child: Final = TracePart(
+        execution_id=run.id, span_id="child", parent_span_id="root", name="tool", kind="tool", content="Short result"
+    )
+
+    async def read(_identity: str, _cursor: str, offset: int) -> ExecutionContent:
+        start: Final = max(offset - 1, 0)
+        truncated: Final = len(original) > start + 8000
+        return ExecutionContent(
+            execution=run,
+            parts=(
+                part.model_copy(
+                    update=MappingProxyType(
+                        {
+                            "content": original[start : start + 8000],
+                            "truncated": truncated,
+                        }
+                    )
+                ),
+                child.model_copy(update=MappingProxyType({"content": child.content[start : start + 8000]})),
+            ),
+            partial=not root_seen or truncated or explicit_partial,
+        )
+
+    workspace: Final = await load_workspace(Sample(executions=(run,), eligible=1), read, 1)
+    assert workspace.parts == (part, child)
+    assert workspace.sessions[0].partial is expected_partial
+    assert (
+        workspace.respond(EvidenceRequest(action="catalog", execution_id=run.id)).catalog[0].partial is expected_partial
+    )

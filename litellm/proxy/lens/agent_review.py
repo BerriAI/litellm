@@ -189,7 +189,12 @@ def findings_result(
 
 FINDINGS_TASK: Final = (
     "Produce final findings grounded in the original recorded behavior and the user's enabled checks. "
-    "Assess the process and the delivered outcome independently. Distinguish observed facts, supported causes, "
+    "Assess the process and the delivered outcome independently. Evaluate system capabilities, tool behavior, "
+    "coordination, and unmet user goals separately from an individual agent's honesty or culpability. A "
+    "demonstrated capability gap or tool defect that prevents the user's goal is an issue even when the agent "
+    "discloses it honestly or cannot repair it. Honest disclosure can also be a useful positive pattern. "
+    "Do not require an avoidable agent mistake to report a supported system problem. "
+    "Distinguish observed facts, supported causes, "
     "plausible explanations, and unknowns. Report every distinct supported problem or useful positive pattern, "
     "including a problem seen in only one session. Merge findings only when their check and underlying cause "
     "are the same. Compare relevant counterexamples and don't infer population rates. Read original evidence "
