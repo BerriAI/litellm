@@ -163,7 +163,6 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving, disa
 
   return (
     <div className="mb-5 border border-border rounded-lg bg-card overflow-hidden">
-      {/* Header — always visible */}
       <div
         className="flex items-center justify-between px-4 py-3 cursor-pointer select-none"
         onClick={() => setExpanded((v) => !v)}
@@ -180,7 +179,6 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving, disa
           )}
         </div>
         <div className="flex items-center gap-3">
-          {/* Active rule chips — collapsed view */}
           {!expanded && activeLabels.length > 0 && (
             <div className="flex flex-wrap gap-1.5 max-w-md">
               {activeLabels.map((f) => (
@@ -202,7 +200,6 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving, disa
         </div>
       </div>
 
-      {/* Expanded editor */}
       {expanded && (
         <div className="border-t border-border px-4 pt-4 pb-4">
           <p className="text-xs text-muted-foreground mb-4">
@@ -338,13 +335,11 @@ function ComplianceChecksPanel({ checks, approvalStatus, onApprove, onReject }: 
 
   return (
     <div className="border-t border-border">
-      {/* Overall status header */}
       <div
         className={`flex items-center gap-3 px-4 py-3 ${
           allPassed ? "bg-success/10 border-b border-success/15" : "bg-destructive/10 border-b border-destructive/15"
         }`}
       >
-        {/* Large status circle */}
         <div
           className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
             allPassed ? "bg-success" : "bg-destructive"
@@ -364,7 +359,6 @@ function ComplianceChecksPanel({ checks, approvalStatus, onApprove, onReject }: 
             {passCount} passing, {failCount} failing
           </div>
         </div>
-        {/* Approve / Reject in header */}
         <div className="flex items-center gap-2 shrink-0">
           {approvalStatus !== "active" && approvalStatus !== "rejected" && (
             <button
@@ -396,11 +390,9 @@ function ComplianceChecksPanel({ checks, approvalStatus, onApprove, onReject }: 
         </div>
       </div>
 
-      {/* Individual check rows */}
       <div className="divide-y divide-border">
         {checks.map((c) => (
           <div key={c.key} className="flex items-center gap-3 px-4 py-2.5">
-            {/* Small circle icon */}
             <div
               className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
                 c.passed ? "bg-success/15" : "bg-destructive/15"
@@ -436,7 +428,6 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
 
   return (
     <div className="bg-card border border-border rounded-lg overflow-hidden">
-      {/* Server info */}
       <div className="px-4 pt-4 pb-3">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
@@ -475,14 +466,12 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
               <p className="text-xs text-destructive mt-1.5">Rejection reason: {server.review_notes}</p>
             )}
           </div>
-          {/* Approve/Reject when no checks panel (no rules configured) */}
           {checks.length === 0 && (
             <CardReviewActions approvalStatus={approvalStatus} onApprove={onApprove} onReject={onReject} />
           )}
         </div>
       </div>
 
-      {/* GitHub-style checks panel */}
       {checks.length > 0 && (
         <ComplianceChecksPanel
           checks={checks}
@@ -601,7 +590,6 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
 
   return (
     <div className="p-6">
-      {/* Submission Rules panel */}
       <SubmissionRulesPanel
         requiredFields={requiredFields}
         onChange={setRequiredFields}
