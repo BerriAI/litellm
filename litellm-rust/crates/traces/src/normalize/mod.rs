@@ -10,7 +10,7 @@ use std::{
 };
 
 use crate::{Error, otlp::DecodedEvent};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 mod format;
 mod instrumentation;
@@ -44,8 +44,16 @@ pub enum ObservationType {
 }
 
 /// A model request a span stands for, by the identifier its instrumentation recorded.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
-#[serde(try_from = "String")]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    serde_with::DeserializeFromStr,
+    serde_with::SerializeDisplay,
+)]
 pub enum CallKey {
     /// LiteLLM's gateway call id, with a fallback to legacy spend request ids.
     LiteLlmRequest(String),
@@ -99,12 +107,6 @@ pub enum CallEvidenceKind {
     Unknown,
     Partial,
     Complete,
-}
-
-impl Serialize for CallKey {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
 }
 
 /// Which model requests a span accounts for. `Complete` comes only from an instrumentation's known
