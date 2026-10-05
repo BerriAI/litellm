@@ -201,6 +201,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_advisor_orchestration_failure,
     is_background_response_cost_poll_not_found,
     is_caller_timeout_408,
+    resolve_cooldown_model_ids,
 )
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
@@ -1770,7 +1771,8 @@ class Router:
                 if strategy == "usage-based-routing-v2" and isinstance(selector, LowestTPMLoggingHandler_v2)
                 else None
             )
-            deployments: Final = self.get_model_list(model_name=model)
+            request_team_id: Final = get_request_team_id(request_kwargs)
+            deployments: Final = self.get_model_list(model_name=model, team_id=request_team_id)
             if deployments:
                 RoutingPrefetch.arm(self, usage_selector, deployments)
         except Exception as e:  # noqa: BLE001  # a prefetch is an optimisation, never a reason to fail the request
@@ -7251,7 +7253,14 @@ class Router:
         # that fails with RouterRateLimitError whenever the "remaining" entries
         # are all in cooldown — the inner async_get_healthy_deployments call
         # would find an empty list and raise immediately.
-        cooldown_ids = set(await _async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=None))
+        cooldown_ids = set(
+            await _async_get_cooldown_deployments(
+                litellm_router_instance=self,
+                parent_otel_span=None,
+                model_name=original_model_group,
+                healthy_deployments=all_deployments,
+            )
+        )
         remaining: Final = (all_ids - cooldown_ids) - excluded
         if not remaining:
             return None
@@ -8612,7 +8621,10 @@ class Router:
             pass
 
         unhealthy_deployments: Final = _get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
+            litellm_router_instance=self,
+            parent_otel_span=parent_otel_span,
+            model_name=model,
+            healthy_deployments=_all_deployments,
         )
         unhealthy_set: Final = set(unhealthy_deployments)
         healthy_deployments: list = [d for d in _all_deployments if d["model_info"]["id"] not in unhealthy_set]
@@ -8640,7 +8652,10 @@ class Router:
             pass
 
         unhealthy_deployments: Final = await _async_get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
+            litellm_router_instance=self,
+            parent_otel_span=parent_otel_span,
+            model_name=model,
+            healthy_deployments=_all_deployments,
         )
         # Convert to set for O(1) lookup instead of O(n)
         unhealthy_deployments_set: Final = set(unhealthy_deployments)
@@ -13130,14 +13145,23 @@ class Router:
             health_check_probe=health_check_probe,
         )
 
+        request_team_id: Final = get_request_team_id(request_kwargs)
         routing_read_batch: Final = RoutingReadBatch.active()
         cooldown_deployments: Final = (
-            await _async_get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
+            await _async_get_cooldown_deployments(
+                litellm_router_instance=self,
+                parent_otel_span=parent_otel_span,
+                model_name=model,
+                healthy_deployments=healthy_deployments,
+                team_id=request_team_id,
+            )
             if routing_read_batch is None
             else await routing_read_batch.async_get_cooldown_deployments(
                 litellm_router_instance=self,
                 healthy_deployments=healthy_deployments,
                 parent_otel_span=parent_otel_span,
+                model_name=model,
+                team_id=request_team_id,
             )
         )
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
@@ -14329,8 +14353,13 @@ class Router:
             parent_otel_span=parent_otel_span,
         )
 
+        request_team_id: Final = get_request_team_id(request_kwargs)
         cooldown_deployments: Final = _get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
+            litellm_router_instance=self,
+            parent_otel_span=parent_otel_span,
+            model_name=model,
+            healthy_deployments=healthy_deployments,
+            team_id=request_team_id,
         )
         _pre_cooldown_deployments: Final = healthy_deployments
         healthy_deployments = self._filter_cooldown_deployments(
@@ -14382,11 +14411,20 @@ class Router:
         )
 
         if len(healthy_deployments) == 0:
-            model_ids = self.get_model_ids(model_name=model)
+            model_ids = resolve_cooldown_model_ids(
+                litellm_router_instance=self,
+                model_name=model,
+                team_id=request_team_id,
+            )
             _cooldown_time = self.cooldown_cache.get_min_cooldown(
                 model_ids=model_ids, parent_otel_span=parent_otel_span
             )
-            _cooldown_list = _get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
+            _cooldown_list = _get_cooldown_deployments(
+                litellm_router_instance=self,
+                parent_otel_span=parent_otel_span,
+                model_name=model,
+                team_id=request_team_id,
+            )
             raise RouterRateLimitError(
                 model=model,
                 cooldown_time=_cooldown_time,
@@ -14418,11 +14456,20 @@ class Router:
 
         if deployment is None:
             verbose_router_logger.info("get_available_deployment for model: %s, No deployment available", model)
-            model_ids = self.get_model_ids(model_name=model)
+            model_ids = resolve_cooldown_model_ids(
+                litellm_router_instance=self,
+                model_name=model,
+                team_id=request_team_id,
+            )
             _cooldown_time = self.cooldown_cache.get_min_cooldown(
                 model_ids=model_ids, parent_otel_span=parent_otel_span
             )
-            _cooldown_list = _get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
+            _cooldown_list = _get_cooldown_deployments(
+                litellm_router_instance=self,
+                parent_otel_span=parent_otel_span,
+                model_name=model,
+                team_id=request_team_id,
+            )
             raise RouterRateLimitError(
                 model=model,
                 cooldown_time=_cooldown_time,
@@ -14521,7 +14568,10 @@ class Router:
             parent_otel_span=parent_otel_span,
         )
         cooldown_deployments: Final = _get_cooldown_deployments(
-            litellm_router_instance=self, parent_otel_span=parent_otel_span
+            litellm_router_instance=self,
+            parent_otel_span=parent_otel_span,
+            model_name=model,
+            healthy_deployments=pass_through_deployments,
         )
         pass_through_deployments = self._filter_cooldown_deployments(
             healthy_deployments=pass_through_deployments,
@@ -14546,11 +14596,21 @@ class Router:
             )
 
         if len(pass_through_deployments) == 0:
-            model_ids = self.get_model_ids(model_name=model)
+            model_ids = list(pass_through_model_ids) or resolve_cooldown_model_ids(
+                litellm_router_instance=self,
+                model_name=model,
+            )
             _cooldown_time = self.cooldown_cache.get_min_cooldown(
                 model_ids=model_ids, parent_otel_span=parent_otel_span
             )
-            _cooldown_list = _get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
+            _cooldown_list = _get_cooldown_deployments(
+                litellm_router_instance=self,
+                parent_otel_span=parent_otel_span,
+                model_name=model,
+                healthy_deployments=[{"model_info": {"id": mid}} for mid in pass_through_model_ids]
+                if pass_through_model_ids
+                else None,
+            )
             raise RouterRateLimitError(
                 model=model,
                 cooldown_time=_cooldown_time,
@@ -14581,11 +14641,21 @@ class Router:
             verbose_router_logger.info(
                 "get_available_deployment_for_pass_through model: %s, no available deployments", model
             )
-            model_ids = self.get_model_ids(model_name=model)
+            model_ids = list(pass_through_model_ids) or resolve_cooldown_model_ids(
+                litellm_router_instance=self,
+                model_name=model,
+            )
             _cooldown_time = self.cooldown_cache.get_min_cooldown(
                 model_ids=model_ids, parent_otel_span=parent_otel_span
             )
-            _cooldown_list = _get_cooldown_deployments(litellm_router_instance=self, parent_otel_span=parent_otel_span)
+            _cooldown_list = _get_cooldown_deployments(
+                litellm_router_instance=self,
+                parent_otel_span=parent_otel_span,
+                model_name=model,
+                healthy_deployments=[{"model_info": {"id": mid}} for mid in pass_through_model_ids]
+                if pass_through_model_ids
+                else None,
+            )
             raise RouterRateLimitError(
                 model=model,
                 cooldown_time=_cooldown_time,
