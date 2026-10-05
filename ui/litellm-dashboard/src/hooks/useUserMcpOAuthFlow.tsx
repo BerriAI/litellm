@@ -19,7 +19,7 @@ import {
   registerMcpOAuthClient,
   storeMCPOAuthUserCredential,
 } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
@@ -140,7 +140,7 @@ export const useUserMcpOAuthFlow = ({
       const msg = extractErrorMessage(err);
       setError(msg);
       setStatus("error");
-      NotificationsManager.error(msg);
+      toast.error(msg);
     }
   }, [accessToken, serverId, serverAlias, scopes, preClientId]);
 
@@ -221,13 +221,13 @@ export const useUserMcpOAuthFlow = ({
 
       setStatus("success");
       setError(null);
-      NotificationsManager.success("Connected successfully");
+      toast.success("Connected successfully");
       onSuccess();
     } catch (err) {
       const msg = extractErrorMessage(err);
       setError(msg);
       setStatus("error");
-      NotificationsManager.error(msg);
+      toast.error(msg);
     } finally {
       clearStorage(FLOW_STATE_KEY);
       setTimeout(() => {

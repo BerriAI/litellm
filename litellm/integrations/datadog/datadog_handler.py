@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Final
 
 from litellm.types.utils import StandardLoggingPayload
@@ -36,6 +37,13 @@ def get_datadog_pod_name() -> str:
     return os.getenv("POD_NAME", "unknown")
 
 
+def normalize_datadog_tag_value(value: object) -> str:
+    normalized_value: Final = "".join(
+        character if character.isalnum() or character in "_-:./" else "_" for character in str(value).lower()
+    )
+    return re.sub(r"_+", "_", normalized_value).strip("_")
+
+
 def get_datadog_tags(
     standard_logging_object: StandardLoggingPayload | None = None,
 ) -> list[str]:
@@ -58,7 +66,7 @@ def get_datadog_tags(
 
     if standard_logging_object:
         request_tags: Final = standard_logging_object.get("request_tags", []) or []
-        tags.extend(f"request_tag:{tag}" for tag in request_tags)
+        tags.extend(f"request_tag:{normalize_datadog_tag_value(tag)}" for tag in request_tags)
 
         # Add Team Tag
         metadata: Final = standard_logging_object.get("metadata", {}) or {}
@@ -69,6 +77,6 @@ def get_datadog_tags(
             or metadata.get("team_id")
         )
         if team_tag:
-            tags.append(f"team:{team_tag}")
+            tags.append(f"team:{normalize_datadog_tag_value(team_tag)}")
 
     return tags

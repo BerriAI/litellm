@@ -15,7 +15,7 @@ test.describe("Playground", () => {
       await openPlayground(page);
 
       // "Current UI Session" is the default: the logged-in admin's key, nothing pasted.
-      await expect(onlyVisible(page.getByTitle("Current UI Session"))).toBeVisible();
+      await expect(keySourceSelect(page)).toContainText("Current UI Session");
 
       await selectModel(page, model);
       const prompt = `playground ping for ${model}`;
@@ -35,8 +35,8 @@ test.describe("Playground", () => {
     await openPlayground(page);
 
     // Switch the source to "Virtual Key" and paste the key we just minted.
-    await keySourceSelect(page, "Current UI Session").click();
-    await onlyVisible(page.locator('.ant-select-item-option[title="Virtual Key"]')).click({ timeout: 15_000 });
+    await keySourceSelect(page).click();
+    await onlyVisible(page.getByRole("option", { name: "Virtual Key" })).click({ timeout: 15_000 });
 
     const keyInput = onlyVisible(page.getByPlaceholder("Enter custom Virtual Key"));
     await expect(keyInput).toBeVisible({ timeout: 10_000 });

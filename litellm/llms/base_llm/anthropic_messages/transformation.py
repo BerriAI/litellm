@@ -41,6 +41,29 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return headers, api_base
 
+    async def avalidate_anthropic_messages_environment(
+        self,
+        headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        model: str,
+        messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        """Async counterpart used by the async handler. The default delegates to the
+        sync implementation; providers whose sync path can block the event loop
+        (e.g. a WIF token exchange) override this."""
+        return self.validate_anthropic_messages_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=api_key,
+            api_base=api_base,
+        )
+
     @abstractmethod
     def get_complete_url(
         self,
@@ -128,6 +151,9 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return True
 
+    def uses_get_llm_provider_api_base(self) -> bool:
+        return False
+
     def get_async_streaming_response_iterator(
         self,
         model: str,
@@ -159,20 +185,20 @@ class BaseAnthropicMessagesConfig(ABC):
         and issue one more attempt (bounded by max_retry_on_anthropic_messages_http_error).
         """
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
         )
 
-        return e.response.status_code == 400 and is_anthropic_invalid_thinking_signature_error(e.response.text)
+        return e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text)
 
     def transform_anthropic_messages_request_on_http_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
         """
         Mutates request_data in place when retrying after a recoverable HTTP error.
         """
         from litellm.llms.anthropic.common_utils import (
-            is_anthropic_invalid_thinking_signature_error,
+            is_anthropic_invalid_thinking_block_error,
             strip_thinking_blocks_from_anthropic_messages_request_dict,
         )
 
-        if e.response.status_code == 400 and is_anthropic_invalid_thinking_signature_error(e.response.text):
+        if e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text):
             strip_thinking_blocks_from_anthropic_messages_request_dict(request_data)
         return request_data

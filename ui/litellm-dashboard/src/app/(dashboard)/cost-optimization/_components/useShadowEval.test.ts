@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/http/api", () => ({ $api: { useQuery: vi.fn() }, fetchClient: { POST: vi.fn() } }));
-vi.mock("@/components/molecules/notifications_manager", () => ({ default: { fromBackend: vi.fn() } }));
 
 import { shadowEvalListPollMs, shadowEvalPollMs } from "./useShadowEval";
 

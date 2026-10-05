@@ -1,5 +1,8 @@
 import aimSecurityLogo from "../../../../../public/assets/logos/aim_security.jpeg";
 import aktoLogo from "../../../../../public/assets/logos/akto.svg";
+import aliceLogo from "../../../../../public/assets/logos/alice.svg";
+import llmShieldProxyLogo from "../../../../../public/assets/logos/llm_shield_proxy.svg";
+import conductLogo from "../../../../../public/assets/logos/conduct.png";
 import aporiaLogo from "../../../../../public/assets/logos/aporia.png";
 import bedrockLogo from "../../../../../public/assets/logos/bedrock.svg";
 import catoNetworksLogo from "../../../../../public/assets/logos/cato_networks.svg";
@@ -11,7 +14,7 @@ import guardrailsAiLogo from "../../../../../public/assets/logos/guardrails_ai.j
 import javelinLogo from "../../../../../public/assets/logos/javelin.png";
 import lakeraAiLogo from "../../../../../public/assets/logos/lakeraai.jpeg";
 import lassoLogo from "../../../../../public/assets/logos/lasso.png";
-import litellmLogo from "../../../../../public/assets/logos/litellm_logo.jpg";
+import litellmLogo from "../../../../../public/assets/logos/litellm_monogram.svg";
 import microsoftAzureLogo from "../../../../../public/assets/logos/microsoft_azure.svg";
 import nomaSecurityLogo from "../../../../../public/assets/logos/noma_security.png";
 import openaiSmallLogo from "../../../../../public/assets/logos/openai_small.svg";
@@ -83,6 +86,9 @@ export const guardrail_provider_map: Record<string, string> = {
   Deepkeep: "deepkeep",
   QostodianNexus: "qostodian_nexus",
   Repelloai: "repelloai",
+  Alice: "alice",
+  "LLM Shield Proxy": "llm_shield_proxy",
+  Conduct: "conduct",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -108,6 +114,17 @@ export const toModeArray = (raw: unknown): string[] => {
   if (Array.isArray(raw)) return raw.filter((m): m is string => typeof m === "string");
   if (typeof raw === "string") return [raw];
   return [];
+};
+
+export const formatGuardrailMode = (raw: unknown): string => {
+  const flat: string[] = toModeArray(raw);
+  if (flat.length > 0) return flat.join(", ");
+  if (raw === null || typeof raw !== "object") return "";
+
+  const { tags, default: fallback } = raw as { tags?: Record<string, unknown>; default?: unknown };
+  const tagged: string[] = tags && typeof tags === "object" ? Object.values(tags).flatMap(toModeArray) : [];
+  const modes: string[] = Array.from(new Set([...toModeArray(fallback), ...tagged]));
+  return modes.length > 0 ? `${modes.join(", ")} (tag-based)` : "";
 };
 
 // Resolves the supported modes for the selected provider, falling back to the global list
@@ -188,11 +205,16 @@ export const guardrailLogoMap = {
   XecGuard: xecguardLogo.src,
   "LiteLLM Content Filter": litellmLogo.src,
   "LiteLLM LLM as a Judge": litellmLogo.src,
+  "Hide Secrets": litellmLogo.src,
   Akto: aktoLogo.src,
   "DeepKeep AI Firewall": deepkeepLogo.src,
   "Qostodian Nexus": qohashLogo.src,
   "RepelloAI Argus": repelloAiLogo.src,
   Straiker: straikerLogo.src,
+  Alice: aliceLogo.src,
+  "Microsoft Agent 365": microsoftAzureLogo.src,
+  "LLM Shield Proxy": llmShieldProxyLogo.src,
+  "Conduct Guard": conductLogo.src,
 } satisfies Record<string, string>;
 
 export const getGuardrailLogo = (displayName: string): string | undefined =>

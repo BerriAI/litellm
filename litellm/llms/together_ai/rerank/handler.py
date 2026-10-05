@@ -4,7 +4,9 @@ Re rank api
 LiteLLM supports the re rank API format, no paramter transformation occurs
 """
 
-from typing import Any, Final
+from typing import Final
+
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.base import BaseLLM
@@ -15,14 +17,21 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.together_ai.rerank.transformation import TogetherAIRerankConfig
 from litellm.types.rerank import RerankRequest, RerankResponse
 
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+def _rerank_url(api_base: str) -> str:
+    return f"{api_base.rstrip('/')}/rerank"
+
 
 class TogetherAIRerank(BaseLLM):
     def rerank(
         self,
         model: str,
         api_key: str,
+        api_base: str,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
@@ -46,10 +55,10 @@ class TogetherAIRerank(BaseLLM):
             raise ValueError("TogetherAI does not support max_chunks_per_doc")
 
         if _is_async:
-            return self.async_rerank(request_data_dict, api_key)  # Call async method
+            return self.async_rerank(request_data_dict, api_key, api_base)
 
         response: Final = client.post(
-            "https://api.together.xyz/v1/rerank",
+            _rerank_url(api_base),
             headers={
                 "accept": "application/json",
                 "content-type": "application/json",
@@ -61,19 +70,20 @@ class TogetherAIRerank(BaseLLM):
         if response.status_code != 200:
             raise Exception(response.text)
 
-        _json_response: Final = response.json()
+        _json_response: Final = _JSON_DICT.validate_python(response.json())
 
         return TogetherAIRerankConfig()._transform_response(_json_response)
 
     async def async_rerank(  # New async method
         self,
-        request_data_dict: dict[str, Any],
+        request_data_dict: dict[str, object],
         api_key: str,
+        api_base: str,
     ) -> RerankResponse:
         client: Final = get_async_httpx_client(llm_provider=litellm.LlmProviders.TOGETHER_AI)  # Use async client
 
         response: Final = await client.post(
-            "https://api.together.xyz/v1/rerank",
+            _rerank_url(api_base),
             headers={
                 "accept": "application/json",
                 "content-type": "application/json",
@@ -85,6 +95,6 @@ class TogetherAIRerank(BaseLLM):
         if response.status_code != 200:
             raise Exception(response.text)
 
-        _json_response: Final = response.json()
+        _json_response: Final = _JSON_DICT.validate_python(response.json())
 
         return TogetherAIRerankConfig()._transform_response(_json_response)

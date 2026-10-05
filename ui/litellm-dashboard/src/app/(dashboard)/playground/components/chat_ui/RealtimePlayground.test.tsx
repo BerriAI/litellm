@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import RealtimePlayground from "./RealtimePlayground";
@@ -177,7 +177,9 @@ describe("RealtimePlayground", () => {
     render(<RealtimePlayground {...props} />);
 
     await connect(user);
-    await user.type(screen.getByPlaceholderText("Type a message or use the mic..."), "hello there");
+    fireEvent.change(screen.getByPlaceholderText("Type a message or use the mic..."), {
+      target: { value: "hello there" },
+    });
     await user.click(screen.getByRole("button", { name: /send/i }));
 
     const payloads = latestSocket().sent.map((raw) => JSON.parse(raw));
@@ -261,7 +263,7 @@ describe("RealtimePlayground", () => {
     await user.click(screen.getByRole("button", { name: /Disconnect/i }));
 
     expect(socket.close).toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByRole("button", { name: /Connect/i })).toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: /Connect/i })).toBeInTheDocument();
     expect(screen.queryByPlaceholderText("Type a message or use the mic...")).not.toBeInTheDocument();
   });
 });

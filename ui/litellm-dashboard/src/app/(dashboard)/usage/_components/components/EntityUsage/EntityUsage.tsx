@@ -6,7 +6,6 @@ import {
   getTopAgents,
   getTopAPIKeys,
   getTopModels,
-  type ExtendedDailyData,
   type ProviderSpendRow,
 } from "./entityUsageAggregations";
 import { buildCostBreakdownTiles, buildSummaryTiles, hasFlatCost, type SummaryTile } from "./entityUsageSummary";
@@ -14,34 +13,36 @@ import { MoneyCell } from "@/components/shared/table_cells";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { hasCapability, type Capability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import type { DateRangePickerValue } from "@tremor/react";
-import { ChevronDown, ChevronRight, ExternalLink, Info, Loader2 } from "lucide-react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
+import { ChevronDown, ChevronRight, Info } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Alert, AlertDescription } from "@/components/shared/Alert";
-import { Button } from "@/components/ui/button";
+import { ChartLoader } from "@/components/shared/chart_loader";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import React, { type ReactNode, useMemo, useState } from "react";
+import React, { type ReactNode, useCallback, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
+import UserDropdown from "@/components/common_components/UserDropdown";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
 import type { EntityType } from "@/components/EntityUsageExport/types";
-import {
-  agentDailyActivityCall,
-  customerDailyActivityCall,
-  organizationDailyActivityCall,
-  tagDailyActivityCall,
-  teamDailyActivityCall,
-  userDailyActivityCall,
-} from "@/components/networking";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { usePaginatedDailyActivity } from "../../hooks/usePaginatedDailyActivity";
+import { useAggregatedDailyActivity } from "../../hooks/useAggregatedDailyActivity";
+import { ENTITY_API } from "./entityFetchFns";
+import {
+  EMPTY_DAILY_ACTIVITY_METADATA,
+  toDailyData,
+  type DailyActivityRequest,
+} from "@/components/UsagePage/dailyActivityApi";
+import { keyDetailFromResponse, overallUsageMetrics } from "@/components/UsagePage/keyActivityData";
 import { EntityMetricWithMetadata } from "@/components/UsagePage/types";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import EndpointUsage from "../EndpointUsage/EndpointUsage";
 import ModelViewToggle, { ModelViewType } from "../ModelViewToggle";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
+import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import TopModelView from "./TopModelView";
+import TeamUserSpendCard from "./TeamUserSpendCard";
 
 interface EntityMetrics {
   metrics: {
@@ -58,18 +59,6 @@ interface EntityMetrics {
   metadata: Record<string, any>;
 }
 
-interface EntitySpendData {
-  results: ExtendedDailyData[];
-  metadata: {
-    total_spend: number;
-    total_flat_cost?: number;
-    total_api_requests: number;
-    total_successful_requests: number;
-    total_failed_requests: number;
-    total_tokens: number;
-  };
-}
-
 export interface EntityList {
   label: string;
   value: string;
@@ -84,16 +73,8 @@ interface EntityUsageProps {
   entityList: EntityList[] | null;
   premiumUser: boolean;
   dateValue: DateRangePickerValue;
+  isOrgAdmin?: boolean;
 }
-
-const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
-  tag: tagDailyActivityCall,
-  team: teamDailyActivityCall,
-  organization: organizationDailyActivityCall,
-  customer: customerDailyActivityCall,
-  agent: agentDailyActivityCall,
-  user: userDailyActivityCall,
-};
 
 const ENTITY_CAPABILITIES: Partial<Record<EntityType, Capability>> = {
   organization: "viewOrganizationUsage",
@@ -107,8 +88,10 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   entityList,
   userRole,
   dateValue,
+  isOrgAdmin = false,
 }) => {
   const { teams } = useTeams();
+  const teamList = useMemo(() => teams ?? [], [teams]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
@@ -118,51 +101,103 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
-
-  const entityFilterArg = useMemo(() => {
-    if (entityType === "user") return selectedTags.length > 0 ? selectedTags[0] : null;
-    return selectedTags.length > 0 ? selectedTags : null;
-  }, [entityType, selectedTags]);
-
-  const fetchFn = ENTITY_FETCH_FNS[entityType];
+  const api = ENTITY_API[entityType];
   const entityCapability = ENTITY_CAPABILITIES[entityType];
-  const canViewEntity = entityCapability === undefined || hasCapability(userRole, entityCapability);
+  const canViewEntity = entityCapability === undefined || hasCapability(userRole, entityCapability, isOrgAdmin);
   const showAgentBreakdown = entityType === "team" && hasCapability(userRole, "viewAgentUsage");
   const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
   const enabled = hasRequestWindow && canViewEntity;
 
+  const request = useMemo<DailyActivityRequest | null>(
+    () =>
+      hasRequestWindow
+        ? {
+            accessToken: accessToken as string,
+            startTime: startTime as Date,
+            endTime: endTime as Date,
+            entityIds: selectedTags.length > 0 ? selectedTags : null,
+          }
+        : null,
+    [hasRequestWindow, accessToken, startTime, endTime, selectedTags],
+  );
+  const agentRequest = useMemo<DailyActivityRequest | null>(
+    () =>
+      hasRequestWindow
+        ? {
+            accessToken: accessToken as string,
+            startTime: startTime as Date,
+            endTime: endTime as Date,
+            entityIds: null,
+          }
+        : null,
+    [hasRequestWindow, accessToken, startTime, endTime],
+  );
+
   const {
     data: spendDataRaw,
-    isFetchingMore,
-    progress,
-    cancelled,
-    cancel,
-  } = usePaginatedDailyActivity({
-    fetchFn,
-    args: [accessToken, startTime, endTime, entityFilterArg],
-    enabled,
+    loading,
+    failed,
+  } = useAggregatedDailyActivity({
+    fetch: () => api.aggregated(request as DailyActivityRequest),
+    enabled: enabled && request !== null,
+    deps: [entityType, accessToken, startTime, endTime, selectedTags],
   });
 
-  const spendData = spendDataRaw as unknown as EntitySpendData;
+  const spendData = useMemo(
+    () => ({
+      results: toDailyData(spendDataRaw),
+      metadata: spendDataRaw.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA,
+    }),
+    [spendDataRaw],
+  );
+  const summaryMetrics = useMemo(() => overallUsageMetrics(spendData.results, spendData.metadata), [spendData]);
 
   const {
     data: agentSpendDataRaw,
-    isFetchingMore: agentIsFetchingMore,
-    progress: agentProgress,
-    cancelled: agentCancelled,
-    cancel: agentCancel,
-  } = usePaginatedDailyActivity({
-    fetchFn: agentDailyActivityCall,
-    args: [accessToken, startTime, endTime, null],
-    enabled: enabled && showAgentBreakdown,
+    loading: agentLoading,
+    failed: agentFailed,
+  } = useAggregatedDailyActivity({
+    fetch: () => ENTITY_API.agent.aggregated(agentRequest as DailyActivityRequest),
+    enabled: enabled && showAgentBreakdown && agentRequest !== null,
+    deps: [accessToken, startTime, endTime, showAgentBreakdown],
   });
 
-  const agentSpendData = agentSpendDataRaw as unknown as EntitySpendData;
+  const agentSpendData = useMemo(
+    () => ({
+      results: toDailyData(agentSpendDataRaw),
+      metadata: agentSpendDataRaw.metadata ?? EMPTY_DAILY_ACTIVITY_METADATA,
+    }),
+    [agentSpendDataRaw],
+  );
+
+  const fetchTopApiKeys = useCallback(
+    (model: string) => api.modelTopKeys(request as DailyActivityRequest, model, modelViewType === "groups"),
+    [api, request, modelViewType],
+  );
+  const searchKeys = useCallback(
+    (query: string) => (request === null ? Promise.resolve({ api_keys: [] }) : api.searchKeys(request, query)),
+    [api, request],
+  );
+  const fetchKeyPage = useCallback(
+    (offset: number, limit: number) =>
+      request === null
+        ? Promise.resolve({ api_keys: [], total_api_keys: 0, offset, limit })
+        : api.keyPage(request, offset, limit),
+    [api, request],
+  );
+  const fetchKeyDetail = useCallback(
+    (apiKey: string) =>
+      request === null
+        ? Promise.resolve(undefined)
+        : api
+            .aggregated({ ...request, apiKey, apiKeyLimit: 1 })
+            .then((response) => keyDetailFromResponse(response, apiKey, teamList)),
+    [api, request, teamList],
+  );
 
   const modelBreakdownKey = modelViewType === "groups" ? "model_groups" : "models";
-  const modelMetrics = processActivityData(spendData, modelBreakdownKey, teams || []);
-  const keyMetrics = processActivityData(spendData, "api_keys", teams || []);
-  const agentMetrics = showAgentBreakdown ? processActivityData(agentSpendData, "entities", teams || []) : {};
+  const modelMetrics = processActivityData(spendData, modelBreakdownKey, teamList);
+  const agentMetrics = showAgentBreakdown ? processActivityData(agentSpendData, "entities", teamList) : {};
 
   const getAllTags = () => {
     if (entityList) {
@@ -254,8 +289,23 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     return `Select ${entityType} to filter...`;
   };
 
+  const entityFilterSlots: Partial<Record<EntityType, ReactNode>> = {
+    team: <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />,
+    user: (
+      <UserDropdown value={selectedTags[0] ?? null} onChange={(userId) => setSelectedTags(userId ? [userId] : [])} />
+    ),
+  };
+  const filterSlot = entityFilterSlots[entityType];
+
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
+  const userSpendTeamIds = useMemo(
+    () =>
+      selectedTags.length > 0
+        ? selectedTags
+        : (teams ?? []).map((team) => team.team_id).filter((id) => id !== "litellm-dashboard"),
+    [selectedTags, teams],
+  );
   const providerSpend = useMemo(() => getProviderSpend(spendData.results), [spendData.results]);
   const entityBreakdownColumns = useMemo<ColumnDef<EntityMetricWithMetadata>[]>(
     () => [
@@ -273,13 +323,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       {
         header: "Successful",
         accessorKey: "metrics.successful_requests",
-        meta: { numeric: true, className: "text-green-600" },
+        meta: { numeric: true, className: "text-success" },
         cell: ({ row }) => row.original.metrics.successful_requests.toLocaleString(),
       },
       {
         header: "Failed",
         accessorKey: "metrics.failed_requests",
-        meta: { numeric: true, className: "text-red-600" },
+        meta: { numeric: true, className: "text-destructive" },
         cell: ({ row }) => row.original.metrics.failed_requests.toLocaleString(),
       },
       {
@@ -312,13 +362,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
       {
         header: "Successful",
         accessorKey: "successful_requests",
-        meta: { numeric: true, className: "text-green-600" },
+        meta: { numeric: true, className: "text-success" },
         cell: ({ row }) => row.original.successful_requests.toLocaleString(),
       },
       {
         header: "Failed",
         accessorKey: "failed_requests",
-        meta: { numeric: true, className: "text-red-600" },
+        meta: { numeric: true, className: "text-destructive" },
         cell: ({ row }) => row.original.failed_requests.toLocaleString(),
       },
       {
@@ -331,13 +381,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     [],
   );
 
-  const chev = "size-3 text-gray-400";
+  const chev = "size-3 text-muted-foreground";
   const expandIcon = showCostBreakdown ? <ChevronDown className={chev} /> : <ChevronRight className={chev} />;
 
   const renderSummaryTile = ({ title, value, className, tooltip, expandable }: SummaryTile) => (
     <ShadcnCard
       key={title}
-      className={expandable ? "cursor-pointer hover:bg-gray-50 transition-colors" : undefined}
+      className={expandable ? "cursor-pointer hover:bg-accent transition-colors" : undefined}
       onClick={expandable ? () => setShowCostBreakdown(!showCostBreakdown) : undefined}
     >
       <CardContent>
@@ -345,7 +395,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           <h3 className="text-lg font-medium text-foreground">{title}</h3>
           {tooltip ? (
             <Tooltip>
-              <TooltipTrigger render={<Info className="size-4 text-gray-400 hover:text-gray-600" />} />
+              <TooltipTrigger render={<Info className="size-4 text-muted-foreground hover:text-foreground" />} />
               <TooltipContent>{tooltip}</TooltipContent>
             </Tooltip>
           ) : null}
@@ -361,7 +411,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const modelViewTitle = modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models";
 
-  const costPanel = (
+  const costPanel = loading ? (
+    <ChartLoader />
+  ) : (
     <div className="grid grid-cols-2 gap-2 w-full">
       <div className="col-span-2">
         <ShadcnCard>
@@ -401,24 +453,24 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                 const requestSpend = data.metrics.spend ?? 0;
                 const flatCost = data.metrics.flat_cost ?? 0;
                 return (
-                  <div className="bg-white p-4 shadow-lg rounded-lg border">
+                  <div className="bg-card p-4 shadow-lg rounded-lg border">
                     <p className="font-bold">{data.date}</p>
                     {showFlatCost ? (
                       <>
-                        <p className="text-cyan-500">Request cost: ${formatNumberWithCommas(requestSpend, 2)}</p>
+                        <p className="text-info">Request cost: ${formatNumberWithCommas(requestSpend, 2)}</p>
                         <p className="text-violet-500">Flat cost: ${formatNumberWithCommas(flatCost, 2)}</p>
                         <p className="font-semibold">
                           Total cost: ${formatNumberWithCommas(requestSpend + flatCost, 2)}
                         </p>
                       </>
                     ) : (
-                      <p className="text-cyan-500">Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
+                      <p className="text-info">Total Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}</p>
                     )}
-                    <p className="text-gray-600">Total Requests: {data.metrics.api_requests}</p>
-                    <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                    <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                    <p className="text-gray-600">Total Tokens: {data.metrics.total_tokens}</p>
-                    <p className="text-gray-600">
+                    <p className="text-muted-foreground">Total Requests: {data.metrics.api_requests}</p>
+                    <p className="text-muted-foreground">Successful: {data.metrics.successful_requests}</p>
+                    <p className="text-muted-foreground">Failed: {data.metrics.failed_requests}</p>
+                    <p className="text-muted-foreground">Total Tokens: {data.metrics.total_tokens}</p>
+                    <p className="text-muted-foreground">
                       Total {capitalizedEntityLabel}s: {entityCount}
                     </p>
                     <div className="mt-2 border-t pt-2">
@@ -433,13 +485,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                         .map(([entity, entityData]) => {
                           const metrics = entityData as EntityMetrics;
                           return (
-                            <p key={entity} className="text-sm text-gray-600">
+                            <p key={entity} className="text-sm text-muted-foreground">
                               {getEntityLabel(entity, metrics.metadata)}: $
                               {formatNumberWithCommas(metrics.metrics.spend, 2)}
                             </p>
                           );
                         })}
-                      {entityCount > 5 && <p className="text-sm text-gray-500 italic">...and {entityCount - 5} more</p>}
+                      {entityCount > 5 && (
+                        <p className="text-sm text-muted-foreground italic">...and {entityCount - 5} more</p>
+                      )}
                     </div>
                   </div>
                 );
@@ -456,11 +510,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
             <div className="flex flex-col space-y-2">
               <h3 className="text-lg font-medium text-foreground">Spend Per {capitalizedEntityLabel}</h3>
               <p className="text-xs text-muted-foreground">Showing Top 5 by Spend</p>
-              <div className="flex items-center text-sm text-gray-500">
+              <div className="flex items-center text-sm text-muted-foreground">
                 <span>Get Started by Tracking cost per {capitalizedEntityLabel} </span>
                 <a
                   href="https://docs.litellm.ai/docs/proxy/enterprise#spend-tracking"
-                  className="text-blue-500 hover:text-blue-700 ml-1"
+                  className="text-info hover:text-info/80 ml-1"
                 >
                   here
                 </a>
@@ -482,15 +536,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
                     if (!active || !payload?.[0]) return null;
                     const data = payload[0].payload;
                     return (
-                      <div className="bg-white p-4 shadow-lg rounded-lg border">
+                      <div className="bg-card p-4 shadow-lg rounded-lg border">
                         <p className="font-bold">{data.metadata.alias}</p>
-                        <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.metrics.spend, 4)}</p>
-                        <p className="text-gray-600">Requests: {data.metrics.api_requests.toLocaleString()}</p>
-                        <p className="text-green-600">
-                          Successful: {data.metrics.successful_requests.toLocaleString()}
-                        </p>
-                        <p className="text-red-600">Failed: {data.metrics.failed_requests.toLocaleString()}</p>
-                        <p className="text-gray-600">Tokens: {data.metrics.total_tokens.toLocaleString()}</p>
+                        <p className="text-info">Spend: ${formatNumberWithCommas(data.metrics.spend, 4)}</p>
+                        <p className="text-muted-foreground">Requests: {data.metrics.api_requests.toLocaleString()}</p>
+                        <p className="text-success">Successful: {data.metrics.successful_requests.toLocaleString()}</p>
+                        <p className="text-destructive">Failed: {data.metrics.failed_requests.toLocaleString()}</p>
+                        <p className="text-muted-foreground">Tokens: {data.metrics.total_tokens.toLocaleString()}</p>
                       </div>
                     );
                   }}
@@ -510,6 +562,17 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </CardContent>
         </ShadcnCard>
       </div>
+
+      {entityType === "team" && (
+        <div className="col-span-2">
+          <TeamUserSpendCard
+            accessToken={accessToken}
+            startTime={startTime}
+            endTime={endTime}
+            teamIds={userSpendTeamIds}
+          />
+        </div>
+      )}
 
       {/* Top API Keys */}
       <div>
@@ -551,11 +614,15 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           <ShadcnCard>
             <CardContent>
               <h3 className="text-lg font-medium text-foreground">Top Agents Driving Spend</h3>
-              <TopModelView
-                topModels={getTopAgents(agentSpendData.results, topAgentsLimit)}
-                topModelsLimit={topAgentsLimit}
-                setTopModelsLimit={setTopAgentsLimit}
-              />
+              {agentLoading ? (
+                <ChartLoader />
+              ) : (
+                <TopModelView
+                  topModels={getTopAgents(agentSpendData.results, topAgentsLimit)}
+                  topModelsLimit={topAgentsLimit}
+                  setTopModelsLimit={setTopAgentsLimit}
+                />
+              )}
             </CardContent>
           </ShadcnCard>
         </div>
@@ -606,93 +673,75 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           <div className="flex justify-end mt-2 mb-4">
             <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
           </div>
-          <ActivityMetrics modelMetrics={modelMetrics} hidePromptCachingMetrics={entityType === "agent"} />
+          <ActivityMetrics
+            modelMetrics={modelMetrics}
+            hidePromptCachingMetrics={entityType === "agent"}
+            fetchTopApiKeys={request ? fetchTopApiKeys : undefined}
+          />
         </>
       ),
     },
     ...(showAgentBreakdown
-      ? [{ key: "agents", label: "Agent Activity", content: <ActivityMetrics modelMetrics={agentMetrics} /> }]
+      ? [
+          {
+            key: "agents",
+            label: "Agent Activity",
+            content: <ActivityMetrics modelMetrics={agentMetrics} />,
+          },
+        ]
       : []),
     {
       key: "keys",
       label: "Key Activity",
-      content: <ActivityMetrics modelMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />,
+      content: (
+        <KeyActivityPanel
+          summary={summaryMetrics}
+          summaryLoading={loading}
+          fetchKeyPage={fetchKeyPage}
+          fetchKeyDetail={fetchKeyDetail}
+          searchKeys={searchKeys}
+          teams={teamList}
+          hidePromptCachingMetrics={entityType === "agent"}
+        />
+      ),
     },
     { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
   ];
 
   return (
     <div style={{ width: "100%" }} className="relative">
-      {isFetchingMore && (
-        <Alert variant="warning" className="mb-2">
-          <AlertDescription className="flex items-center justify-between text-inherit">
-            <span>
-              <Loader2 className="mr-2 inline size-4 animate-spin align-text-bottom" />
-              Currently fetching spend data: fetched {progress.currentPage} / {progress.totalPages} pages. Charts will
-              update periodically as data loads. Moving off of this page will stop and reset this. To continue using the
-              UI in the meantime,{" "}
-              <a href={window.location.href} target="_blank" rel="noopener noreferrer">
-                open a new tab <ExternalLink className="inline size-3.5 align-text-bottom" />
-              </a>
-              .
-            </span>
-            <Button variant="destructive" onClick={cancel}>
-              Stop
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {cancelled && (
-        <Alert variant="info" className="mb-2">
+      {failed && (
+        <Alert variant="error" className="mb-2">
           <AlertDescription className="text-inherit">
-            Showing partial data ({progress.currentPage}/{progress.totalPages} pages loaded)
+            Fetching spend data failed, so the totals below may be empty rather than final. Reload the page to try
+            again.
           </AlertDescription>
         </Alert>
       )}
-      {agentIsFetchingMore && showAgentBreakdown && (
-        <Alert variant="warning" className="mb-2">
-          <AlertDescription className="flex items-center justify-between text-inherit">
-            <span>
-              <Loader2 className="mr-2 inline size-4 animate-spin align-text-bottom" />
-              Currently fetching agent data: fetched {agentProgress.currentPage} / {agentProgress.totalPages} pages.
-              Charts will update periodically as data loads. Moving off of this page will stop and reset this. To
-              continue using the UI in the meantime,{" "}
-              <a href={window.location.href} target="_blank" rel="noopener noreferrer">
-                open a new tab <ExternalLink className="inline size-3.5 align-text-bottom" />
-              </a>
-              .
-            </span>
-            <Button variant="destructive" onClick={agentCancel}>
-              Stop
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {agentCancelled && showAgentBreakdown && (
-        <Alert variant="info" className="mb-2">
+      {showAgentBreakdown && agentFailed && (
+        <Alert variant="error" className="mb-2">
           <AlertDescription className="text-inherit">
-            Showing partial agent data ({agentProgress.currentPage}/{agentProgress.totalPages} pages loaded)
+            Fetching agent data failed, so the totals below may be empty rather than final. Reload the page to try
+            again.
           </AlertDescription>
         </Alert>
-      )}
-      {entityType === "team" && (
-        <div className="mb-4">
-          <p className="mb-2 text-sm text-foreground">Filter by team</p>
-          <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />
-        </div>
       )}
       <UsageExportHeader
         dateValue={dateValue}
         entityType={entityType}
-        spendData={spendData}
-        showFilters={entityType !== "team" && entityList !== null && entityList.length > 0}
+        onExport={(exportType, format) =>
+          request
+            ? api.exportRows(request, exportType, format)
+            : Promise.reject(new Error("Select a date range to export"))
+        }
+        showFilters={filterSlot === undefined && entityList !== null}
+        filterSlot={filterSlot}
         filterLabel={getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}
         selectedFilters={selectedTags}
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
-        filterMode={entityType === "user" ? "single" : "multiple"}
-        teams={teams || []}
+        teams={teamList}
       />
       <Tabs defaultValue={tabs[0].key}>
         <TabsList className="mt-1">

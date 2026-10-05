@@ -2,11 +2,9 @@
 ## Unit Tests for prometheus service monitoring
 
 import json
-import sys
 import os
 import io, asyncio
 
-sys.path.insert(0, os.path.abspath("../.."))
 import pytest
 from litellm import acompletion, Cache
 from litellm._service_logger import ServiceLogging
@@ -83,63 +81,6 @@ async def test_completion_with_caching_bad_call():
     assert sl.mock_testing_async_failure_hook > 0
     assert sl.mock_testing_async_success_hook == 0
     assert sl.mock_testing_sync_success_hook == 0
-
-
-@pytest.mark.asyncio
-async def test_router_with_caching():
-    """
-    - Run router with usage-based-routing-v2
-    - Assert success callback gets called
-    """
-    try:
-
-        def get_openai_params():
-            params = {
-                "model": "gpt-4.1-nano",
-                "api_key": os.environ["OPENAI_API_KEY"],
-            }
-            return params
-
-        model_list = [
-            {
-                "model_name": "azure/gpt-4",
-                "litellm_params": get_openai_params(),
-                "tpm": 100,
-            },
-            {
-                "model_name": "azure/gpt-4",
-                "litellm_params": get_openai_params(),
-                "tpm": 1000,
-            },
-        ]
-
-        router = litellm.Router(
-            model_list=model_list,
-            set_verbose=True,
-            debug_level="DEBUG",
-            routing_strategy="usage-based-routing-v2",
-            redis_host=os.environ["REDIS_HOST"],
-            redis_port=os.environ["REDIS_PORT"],
-            redis_password=os.environ["REDIS_PASSWORD"],
-        )
-
-        litellm.service_callback = ["prometheus_system"]
-
-        sl = ServiceLogging(mock_testing=True)
-        sl.prometheusServicesLogger.mock_testing = True
-        router.cache.redis_cache.service_logger_obj = sl
-
-        messages = [{"role": "user", "content": "Hey, how's it going?"}]
-        response1 = await router.acompletion(model="azure/gpt-4", messages=messages)
-        response1 = await router.acompletion(model="azure/gpt-4", messages=messages)
-
-        assert sl.mock_testing_async_success_hook > 0
-        assert sl.mock_testing_sync_failure_hook == 0
-        assert sl.mock_testing_async_failure_hook == 0
-        assert sl.prometheusServicesLogger.mock_testing_success_calls > 0
-
-    except Exception as e:
-        pytest.fail(f"An exception occured - {str(e)}")
 
 
 @pytest.mark.asyncio

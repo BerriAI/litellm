@@ -2,6 +2,7 @@ import json
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
@@ -24,11 +25,14 @@ if TYPE_CHECKING:
 else:
     AWSPreparedRequest = Any
 
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+
 
 class BedrockRerankHandler(BaseAWSLLM):
     async def arerank(
         self,
         prepared_request: BedrockPreparedRequest,
+        logging_obj: LitellmLogging,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ):
@@ -40,21 +44,27 @@ class BedrockRerankHandler(BaseAWSLLM):
                 headers=dict(prepared_request["prepped"].headers),
                 data=prepared_request["body"],
                 timeout=timeout,
+                logging_obj=logging_obj,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=err.response.text,
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return BedrockRerankConfig()._transform_response(response.json())
+        return BedrockRerankConfig()._transform_response(_JSON_DICT.validate_python(response.json()))
 
     def rerank(
         self,
         model: str,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         optional_params: dict,
         logging_obj: LitellmLogging,
         top_n: int | None = None,
@@ -98,6 +108,7 @@ class BedrockRerankHandler(BaseAWSLLM):
         if _is_async:
             return self.arerank(
                 prepared_request,
+                logging_obj=logging_obj,
                 timeout=timeout,
                 client=client if client is not None and isinstance(client, AsyncHTTPHandler) else None,
             )
@@ -114,7 +125,12 @@ class BedrockRerankHandler(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=err.response.text,
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
@@ -123,7 +139,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             api_key="",
         )
 
-        response_json: Final = response.json()
+        response_json: Final = _JSON_DICT.validate_python(response.json())
 
         return BedrockRerankConfig()._transform_response(response_json)
 
@@ -135,11 +151,6 @@ class BedrockRerankHandler(BaseAWSLLM):
         data: dict,
         optional_params: dict,
     ) -> BedrockPreparedRequest:
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         boto3_credentials_info: Final = self._get_boto_credentials_from_optional_params(optional_params, model)
 
         ### SET RUNTIME ENDPOINT ###
@@ -150,24 +161,21 @@ class BedrockRerankHandler(BaseAWSLLM):
         )
         proxy_endpoint_url = proxy_endpoint_url.replace("bedrock-runtime", "bedrock-agent-runtime")
         proxy_endpoint_url = f"{proxy_endpoint_url}/rerank"
-        sigv4: Final = SigV4Auth(
-            boto3_credentials_info.credentials,
-            "bedrock",
-            boto3_credentials_info.aws_region_name,
-        )
-        # Make POST Request
-        body: Final = json.dumps(data).encode("utf-8")
 
+        body: Final = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-        request: Final = AWSRequest(method="POST", url=proxy_endpoint_url, data=body, headers=headers)
-        sigv4.add_auth(request)
-        if (
-            extra_headers is not None and "Authorization" in extra_headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request.headers["Authorization"] = extra_headers["Authorization"]
-        prepped: Final = request.prepare()
+
+        prepped: Final = self.get_request_headers(
+            credentials=boto3_credentials_info.credentials,
+            aws_region_name=boto3_credentials_info.aws_region_name,
+            extra_headers=extra_headers,
+            endpoint_url=proxy_endpoint_url,
+            data=body,
+            headers=headers,
+            supports_bearer_token=False,
+        )
 
         return BedrockPreparedRequest(
             endpoint_url=proxy_endpoint_url,

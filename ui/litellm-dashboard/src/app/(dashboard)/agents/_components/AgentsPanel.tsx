@@ -5,7 +5,7 @@ import AddAgentForm from "./add_agent_form";
 import { isAdminRole } from "@/utils/roles";
 import AgentInfoView from "./agent_info";
 import AgentsTable from "./AgentsTable";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Agent } from "@/components/agents/types";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -120,11 +120,11 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     setIsDeleting(true);
     try {
       await deleteAgentCall(accessToken, agentToDelete.id);
-      NotificationsManager.success(`Agent "${agentToDelete.name}" deleted successfully`);
+      toast.success(`Agent "${agentToDelete.name}" deleted successfully`);
       await refetchAgents(healthCheckEnabled);
     } catch (error) {
       console.error("Error deleting agent:", error);
-      NotificationsManager.fromBackend("Failed to delete agent");
+      toast.fromError("Failed to delete agent");
     } finally {
       setIsDeleting(false);
       setAgentToDelete(null);
@@ -145,10 +145,10 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
         </p>
         <Alert className="mb-3">
           <Info />
-          <AlertTitle>Why do agents need keys?</AlertTitle>
+          <AlertTitle>How do agents authenticate?</AlertTitle>
           <AlertDescription>
-            Keys scope access to an agent and allow it to call MCP tools. Assign a key when creating an agent or from
-            the Virtual Keys page.
+            Agents can authenticate with a virtual key or a trusted identity provider using JWT. Configure an identity
+            binding when adding or editing an agent. JWT authentication does not require a virtual key.
           </AlertDescription>
         </Alert>
         {isAdmin && (

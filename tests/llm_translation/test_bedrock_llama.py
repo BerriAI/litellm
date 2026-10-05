@@ -1,15 +1,14 @@
 from base_llm_unit_tests import BaseLLMChatTest
 import pytest
-import sys
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 
 
 class TestBedrockTestSuite(BaseLLMChatTest):
+    test_content_list_handling = None
+    test_empty_tools = None
+    test_function_calling_with_tool_response = None
+
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         pass
 

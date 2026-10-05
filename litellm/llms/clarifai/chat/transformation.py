@@ -1,6 +1,8 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.common_utils import OpenAIError
@@ -14,10 +16,13 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class ClarifaiConfig(OpenAIGPTConfig):
@@ -85,7 +90,7 @@ class ClarifaiConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -110,7 +115,7 @@ class ClarifaiConfig(OpenAIGPTConfig):
                 headers=raw_response.headers,
             ) from e
 
-        response: Final = ModelResponse(**completion_response)
+        response: Final = ModelResponse(**_JSON_OBJECT.validate_python(completion_response))
 
         if response.model is not None:
             response.model = "clarifai/" + model

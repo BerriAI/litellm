@@ -12,7 +12,8 @@ All /customer management endpoints
 #### END-USER/CUSTOMER MANAGEMENT ####
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Final, Protocol, TypeVar, overload
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypeVar, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -29,6 +30,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import (
+    end_user_cache_key,
+    end_user_restricted_registry_cache_key,
+)
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (
@@ -37,6 +42,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.table_repositories import EndUserRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -99,6 +105,25 @@ def _typed_table(repo: EndUserRepository | BudgetRepository) -> object:
 router: Final = APIRouter()
 
 
+async def _evict_end_user_cache_keys(cache_keys: Sequence[str]) -> None:
+    """
+    Every endpoint that mutates an end-user row must call this, or a newly blocked or budgeted
+    customer keeps being served unrestricted until the TTL expires: auth reads end users
+    cache-first, and the cached restricted-id registry decides whether the row is read at all.
+    """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+        evict_and_broadcast,
+    )
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    await evict_and_broadcast(cache_keys=cache_keys, user_api_key_cache=user_api_key_cache)
+
+
+def _end_user_cache_keys(user_ids: Sequence[str]) -> tuple[str, ...]:
+    """The per-id entries plus the registry, which any restriction change can move ids in or out of."""
+    return (*(end_user_cache_key(user_id) for user_id in user_ids), end_user_restricted_registry_cache_key())
+
+
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
     """Validate a raw end-user DB row into the typed customer response.
 
@@ -152,6 +177,7 @@ async def block_user(data: BlockUsers):
                     },
                 )
                 records.append(record)
+            await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
         else:
             raise HTTPException(
                 status_code=500,
@@ -311,6 +337,7 @@ async def new_end_user(
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
     - rpm_limit: Optional[int] - [Not Implemented Yet] Specify rpm limit for a given customer (Requests per minute)
+    - tpd_limit: Optional[int] - Specify tpd limit for a given customer (Tokens per day). Batch submissions are charged against it instead of tpm_limit/rpm_limit
     - model_max_budget: Optional[dict] - [Not Implemented Yet] Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d"}}
     - max_parallel_requests: Optional[int] - [Not Implemented Yet] Specify max parallel requests for a given customer.
     - soft_budget: Optional[float] - [Not Implemented Yet] Get alerts when customer crosses given budget, doesn't block requests.
@@ -448,6 +475,8 @@ async def new_end_user(
             include={"litellm_budget_table": True, "object_permission": True},
         )
 
+        await _evict_end_user_cache_keys(_end_user_cache_keys((data.user_id,)))
+
         return _to_customer_response(end_user_record)
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -461,6 +490,33 @@ async def new_end_user(
                 param="user_id",
             )
         raise handle_exception_on_proxy(e)
+
+
+class _CustomerDailyActivityScope(NamedTuple):
+    end_user_ids: tuple[str, ...] | None
+    end_user_metadata: Mapping[str, dict[str, object]]
+
+
+async def resolve_customer_daily_activity_scope(
+    *,
+    end_user_ids: tuple[str, ...] | None,
+    prisma_client: "PrismaClient",
+) -> _CustomerDailyActivityScope:
+    end_user_table: Final = _typed_table(EndUserRepository(prisma_client))
+    end_user_aliases: Final = (
+        await find_many_in(end_user_table, "user_id", end_user_ids)
+        if end_user_ids is not None
+        else await end_user_table.find_many(where={})
+    )
+    metadata: Final = MappingProxyType({end_user.user_id: {"alias": end_user.alias} for end_user in end_user_aliases})
+    return _CustomerDailyActivityScope(end_user_ids, metadata)
+
+
+def customer_daily_activity_is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    return user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
 
 
 @router.get(
@@ -600,11 +656,7 @@ async def update_end_user(
         # get non default values for key
         non_default_values: Final = dict[str, object]()
         for k, v in data_json.items():
-            if v is not None and v not in (
-                [],
-                {},
-                0,
-            ):  # models default to [], spend defaults to 0, we should not reset these values
+            if v is not None and ((isinstance(v, bool) and k in data.fields_set()) or v not in ([], {}, 0)):
                 non_default_values[k] = v
 
         ## Get end user table data ##
@@ -691,6 +743,8 @@ async def update_end_user(
                 raise ValueError(f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}")
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
 
+            await _evict_end_user_cache_keys(_end_user_cache_keys((data.user_id,)))
+
             return _to_customer_response(response)
         else:
             raise ValueError(f"user_id is required, passed user_id = {data.user_id}")
@@ -764,6 +818,9 @@ async def delete_end_user(
                 where={"user_id": {"in": data.user_ids}}
             )
             verbose_proxy_logger.debug("received response from updating prisma client. response=%s", response)
+
+            await _evict_end_user_cache_keys(_end_user_cache_keys(data.user_ids))
+
             return DeleteCustomersResponse(
                 deleted_customers=response,
                 message="Successfully deleted customers with ids: " + str(data.user_ids),
@@ -860,10 +917,7 @@ async def get_customer_daily_activity(
     """
     Get daily activity for specific organizations or all accessible organizations.
     """
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-    ):
+    if not customer_daily_activity_is_admin(user_api_key_dict):
         raise HTTPException(
             status_code=401,
             detail={"error": f"Admin-only endpoint. Your user role={user_api_key_dict.user_role}"},
@@ -878,24 +932,22 @@ async def get_customer_daily_activity(
         )
 
     # Parse comma-separated ids
-    end_user_ids_list: Final = end_user_ids.split(",") if end_user_ids else None
+    end_user_ids_list: Final = tuple(end_user_ids.split(",")) if end_user_ids else None
     exclude_end_user_ids_list: list[str] | None = None
     if exclude_end_user_ids:
         exclude_end_user_ids_list = exclude_end_user_ids.split(",") if exclude_end_user_ids else None
 
-    # Fetch organization aliases for metadata
-    where_condition: Final = dict[str, object]()
-    if end_user_ids_list:
-        where_condition["user_id"] = {"in": list(end_user_ids_list)}
-    end_user_aliases: Final = await _typed_table(EndUserRepository(prisma_client)).find_many(where=where_condition)
+    customer_scope: Final = await resolve_customer_daily_activity_scope(
+        end_user_ids=end_user_ids_list,
+        prisma_client=prisma_client,
+    )
 
-    # Query daily activity for organizations
     return await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyenduserspend",
         entity_id_field="end_user_id",
-        entity_id=end_user_ids_list,
-        entity_metadata_field={e.user_id: {"alias": e.alias} for e in end_user_aliases},
+        entity_id=None if customer_scope.end_user_ids is None else list(customer_scope.end_user_ids),
+        entity_metadata_field=customer_scope.end_user_metadata,
         exclude_entity_ids=exclude_end_user_ids_list,
         start_date=start_date,
         end_date=end_date,
