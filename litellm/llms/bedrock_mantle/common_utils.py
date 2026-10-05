@@ -80,8 +80,9 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         fake_stream: bool | None = None,
     ) -> tuple[dict, bytes | None]:
         bearer: Final = self._resolve_bearer_token(api_key)
+        sign_with_aws: Final = self._aws_signer._sign_request
         if bearer:
-            return self._aws_signer._sign_request(
+            return sign_with_aws(
                 service_name="bedrock",
                 headers=headers,
                 optional_params=optional_params,
@@ -116,7 +117,7 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         }
         headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
         try:
-            return self._aws_signer._sign_request(
+            return sign_with_aws(
                 service_name="bedrock",
                 headers=headers,
                 optional_params=optional_params,
