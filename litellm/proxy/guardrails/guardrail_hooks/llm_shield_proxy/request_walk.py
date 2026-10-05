@@ -19,19 +19,10 @@ from .payload import (
     read_list,
 )
 
-# Roles whose text the application author wrote and the caller never sees. Their
-# PII is still redacted outbound, but it is not restorable from the reply.
 PRIVILEGED_ROLES: Final = frozenset({"system", "developer"})
 
-# How far a tool_result chain is followed. Real payloads nest one or two deep; the
-# bound is what stops a crafted one from becoming an unbounded walk. A request that
-# nests deeper is refused rather than forwarded, because text past the bound would
-# otherwise reach the provider unredacted.
 MAX_CONTENT_DEPTH: Final = 8
 
-# JSON Schema keywords whose value has to reach the model or a validator verbatim, so the
-# schema walk leaves them alone: types, formats, patterns, references and
-# required-property lists. Everything else is scanned.
 SCHEMA_STRUCTURAL_KEYWORDS: Final = frozenset(
     (
         "type",
@@ -55,19 +46,10 @@ SCHEMA_STRUCTURAL_KEYWORDS: Final = frozenset(
     )
 )
 
-# Keywords holding JSON values rather than schemas: every string in them is collected,
-# whatever the keys around it are called.
 SCHEMA_VALUE_KEYWORDS: Final = frozenset(("examples", "default"))
 
-# Keywords holding the literal values the model must reproduce. These go to the CALLER's
-# vault, not the privileged one: the model emits the stand-in in its tool arguments or
-# structured output, and restoring the reply turns it back into the value the schema
-# allows, so the call still routes. In the non-restorable vault it would come back as a
-# stand-in no validator accepts.
 SCHEMA_LITERAL_KEYWORDS: Final = frozenset(("enum", "const"))
 
-# Keywords whose value maps names to subschemas. Their keys are property names, not
-# keywords, so a property called `type` or `enum` is walked like any other subschema.
 SCHEMA_MAP_KEYWORDS: Final = frozenset(
     ("properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies")
 )
@@ -82,10 +64,6 @@ def collect_prompt(data: MutableRequest, slots: SlotSink) -> None:
         return
     prompt_object: Final = as_object(prompt)
     if prompt_object is not None:
-        # A Responses API PromptObject. `variables` are substituted into the stored
-        # prompt on the provider side, so they are caller text. `id` and `version`
-        # identify which prompt to use and must arrive unchanged. A variable is a string
-        # or a typed input such as `{"type": "input_text", "text": ...}`.
         variables: Final = as_object(prompt_object.get("variables"))
         if variables is not None:
             for name in tuple(variables):
@@ -109,8 +87,6 @@ def collect_content(container: MutableRequest, slots: SlotSink) -> None:
     caller controlled, and an unbounded descent is a JSON bomb. Content nested past the
     bound raises `RequestTooDeep` rather than being skipped.
     """
-    # Walked in document order: the shield maps its replies back by position, so the
-    # order spans are collected in is part of the contract.
     pending: Final[list[tuple[MutableRequest, int]]] = [(container, 0)]  # mutable-ok: local queue, never escapes.
     cursor = 0  # rebind-ok: advances through the queue.
     while cursor < len(pending):
@@ -126,20 +102,11 @@ def collect_content(container: MutableRequest, slots: SlotSink) -> None:
             part = as_object(item)
             if part is None:
                 continue
-            # Image and audio parts have no text and fall through untouched.
             collect(part, "text", slots)
             if part.get("type") == "tool_use":
-                # A replayed Anthropic tool call. Its `input` is a JSON object rather than
-                # a string, so a value can sit at any depth -- the reply side walks the
-                # same leaves when it restores one. Its own JSON bound applies, not the
-                # content one, and past it the request is refused.
                 collect_json_leaves(part.get("input"), slots, strict=True)
             source = as_object(part.get("source")) if part.get("type") == "document" else None
             if source is not None:
-                # An Anthropic document carries text inline: a `text` source holds it in
-                # `data`, a `content` source as a string or blocks, walked like any other
-                # content. Base64, URL and file sources are binary or remote, and pass
-                # untouched. Its `title` and `context` are caller text too.
                 collect(part, "title", slots)
                 collect(part, "context", slots)
                 if source.get("type") == "text":
@@ -201,23 +168,17 @@ def collect_responses_fields(data: MutableRequest, slots: SlotSink, privileged: 
         return
     for index, entry in enumerate(entries):
         if isinstance(entry, str):
-            # The embeddings and moderations shape: `input` as an array of strings.
             collect_entry(entries, index, slots)
             continue
         item = as_object(entry)
         if item is None:
             continue
         collect_content(item, privileged if item.get("role") in PRIVILEGED_ROLES else slots)
-        # A function_call item holds `arguments`; a function_call_output holds `output`,
-        # as a string or as a list of input_text parts. A custom_tool_call holds `input`
-        # and a code_interpreter_call `code` -- the fields the reply side restores.
         collect(item, "arguments", slots)
         collect(item, "output", slots)
         collect_text_parts(item, "output", slots)
         collect(item, "input", slots)
         collect(item, "code", slots)
-        # A replayed reasoning item carries the model's summary of its own reasoning,
-        # which quotes whatever the conversation contained.
         collect_text_parts(item, "summary", slots)
 
 

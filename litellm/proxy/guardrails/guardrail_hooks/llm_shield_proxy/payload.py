@@ -6,36 +6,20 @@ from typing import (
     TypeAlias,
 )
 
-# The proxy's own request dict. Mutable by design: a pre-call guardrail rewrites
-# the caller's payload in place, which is the entire point of the hook.
 MutableRequest: TypeAlias = dict[str, object]
 
-# A JSON body on its way to httpx, which requires a real dict rather than a view.
 JsonBody: TypeAlias = dict[str, object]
 
-# How far a JSON value -- a tool input, a parameter schema -- is followed on the request
-# side. Legitimate JSON nests far deeper than content blocks do, so the bound is
-# generous; past it the request is refused, since text past the bound would reach the
-# provider unredacted.
 MAX_JSON_DEPTH: Final = 64
 
-# One redactable span: the text as it stands, and the write that puts the
-# replacement back where it came from.
 Slot: TypeAlias = tuple[str, Callable[[str], None]]
 
-# One incremental rehydration step for a stream the caller has already bound to its
-# vault: (new text, carried window, final) -> (text safe to emit, window still held).
 StreamStep: TypeAlias = Callable[[str, str, bool], Awaitable[tuple[str, str]]]
 
-# A batch rehydration already bound to the request's vault.
 Rehydrate: TypeAlias = Callable[[Sequence[str]], Awaitable[Sequence[str]]]
 
-# The accumulator the collectors below append into. It never escapes
-# _locate_request_texts, which freezes it into a tuple before returning.
 SlotSink: TypeAlias = list[Slot]
 
-# A caller-owned list whose entries are rewritten in place, such as a Completions
-# `prompt` sent as an array of strings.
 MutableSeq: TypeAlias = list[object]
 
 

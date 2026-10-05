@@ -24,40 +24,23 @@ from .payload import (
     write_field,
 )
 
-# Anthropic /v1/messages delta types that carry restorable text, and the field holding
-# it. `thinking_delta` is left out on purpose: a thinking block is signed, and one
-# rewritten here fails verification when the client sends it back on the next turn.
 ANTHROPIC_DELTA_FIELDS: Final = MappingProxyType({"text_delta": "text", "input_json_delta": "partial_json"})
 
-# A blank line ends an SSE event. Frames are cut there, never inside an event, so a
-# `data:` line split across two network chunks is parsed only once it is whole.
 SSE_EVENT_BOUNDARY: Final = re.compile(rb"(\r?\n\r?\n)")
 
-# What an SSE stream can open with: one of its fields, or a `:` comment.
 SSE_OPENINGS: Final = (b"event:", b"data:", b"id:", b"retry:", b":")
 
-# Responses API delta events whose `delta` is not text. Audio arrives base64-encoded;
-# sending it through the shield would cost a round trip per chunk to restore nothing.
 RESPONSES_BINARY_DELTAS: Final = frozenset(("response.audio.delta",))
 
-# Fields on a Responses API event that identify something rather than say something.
-# Every other string field on a `.done` event is model text and is restored, so an event
-# type added upstream is covered by default instead of leaking a placeholder.
 RESPONSES_STRUCTURAL_FIELDS: Final = frozenset(
     ("type", "id", "item_id", "call_id", "name", "server_label", "status", "obfuscation")
 )
 
-# Terminal Responses API events that repeat the whole reply under `response`.
 RESPONSES_TERMINAL_EVENTS: Final = frozenset(("response.completed", "response.incomplete"))
 
-# Sliding windows keyed by (choice index, tool-call index | None), threaded through one
-# stream. `None` is the content channel; an int is one tool call's accumulating
-# `arguments`. Content and each tool call are separate token streams, so each needs its
-# own window -- one shared window would splice one stream's held-back tail onto another.
 CarryKey: TypeAlias = tuple[int, int | None]
 CarryWindows: TypeAlias = dict[CarryKey, str]
 
-# A Responses API delta stream: (event family, item id, output index, part index).
 ResponsesStreamKey: TypeAlias = tuple[str, object, object, object]
 
 
@@ -146,7 +129,6 @@ class AnthropicSSERestorer:
         if self._is_sse is None:
             self._is_sse = opens_like_sse(buffered)
             if self._is_sse is None:
-                # Too little has arrived to tell -- `b"eve"` could still become `event:`.
                 self._pending = buffered
                 return ()
             if not self._is_sse:
@@ -158,8 +140,6 @@ class AnthropicSSERestorer:
             return ()
         cut: Final = boundaries[-1].end()
         self._pending = buffered[cut:]
-        # With a capturing group, split alternates event, separator, ..., and ends in the
-        # empty remainder after the last separator.
         parts: Final = SSE_EVENT_BOUNDARY.split(buffered[:cut])
         restored: Final = tuple(
             [await self._restore_event(parts[index]) + parts[index + 1] for index in range(0, len(parts) - 1, 2)]
@@ -171,11 +151,9 @@ class AnthropicSSERestorer:
         held: Final = self._pending
         self._pending = b""
         if not self._is_sse:
-            # The stream ended before it could be told apart from SSE: hand it back as is.
             return self._emit(held)
         tail: Final = await self._restore_event(held) if held.strip() else held
         flushed: Final = await self._flush_all()
-        # The tail had no blank line after it; one is needed before another frame follows.
         separator: Final = b"\n\n" if tail.strip() and flushed else b""
         return self._emit(tail + separator + flushed)
 
@@ -356,7 +334,6 @@ def collect_event_text(event: object, slots: SlotSink) -> None:
     `.done` event of each stream family names its text differently (`text`, `refusal`,
     `arguments`, ...), and a family added upstream would otherwise leak a placeholder.
     """
-    # A model's fields live in its `__dict__`; an empty dict has none either way.
     attributes: Final[object] = getattr(event, "__dict__", None)
     fields: Final = as_object(event) or as_object(attributes)
     if fields is None:

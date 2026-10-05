@@ -1,10 +1,3 @@
-# +-------------------------------------------------------------+
-#
-#         Use LLM Shield Proxy for reversible PII redaction
-#            https://github.com/ninadphalak/LLM-Shield-Proxy
-#
-# +-------------------------------------------------------------+
-
 import copy
 import functools
 import os
@@ -79,24 +72,10 @@ _REDACT_PATH: Final = "/v1/guard/redact"
 _REHYDRATE_PATH: Final = "/v1/guard/rehydrate"
 _REHYDRATE_STREAM_PATH: Final = "/v1/guard/rehydrate/stream"
 
-# The session id ties a redact call to the rehydrate calls that undo it. It is
-# stored on the request dict rather than on the guardrail instance: the proxy
-# registers one instance process-wide, so instance attributes would be shared
-# across concurrent requests.
 _SESSION_METADATA_KEY: Final = "llm_shield_session_id"
 
-# Set when the deployment pre-call hook redacted the request -- model-level `guardrails`
-# outside the proxy -- to that request's vault id. Only then is the reply restored at the
-# deployment, because only then does no later hook restore it. Matching it against the
-# minted id, which carries the unguessable per-process prefix, means a caller cannot opt
-# a proxy request into deployment-level restoration by sending the key themselves.
 _DEPLOYMENT_RESTORE_KEY: Final = "llm_shield_restore_at_deployment"
 
-# Vault ids are minted here and never derived from anything the caller sends. The
-# vault holds the plaintext behind every placeholder, so an id a caller could
-# supply or guess would let one user rehydrate another user's values by getting a
-# placeholder echoed back. The per-process prefix means a caller cannot even name
-# a vault this process uses.
 _VAULT_PREFIX: Final = f"litellm-{uuid.uuid4().hex}"
 
 _DEFAULT_TIMEOUT_SECONDS: Final = 10.0
@@ -116,9 +95,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
     split across two chunks is never emitted in fragments.
     """
 
-    # Our redaction and restoration run in the native lifecycle hooks below. Without
-    # this the proxy would route every event through the unified apply_guardrail path
-    # and the streaming hook would never fire.
     use_native_lifecycle_hooks: ClassVar[bool] = True
 
     def __init__(
@@ -207,8 +183,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             return None
         return await super().async_post_call_success_deployment_hook(request_data, response, call_type)
 
-    # --- transport ---------------------------------------------------------------
-
     def _headers(self, session_id: str) -> JsonBody:
         headers: Final[JsonBody] = {
             "Content-Type": "application/json",
@@ -261,15 +235,12 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         """Guards the positional mapping the callers rely on to write results back."""
         entries: Final = as_array(returned)
         texts: Final = tuple(entry for entry in entries or () if isinstance(entry, str))
-        # A non-string entry would be written into the request or reply as is.
         if entries is None or len(entries) != len(sent) or len(texts) != len(entries):
             raise GuardrailRaisedException(
                 guardrail_name=self.guardrail_name,
                 message=f"LLM Shield Proxy {operation} returned an unexpected payload; blocking the request.",
             )
         return texts
-
-    # --- session ------------------------------------------------------------------
 
     @staticmethod
     def _mint_session_id(data: MutableRequest) -> str:
@@ -280,10 +251,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         caller from reaching another caller's vault.
         """
         session_id: Final = f"{_VAULT_PREFIX}-{uuid.uuid4().hex}"
-        # `litellm_metadata` is proxy-private; `metadata` is forwarded to the provider on
-        # /v1/responses. The session id is a capability against the vault's rehydrate
-        # endpoint, so handing it to the provider alongside the placeholders would let the
-        # provider read back exactly what this guardrail exists to withhold.
         metadata: Final = data.setdefault("litellm_metadata", {})
         if isinstance(metadata, dict):
             metadata[_SESSION_METADATA_KEY] = session_id
@@ -311,13 +278,9 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         existing: Final = LLMShieldProxyGuardrail._minted_session_id(data)
         return existing if existing is not None else f"{_VAULT_PREFIX}-{uuid.uuid4().hex}"
 
-    # --- request traversal --------------------------------------------------------
-
     @staticmethod
     def _locate_request_texts(data: MutableRequest) -> tuple[Sequence[Slot], Sequence[Slot]]:
         return locate_request_texts(data)
-
-    # --- hooks --------------------------------------------------------------------
 
     @log_guardrail_information
     async def async_pre_call_hook(
@@ -343,9 +306,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
         session_id: Final = self._mint_session_id(data)
         if privileged:
-            # A vault of its own, whose id is deliberately never stored: the
-            # response is restored against `session_id` alone, so nothing the
-            # model emits can turn one of these placeholders back into plaintext.
             await self._redact_into(privileged, f"{_VAULT_PREFIX}-{uuid.uuid4().hex}")
         if slots:
             await self._redact_into(slots, session_id)
@@ -357,15 +317,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         for (_, write), replacement in zip(slots, redacted):
             write(replacement)
 
-    # KNOWN LIMIT: a tool call's `arguments` is a JSON *string*, and a restored value is
-    # spliced into it as raw text. If the original value contained a double quote, a
-    # backslash or a newline, the reassembled document is no longer valid JSON for a
-    # strict parser. The proxy's own tool-argument rehydration has the same property
-    # (`_rehydrate_json_response` in api/main.py), so this is a pre-existing limit of the
-    # product rather than one introduced here. Escaping is deliberately NOT applied as a
-    # fix: a fragment is an arbitrary slice of a JSON document, so the code cannot tell
-    # whether the position it writes is inside a string literal, and escaping
-    # unconditionally would corrupt the values that are not.
     async def async_post_call_success_hook(
         self,
         data: MutableRequest,
@@ -397,17 +348,10 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         if not choices:
             return response
 
-        # One batch for every restorable span in the reply, collected in document order:
-        # the shield maps its answers back by position. A second round trip is not an
-        # option here -- /v1/guard/rehydrate caps a batch at 256 texts and 1,000,000
-        # characters, and `_same_length_or_raise` is what guarantees the positional
-        # mapping -- so a reply carrying more spans than that fails closed, which is this
-        # guardrail's posture everywhere else.
         pending: Final[SlotSink] = []
         for choice in choices:
             message = getattr(choice, "message", None)
             if message is None:
-                # A Completions reply carries its text on the choice itself.
                 text = read_field(choice, "text")
                 if isinstance(text, str) and text:
                     pending.append((text, functools.partial(write_field, choice, "text")))
@@ -415,9 +359,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             content = getattr(message, "content", None)
             if isinstance(content, str) and content:
                 pending.append((content, functools.partial(setattr, message, "content")))
-            # A tool call's `arguments` is model-generated text and the request path
-            # redacts it, so leaving it unrestored hands the application a placeholder to
-            # invoke a tool with. These are Pydantic objects on this path, not dicts.
             for tool_call in getattr(message, "tool_calls", None) or ():
                 function = getattr(tool_call, "function", None)
                 arguments = getattr(function, "arguments", None) if function is not None else None
@@ -530,9 +471,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                 for frames in await sse.feed(chunk):
                     yield frames
                 continue
-            # Chunks are restored as copies, for the reason the non-streaming hook copies:
-            # LiteLLM keeps the chunks it yielded to assemble the reply it caches and logs,
-            # so restoring them in place would cache this caller's plaintext.
             if responses_event_type(chunk) is not None:
                 for event in await events.restore(detached(chunk)):
                     yield event
@@ -543,7 +481,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                 await self._restore_choice(choice, carries, session_id)
             yield restored_chunk
 
-        # A stream that ended early can still leave text held back, in any shape.
         for frames in await sse.finish():
             yield frames
         for event in await events.finish():
@@ -564,8 +501,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         index: Final = choice_index(choice)
         is_final: Final = bool(getattr(choice, "finish_reason", None))
         if isinstance(choice, TextChoices):
-            # A Completions stream carries its text on the choice itself, with no delta
-            # and no tool calls: one window, the content one.
             await self._restore_text_window(choice, (index, None), carries, session_id, is_final)
             return
         if delta is None:
@@ -577,9 +512,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             await self._restore_tool_call_window(tool_call, index, carries, session_id)
 
         if is_final:
-            # A client parses a tool call's arguments when it sees the finish_reason, so
-            # every window this choice still holds has to land in *this* chunk. Flushing
-            # after it produces argument JSON the client has already stopped waiting for.
             await self._flush_finished_choice(delta, index, carries, session_id)
 
     async def _restore_text_window(
@@ -614,7 +546,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         text: Final = getattr(delta, "content", None)
 
         if not isinstance(text, str) or not text:
-            # Nothing to restore here, but a final chunk still has to flush the window.
             if is_final and carry:
                 flushed, remaining = await self._stream_step("", carry, True, session_id)
                 carries[key] = remaining  # rebind-ok: this stream's window advances.
@@ -721,9 +652,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             elif tool_index is None:
                 write_field(delta, "content", text)
             else:
-                # The copy carried this chunk's own content and tool calls, both already
-                # delivered. Replace rather than append, and drop the content, or the
-                # client sees them twice.
                 write_field(delta, "content", None)
                 write_field(delta, "tool_calls", continuation_delta(tool_index, text))
             yield chunk
@@ -745,12 +673,8 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         if getattr(kept, "delta", None) is None and not isinstance(kept, TextChoices):
             return None
         kept.index = index
-        # The terminal signal, if there was one, already went out with the real chunk.
         kept.finish_reason = None
         chunk.choices = [kept]
-        # So did the usage, which `stream_options.include_usage` puts on that last chunk. A
-        # client that sums usage across chunks would count the request twice; a mid-stream
-        # chunk carries no `usage` attribute at all, so the copy drops it.
         if hasattr(chunk, "usage"):
             del chunk.usage
         return chunk
@@ -770,8 +694,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                 message="LLM Shield Proxy stream rehydration returned an unexpected payload.",
             )
         return emitted, remaining
-
-    # --- unified API (powers the UI "Test guardrail" button) -----------------------
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -795,8 +717,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         if not text_list and not tool_calls:
             return inputs
 
-        # Copied rather than mutated: the caller's tool calls are theirs to own, and this
-        # method's contract is to hand back a new mapping.
         restored_calls: Final[list[object]] = [copy.deepcopy(call) for call in tool_calls]  # mutable-ok: a new list.
         spans: Final[list[str]] = list(text_list)  # mutable-ok: ordered batch, frozen before the call.
         writers: Final[list[Callable[[str], None]]] = []  # mutable-ok: one per span appended below.
@@ -816,8 +736,6 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
         for write, replacement in zip(writers, restored_values[len(text_list) :]):
             write(replacement)
-        # Return a new mapping rather than rewriting the caller's, so this stays a
-        # pure transform of the inputs it was handed.
         merged: Final[JsonBody] = {**inputs}
         if text_list:
             merged["texts"] = restored_values[: len(text_list)]
