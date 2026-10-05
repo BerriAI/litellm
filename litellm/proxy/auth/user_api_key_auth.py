@@ -677,7 +677,35 @@ async def user_api_key_auth_websocket(websocket: WebSocket) -> UserAPIKeyAuth:
     return await user_api_key_auth_websocket_for_model(websocket, model=websocket.query_params.get("model"))
 
 
-async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str | None) -> UserAPIKeyAuth:
+class _WebsocketKeyRejection(NamedTuple):
+    detail: str
+
+
+_INSECURE_API_KEY_PROTOCOL_PREFIX: Final = "openai-insecure-api-key."
+
+
+def _websocket_api_key(websocket: WebSocket) -> str | _WebsocketKeyRejection:
+    authorization: Final = websocket.headers.get("authorization")
+    if authorization:
+        if not authorization.startswith("Bearer "):
+            return _WebsocketKeyRejection("Invalid Authorization header format")
+        return authorization[len("Bearer ") :].strip()
+    header_key: Final = websocket.headers.get("api-key")
+    if header_key:
+        return header_key
+    protocols: Final = (protocol.strip() for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","))
+    protocol_key: Final = next(
+        (
+            protocol[len(_INSECURE_API_KEY_PROTOCOL_PREFIX) :]
+            for protocol in protocols
+            if protocol.startswith(_INSECURE_API_KEY_PROTOCOL_PREFIX)
+        ),
+        None,
+    )
+    return protocol_key or _WebsocketKeyRejection("No API key provided")
+
+
+def _websocket_auth_request(websocket: WebSocket, model: str | None) -> Request:
     ws_scope: Final = websocket.scope or {}
     scope_headers: Final = list(ws_scope.get("headers") or [])
     # ``get_request_route`` falls back to ``request.url.path`` when
@@ -704,31 +732,16 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
         return realtime_request_body(model)
 
     request.body = return_body
+    return request
 
-    authorization: Final = websocket.headers.get("authorization")
-    # If no Authorization header, try the api-key header
-    if not authorization:
-        api_key = websocket.headers.get("api-key")
-        if not api_key:
-            # Try extracting from WebSocket subprotocol (browser clients)
-            for protocol in websocket.headers.get("sec-websocket-protocol", "").split(","):
-                protocol = protocol.strip()
-                if protocol.startswith("openai-insecure-api-key."):
-                    api_key = protocol[len("openai-insecure-api-key.") :]
-                    break
-        if not api_key:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            raise HTTPException(status_code=403, detail="No API key provided")
-    else:
-        # Extract the API key from the Bearer token
-        if not authorization.startswith("Bearer "):
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-            raise HTTPException(status_code=403, detail="Invalid Authorization header format")
 
-        api_key = authorization[len("Bearer ") :].strip()
+async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str | None) -> UserAPIKeyAuth:
+    request: Final = _websocket_auth_request(websocket, model)
+    api_key: Final = _websocket_api_key(websocket)
+    if isinstance(api_key, _WebsocketKeyRejection):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise HTTPException(status_code=403, detail=api_key.detail)
 
-    # Call user_api_key_auth with the extracted API key
-    # Note: You'll need to modify this to work with WebSocket context if needed
     try:
         return await user_api_key_auth(request=request, api_key=f"Bearer {api_key}")
     except Exception as e:
@@ -737,6 +750,19 @@ async def user_api_key_auth_websocket_for_model(websocket: WebSocket, model: str
         log_model_access_denial(e)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=403, detail=str(e))
+
+
+async def user_api_key_auth_accepted_websocket_for_model(websocket: WebSocket, model: str) -> UserAPIKeyAuth:
+    """Re-authorize an already accepted WebSocket for a model it named after the upgrade.
+
+    Runs the same key, team, member, user, project and agent checks, plus budget reservation, as
+    the upgrade does for ``?model=``, but leaves the socket open so the caller can reply with an
+    error frame.
+    """
+    api_key: Final = _websocket_api_key(websocket)
+    if isinstance(api_key, _WebsocketKeyRejection):
+        raise HTTPException(status_code=403, detail=api_key.detail)
+    return await user_api_key_auth(request=_websocket_auth_request(websocket, model), api_key=f"Bearer {api_key}")
 
 
 def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_user_params: dict) -> UserAPIKeyAuth:

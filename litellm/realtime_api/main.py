@@ -3,8 +3,11 @@
 import asyncio
 import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, cast
+
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm.constants import (
@@ -37,6 +40,7 @@ from ..llms.azure.common_utils import get_azure_ad_token
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_protocol_for_client
 from ..llms.bedrock.realtime.handler import BedrockRealtime
 from ..llms.custom_httpx.http_handler import realtime_ssl_for_url
+from ..llms.openai.live.handler import OpenAILiveSessions
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..llms.vertex_ai.audio_transcription.realtime_transformation import is_vertex_speech_to_text_model
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig, vertex_realtime_config
@@ -51,6 +55,7 @@ if TYPE_CHECKING:
 
 azure_realtime: Final = AzureOpenAIRealtime()
 openai_realtime: Final = OpenAIRealtime()
+openai_live_sessions: Final = OpenAILiveSessions()
 bedrock_realtime: Final = BedrockRealtime()
 xai_realtime: Final = XAIRealtime()
 vertex_llm_base: Final = VertexBase()
@@ -75,9 +80,9 @@ def _with_resolved_session_model(session: dict[str, object], model_name: str) ->
     return {**session, "model": model_name}
 
 
-def _build_litellm_metadata(kwargs: dict) -> dict:
+def _build_litellm_metadata(kwargs: dict) -> dict[str, object]:
     """Build the litellm_metadata dict for guardrail checking (internal only, not forwarded to provider)."""
-    metadata: Final[dict] = {**(kwargs.get("litellm_metadata") or {})}
+    metadata: Final[dict[str, object]] = {**(kwargs.get("litellm_metadata") or {})}
     guardrails: Final = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
     if guardrails:
         metadata["guardrails"] = guardrails
@@ -345,6 +350,84 @@ async def _resolve_vertex_access_token_bounded(
         ) from e
 
 
+class _RealtimeGuardrailRequestData(TypedDict):
+    litellm_metadata: ReadOnly[Mapping[str, object]]
+    stream: ReadOnly[Literal[True]]
+
+
+def _realtime_guardrail_configured(litellm_metadata: Mapping[str, object]) -> bool:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    event_hooks: Final = (
+        GuardrailEventHooks.realtime_input_transcription,
+        GuardrailEventHooks.pre_call,
+        GuardrailEventHooks.post_call,
+    )
+    request_data: Final[_RealtimeGuardrailRequestData] = {"litellm_metadata": litellm_metadata, "stream": True}
+    return any(
+        isinstance(callback, CustomGuardrail)
+        and any(callback.should_run_guardrail(data=request_data, event_type=hook) for hook in event_hooks)
+        for callback in litellm.callbacks
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _LiveProviderUnsupported:
+    provider: str
+
+
+@dataclass(frozen=True, slots=True)
+class _LiveGuardrailsUnsupported:
+    pass
+
+
+_LiveSessionRejection = _LiveProviderUnsupported | _LiveGuardrailsUnsupported
+
+
+def _live_session_rejection(
+    custom_llm_provider: str, litellm_metadata: Mapping[str, object]
+) -> _LiveSessionRejection | None:
+    if custom_llm_provider != "openai":
+        return _LiveProviderUnsupported(provider=custom_llm_provider)
+    if _realtime_guardrail_configured(litellm_metadata):
+        return _LiveGuardrailsUnsupported()
+    return None
+
+
+def _raise_live_session_rejection(rejection: _LiveSessionRejection) -> NoReturn:
+    match rejection:
+        case _LiveProviderUnsupported(provider=provider):
+            raise ValueError(f"OpenAI Live sessions require the openai provider, got {provider}")
+        case _LiveGuardrailsUnsupported():
+            raise ValueError("Guardrails are not supported on OpenAI Live sessions")
+        case _:
+            assert_never(rejection)
+
+
+async def _alive_session(
+    model: str,
+    websocket: "WebSocket",
+    custom_llm_provider: str,
+    litellm_logging_obj: LiteLLMLogging,
+    session_start: Mapping[str, object],
+    api_base: str | None,
+    api_key: str | None,
+    litellm_metadata: Mapping[str, object],
+) -> None:
+    rejection: Final = _live_session_rejection(custom_llm_provider, litellm_metadata)
+    if rejection is not None:
+        _raise_live_session_rejection(rejection)
+    await openai_live_sessions.async_live_session(
+        model=model,
+        websocket=websocket,
+        logging_obj=litellm_logging_obj,
+        session_start=session_start,
+        api_base=api_base or litellm.api_base or "https://api.openai.com/",
+        api_key=api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY"),
+    )
+
+
 @wrapper_client
 async def _arealtime(
     model: str,
@@ -356,6 +439,7 @@ async def _arealtime(
     client: object | None = None,
     timeout: float | None = None,
     query_params: RealtimeQueryParams | None = None,
+    live_session_start: Mapping[str, object] | None = None,
     **kwargs,
 ) -> None:
     """
@@ -397,6 +481,19 @@ async def _arealtime(
         litellm_params=litellm_params_dict,
         custom_llm_provider=_custom_llm_provider,
     )
+
+    if live_session_start is not None:
+        await _alive_session(
+            model=model,
+            websocket=websocket,
+            custom_llm_provider=_custom_llm_provider,
+            litellm_logging_obj=litellm_logging_obj,
+            session_start=live_session_start,
+            api_base=dynamic_api_base or litellm_params.api_base,
+            api_key=dynamic_api_key,
+            litellm_metadata=_build_litellm_metadata(kwargs),
+        )
+        return
 
     provider_config: BaseRealtimeConfig | None = None
     if _custom_llm_provider in LlmProviders._member_map_.values():
