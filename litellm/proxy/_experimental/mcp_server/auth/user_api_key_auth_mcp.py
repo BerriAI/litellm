@@ -3642,7 +3642,7 @@ class MCPRequestHandler:
         requires_fresh_policy: bool = False,
     ) -> list[str]:
         """
-        Resolve MCP access groups to server IDs by querying BOTH the MCP server table (DB) AND config-loaded servers.
+        Resolve MCP access groups against the operation snapshot, or database and config outside an operation.
         ``requires_fresh_policy`` reads the writer and propagates a read fault instead of resolving to no servers.
         """
         from litellm.proxy.proxy_server import prisma_client
@@ -3652,6 +3652,10 @@ class MCPRequestHandler:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
+
+            snapshot: Final = global_mcp_server_manager.catalog.current()
+            if snapshot is not None:
+                return list(MCPRequestHandler._get_config_server_ids_for_access_groups(snapshot.servers, access_groups))
 
             # Use the new helper for config-loaded servers
             server_ids: Final = MCPRequestHandler._get_config_server_ids_for_access_groups(

@@ -18607,3 +18607,21 @@ async def test_catalog_revision_failure_preserves_state_and_recovers(monkeypatch
     assert unavailable.value.detail == "MCP server configuration could not be refreshed"
     assert manager.registry["catalog-server"].name == "initial"
     assert (await manager.catalog.resolve("catalog-server")).name == "updated"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("groups", [[], ["catalog-group"]])
+async def test_access_group_resolution_uses_the_operation_catalog(monkeypatch, groups):
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    row = _catalog_row().model_copy(update={"mcp_access_groups": groups})
+    _catalog_database(monkeypatch, AsyncMock(return_value=[row]))
+    manager = MCPServerManager()
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    stale = AsyncMock(return_value=set() if groups else {row.server_id})
+    monkeypatch.setattr(MCPRequestHandler, "_get_db_server_ids_for_access_groups", stale)
+    async with manager.catalog.operation():
+        allowed = await MCPRequestHandler._get_mcp_servers_from_access_groups(["catalog-group"])
+        assert set(allowed) == ({row.server_id} if groups else set())
+    stale.assert_not_awaited()
