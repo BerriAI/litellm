@@ -127,19 +127,32 @@ def test_session_translates_formats_modalities_tools_and_manual_control(layout: 
     }
 
 
-def test_16khz_audio_passes_through_unchanged() -> None:
+def test_audio_is_accepted_only_after_16khz_input_is_declared() -> None:
     config: Final = AlibabaTokenPlanRealtimeConfig()
     raw: Final = b"\x00\x01\x00\x02" * 320
     encoded: Final = base64.b64encode(raw).decode()
-    assert _audio_bytes(_audio_frames(config, raw)) == raw
-    (item,) = _request(
+    audio_item: Final = {
+        "type": "conversation.item.create",
+        "item": {"type": "message", "role": "user", "content": [{"type": "input_audio", "audio": encoded}]},
+    }
+    text_item: Final = {
+        "type": "conversation.item.create",
+        "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hi"}]},
+    }
+    (instructions,) = _request(config, {"type": "session.update", "session": {"instructions": "Be brief"}})
+    assert instructions["session"]["instructions"] == "Be brief"
+    assert _request(config, text_item)[0]["item"]["content"][0]["text"] == "Hi"
+    with pytest.raises(RealtimeTranscriptionProtocolError, match="before sending audio"):
+        _audio_frames(config, raw)
+    with pytest.raises(RealtimeTranscriptionProtocolError, match="before sending audio"):
+        _request(config, audio_item)
+
+    _request(
         config,
-        {
-            "type": "conversation.item.create",
-            "item": {"type": "message", "role": "user", "content": [{"type": "input_audio", "audio": encoded}]},
-        },
+        {"type": "session.update", "session": {"audio": {"input": {"format": {"type": "audio/pcm", "rate": 16000}}}}},
     )
-    assert item["item"]["content"][0]["audio"] == encoded
+    assert _audio_bytes(_audio_frames(config, raw)) == raw
+    assert _request(config, audio_item)[0]["item"]["content"][0]["audio"] == encoded
 
 
 @pytest.mark.parametrize(

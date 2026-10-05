@@ -8549,7 +8549,7 @@ class ProviderConfigManager:
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
             LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
-            LlmProviders.ALIBABA_TOKEN_PLAN: (lambda: litellm.AlibabaTokenPlanChatConfig(), False),
+            LlmProviders.ALIBABA_TOKEN_PLAN: (litellm.AlibabaTokenPlanChatConfig, False),
             LlmProviders.QWENCLOUD: (lambda: litellm.QwenCloudChatConfig(), False),
             LlmProviders.QWEN_AI_PLATFORM: (
                 lambda: litellm.QwenAIPlatformChatConfig(),

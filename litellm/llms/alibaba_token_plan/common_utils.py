@@ -51,15 +51,17 @@ def validate_headers(
 
 
 def image_reference(image: object) -> str:
-    if isinstance(image, str):
-        return image
-    if isinstance(image, tuple) and len(image) > 1:
-        return image_reference(image[1])
-    if isinstance(image, PathLike):
-        return image_reference(Path(image).read_bytes())
-    if isinstance(image, _Readable):
-        return image_reference(image.read())
-    if not isinstance(image, bytes):
+    source: Final = image[1] if isinstance(image, tuple) and len(image) > 1 else image
+    if isinstance(source, str):
+        return source
+    data: Final = (
+        Path(source).read_bytes()
+        if isinstance(source, PathLike)
+        else source.read()
+        if isinstance(source, _Readable)
+        else source
+    )
+    if not isinstance(data, bytes):
         raise TypeError("Image must be a URL, data URI, bytes, path or binary file")
-    content_type: Final = ImageEditRequestUtils.get_image_content_type(image)
-    return f"data:{content_type};base64,{base64.b64encode(image).decode('ascii')}"
+    content_type: Final = ImageEditRequestUtils.get_image_content_type(data)
+    return f"data:{content_type};base64,{base64.b64encode(data).decode('ascii')}"

@@ -43,6 +43,7 @@ _SESSION_KEYS: Final = frozenset(
         "turn_detection",
     )
 )
+_ITEM_CONTENT_TYPES: Final = MappingProxyType({"audio": "output_audio", "text": "output_text"})
 _USAGE_KEYS: Final = MappingProxyType(
     {"input_tokens_details": "input_token_details", "output_tokens_details": "output_token_details"}
 )
@@ -97,32 +98,56 @@ def _modalities(value: JsonValue | None) -> Sequence[str]:
     return ("text", "audio") if "audio" in modalities else ("text",)
 
 
-def _content_to_ga(value: JsonValue, *, item_content: bool = False) -> JsonValue:
-    if isinstance(value, list):
-        return [_content_to_ga(item, item_content=item_content) for item in value]
-    if not isinstance(value, dict):
-        return value
-    content_type: Final = value.get("type")
-    renamed_type: Final = (
-        ("output_audio" if content_type == "audio" else "output_text" if content_type == "text" else content_type)
-        if item_content
-        else content_type
-    )
-    fields: Final = {
-        _USAGE_KEYS.get(key, key): _content_to_ga(item, item_content=key == "content")
-        for key, item in value.items()
-        if key != "type"
-    }
+def _part_to_ga(part: JsonValue, *, item_content: bool) -> JsonValue:
+    if not isinstance(part, dict):
+        return part
+    part_type: Final = part.get("type")
+    renamed_type: Final = _ITEM_CONTENT_TYPES.get(str(part_type), part_type) if item_content else part_type
     return {
-        **fields,
-        **({"type": renamed_type} if "type" in value else {}),
-        **({"transcript": value["text"]} if content_type == "audio" and "text" in value else {}),
+        **part,
+        **({"type": renamed_type} if "type" in part else {}),
+        **({"transcript": part["text"]} if part_type == "audio" and "text" in part else {}),
+    }
+
+
+def _item_to_ga(item: JsonValue) -> JsonValue:
+    if not isinstance(item, dict) or not isinstance(item.get("content"), list):
+        return item
+    content: Final = _items(item["content"], "content")
+    return {**item, "content": [_part_to_ga(part, item_content=True) for part in content]}
+
+
+def _usage_to_ga(usage: JsonValue) -> JsonValue:
+    if not isinstance(usage, dict):
+        return usage
+    return {_USAGE_KEYS.get(key, key): value for key, value in usage.items()}
+
+
+def _response_to_ga(response: JsonValue) -> JsonValue:
+    if not isinstance(response, dict):
+        return response
+    output: Final = response.get("output")
+    return {
+        **response,
+        **({"output": [_item_to_ga(item) for item in output]} if isinstance(output, list) else {}),
+        **({"usage": _usage_to_ga(response["usage"])} if "usage" in response else {}),
+    }
+
+
+def _event_to_ga(event: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return {
+        **event,
+        **({"item": _item_to_ga(event["item"])} if "item" in event else {}),
+        **({"part": _part_to_ga(event["part"], item_content=False)} if "part" in event else {}),
+        **({"usage": _usage_to_ga(event["usage"])} if "usage" in event else {}),
+        **({"response": _response_to_ga(event["response"])} if "response" in event else {}),
     }
 
 
 class AlibabaTokenPlanRealtimeConfig(BaseRealtimeConfig):
     def __init__(self) -> None:
         self._transcription_prefixes: Mapping[tuple[str, int], str] = MappingProxyType({})
+        self._input_rate_declared = False
 
     def validate_environment(
         self, headers: Mapping[str, str], model: str, api_key: str | None = None
@@ -144,6 +169,8 @@ class AlibabaTokenPlanRealtimeConfig(BaseRealtimeConfig):
         input_format: Final = audio_input.get("format", session.get("input_audio_format"))
         if input_format is not None and _audio_rate(input_format) != 16000:
             raise RealtimeTranscriptionProtocolError("Qwen Audio realtime input must be 16000 Hz PCM16")
+        if input_format is not None:
+            self._input_rate_declared = True
         _audio_rate(audio_output.get("format", session.get("output_audio_format")), output=True)
         normalized: Final[Mapping[str, JsonValue]] = {
             **{key: value for key, value in session.items() if key in _SESSION_KEYS},
@@ -179,7 +206,16 @@ class AlibabaTokenPlanRealtimeConfig(BaseRealtimeConfig):
     def _input_content(self, content: Mapping[str, JsonValue]) -> Mapping[str, object]:
         if content.get("type") == "text":
             return {**content, "type": "output_text"}
+        if content.get("type") == "input_audio":
+            self._require_declared_input_rate()
         return content
+
+    def _require_declared_input_rate(self) -> None:
+        if not self._input_rate_declared:
+            raise RealtimeTranscriptionProtocolError(
+                "Qwen Audio realtime input is 16000 Hz PCM16; declare that input format in session.update before "
+                "sending audio"
+            )
 
     def transform_realtime_request(
         self, message: str, model: str, session_configuration_request: str | None = None
@@ -190,6 +226,8 @@ class AlibabaTokenPlanRealtimeConfig(BaseRealtimeConfig):
             return (
                 json.dumps({**event, "session": self._session_request(json_mapping(event.get("session"), "session"))}),
             )
+        if event_type == "input_audio_buffer.append":
+            self._require_declared_input_rate()
         if event_type == "conversation.item.create":
             return (json.dumps({**event, "item": self._item_request(json_mapping(event.get("item"), "item"))}),)
         if event_type == "response.create" and "response" in event:
@@ -289,9 +327,7 @@ class AlibabaTokenPlanRealtimeConfig(BaseRealtimeConfig):
     ) -> RealtimeResponseTypedDict:
         event: Final = json_object(message.decode("utf-8") if isinstance(message, bytes) else message)
         event_type: Final = event.get("type")
-        normalized: Final = _content_to_ga(dict(event))
-        if not isinstance(normalized, dict):
-            raise RealtimeTranscriptionProtocolError("Expected a realtime event object")
+        normalized: Final = _event_to_ga(event)
         result: Final = {
             **normalized,
             "type": _EVENT_TYPES.get(str(event_type), event_type),
