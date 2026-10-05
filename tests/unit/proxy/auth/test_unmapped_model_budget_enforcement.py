@@ -678,6 +678,34 @@ class TestUnmappedModelBudgetEnforcement:
         assert _served_model(router, "chain-entry") == "openai/gpt-4o-mini"
         assert _is_model_cost_zero(model="chain-entry", llm_router=router) is False
 
+    @pytest.mark.parametrize("alias_name", ["openai/smart", "smart"], ids=["alias_on_pattern", "alias_off_pattern"])
+    def test_alias_chain_served_by_an_explicitly_priced_wildcard_route_enforces_budget(self, alias_name: str):
+        """A chain the router serves from a priced wildcard route is budgeted at that route's price.
+
+        The group's price reads $0 through the second alias to the free group, and the wildcard
+        route's cost-map entry carries explicit prices, so only their sign tells that the served
+        deployment is not free.
+        """
+        router = Router(
+            model_list=[
+                _explicitly_free("free-model", model="ollama/llama2"),
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {
+                        "model": "openai/*",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.00001,
+                        "output_cost_per_token": 0.00002,
+                    },
+                    "model_info": {"id": "priced-wildcard-id"},
+                },
+            ],
+            model_group_alias={alias_name: "openai/gpt-4o-mini", "openai/gpt-4o-mini": "free-model"},
+        )
+
+        assert _served_model(router, alias_name) == "openai/gpt-4o-mini"
+        assert _is_model_cost_zero(model=alias_name, llm_router=router) is False
+
     def test_alias_shadowing_a_free_group_is_judged_by_its_unpriced_target_through_an_alias_chain(self):
         """A shadowing alias stays enforced when its unpriced target is itself an alias key to a free group."""
         router = Router(

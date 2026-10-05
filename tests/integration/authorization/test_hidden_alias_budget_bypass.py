@@ -622,6 +622,54 @@ def test_hidden_alias_shadow_chain_is_judged_by_the_deployment_it_is_served_from
             _assert_refused_on_every_route(rig, candidate, key, shadow)
 
 
+def _await_route(candidate: Gateway, name: str, route: str) -> None:
+    eventually(lambda: _serving_deployment(candidate, name), lambda served: served == route, seconds=90)
+
+
+def _priced_wildcard_route(rig: AliasRig, scenario: Scenario, prefix: str) -> str:
+    """A wildcard deployment serving every ``<prefix>/...`` name at an explicit positive per-token price."""
+    created: Final = rig.gateway.post(
+        "/model/new",
+        {
+            "model_name": f"{prefix}/*",
+            "litellm_params": {
+                "model": "openai/*",
+                "api_key": "integration-provider-key",
+                "api_base": f"{rig.gateway.upstream_url}/v1",
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00002,
+            },
+            "model_info": {},
+        },
+    )
+    identity: Final = str(object_value(created["model_info"])["id"])
+    scenario.cleanups.callback(scenario.delete_model, identity)
+    return identity
+
+
+@pytest.mark.parametrize("entry_on_pattern", [False, True], ids=["entry_off_pattern", "entry_on_pattern"])
+def test_hidden_alias_chain_served_by_a_priced_wildcard_route_is_refused(rig: AliasRig, entry_on_pattern: bool) -> None:
+    """A chain the router serves from a priced wildcard route is budgeted at that route's price.
+
+    The chain's middle name is only an alias key to the free group, so the group's price reads $0
+    through it while the request is served by the wildcard route matching the middle name.
+    """
+    prefix: Final = "wild" + uuid.uuid4().hex[:8]
+    middle: Final = f"{prefix}/gpt-4o-mini"
+    entry: Final = (f"{prefix}/" if entry_on_pattern else "chain-entry-") + uuid.uuid4().hex
+    with rig.gateway.scenario() as scenario:
+        route: Final = _priced_wildcard_route(rig, scenario, prefix)
+        install_aliases(rig.gateway, {entry: hidden(middle), middle: hidden(rig.free)})
+        scenario.cleanups.callback(remove_aliases, rig.gateway, frozenset({entry, middle}))
+        for candidate in (rig.gateway, rig.peer):
+            _await_route(candidate, entry, route)
+            _await_alias(candidate, middle, rig.free)
+        key: Final = exhausted_key(rig, scenario)
+        settle_chat(rig, rig.paid, key, BUDGET_EXCEEDED)
+        for candidate in (rig.gateway, rig.peer):
+            _assert_refused_on_every_route(rig, candidate, key, entry)
+
+
 def _ptu_shadow_config(rig: AliasRig, directory: Path, name: str) -> Path:
     base: Final = _base_config()["model_list"]
     assert isinstance(base, list), base
