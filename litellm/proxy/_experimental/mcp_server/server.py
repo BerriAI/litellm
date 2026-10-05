@@ -1791,13 +1791,17 @@ if MCP_AVAILABLE:
                 else None
             )
             # The strict single-space ``Bearer`` rule gates only the sign-in providers (guardrails).
-            # The OBO server's own requirement keeps the legacy rule: challenge when there is no
-            # credential the legacy parser would exchange — no Authorization at all, or a withheld
-            # LiteLLM key — while a bearer it would have exchanged (scheme-less value, tab separator)
-            # still reaches the IdP, as before this change.
+            # The OBO server's own requirement keeps the legacy trigger — no Authorization header at
+            # all (presence, not parsability: an empty-valued header counts as present, as before
+            # this change) — and the withheld-LiteLLM-key challenge; every other bearer the legacy
+            # parser would exchange (scheme-less value, tab separator) still reaches the IdP.
             obo_gated = server is not None and server.auth_type == MCPAuth.oauth2_token_exchange
+            authorization_present = server is not None and (
+                "Authorization" in (oauth2_headers or {})
+                or any(k.lower() == "authorization" for k in (raw_headers or {}))
+            )
             inbound_bearer = (
-                operations.global_mcp_server_manager._extract_bearer_token(  # pyright: ignore[reportPrivateUsage]  # the manager owns the legacy parse the exchange consumes
+                operations.global_mcp_server_manager._extract_bearer_token(  # pyright: ignore[reportPrivateUsage]  # None for an absent or empty-valued header, the raw value otherwise
                     oauth2_headers, raw_headers
                 )
                 if server is not None
@@ -1815,8 +1819,8 @@ if MCP_AVAILABLE:
                 and subject_token is None
                 and (
                     (guardrail_sign_in is not None and granted_single)
-                    or (obo_gated and inbound_bearer is None)
-                    or (obo_gated and granted_single and exchangeable_subject is None)
+                    or (obo_gated and not authorization_present)
+                    or (obo_gated and granted_single and inbound_bearer is not None and exchangeable_subject is None)
                 )
             ):
                 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph

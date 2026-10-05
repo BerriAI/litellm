@@ -11518,6 +11518,39 @@ class TestOboChallengeGateKeepsBaseConnectRules:
 
 
     @pytest.mark.asyncio
+    async def test_single_obo_connect_with_an_empty_valued_authorization_is_not_challenged(self):
+        """Gauntlet round: an empty-valued Authorization header counted as present on the merge base
+        (initialize 200); presence, not parsability, must decide the legacy OBO trigger."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        preflight = AsyncMock()
+        with (
+            patch.object(  # test-quality-ok: route wiring must use the manager's configured server
+                mcp_operations.global_mcp_server_manager,
+                "get_mcp_server_answering_to",
+                return_value=_make_obo_server("obo"),
+            ),
+            patch.object(  # test-quality-ok: the granted key exercises the legacy leg
+                mcp_operations,
+                "_get_allowed_mcp_servers",
+                AsyncMock(return_value=[_make_obo_server("obo")]),
+            ),
+            patch.object(  # test-quality-ok: the preflight exchange is the observable; a real one would call an IdP
+                mcp_operations.global_mcp_server_manager, "preflight_token_exchange", preflight
+            ),
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": "/mcp/obo", "headers": []},
+                mcp_servers=["obo"],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-1234", user_id="u-1"),
+                client_ip=None,
+                raw_headers={"x-litellm-api-key": "sk-1234", "authorization": ""},
+                connecting=_connecting,
+            )
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "authorization",
         ["eyJ.schemeless.x.y", "Bearer\teyj.tab.x.y"],
