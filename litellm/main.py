@@ -8838,6 +8838,24 @@ def config_completion(**kwargs):
         )
 
 
+def _prompt_tokens_or_zero(model: str, messages: Sequence | None) -> int:
+    try:
+        return token_counter(model=model, messages=messages)
+    except Exception:  # don't allow this failing to block a complete streaming response from being returned
+        print_verbose("token_counter failed, assuming prompt tokens is 0")
+        return 0
+
+
+def _recount_text_completion_usage(model: str, messages: Sequence | None, text: str) -> Usage:
+    prompt_tokens: Final = _prompt_tokens_or_zero(model, messages)
+    completion_tokens: Final = token_counter(model=model, text=text, count_response_tokens=True)
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+
+
 def stream_chunk_builder_text_completion(
     chunks: Sequence[TextCompletionResponse], messages: Sequence | None = None
 ) -> TextCompletionResponse:
@@ -8864,20 +8882,7 @@ def stream_chunk_builder_text_completion(
         (c.usage for c in reversed(chunks) if c.usage and c.usage.total_tokens),
         None,
     )
-    if provider_usage is not None:
-        prompt_tokens = provider_usage.prompt_tokens
-        completion_tokens = provider_usage.completion_tokens
-    else:
-        try:
-            prompt_tokens = token_counter(model=model or "", messages=messages)
-        except Exception:  # don't allow this failing to block a complete streaming response from being returned
-            print_verbose("token_counter failed, assuming prompt tokens is 0")
-            prompt_tokens = 0
-        completion_tokens = token_counter(
-            model=model or "",
-            text=combined_content,
-            count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
-        )
+    usage: Final = provider_usage or _recount_text_completion_usage(model or "", messages, combined_content)
 
     response: Final = {
         "id": id,
@@ -8893,11 +8898,7 @@ def stream_chunk_builder_text_completion(
                 "finish_reason": finish_reason,
             }
         ],
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": prompt_tokens + completion_tokens,
-        },
+        "usage": usage,
     }
     return TextCompletionResponse(**response)
 
