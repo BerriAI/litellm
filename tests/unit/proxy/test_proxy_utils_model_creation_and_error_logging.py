@@ -2214,6 +2214,61 @@ def test_create_model_info_response_resolves_model_group_alias_to_target(model_g
     assert alias_response["mode"] == "embedding"
 
 
+def test_create_model_info_response_resolves_chained_model_group_alias():
+    """An alias of an alias must report the concrete deployment's token limits."""
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "concrete-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": 450560, "max_output_tokens": 8192},
+            }
+        ],
+        model_group_alias={
+            "role-alias": "middle-alias",
+            "middle-alias": {"model": "concrete-model", "hidden": False},
+        },
+    )
+
+    response = create_model_info_response(
+        model_id="role-alias",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["id"] == "role-alias"
+    assert response["max_input_tokens"] == 450560
+    assert response["max_output_tokens"] == 8192
+
+
+def test_create_model_info_response_alias_cycle_omits_token_limits():
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "concrete-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+                "model_info": {"max_input_tokens": 450560},
+            }
+        ],
+        model_group_alias={"role-alias": "middle-alias", "middle-alias": "role-alias"},
+    )
+
+    response = create_model_info_response(
+        model_id="role-alias",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["id"] == "role-alias"
+    assert "max_input_tokens" not in response
+
+
 @pytest.mark.parametrize(
     "key_metadata, team_metadata, expected_to_run",
     [

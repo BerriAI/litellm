@@ -14,6 +14,7 @@ from litellm.router_utils.common_utils import (
     filter_web_search_deployments,
     provider_for_generic_call,
     resolve_model_group_alias,
+    resolve_model_group_alias_chain,
     truncate_fallback_error_detail,
     PROVIDER_SCOPED_CREDENTIAL_PARAMS,
     warn_on_provider_credential_mismatch,
@@ -564,6 +565,35 @@ class TestResolveModelGroupAlias:
         assert router._get_model_from_alias("group-a") == "group-b"
         assert router._get_model_from_alias("group-item") == "group-b"
         assert router._get_model_from_alias("group-b") is None
+
+
+class TestResolveModelGroupAliasChain:
+    def test_walks_alias_of_alias_to_concrete_deployment(self):
+        alias_map = {"role-alias": "middle-alias", "middle-alias": {"model": "concrete", "hidden": False}}
+
+        assert (
+            resolve_model_group_alias_chain(alias_map, "role-alias", is_deployment=lambda name: name == "concrete")
+            == "concrete"
+        )
+
+    def test_one_hop_alias_still_returns_its_target(self):
+        assert resolve_model_group_alias_chain({"role-alias": "concrete"}, "role-alias") == "concrete"
+
+    def test_stops_at_a_concrete_name_even_when_that_name_is_also_an_alias(self):
+        alias_map = {"role-alias": "concrete", "concrete": "elsewhere"}
+
+        assert (
+            resolve_model_group_alias_chain(alias_map, "role-alias", is_deployment=lambda name: name == "concrete")
+            == "concrete"
+        )
+
+    def test_cycle_returns_the_original_name(self):
+        alias_map = {"role-alias": "middle-alias", "middle-alias": "role-alias"}
+
+        assert resolve_model_group_alias_chain(alias_map, "role-alias") == "role-alias"
+
+    def test_non_map_returns_the_original_name(self):
+        assert resolve_model_group_alias_chain(None, "role-alias") == "role-alias"
 
 
 class TestTruncateFallbackErrorDetail:

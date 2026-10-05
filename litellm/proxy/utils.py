@@ -239,7 +239,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
-from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.common_utils import resolve_model_group_alias_chain
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -8838,6 +8838,14 @@ def _group_token_limit(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field:
     return max(limits) if limits else None
 
 
+def _name_is_concrete_deployment(llm_router: object, name: str) -> bool:
+    """True when ``name`` is a deployment group, not only an alias of one."""
+    index: Final = getattr(llm_router, "model_name_to_deployment_indices", None)
+    if not isinstance(index, Mapping):
+        return False
+    return bool(index.get(name))
+
+
 def create_model_info_response(
     model_id: str,
     provider: str,
@@ -8862,10 +8870,15 @@ def create_model_info_response(
         "owned_by": provider,
     }
 
-    alias_target: Final = (
-        resolve_model_group_alias(llm_router.model_group_alias, model_id) if llm_router is not None else None
+    lookup_model: Final = (
+        resolve_model_group_alias_chain(
+            llm_router.model_group_alias,
+            model_id,
+            is_deployment=lambda name: _name_is_concrete_deployment(llm_router, name),
+        )
+        if llm_router is not None
+        else model_id
     )
-    lookup_model: Final = alias_target if alias_target is not None else model_id
 
     listing_info: Final = llm_router.get_model_listing_info(lookup_model) if llm_router is not None else None
 

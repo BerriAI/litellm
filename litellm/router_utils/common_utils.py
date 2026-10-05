@@ -1,6 +1,6 @@
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -59,6 +59,33 @@ def resolve_model_group_alias(model_group_alias: object, model: str) -> str | No
     if not isinstance(target, str) or not target:
         return None
     return target
+
+
+def resolve_model_group_alias_chain(
+    model_group_alias: object,
+    model: str,
+    *,
+    is_deployment: Callable[[str], bool] | None = None,
+) -> str:
+    """Follow alias hops to the name whose metadata should be listed.
+
+    A role alias may point at another alias. Stop at the first concrete
+    deployment, or at the last name that has no further alias. A cycle returns
+    the original name so the walk cannot settle on an arbitrary hop.
+    """
+    if not isinstance(model_group_alias, Mapping):
+        return model
+    seen: set[str] = set()
+    current: str = model
+    while current not in seen:
+        if is_deployment is not None and is_deployment(current):
+            return current
+        seen.add(current)
+        target: Final = resolve_model_group_alias(model_group_alias, current)
+        if target is None:
+            return current
+        current = target
+    return model
 
 
 def truncate_fallback_error_detail(detail: str) -> str:
