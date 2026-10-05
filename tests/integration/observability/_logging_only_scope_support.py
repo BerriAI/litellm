@@ -31,6 +31,8 @@ from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionChunk
 from pydantic import JsonValue, TypeAdapter
 
+from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
+from litellm.proxy.guardrails.guardrail_registry import decrypt_guardrail_litellm_params
 from tests.integration.cost_calculation.cost_tracking_case import JsonResponse, SseResponse
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -850,7 +852,7 @@ def _create_guardrail(candidate: Gateway, identity: str, params: Mapping[str, Js
 
 
 def _management_guardrail_rows(identity: str) -> tuple[dict[str, JsonValue], ...]:
-    return tuple(
+    rows: Final = tuple(
         object_value(row)
         for row in read_rows(
             "SELECT guardrail_id, guardrail_name, litellm_params, guardrail_info "
@@ -858,6 +860,32 @@ def _management_guardrail_rows(identity: str) -> tuple[dict[str, JsonValue], ...
             (identity,),
         )
     )
+    return tuple({**row, "litellm_params": _decrypted_management_litellm_params(row["litellm_params"])} for row in rows)
+
+
+def _decrypted_management_litellm_params(stored_value: JsonValue) -> dict[str, JsonValue]:
+    stored: Final = object_value(stored_value)
+    salt_key: Final = os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt")
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+        decrypted: Final = JSON_OBJECT.validate_python(decrypt_guardrail_litellm_params(stored))
+    assert _decryption_only_changes_encrypted_values(stored, decrypted)
+    return decrypted
+
+
+def _decryption_only_changes_encrypted_values(stored: JsonValue, decrypted: JsonValue) -> bool:
+    if isinstance(stored, dict) and isinstance(decrypted, dict):
+        return stored.keys() == decrypted.keys() and all(
+            _decryption_only_changes_encrypted_values(value, decrypted[key]) for key, value in stored.items()
+        )
+    if isinstance(stored, list) and isinstance(decrypted, list):
+        return len(stored) == len(decrypted) and all(
+            _decryption_only_changes_encrypted_values(stored_value, decrypted_value)
+            for stored_value, decrypted_value in zip(stored, decrypted)
+        )
+    if isinstance(stored, str) and stored.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX):
+        return isinstance(decrypted, str) and not decrypted.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)
+    return stored == decrypted
 
 
 def _drain_upstream(upstream_url: str) -> tuple[dict[str, JsonValue], ...]:
@@ -865,8 +893,10 @@ def _drain_upstream(upstream_url: str) -> tuple[dict[str, JsonValue], ...]:
     response.raise_for_status()
     requests: Final = object_value(JSON_OBJECT.validate_python(response.json())).get("requests")
     assert isinstance(requests, list), response.text
-    _record_upstream_request_count(len(requests))
-    return tuple(object_value(request) for request in requests)
+    observations: Final = tuple(object_value(request) for request in requests)
+    forwarded_requests: Final = tuple(request for request in observations if request.get("method", "POST") != "GET")
+    _record_upstream_request_count(len(forwarded_requests))
+    return forwarded_requests
 
 
 def _json_contains_exact_string(value: JsonValue, expected: str) -> bool:

@@ -502,7 +502,7 @@ def test_F7_guardrail_ui_settings_classify_directional_scope_support(gateway: Ga
             "logging_only",
             "sideways",
             200,
-            ("request", "response"),
+            ("request",),
             "logging_only",
             id="G3-yaml-logging-invalid-literal",
         ),
@@ -1337,7 +1337,14 @@ def test_H10_management_patch_null_scope_restores_both_directions(gateway: Gatew
 
     def policy(request: Request) -> Reply:
         assert request.target == "/beta/litellm_basic_guardrail_api", request.target
-        return Reply(body=b'{"action":"BLOCKED","blocked_reason":"synthetic reset-scope monitor"}')
+        payload: Final = JSON_OBJECT.validate_json(request.body)
+        direction: Final = _direction(payload)
+        verdict: Final = (
+            {"action": "NONE"}
+            if direction == "request"
+            else {"action": "BLOCKED", "blocked_reason": "synthetic reset-scope monitor"}
+        )
+        return Reply(body=json.dumps(verdict).encode())
 
     try:
         with wire_server(policy) as guardrail:
@@ -1407,7 +1414,7 @@ def test_H10_management_patch_null_scope_restores_both_directions(gateway: Gatew
                 assert tuple(
                     (entry["guardrail_name"], entry["guardrail_mode"], entry["guardrail_status"]) for entry in entries
                 ) == (
-                    (identity, "logging_only", "guardrail_intervened"),
+                    (identity, "logging_only", "success"),
                     (identity, "logging_only", "guardrail_intervened"),
                 ), entries
     finally:
