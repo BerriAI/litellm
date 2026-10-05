@@ -173,14 +173,8 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
 
 
 def _resolved_token_salt(value: str | None) -> str:
-    """Resolve the salt from an ``os.environ/<VAR>`` reference, the way guardrail
-    api_key and api_base are already resolved.
-
-    A literal is refused rather than used. The salt is the HMAC key, so it has to
-    survive as a secret for the tokens to mean anything, and a literal does not:
-    guardrail_registry logs the whole params mapping at debug before
-    initialization, so a literal reaches the proxy log in full and anyone with
-    the log can test candidate values against the tokens they can see."""
+    """A literal is refused: guardrail_registry debug-logs the params mapping, so a
+    literal salt reaches the proxy log and the tokens stop meaning anything."""
     if value is None:
         return ""
     if not value.startswith("os.environ/"):
@@ -824,8 +818,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     _STABLE_TOKEN_HEX_CHARS: Final[int] = 8
 
     def _stable_token_suffix(self, entity_type: str, value: str) -> str:
-        # The guardrail name namespaces the digest, so two guardrails with
-        # different salts cannot produce the same token for the same value.
         namespace: Final = self.guardrail_name or ""
         message: Final = f"{namespace}\x00{entity_type}\x00{value}".encode()
         digest: Final = hmac.new(self.presidio_token_salt.encode(), message, hashlib.sha256).hexdigest()
@@ -869,8 +861,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         for ar in reversed(sorted_forward):
             start = ar["start"]
             end = ar["end"]
-            # Annotated because the analyzer result is an untyped mapping: both now
-            # reach _stable_token_suffix as call arguments, where an Any counts.
             entity_type: str = ar["entity_type"]
             value: str = text[start:end]
             suffix = (

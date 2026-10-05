@@ -4307,10 +4307,7 @@ def _mask(
 
 
 def _stable_guardrail(salt: str = "unit-test-salt", guardrail_name: str | None = None) -> _OPTIONAL_PresidioPIIMasking:
-    """Build a stable-token guardrail on a salt held where the real one has to be.
-
-    The salt is only ever read through an os.environ reference, so the tests put
-    it there rather than passing a literal the constructor refuses."""
+    """The constructor refuses a literal salt, so the tests put it in the env."""
     var = f"PRESIDIO_TEST_SALT_{abs(hash(salt)) % 10**8}"
     os.environ[var] = salt
     return _OPTIONAL_PresidioPIIMasking(

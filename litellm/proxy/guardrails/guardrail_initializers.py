@@ -137,9 +137,6 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
         _OPTIONAL_PresidioPIIMasking,
     )
 
-    # Read through getattr with a declared type: these two are guardrail-only
-    # params, so they are not fields on LitellmParams, and an unannotated
-    # getattr returns Any and counts against the unknown-argument budget.
     stable_tokens: Final[bool | None] = getattr(litellm_params, "presidio_stable_tokens", None)
     token_salt: Final[str | None] = getattr(litellm_params, "presidio_token_salt", None)
     explicit_filter_scope: Final = litellm_params.presidio_filter_scope
