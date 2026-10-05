@@ -2,12 +2,11 @@ import { act, fireEvent, screen, within, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { testQueryClient } from "@/../tests/test-utils";
-import { renderWithLens } from "@/../tests/lens-test-utils";
+import { renderWithLens, stubGateway } from "@/../tests/lens-test-utils";
 import { ApiError } from "@/lib/http/client";
-import { apiClient } from "@/components/networking";
 import { lensKeys } from "../data/queries";
 import { InvestigationsView } from "./InvestigationsView";
-import { LensPreviewContext } from "@/components/view_logs/TraceView/LensPreviewButton";
+import { LensPreviewContext } from "@/components/lens/ui/LensPreviewButton";
 import { briefMarkdown } from "../model/findings";
 import { findingKey } from "../model/inbox";
 import { runTime } from "../model/format";
@@ -21,16 +20,20 @@ function renderWithProviders(ui: React.ReactElement, options?: Parameters<typeof
   return renderWithLens(ui, { searchParams: window.location.search, ...options });
 }
 
-vi.mock("@/components/networking", () => ({
-  apiClient: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), request: vi.fn() },
+vi.mock("@/components/networking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/networking")>()),
   proxyBaseUrl: "",
   getProxyBaseUrl: () => "",
 }));
 
+let proxy = stubGateway();
+const sentBody = (handler: typeof proxy.post, path: string) =>
+  handler.mock.calls.filter(([called]) => called === path).map(([, request]) => request.body);
+
 beforeEach(() => {
   window.history.replaceState({}, "", "/lens/?lens=lens");
-  vi.mocked(apiClient.post).mockReset();
-  vi.mocked(apiClient.post).mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
+  proxy = stubGateway();
+  proxy.post.mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
 });
 
 const executionId = btoa(JSON.stringify(["traces", "", "trace-42"]));
@@ -161,8 +164,8 @@ const lens: Lens = {
 
 describe("Lens findings and runs", () => {
   beforeEach(() => {
-    vi.mocked(apiClient.get).mockReset();
-    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    proxy.get.mockReset();
+    proxy.get.mockImplementation(async (path) => {
       if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
       if (path === "/lens/lens/runs") return lens.jobs;
       return { data: [] };
@@ -197,7 +200,7 @@ describe("Lens findings and runs", () => {
   async function openIssue(finding: Finding) {
     testQueryClient.clear();
     const jobs = lens.jobs.map((job) => ({ ...job, findings: [finding] }));
-    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    proxy.get.mockImplementation(async (path) => {
       if (path === "/lens")
         return { lenses: [{ ...lens, findings: [finding], jobs }], workers: [], tracing_enabled: true };
       if (path === "/lens/lens/runs") return jobs;
@@ -245,7 +248,7 @@ describe("Lens findings and runs", () => {
   it("closes the open run when the keyboard switches to another investigation run", async () => {
     testQueryClient.clear();
     const older = { ...lens.jobs[0], id: "older", created_at: "2026-09-29T10:00:00Z" };
-    vi.mocked(apiClient.get).mockImplementation(async (path) => {
+    proxy.get.mockImplementation(async (path) => {
       if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
       if (path === "/lens/lens/runs") return [...lens.jobs, older];
       return { data: [] };
@@ -269,7 +272,7 @@ describe("Lens findings and runs", () => {
 
 it("runs with saved settings from Run now without opening setup, then accepts an agent and window", async () => {
   testQueryClient.clear();
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens")
       return {
         lenses: [lens],
@@ -289,32 +292,29 @@ it("runs with saved settings from Run now without opening setup, then accepts an
     if (path === "/lens/activity/available") return { traces: true, requests: false };
     return { data: [] };
   });
-  vi.mocked(apiClient.post).mockResolvedValue(lens);
+  proxy.post.mockResolvedValue(lens);
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView />);
   await user.click(await screen.findByRole("button", { name: "Run now" }));
   const choices = await screen.findByRole("dialog", { name: "Run now" });
   expect(within(choices).getByRole("button", { name: "Since last run" })).toHaveAttribute("aria-pressed", "true");
   await user.click(within(choices).getByRole("button", { name: "Run now" }));
-  expect(apiClient.post).toHaveBeenCalledWith("/lens/lens/runs", { accessToken: "test", body: {} });
+  expect(sentBody(proxy.post, "/lens/lens/runs")).toEqual([{}]);
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
-  vi.mocked(apiClient.post).mockClear();
+  proxy.post.mockClear();
   await user.click(screen.getByRole("button", { name: "Run now" }));
   const custom = await screen.findByRole("dialog", { name: "Run now" });
   fireEvent.change(within(custom).getByRole("combobox", { name: "Agent" }), { target: { value: "billing" } });
   await user.click(within(custom).getByRole("button", { name: "Last 24h" }));
   await user.click(within(custom).getByRole("button", { name: "Run now" }));
-  expect(apiClient.post).toHaveBeenCalledWith("/lens/lens/runs", {
-    accessToken: "test",
-    body: { agent_name: "billing", lookback_hours: 24 },
-  });
+  expect(sentBody(proxy.post, "/lens/lens/runs")).toEqual([{ agent_name: "billing", lookback_hours: 24 }]);
 });
 
 it("offers the interactive demo without starting an investigation", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: false };
     return { traces: false, requests: false };
   });
@@ -323,13 +323,13 @@ it("offers the interactive demo without starting an investigation", async () => 
   renderWithProviders(withPreview(<InvestigationsView />, onPreview));
   await user.click(await screen.findByRole("button", { name: "Preview sample" }));
   expect(onPreview).toHaveBeenCalledOnce();
-  expect(apiClient.post).not.toHaveBeenCalled();
+  expect(proxy.post).not.toHaveBeenCalled();
 });
 
 it("guides a first-time administrator into worker connection and lens setup", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: true };
     if (path === "/lens/agents") return [];
     return { traces: true, requests: false, data: [] };
@@ -341,7 +341,10 @@ it("guides a first-time administrator into worker connection and lens setup", as
     onboarding: { connect, create },
   });
   const guide = within(await screen.findByRole("region", { name: "Get Lens running" }));
-  expect(apiClient.get).toHaveBeenCalledWith("/lens/activity/available", { accessToken: "test" });
+  expect(proxy.get).toHaveBeenCalledWith(
+    "/lens/activity/available",
+    expect.objectContaining({ authorization: "Bearer test" }),
+  );
   expect(guide.getByRole("button", { name: /Send your first trace/ })).toContainElement(
     guide.getByLabelText("Step 2 complete"),
   );
@@ -382,7 +385,7 @@ it("opens the saved results of an older batch", async () => {
     finished_at: "2026-09-29T10:02:13Z",
     findings: [{ ...issue, title: "Earlier batch finding" }],
   };
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
     if (path === "/lens/lens/runs") return [lens.jobs[0], older];
     if (path === "/lens/lens/runs/older") return older;
@@ -413,11 +416,11 @@ it("reads request content from the beginning after its abbreviated preview", asy
       executions: [{ ...lens.jobs[0].sample!.executions[0], id: requestId, source: "requests" as const }],
     },
   };
-  vi.mocked(apiClient.get).mockImplementation(async (path, options) => {
+  proxy.get.mockImplementation(async (path, options) => {
     if (path === "/lens") return { lenses: [{ ...lens, jobs: [job] }], workers: [], tracing_enabled: true };
     if (path === "/lens/lens/runs") return [job];
     if (!path.includes("/executions/")) return { data: [] };
-    const offset = options?.query?.offset ?? 0;
+    const offset = Number(options.query.offset ?? 0);
     return {
       parts: [
         {
@@ -453,7 +456,7 @@ it.each([false, true])(
   async (enabled) => {
     window.history.replaceState({}, "", "/lens/");
     testQueryClient.clear();
-    vi.mocked(apiClient.get).mockImplementation(async (path) =>
+    proxy.get.mockImplementation(async (path) =>
       path === "/lens" ? { lenses: [], workers: [], tracing_enabled: enabled } : { data: [] },
     );
     const user = userEvent.setup();
@@ -472,7 +475,7 @@ it("enables first-lens setup when a trace arrives without leaving Investigations
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
   const traceCheck = vi.fn().mockResolvedValue({ traces: false, requests: false });
-  vi.mocked(apiClient.get).mockImplementation(async (path) =>
+  proxy.get.mockImplementation(async (path) =>
     path === "/lens" ? { lenses: [], workers: [], tracing_enabled: true } : traceCheck(),
   );
   vi.useFakeTimers();
@@ -502,7 +505,7 @@ it("allows retrying a failed trace readiness check without treating it as an emp
     .fn()
     .mockRejectedValueOnce(new ApiError("Trace storage unavailable", 503, {}))
     .mockResolvedValue({ data: [] });
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: true };
     if (path === "/lens/activity/available") return traceCheck();
     return { data: [] };
@@ -523,7 +526,7 @@ it("shows a centered failure with a retry when investigations cannot load, then 
     .fn()
     .mockRejectedValueOnce(new ApiError("Proxy timed out", 504, {}))
     .mockResolvedValue({ lenses: [], workers: [], tracing_enabled: true });
-  vi.mocked(apiClient.get).mockImplementation(async (path) => (path === "/lens" ? list() : { data: [] }));
+  proxy.get.mockImplementation(async (path) => (path === "/lens" ? list() : { data: [] }));
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView />);
   const alert = await screen.findByRole("alert");
@@ -536,7 +539,7 @@ it("shows a centered failure with a retry when investigations cannot load, then 
 
 it("keeps saved investigations accessible when tracing is disabled", async () => {
   testQueryClient.clear();
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: false };
     if (path === "/lens/lens/runs") return lens.jobs;
     return { data: [] };
@@ -549,7 +552,7 @@ it("keeps saved investigations accessible when tracing is disabled", async () =>
 it("allows request-only accounts to connect a worker without requiring agent traces", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: true };
     if (path === "/lens/activity/available") return { traces: false, requests: true };
     return { data: [] };
@@ -565,7 +568,7 @@ it("allows request-only accounts to connect a worker without requiring agent tra
 
 it("reopens the inline editor from a shared link and drops it from the URL on cancel", async () => {
   testQueryClient.clear();
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
     if (path === "/lens/lens/runs") return lens.jobs;
     if (path === "/lens/agents") return [];
@@ -587,12 +590,13 @@ it("reopens the inline editor from a shared link and drops it from the URL on ca
   const url = new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
   expect(url.has("dialog")).toBe(false);
   expect(url.get("lens")).toBe(lens.id);
-  expect(apiClient.request).not.toHaveBeenCalled();
+  expect(proxy.put).not.toHaveBeenCalled();
+  expect(sentBody(proxy.post, "/lens")).toEqual([]);
 });
 
 it("reopens a finding and a results section from shared links", async () => {
   testQueryClient.clear();
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
     if (path === "/lens/lens/runs") return lens.jobs;
     return { data: [] };
@@ -628,7 +632,7 @@ it("steps across findings and investigations with J and K, skipping hidden findi
     findings: [twinIssue],
     jobs: lens.jobs.map((job) => ({ ...job, findings: [twinIssue] })),
   };
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
     if (path === "/lens/activity/available") return { traces: true, requests: false };
     if (path.endsWith("/runs")) return [];
@@ -665,7 +669,7 @@ it("steps across findings and investigations with J and K, skipping hidden findi
 it("opens an investigation beside the list and walks from it into its findings with J and K", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], tracing_enabled: true, workers: [] };
     if (path === "/lens/activity/available") return { traces: true, requests: false };
     if (path.endsWith("/runs")) return [];
@@ -698,13 +702,13 @@ it("lists each finding under the investigation that owns it and resolves only th
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
   const twin: Lens = { ...lens, id: "twin", settings: { ...lens.settings, name: "Twin reviews" } };
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
     if (path === "/lens/activity/available") return { traces: true, requests: false };
     if (path.endsWith("/runs")) return [];
     return { data: [] };
   });
-  vi.mocked(apiClient.patch).mockResolvedValue(undefined);
+  proxy.patch.mockResolvedValue(undefined);
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView />);
   const rows = await screen.findAllByRole("row", { name: issue.title });
@@ -714,14 +718,14 @@ it("lists each finding under the investigation that owns it and resolves only th
   expect(remaining.previousElementSibling).toBe(screen.getByRole("row", { name: twin.settings.name }));
   await user.click(remaining);
   await user.click(await screen.findByRole("button", { name: "Mark resolved" }));
-  await waitFor(() => expect(apiClient.patch).toHaveBeenCalledTimes(1));
-  expect(vi.mocked(apiClient.patch).mock.calls[0][0]).toBe("/lens/twin/findings/issue");
+  await waitFor(() => expect(proxy.patch).toHaveBeenCalledTimes(1));
+  expect(proxy.patch.mock.calls[0][0]).toBe("/lens/twin/findings/issue");
 });
 
 it("lists investigations without edit or run controls for read-only viewers", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], tracing_enabled: true, workers: [] };
     if (path === "/lens/activity/available") return { traces: true, requests: false };
     if (path === "/lens/lens/runs") return [];
@@ -740,7 +744,7 @@ it("lists investigations without edit or run controls for read-only viewers", as
 it("opens investigations from the keyboard without treating nested edit keys as row activation", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], tracing_enabled: true, workers: [] };
     if (path === "/lens/activity/available") return { traces: true, requests: false };
     if (path === "/lens/lens/runs") return [];
@@ -779,7 +783,7 @@ it("opens a failed investigation's details from its row and edits only from the 
     error: "boom",
     findings: [],
   };
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [{ ...lens, jobs: [job] }], workers: [], tracing_enabled: true };
     if (path === "/lens/activity/available") return { traces: true, requests: false };
     if (path === "/lens/lens/runs") return [job];
@@ -804,7 +808,7 @@ it("shows the actual saved failure and run context without opening backend logs"
     "Grouping observations failed: Clusters response invalid after 2 attempts.\n" +
     "candidates.0.check_id: Field required [missing]";
   const job = { ...lens.jobs[0], id: "failed-run", status: "failed" as const, stage: "Failed", error, findings: [] };
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [{ ...lens, jobs: [job] }], workers: [], tracing_enabled: true };
     if (path === "/lens/lens/runs") return [job];
     if (path === "/lens/lens/runs/failed-run") return job;
@@ -822,14 +826,14 @@ it("keeps a finding open to retry when its update fails", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
   const twin: Lens = { ...lens, id: "twin", settings: { ...lens.settings, name: "Twin reviews" } };
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
     if (path === "/lens/activity/available") return { traces: true, requests: false };
     if (path.endsWith("/runs")) return [];
     return { data: [] };
   });
-  vi.mocked(apiClient.patch).mockReset();
-  vi.mocked(apiClient.patch).mockImplementation(async (path) => {
+  proxy.patch.mockReset();
+  proxy.patch.mockImplementation(async (path) => {
     if (String(path).startsWith("/lens/twin/")) throw new Error("Twin reviews could not be updated");
   });
   const user = userEvent.setup();
@@ -844,28 +848,24 @@ it("keeps a finding open to retry when its update fails", async () => {
 it("pauses monitoring from the detail menu by saving the investigation with monitoring off", async () => {
   testQueryClient.clear();
   const watching: Lens = { ...lens, settings: { ...lens.settings, enabled: true } };
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [watching], workers: [], tracing_enabled: true };
     if (path === "/lens/lens/runs") return watching.jobs;
     return { data: [] };
   });
-  vi.mocked(apiClient.request).mockReset();
-  vi.mocked(apiClient.request).mockResolvedValue({ ...watching, settings: lens.settings });
+  proxy.put.mockResolvedValue({ ...watching, settings: lens.settings });
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView />);
   await user.click(await screen.findByRole("button", { name: "Investigation actions" }));
   await user.click(await screen.findByRole("menuitem", { name: "Pause monitoring" }));
-  await waitFor(() => expect(apiClient.request).toHaveBeenCalledTimes(1));
-  expect(apiClient.request).toHaveBeenCalledWith("PUT", "/lens/lens", {
-    accessToken: "test",
-    body: { ...watching.settings, enabled: false },
-  });
+  await waitFor(() => expect(proxy.put).toHaveBeenCalledTimes(1));
+  expect(sentBody(proxy.put, "/lens/lens")).toEqual([{ ...watching.settings, enabled: false }]);
 });
 
 it("cancels the running job from the progress banner", async () => {
   testQueryClient.clear();
   const running = { ...lens.jobs[0], id: "live", status: "running" as const, stage: "Reading executions" };
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens")
       return { lenses: [{ ...lens, jobs: [running, lens.jobs[0]] }], workers: [], tracing_enabled: true };
     if (path === "/lens/lens/runs") return [running, lens.jobs[0]];
@@ -874,15 +874,13 @@ it("cancels the running job from the progress banner", async () => {
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView />);
   await user.click(await screen.findByRole("button", { name: "Cancel" }));
-  await waitFor(() =>
-    expect(apiClient.post).toHaveBeenCalledWith("/lens/lens/cancel", { accessToken: "test", body: {} }),
-  );
+  await waitFor(() => expect(proxy.post).toHaveBeenCalledWith("/lens/lens/cancel", expect.anything()));
 });
 
 it("refreshes run history as soon as the list reports a job the scheduler started", async () => {
   testQueryClient.clear();
   const runs = vi.fn().mockResolvedValue(lens.jobs);
-  vi.mocked(apiClient.get).mockImplementation(async (path) => {
+  proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
     if (path === "/lens/lens/runs") return runs();
     return { data: [] };

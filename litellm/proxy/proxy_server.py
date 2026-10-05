@@ -399,6 +399,7 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     _is_azure_model_router_request,
     _should_return_raw_model_name,
+    close_guarded_stream,
     create_response,
     log_llm_api_exception,
     open_sse_before_first_byte,
@@ -422,6 +423,14 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_body_call_id, with_call_id
+from litellm.proxy.common_utils.fips import (
+    FIPS_MODE_ENV_VAR,
+    SSL_VERIFY_ENV_VAR,
+    enforce_fips_boot_verdict,
+    fips_boot_verdict,
+    is_fips_mode,
+    openssl_enforces_fips,
+)
 from litellm.proxy.common_utils.healthy_model_filter import (
     get_hidden_unhealthy_model_names,
     is_healthy_only_listing_default,
@@ -824,6 +833,7 @@ from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
     ProxyUpdateSpend,
+    StreamingReasoningState,
     StreamingToolCallState,
     _cache_user_row,
     _get_docs_url,
@@ -845,6 +855,7 @@ from litellm.proxy.utils import (
     migrate_passwords_to_scrypt_async,
     model_dump_with_preserved_fields,
     prefetch_config_params,
+    streaming_reasoning_with_response,
     streaming_tool_calls_with_response,
     update_spend,
 )
@@ -1331,6 +1342,16 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             if isinstance(worker_config, dict):
                 await initialize_from_worker_config(worker_config)
 
+    enforce_fips_boot_verdict(
+        fips_boot_verdict(
+            raw_fips_mode=os.getenv(FIPS_MODE_ENV_VAR),
+            provider_enforces_fips=openssl_enforces_fips,
+            ssl_verify_environment=os.getenv(SSL_VERIFY_ENV_VAR),
+            ssl_verify_setting=litellm.ssl_verify,
+        ),
+        announce=announce_on_stderr_at_exit,
+    )
+
     enforce_master_key_boot_verdict(
         await with_stored_secrets_counted(
             master_key_boot_verdict(
@@ -1370,10 +1391,21 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
             try:
                 result: Final = await migrate_passwords_to_scrypt_async(prisma_client)
                 verbose_proxy_logger.info("Password migration: %s", result)
+            except ValueError as e:
+                verbose_proxy_logger.error(
+                    "Password migration failed, so plaintext passwords stay unhashed in the database: %s. "
+                    "This is what an OpenSSL FIPS provider reports when the hashing algorithm is not approved.",
+                    e,
+                )
+                if is_fips_mode():
+                    raise
             except Exception as e:
                 verbose_proxy_logger.warning("Password migration skipped: %s", e)
 
-        asyncio.create_task(_run_pw_migration())
+        if is_fips_mode():
+            await _run_pw_migration()
+        else:
+            asyncio.create_task(_run_pw_migration())
 
         async def _run_agent_grant_id_migration() -> None:
             from litellm.proxy.agent_endpoints.agent_registry import (
@@ -9631,7 +9663,8 @@ async def _apply_streaming_chunk_hooks(
     request_data: dict,
     str_so_far: str,
     streaming_tool_calls_so_far: StreamingToolCallState = (),
-) -> tuple[Any, str, StreamingToolCallState]:
+    streaming_reasoning_so_far: StreamingReasoningState = (),
+) -> tuple[Any, str, StreamingToolCallState, StreamingReasoningState]:
     stream_chunk: Final = chunk
     chunk = await proxy_logging_obj.async_post_call_streaming_hook(
         user_api_key_dict=user_api_key_dict,
@@ -9639,6 +9672,7 @@ async def _apply_streaming_chunk_hooks(
         data=request_data,
         str_so_far=str_so_far if str_so_far else None,
         streaming_tool_calls_so_far=streaming_tool_calls_so_far,
+        streaming_reasoning_so_far=streaming_reasoning_so_far,
     )
 
     if isinstance(chunk, (ModelResponse, ModelResponseStream)):
@@ -9646,7 +9680,8 @@ async def _apply_streaming_chunk_hooks(
         str_so_far += response_str
 
     updated_tool_calls: Final = streaming_tool_calls_with_response(streaming_tool_calls_so_far, stream_chunk)
-    return chunk, str_so_far, updated_tool_calls
+    updated_reasoning: Final = streaming_reasoning_with_response(streaming_reasoning_so_far, stream_chunk)
+    return chunk, str_so_far, updated_tool_calls, updated_reasoning
 
 
 def _format_streaming_sse_chunk(chunk: str | bytes) -> str | bytes:
@@ -9888,6 +9923,17 @@ async def async_data_generator(
     stream_completed = False
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
+    needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
+    stream_iterator: Final[AsyncIterator[object]] = (
+        proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_data=request_data,
+        )
+        if needs_iterator_wrap
+        else response
+    )
+    stream_source: AsyncIterator[object] | None = None  # rebind-ok: bound once the keepalive policy resolves
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -9904,6 +9950,7 @@ async def async_data_generator(
         # the entire accumulated response. String += is O(n) amortized total.
         _str_so_far: str = ""
         _streaming_tool_calls_so_far: StreamingToolCallState = ()
+        _streaming_reasoning_so_far: StreamingReasoningState = ()
         # Separate iterator-level vs per-chunk hook decisions. The iterator
         # wrap is needed when any callback overrides
         # ``async_post_call_streaming_iterator_hook`` or has
@@ -9913,20 +9960,10 @@ async def async_data_generator(
         # per-chunk hook. Coalescing them into a single flag forced wasted
         # ``get_response_string`` work per chunk on every deployment that
         # happened to ship a streaming-iterator override (the default).
-        needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
         needs_per_chunk_hook: Final = proxy_logging_obj.needs_per_chunk_streaming_hook()
         is_raw_sse_stream: Final = bool(request_data.get("_litellm_raw_sse_stream"))
         strip_stream_usage: Final = bool(request_data.get("_litellm_strip_stream_usage"))
         raw_sse_buffer = ""
-
-        if needs_iterator_wrap:
-            stream_iterator = proxy_logging_obj.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_data=request_data,
-            )
-        else:
-            stream_iterator = response
 
         # A stream can start on a deployment with keepalive off and fall back
         # mid-stream to one that enables it: only skip wrapping altogether when
@@ -9936,7 +9973,7 @@ async def async_data_generator(
         # happens to start with it off.
         resolve_keepalive_seconds: Final = _make_keepalive_resolver(request_data)
         initial_keepalive_seconds: Final = resolve_keepalive_seconds(response)
-        stream_source: Final = (
+        stream_source = (
             _iter_with_keepalive(
                 stream_iterator.__aiter__(),
                 resolve_keepalive_seconds,
@@ -9953,12 +9990,18 @@ async def async_data_generator(
             chunk = cast(Any, item)  # cast-ok: sentinel already handled above, item is a real chunk here
             if needs_per_chunk_hook:
                 ### CALL HOOKS ### - modify outgoing data
-                chunk, _str_so_far, _streaming_tool_calls_so_far = await _apply_streaming_chunk_hooks(
+                (
+                    chunk,
+                    _str_so_far,
+                    _streaming_tool_calls_so_far,
+                    _streaming_reasoning_so_far,
+                ) = await _apply_streaming_chunk_hooks(
                     chunk=chunk,
                     user_api_key_dict=user_api_key_dict,
                     request_data=request_data,
                     str_so_far=_str_so_far,
                     streaming_tool_calls_so_far=_streaming_tool_calls_so_far,
+                    streaming_reasoning_so_far=_streaming_reasoning_so_far,
                 )
 
             # Mid-stream fallbacks surface metadata on individual chunks rather than
@@ -10078,6 +10121,9 @@ async def async_data_generator(
         # (a nested iterator hook would only see GeneratorExit on GC).
         if not stream_completed:
             client_disconnected = True
+        for guarded_layer in (stream_source, stream_iterator):
+            if guarded_layer is not response:
+                await close_guarded_stream(guarded_layer)
         raise
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)

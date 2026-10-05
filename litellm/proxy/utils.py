@@ -45,6 +45,7 @@ from typing import (
     Union,
     cast,
     overload,
+    runtime_checkable,
 )
 
 from typing_extensions import ReadOnly, TypedDict
@@ -242,7 +243,7 @@ from litellm.repositories.verification_token_repository import (
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ChatCompletionReasoningSummaryTextBlock, ResponsesAPIResponse
 from litellm.types.mcp import (
     MCPDuringCallResponseObject,
     MCPPreCallRequestObject,
@@ -253,6 +254,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionRe
 from litellm.types.utils import (
     ChatCompletionDeltaCustomToolCall,
     ChatCompletionDeltaToolCall,
+    Delta,
     LLMResponseTypes,
     LoggedLiteLLMParams,
 )
@@ -530,8 +532,13 @@ class _UpstreamStreamBoundary(Generic[_T]):
             raise
 
 
+@runtime_checkable
+class _ClosableAsyncIterator(Protocol):
+    def aclose(self) -> object: ...
+
+
 class _StreamIteratorHook(Protocol[_T]):
-    def __call__(self, *, response: AsyncIterator[_T]) -> AsyncGenerator[_T, None]: ...
+    def __call__(self, *, response: AsyncIterator[_T]) -> AsyncIterator[_T]: ...
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
@@ -1111,6 +1118,50 @@ class _StreamingToolCallFragment:
 StreamingToolCallState: TypeAlias = tuple[_StreamingToolCallFragment, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _StreamingReasoningFragment:
+    choice_index: int
+    text: str
+
+
+StreamingReasoningState: TypeAlias = tuple[_StreamingReasoningFragment, ...]
+
+
+def _streaming_reasoning_text(delta: Delta) -> str:
+    reasoning: Final = delta.reasoning_content if hasattr(delta, "reasoning_content") else None
+    thinking_blocks: Final = delta.thinking_blocks if hasattr(delta, "thinking_blocks") else None
+    reasoning_items: Final = delta.reasoning_items if hasattr(delta, "reasoning_items") else None
+    thinking: Final = tuple(block.get("thinking", "") for block in thinking_blocks or () if block["type"] == "thinking")
+    summaries: Final = tuple(_reasoning_summary_text(item.get("summary") or ()) for item in reasoning_items or ())
+    return "".join((reasoning or "", *thinking, *summaries))
+
+
+def _streaming_reasoning_fragments(response: ModelResponseStream) -> Iterator[_StreamingReasoningFragment]:
+    for choice in response.choices:
+        if text := _streaming_reasoning_text(choice.delta):
+            yield _StreamingReasoningFragment(choice_index=choice.index, text=text)
+
+
+def _reasoning_summary_text(summary: Sequence[ChatCompletionReasoningSummaryTextBlock]) -> str:
+    return "".join(block.get("text", "") for block in summary)
+
+
+def streaming_reasoning_with_response(
+    reasoning: Sequence[_StreamingReasoningFragment], response: object
+) -> StreamingReasoningState:
+    if not isinstance(response, ModelResponseStream):
+        return tuple(reasoning)
+    fragments: Final = (*reasoning, *_streaming_reasoning_fragments(response))
+    indices: Final = tuple(dict.fromkeys(fragment.choice_index for fragment in fragments))
+    return tuple(
+        _StreamingReasoningFragment(
+            choice_index=index,
+            text="".join(fragment.text for fragment in fragments if fragment.choice_index == index),
+        )
+        for index in indices
+    )
+
+
 def _streaming_hook_response_text(*, response_str: str, str_so_far: str | None, response: object) -> str:
     complete_response: Final = str_so_far + response_str if str_so_far is not None else response_str
     if complete_response == "" and isinstance(response, (ModelResponse, ModelResponseStream)):
@@ -1177,11 +1228,12 @@ def _streaming_guardrail_response_text(
     complete_response: str,
     response: object,
     streaming_tool_calls_so_far: Sequence[_StreamingToolCallFragment],
+    streaming_reasoning_so_far: Sequence[_StreamingReasoningFragment],
 ) -> str:
     if not isinstance(response, ModelResponseStream):
         return complete_response
     tool_calls: Final = streaming_tool_calls_with_response(streaming_tool_calls_so_far, response)
-    structured_fields: Final = tuple(
+    tool_fields: Final = tuple(
         "tool_call:"
         + json.dumps(
             (tool_call.choice_index, tool_call.tool_index, tool_call.name, tool_call.arguments),
@@ -1190,6 +1242,12 @@ def _streaming_guardrail_response_text(
         )
         for tool_call in tool_calls
     )
+    reasoning: Final = streaming_reasoning_with_response(streaming_reasoning_so_far, response)
+    reasoning_fields: Final = tuple(
+        "reasoning:" + json.dumps((fragment.choice_index, fragment.text), ensure_ascii=False, separators=(",", ":"))
+        for fragment in reasoning
+    )
+    structured_fields: Final = (*tool_fields, *reasoning_fields)
     if not structured_fields:
         return complete_response
     return _StructuredStreamingGuardrailText("\n".join((str(complete_response), *structured_fields)))
@@ -1206,7 +1264,14 @@ def _is_unchanged_structured_streaming_hook_response(
         return callback_response is complete_response
     if response_str != "" and not (
         isinstance(response, ModelResponseStream)
-        and any(choice.delta.tool_calls or choice.delta.function_call is not None for choice in response.choices)
+        and any(
+            choice.delta.tool_calls
+            or choice.delta.function_call is not None
+            or getattr(choice.delta, "reasoning_content", None)
+            or getattr(choice.delta, "thinking_blocks", None)
+            or getattr(choice.delta, "reasoning_items", None)
+            for choice in response.choices
+        )
     ):
         return False
     return callback_response == complete_response
@@ -2903,8 +2968,22 @@ class ProxyLogging:
     ) -> AsyncGenerator[_T, None]:
         upstream: Final = _UpstreamStreamBoundary(response)
         try:
-            async for chunk in hook(response=upstream):
-                yield chunk
+            guarded: Final = hook(response=upstream)
+            try:
+                async for chunk in guarded:
+                    yield chunk
+            finally:
+                if isinstance(guarded, _ClosableAsyncIterator):
+                    try:
+                        closing: Final = guarded.aclose()
+                        if inspect.isawaitable(closing):
+                            await closing
+                    except Exception as e:  # noqa: BLE001  # a finished stream must not fail on callback cleanup
+                        verbose_proxy_logger.warning(
+                            "Closing the streaming iterator of %s raised %s",
+                            getattr(callback, "guardrail_name", None) or type(callback).__name__,
+                            type(e).__name__,
+                        )
         except Exception as e:
             if e is not upstream.failure:
                 enrich_http_exception_with_guardrail_context(e, callback)
@@ -3965,6 +4044,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         str_so_far: str | None = None,
         streaming_tool_calls_so_far: Sequence[_StreamingToolCallFragment] = (),
+        streaming_reasoning_so_far: Sequence[_StreamingReasoningFragment] = (),
     ):
         """
         Allow user to modify outgoing streaming data -> per chunk
@@ -4041,6 +4121,7 @@ class ProxyLogging:
                                 complete_response=complete_response,
                                 response=response,
                                 streaming_tool_calls_so_far=streaming_tool_calls_so_far,
+                                streaming_reasoning_so_far=streaming_reasoning_so_far,
                             )
                         callback_response: (
                             str | ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
@@ -4102,6 +4183,7 @@ class ProxyLogging:
         stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
         pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
+        guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
         for resolved_callback, kind in caps.iterator_overrides:
             if isinstance(resolved_callback, CustomGuardrail):
                 if resolved_callback.guardrail_name in pipeline_gated_names:
@@ -4144,6 +4226,7 @@ class ProxyLogging:
                 hook,
                 request_data=request_data,
             )
+            guarded_layers.append(current_response)
 
         pipeline_translation: Final = (
             resolve_endpoint_translation(user_api_key_dict, None) if post_call_pipelines else None
@@ -4156,6 +4239,7 @@ class ProxyLogging:
                 pipelines=post_call_pipelines,
                 translation=pipeline_translation,
             )
+            guarded_layers.append(current_response)
 
         served_chunks: Final[list[object]] = []  # mutable-ok: accumulates while yielding to the client
         try:
@@ -4163,6 +4247,7 @@ class ProxyLogging:
                 served_chunks.append(chunk)
                 yield chunk
         except (GeneratorExit, asyncio.CancelledError):
+            await ProxyLogging._close_guarded_layers(guarded_layers)
             ProxyLogging._record_served_stream_output(request_data, served_chunks)
             raise
         except Exception as e:
@@ -4242,6 +4327,16 @@ class ProxyLogging:
 
         for buffered_item in buffered:
             yield buffered_item
+
+    @staticmethod
+    async def _close_guarded_layers(layers: Sequence[AsyncGenerator[object, None]]) -> None:
+        for layer in reversed(layers):
+            try:
+                await layer.aclose()
+            except Exception as e:  # noqa: BLE001  # one failing callback cleanup must not skip the inner ones
+                verbose_proxy_logger.warning(
+                    "Closing a streaming callback layer after a client disconnect raised %s", type(e).__name__
+                )
 
     @staticmethod
     def _record_served_stream_output(request_data: Mapping[str, object], served_chunks: Sequence[object]) -> None:

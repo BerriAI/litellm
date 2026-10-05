@@ -3801,7 +3801,7 @@ class MCPServerManager:
             if server is None:
                 verbose_logger.warning("MCP Server %s not found", server_id)
                 return []
-            return await self._get_tools_from_server(server)
+            return list(await self._get_tools_from_server(server))
         except Exception as e:
             verbose_logger.warning("Failed to get tools from server %s: %s", server_id, e)
             return []
@@ -3838,11 +3838,13 @@ class MCPServerManager:
             server_auth_header: Final = _server_auth_header_for(server, mcp_server_auth_headers, mcp_auth_header)
 
             try:
-                tools: Final = await self._get_tools_from_server(
-                    server=server,
-                    mcp_auth_header=server_auth_header,
-                    user_api_key_auth=user_api_key_auth,
-                    record_listing=True,
+                tools: Final = list(
+                    await self._get_tools_from_server(
+                        server=server,
+                        mcp_auth_header=server_auth_header,
+                        user_api_key_auth=user_api_key_auth,
+                        record_listing=True,
+                    )
                 )
                 return tools
             except Exception as e:
@@ -4350,12 +4352,11 @@ class MCPServerManager:
                 # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
                 # through _create_prefixed_tools — that would add the prefix a second
                 # time producing "test_petstore-test_petstore-getinventory".
-                unprefixed_tools: Final = guarded_openapi
-                self._record_listed_tools(
-                    server, unprefixed_tools, listed_caller, listed_generation, record_listing=record_listing
+                self.record_listed_tools(
+                    server, guarded_openapi, listed_caller, listed_generation, record_listing=record_listing
                 )
                 if not add_prefix:
-                    return unprefixed_tools
+                    return guarded_openapi
                 return [t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
@@ -4371,7 +4372,7 @@ class MCPServerManager:
             prefixed_or_original_tools: Final = self._create_prefixed_tools(
                 guarded_tools, server, add_prefix=add_prefix
             )
-            self._record_listed_tools(
+            self.record_listed_tools(
                 server, guarded_tools, listed_caller, listed_generation, record_listing=record_listing
             )
 
@@ -4478,17 +4479,6 @@ class MCPServerManager:
         return self._listed_tools_generations.get(server_id, 0)
 
     def record_listed_tools(
-        self,
-        server: MCPServer,
-        tools: Sequence[MCPTool],
-        caller: ListedToolsCaller | None,
-        generation: int,
-        *,
-        record_listing: bool = True,
-    ) -> None:
-        self._record_listed_tools(server, tools, caller, generation, record_listing=record_listing)
-
-    def _record_listed_tools(
         self,
         server: MCPServer,
         tools: Sequence[MCPTool],

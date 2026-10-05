@@ -614,12 +614,15 @@ def test_serialize_streaming_chunk_invalid_input_raises_attribute_error():
 async def test_apply_streaming_chunk_hooks_appends_to_str_so_far(monkeypatch):
     chunk = _simple_chunk(content="abc")
 
-    async def _passthrough(*, user_api_key_dict, response, data, str_so_far=None, streaming_tool_calls_so_far=()):
+    async def _passthrough(
+        *, user_api_key_dict, response, data, str_so_far=None, streaming_tool_calls_so_far=(),
+        streaming_reasoning_so_far=(),
+    ):
         return response
 
     monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough)
 
-    new_chunk, new_str, tool_calls = await _apply_streaming_chunk_hooks(
+    new_chunk, new_str, tool_calls, _ = await _apply_streaming_chunk_hooks(
         chunk=chunk,
         user_api_key_dict=_user_auth(),
         request_data={},
@@ -642,14 +645,17 @@ async def test_apply_streaming_chunk_hooks_appends_to_str_so_far(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_apply_streaming_chunk_hooks_compacts_tool_call_history(monkeypatch):
-    async def _passthrough(*, user_api_key_dict, response, data, str_so_far=None, streaming_tool_calls_so_far=()):
+    async def _passthrough(
+        *, user_api_key_dict, response, data, str_so_far=None, streaming_tool_calls_so_far=(),
+        streaming_reasoning_so_far=(),
+    ):
         return response
 
     monkeypatch.setattr(ps.proxy_logging_obj, "async_post_call_streaming_hook", _passthrough)
     stream_state = ()
 
     for arguments in ('{"command":"', "blocked-", "command", '"}'):
-        _, _, stream_state = await _apply_streaming_chunk_hooks(
+        _, _, stream_state, _ = await _apply_streaming_chunk_hooks(
             chunk=_tool_call_chunk(arguments),
             user_api_key_dict=_user_auth(),
             request_data={},

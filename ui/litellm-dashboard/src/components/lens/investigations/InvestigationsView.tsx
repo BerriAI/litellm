@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
-import { LensPreviewButton } from "@/components/view_logs/TraceView/LensPreviewButton";
+import { LensPreviewButton } from "@/components/lens/ui/LensPreviewButton";
 
 import { useInvalidateLenses } from "../data/mutations";
 import { lensQueries } from "../data/queries";

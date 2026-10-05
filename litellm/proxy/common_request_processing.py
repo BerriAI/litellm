@@ -118,8 +118,10 @@ from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import (
     ProxyLogging,
+    StreamingReasoningState,
     StreamingToolCallState,
     _check_and_merge_model_level_guardrails,
+    streaming_reasoning_with_response,
     streaming_tool_calls_with_response,
 )
 from litellm.router import Router
@@ -273,6 +275,18 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
 
 def _withheld_provider_output(response: object) -> bool:
     return getattr(response, "has_buffered_provider_output", False) is True
+
+
+async def close_guarded_stream(stream: object) -> None:
+    if not isinstance(stream, AsyncGenerator):
+        return
+    with anyio.CancelScope(shield=True):
+        try:
+            await stream.aclose()
+        except Exception as e:  # noqa: BLE001  # a failing callback cleanup must not skip the refund and finalizer
+            verbose_proxy_logger.warning(
+                "Closing the guarded stream after a client disconnect raised %s", type(e).__name__
+            )
 
 
 def resolve_litellm_call_id(client_call_id: str | None) -> str:
@@ -3877,7 +3891,8 @@ class ProxyBaseLLMRequestProcessing:
         request_data: dict,  # mutable-ok: ProxyLogging requires the existing mutable request payload
         str_so_far: str,
         streaming_tool_calls_so_far: StreamingToolCallState,
-    ) -> tuple[Any, StreamingToolCallState]:
+        streaming_reasoning_so_far: StreamingReasoningState = (),
+    ) -> tuple[Any, StreamingToolCallState, StreamingReasoningState]:
         return (
             await proxy_logging_obj.async_post_call_streaming_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -3885,8 +3900,10 @@ class ProxyBaseLLMRequestProcessing:
                 data=request_data,
                 str_so_far=str_so_far,
                 streaming_tool_calls_so_far=streaming_tool_calls_so_far,
+                streaming_reasoning_so_far=streaming_reasoning_so_far,
             ),
             streaming_tool_calls_with_response(streaming_tool_calls_so_far, chunk),
+            streaming_reasoning_with_response(streaming_reasoning_so_far, chunk),
         )
 
     @staticmethod
@@ -3933,14 +3950,16 @@ class ProxyBaseLLMRequestProcessing:
         client_disconnected = False
         delivered_chunk = False
         recent_tail = SSE_STREAM_START_TAIL  # rebind-ok: rolling window over the yielded bytes
+        guarded_stream: Final[AsyncGenerator[object, None]] = proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_data=request_data,
+        )
         try:
             str_so_far = ""
             streaming_tool_calls_so_far: StreamingToolCallState = ()
-            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_data=request_data,
-            ):
+            streaming_reasoning_so_far: StreamingReasoningState = ()
+            async for chunk in guarded_stream:
                 # ``.format(chunk)`` was previously evaluated for every chunk
                 # regardless of log level; gate it behind the level check.
                 if debug_enabled:
@@ -3950,6 +3969,7 @@ class ProxyBaseLLMRequestProcessing:
                     (
                         chunk,
                         streaming_tool_calls_so_far,
+                        streaming_reasoning_so_far,
                     ) = await ProxyBaseLLMRequestProcessing._apply_streaming_chunk_hook(
                         chunk=chunk,
                         proxy_logging_obj=proxy_logging_obj,
@@ -3957,6 +3977,7 @@ class ProxyBaseLLMRequestProcessing:
                         request_data=request_data,
                         str_so_far=str_so_far,
                         streaming_tool_calls_so_far=streaming_tool_calls_so_far,
+                        streaming_reasoning_so_far=streaming_reasoning_so_far,
                     )
 
                     if isinstance(chunk, (ModelResponse, ModelResponseStream)):
@@ -4001,6 +4022,7 @@ class ProxyBaseLLMRequestProcessing:
             # Starlette closes on disconnect, so the nested iterator hook (which
             # only sees GeneratorExit on GC) cannot own the refund.
             client_disconnected = not stream_completed
+            await close_guarded_stream(guarded_stream)
             if not delivered_chunk and not _withheld_provider_output(response):
                 from litellm.proxy.spend_tracking.budget_reservation import (
                     release_budget_reservation_on_cancel,

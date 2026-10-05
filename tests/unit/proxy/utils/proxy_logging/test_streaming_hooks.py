@@ -10,11 +10,13 @@ Covers ``_wrap_streaming_iterator_with_enrichment``,
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import datetime
 from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -1136,3 +1138,173 @@ async def test_stream_provider_failure_is_not_attributed_to_any_guardrail(
     with pytest.raises(RuntimeError, match="provider connection dropped"):
         await _drain_stream_chain(proxy_logging, make_user_api_key_auth(), _failing_provider_stream(), request_data)
     assert request_data["metadata"] == {}
+
+
+@pytest.fixture
+def reasoning_guardrail(proxy_logging, monkeypatch):
+    from litellm.proxy.guardrails.guardrail_hooks.azure.text_moderation import (
+        AzureContentSafetyTextModerationGuardrail,
+    )
+
+    guardrail: Final = AzureContentSafetyTextModerationGuardrail(
+        guardrail_name="reasoning-scanner", api_key="test-key", api_base="https://moderation.test",
+        event_hook=GuardrailEventHooks.post_call, default_on=True,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    return guardrail
+
+
+def _moderate_reasoning(request: httpx.Request) -> httpx.Response:
+    text: Final = json.loads(request.content)["text"]
+    assert "opaque-marker" not in text
+    return httpx.Response(200, json={
+        "blocklistsMatch": [],
+        "categoriesAnalysis": [{"category": "Violence", "severity": 6 if "blocked-command" in text else 0}],
+    })
+
+
+def _reasoning_chunk(field: str, text: str, choice_index: int = 0) -> litellm.ModelResponseStream:
+    delta: Final = {
+        "reasoning_content": {"reasoning_content": text},
+        "thinking_blocks": {"thinking_blocks": [
+            {"type": "thinking", "thinking": text, "signature": "opaque-marker"},
+            {"type": "redacted_thinking", "data": "opaque-marker"},
+        ]},
+        "reasoning_items": {"reasoning_items": [{
+            "type": "reasoning", "id": "r1", "encrypted_content": "opaque-marker",
+            "summary": [{"type": "summary_text", "text": text}],
+        }]},
+    }[field]
+    return litellm.ModelResponseStream(choices=[{"index": choice_index, "delta": delta}])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["reasoning_content", "thinking_blocks", "reasoning_items"])
+@pytest.mark.parametrize("text", ["blocked-command", "safe reasoning", ""])
+async def test_native_azure_moderates_plaintext_reasoning(
+    field, text, reasoning_guardrail, proxy_logging, make_user_api_key_auth,
+):
+    chunk: Final = _reasoning_chunk(field, text)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_moderate_reasoning)) as handler:
+        reasoning_guardrail.async_handler = handler
+        result: Final = await proxy_logging.async_post_call_streaming_hook(
+            data={}, response=chunk, user_api_key_dict=make_user_api_key_auth(),
+        )
+    if text == "blocked-command":
+        assert isinstance(result, str)
+        assert "Azure Content Safety Guardrail" in result
+        assert "blocked-command" not in result
+    else:
+        assert result is chunk
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["reasoning_content", "thinking_blocks", "reasoning_items"])
+@pytest.mark.parametrize("path", ["proxy_server", "common_request_processing"])
+@pytest.mark.parametrize("same_choice", [True, False])
+async def test_native_azure_moderates_split_reasoning_in_both_streams(
+    field, path, same_choice, reasoning_guardrail, proxy_logging, make_user_api_key_auth,
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.proxy_server import async_data_generator
+
+    chunks: Final = (_reasoning_chunk(field, "blocked-"), _reasoning_chunk(field, "command", 0 if same_choice else 1))
+
+    async def source():
+        for chunk in chunks:
+            yield chunk
+
+    stream: Final = (
+        async_data_generator(response=source(), user_api_key_dict=make_user_api_key_auth(), request_data={})
+        if path == "proxy_server"
+        else ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=source(), user_api_key_dict=make_user_api_key_auth(), request_data={},
+            proxy_logging_obj=proxy_logging,
+            serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+            serialize_error=lambda error: f"data: {error}\n\n",
+        )
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_moderate_reasoning)) as handler:
+        reasoning_guardrail.async_handler = handler
+        output: Final = tuple([part async for part in stream])
+    assert len(output) >= 2
+    if same_choice:
+        assert isinstance(output[1], str)
+        assert "Azure Content Safety Guardrail" in output[1]
+        assert '"command"' not in output[1]
+    else:
+        if path == "common_request_processing":
+            assert output[1] is chunks[1]
+        else:
+            assert isinstance(output[1], str)
+            assert json.loads(output[1].removeprefix("data: "))["choices"] == chunks[1].model_dump(exclude_none=True)["choices"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("callback_kind", ["ordinary", "disabled_guardrail"])
+@pytest.mark.parametrize("content", [None, "answer"])
+async def test_reasoning_chunks_preserve_ordinary_and_disabled_callback_behavior(
+    callback_kind, content, proxy_logging, make_user_api_key_auth, monkeypatch,
+):
+    class OrdinaryCallback(CustomLogger):
+        async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+            assert "blocked-command" not in response
+            return response
+
+    class DisabledGuardrail(CustomGuardrail):
+        def should_run_guardrail(self, data, event_type):
+            return False
+
+        async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+            pytest.fail("Disabled guardrail ran")
+
+    callback: Final = OrdinaryCallback() if callback_kind == "ordinary" else DisabledGuardrail(guardrail_name="disabled")
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    chunk: Final = litellm.ModelResponseStream(choices=[{
+        "index": 0, "delta": {"content": content, "reasoning_content": "blocked-command"},
+    }])
+    result: Final = await proxy_logging.async_post_call_streaming_hook(
+        data={}, response=chunk, user_api_key_dict=make_user_api_key_auth(),
+    )
+    assert result is chunk
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["proxy_server", "common_request_processing"])
+async def test_reasoning_stream_preserves_opaque_items_without_optional_plaintext(
+    path, reasoning_guardrail, proxy_logging, make_user_api_key_auth,
+):
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.proxy.proxy_server import async_data_generator
+
+    chunks: Final = tuple(litellm.ModelResponseStream(choices=[{
+        "index": 0, "delta": {"reasoning_items": [item]},
+    }]) for item in (
+        {"type": "reasoning", "id": "encrypted", "encrypted_content": "opaque-marker"},
+        {"type": "reasoning", "id": "empty-summary", "summary": [{"type": "summary_text"}]},
+    ))
+
+    async def source():
+        for chunk in chunks:
+            yield chunk
+
+    stream: Final = (
+        async_data_generator(response=source(), user_api_key_dict=make_user_api_key_auth(), request_data={})
+        if path == "proxy_server"
+        else ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=source(), user_api_key_dict=make_user_api_key_auth(), request_data={},
+            proxy_logging_obj=proxy_logging,
+            serialize_chunk=ProxyBaseLLMRequestProcessing.return_sse_chunk,
+            serialize_error=lambda error: f"data: {error}\n\n",
+        )
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_moderate_reasoning)) as handler:
+        reasoning_guardrail.async_handler = handler
+        output: Final = tuple([part async for part in stream])
+    assert len(output) >= 2
+    if path == "common_request_processing":
+        assert output[:2] == chunks
+    else:
+        for chunk, frame in zip(chunks, output[:2]):
+            assert isinstance(frame, str)
+            assert json.loads(frame.removeprefix("data: "))["choices"] == chunk.model_dump(exclude_none=True)["choices"]
