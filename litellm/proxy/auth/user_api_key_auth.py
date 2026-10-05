@@ -82,6 +82,7 @@ from litellm.proxy.auth.auth_object_prefetch import (
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
+    fallback_target_model_name,
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
@@ -3796,7 +3797,7 @@ async def _enforce_key_and_fallback_model_access(
         fallback_names: Final = tuple(
             name
             for target in iter_request_fallback_targets(request_data)
-            if (name := _fallback_target_model_name(target)) is not None
+            if (name := fallback_target_model_name(target)) is not None
         )
 
         for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
@@ -3811,16 +3812,6 @@ async def _enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
                 user_model=None,
             )
-
-
-def _fallback_target_model_name(target: object) -> str | None:
-    if isinstance(target, str):
-        return target
-    if isinstance(target, dict):
-        model: Final = target.get("model")
-        if isinstance(model, str):
-            return model
-    return None
 
 
 async def _run_post_custom_auth_checks(
