@@ -8115,7 +8115,7 @@ async def test_execute_mcp_tool_hands_openapi_hooks_the_listed_entry_and_nothing
             patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
         ):
             never_listed_tool, never_listed_data = await call()
-            manager._record_listed_tools(
+            manager.record_listed_tools(
                 petstore,
                 [MCPTool(name="list_pets", description="ADMIN DESC", inputSchema=schema)],
                 ListedToolsCaller(user_api_key_auth=alice),
@@ -8156,7 +8156,7 @@ async def test_execute_mcp_tool_hands_openapi_hooks_the_guarded_catalog_entry_cl
     )
     manager = mcp_module.global_mcp_server_manager
     alice = UserAPIKeyAuth(api_key="sk-user", user_id="alice")
-    manager._record_listed_tools(
+    manager.record_listed_tools(
         petstore,
         [MCPTool(name="getpetbyid", description="Find a [MASKED] pet", inputSchema=pinned_schema)],
         ListedToolsCaller(user_api_key_auth=alice),
@@ -8206,12 +8206,12 @@ async def test_execute_mcp_tool_hands_openapi_hooks_each_callers_own_listed_entr
     manager = mcp_module.global_mcp_server_manager
     guarded = UserAPIKeyAuth(api_key="sk-guarded", user_id="alice")
     opted_out = UserAPIKeyAuth(api_key="sk-opted-out", user_id="bob")
-    manager._record_listed_tools(
+    manager.record_listed_tools(
         petstore,
         [MCPTool(name="getpetbyid", description="Find a [MASKED] pet", inputSchema=schema)],
         ListedToolsCaller(user_api_key_auth=guarded),
     )
-    manager._record_listed_tools(
+    manager.record_listed_tools(
         petstore,
         [MCPTool(name="getpetbyid", description="Find a SECRET pet", inputSchema=schema)],
         ListedToolsCaller(user_api_key_auth=opted_out),
@@ -8305,7 +8305,7 @@ async def test_execute_mcp_tool_hands_hooks_nothing_for_a_never_listed_operation
     )
     manager = mcp_module.global_mcp_server_manager
     alice = UserAPIKeyAuth(api_key="sk-user", user_id="alice")
-    manager._record_listed_tools(
+    manager.record_listed_tools(
         petstore,
         [MCPTool(name="get_pet", description="Fetches pet records. FLAGWORD", inputSchema={"type": "object"})],
         ListedToolsCaller(user_api_key_auth=alice),
@@ -9191,8 +9191,8 @@ async def test_fire_mcp_tool_call_logging_iserror_logs_failure():
     tool_error = logging_obj.async_failure_handler.await_args.args[0]
     assert isinstance(tool_error, MCPToolResultError)
     assert str(tool_error) == "upstream exploded"
-    logging_obj.has_run_logging.assert_any_call(event_type="sync_success")
-    logging_obj.has_run_logging.assert_any_call(event_type="async_success")
+    logging_obj.mark_logging_complete.assert_any_call(event_type="sync_success")
+    logging_obj.mark_logging_complete.assert_any_call(event_type="async_success")
     proxy_logging_mock.post_call_failure_hook.assert_awaited_once()
     hook_kwargs = proxy_logging_mock.post_call_failure_hook.await_args.kwargs
     assert hook_kwargs["route"] == "/mcp/call_tool"
@@ -9768,7 +9768,7 @@ async def test_call_mcp_tool_modern_interim_result_passes_through_without_comple
     logging_obj.async_post_mcp_tool_call_hook.assert_not_awaited()
     proxy_logging_mock.post_mcp_call_hook.assert_not_awaited()
     proxy_logging_mock.post_call_failure_hook.assert_not_awaited()
-    assert sorted(c.kwargs["event_type"] for c in logging_obj.has_run_logging.call_args_list) == [
+    assert sorted(c.kwargs["event_type"] for c in logging_obj.mark_logging_complete.call_args_list) == [
         "async_success",
         "sync_success",
     ], "the @client wrapper would otherwise log the interim result as a completed success on return"

@@ -1,9 +1,12 @@
 import userEvent from "@testing-library/user-event";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render as renderWithoutNuqs, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NuqsAdapter } from "nuqs/adapters/react";
 
 import { apiClient } from "@/components/networking";
 import ROICalculatorView from "./ROICalculatorView";
+
+const render = (ui: Parameters<typeof renderWithoutNuqs>[0]) => renderWithoutNuqs(ui, { wrapper: NuqsAdapter });
 
 vi.mock("@/components/networking", () => ({
   apiClient: {
@@ -520,7 +523,7 @@ describe("ROICalculatorView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Preview sample report" }));
 
     expect(await screen.findByText("You’re viewing demo data")).toBeVisible();
-    expect(window.location.search).toBe("?demo=1");
+    await waitFor(() => expect(window.location.search).toBe("?demo=1"));
     expect(screen.getByRole("tab", { name: "Branches" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("searchbox")).toHaveValue("");
     expect(screen.getByRole("cell", { name: "$9.10" })).toBeVisible();
@@ -543,7 +546,7 @@ describe("ROICalculatorView", () => {
 
     expect(screen.getByText("Improve request routing")).toBeVisible();
     expect(screen.queryByText("Sample usage breakdown")).not.toBeInTheDocument();
-    expect(window.location.search).toBe("");
+    await waitFor(() => expect(window.location.search).toBe(""));
     expect(screen.getByRole("button", { name: "Syncing…" })).toBeDisabled();
     expect(apiClient.post).not.toHaveBeenCalled();
     expect(apiClient.put).not.toHaveBeenCalled();
@@ -569,7 +572,7 @@ describe("ROICalculatorView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Exit demo" }));
     expect(screen.getByRole("progressbar")).toBeVisible();
     expect(screen.getByText("$20.00")).toBeVisible();
-    expect(window.location.search).toBe("");
+    await waitFor(() => expect(window.location.search).toBe(""));
   });
 
   it.each(["report", "sync"])("loads a demo link when the live %s request fails", async (failedRequest) => {
@@ -615,7 +618,7 @@ describe("ROICalculatorView", () => {
     expect(screen.getByRole("button", { name: "Settings" })).toBeEnabled();
     expect(screen.queryByText("You’re viewing demo data")).not.toBeInTheDocument();
     expect(apiClient.post).not.toHaveBeenCalled();
-    expect(window.location.search).toBe("?from=review");
+    await waitFor(() => expect(window.location.search).toBe("?from=review"));
     expect(window.location.hash).toBe("#overview");
   });
 
@@ -634,7 +637,7 @@ describe("ROICalculatorView", () => {
     expect(screen.getByText("Loading ROI Calculator…")).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Connect your repositories" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run analysis" })).not.toBeInTheDocument();
-    expect(window.location.search).toBe("");
+    await waitFor(() => expect(window.location.search).toBe(""));
 
     pending.resolve(pendingRequest === "report" ? { report: summary } : idleStatus);
     expect(await screen.findByText("Gateway AI cost")).toBeVisible();

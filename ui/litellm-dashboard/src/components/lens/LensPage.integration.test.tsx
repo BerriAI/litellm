@@ -2,12 +2,12 @@ import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
-import { dismissLensIntro } from "@/../tests/lens-test-utils";
+import { dismissLensIntro, requestPath } from "@/../tests/lens-test-utils";
 import LensPage from "@/app/(dashboard)/lens/page";
 
 const { auth } = vi.hoisted(() => ({ auth: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: auth }));
-vi.mock("@/components/view_logs/TraceView/AgentTracesPage", () => ({
+vi.mock("@/components/lens/traces/list/AgentTracesPage", () => ({
   default: ({ isActive }: { isActive: boolean }) => <div>Trace polling {isActive ? "active" : "paused"}</div>,
 }));
 vi.mock("./investigations/InvestigationsView", () => ({
@@ -26,7 +26,7 @@ describe("Lens navigation", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input) => {
-        const path = new URL(String(input), "http://localhost").pathname;
+        const path = requestPath(input);
         if (path === "/v1/traces") return Response.json({ data: [{}] });
         if (path === "/lens") return Response.json({ lenses: [], workers: [], tracing_enabled: true });
         return Response.json({ traces: true, requests: false, data: [] });

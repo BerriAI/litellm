@@ -2,7 +2,8 @@
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { apiClient } from "@/components/networking";
-import { liveTracesApi, TracesApiContext, type TracesApi } from "@/components/view_logs/TraceView/tracesApi";
+import { fetchClient } from "@/lib/http/api";
+import { liveTracesApi, TracesApiContext, type TracesApi } from "@/components/lens/traces/api";
 import { liveLensApi, type LensApi } from "./service";
 
 export interface LensServices {
@@ -14,7 +15,7 @@ export interface LensServices {
 const LensServicesContext = createContext<LensServices | null>(null);
 
 export function liveLensServices(accessToken: string): LensServices {
-  return { accessToken, lens: liveLensApi(apiClient, accessToken), traces: liveTracesApi(accessToken) };
+  return { accessToken, lens: liveLensApi(fetchClient, apiClient, accessToken), traces: liveTracesApi(accessToken) };
 }
 
 function useLensServices(): LensServices {

@@ -1125,18 +1125,20 @@ async def _get_tools_from_mcp_servers(
                 from litellm.proxy.proxy_server import proxy_logging_obj
 
                 listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
-                tools: Final = await global_mcp_server_manager._get_tools_from_server(
-                    server=server,
-                    mcp_auth_header=server_auth_header,
-                    extra_headers=extra_headers,
-                    add_prefix=True,  # Always add server prefix
-                    raw_headers=raw_headers,
-                    client_ip=client_ip,
-                    user_api_key_auth=user_api_key_auth,
-                    oauth2_headers=oauth2_headers,
-                    proxy_logging_obj=proxy_logging_obj,
-                    catalog_auth_header=catalog_auth_header,
-                    record_listing=False,
+                tools: Final = list(
+                    await global_mcp_server_manager._get_tools_from_server(
+                        server=server,
+                        mcp_auth_header=server_auth_header,
+                        extra_headers=extra_headers,
+                        add_prefix=True,  # Always add server prefix
+                        raw_headers=raw_headers,
+                        client_ip=client_ip,
+                        user_api_key_auth=user_api_key_auth,
+                        oauth2_headers=oauth2_headers,
+                        proxy_logging_obj=proxy_logging_obj,
+                        catalog_auth_header=catalog_auth_header,
+                        record_listing=False,
+                    )
                 )
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
@@ -2286,8 +2288,8 @@ async def _run_post_mcp_call_guardrails(
 def suppress_completed_success_logging(logging_obj: LiteLLMLoggingObj) -> None:
     """An interim ``InputRequiredResult`` is not a completed call, so the ``@client`` wrapper
     on ``call_mcp_tool`` must not run the success handlers for it when the coroutine returns."""
-    logging_obj.has_run_logging(event_type="sync_success")
-    logging_obj.has_run_logging(event_type="async_success")
+    logging_obj.mark_logging_complete(event_type="sync_success")
+    logging_obj.mark_logging_complete(event_type="async_success")
 
 
 async def _fire_mcp_tool_call_logging(
@@ -2335,8 +2337,8 @@ async def _fire_mcp_tool_call_logging(
         await logging_obj.async_success_handler(result=result, start_time=start_time, end_time=end_time)
         return result
 
-    logging_obj.has_run_logging(event_type="sync_success")
-    logging_obj.has_run_logging(event_type="async_success")
+    logging_obj.mark_logging_complete(event_type="sync_success")
+    logging_obj.mark_logging_complete(event_type="async_success")
     tool_error: Final = MCPToolResultError(error_message)
     logging_obj.failure_handler(tool_error, "", start_time, end_time)
     await logging_obj.async_failure_handler(tool_error, "", start_time, end_time)

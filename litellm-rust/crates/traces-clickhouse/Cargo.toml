@@ -12,13 +12,10 @@ schema = ["dep:schemars", "litellm-traces/schema"]
 macro_rules_attribute.workspace = true
 schemars = { workspace = true, optional = true }
 askama.workspace = true
-base64.workspace = true
 flate2.workspace = true
 futures-util.workspace = true
 hmac = "0.12.1"
-itertools = "0.14.0"
 litellm-http.workspace = true
-litellm-migrate.workspace = true
 litellm-storage-clickhouse.workspace = true
 litellm-traces.workspace = true
 litellm-traces-cache.workspace = true
@@ -26,11 +23,11 @@ moka.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+sqlx = { workspace = true, features = ["migrate", "macros"] }
 strum.workspace = true
 thiserror.workspace = true
 time = { workspace = true, features = ["formatting"] }
 tokio.workspace = true
-tracing.workspace = true
 url.workspace = true
 
 [dev-dependencies]

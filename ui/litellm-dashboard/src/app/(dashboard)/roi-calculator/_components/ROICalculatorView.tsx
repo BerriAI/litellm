@@ -15,6 +15,7 @@ import { Tabs } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { isProxyAdminTierRole } from "@/utils/roles";
+import { useQueryState } from "nuqs";
 import ROISettingsPanel from "./ROISettingsPanel";
 import { MatchedPeopleToggle } from "./MatchedPeopleToggle";
 import { IdentityMatchDialog, type PersonMatchSelection, PullReasoningDialog } from "./ROICalculatorDialogs";
@@ -29,6 +30,7 @@ import type {
   ROISummary,
   ROISyncStatus,
 } from "./roiCalculatorData";
+import { parseAsDemoFlag } from "./demoUrlState";
 
 type View = "overview" | "people" | "branches";
 
@@ -45,13 +47,6 @@ const IDLE_STATUS: ROISyncStatus = {
   error: null,
 };
 
-function updateDemoUrl(enabled: boolean) {
-  const url = new URL(window.location.href);
-  if (enabled) url.searchParams.set("demo", "1");
-  else url.searchParams.delete("demo");
-  window.history.replaceState(null, "", url);
-}
-
 export default function ROICalculatorView({
   accessToken,
   userRole = null,
@@ -61,6 +56,8 @@ export default function ROICalculatorView({
   userRole?: string | null;
   isViewOnly?: boolean;
 }) {
+  const [demo, setDemo] = useQueryState("demo", parseAsDemoFlag);
+  const [demoRequestedOnLoad] = React.useState(demo === true);
   const [sampleSummary, setSampleSummary] = React.useState<ROISummary | null>(null);
   const adminReadOnly = isViewOnly && isProxyAdminTierRole(userRole ?? "");
   const readOnly = adminReadOnly || sampleSummary !== null;
@@ -95,7 +92,6 @@ export default function ROICalculatorView({
   React.useEffect(() => {
     if (!accessToken) return;
     let cancelled = false;
-    const demoRequested = new URLSearchParams(window.location.search).get("demo") === "1";
     const settingsRequest = apiClient.get<ROISettings>("/roi-calculator/settings", { accessToken });
     const reportRequest = apiClient
       .get<ROIReportResponse>("/roi-calculator/report", { accessToken })
@@ -128,13 +124,13 @@ export default function ROICalculatorView({
       });
     Promise.all([
       settingsRequest,
-      demoRequested
+      demoRequestedOnLoad
         ? apiClient
             .get<ROIReportResponse>("/roi-calculator/report", { accessToken, query: { mode: "demo" } })
             .catch((reason: unknown) => {
               if (!cancelled) {
                 setDemoError(`Could not load demo data: ${extractErrorMessage(reason)}`);
-                updateDemoUrl(false);
+                setDemo(null);
               }
               return liveData;
             })
@@ -156,7 +152,7 @@ export default function ROICalculatorView({
     return () => {
       cancelled = true;
     };
-  }, [accessToken]);
+  }, [accessToken, demoRequestedOnLoad, setDemo]);
 
   React.useEffect(() => {
     if (!accessToken || !settingsLoaded) return;
@@ -280,7 +276,7 @@ export default function ROICalculatorView({
       });
       setSampleSummary(response.report);
       setDemoError(null);
-      updateDemoUrl(true);
+      setDemo(true);
       setView("branches");
       setQuery("");
     } catch (reason) {
@@ -355,7 +351,7 @@ export default function ROICalculatorView({
       {sampleSummary && (
         <DemoNotice
           onExit={() => {
-            updateDemoUrl(false);
+            setDemo(null);
             setSampleSummary(null);
           }}
         />
