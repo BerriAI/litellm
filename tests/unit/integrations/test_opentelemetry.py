@@ -442,6 +442,49 @@ class TestOpenTelemetryZeroValuedRequestParams(unittest.TestCase):
         assert recorded.get(SpanAttributes.LLM_REQUEST_TOP_P.value) == 0
         assert recorded.get(SpanAttributes.LLM_REQUEST_MAX_TOKENS.value) == 0
 
+    @parameterized.expand(
+        [
+            ({"max_completion_tokens": 256}, 256),
+            ({"max_tokens": 128}, 128),
+            ({"max_tokens": 128, "max_completion_tokens": 256}, 128),
+            ({"max_tokens": 0, "max_completion_tokens": 256}, 0),
+        ]
+    )
+    def test_max_tokens_is_read_from_either_request_field(self, optional_params, expected):
+        """Callers send max_completion_tokens instead of max_tokens, so the span has to
+        read both. max_tokens wins when present, including when it is 0, which matches
+        how LLMRequestParams.from_model_parameters resolves the two.
+        """
+        from litellm.proxy._types import SpanAttributes
+
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": optional_params,
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        recorded = dict(call[0] for call in mock_span.set_attribute.call_args_list if len(call[0]) == 2)
+
+        assert recorded.get(SpanAttributes.LLM_REQUEST_MAX_TOKENS.value) == expected
+
 
 class TestOpenTelemetryProviderInitialization(unittest.TestCase):
     """Test suite for verifying provider initialization respects existing providers"""

@@ -529,14 +529,16 @@ def _set_request_attributes(
         litellm_params.get("custom_llm_provider", "Unknown"),
     )
 
-    for source_key, request_attribute in (
-        ("max_tokens", "llm.request.max_tokens"),
-        ("temperature", "llm.request.temperature"),
-        ("top_p", "llm.request.top_p"),
+    for source_keys, request_attribute in (
+        (("max_tokens", "max_completion_tokens"), "llm.request.max_tokens"),
+        (("temperature",), "llm.request.temperature"),
+        (("top_p",), "llm.request.top_p"),
     ):
-        request_value = optional_params.get(source_key)
-        if request_value is not None:
-            safe_set_attribute(span, request_attribute, request_value)
+        for source_key in source_keys:
+            request_value = optional_params.get(source_key)
+            if request_value is not None:
+                safe_set_attribute(span, request_attribute, request_value)
+                break
 
     safe_set_attribute(span, "llm.is_streaming", str(optional_params.get("stream", False)))
 
