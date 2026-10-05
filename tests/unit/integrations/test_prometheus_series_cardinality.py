@@ -390,6 +390,45 @@ def test_a_series_limit_that_is_not_a_positive_number_is_ignored_with_a_warning_
     assert setting in caplog.text
 
 
+@pytest.mark.parametrize("value", ["sixty", -1, True, ""])
+def test_a_cleanup_interval_that_is_not_a_number_of_at_least_zero_falls_back_to_the_default_with_a_warning(
+    value: object, monkeypatch, clock, caplog
+):
+    monkeypatch.setattr(litellm, "prometheus_metrics_max_series_per_metric", 3)
+    monkeypatch.setattr(litellm, "prometheus_metrics_ttl_seconds", 10.0)
+    monkeypatch.setattr(litellm, "prometheus_metrics_cleanup_interval_seconds", value)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        logger: Final = PrometheusLogger()
+    _count_request(logger, "agent-0")
+    clock[0] += 30.0
+    _count_request(logger, "agent-1")
+    within_the_interval: Final = _scraped_series("litellm_proxy_total_requests_metric_total")
+    clock[0] += 31.0
+    _count_request(logger, "agent-2")
+
+    assert "prometheus_metrics_cleanup_interval_seconds" in caplog.text
+    assert _label_values(within_the_interval, "user_agent") == {"agent-0", "agent-1"}
+    series: Final = _scraped_series("litellm_proxy_total_requests_metric_total")
+    assert _label_values(series, "user_agent") == {"agent-2"}
+
+
+def test_a_cleanup_interval_written_as_a_numeric_string_is_honored(monkeypatch, clock, caplog):
+    monkeypatch.setattr(litellm, "prometheus_metrics_max_series_per_metric", 3)
+    monkeypatch.setattr(litellm, "prometheus_metrics_ttl_seconds", 10.0)
+    monkeypatch.setattr(litellm, "prometheus_metrics_cleanup_interval_seconds", "0")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        logger: Final = PrometheusLogger()
+    _count_request(logger, "agent-0")
+    clock[0] += 30.0
+    _count_request(logger, "agent-1")
+
+    series: Final = _scraped_series("litellm_proxy_total_requests_metric_total")
+    assert _label_values(series, "user_agent") == {"agent-1"}
+    assert "prometheus_metrics_cleanup_interval_seconds" not in caplog.text
+
+
 def test_a_series_cap_written_as_a_numeric_string_is_honored(caplog):
     litellm.prometheus_metrics_max_series_per_metric = "2"
 

@@ -258,9 +258,11 @@ _MetricLike: TypeAlias = "NoOpMetric | _LabeledMetric | MetricWrapperBase"
 _SeriesLimitT: Final = TypeVar("_SeriesLimitT", int, float)
 _POSITIVE_SERIES_CAP: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field(gt=0)])
 _POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(gt=0)])
+_SERIES_CLEANUP_INTERVAL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=0)])
+_DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS: Final = 60.0
 
 
-def _positive_number(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:
+def _number_or_none(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:
     if isinstance(value, bool):
         return None
     try:
@@ -272,7 +274,7 @@ def _positive_number(value: object, limit: TypeAdapter[_SeriesLimitT]) -> _Serie
 def _positive_or_ignored(setting: str, value: object, limit: TypeAdapter[_SeriesLimitT]) -> _SeriesLimitT | None:
     if value is None:
         return None
-    validated: Final = _positive_number(value, limit)
+    validated: Final = _number_or_none(value, limit)
     if validated is not None:
         return validated
     verbose_logger.warning(
@@ -281,6 +283,21 @@ def _positive_or_ignored(setting: str, value: object, limit: TypeAdapter[_Series
         value,
     )
     return None
+
+
+def _cleanup_interval_or_default(value: object) -> float | None:
+    if value is None:
+        return None
+    validated: Final = _number_or_none(value, _SERIES_CLEANUP_INTERVAL)
+    if validated is not None:
+        return validated
+    verbose_logger.warning(
+        "prometheus_metrics_cleanup_interval_seconds is ignored because it is not a number of at least 0 (got %r). "
+        "Idle series are checked every %s seconds",
+        value,
+        _DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS,
+    )
+    return _DEFAULT_SERIES_CLEANUP_INTERVAL_SECONDS
 
 
 def _get_budget_metrics_per_request_timeout() -> float:
@@ -1320,7 +1337,7 @@ class PrometheusLogger(CustomLogger):
             ttl_seconds=_positive_or_ignored(
                 "prometheus_metrics_ttl_seconds", litellm.prometheus_metrics_ttl_seconds, _POSITIVE_SERIES_TTL
             ),
-            cleanup_interval_seconds=litellm.prometheus_metrics_cleanup_interval_seconds,
+            cleanup_interval_seconds=_cleanup_interval_or_default(litellm.prometheus_metrics_cleanup_interval_seconds),
         )
         if limits.ttl_seconds is None or not multiprocess_mode:
             return limits

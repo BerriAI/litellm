@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator, Sequence
-from pathlib import Path
 from typing import Final
 
 import anthropic
@@ -375,6 +374,39 @@ class TestIgnored:
         assert "prometheus_metrics_ttl_seconds is ignored because it is not a number greater than 0 (got '')" in log
 
 
+@pytest.fixture(scope="class")
+def ignored_interval(tmp_path_factory: pytest.TempPathFactory) -> Iterator[CapRig]:
+    with series_cap_rig(
+        tmp_path_factory.mktemp("series-ignored-interval"),
+        {
+            "prometheus_metrics_max_series_per_metric": CAP,
+            "prometheus_metrics_ttl_seconds": TTL_SECONDS,
+            "prometheus_metrics_cleanup_interval_seconds": "sixty",
+        },
+        workers=1,
+        warm_keys=CAP,
+    ) as rig:
+        yield rig
+
+
+class TestIgnoredInterval:
+    def test_a_cleanup_interval_that_is_not_a_number_is_ignored_with_a_warning_while_the_cap_and_ttl_apply(
+        self, ignored_interval: CapRig
+    ) -> None:
+        """I2: a cleanup interval of "sixty" next to a TTL is ignored for the default, so the first labeled emit
+        still counts (it raised inside the logging callback before) and a fourth key lands on `other`."""
+        key: Final = ignored_interval.key("i2")
+        call: Final = Call.new()
+        before: Final = scrape(ignored_interval.gateway)
+        response: Final = ignored_interval.chat(key, call)
+        assert response.status_code == 200 and call.answer in response.text, response.text
+        _expect_other(ignored_interval, key, (call,), (string_value(object_value(response.json())["id"]),), before)
+        assert (
+            "prometheus_metrics_cleanup_interval_seconds is ignored because it is not a number of at least 0 "
+            "(got 'sixty'). Idle series are checked every 60.0 seconds"
+        ) in ignored_interval.proxy.log.read_text()
+
+
 def _fallback_deployments(provider_url: str) -> tuple[dict[str, JsonValue], ...]:
     return tuple(
         {
@@ -433,14 +465,14 @@ class TestExcluded:
         prometheus_exclude_labels, which get_labels_for_metric already applied to them."""
         keys: Final = tuple(excluded.key("x1") for _ in range(CAP + 1))
         for key in keys:
-            call: Final = Call.new()
-            response: Final = chat_once(excluded.base_url, key, PRIMARY, call)
+            call = Call.new()
+            response = chat_once(excluded.base_url, key, PRIMARY, call)
             assert response.status_code == 200 and call.answer in response.text, response.text
         _expect_capped_fallback_counter(excluded, SUCCESSFUL_FALLBACKS)
         excluded.outage.set()
         try:
             for key in keys:
-                failed: Final = chat_once(excluded.base_url, key, PRIMARY, Call.new())
+                failed = chat_once(excluded.base_url, key, PRIMARY, Call.new())
                 assert failed.status_code == 500, failed.text
         finally:
             excluded.outage.clear()
