@@ -1,4 +1,6 @@
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
+from dataclasses import dataclass, field
 from typing import Any, Final
 
 from pydantic import BaseModel
@@ -6,38 +8,46 @@ from pydantic import BaseModel
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 from litellm.litellm_core_utils.secret_redaction import REDACTED
 
+_DEFAULT_SENSITIVE_PATTERNS: Final = frozenset(
+    (
+        "password",
+        "secret",
+        "key",
+        "token",
+        "auth",
+        "authorization",
+        "cookie",
+        "credential",
+        # Plural form: Vertex uses ``vertex_credentials``; segment-exact
+        # matching otherwise misses it because "credential" != "credentials".
+        "credentials",
+        "access",
+        "private",
+        "certificate",
+        "fingerprint",
+        "tenancy",
+    )
+)
+
 
 class SensitiveDataMasker:
     def __init__(
         self,
-        sensitive_patterns: set[str] | None = None,
-        non_sensitive_overrides: set[str] | None = None,
+        sensitive_patterns: AbstractSet[str] | None = None,
+        non_sensitive_overrides: AbstractSet[str] | None = None,
         visible_prefix: int = 4,
         visible_suffix: int = 4,
         mask_char: str = "*",
         mask_short_values: bool = True,
+        extra_sensitive_patterns: AbstractSet[str] | None = None,
     ):
-        self.sensitive_patterns = sensitive_patterns or {
-            "password",
-            "secret",
-            "key",
-            "token",
-            "auth",
-            "authorization",
-            "credential",
-            # Plural form: Vertex uses ``vertex_credentials``; segment-exact
-            # matching otherwise misses it because "credential" != "credentials".
-            "credentials",
-            "access",
-            "private",
-            "certificate",
-            "fingerprint",
-            "tenancy",
-        }
+        self.sensitive_patterns = (sensitive_patterns or _DEFAULT_SENSITIVE_PATTERNS) | (
+            extra_sensitive_patterns or frozenset()
+        )
         # If any key segment matches one of these, the key is not considered sensitive
         # even if it also matches a sensitive pattern. For example, "input_cost_per_token"
         # contains "token" but "cost" overrides that — it's a pricing field, not a secret.
-        self.non_sensitive_overrides = non_sensitive_overrides or {"cost"}
+        self.non_sensitive_overrides = non_sensitive_overrides or frozenset(("cost",))
 
         self.visible_prefix = visible_prefix
         self.visible_suffix = visible_suffix
@@ -83,13 +93,13 @@ class SensitiveDataMasker:
 
     def _mask_sequence(
         self,
-        values: list[Any],
+        values: Sequence[object],
         depth: int,
         max_depth: int,
         excluded_keys: set[str] | None,
         key_is_sensitive: bool,
-    ) -> list[Any]:
-        masked_items: Final[list[Any]] = []
+    ) -> Sequence[object]:
+        masked_items: Final[list[object]] = []
         if depth >= max_depth:
             return values
 
@@ -167,29 +177,52 @@ def mask_credentials_in_payload(data: object) -> object:
     config-dump semantics (``None`` -> ``"None"``, tuples stringified,
     objects flattened via ``__dict__``) would silently distort the record.
 
+    A container referenced from several places in ``data`` is rebuilt once and
+    referenced from the same places in the copy, so a shared subtree never
+    fans out into independent copies, and a reference back into a container
+    still being rebuilt (a cycle) becomes ``REDACTED``. A container nested past
+    ``DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER`` is replaced by
+    ``REDACTED`` rather than returned unmasked.
+
     Sensitive-key detection is delegated to the shared
     :class:`SensitiveDataMasker` so pattern updates stay in one place.
     """
-    return _walk_payload(data, key_is_sensitive=False, depth=0)
+    return _PayloadWalker().walk(data, key_is_sensitive=False, depth=0)
 
 
-def _walk_payload(node: object, key_is_sensitive: bool, depth: int) -> object:
-    if depth >= DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER:
-        return node
-    if isinstance(node, Mapping):
-        return {k: _walk_payload(v, _default_masker.is_sensitive_key(k), depth + 1) for k, v in node.items()}
-    if isinstance(node, list):
-        return [_walk_payload(item, key_is_sensitive, depth + 1) for item in node]
-    if isinstance(node, tuple):
-        return tuple(_walk_payload(item, key_is_sensitive, depth + 1) for item in node)
-    if isinstance(node, BaseModel):
-        return _walk_payload(node.model_dump(), key_is_sensitive, depth)
-    if key_is_sensitive and isinstance(node, str) and node:
-        return _default_masker._mask_value(node)
-    return node
+@dataclass(frozen=True, slots=True)
+class _PayloadWalker:
+    _memo: dict[tuple[int, bool], tuple[object, object]] = field(  # mutable-ok: memo of one walk, pins each keyed node
+        default_factory=dict
+    )
+
+    def walk(self, node: object, key_is_sensitive: bool, depth: int) -> object:
+        if not isinstance(node, (Mapping, list, tuple, BaseModel)):
+            return _default_masker._mask_value(node) if key_is_sensitive and isinstance(node, str) and node else node
+        if depth >= DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER:
+            return REDACTED
+        memo_key: Final = (id(node), key_is_sensitive and not isinstance(node, Mapping))
+        cached: Final = self._memo.get(memo_key)
+        if cached is not None:
+            return cached[1]
+        self._memo[memo_key] = (node, REDACTED)
+        rebuilt: Final = self._rebuild(node, key_is_sensitive, depth)
+        self._memo[memo_key] = (node, rebuilt)
+        return rebuilt
+
+    def _rebuild(
+        self, node: Mapping[str, object] | Sequence[object] | BaseModel, key_is_sensitive: bool, depth: int
+    ) -> object:
+        if isinstance(node, BaseModel):
+            return self.walk(node.model_dump(), key_is_sensitive, depth)
+        if isinstance(node, Mapping):
+            return {k: self.walk(v, _default_masker.is_sensitive_key(k), depth + 1) for k, v in node.items()}
+        if isinstance(node, tuple):
+            return tuple(self.walk(item, key_is_sensitive, depth + 1) for item in node)
+        return [self.walk(item, key_is_sensitive, depth + 1) for item in node]
 
 
-def mask_sensitive_keys(data: dict[str, Any], sensitive_fields: set[str]) -> dict[str, Any]:
+def mask_sensitive_keys(data: Mapping[str, object], sensitive_fields: set[str]) -> dict[str, object]:
     """Return a new dict with values masked for keys listed in ``sensitive_fields``.
 
     Unlike :meth:`SensitiveDataMasker.mask_dict`, this does exact key-name
@@ -201,7 +234,7 @@ def mask_sensitive_keys(data: dict[str, Any], sensitive_fields: set[str]) -> dic
     range and are replaced with a fixed-length all-mask string, so a short
     credential is never returned verbatim.
     """
-    masked: Final[dict[str, Any]] = {}
+    masked: Final[dict[str, object]] = {}
     mask_char: Final = _default_masker.mask_char
     min_visible: Final = _default_masker.visible_prefix + _default_masker.visible_suffix
     for key, value in data.items():

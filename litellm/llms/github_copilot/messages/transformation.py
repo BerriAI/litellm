@@ -1,7 +1,7 @@
 from typing import Any, Final
 
 from litellm.exceptions import AuthenticationError
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 
@@ -92,7 +92,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             headers["anthropic-version"] = "2023-06-01"
 
         headers = self._update_headers_with_anthropic_beta(
-            headers, optional_params, custom_llm_provider="github_copilot"
+            headers, optional_params, custom_llm_provider="github_copilot", messages=messages
         )
 
         return headers, dynamic_api_base
