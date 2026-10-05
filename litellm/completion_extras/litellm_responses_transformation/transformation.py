@@ -19,7 +19,7 @@ from openai.types.responses.response_input_param import (
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse
@@ -78,7 +78,6 @@ _CHAT_COMPLETION_FIELDS: Final = frozenset((*ModelResponse.model_fields, "usage"
 _RESPONSES_API_ONLY_FIELDS: Final = frozenset((*Response.model_fields, *ResponsesAPIResponse.model_fields)) - frozenset(
     ChatCompletion.model_fields
 )
-_CHAT_CONTENT_ITEM: Final = TypeAdapter(dict[str, object])
 
 
 def _strip_prompt_cache_breakpoint_from_content_block(value: object) -> object:
@@ -1118,7 +1117,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     if original_type == "text":
                         converted = with_prompt_cache_breakpoint(
                             self._convert_content_str_to_input_text(item.get("text", ""), role),
-                            _CHAT_CONTENT_ITEM.validate_python(item).get("prompt_cache_breakpoint"),
+                            item.get("prompt_cache_breakpoint"),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   text -> %s", converted)
@@ -1131,7 +1130,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                     role,
                                 )
                             ),
-                            _CHAT_CONTENT_ITEM.validate_python(item).get("prompt_cache_breakpoint"),
+                            item.get("prompt_cache_breakpoint"),
                         )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   image_url -> %s", converted)
@@ -1147,7 +1146,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                 _input_file_from_file_value(
                                     cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
                                 ),
-                                _CHAT_CONTENT_ITEM.validate_python(item).get("prompt_cache_breakpoint"),
+                                item.get("prompt_cache_breakpoint"),
                             )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   file -> %s", converted)

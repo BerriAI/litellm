@@ -4233,6 +4233,44 @@ def test_prompt_cache_breakpoint_survives_chat_to_responses_conversion(
     assert request["prompt_cache_options"] == cache_breakpoint
 
 
+def test_prompt_cache_breakpoint_read_tolerates_non_string_content_block_keys() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    # Non-string keys are not JSON-representable but are accepted by chat completion
+    # callers passing Python dicts; reading the marker must not validate or reject them.
+    content: Final = [
+        {"type": "text", "text": "Stable prefix", 1: "ignored"},
+        {"type": "image_url", "image_url": "https://example.com/image.png", 2: "ignored"},
+        {"type": "file", "file": {"file_id": "file-123"}, 3: "ignored"},
+    ]
+    messages: Final = [{"role": "user", "content": content}]
+
+    for model in ("gpt-5.6", "gpt-4o"):  # marker keep path and strip path both read the block
+        request: dict[str, object] = handler.transform_request(
+            model=model,
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+            litellm_logging_obj=Mock(),
+        )
+
+        assert request["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Stable prefix"},
+                    {
+                        "type": "input_image",
+                        "image_url": "https://example.com/image.png",
+                        "detail": "auto",
+                    },
+                    {"type": "input_file", "file_id": "file-123"},
+                ],
+            }
+        ]
+
+
 def test_prompt_cache_breakpoints_are_dropped_for_unsupported_models() -> None:
     handler: Final = LiteLLMResponsesTransformationHandler()
     cache_breakpoint: Final = {"mode": "explicit"}
