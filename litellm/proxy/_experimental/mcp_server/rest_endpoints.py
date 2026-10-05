@@ -54,6 +54,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.responses.mcp.request_context import MCPRequestContext
 
 if TYPE_CHECKING:
@@ -737,6 +738,8 @@ if MCP_AVAILABLE:
         """
         from litellm.proxy.proxy_server import proxy_logging_obj
 
+        if apply_tool_filters and proxy_logging_obj is not None:
+            await proxy_logging_obj.enforce_mcp_server_rate_limits(user_api_key_auth, server)
         listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
         tools: Final = await _list_server_tools(
             server,
@@ -899,6 +902,8 @@ if MCP_AVAILABLE:
             # Surface the upstream 401/403 to the caller so it can emit the
             # matching status code and WWW-Authenticate challenge; that is what
             # lets standards-compliant MCP clients run the upstream OAuth flow.
+            raise
+        except ProxyRateLimitError:
             raise
         except MCPServerListError as e:
             fault: Final = classify_list_exception(e)

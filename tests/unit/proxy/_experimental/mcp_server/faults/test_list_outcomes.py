@@ -3,6 +3,7 @@ to exactly one category, wire values never carry upstream prose, and single-upst
 stay truthful to who failed."""
 
 import sys
+from typing import Final
 
 if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
     from exceptiongroup import BaseExceptionGroup
@@ -23,6 +24,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     list_fault_http_status,
     outcome_wire_value,
 )
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
 
 def test_carried_fault_passes_through():
@@ -33,6 +35,11 @@ def test_carried_fault_passes_through():
 def test_upstream_auth_error_maps_to_auth_required_and_forbidden():
     assert classify_list_exception(MCPUpstreamAuthError(401, None, "srv")).tag == "auth_required"
     assert classify_list_exception(MCPUpstreamAuthError(403, None, "srv")).tag == "forbidden"
+
+
+def test_proxy_rate_limit_error_maps_to_rate_limited() -> None:
+    fault: Final = classify_list_exception(ProxyRateLimitError(detail="server RPM exceeded"))
+    assert fault == ServerListFault(tag="rate_limited", status_code=429)
 
 
 def test_timeout_and_connection_errors_classify_without_status():

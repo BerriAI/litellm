@@ -24,6 +24,7 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPUpstreamAuthError,
 )
 from litellm.proxy._experimental.mcp_server.faults.traversal import iter_exception_tree
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
 ListFaultCategory: TypeAlias = Literal[
     "auth_required",
@@ -124,6 +125,8 @@ def classify_list_exception(exc: BaseException) -> ServerListFault:
     if isinstance(exc, MCPUpstreamAuthError):
         tag: Final = "forbidden" if exc.status_code == 403 else "auth_required"
         return ServerListFault(tag=tag, status_code=exc.status_code)
+    if isinstance(exc, ProxyRateLimitError):
+        return ServerListFault(tag="rate_limited", status_code=429)
     if isinstance(exc, TimeoutError):
         return ServerListFault(tag="timeout")
     if isinstance(exc, ConnectionError):

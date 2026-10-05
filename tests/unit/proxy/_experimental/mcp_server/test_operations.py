@@ -937,6 +937,82 @@ async def test_discovery_lists_each_capability_with_the_same_caller(available):
 
 
 @pytest.mark.asyncio
+async def test_discovery_shares_one_server_admission_across_catalog_listings() -> None:
+    from mcp import types
+
+    admitted: Final = MCPServer(
+        server_id="discover-admitted",
+        name="discover-admitted",
+        server_name="discover-admitted",
+        transport=MCPTransport.http,
+    )
+    rejected: Final = MCPServer(
+        server_id="discover-rejected",
+        name="discover-rejected",
+        server_name="discover-rejected",
+        transport=MCPTransport.http,
+    )
+    caller: Final = UserAPIKeyAuth(api_key="sk-discovery-admission")
+    proxy_logging: Final = _mcp_rate_limited_proxy_logging()
+    manager: Final = operations.global_mcp_server_manager
+
+    async def enforce_server_rpm(_user_api_key_auth: UserAPIKeyAuth | None, server: MCPServer) -> None:
+        if server.server_id == rejected.server_id:
+            raise ProxyRateLimitError(detail="server RPM exceeded")
+
+    async def fetch_tools(*, server: MCPServer, **_: object) -> list[types.Tool]:
+        return [types.Tool(name=f"{server.server_id}-tool", inputSchema={"type": "object"})]
+
+    async def fetch_prompts(*, server: MCPServer, **_: object) -> list[types.Prompt]:
+        return [types.Prompt(name=f"{server.server_id}-prompt")]
+
+    async def fetch_resources(*, server: MCPServer, **_: object) -> list[types.Resource]:
+        return [types.Resource(name=f"{server.server_id}-resource", uri=f"test://{server.server_id}")]
+
+    async def fetch_resource_templates(*, server: MCPServer, **_: object) -> list[types.ResourceTemplate]:
+        return [
+            types.ResourceTemplate(
+                name=f"{server.server_id}-template",
+                uri_template=f"test://{server.server_id}/{{name}}",
+            )
+        ]
+
+    enforcement: Final = AsyncMock(side_effect=enforce_server_rpm)
+    upstream_calls: Final = (
+        AsyncMock(side_effect=fetch_tools),
+        AsyncMock(side_effect=fetch_prompts),
+        AsyncMock(side_effect=fetch_resources),
+        AsyncMock(side_effect=fetch_resource_templates),
+    )
+    with (
+        patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[admitted, rejected])),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        patch.object(proxy_logging, "enforce_mcp_server_rate_limits", enforcement),
+        patch.object(manager, "_get_tools_from_server", upstream_calls[0]),
+        patch.object(manager, "get_prompts_from_server", upstream_calls[1]),
+        patch.object(manager, "get_resources_from_server", upstream_calls[2]),
+        patch.object(manager, "get_resource_templates_from_server", upstream_calls[3]),
+    ):
+        result: Final = await GatewayOperations().execute(
+            types.DiscoverRequest(),
+            prepare_context(caller, mcp_servers=[admitted.server_id, rejected.server_id]),
+        )
+
+    assert enforcement.await_count == 2
+    assert {call.args[1].server_id for call in enforcement.await_args_list} == {
+        admitted.server_id,
+        rejected.server_id,
+    }
+    assert all(
+        tuple(call.kwargs["server"].server_id for call in upstream.await_args_list) == (admitted.server_id,)
+        for upstream in upstream_calls
+    )
+    assert result.capabilities.tools is not None
+    assert result.capabilities.prompts is not None
+    assert result.capabilities.resources is not None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
 async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(outcome):
     from mcp.types import DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult

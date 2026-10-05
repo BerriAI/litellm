@@ -5,6 +5,7 @@ import traceback
 import types
 import uuid
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final, NoReturn, TypeAlias, overload
@@ -76,7 +77,6 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     SERVER_OUTCOMES_META_KEY,
     AggregateToolListing,
-    ServerListFault,
     ServerListOk,
     ServerOutcome,
     classify_list_exception,
@@ -234,6 +234,11 @@ class _MCPServerRateLimitAdmission:
     rejected_servers: tuple[tuple[MCPServer, ProxyRateLimitError], ...]
 
 
+_mcp_server_admission_memo: Final[ContextVar[dict[str, asyncio.Task[ProxyRateLimitError | None]] | None]] = ContextVar(
+    "mcp_server_admission_memo", default=None
+)
+
+
 async def _enforce_mcp_server_rate_limit(
     user_api_key_auth: UserAPIKeyAuth | None,
     server: MCPServer,
@@ -248,12 +253,24 @@ async def _admit_mcp_servers(
     servers: Sequence[MCPServer],
     user_api_key_auth: UserAPIKeyAuth | None,
 ) -> _MCPServerRateLimitAdmission:
-    async def _admit_server(server: MCPServer) -> tuple[MCPServer, ProxyRateLimitError | None]:
+    memo: Final = _mcp_server_admission_memo.get()
+
+    async def _server_rate_limit_error(server: MCPServer) -> ProxyRateLimitError | None:
         try:
             await _enforce_mcp_server_rate_limit(user_api_key_auth, server)
         except ProxyRateLimitError as error:
-            return server, error
-        return server, None
+            return error
+        return None
+
+    async def _admit_server(server: MCPServer) -> tuple[MCPServer, ProxyRateLimitError | None]:
+        if memo is None:
+            return server, await _server_rate_limit_error(server)
+        admission_task: Final = memo.get(server.server_id)
+        if admission_task is not None:
+            return server, await admission_task
+        created_task: Final = asyncio.create_task(_server_rate_limit_error(server))
+        memo[server.server_id] = created_task
+        return server, await created_task
 
     results: Final = await asyncio.gather(*(_admit_server(server) for server in servers))
     return _MCPServerRateLimitAdmission(
@@ -1246,8 +1263,8 @@ async def _get_tools_from_mcp_servers(
         server_outcomes: Final[dict[str, ServerOutcome]] = {
             _aggregate_server_key(server): outcome for server, (_, outcome) in zip(admitted_mcp_servers, results)
         } | {
-            _aggregate_server_key(server): ServerListFault(tag="rate_limited", status_code=429)
-            for server, _ in server_admission.rejected_servers
+            _aggregate_server_key(server): classify_list_exception(error)
+            for server, error in server_admission.rejected_servers
         }
 
         # If logging is enabled, enrich spend_logs_metadata with counts
@@ -3299,6 +3316,7 @@ class GatewayOperations:
                     if context.mcp_proxy_mode
                     else (ListPromptsRequest(), ListResourcesRequest(), ListResourceTemplatesRequest())
                 )
+                memo_token: Final = _mcp_server_admission_memo.set({})
                 tasks: Final = (
                     asyncio.create_task(
                         _execute_handle_list_tools(
@@ -3313,9 +3331,12 @@ class GatewayOperations:
                 try:
                     results: Final = await asyncio.gather(*tasks)
                 finally:
-                    for task in tasks:
-                        task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                    try:
+                        for task in tasks:
+                            task.cancel()
+                        await asyncio.gather(*tasks, return_exceptions=True)
+                    finally:
+                        _mcp_server_admission_memo.reset(memo_token)
                 return build_discovery(
                     configured=configured_versions(),
                     revision=context.protocol_version or "2025-11-25",
