@@ -260,7 +260,7 @@ function Input({ placeholder, busy = false, className, ...props }: SearchBoxInpu
       <div className="relative flex min-w-0 flex-1">
         <ProseMirrorDoc />
         {!text && (
-          <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center font-mono text-xs text-muted-foreground">
+          <span className="pointer-events-none absolute inset-y-0 right-0 left-0 truncate font-mono text-xs/8 text-muted-foreground">
             {placeholder}
           </span>
         )}

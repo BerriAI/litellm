@@ -38,8 +38,8 @@ function RunCount({ cap, sampled, onCapChange, onBlur }: RunCountProps) {
     onBlur();
   };
   return (
-    <div className="grid justify-items-end gap-0.5">
-      <label className="flex items-baseline gap-1.5">
+    <div className="grid justify-items-end gap-1">
+      <label className="flex items-center gap-2">
         <input
           inputMode="numeric"
           aria-label="Runs to analyze"
@@ -51,12 +51,12 @@ function RunCount({ cap, sampled, onCapChange, onBlur }: RunCountProps) {
             onCapChange(capFromText(event.target.value));
           }}
           onBlur={finishTyping}
-          style={{ width: `${Math.max((shown || "All").length, 2) + 1}ch` }}
-          className="-mr-1 rounded-sm border-0 bg-transparent px-1 py-0 shadow-none focus:ring-0 text-right text-xl font-semibold tabular-nums tracking-tight outline-none hover:bg-muted/60 focus:bg-muted/60"
+          style={{ width: `${Math.max((shown || "All").length, 3) + 2}ch` }}
+          className="h-8 rounded-md border border-input bg-background px-2 py-0 text-right text-base font-semibold tabular-nums shadow-xs outline-none hover:border-ring/60 focus:border-ring focus:ring-[3px] focus:ring-ring/50 dark:bg-input/30"
         />
         <span className="text-sm text-muted-foreground">runs</span>
       </label>
-      {capped ? (
+      {capped && (
         <button
           type="button"
           aria-label="Remove cap"
@@ -66,8 +66,6 @@ function RunCount({ cap, sampled, onCapChange, onBlur }: RunCountProps) {
           Capped
           <X aria-hidden="true" className="size-3" />
         </button>
-      ) : (
-        <span className="text-xs text-muted-foreground">Type a number to cap</span>
       )}
     </div>
   );

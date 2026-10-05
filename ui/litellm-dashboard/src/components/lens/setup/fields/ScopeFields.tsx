@@ -11,7 +11,7 @@ export function ScopeFields({ runs, range }: ScopeOptions) {
   const { control } = useFormContext<InvestigationInput>();
   const dropPicks = useDropPicks();
   return (
-    <div className="min-h-11 rounded-md border border-input py-1 shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30">
+    <div className="h-10 rounded-md border border-input shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30 [&_[data-slot=search-box-input]]:rounded-md [&_[data-slot=search-box-input]]:focus-within:bg-transparent">
       <Controller
         control={control}
         name="selection.q"
