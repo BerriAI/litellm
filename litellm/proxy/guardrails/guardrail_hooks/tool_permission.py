@@ -579,9 +579,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.info("Blocking %s unauthorized tool uses", len(denied_tools))
 
-        error_by_tool_use_id: Final[
-            Mapping[object, str]
-        ] = {  # mutable-ok: read-only lookup, never mutated after construction
+        error_by_tool_use_id: Final[Mapping[object, str]] = {
             tool_call.id: self._create_permission_error_result(tool_call, error).content
             for tool_call, error in denied_tools
         }
@@ -596,9 +594,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
             message for message in (_denied_message(block) for block in content) if message is not None
         )
         kept_blocks: Final = tuple(block for block in content if _denied_message(block) is None)
-        new_content: Final = [  # mutable-ok: response content is a JSON array on the wire
+        new_content: Final = [
             *kept_blocks,
-            {"type": "text", "text": "\n".join(error_messages)},  # mutable-ok: content block is a JSON object
+            {"type": "text", "text": "\n".join(error_messages)},
         ]
 
         response["content"] = new_content  # rebind-ok: the guardrail rewrites the provider response in place

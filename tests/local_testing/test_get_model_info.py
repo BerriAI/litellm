@@ -1,14 +1,19 @@
 # What is this?
 ## Unit testing for the 'get_model_info()' function
 import os
+import re
+from collections.abc import Collection, Mapping
 
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Final, Literal
 
 import pytest
 
 import litellm
 from litellm import get_model_info
+from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.types.utils import ModelInfoBase
+from litellm.utils import _invalidate_model_cost_lowercase_map
 from unittest.mock import MagicMock, patch
 
 
@@ -74,15 +79,15 @@ def test_get_model_info_ollama_chat():
         assert mock_client.call_args.kwargs["json"]["name"] == "unknown-model"
 
 
-def test_get_model_info_bedrock_region():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    args = {
-        "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        "custom_llm_provider": "bedrock",
+def test_get_model_info_bedrock_region(monkeypatch):
+    regional_model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    model_cost_without_regional_entry = {
+        key: value for key, value in litellm.get_model_cost_map(url="").items() if key != regional_model
     }
-    litellm.model_cost.pop("us.anthropic.claude-haiku-4-5-20251001-v1:0", None)
-    info = litellm.get_model_info(**args)
+    monkeypatch.setattr(litellm, "model_cost", model_cost_without_regional_entry)
+    _invalidate_model_cost_lowercase_map()
+    info = litellm.get_model_info(model=regional_model, custom_llm_provider="bedrock")
     print("info", info)
     assert info["key"] == "anthropic.claude-haiku-4-5-20251001-v1:0"
     assert info["litellm_provider"] == "bedrock_converse"
@@ -115,26 +120,31 @@ def test_get_model_info_ft_model_with_provider_prefix():
 
 
 def _enforce_bedrock_converse_models(
-    model_cost: List[Dict[str, Any]], whitelist_models: List[str]
-):
+    model_cost: Mapping[str, ModelInfoBase], whitelist_models: Collection[str]
+) -> None:
     """
-    Assert all new bedrock chat models are added as `bedrock_converse` unless explicitly whitelisted.
+    Assert unlisted Bedrock chat models declare or inherit Converse routing.
     """
     # Check for unwhitelisted models
-    for model, info in litellm.model_cost.items():
+    for model, info in model_cost.items():
         if (
             info["litellm_provider"] == "bedrock"
             and info["mode"] == "chat"
             and model not in whitelist_models
+            and not (
+                (base_model := BedrockModelInfo.get_base_model(model)) != model
+                and model_cost.get(base_model, {}).get("litellm_provider") == "bedrock_converse"
+                and BedrockModelInfo.get_bedrock_route(model) == "converse"
+            )
         ):
             raise AssertionError(
-                f"New bedrock chat model detected: {model}. Please set `litellm_provider='bedrock_converse'` for this model."
+                f"Unlisted Bedrock chat model does not route to Converse: {model}"
             )
 
 
 def test_model_info_bedrock_converse(monkeypatch):
     """
-    Assert all new bedrock chat models are added as `bedrock_converse` unless explicitly whitelisted.
+    Assert unlisted Bedrock chat models declare or inherit Converse routing.
 
     This ensures they are automatically routed to the converse endpoint.
     """
@@ -172,12 +182,33 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
             whitelist_models = [line.strip() for line in file.readlines()]
 
         # Check for unwhitelisted models
-        with pytest.raises(AssertionError):
+        with pytest.raises(AssertionError, match=r"fake\.bedrock-chat-model"):
             _enforce_bedrock_converse_models(
                 model_cost=litellm.model_cost, whitelist_models=whitelist_models
             )
     except FileNotFoundError as e:
         pytest.skip("whitelisted_bedrock_models.txt not found")
+
+
+@pytest.mark.parametrize("region", ("us-gov-east-1", "us-gov-west-1"))
+@pytest.mark.parametrize("base_provider", ("bedrock_converse", "bedrock"))
+def test_regional_bedrock_alias_requires_canonical_converse_metadata(
+    region: str, base_provider: Literal["bedrock_converse", "bedrock"]
+) -> None:
+    base_model: Final = next(
+        model for model in sorted(litellm.bedrock_converse_models) if BedrockModelInfo.get_base_model(model) == model
+    )
+    model: Final = f"bedrock/{region}/{base_model}"
+    model_cost: Final[Mapping[str, ModelInfoBase]] = {
+        model: {"litellm_provider": "bedrock", "mode": "chat"},
+        base_model: {"litellm_provider": base_provider, "mode": "chat"},
+    }
+    assert BedrockModelInfo.get_bedrock_route(model) == "converse"
+    if base_provider == "bedrock":
+        with pytest.raises(AssertionError, match=re.escape(model)):
+            _enforce_bedrock_converse_models(model_cost, ())
+        return
+    _enforce_bedrock_converse_models(model_cost, ())
 
 
 def test_get_model_info_custom_provider():
@@ -318,6 +349,33 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
 
     assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
 
+
+
+def test_get_model_info_bedrock_priced_cross_region_profile_has_priced_base():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    prefixes = ("us.", "eu.", "apac.", "us-gov.", "au.", "global.")
+    checked = 0
+
+    for k, v in litellm.model_cost.items():
+        if not str(v.get("litellm_provider", "")).startswith("bedrock"):
+            continue
+        base_model_key = next(
+            (k[len(p) :] for p in prefixes if k.startswith(p)),
+            None,
+        )
+        if base_model_key is None or base_model_key not in litellm.model_cost:
+            continue
+        checked += 1
+        base = litellm.model_cost[base_model_key]
+        for cost_key in ("input_cost_per_token", "output_cost_per_token"):
+            if (v.get(cost_key) or 0) > 0:
+                assert (
+                    base.get(cost_key) or 0
+                ) > 0, f"{k} charges {cost_key} but its base {base_model_key} is free"
+
+    assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
 
 def test_get_model_info_huggingface_models(monkeypatch):
     from litellm import Router

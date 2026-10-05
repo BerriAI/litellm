@@ -355,7 +355,9 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             "CrowdStrike AIDR Guardrail (%s): Calling endpoint %s with payload: %s", hook_name, endpoint, payload
         )
 
-        response: Final = await self.async_handler.post(url=endpoint, json=payload, headers=headers)
+        response: Final = await self.async_handler.post(
+            url=endpoint, json=payload, headers=headers, timeout=self.timeout
+        )
         assert response is not None
         response.raise_for_status()
 
@@ -384,7 +386,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             if transformed_signal:
                 raise HTTPException(
                     status_code=500,
-                    detail={  # mutable-ok: one-shot HTTPException detail payload, never mutated after construction
+                    detail={
                         "error": "CrowdStrike AIDR returned a transformed response litellm could not parse; "
                         "failing closed instead of dropping the delivered redactions",
                         "guardrail_name": self.guardrail_name,

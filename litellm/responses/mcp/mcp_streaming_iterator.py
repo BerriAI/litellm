@@ -281,6 +281,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]] | None = None,
         user_api_key_auth: "UserAPIKeyAuth | None" = None,
         original_request_params: dict[str, Any] | None = None,
+        served_tools: Sequence[MCPTool] | None = None,
     ):
         # MCP setup
         self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
@@ -300,6 +301,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.mcp_discovery_generated = True  # Events are already generated
         self.mcp_events = mcp_events  # Store the initial MCP events for backward compatibility
         self.tool_server_map = tool_server_map
+        self.served_tools = tuple(served_tools) if served_tools is not None else None
 
         # Iterator references
         self.base_iterator: BaseResponsesAPIStreamingIterator | ResponsesAPIResponse | None = (
@@ -648,9 +650,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 *self._composed_output,
                 *_output_items(response_obj),
             ]
-            merged_response: Final = response_obj.model_copy(
-                update={"output": merged_output}  # mutable-ok: pydantic's update argument must be a dict
-            )
+            merged_response: Final = response_obj.model_copy(update={"output": merged_output})
             _set_event_field(chunk, "response", merged_response)
         return chunk
 
@@ -767,11 +767,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     call_items[tool_call_id] = (item_id, output_index)
                     self.tool_execution_events.append(
                         OutputItemAddedEvent.model_validate(
-                            {  # mutable-ok: consumed once by model_validate
+                            {
                                 "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                                 "sequence_number": len(self.tool_execution_events) + 1,
                                 "output_index": output_index,
-                                "item": {  # mutable-ok: consumed once by model_validate
+                                "item": {
                                     "id": item_id,
                                     "type": "mcp_call",
                                     "status": "in_progress",
@@ -798,6 +798,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Execute the tools
             tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
                 tool_server_map=self.tool_server_map,
+                served_tools=self.served_tools,
                 tool_calls=tool_calls,
                 user_api_key_auth=self.user_api_key_auth,
                 mcp_auth_header=self.mcp_auth_header,
@@ -849,7 +850,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 from litellm.types.llms.openai import OutputItemDoneEvent
 
                 mcp_call_item = BaseLiteLLMOpenAIResponseObject(
-                    **{  # mutable-ok: consumed once by the model constructor
+                    **{
                         "id": item_id,
                         "type": "mcp_call",
                         "status": "completed",
