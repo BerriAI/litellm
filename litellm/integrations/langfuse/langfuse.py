@@ -10,8 +10,6 @@ from importlib.metadata import PackageNotFoundError, version
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
 
-from packaging.version import Version
-
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
@@ -194,6 +192,11 @@ def raise_if_unsupported_langfuse_version(installed_version: str) -> None:
     `LangfuseOtelSpanAttributes` raises inside the per-request handler and the
     broad except there turns it into silent total data loss.
     """
+    from litellm.litellm_core_utils.optional_dependencies import require_optional_dependency
+
+    require_optional_dependency("packaging", "integrations", "Langfuse version checks")
+    from packaging.version import Version
+
     installed: Final = Version(installed_version)
     # compare majors, not versions: "5.0.0rc1" sorts below "5" but is just as unsupported
     if Version(MINIMUM_LANGFUSE_VERSION) <= installed and installed.major < Version(UNSUPPORTED_LANGFUSE_VERSION).major:

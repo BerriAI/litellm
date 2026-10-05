@@ -1,3 +1,5 @@
+from litellm.litellm_core_utils.optional_dependencies import MissingOptionalDependencyError
+
 """
 Translation from OpenAI's `/chat/completions` endpoint to IBM WatsonX's `/text/chat` endpoint.
 
@@ -129,6 +131,8 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
                 # The caller will handle None/empty by falling back to default
                 if result:
                     return result
+            except MissingOptionalDependencyError:
+                raise
             except Exception:
                 # Silently fall through to return None - caller will handle fallback
                 pass
@@ -182,6 +186,8 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
                 # The caller (_aconvert_watsonx_messages_core) will handle None/empty by falling back to default
                 if result:
                     return result
+            except MissingOptionalDependencyError:
+                raise
             except Exception as e:
                 # Log the exception for debugging but don't raise it
                 # The caller will fall back to default prompt factory

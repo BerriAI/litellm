@@ -103,6 +103,7 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages_async,
 )
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
+from litellm.litellm_core_utils.optional_dependencies import MissingOptionalDependencyError
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
@@ -4811,7 +4812,7 @@ def _init_custom_logger_compatible_class(
             # never registered simultaneously — the dedup loop below treats
             # any module under ``litellm.integrations.otel`` or
             # ``litellm.integrations.opentelemetry`` as "the OTel callback".
-            from litellm.integrations.otel.model.config import is_otel_v2_enabled
+            from litellm.integrations.otel.model.flags import is_otel_v2_enabled
 
             if is_otel_v2_enabled():
                 from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger
@@ -5205,9 +5206,14 @@ def _init_custom_logger_compatible_class(
             return newrelic_logger
         return None
     except Exception as e:
-        verbose_logger.exception("[Non-Blocking Error] Error initializing custom logger: %s", e)
-        return None
+        return _handle_custom_logger_initialization_error(e)
     return None
+
+
+def _handle_custom_logger_initialization_error(error: Exception) -> None:
+    if isinstance(error, MissingOptionalDependencyError):
+        raise error
+    verbose_logger.exception("[Non-Blocking Error] Error initializing custom logger: %s", error)
 
 
 def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[CustomLogger]) -> "OpenTelemetryV2 | None":
@@ -5230,7 +5236,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     console placeholder returns ``None``, so the caller falls through to the legacy
     path exactly as before V2 landed.
     """
-    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.model.flags import is_otel_v2_enabled
 
     if not is_otel_v2_enabled():
         return None

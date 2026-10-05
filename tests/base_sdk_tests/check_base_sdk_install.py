@@ -15,6 +15,7 @@ import subprocess
 import sys
 import traceback
 import warnings
+import tempfile
 from collections.abc import Callable
 from functools import partial
 from importlib.metadata import distribution
@@ -32,7 +33,7 @@ TOKENIZER_MODULES: Final = ("tokenizers", "huggingface_hub", "hf_xet", "fsspec")
 
 def check_optional_dependencies(profile: str) -> str:
     if profile == "core":
-        for module in ("click", "filelock", "importlib_metadata", "zipp", "jsonschema", "referencing", "rpds"):
+        for module in ("click", "filelock", "importlib_metadata", "zipp", "jsonschema", "referencing", "rpds", "pydantic_settings", "packaging", "yaml", "jinja2", "markupsafe", "dateutil", "six", "dotenv"):
             _require(importlib.util.find_spec(module) is None, f"core still installs {module}")
     for modules, expected in (
         (AWS_MODULES, profile in ("aws", "aws,tokenizers", "sdk-extras", "proxy")),
@@ -265,10 +266,122 @@ def check_retries() -> str:
 
 
 def check_search_date_parsing() -> str:
+    if importlib.util.find_spec("dateutil") is None:
+        _expect_extra("search", lambda: __import__("litellm.llms.brave.search.transformation"))
+        return "Brave search requests the search extra"
     from litellm.llms.brave.search.transformation import to_yyyy_mm_dd
 
-    _require(to_yyyy_mm_dd("2026-01-02") == "2026-01-02", "search result date parsing failed")
-    return "search date parsing works independently of AWS"
+    for value, expected in (("2026-01-02", "2026-01-02"), ("January 2, 2026", "2026-01-02"), ("1767312000000", "2026-01-02"), ("not a date", None)):
+        _require(to_yyyy_mm_dd(value) == expected, "search date normalization changed")
+    _require(to_yyyy_mm_dd("02/03/2026", dayfirst=True) == "2026-03-02", "ambiguous date precedence changed")
+    return "search date formats and malformed input retain their behavior"
+
+
+def _expect_extra(extra: str, action: Callable[[], object]) -> None:
+    try:
+        action()
+    except ImportError as error:
+        _require(f"litellm[{extra}]" in str(error), f"missing {extra} installation guidance: {error}")
+        _require(isinstance(error.__cause__, ModuleNotFoundError), "missing dependency cause was lost")
+    else:
+        raise AssertionError(f"requested capability silently succeeded without {extra}")
+
+
+def check_prompt_rendering() -> str:
+    import litellm
+    from litellm.integrations.dotprompt.prompt_manager import PromptManager
+    from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+    from litellm.litellm_core_utils.prompt_templates.factory import ahf_chat_template, hf_chat_template, prompt_factory
+    from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
+
+    messages: Final = [{"role": "user", "content": "hello"}]
+    template: Final = "{{ messages[0].content }}"
+    if importlib.util.find_spec("jinja2") is None:
+        previous: Final = litellm.known_tokenizer_config
+        litellm.known_tokenizer_config = {**previous, "unknown/template-model": {"status": "success", "tokenizer": {"chat_template": template}}, "openai/gpt-oss-120b": {"status": "success", "tokenizer": {"chat_template": template}}}
+        for action in (
+            PromptManager,
+            partial(hf_chat_template, "test", messages, template),
+            lambda: asyncio.run(ahf_chat_template("test", messages, template)),
+            partial(prompt_factory, model="unknown/template-model", messages=messages),
+            partial(IBMWatsonXChatConfig.apply_prompt_template, "openai/gpt-oss-120b", messages),
+            lambda: asyncio.run(IBMWatsonXChatConfig.aapply_prompt_template("openai/gpt-oss-120b", messages)),
+            partial(DotpromptManager(prompt_data={"hello": {"content": "hi"}}).should_run_prompt_management, "hello", None, {}),
+        ):
+            _expect_extra("prompts", action)
+        litellm.known_tokenizer_config = previous
+        return "sync/async templates and prompt selection explain the extra without fallback"
+    _require(hf_chat_template("test", messages, template) == "hello", "sync rendering changed")
+    _require(asyncio.run(ahf_chat_template("test", messages, template)) == "hello", "async rendering changed")
+    manager: Final = PromptManager()
+    metadata, content = manager._parse_frontmatter('---\nmodel: openai/test\ntags: [one, two]\n---\nHello {{ name }}')
+    _require(metadata["tags"] == ["one", "two"], "nested YAML frontmatter changed")
+    _require(manager.jinja_env.from_string(content).render(name="world") == "Hello world", "prompt rendering changed")
+    from jinja2.exceptions import SecurityError
+
+    try:
+        manager.jinja_env.from_string("{{ value.__class__.__mro__ }}").render(value="test")
+    except SecurityError:
+        return "YAML, sync/async rendering and sandbox protections retained"
+    raise AssertionError("prompt sandbox allowed private attribute traversal")
+
+
+def check_environment_files() -> str:
+    import litellm
+
+    available: Final = importlib.util.find_spec("dotenv") is not None
+    with tempfile.TemporaryDirectory() as directory:
+        root: Final = Path(directory)
+        (root / ".env").write_text("SDK_ENV_FILE_ONLY=file\nSDK_ENV_PRECEDENCE=file\n", encoding="utf-8")
+        source: Final = (
+            "import os, json; import litellm; "
+            "print(json.dumps([os.getenv('SDK_ENV_FILE_ONLY'), os.getenv('SDK_ENV_PRECEDENCE'), litellm.__file__]))"
+        )
+        for mode, reload, expected in (
+            ("DEV", "False", ["file" if available else None, "process"]),
+            ("PRODUCTION", "False", [None, "process"]),
+            ("DEV", "True", ["file", "file"]),
+        ):
+            environment: Final = {
+                **{key: value for key, value in os.environ.items() if key not in ("SDK_ENV_FILE_ONLY", "PYTHON_DOTENV_DISABLED")},
+                "LITELLM_MODE": mode,
+                "LITELLM_DEV_ENV_HOT_RELOAD": reload,
+                "SDK_ENV_PRECEDENCE": "process",
+                "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+            }
+            result: Final = subprocess.run([sys.executable, "-I", "-c", source], cwd=root, env=environment, capture_output=True, text=True, timeout=60)
+            if reload == "True" and not available:
+                _require(result.returncode != 0 and "litellm[dotenv]" in result.stderr, "explicit reload lost missing-extra guidance")
+            else:
+                _require(result.returncode == 0, f"environment loading failed: {result.stderr}")
+                _require(json.loads(result.stdout.strip().splitlines()[-1]) == [*expected, litellm.__file__], "file/process environment precedence changed")
+    return "DEV/PRODUCTION loading and reload precedence match the installation"
+
+
+def check_integration_configuration() -> str:
+    from litellm.integrations.otel.model.flags import is_otel_v2_enabled
+    from litellm.integrations.langfuse.langfuse import raise_if_unsupported_langfuse_version
+    from litellm.integrations.lunary import LunaryLogger
+
+    _require(is_otel_v2_enabled() is False, "disabled telemetry must work in core")
+    if importlib.util.find_spec("packaging") is None:
+        _expect_extra("integrations", partial(raise_if_unsupported_langfuse_version, "4.7.0"))
+        _expect_extra("integrations", LunaryLogger)
+    else:
+        raise_if_unsupported_langfuse_version("4.7.0")
+        try:
+            raise_if_unsupported_langfuse_version("5.0.0rc1")
+        except ImportError as error:
+            _require("5.0.0rc1" in str(error), "version rejection lost its explanation")
+        else:
+            raise AssertionError("unsupported prerelease version was accepted")
+    if importlib.util.find_spec("pydantic_settings") is None:
+        _expect_extra("integrations", lambda: __import__("litellm.integrations.otel.model.config"))
+    else:
+        from litellm.integrations.otel import OpenTelemetryV2Config
+
+        _require(OpenTelemetryV2Config().exporters, "telemetry default exporter was lost")
+    return "disabled telemetry stays core; optional settings and version checks retain behavior"
 
 
 def check_bundled_model_metadata() -> str:
@@ -397,6 +510,9 @@ CHECKS: tuple[tuple[str, Callable[[], str]], ...] = (
     ("streaming", check_streaming),
     ("retries", check_retries),
     ("search date parsing", check_search_date_parsing),
+    ("prompt rendering", check_prompt_rendering),
+    ("integration configuration", check_integration_configuration),
+    ("environment files", check_environment_files),
     ("bundled model metadata", check_bundled_model_metadata),
     ("token counter", check_token_counter),
     ("Mantle bearer authentication", check_mantle_bearer_authentication),
@@ -415,7 +531,7 @@ def main() -> int:
     parser: Final = argparse.ArgumentParser()
     parser.add_argument(
         "--profile",
-        choices=("core", "cli", "validation", "aws", "tokenizers", "aws,tokenizers", "sdk-extras", "proxy"),
+        choices=("core", "cli", "validation", "aws", "tokenizers", "aws,tokenizers", "sdk-extras", "proxy", "integrations", "prompts", "search", "dotenv", "prompts,search", "mcp"),
         default="core",
     )
     profile: Final = parser.parse_args().profile

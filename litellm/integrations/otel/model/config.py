@@ -1,11 +1,18 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
 from enum import Enum
-from functools import lru_cache
 from typing import Annotated, Final
 
 from pydantic import AliasChoices, ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 from pydantic.fields import FieldInfo
+
+from litellm.integrations.otel.model import flags
+from litellm.litellm_core_utils.optional_dependencies import require_optional_dependency
+
+OTEL_V2_ENV: Final = flags.OTEL_V2_ENV
+is_otel_v2_enabled: Final = flags.is_otel_v2_enabled
+
+require_optional_dependency("pydantic_settings", "integrations", "OpenTelemetry configuration")
 from pydantic_settings import BaseSettings, NoDecode, PydanticBaseSettingsSource, SettingsConfigDict
 
 from litellm._logging import verbose_logger
@@ -17,9 +24,6 @@ from litellm.integrations.otel.model.baggage import (
 from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import OtelSpanScope
-
-#: Master feature-flag env var. The logger is inert until this is truthy.
-OTEL_V2_ENV: Final = "LITELLM_OTEL_V2"
 
 
 class CaptureMessageContent(str):
@@ -46,21 +50,6 @@ class ExporterOwner(str, Enum):
     AGENTOPS = "agentops"
     NEWRELIC = "newrelic"
     SIGNOZ = "signoz"
-
-
-class _OTelV2Flag(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore")
-
-    enabled: bool = Field(default=False, validation_alias=AliasChoices(OTEL_V2_ENV))
-
-
-@lru_cache(maxsize=1)
-def is_otel_v2_enabled() -> bool:
-    # Resolved once at startup and cached: constructing the pydantic-settings
-    # model re-scans the environment and cost ~28us, which on the proxy hot path
-    # (auth, logging-callback setup) compounded into a measurable throughput
-    # regression. Tests that toggle the env must call ``is_otel_v2_enabled.cache_clear()``.
-    return _OTelV2Flag().enabled
 
 
 class ExporterSpec(LiteLLMBaseModel):

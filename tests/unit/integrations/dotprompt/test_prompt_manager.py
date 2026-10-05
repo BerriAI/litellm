@@ -746,3 +746,17 @@ def test_sync_caller_ignore_flag_survives_missing_prompt_spec():
         ignore_prompt_manager_model=True,
     )
     assert model == "anthropic/claude-haiku-4-5"
+
+
+@pytest.mark.parametrize("missing", ["jinja2", "yaml"])
+def test_prompt_selection_reports_missing_capability(monkeypatch, missing):
+    import sys
+
+    monkeypatch.setitem(sys.modules, missing, None)
+    manager = DotpromptManager(prompt_data={"hello": {"content": "Hello {{ name }}"}})
+    with pytest.raises(ImportError, match=r"litellm\[prompts\]") as caught:
+        manager.should_run_prompt_management("hello", None, {})
+    assert isinstance(caught.value.__cause__, ModuleNotFoundError)
+    assert caught.value.__cause__.name == missing
+    with pytest.raises(ImportError, match=r"litellm\[prompts\]"):
+        manager._compile_prompt_helper("hello", None, {"name": "world"}, {})

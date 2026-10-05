@@ -72,3 +72,19 @@ async def test_watsonx_text_gpt_oss_async_completion_fetches_hf_template_off_the
     assert response.choices[0].message.content == "Hi"
     assert hf_fetched == [expected_fetch]
     assert captured["body"]["input"] == "<|user|>Hi there"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_gpt_oss_template_dependency_error_is_not_a_prompt_fallback(monkeypatch, asynchronous):
+    import sys
+    from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
+
+    monkeypatch.setitem(sys.modules, "jinja2", None)
+    monkeypatch.setitem(litellm.known_tokenizer_config, "openai/gpt-oss-120b", {"status": "success", "tokenizer": {"chat_template": "{{ messages[0].content }}"}})
+    messages = [{"role": "user", "content": "hello"}]
+    if asynchronous:
+        with pytest.raises(ImportError, match=r"litellm\[prompts\]"):
+            await IBMWatsonXChatConfig.aapply_prompt_template("openai/gpt-oss-120b", messages)
+    else:
+        with pytest.raises(ImportError, match=r"litellm\[prompts\]"):
+            IBMWatsonXChatConfig.apply_prompt_template("openai/gpt-oss-120b", messages)

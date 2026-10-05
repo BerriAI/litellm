@@ -14,9 +14,6 @@ warnings.filterwarnings("ignore", message=".*`ReadOnly` qualifier.*")
 import threading
 import os
 
-# Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
-import dotenv as _dotenv
-
 
 def _dev_env_hot_reload_enabled() -> bool:
     """The proxy exports this flag when started with ``--reload``. A reloaded
@@ -27,7 +24,22 @@ def _dev_env_hot_reload_enabled() -> bool:
 
 
 if os.getenv("LITELLM_MODE", "DEV") == "DEV":
-    _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
+    try:
+        import dotenv as _dotenv
+    except ModuleNotFoundError as _dotenv_error:
+        if _dotenv_error.name != "dotenv":
+            raise
+        if _dev_env_hot_reload_enabled():
+            raise ImportError(
+                'Environment-file reload requires python-dotenv. Install with pip install "litellm[dotenv]"'
+            ) from _dotenv_error
+        import logging as _env_logging
+
+        _env_logging.getLogger("LiteLLM").debug(
+            'Environment-file loading is unavailable. Use process environment variables or pip install "litellm[dotenv]"'
+        )
+    else:
+        _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
 
 from collections.abc import Mapping, Sequence
 from typing import (

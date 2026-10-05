@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from typing import Final, Literal, TypedDict
 
 import httpx
+
+from litellm.litellm_core_utils.optional_dependencies import require_optional_dependency
+
+require_optional_dependency("dateutil", "search", "Brave search date parsing")
 from dateutil import parser
 
 _ISO_YMD: Final = re.compile(r"^\s*\d{4}[-/]\d{1,2}[-/]\d{1,2}\s*$")

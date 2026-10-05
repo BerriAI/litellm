@@ -5,7 +5,6 @@ from typing import Any, Final
 from urllib.parse import quote
 
 import httpx
-import yaml
 
 import litellm
 from litellm._logging import verbose_logger
@@ -133,6 +132,11 @@ class CyberArkSecretManager(BaseSecretManager):
         """
         # In production, we'd check if the variable exists first
         # For now, we'll attempt to create it and ignore if it already exists
+        from litellm.litellm_core_utils.optional_dependencies import require_optional_dependency
+
+        require_optional_dependency("yaml", "integrations", "CyberArk variable policies")
+        import yaml
+
         raise_if_unsafe_secret_name(secret_name)
         policy_url: Final = f"{self.conjur_addr}/policies/{self.conjur_account}/policy/root"
         # Use a real YAML serializer to build the scalar safely.

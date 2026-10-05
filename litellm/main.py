@@ -34,7 +34,6 @@ from litellm._uuid import uuid
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
-import dotenv
 import httpx
 import openai
 from pydantic import BaseModel, TypeAdapter

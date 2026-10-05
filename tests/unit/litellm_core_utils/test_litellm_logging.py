@@ -9552,3 +9552,21 @@ def test_aws_callback_setup_does_not_swallow_missing_extra(callback: str, missin
         get_custom_logger_compatible_class(callback)
     with pytest.raises(ImportError, match=r"litellm\[aws\]"):
         SQSLogger()
+
+
+def test_optional_callback_dependency_is_not_silently_ignored(monkeypatch):
+    import sys
+    from litellm.integrations.otel.model.flags import is_otel_v2_enabled
+    from litellm.litellm_core_utils.litellm_logging import _init_custom_logger_compatible_class
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setitem(sys.modules, "pydantic_settings", None)
+    monkeypatch.delitem(sys.modules, "litellm.integrations.otel.model.config", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        with pytest.raises(ImportError, match=r"litellm\[integrations\]") as caught:
+            _init_custom_logger_compatible_class("otel", None, None)
+        assert isinstance(caught.value.__cause__, ModuleNotFoundError)
+        assert caught.value.__cause__.name == "pydantic_settings"
+    finally:
+        is_otel_v2_enabled.cache_clear()

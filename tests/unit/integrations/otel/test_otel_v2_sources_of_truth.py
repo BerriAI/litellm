@@ -1700,23 +1700,14 @@ def test_v2_flag_resolved_once_not_per_call(monkeypatch):
     (auth, logging-callback setup). Building the pydantic-settings model on every
     call re-scanned the environment at ~28us a pop and dropped throughput, so the
     flag must be resolved once and cached rather than reconstructed per call."""
-    from litellm.integrations.otel.model import config as config_mod
-
-    constructions = 0
-    real_flag = config_mod._OTelV2Flag
-
-    def _counting_flag(*args, **kwargs):
-        nonlocal constructions
-        constructions += 1
-        return real_flag(*args, **kwargs)
-
-    monkeypatch.setattr(config_mod, "_OTelV2Flag", _counting_flag)
-    config_mod.is_otel_v2_enabled.cache_clear()
-
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    assert is_otel_v2_enabled() is True
+    monkeypatch.setenv("LITELLM_OTEL_V2", "false")
     for _ in range(50):
-        config_mod.is_otel_v2_enabled()
-
-    assert constructions == 1
+        assert is_otel_v2_enabled() is True
+    is_otel_v2_enabled.cache_clear()
+    assert is_otel_v2_enabled() is False
 
 
 def test_config_from_env(monkeypatch):
@@ -1801,3 +1792,30 @@ def test_upstream_address_port(resource, expected):
     origin yields nothing at all because the redactor rebuilds it without its brackets;
     both are why the mapper gates ``rpc.system`` on the complete pair."""
     assert _upstream_address_port(resource) == expected
+
+
+@pytest.mark.parametrize("value, expected", [("true", True), ("1", True), ("YES", True), ("on", True), ("false", False), ("0", False), ("NO", False), ("off", False)])
+def test_settings_free_flag_preserves_boolean_inputs(monkeypatch, value, expected):
+    from litellm.integrations.otel.model.flags import is_otel_v2_enabled as flag
+
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    monkeypatch.setenv("litellm_otel_v2", value)
+    flag.cache_clear()
+    try:
+        assert flag() is expected
+        assert flag is is_otel_v2_enabled
+    finally:
+        flag.cache_clear()
+
+
+def test_settings_free_flag_rejects_invalid_boolean(monkeypatch):
+    from pydantic import ValidationError
+    from litellm.integrations.otel.model.flags import is_otel_v2_enabled as flag
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "invalid")
+    flag.cache_clear()
+    try:
+        with pytest.raises(ValidationError):
+            flag()
+    finally:
+        flag.cache_clear()

@@ -39,7 +39,6 @@ from os.path import abspath, dirname, join
 from pathlib import PurePath
 from types import MappingProxyType
 
-import dotenv
 import httpx
 import openai
 from httpx import Proxy

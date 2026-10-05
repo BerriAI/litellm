@@ -6,8 +6,6 @@ Fetches prompt versions from Arize Phoenix and provides workspace-based access c
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
 
-from jinja2 import DictLoader, select_autoescape
-from jinja2.sandbox import ImmutableSandboxedEnvironment
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -92,6 +90,13 @@ class ArizePhoenixTemplateManager:
         api_base: str | None = None,
         prompt_id: str | None = None,
     ):
+        from litellm.litellm_core_utils.optional_dependencies import require_optional_dependency
+
+        require_optional_dependency("jinja2", "prompts", "Prompt rendering")
+        require_optional_dependency("yaml", "prompts", "Prompt frontmatter")
+        from jinja2 import DictLoader, select_autoescape
+        from jinja2.sandbox import ImmutableSandboxedEnvironment
+
         self.api_key = api_key
         self.api_base = api_base
         self.prompt_id = prompt_id

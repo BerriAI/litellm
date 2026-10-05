@@ -13,16 +13,27 @@ The ``LITELLM_OTEL_V2`` env var gates whether the factory in
 class (from :mod:`logger`).
 """
 
+from typing import TYPE_CHECKING
+
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
     promoted_baggage,
 )
-from litellm.integrations.otel.model.config import (
-    OTEL_V2_ENV,
-    OpenTelemetryV2Config,
-    is_otel_v2_enabled,
-)
+from litellm.integrations.otel.model.flags import OTEL_V2_ENV, is_otel_v2_enabled
+
+if TYPE_CHECKING:
+    from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+
+
+def __getattr__(name: str) -> object:
+    if name == "OpenTelemetryV2Config":
+        from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+
+        return OpenTelemetryV2Config
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 from litellm.integrations.otel.model.metadata import (
     RequestContext,
     RequestIdentity,
