@@ -179,6 +179,8 @@ class TracePart(Record):
     kind: str
     content: str
     truncated: bool = False
+    start_time: str = ""
+    end_time: str = ""
 
 
 class ExecutionContent(Record):
@@ -201,6 +203,19 @@ class RunAssessment(Record):
     issue_checks: tuple[str, ...] = ()
     pattern_checks: tuple[str, ...] = ()
     cannot_assess: bool = False
+
+
+class TraceIdentity(Record):
+    trace_id: str = Field(min_length=1, max_length=128)
+    trace_ref: str = Field(default="", max_length=512)
+
+
+class TraceFindingsRequest(Record):
+    traces: tuple[TraceIdentity, ...] = Field(min_length=1, max_length=500)
+
+
+class TraceFindingCount(TraceIdentity):
+    finding_count: int | None = Field(ge=0)
 
 
 MAX_STEPS = 200
