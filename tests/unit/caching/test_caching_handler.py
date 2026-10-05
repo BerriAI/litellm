@@ -2313,3 +2313,35 @@ async def test_response_cache_lookup_and_write_declare_the_llm_response_target(m
 
     assert seen == {"get": "llm_response", "set": "llm_response"}
     assert current_service_target() is None
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_empty_choices_is_not_cached(monkeypatch):
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    messages = [{"role": "user", "content": f"empty choices {uuid.uuid4()}"}]
+
+    first = await litellm.acompletion(
+        model="gpt-4o", messages=messages, mock_response=litellm.ModelResponse(choices=[]), caching=True
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    second = await litellm.acompletion(model="gpt-4o", messages=messages, mock_response="hi", caching=True)
+
+    assert first.choices == []
+    assert [choice.message.content for choice in second.choices] == ["hi"], (
+        "an empty-choices reply must not be replayed from the cache"
+    )
+
+
+def test_completion_with_empty_choices_is_not_cached(monkeypatch):
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    messages = [{"role": "user", "content": f"empty choices {uuid.uuid4()}"}]
+
+    first = litellm.completion(
+        model="gpt-4o", messages=messages, mock_response=litellm.ModelResponse(choices=[]), caching=True
+    )
+    second = litellm.completion(model="gpt-4o", messages=messages, mock_response="hi", caching=True)
+
+    assert first.choices == []
+    assert [choice.message.content for choice in second.choices] == ["hi"], (
+        "an empty-choices reply must not be replayed from the cache"
+    )

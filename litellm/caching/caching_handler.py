@@ -110,6 +110,11 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     return "choices" in cached_result
 
 
+def _is_chat_completion_without_choices(result: object) -> bool:
+    """A chat completion with no choices (e.g. a provider 200 with no candidates) is not a reusable answer."""
+    return isinstance(result, litellm.ModelResponse) and not result.choices
+
+
 def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
     if kwargs.get("stream", False) is True:
         return True
@@ -1074,7 +1079,9 @@ class LLMCachingHandler:
         parent_otel_span: Final = _get_parent_otel_span_from_kwargs(new_kwargs)
         new_kwargs["parent_otel_span"] = parent_otel_span
         # [OPTIONAL] ADD TO CACHE
-        if self._should_store_result_in_cache(original_function=original_function, kwargs=new_kwargs):
+        if self._should_store_result_in_cache(
+            original_function=original_function, kwargs=new_kwargs
+        ) and not _is_chat_completion_without_choices(result):
             if (
                 isinstance(result, litellm.ModelResponse)
                 or isinstance(result, litellm.EmbeddingResponse)
@@ -1123,7 +1130,9 @@ class LLMCachingHandler:
         if litellm.cache is None:
             return
 
-        if self._should_store_result_in_cache(original_function=self.original_function, kwargs=new_kwargs):
+        if self._should_store_result_in_cache(
+            original_function=self.original_function, kwargs=new_kwargs
+        ) and not _is_chat_completion_without_choices(result):
             with response_cache_phase("set"):
                 litellm.cache.add_cache(result, **new_kwargs)
 
