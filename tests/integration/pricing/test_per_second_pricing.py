@@ -213,6 +213,17 @@ def test_transcription_per_second_model_bills_request_time_through_cost_per_toke
     assert cost == pytest.approx(expected_cost)
 
 
+def test_transcription_per_second_model_bills_audio_length_through_cost_per_token() -> None:
+    cost: Final = litellm.cost_per_token(
+        model="deepgram/nova-3",
+        custom_llm_provider="deepgram",
+        response_time_ms=10_000.0,
+        audio_transcription_file_duration=60.0,
+    )
+
+    assert cost == pytest.approx((0.0043002, 0.0))
+
+
 def test_transcription_response_still_bills_audio_length_through_completion_cost() -> None:
     response: Final = litellm.TranscriptionResponse(text="hello")
     response.duration = 60.0

@@ -3316,7 +3316,14 @@ def test_cost_per_token_leaves_media_second_rates_to_their_dedicated_paths(monke
     assert cost_per_token(model=model, custom_llm_provider="openai", response_time_ms=2000.0) == (0.0, 0.0)
 
 
-def test_cost_per_token_bills_transcription_second_rates_by_request_time(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("audio_seconds", "expected_cost"),
+    [(0.0, (0.04, 0.0)), (60.0, (1.2, 0.0))],
+    ids=["no_audio_length_bills_request_time", "audio_length_bills_audio_seconds"],
+)
+def test_cost_per_token_bills_transcription_second_rates(
+    monkeypatch: pytest.MonkeyPatch, audio_seconds: float, expected_cost: tuple[float, float]
+) -> None:
     model: Final = "test-transcription-per-second"
     monkeypatch.setitem(
         litellm.model_cost,
@@ -3324,9 +3331,12 @@ def test_cost_per_token_bills_transcription_second_rates_by_request_time(monkeyp
         {"input_cost_per_second": 0.02, "litellm_provider": "deepgram", "mode": "audio_transcription"},
     )
 
-    assert cost_per_token(model=model, custom_llm_provider="deepgram", response_time_ms=2000.0) == pytest.approx(
-        (0.04, 0.0)
-    )
+    assert cost_per_token(
+        model=model,
+        custom_llm_provider="deepgram",
+        response_time_ms=2000.0,
+        audio_transcription_file_duration=audio_seconds,
+    ) == pytest.approx(expected_cost)
 
 
 def test_completion_cost_video_status_poll_bills_nothing_on_a_per_second_video_model(monkeypatch):
