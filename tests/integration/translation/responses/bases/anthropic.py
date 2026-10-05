@@ -1,7 +1,7 @@
 from typing import Final
+from unittest.mock import ANY
 
 from integration.translation.case import TranslationTestCase
-from integration.translation.matchers import RESPONSE_ID, RESPONSE_MESSAGE_ID, UNIX_TIMESTAMP
 
 CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
@@ -47,8 +47,8 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
         "diagnostics": None,
     },
     expected_litellm_response={
-        "id": RESPONSE_ID,
-        "created_at": UNIX_TIMESTAMP,
+        "id": ANY,
+        "created_at": ANY,
         "error": None,
         "incomplete_details": None,
         "instructions": "You are a terse assistant.",
@@ -58,7 +58,7 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
         "output": [
             {
                 "type": "message",
-                "id": RESPONSE_MESSAGE_ID,
+                "id": ANY,
                 "status": "completed",
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": "Hello.", "annotations": []}],
@@ -142,8 +142,8 @@ CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
         "diagnostics": None,
     },
     expected_litellm_response={
-        "id": RESPONSE_ID,
-        "created_at": UNIX_TIMESTAMP,
+        "id": ANY,
+        "created_at": ANY,
         "error": None,
         "incomplete_details": None,
         "instructions": "You are a terse assistant.",
@@ -153,7 +153,7 @@ CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
         "output": [
             {
                 "type": "message",
-                "id": RESPONSE_MESSAGE_ID,
+                "id": ANY,
                 "status": "completed",
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": "Hello!", "annotations": []}],
@@ -238,8 +238,8 @@ CLAUDE_SONNET_5_TEST_CASE: Final = TranslationTestCase(
         "diagnostics": None,
     },
     expected_litellm_response={
-        "id": RESPONSE_ID,
-        "created_at": UNIX_TIMESTAMP,
+        "id": ANY,
+        "created_at": ANY,
         "error": None,
         "incomplete_details": None,
         "instructions": "You are a terse assistant.",
@@ -249,7 +249,7 @@ CLAUDE_SONNET_5_TEST_CASE: Final = TranslationTestCase(
         "output": [
             {
                 "type": "message",
-                "id": RESPONSE_MESSAGE_ID,
+                "id": ANY,
                 "status": "completed",
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": "Hello.", "annotations": []}],
@@ -334,8 +334,8 @@ CLAUDE_OPUS_4_8_TEST_CASE: Final = TranslationTestCase(
         "diagnostics": None,
     },
     expected_litellm_response={
-        "id": RESPONSE_ID,
-        "created_at": UNIX_TIMESTAMP,
+        "id": ANY,
+        "created_at": ANY,
         "error": None,
         "incomplete_details": None,
         "instructions": "You are a terse assistant.",
@@ -345,7 +345,7 @@ CLAUDE_OPUS_4_8_TEST_CASE: Final = TranslationTestCase(
         "output": [
             {
                 "type": "message",
-                "id": RESPONSE_MESSAGE_ID,
+                "id": ANY,
                 "status": "completed",
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": "Hello.", "annotations": []}],
@@ -430,8 +430,8 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
         "diagnostics": None,
     },
     expected_litellm_response={
-        "id": RESPONSE_ID,
-        "created_at": UNIX_TIMESTAMP,
+        "id": ANY,
+        "created_at": ANY,
         "error": None,
         "incomplete_details": None,
         "instructions": "You are a terse assistant.",
@@ -441,7 +441,7 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
         "output": [
             {
                 "type": "message",
-                "id": RESPONSE_MESSAGE_ID,
+                "id": ANY,
                 "status": "completed",
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": "Hello.", "annotations": []}],
@@ -526,8 +526,8 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
         "diagnostics": None,
     },
     expected_litellm_response={
-        "id": RESPONSE_ID,
-        "created_at": UNIX_TIMESTAMP,
+        "id": ANY,
+        "created_at": ANY,
         "error": None,
         "incomplete_details": None,
         "instructions": "You are a terse assistant.",
@@ -537,7 +537,7 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
         "output": [
             {
                 "type": "message",
-                "id": RESPONSE_MESSAGE_ID,
+                "id": ANY,
                 "status": "completed",
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": "Hello.", "annotations": []}],

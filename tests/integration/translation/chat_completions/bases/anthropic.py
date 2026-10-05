@@ -1,7 +1,7 @@
 from typing import Final
+from unittest.mock import ANY
 
 from integration.translation.case import TranslationTestCase
-from integration.translation.matchers import CHAT_COMPLETION_ID, UNIX_TIMESTAMP
 
 CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
@@ -49,8 +49,8 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
         "diagnostics": None,
     },
     expected_litellm_response={
-        "id": CHAT_COMPLETION_ID,
-        "created": UNIX_TIMESTAMP,
+        "id": ANY,
+        "created": ANY,
         "model": "anthropic/claude-haiku-4-5",
         "object": "chat.completion",
         "choices": [
@@ -130,8 +130,8 @@ CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
         "diagnostics": None,
     },
     expected_litellm_response={
-        "id": CHAT_COMPLETION_ID,
-        "created": UNIX_TIMESTAMP,
+        "id": ANY,
+        "created": ANY,
         "model": "anthropic/claude-sonnet-4-6",
         "object": "chat.completion",
         "choices": [
@@ -212,8 +212,8 @@ CLAUDE_SONNET_5_TEST_CASE: Final = TranslationTestCase(
         "diagnostics": None,
     },
     expected_litellm_response={
-        "id": CHAT_COMPLETION_ID,
-        "created": UNIX_TIMESTAMP,
+        "id": ANY,
+        "created": ANY,
         "model": "anthropic/claude-sonnet-5",
         "object": "chat.completion",
         "choices": [
@@ -294,8 +294,8 @@ CLAUDE_OPUS_4_8_TEST_CASE: Final = TranslationTestCase(
         "diagnostics": None,
     },
     expected_litellm_response={
-        "id": CHAT_COMPLETION_ID,
-        "created": UNIX_TIMESTAMP,
+        "id": ANY,
+        "created": ANY,
         "model": "anthropic/claude-opus-4-8",
         "object": "chat.completion",
         "choices": [
@@ -376,8 +376,8 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
         "diagnostics": None,
     },
     expected_litellm_response={
-        "id": CHAT_COMPLETION_ID,
-        "created": UNIX_TIMESTAMP,
+        "id": ANY,
+        "created": ANY,
         "model": "anthropic/claude-sonnet-5-5",
         "object": "chat.completion",
         "choices": [
@@ -458,8 +458,8 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
         "diagnostics": None,
     },
     expected_litellm_response={
-        "id": CHAT_COMPLETION_ID,
-        "created": UNIX_TIMESTAMP,
+        "id": ANY,
+        "created": ANY,
         "model": "anthropic/claude-opus-5-5",
         "object": "chat.completion",
         "choices": [

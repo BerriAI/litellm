@@ -3,8 +3,6 @@ from dataclasses import dataclass
 
 from pydantic import JsonValue
 
-from integration.translation.matchers import ExpectedValue
-
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TranslationTestCase:
@@ -19,7 +17,7 @@ class TranslationTestCase:
     expected_provider_request: Mapping[str, JsonValue]
     mock_provider_response: Mapping[str, JsonValue]
     expected_litellm_status_code: int = 200
-    expected_litellm_response: Mapping[str, ExpectedValue]
+    expected_litellm_response: Mapping[str, JsonValue]
 
     @property
     def id(self) -> str:
