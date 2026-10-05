@@ -199,7 +199,7 @@ def test_migration_entrypoint_adds_the_gin_index_and_the_upgraded_proxy_maps_man
             connected_roles: Final = {
                 string_value(row["usename"])
                 for row in read_rows(
-                    "SELECT DISTINCT usename FROM pg_stat_activity WHERE datname = current_database()",
+                    "SELECT DISTINCT usename FROM pg_stat_activity WHERE datname = current_database() AND usename IS NOT NULL",
                     (),
                     database_url=database_url,
                 )
