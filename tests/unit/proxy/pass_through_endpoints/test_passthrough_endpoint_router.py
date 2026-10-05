@@ -412,3 +412,18 @@ def test_oidc_file_reference_outside_allowed_dirs_is_refused(tmp_path, monkeypat
 
     with pytest.raises(ValueError, match="outside the allowed credential directories"):
         _passthrough_router(None).get_credentials(custom_llm_provider="openai", region_name=None)
+
+
+def test_network_backed_oidc_reference_is_not_fetched_inline(monkeypatch):
+    def fail(*args, **kwargs):
+        raise AssertionError("network-backed oidc reference was resolved inside the request path")
+
+    monkeypatch.setattr(
+        "litellm.proxy.pass_through_endpoints.passthrough_endpoint_router.get_secret_str",
+        lambda name, *a, **k: "oidc/google/https://example.com" if name == "OPENAI_API_KEY" else fail(),
+    )
+
+    assert (
+        _passthrough_router(None).get_credentials(custom_llm_provider="openai", region_name=None)
+        == "oidc/google/https://example.com"
+    )

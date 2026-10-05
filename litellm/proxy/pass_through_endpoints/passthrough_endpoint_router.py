@@ -37,9 +37,13 @@ def _credential_identity(credentials: VERTEX_CREDENTIALS_TYPES | None) -> str | 
     return credentials
 
 
+# Network I/O prohibited; get_credentials() is synchronous inside async routes.
+_LOCAL_OIDC_PREFIXES: Final = ("oidc/file/", "oidc/env/", "oidc/env_path/")
+
+
 def _resolve_oidc_reference(credential: str | None) -> str | None:
-    """Resolve ``oidc/...`` credentials on every call to pick up rotated tokens."""
-    if credential is not None and credential.startswith("oidc/"):
+    """Resolve local ``oidc/...`` credentials on every call to pick up rotated tokens."""
+    if credential is not None and credential.startswith(_LOCAL_OIDC_PREFIXES):
         return get_secret_str(credential)
     return credential
 
