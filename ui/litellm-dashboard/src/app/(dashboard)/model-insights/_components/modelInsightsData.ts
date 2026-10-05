@@ -21,16 +21,6 @@ export type ModelInsightsResponse = {
   daily_totals: DailyTotal[];
   top_models: ModelMetric[];
 };
-export type TaskSummary = {
-  task_type: string;
-  label: string;
-  category: string;
-  value: number;
-  share: number;
-  leader: string;
-  provider: string;
-};
-export type ModelInsightTasksResponse = { start_date: string; end_date: string; tasks: TaskSummary[] };
 
 export type RankedModel = { model_group: string; provider: string; share: number; delta: number };
 export type Granularity = "day" | "week";
