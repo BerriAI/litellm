@@ -1,6 +1,5 @@
 import json
 import uuid
-from email.message import Message
 from email.parser import BytesParser
 from email.policy import HTTP
 from pathlib import Path
@@ -85,6 +84,7 @@ def test_audio_transcription_routes_to_the_requested_model_not_the_moderation_mo
     )
     stt: Final = f"integration-stt-{uuid.uuid4().hex}"
     moderation: Final = f"integration-moderation-{uuid.uuid4().hex}"
+
     def respond(request: Request) -> Reply:
         if request.target != _TRANSCRIPTIONS:
             return Reply(body=b'{"object":"list","data":[]}')
@@ -98,9 +98,9 @@ def test_audio_transcription_routes_to_the_requested_model_not_the_moderation_mo
             )
             assert response.status_code == 200, response.text
         calls: Final = wire.drain()
-        assert tuple(
-            (request.method, request.target) for request in calls if request.target == _TRANSCRIPTIONS
-        ) == (("POST", _TRANSCRIPTIONS),), response.text
-        assert tuple(
-            _text_parts(request)["model"] for request in calls if request.target == _TRANSCRIPTIONS
-        ) == ("whisper-1",), response.text
+        assert tuple((request.method, request.target) for request in calls if request.target != "/v1/models") == (
+            ("POST", _TRANSCRIPTIONS),
+        ), response.text
+        assert tuple(_text_parts(request)["model"] for request in calls if request.target == _TRANSCRIPTIONS) == (
+            "whisper-1",
+        ), response.text
