@@ -1136,3 +1136,63 @@ def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_convers
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant", "user", "system"]
     assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+
+def test_invoke_claude_preserves_region_name_and_govcloud_pricing(local_model_cost_map, monkeypatch):
+    """Invoke Claude must keep region_name and Bedrock model id so GovCloud pricing
+    matches Converse (Fixes #44002)."""
+    from unittest.mock import patch
+
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFAKEFAKEFAKE")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
+
+    invoke_body = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-opus-5",
+        "content": [{"type": "text", "text": "hello there"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    converse_body = {
+        "output": {"message": {"role": "assistant", "content": [{"text": "hello there"}]}},
+        "stopReason": "end_turn",
+        "usage": {"inputTokens": 10, "outputTokens": 20, "totalTokens": 30},
+        "metrics": {"latencyMs": 1},
+    }
+
+    def fake_post(self, url, *args, **kwargs):
+        body = converse_body if url.endswith("/converse") else invoke_body
+        return httpx.Response(
+            200,
+            json=body,
+            headers={"content-type": "application/json"},
+            request=httpx.Request("POST", url),
+        )
+
+    costs = {}
+    for model in [
+        "bedrock/invoke/anthropic.claude-opus-5",
+        "bedrock/converse/anthropic.claude-opus-5",
+    ]:
+        with patch.object(HTTPHandler, "post", fake_post):
+            r = litellm.completion(
+                model=model,
+                aws_region_name="us-gov-west-1",
+                messages=[{"role": "user", "content": "hi"}],
+                client=HTTPHandler(),
+            )
+        assert r._hidden_params.get("region_name") == "us-gov-west-1"
+        assert r.model == "anthropic.claude-opus-5"
+        costs[model] = r._hidden_params.get("response_cost")
+
+    assert costs["bedrock/invoke/anthropic.claude-opus-5"] == pytest.approx(0.00066)
+    assert costs["bedrock/converse/anthropic.claude-opus-5"] == pytest.approx(0.00066)
+
