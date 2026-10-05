@@ -979,7 +979,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         base_request: BedrockRequest,
         request_data: dict | None,  # mutable-ok: proxy request body dict, read by the dynamic-params helper
     ) -> tuple[dict, str | None]:  # mutable-ok: ApplyGuardrail JSON request body
-        """Merge the request's dynamic ApplyGuardrail params into `base_request` and pick up its api_key."""
         bedrock_request_data: Final[dict] = dict(base_request)  # mutable-ok: JSON request body
         api_key: str | None = None
         if request_data:
@@ -1005,7 +1004,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         start_time: "datetime",
         allow_chunking: bool,
     ) -> BedrockGuardrailResponse:
-        """Post prepared ApplyGuardrail content and log the call once, as a success or a failure."""
         credentials, aws_region_name = await run_aws_signing(
             self._load_credentials, bearer_token=bedrock_bearer_token(api_key)
         )
@@ -2542,19 +2540,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         call_type: CallTypesLiteral,
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
     ) -> None:
-        """Scan the request's inline PNG/JPEG images and text documents, and block attachments it cannot scan.
-
-        Images go to ApplyGuardrail 20 per call. Text documents go through ``make_bedrock_api_request``
-        as one user turn, and any intervention on them blocks the request, since their text cannot be
-        rewritten with a mask.
-
-        Documents, files, audio, video, and images sent by URL, by file id or in another format block the
-        request unless ``skip_unscannable_attachments`` is set. ``checks`` mode calls the text-only
-        InvokeGuardrailChecks API, so there every image counts as unscannable too. A failed ApplyGuardrail
-        call raises the same error the text scan of the same hook raises. A guardrail whose
-        ``apply_guardrail`` or ``make_bedrock_api_request`` is replaced, by a subclass or on the
-        instance, skips this scan.
-        """
         if (
             getattr(self.apply_guardrail, "__func__", None) is not BedrockGuardrail.apply_guardrail
             or getattr(self.make_bedrock_api_request, "__func__", None) is not BedrockGuardrail.make_bedrock_api_request
@@ -2608,7 +2593,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
     ) -> None:
-        """Scan text documents like a user turn and block when the guardrail intervenes on them."""
         response: Final = await self.make_bedrock_api_request(
             source="INPUT",
             messages=[{"role": "user", "content": text} for text in document_texts],
@@ -2628,7 +2612,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
     ) -> HTTPException | ModifyResponseException:
-        """Log the refusal and build the block error for attachments ApplyGuardrail cannot scan."""
         reason: Final = (
             f"Bedrock guardrail cannot scan {len(unscannable)} attachment(s) "
             f"({', '.join(sorted(frozenset(unscannable)))}), so the request was blocked"

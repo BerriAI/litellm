@@ -48,8 +48,6 @@ GUARDRAIL_NAME: Final = "unified_llm_guardrails"
 
 @runtime_checkable
 class RequestAttachmentScanner(Protocol):
-    """A guardrail that scans the raw request's attachments before its text is extracted."""
-
     async def async_scan_request_attachments(
         self,
         data: dict,  # mutable-ok: proxy request body dict, mutated by the logging helper

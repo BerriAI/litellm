@@ -1,12 +1,3 @@
-"""
-Find the attachments in a raw request that the Bedrock guardrail has to scan or refuse.
-
-ApplyGuardrail scans inline PNG and JPEG images of up to 4 MB. Every other attachment
-(documents, files, audio, video, and images sent as a remote URL, a file id, in another
-format or over the size limit) is reported as unscannable so the guardrail can block the
-request instead of letting the attachment reach the model unread.
-"""
-
 import base64
 import binascii
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -92,7 +83,6 @@ def find_request_attachments(
     latest_user_message_only: bool,
     scan_only_tool_results: bool = False,
 ) -> RequestAttachments:
-    """List the scannable images, the document text and the unscannable attachments in the message content and tool results."""
     messages, classify, nested_tool_blocks = _messages_and_classifier(data, call_type)
     selected: Final = messages if not latest_user_message_only else _latest_user_message(messages)
     entries: Final = chain.from_iterable(_message_blocks(message, nested_tool_blocks) for message in selected)
@@ -119,7 +109,6 @@ def _classify_entry(entry: _Block, classify: _BlockClassifier) -> tuple[_Image |
 
 
 def _document_text(entry: _Block) -> str:
-    """Return the text a block carries as part of a document: a nested text block, or a document's title, context and text source."""
     block: Final = entry.block
     if entry.document_depth > 0 and block.get("type") == "text":
         text: Final = block.get("text")
@@ -343,7 +332,6 @@ def _sniffed_format(data: bytes) -> BedrockImageFormat | None:
 
 
 def _pixel_size(data: bytes, image_format: BedrockImageFormat) -> tuple[int, ...]:
-    """Width and height from the PNG IHDR chunk or the JPEG frame header, or () when the header is unreadable."""
     if image_format == "png":
         return (
             (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")) if data[12:16] == b"IHDR" else ()
@@ -368,7 +356,6 @@ def _pixel_size(data: bytes, image_format: BedrockImageFormat) -> tuple[int, ...
 
 
 def _standard_base64(encoded: object) -> str:
-    """Return the payload as padded standard base64, accepting whitespace, missing padding and the URL-safe alphabet."""
     compact: Final = (
         "".join(encoded.split()).translate(_URL_SAFE_TO_STANDARD_BASE64) if isinstance(encoded, str) else ""
     )
