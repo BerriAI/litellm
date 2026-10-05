@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_team_member_budget_counter,
+    count_request_input_tokens,
     estimate_request_max_cost,
     get_budget_window_start,
     release_unbound_budget_reservation,
@@ -451,11 +452,20 @@ async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_a
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
 
     if pricing == "tokens":
+        target_cost_info: Final = (
+            {"output_cost_per_token": 0.125}
+            if budget_owner == "agent"
+            else {"input_cost_per_token": 0.0, "output_cost_per_token": 0.125}
+        )
         monkeypatch.setattr(litellm, "model_cost", {
             **litellm.model_cost,
-            "a2a/target": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.125,
-                           "litellm_provider": "a2a", "mode": "chat"},
+            "a2a/target": {
+                **target_cost_info,
+                "litellm_provider": "a2a",
+                "mode": "chat",
+            },
         })
+        litellm.get_model_info.cache_clear()
 
     token: Final = "fee-key" if budget_owner == "key" else None
     team: Final = LiteLLM_TeamTable(team_id="fee-team", max_budget=0.5, spend=0.0) if budget_owner == "team" else None
@@ -465,6 +475,26 @@ async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_a
     )
     await spend_counter_cache.async_set_cache(key=counter_key, value=0.0)
 
+    request_body: Final = {
+        "method": "message/send",
+        "model": "a2a/target",
+        "max_tokens": 0 if budget_owner == "agent" and pricing == "tokens" else 2,
+        "messages": [{"role": "user", "content": "Hello"}],
+    }
+    if budget_owner == "agent" and pricing == "tokens":
+        input_token_counts: Final = await count_request_input_tokens(
+            request_body=request_body,
+            route=route,
+            llm_router=None,
+        )
+        assert input_token_counts["a2a/target"] > 0
+        assert estimate_request_max_cost(
+            request_body=request_body,
+            route=route,
+            llm_router=None,
+            input_token_counts=input_token_counts,
+        ) == pytest.approx(0.0)
+
     async def admit() -> dict[str, object] | None:
         auth: Final = UserAPIKeyAuth(
             agent_id="caller" if budget_owner == "agent" else None, user_role="proxy_admin",
@@ -473,12 +503,6 @@ async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_a
         )
         if budget_owner == "agent" or pricing == "tokens":
             auth.billing_agent_policy = caller
-        request_body: Final = {
-            "method": "message/send",
-            "model": "a2a/target",
-            "max_tokens": 2,
-            "messages": [{"role": "user", "content": "Hello"}],
-        }
         target_name: Final = invocation_target(route, request_body)
         assert target_name == "target"
         await prepare_agent_invocation(auth, target_name, None)
@@ -502,6 +526,14 @@ async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_a
             == "Budgeted token-priced agent invocations require a fixed cost_per_query before execution"
         )
         assert len(policy_unavailable) == 8, results
+        assert await spend_counter_cache.async_get_cache(counter_key) == pytest.approx(0.0)
+        monkeypatch.setattr(litellm, "model_cost", {
+            **litellm.model_cost,
+            "a2a/target": {"litellm_provider": "a2a", "mode": "chat"},
+        })
+        litellm.get_model_info.cache_clear()
+        unpriced_reservation: Final = await admit()
+        assert unpriced_reservation is None
         assert await spend_counter_cache.async_get_cache(counter_key) == pytest.approx(0.0)
         return
     accepted: Final = tuple(result for result in results if isinstance(result, dict))

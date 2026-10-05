@@ -312,16 +312,11 @@ async def reserve_budget_for_request(
             input_token_counts=input_token_counts,
         )
     )
-    # estimate_request_max_cost still returns None when the model is unknown
-    # to the cost map (no token-priced cost fields, e.g. image/audio routes).
-    # In that case we fall back to read-time enforcement only.
-    if reservation_cost is None or reservation_cost <= 0:
-        return None
-
     if (
         invocation_cost is None
         and valid_token.invoked_agent_policy is not None
         and any(counter.entity_type == "Agent" for counter in counters)
+        and _request_has_positive_price(request_body=request_body, route=route, llm_router=llm_router)
     ):
         from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
         from litellm.types.proxy.agent_identity import AgentIdentityFailure
@@ -332,6 +327,12 @@ async def reserve_budget_for_request(
                 message="Budgeted token-priced agent invocations require a fixed cost_per_query before execution",
             )
         )
+
+    # estimate_request_max_cost still returns None when the model is unknown
+    # to the cost map (no token-priced cost fields, e.g. image/audio routes).
+    # In that case we fall back to read-time enforcement only.
+    if reservation_cost is None or reservation_cost <= 0:
+        return None
 
     applied_entries: Final[list[dict[str, float | str]]] = []
     try:
@@ -1752,6 +1753,29 @@ def _to_float(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _cost_info_has_positive_price(cost_info: Mapping[str, object]) -> bool:
+    tiered_pricing: Final = cost_info.get("tiered_pricing")
+    if isinstance(tiered_pricing, list) and tiered_pricing:
+        return True
+    return any(
+        price > 0 for key, value in cost_info.items() if "cost_per" in key and (price := _to_float(value)) is not None
+    )
+
+
+def _request_has_positive_price(
+    request_body: dict,
+    route: str,
+    llm_router: Router | None,
+) -> bool:
+    return any(
+        any(
+            _cost_info_has_positive_price(cost_info)
+            for cost_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+        )
+        for model in _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
+    )
 
 
 def _to_int(value: object) -> int | None:
