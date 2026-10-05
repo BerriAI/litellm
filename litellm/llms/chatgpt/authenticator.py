@@ -52,7 +52,7 @@ class Authenticator:
     def get_api_base(self) -> str:
         return os.getenv("CHATGPT_API_BASE") or os.getenv("OPENAI_CHATGPT_API_BASE") or CHATGPT_API_BASE
 
-    def get_access_token(self) -> str:
+    def get_access_token(self, *, allow_device_login: bool = True) -> str:
         auth_data: Final = self._read_auth_file()
         if auth_data:
             access_token: Final = _optional_str(auth_data.get("access_token"))
@@ -65,6 +65,12 @@ class Authenticator:
                     return refreshed["access_token"]
                 except RefreshAccessTokenError as exc:
                     verbose_logger.warning("ChatGPT refresh token failed, re-login required: %s", exc)
+
+        if not allow_device_login:
+            raise GetAccessTokenError(
+                status_code=401,
+                message="ChatGPT authorization is unavailable; model discovery cannot start device login",
+            )
 
         cooldown_remaining: Final = self._get_device_code_cooldown_remaining(auth_data)
         if cooldown_remaining > 0:

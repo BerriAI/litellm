@@ -2433,3 +2433,66 @@ def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog)
     assert provider_result.code == internal_result.code == "500"
     assert ISSUE_URL_BASE in caplog.text
     assert ISSUE_URL_BASE not in internal_result.message
+
+
+def test_model_listing_advertises_complete_configured_metadata_and_no_secrets():
+    metadata: Final = {
+        "context_window": 1200,
+        "max_input_tokens": 1100,
+        "max_output_tokens": 200,
+        "supports_function_calling": True,
+        "supports_parallel_function_calling": False,
+        "supports_reasoning": True,
+        "reasoning_effort_levels": ["low", "xhigh", "max"],
+        "default_reasoning_effort": "xhigh",
+        "supported_endpoints": ["/v1/responses"],
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text"],
+    }
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "selected",
+                "litellm_params": {"model": "openai/unknown-test-model", "api_key": "private-fixture-key"},
+                "model_info": {**metadata, "internal_secret": "must-not-advertise"},
+            }
+        ]
+    )
+    response: Final = create_model_info_response(
+        "selected", "openai", llm_router=router, get_model_info=_raise_unmapped
+    )
+    assert response == {
+        "id": "selected",
+        "object": "model",
+        "created": response["created"],
+        "owned_by": "openai",
+        **metadata,
+    }
+
+
+def test_model_listing_context_contract_uses_minimum_and_omits_unknown_group_limits():
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "selected",
+                "litellm_params": {"model": "openai/unknown-one"},
+                "model_info": {"context_window": 1200, "max_input_tokens": 1100, "max_output_tokens": 200},
+            },
+            {
+                "model_name": "selected",
+                "litellm_params": {"model": "openai/unknown-two"},
+                "model_info": {"context_window": 800, "max_output_tokens": 100},
+            },
+        ]
+    )
+    response: Final = create_model_info_response(
+        "selected", "openai", llm_router=router, get_model_info=_raise_unmapped
+    )
+    assert response == {
+        "id": "selected",
+        "object": "model",
+        "created": response["created"],
+        "owned_by": "openai",
+        "context_window": 800,
+        "max_output_tokens": 100,
+    }

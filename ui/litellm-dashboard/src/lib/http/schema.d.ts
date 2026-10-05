@@ -50293,6 +50293,16 @@ export interface components {
         litellm__proxy___types__ModelInfo: {
             /** Base Model */
             base_model: ("gpt-4-1106-preview" | "gpt-4-32k" | "gpt-4" | "gpt-3.5-turbo-16k" | "gpt-3.5-turbo" | "text-embedding-ada-002") | null;
+            /**
+             * Context Window
+             * @description Maximum combined input and generated output tokens
+             */
+            context_window?: number | null;
+            /**
+             * Default Reasoning Effort
+             * @description Effort used when the request omits it
+             */
+            default_reasoning_effort?: string | null;
             /** Discoverable */
             discoverable?: boolean | null;
             /** Id */
@@ -50302,6 +50312,16 @@ export interface components {
              * @default 0
              */
             input_cost_per_token: number | null;
+            /**
+             * Max Input Tokens
+             * @description Independent maximum input tokens
+             */
+            max_input_tokens?: number | null;
+            /**
+             * Max Output Tokens
+             * @description Independent maximum generated output tokens
+             */
+            max_output_tokens?: number | null;
             /**
              * Max Tokens
              * @default 2048
@@ -50314,6 +50334,26 @@ export interface components {
              * @default 0
              */
             output_cost_per_token: number | null;
+            /**
+             * Reasoning Effort Levels
+             * @description Exact effort values this route accepts
+             */
+            reasoning_effort_levels?: string[] | null;
+            /**
+             * Supported Endpoints
+             * @description Inference endpoints exposed by this route
+             */
+            supported_endpoints?: string[] | null;
+            /** Supported Modalities */
+            supported_modalities?: string[] | null;
+            /** Supported Output Modalities */
+            supported_output_modalities?: string[] | null;
+            /** Supports Function Calling */
+            supports_function_calling?: boolean | null;
+            /** Supports Parallel Function Calling */
+            supports_parallel_function_calling?: boolean | null;
+            /** Supports Reasoning */
+            supports_reasoning?: boolean | null;
         } & {
             [key: string]: unknown;
         };

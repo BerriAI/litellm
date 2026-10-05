@@ -85,6 +85,7 @@ async def test_discovery_preserves_model_info_fallbacks(
                         {
                             "id": backend_model.split("/", 1)[1],
                             "max_model_len": advertised_limit,
+                            "max_input_tokens": advertised_limit,
                         }
                     ]
                 },
@@ -142,7 +143,9 @@ async def test_upstream_limits_reach_model_info_routes(
 
     def respond(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/models"
-        return httpx.Response(200, json={"data": [{"id": "org/local-model", "max_model_len": 4096}]})
+        return httpx.Response(
+            200, json={"data": [{"id": "org/local-model", "max_model_len": 4096, "max_input_tokens": 4096}]}
+        )
 
     handler: Final = AsyncHTTPHandler()
     await handler.client.aclose()

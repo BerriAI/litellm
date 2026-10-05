@@ -1,15 +1,29 @@
+from collections.abc import Sequence
+
 """Response types for the model listing/retrieve endpoints (/v1/models, /models)."""
 
 from typing import Literal
 
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
+
+
+class ModelDiscoveryInfo(TypedDict, total=False):
+    context_window: ReadOnly[int]
+    supports_function_calling: ReadOnly[bool]
+    supports_parallel_function_calling: ReadOnly[bool]
+    supports_reasoning: ReadOnly[bool]
+    reasoning_effort_levels: ReadOnly[Sequence[str]]
+    default_reasoning_effort: ReadOnly[str]
+    supported_endpoints: ReadOnly[Sequence[str]]
+    supported_modalities: ReadOnly[Sequence[str]]
+    supported_output_modalities: ReadOnly[Sequence[str]]
 
 
 class ModelInfoMetadata(TypedDict):
     fallbacks: list[str]
 
 
-class ModelInfoResponse(TypedDict):
+class ModelInfoResponse(ModelDiscoveryInfo):
     """OpenAI-compatible model object. `mode`, `max_input_tokens`, and
     `max_output_tokens` are attached when the cost map or deployment config
     knows them; `metadata` is present only with include_metadata=true.

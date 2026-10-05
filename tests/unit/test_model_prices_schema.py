@@ -533,3 +533,29 @@ def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
         "unknown_root-new_family_models",
         "vertex_ai-new_family_models",
     ]
+
+
+@pytest.mark.parametrize("context", [0, -1, True, 1.5, "1200"])
+def test_schema_rejects_invalid_total_context(committed_schema, context):
+    assert not build_validator(committed_schema).is_valid(
+        {"fixture-model": {"litellm_provider": "openai", "context_window": context}}
+    )
+
+
+def test_schema_and_model_info_preserve_independent_total_context(committed_schema, monkeypatch):
+    entry = {
+        "litellm_provider": "openai",
+        "context_window": 1200,
+        "max_input_tokens": 1100,
+        "max_output_tokens": 200,
+        "max_tokens": 200,
+    }
+    assert build_validator(committed_schema).is_valid({"fixture-model": entry})
+    monkeypatch.setattr(litellm, "model_cost", {"fixture-model": entry})
+    info = litellm.get_model_info("fixture-model")
+    assert (info["context_window"], info["max_input_tokens"], info["max_output_tokens"], info["max_tokens"]) == (
+        1200,
+        1100,
+        200,
+        200,
+    )

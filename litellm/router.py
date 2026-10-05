@@ -292,6 +292,7 @@ from litellm.types.router import (
     LiteLLM_Params,
     MockRouterTestingParams,
     ModelGroupInfo,
+    ModelListingDeployment,
     OptionalPreCallChecks,
     PreRoutingStrategy,
     RetryPolicy,
@@ -10395,30 +10396,7 @@ class Router:
                 }
             )
         )
-        model, provider, dynamic_api_key, api_base = litellm.get_llm_provider(model=params.model, litellm_params=params)
-        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
-            return
-        if api_base is None or "*" in model or params.get("use_clientside_credentials"):
-            return
-        api_key: Final = params.api_key or dynamic_api_key
-        headers: Final = TypeAdapter(Mapping[str, str]).validate_python(
-            params.get("extra_headers") or params.get("headers") or MappingProxyType({})
-        )
-        auth_headers: Final = (
-            MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
-        )
-        limits: Final = await get_openai_compatible_model_info(
-            model=model,
-            api_base=api_base,
-            headers=MappingProxyType(
-                {
-                    **auth_headers,
-                    **MappingProxyType({key.lower(): value for key, value in headers.items()}),
-                }
-            ),
-            client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
-            cache=self.cache.in_memory_cache,
-        )
+        limits: Final = await self._aget_deployment_model_metadata(params, client=client)
         model_id: Final = deployment.model_info.id
         if not limits or model_id is None or self.get_model_info(model_id) is not raw_deployment:
             return
@@ -10429,7 +10407,51 @@ class Router:
         )
         self._invalidate_model_group_info_cache()
 
-    def get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
+    async def _aget_deployment_model_metadata(
+        self, params: LiteLLM_Params, *, client: AsyncHTTPHandler | None
+    ) -> Mapping[str, object]:
+        if params.get("use_clientside_credentials") or "*" in params.model:
+            return MappingProxyType({})
+        if params.model.startswith("chatgpt/"):
+            from litellm.llms.chatgpt.model_info import get_chatgpt_model_info
+
+            return await get_chatgpt_model_info(
+                model=params.model.removeprefix("chatgpt/"),
+                api_base=params.api_base,
+                client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
+                cache=self.cache.in_memory_cache,
+            )
+        model, provider, dynamic_api_key, api_base = litellm.get_llm_provider(model=params.model, litellm_params=params)
+        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS:
+            return MappingProxyType({})
+        discovery_api_base: Final = api_base or {
+            "openrouter": "https://openrouter.ai/api/v1",
+            "vercel_ai_gateway": "https://ai-gateway.vercel.sh/v1",
+        }.get(provider)
+        if discovery_api_base is None or "*" in model or params.get("use_clientside_credentials"):
+            return MappingProxyType({})
+        api_key: Final = params.api_key or dynamic_api_key
+        headers: Final = TypeAdapter(Mapping[str, str]).validate_python(
+            params.get("extra_headers") or params.get("headers") or MappingProxyType({})
+        )
+        auth_headers: Final = (
+            MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
+        )
+        return await get_openai_compatible_model_info(
+            model=model,
+            api_base=discovery_api_base,
+            provider=provider,
+            headers=MappingProxyType(
+                {
+                    **auth_headers,
+                    **MappingProxyType({key.lower(): value for key, value in headers.items()}),
+                }
+            ),
+            client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
+            cache=self.cache.in_memory_cache,
+        )
+
+    def get_discovered_model_info(self, model_id: str | None) -> Mapping[str, object]:
         cached: Final[object] = self._discovered_model_info_cache.get_cache(model_id)
         if (
             model_id is not None
@@ -10496,6 +10518,15 @@ class Router:
             cost_map_keys=cost_map_keys,
             max_input_tokens=self._widest_configured_limit(model_infos, "max_input_tokens"),
             max_output_tokens=self._widest_configured_limit(model_infos, "max_output_tokens"),
+            deployments=tuple(
+                ModelListingDeployment(
+                    cost_map_key=(
+                        model_info.get("base_model") or litellm_params.get("base_model") or litellm_params.get("model")
+                    ),
+                    model_info=model_info,
+                )
+                for model_info, litellm_params in zip(model_infos, params)
+            ),
         )
 
     @staticmethod

@@ -58,6 +58,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.model_metadata import GatewayModelMetadata
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
@@ -1208,7 +1209,7 @@ class ModelInfoDelete(LiteLLMPydanticObjectBase):
     id: str
 
 
-class ModelInfo(LiteLLMPydanticObjectBase):
+class ModelInfo(GatewayModelMetadata, LiteLLMPydanticObjectBase):
     id: str | None
     mode: Literal["embedding", "chat", "completion"] | None
     input_cost_per_token: float | None = 0.0
@@ -1225,7 +1226,7 @@ class ModelInfo(LiteLLMPydanticObjectBase):
     )
     discoverable: bool | None = None
 
-    model_config = ConfigDict(protected_namespaces=(), extra="allow")
+    model_config = ConfigDict(protected_namespaces=(), extra="allow", frozen=False)
 
     @model_validator(mode="before")
     @classmethod

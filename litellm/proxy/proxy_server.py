@@ -136,6 +136,7 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.management_helpers.auto_router_availability import AutoRouterCatalogEntry, build_auto_router_catalog
+from litellm.proxy.model_discovery import discover_model_metadata
 from litellm.router_utils.access_windows import access_windows_config_error
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
@@ -158,6 +159,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
+from litellm.types.proxy.model_metadata import GatewayModelMetadata, resolve_gateway_model_metadata
 from litellm.types.utils import (
     PRICING_OVERRIDES_KEY,
     ModelResponse,
@@ -1592,12 +1594,12 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         None if model_info_refresh_disabled else scheduler if scheduler is not None else AsyncIOScheduler()
     )
     if model_info_scheduler is not None:
+        await ProxyStartupEvent.refresh_model_info()
         model_info_scheduler.add_job(
             ProxyStartupEvent.refresh_model_info,
             "interval",
             seconds=MODEL_INFO_REFRESH_SECONDS,
             id="refresh_model_info",
-            next_run_time=datetime.now(timezone.utc),
             max_instances=1,
             replace_existing=True,
         )
@@ -14703,10 +14705,22 @@ def _enrich_model_info_with_litellm_data(
             if k not in stamped_model_info or (stamped_model_info[k] is None and k in discovered_model_info)
         },
     }
-    # don't return the api key / vertex credentials
-    # don't return the llm credentials
-    model = remove_sensitive_info_from_deployment(model, excluded_keys={"litellm_credential_name"})
-    return model
+    gateway_metadata: Final = resolve_gateway_model_metadata(
+        MappingProxyType({**litellm_model_info, **discovered_model_info}), model_info
+    )
+    published_model: Final = {
+        **model,
+        "model_info": {
+            **{
+                field: value
+                for field, value in model["model_info"].items()
+                if field not in GatewayModelMetadata.model_fields
+            },
+            **gateway_metadata.model_dump(mode="json", exclude_none=True),
+            **discover_model_metadata((gateway_metadata,)),
+        },
+    }
+    return remove_sensitive_info_from_deployment(published_model, excluded_keys={"litellm_credential_name"})
 
 
 async def _get_caller_byok_team_scope(
