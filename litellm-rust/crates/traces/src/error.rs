@@ -15,9 +15,5 @@ pub enum Error {
 pub struct InvalidScope;
 
 #[derive(Debug, thiserror::Error)]
-#[error("unknown ClickHouse read query")]
-pub struct InvalidQuery;
-
-#[derive(Debug, thiserror::Error)]
 #[error("invalid trace call key")]
 pub struct InvalidCallKey;

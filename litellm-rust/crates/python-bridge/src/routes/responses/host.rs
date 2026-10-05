@@ -1,6 +1,5 @@
 use std::convert::Infallible;
 
-use super::super::inference::InferenceHost;
 use litellm_core::responses::{Error, route::Responses, types::ResponsesCall};
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
 use pyo3::{
@@ -8,6 +7,8 @@ use pyo3::{
     prelude::*,
     types::PyDict,
 };
+
+use super::super::inference::InferenceHost;
 
 pub(super) struct ResponsesPythonHost(pub InferenceHost);
 

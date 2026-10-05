@@ -7,8 +7,8 @@ use litellm_traces::{
         histogram,
     },
     store::{
-        CountBy, CountValue, RunCountQuery, RunQuery, RunSelection, SpanPart, SpanQuery, SpanRow,
-        SpanSelection, SpanText, SpanTextQuery,
+        CountBy, CountValue, RunCountQuery, RunOrder, RunQuery, RunSelection, SpanPart, SpanQuery,
+        SpanRow, SpanSelection, SpanText, SpanTextQuery, TextRange,
     },
     to_ui_content,
 };
@@ -16,7 +16,9 @@ use litellm_traces::{
 use crate::{
     ReadError, Snapshot, SnapshotCache, SnapshotKey, StoreError, TraceStore,
     cache::{Freshness, ListCache},
-    cursor::{Cursor, SpanPosition, TextPosition, run_position, span_position, text_position},
+    cursor::{
+        Cursor, RunPosition, SpanPosition, TextPosition, run_position, span_position, text_position,
+    },
     list::{list_summaries, run_batches},
     pages::read_all,
     spend::spend,
@@ -27,6 +29,7 @@ pub const MAX_GRAPH_SPANS: usize = 100_000;
 
 const SNAPSHOT_IDLE: Duration = Duration::from_secs(120);
 const ERROR_PAGE_CHARS: u64 = 16_384;
+pub const MAX_TEXT_SPANS: usize = 100;
 
 #[derive(Clone, Debug, Default)]
 pub struct PageRequest {
@@ -77,33 +80,38 @@ impl TraceReader {
         store: &S,
         access: &QueryScope,
         filter: &RunFilter,
+        order: RunOrder,
         page: &PageRequest,
     ) -> Result<TracePage, ReadError<S::Error>> {
         if page.limit == 0 || filter.start_ms >= filter.end_ms {
             return Err(ReadError::InvalidParameters);
         }
-        let after = run_position(page.cursor.as_deref())?;
+        let after = run_position(page.cursor.as_deref(), order)?;
         let scope = SnapshotKey::scope(store.source(), access)?;
         let accepted = self.lists.limits.get(&scope).await.unwrap_or(u32::MAX);
-        let mut query = RunQuery {
-            selection: RunSelection::Matching(filter.clone()),
-            after,
-            limit: page.limit.min(500).min(accepted),
-        };
-        let rows = loop {
+        let mut page_size = page.limit.min(500).min(accepted);
+        let mut rows = loop {
+            let query = RunQuery {
+                selection: RunSelection::Matching(filter.clone()),
+                order,
+                after: after.clone(),
+                limit: page_size + 1,
+            };
             match store.runs(access, &query).await {
-                Err(StoreError::TooLarge) if query.limit > 1 => {
-                    query.limit /= 2;
-                    self.lists.limits.insert(scope.clone(), query.limit).await;
+                Err(StoreError::TooLarge) if page_size > 1 => {
+                    page_size /= 2;
+                    self.lists.limits.insert(scope.clone(), page_size).await;
                 }
                 Err(StoreError::TooLarge) => return Err(ReadError::TooLarge),
                 result => break result.map_err(map_store_error)?,
             }
         };
+        let more = rows.len() > page_size as usize;
+        rows.truncate(page_size as usize);
         let next_cursor = rows
             .last()
-            .filter(|_| rows.len() == query.limit as usize)
-            .map(|last| Cursor::Run(last.cursor()).encode());
+            .filter(|_| more)
+            .map(|last| Cursor::Run(RunPosition::after(order, last)).encode());
         let data = {
             let mut summaries = Vec::with_capacity(rows.len());
             for batch in run_batches(&rows) {
@@ -169,6 +177,61 @@ impl TraceReader {
         Ok(RunValues {
             values: rows.into_iter().map(|row| row.value).collect(),
         })
+    }
+
+    pub async fn count_traces<S: TraceStore>(
+        &self,
+        store: &S,
+        access: &QueryScope,
+        filter: &RunFilter,
+    ) -> Result<u64, ReadError<S::Error>> {
+        if filter.start_ms >= filter.end_ms {
+            return Err(ReadError::InvalidParameters);
+        }
+        let query = RunCountQuery {
+            filter: filter.clone(),
+            by: CountBy::default(),
+            contains: String::new(),
+            limit: None,
+        };
+        let counts = store
+            .run_counts(access, &query)
+            .await
+            .map_err(map_store_error)?;
+        Ok(counts.iter().map(|count| count.runs).sum())
+    }
+
+    /// One part of each listed span, for readers that page or search a run's text themselves.
+    #[expect(clippy::too_many_arguments, reason = "one argument per read dimension")]
+    pub async fn span_text<S: TraceStore>(
+        &self,
+        store: &S,
+        access: &QueryScope,
+        trace_id: &str,
+        trace_ref: &str,
+        span_ids: Vec<String>,
+        part: SpanPart,
+        range: TextRange,
+        contains: Option<String>,
+    ) -> Result<Vec<SpanText>, ReadError<S::Error>> {
+        if span_ids.len() > MAX_TEXT_SPANS || trace_ref.is_empty() {
+            return Err(ReadError::InvalidParameters);
+        }
+        if span_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query = SpanTextQuery {
+            trace_id: trace_id.to_owned(),
+            trace_ref: trace_ref.to_owned(),
+            span_ids,
+            part,
+            range,
+            contains,
+        };
+        store
+            .span_text(access, &query)
+            .await
+            .map_err(map_store_error)
     }
 
     pub async fn get_trace<S: TraceStore>(
@@ -296,21 +359,21 @@ impl TraceReader {
             return Ok(None);
         };
         let read = |part| {
-            let query = SpanTextQuery {
-                trace_id: trace_id.to_owned(),
-                trace_ref: trace_ref.clone(),
-                span_id: span_id.to_owned(),
+            span_texts(
+                store,
+                access,
+                trace_id,
+                &trace_ref,
+                vec![span_id.to_owned()],
                 part,
-                offset: 0,
-                max_chars: None,
-            };
-            async move { store.span_text(access, &query).await }
+                TextRange::ALL,
+            )
         };
-        let Some(input) = read(SpanPart::Input).await.map_err(map_store_error)? else {
+        let Some(input) = read(SpanPart::Input).await?.pop() else {
             return Ok(None);
         };
-        let output = text_of(read(SpanPart::Output).await)?;
-        let attributes = text_of(read(SpanPart::Attributes).await)?;
+        let output = text_of(read(SpanPart::Output).await?);
+        let attributes = text_of(read(SpanPart::Attributes).await?);
         let output = if output.is_empty() {
             self.agent_answer(store, access, trace_id, &trace_ref, span_id)
                 .await?
@@ -345,28 +408,33 @@ impl TraceReader {
         {
             return Ok(String::new());
         }
-        let mut calls: Vec<_> = spans
+        let calls: Vec<_> = spans
             .iter()
             .filter(|span| {
                 span.kind == ObservationType::Llm && span.parent_span_id.as_deref() == Some(span_id)
             })
             .collect();
-        calls.sort_by(|left, right| right.start_offset_ms.total_cmp(&left.start_offset_ms));
-        for call in calls {
-            let query = SpanTextQuery {
-                trace_id: trace_id.to_owned(),
-                trace_ref: trace_ref.to_owned(),
-                span_id: call.span_id.clone(),
-                part: SpanPart::Output,
-                offset: 0,
-                max_chars: None,
-            };
-            let output = text_of(store.span_text(access, &query).await)?;
-            if !output.is_empty() {
-                return Ok(output);
-            }
-        }
-        Ok(String::new())
+        let outputs = span_texts(
+            store,
+            access,
+            trace_id,
+            trace_ref,
+            calls.iter().map(|call| call.span_id.clone()).collect(),
+            SpanPart::Output,
+            TextRange::ALL,
+        )
+        .await?;
+        Ok(calls
+            .iter()
+            .filter_map(|call| {
+                outputs
+                    .iter()
+                    .find(|output| output.span_id == call.span_id && !output.text.is_empty())
+                    .map(|output| (call.start_offset_ms, &output.text))
+            })
+            .max_by(|left, right| left.0.total_cmp(&right.0))
+            .map(|(_, text)| text.clone())
+            .unwrap_or_default())
     }
 
     pub async fn get_span_error<S: TraceStore>(
@@ -383,19 +451,20 @@ impl TraceReader {
             return Ok(None);
         };
         let offset = position.as_ref().map_or(0, |position| position.offset);
-        let query = SpanTextQuery {
-            trace_id: trace_id.to_owned(),
-            trace_ref,
-            span_id: span_id.to_owned(),
-            part: SpanPart::Error,
-            offset,
-            max_chars: Some(ERROR_PAGE_CHARS),
-        };
-        let Some(text) = store
-            .span_text(access, &query)
-            .await
-            .map_err(map_store_error)?
-        else {
+        let Some(text) = span_texts(
+            store,
+            access,
+            trace_id,
+            &trace_ref,
+            vec![span_id.to_owned()],
+            SpanPart::Error,
+            TextRange::From {
+                offset,
+                max_chars: Some(ERROR_PAGE_CHARS),
+            },
+        )
+        .await?
+        .pop() else {
             return Ok(None);
         };
         if position.is_some_and(|position| position.version != text.version) {
@@ -419,11 +488,34 @@ impl TraceReader {
     }
 }
 
-fn text_of<E>(result: Result<Option<SpanText>, StoreError<E>>) -> Result<String, ReadError<E>> {
-    Ok(result
-        .map_err(map_store_error)?
-        .map(|text| text.text)
-        .unwrap_or_default())
+fn text_of(mut texts: Vec<SpanText>) -> String {
+    texts.pop().map(|text| text.text).unwrap_or_default()
+}
+
+pub(super) async fn span_texts<S: TraceStore>(
+    store: &S,
+    access: &QueryScope,
+    trace_id: &str,
+    trace_ref: &str,
+    span_ids: Vec<String>,
+    part: SpanPart,
+    range: TextRange,
+) -> Result<Vec<SpanText>, ReadError<S::Error>> {
+    if span_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let query = SpanTextQuery {
+        trace_id: trace_id.to_owned(),
+        trace_ref: trace_ref.to_owned(),
+        span_ids,
+        part,
+        range,
+        contains: None,
+    };
+    store
+        .span_text(access, &query)
+        .await
+        .map_err(map_store_error)
 }
 
 fn parse_attributes<E>(json: &str) -> Result<BTreeMap<String, String>, ReadError<E>> {
@@ -464,6 +556,7 @@ async fn reference<S: TraceStore>(
     }
     let query = RunQuery {
         selection: RunSelection::TraceId(trace_id.to_owned()),
+        order: RunOrder::NEWEST,
         after: None,
         limit: 2,
     };

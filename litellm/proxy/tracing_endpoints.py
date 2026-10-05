@@ -36,6 +36,7 @@ from litellm.rust_bridge.trace.generated.types import (
     OwnedQueryScope,
     QueryScope,
     RunField,
+    RunOrder,
     RunValues,
     SpanDetail,
     SpanErrorPage,
@@ -206,11 +207,14 @@ async def list_agent_traces(
     window: Annotated[TraceWindow, Depends(trace_window)],
     q: RunQuery = "",
     cursor: Annotated[str | None, Query(max_length=512)] = None,
+    sort_by: Literal["start_ms", "duration_ms", "span_count", "error_count"] = "start_ms",
+    sort_dir: Literal["asc", "desc"] = "desc",
 ) -> TracePage:
+    order: Final = RunOrder(key=sort_by, descending=sort_dir == "desc")
     try:
         tracing, scope = context.reader()
         return await tracing.list_traces(
-            scope=scope, start_ms=window.start_ms, end_ms=window.end_ms, q=q, cursor=cursor
+            scope=scope, start_ms=window.start_ms, end_ms=window.end_ms, q=q, cursor=cursor, order=order
         )
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
         raise read_failure(error) from error

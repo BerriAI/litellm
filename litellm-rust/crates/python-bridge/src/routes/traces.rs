@@ -2,13 +2,12 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use litellm_http::ClientVariant;
 use litellm_traces::{
-    QueryScope, ReadQuery, Tenant,
+    QueryScope, Tenant,
     search::{RunField, RunFilter, RunSearch},
+    store::{RunOrder, SpanPart, TextRange},
 };
 use litellm_traces_cache::{PageRequest, ReadError, TraceReader};
-use litellm_traces_clickhouse::{
-    ClickHouseTraces, Config, Error, InsertTable, Parameter, QueryReaders,
-};
+use litellm_traces_clickhouse::{ClickHouseTraces, Config, Error, InsertTable, QueryReaders};
 use prost::Message;
 use pyo3::{
     exceptions::{PyOverflowError, PyRuntimeError, PyValueError},
@@ -51,7 +50,6 @@ fn map_error_ref(error: &Error) -> PyErr {
         | Error::InvalidTable
         | Error::Decode(_)
         | Error::InvalidSchema
-        | Error::InvalidQuery
         | Error::InvalidParameters
         | Error::InvalidScope => PyValueError::new_err(error.to_string()),
         Error::Task
@@ -95,12 +93,19 @@ fn map_read_error(error: ReadError<Error>) -> PyErr {
     }
 }
 
-fn run_filter(start_ms: i64, end_ms: i64, q: &str) -> RunFilter {
+fn run_filter(start_ms: i64, end_ms: i64, q: &str, trace_refs: Vec<String>) -> RunFilter {
     RunFilter {
         start_ms,
         end_ms,
         search: RunSearch::parse(q),
+        trace_refs,
     }
+}
+
+fn parsed<T: std::str::FromStr>(kind: &str, value: &str) -> PyResult<T> {
+    value
+        .parse()
+        .map_err(|_| PyValueError::new_err(format!("unknown {kind} {value}")))
 }
 
 fn map_sql_error(error: Error) -> PyErr {
@@ -235,7 +240,7 @@ impl NativeTraceStorage {
         )
     }
 
-    #[pyo3(signature = (scope, start_ms, end_ms, q, cursor, limit))]
+    #[pyo3(signature = (scope, start_ms, end_ms, q, cursor, limit, order, trace_refs=Vec::new()))]
     #[expect(
         clippy::too_many_arguments,
         reason = "one parameter per Python argument"
@@ -249,8 +254,10 @@ impl NativeTraceStorage {
         q: &str,
         cursor: Option<String>,
         limit: u32,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] order: RunOrder,
+        trace_refs: Vec<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let filter = run_filter(start_ms, end_ms, q);
+        let filter = run_filter(start_ms, end_ms, q, trace_refs);
         let page = PageRequest { cursor, limit };
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
@@ -259,7 +266,75 @@ impl NativeTraceStorage {
             py,
             async move {
                 let store = ClickHouseTraces::new(client, connection);
-                reader.list_traces(&store, &scope, &filter, &page).await
+                reader
+                    .list_traces(&store, &scope, &filter, order, &page)
+                    .await
+            },
+            map_read_error,
+        )
+    }
+
+    #[pyo3(signature = (scope, start_ms, end_ms, q, trace_refs=Vec::new()))]
+    fn count_traces<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
+        start_ms: i64,
+        end_ms: i64,
+        q: &str,
+        trace_refs: Vec<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let filter = run_filter(start_ms, end_ms, q, trace_refs);
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().reader().clone();
+        let reader = Arc::clone(&self.reader);
+        crate::execution::run_async(
+            py,
+            async move {
+                let store = ClickHouseTraces::new(client, connection);
+                reader.count_traces(&store, &scope, &filter).await
+            },
+            map_read_error,
+        )
+    }
+
+    /// `tail` reads the last `max_chars` characters instead of starting at `offset`.
+    #[pyo3(signature = (trace_id, trace_ref, span_ids, part, scope, offset=0, max_chars=None, tail=false, contains=None))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one parameter per Python argument"
+    )]
+    fn span_text<'py>(
+        &self,
+        py: Python<'py>,
+        trace_id: String,
+        trace_ref: String,
+        span_ids: Vec<String>,
+        part: &str,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
+        offset: u64,
+        max_chars: Option<u64>,
+        tail: bool,
+        contains: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let part: SpanPart = parsed("span part", part)?;
+        let range = match (tail, max_chars) {
+            (true, Some(chars)) => TextRange::Last { chars },
+            (true, None) => return Err(PyValueError::new_err("tail reads need max_chars")),
+            (false, max_chars) => TextRange::From { offset, max_chars },
+        };
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().reader().clone();
+        let reader = Arc::clone(&self.reader);
+        crate::execution::run_async(
+            py,
+            async move {
+                let store = ClickHouseTraces::new(client, connection);
+                reader
+                    .span_text(
+                        &store, &scope, &trace_id, &trace_ref, span_ids, part, range, contains,
+                    )
+                    .await
             },
             map_read_error,
         )
@@ -274,7 +349,7 @@ impl NativeTraceStorage {
         q: &str,
         buckets: u32,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let filter = run_filter(start_ms, end_ms, q);
+        let filter = run_filter(start_ms, end_ms, q, Vec::new());
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
         let reader = Arc::clone(&self.reader);
@@ -306,7 +381,7 @@ impl NativeTraceStorage {
         let field = field
             .parse::<RunField>()
             .map_err(|_| PyValueError::new_err(format!("unknown run field {field}")))?;
-        let filter = run_filter(start_ms, end_ms, q);
+        let filter = run_filter(start_ms, end_ms, q, Vec::new());
         let contains = contains.to_owned();
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
@@ -459,34 +534,6 @@ impl NativeTraceStorage {
                 litellm_traces_clickhouse::query_help(&client, &connection).await
             },
             map_sql_error,
-        )
-    }
-
-    fn query<'py>(
-        &self,
-        py: Python<'py>,
-        query: &str,
-        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] parameters: BTreeMap<
-            String,
-            Parameter,
-        >,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let query =
-            ReadQuery::parse(query).map_err(|error| PyValueError::new_err(error.to_string()))?;
-        let connection = self.config.storage().reader().clone();
-        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
-        crate::execution::run_async(
-            py,
-            async move {
-                litellm_traces_clickhouse::execute_named_read(
-                    &client,
-                    &connection,
-                    query,
-                    &parameters,
-                )
-                .await
-            },
-            map_error,
         )
     }
 }

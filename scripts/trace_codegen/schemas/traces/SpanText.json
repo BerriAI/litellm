@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "contains": {
+      "type": "boolean"
+    },
+    "span_id": {
+      "type": "string"
+    },
+    "text": {
+      "type": "string"
+    },
+    "total_chars": {
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "version": {
+      "description": "Uppercase hex SHA-256 of the whole part, so a reader can tell when it changed.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "span_id",
+    "text",
+    "total_chars",
+    "version",
+    "contains"
+  ],
+  "title": "SpanText",
+  "type": "object"
+}

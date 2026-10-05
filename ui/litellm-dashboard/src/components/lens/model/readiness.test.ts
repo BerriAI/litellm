@@ -21,8 +21,8 @@ describe("readiness", () => {
   });
 
   it("needs a connected worker and a healthy list on top of recorded activity", () => {
-    const active = { ...base, activity: { traces: false, requests: true } };
-    expect(readiness(active)).toMatchObject({ requestsReady: true, activityReady: true, ready: true });
+    const active = { ...base, activity: { traces: true } };
+    expect(readiness(active)).toMatchObject({ tracesReady: true, activityReady: true, ready: true });
     expect(readiness({ ...active, connected: false }).ready).toBe(false);
     expect(readiness({ ...active, listError: new Error("down") }).ready).toBe(false);
   });
@@ -46,7 +46,7 @@ describe("initialSetupStep", () => {
     const offline = { ...base, connected: false };
     expect(initialSetupStep(readiness(offline))).toBe(0);
     expect(initialSetupStep(readiness({ ...offline, tracingConfigured: true }))).toBe(1);
-    const recorded = { ...offline, activity: { traces: false, requests: true } };
+    const recorded = { ...offline, activity: { traces: true } };
     expect(initialSetupStep(readiness(recorded))).toBe(2);
     expect(initialSetupStep(readiness({ ...recorded, connected: true }))).toBe(3);
   });

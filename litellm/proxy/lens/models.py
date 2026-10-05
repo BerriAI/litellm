@@ -1,7 +1,11 @@
+import base64
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
+from typing_extensions import ReadOnly, TypedDict
+
+from litellm.rust_bridge.trace.generated.types import TraceSummary
 
 
 def calendar_lookback(hours: int) -> int:
@@ -34,9 +38,69 @@ class Scope(Record):
     all_teams: bool = False
 
 
-class MetadataFilter(Record):
-    key: str = Field(min_length=1)
-    value: str = Field(min_length=1)
+TRACE_REF_LENGTH: Final = 64
+
+
+def execution_id(trace_ref: str, trace_id: str) -> str:
+    return f"{trace_ref}:{trace_id}"
+
+
+def parse_execution(value: str) -> tuple[str, str]:
+    """`(trace_ref, trace_id)` of an execution id."""
+    trace_ref, separator, trace_id = value.partition(":")
+    if len(trace_ref) != TRACE_REF_LENGTH or not separator or not trace_id:
+        raise ValueError("Not an execution ID")
+    return trace_ref, trace_id
+
+
+_LEGACY_ID: Final[TypeAdapter[tuple[str, str, str] | tuple[str, str, str, str]]] = TypeAdapter(
+    tuple[str, str, str] | tuple[str, str, str, str]
+)
+
+
+def _legacy_execution_id(value: str) -> str | None:
+    """Selections saved before executions were runs named them by source, team, trace id and reference."""
+    try:
+        parts: Final = _LEGACY_ID.validate_json(base64.urlsafe_b64decode(value))
+    except (ValueError, ValidationError):
+        return value
+    trace_ref: Final = parts[3] if len(parts) == 4 else ""
+    return execution_id(trace_ref, parts[2]) if parts[0] == "traces" and trace_ref else None
+
+
+def _term(key: str, value: str) -> str:
+    return f'{key}:"{value}"' if any(c.isspace() for c in value) else f"{key}:{value}"
+
+
+class _LegacyFilter(BaseModel):
+    key: str
+    value: str
+
+
+class _LegacySelection(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    q: str = ""
+    source: str = ""
+    service: str = ""
+    agent_name: str = ""
+    filters: tuple[_LegacyFilter, ...] = ()
+    team_id: str = ""
+    execution_ids: tuple[str, ...] = ()
+
+    def current(self) -> dict[str, object]:
+        terms: Final = (
+            self.q,
+            _term("agent", self.agent_name) if self.agent_name else "",
+            _term("service", self.service) if self.service else "",
+            _term("team", self.team_id) if self.team_id else "",
+            *(_term(f"attr.{f.key}", f.value) for f in self.filters),
+        )
+        ids: Final = tuple(i for i in map(_legacy_execution_id, self.execution_ids) if i is not None)
+        return {**(self.model_extra or {}), "q": " ".join(t for t in terms if t), "execution_ids": ids}
+
+
+_LEGACY_KEYS: Final = frozenset({"source", "service", "agent_name", "filters", "team_id"})
+_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 class Check(Record):
@@ -46,14 +110,22 @@ class Check(Record):
 
 
 class ActivitySelection(Record):
-    source: Literal["traces", "requests", "both"] = "traces"
-    service: str = Field(default="")
-    agent_name: str = Field(default="")
-    filters: tuple[MetadataFilter, ...] = Field(default=())
+    q: str = Field(default="", max_length=2000)
     sample_size: int | None = Field(default=None, ge=1)
     sample_percent: float = Field(default=100, gt=0, le=100, allow_inf_nan=False)
-    team_id: str = ""
     execution_ids: tuple[str, ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def from_saved_filters(cls, data: object) -> object:
+        """Selections saved with separate agent, service, team and attribute filters load as `q`."""
+        try:
+            fields: Final = _FIELDS.validate_python(data)
+        except ValidationError:
+            return data
+        if not _LEGACY_KEYS & fields.keys():
+            return data
+        return _LegacySelection.model_validate(fields).current()
 
 
 class LensSettings(ActivitySelection):
@@ -149,16 +221,9 @@ class Coverage(Record):
 
 class Execution(Record):
     id: str
-    source: Literal["traces", "requests"]
     trace_id: str
-    trace_ref: str = ""
-    team_id: str
-    name: str
-    start_time: str
-    span_count: int
-    root_seen: bool = False
-    service: str = ""
-    metadata: tuple[MetadataFilter, ...] = ()
+    trace_ref: str
+    summary: TraceSummary | None = None
 
 
 class TracePart(Record):
@@ -182,8 +247,22 @@ class Sample(Record):
     executions: tuple[Execution, ...]
     eligible: int
     selected: int = 0
-    next_offset: int | None = None
     next_cursor: str | None = None
+
+
+class ActivityAvailability(Record):
+    traces: bool = False
+
+
+class _SavedSample(TypedDict, total=False):
+    executions: ReadOnly[list[dict[str, object]]]
+
+
+class _SavedJob(TypedDict, total=False):
+    sample: ReadOnly[_SavedSample | None]
+
+
+_SAVED_JOB: Final = TypeAdapter(_SavedJob)
 
 
 class RunAssessment(Record):
@@ -208,6 +287,20 @@ class Step(Record):
 
 
 class Job(Record):
+    @model_validator(mode="before")
+    @classmethod
+    def without_legacy_sample(cls, data: object) -> object:
+        """Samples saved before executions were runs no longer resolve, so they load as absent."""
+        try:
+            saved: Final = _SAVED_JOB.validate_python(data)
+            fields: Final = _FIELDS.validate_python(data)
+        except ValidationError:
+            return data
+        sample: Final = saved.get("sample") or {}
+        if not any("source" in e for e in sample.get("executions", [])):
+            return data
+        return {**fields, "sample": None}
+
     id: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
     stage: str = "Queued"

@@ -169,13 +169,8 @@ def main() -> int:
     schema_set_matches: Final = reconcile_schemas(frozenset(path for path, _ in exported), args.check)
     with TemporaryDirectory(prefix="trace-codegen-") as temporary:
         directory: Final = Path(temporary)
-        types: Final = generate({**domain, "ReadQueryName": clickhouse["ReadQueryName"]}, "types", directory, config)
-        models: Final = generate(
-            {name: schema for name, schema in clickhouse.items() if name != "ReadQueryName"},
-            "models",
-            directory,
-            config,
-        )
+        types: Final = generate(domain, "types", directory, config)
+        models: Final = generate(clickhouse, "models", directory, config)
         python_results: Final = (
             publish(GENERATED / "types.py", types.read_text(), args.check),
             publish(GENERATED / "models.py", models.read_text(), args.check),

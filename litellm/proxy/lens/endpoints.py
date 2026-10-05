@@ -20,6 +20,7 @@ from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
 from litellm.proxy.lens.billing import validate_key
 from litellm.proxy.lens.inference import Deployment, deployment_prices
 from litellm.proxy.lens.models import (
+    ActivityAvailability,
     ActivitySelection,
     Claim,
     Execution,
@@ -43,11 +44,12 @@ from litellm.proxy.lens.models import (
     WatchSkipped,
     Worker,
     WorkerCreated,
+    parse_execution,
 )
 from litellm.proxy.lens.release import PROTOCOL_VERSION, release_tag, worker_image
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
-from litellm.proxy.lens.search import LensField, parse_search
-from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
+from litellm.proxy.lens.search import LensField, parse_search, search_terms
+from litellm.proxy.lens.sources import SourceReader, Storage
 from litellm.proxy.lens.state import (
     add_step,
     can_access,
@@ -134,9 +136,7 @@ def required(lens: Lens | None) -> Lens:
 def validate_selection(settings: ActivitySelection) -> None:
     for identity in settings.execution_ids:
         try:
-            source, _, _, _ = parse_execution(identity)
-            if source not in ("traces", "requests"):
-                raise ValueError("Unsupported source")
+            parse_execution(identity)
         except ValueError:
             raise HTTPException(422, "Choose execution IDs returned by the activity preview")
 
@@ -241,12 +241,6 @@ async def activity_available(auth: Auth, storage: StorageDep) -> ActivityAvailab
     return await source_reader(storage).availability(scope) if storage is not None else ActivityAvailability()
 
 
-@router.get("/agents", response_model=tuple[str, ...])
-async def list_agents(auth: Auth, storage: StorageDep) -> tuple[str, ...]:
-    scope: Final = user_scope(auth)
-    return await source_reader(storage).agents(scope) if storage is not None else ()
-
-
 @router.get("/values/{field}", response_model=tuple[str, ...])
 async def list_lens_values(
     field: LensField,
@@ -324,7 +318,12 @@ def run_window(lens: Lens, body: RunRequest, now: datetime) -> tuple[datetime, d
 def run_settings(lens: Lens, body: RunRequest) -> LensSettings | None:
     if body.agent_name is None:
         return body.settings
-    return (body.settings or lens.settings).model_copy(update=MappingProxyType({"agent_name": body.agent_name}))
+    settings: Final = body.settings or lens.settings
+    agent: Final = (
+        f'agent:"{body.agent_name}"' if any(c.isspace() for c in body.agent_name) else f"agent:{body.agent_name}"
+    )
+    kept: Final = tuple(term for term in search_terms(settings.q) if not term.lower().startswith("agent:"))
+    return settings.model_copy(update=MappingProxyType({"q": " ".join((*kept, agent))}))
 
 
 @router.post("/{lens_id}/runs", response_model=Lens)
@@ -414,7 +413,7 @@ async def update_finding(lens_id: str, finding_id: str, body: FindingUpdate, aut
 
 class Preview(BaseModel):
     as_of: AwareDatetime | None = None
-    offset: int = Field(default=0, ge=0)
+    cursor: str = ""
     selection: ActivitySelection
     lookback_hours: LookbackHours = 24
 
@@ -433,7 +432,7 @@ async def preview_sample(body: Preview, auth: Auth, storage: StorageDep) -> Samp
         body.selection,
         start,
         end,
-        offset=body.offset,
+        cursor=body.cursor,
         preview=True,
     )
 
@@ -748,20 +747,8 @@ async def evidence_content(
 ) -> ExecutionContent:
     lens: Final = await get_lens(lens_id, user_scope(auth))
     try:
-        source, team, trace_id, trace_ref = parse_execution(execution_id)
+        trace_ref, trace_id = parse_execution(execution_id)
     except ValueError:
         raise HTTPException(404, "Execution not found")
-    if source not in ("traces", "requests") or (not lens.scope.all_teams and team != lens.scope.team_id):
-        raise HTTPException(404, "Execution not found")
-    execution: Final = Execution(
-        id=execution_id,
-        source="traces" if source == "traces" else "requests",
-        trace_id=trace_id,
-        trace_ref=trace_ref,
-        team_id=team,
-        name=trace_id,
-        start_time="",
-        span_count=1,
-        root_seen=source == "requests",
-    )
+    execution: Final = Execution(id=execution_id, trace_id=trace_id, trace_ref=trace_ref)
     return await source_reader(storage).content(lens.scope, execution, cursor, offset)

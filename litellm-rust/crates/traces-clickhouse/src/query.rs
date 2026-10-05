@@ -17,7 +17,6 @@ use super::{
 use crate::TraceTable;
 
 mod guide;
-pub mod lens;
 pub mod named;
 mod number;
 

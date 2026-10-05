@@ -18,7 +18,7 @@ export function liveLensServices(accessToken: string): LensServices {
   return { accessToken, lens: liveLensApi(fetchClient, apiClient, accessToken), traces: liveTracesApi(accessToken) };
 }
 
-function useLensServices(): LensServices {
+export function useLensServices(): LensServices {
   const provided = useContext(LensServicesContext);
   if (!provided) throw new Error("Lens services need a LensServicesProvider above them");
   return provided;

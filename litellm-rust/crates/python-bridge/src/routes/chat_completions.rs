@@ -1,15 +1,16 @@
 mod host;
 
-use pyo3::types::{PyDict, PyTuple};
-
-use crate::execution::{run_async, run_sync};
 use litellm_core::chat_completions::{ChatCompletionsRoute, Error, types::ChatCompletionsRequest};
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
-use pyo3::prelude::*;
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 use serde_json::{Map, Value};
 
 use crate::{
     errors::route_error_to_pyerr,
+    execution::{run_async, run_sync},
     marshal::{
         RouteOptions, extra_headers_argument, messages_argument, optional_params_argument,
         optional_timeout,
@@ -136,8 +137,9 @@ fn run_public(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    use super::inference::InferenceHost;
     use litellm_callbacks_legacy_python::LoggingOperation;
+
+    use super::inference::InferenceHost;
     let host = InferenceHost::new(
         request.clone().unbind(),
         "litellm.rust_bridge.chat_completions.route_host",

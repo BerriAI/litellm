@@ -2,7 +2,7 @@
 
 import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useCallback } from "react";
-import { OPEN_TRACE_PARSERS, RUN_FILTER_PARSERS } from "@/components/lens/traces/routing";
+import { OPEN_TRACE_PARSERS, RUN_FILTER_PARSERS, TRACING_SETUP_PARSERS } from "@/components/lens/traces/routing";
 
 export const LENS_TABS = { traces: "Traces", investigations: "Investigations", settings: "Settings" } as const;
 export type LensTab = keyof typeof LENS_TABS;
@@ -42,6 +42,7 @@ const SESSION_PARSERS = {
   ...LENS_PARSERS,
   ...OPEN_TRACE_PARSERS,
   ...RUN_FILTER_PARSERS,
+  ...TRACING_SETUP_PARSERS,
   ...ISSUE_PARSERS,
   ...LIST_PARSERS,
   ...RESULT_PARSERS,

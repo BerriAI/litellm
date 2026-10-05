@@ -1,5 +1,3 @@
-use crate::cache::cache_error;
-use crate::execution::run_sync_value;
 use litellm_cache_gcs::{DEFAULT_ENDPOINT, GcsConfig};
 use litellm_cache_redis_semantic::RedisSemanticConfig;
 use litellm_host_python::release_gil;
@@ -11,8 +9,9 @@ use super::{
     config::{CacheBackendConfig, NativeCacheConfig, UnsupportedCacheConfig},
     embedder::PythonEmbedder,
 };
-use crate::errors::RustBridgeDeclined;
-use crate::http::host_client;
+use crate::{
+    cache::cache_error, errors::RustBridgeDeclined, execution::run_sync_value, http::host_client,
+};
 
 fn declined(reason: UnsupportedCacheConfig) -> PyErr {
     RustBridgeDeclined::new_err(reason.message())

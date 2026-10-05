@@ -1,4 +1,5 @@
-use super::{native, python};
+use std::sync::Arc;
+
 use litellm_cache_response::{
     CacheOptions, CachePolicy, CacheScope, ResponseCacheService, ScopedCache,
 };
@@ -7,7 +8,8 @@ use litellm_host::{
     protocol::Protocol,
 };
 use pyo3::{prelude::*, types::PyDict};
-use std::sync::Arc;
+
+use super::{native, python};
 
 pub(crate) struct Cached<P>(std::marker::PhantomData<P>);
 

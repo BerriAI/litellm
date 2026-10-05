@@ -1,0 +1,31 @@
+{
+  "$defs": {
+    "RunSortKey": {
+      "enum": [
+        "start_ms",
+        "duration_ms",
+        "span_count",
+        "error_count",
+        "trace_ref"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Runs by `key`, ties broken by `trace_ref` in the same direction.",
+  "properties": {
+    "descending": {
+      "type": "boolean"
+    },
+    "key": {
+      "$ref": "#/$defs/RunSortKey"
+    }
+  },
+  "required": [
+    "key",
+    "descending"
+  ],
+  "title": "RunOrder",
+  "type": "object"
+}

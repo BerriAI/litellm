@@ -9,13 +9,13 @@ _SETTINGS: Final = "data->'settings'"
 FIELD_VALUES: Final[MappingProxyType[LensField, str]] = MappingProxyType(
     {
         "name": f"ARRAY[{_SETTINGS}->>'name']",
-        "agent": f"ARRAY[{_SETTINGS}->>'agent_name', {_SETTINGS}->>'service']",
+        "agent": f"ARRAY[{_SETTINGS}->>'q', {_SETTINGS}->>'agent_name', {_SETTINGS}->>'service']",
         "status": "ARRAY[COALESCE(data->'jobs'->0->>'status', 'never')]",
         "schedule": f"ARRAY[CASE WHEN ({_SETTINGS}->>'enabled')::boolean THEN 'watching' ELSE 'paused' END]",
     }
 )
 
-_SCOPE_LABEL: Final = f"""COALESCE(NULLIF(concat_ws(' · ',
+_SCOPE_LABEL: Final = f"""COALESCE(NULLIF({_SETTINGS}->>'q', ''), NULLIF(concat_ws(' · ',
     NULLIF({_SETTINGS}->>'agent_name', ''),
     NULLIF({_SETTINGS}->>'service', ''),
     (SELECT string_agg((f->>'key') || ': ' || (f->>'value'), ' · ')
@@ -23,6 +23,13 @@ _SCOPE_LABEL: Final = f"""COALESCE(NULLIF(concat_ws(' · ',
 FREE_TEXT: Final = f"ARRAY[{_SETTINGS}->>'name', {_SCOPE_LABEL}]"
 
 _TOKEN: Final = re.compile(r'(?:"[^"]*"?|\S)+')
+
+
+def search_terms(q: str) -> tuple[str, ...]:
+    """Whitespace-separated terms of a search, keeping quoted stretches whole."""
+    return tuple(_TOKEN.findall(q))
+
+
 _FIELD_TOKEN: Final = re.compile(r"^(-?)([A-Za-z_]+):(.*)$", re.DOTALL)
 _QUOTED: Final = re.compile(r'^"([^"]*)"?$')
 

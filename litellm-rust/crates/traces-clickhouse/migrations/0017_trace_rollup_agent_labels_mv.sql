@@ -17,7 +17,9 @@ SELECT
     sum(OutputTokens)                                      AS OutputTokens,
     groupUniqArrayIf(toString(Model), Model != '')         AS Models,
     groupUniqArrayIf(SpanName, ObservationType = 'agent')  AS AgentNames,
-    groupUniqArrayIf(if(AgentName != '', AgentName, SpanName), ObservationType = 'agent' OR AgentName != '') AS AgentLabels,
+    groupUniqArrayIf(AgentName, AgentName != '')            AS AgentLabels,
+    groupUniqArrayIf(if(AgentName = '', SpanName, AgentName), ObservationType = 'agent') AS AgentIdentities,
+    groupUniqArrayIf(toString(Framework), Framework != '') AS Frameworks,
     groupArrayIf(LiteLLMRequestId, ObservationType = 'llm' OR LiteLLMRequestId != '') AS RequestIds
 FROM {database}.otel_traces
 GROUP BY TeamId, ApiKeyHash, TraceId

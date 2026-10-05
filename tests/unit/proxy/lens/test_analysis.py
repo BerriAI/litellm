@@ -20,6 +20,7 @@ from litellm.proxy.lens.models import (
 )
 from litellm.proxy.lens.state import queue_job
 from tests.unit.proxy.lens.test_state import NOW, issue_brief, lens, finding
+from tests.unit.proxy.lens.test_sources import summary
 
 
 @pytest.mark.asyncio
@@ -28,7 +29,7 @@ async def test_parallel_review_shares_one_model_limit_and_cleans_up(outcome: str
     from litellm.proxy.lens.analysis import ANALYSIS_CONCURRENCY, analyze_sample
 
     executions: Final = tuple(
-        Execution(id=str(i), source="traces", trace_id=str(i), team_id="alpha", name="run", start_time="", span_count=6)
+        Execution(id=str(i), trace_id=str(i), trace_ref="", summary=summary("", str(i), span_count=6))
         for i in range(ANALYSIS_CONCURRENCY + 1)
     )
     entered: Final = SimpleQueue[str]()
@@ -162,9 +163,7 @@ def test_excerpt_omission_is_not_original_evidence() -> None:
 
 @pytest.mark.asyncio
 async def test_reviewer_sees_final_outcome_and_catalog_across_pages() -> None:
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="t", team_id="", name="run", start_time="", span_count=2
-    )
+    execution: Final = Execution(id="run", trace_id="t", trace_ref="", summary=summary("", "t", span_count=2))
     root: Final = TracePart(execution_id="run", span_id="01", name="task", kind="agent", content="Task: write a report")
     editor: Final = TracePart(
         execution_id="run", span_id="02", parent_span_id="01", name="editor", kind="agent", content="Delivered report"
@@ -195,9 +194,7 @@ async def test_reviewer_sees_final_outcome_and_catalog_across_pages() -> None:
 async def test_reviewer_fetches_targeted_evidence_and_rejects_outside_catalog_reads() -> None:
     from litellm.proxy.lens.analysis import Observation, SpanRead, TraceReview
 
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="t", team_id="", name="run", start_time="", span_count=2
-    )
+    execution: Final = Execution(id="run", trace_id="t", trace_ref="", summary=summary("", "t", span_count=2))
     root: Final = TracePart(
         execution_id="run", span_id="01", name="task", kind="agent", content="Find the verified result"
     )
@@ -257,9 +254,7 @@ async def test_reviewer_fetches_targeted_evidence_and_rejects_outside_catalog_re
 async def test_reviewer_stops_repeated_read_requests() -> None:
     from litellm.proxy.lens.analysis import SpanRead, TraceReview
 
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="t", team_id="", name="run", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run", trace_id="t", trace_ref="", summary=summary("", "t", span_count=1))
     part: Final = TracePart(execution_id="run", span_id="01", name="task", kind="agent", content="Partial export")
     reads: Final = SimpleQueue[int]()
     calls: Final = SimpleQueue[int]()
@@ -294,9 +289,7 @@ def test_chunks_preserve_all_spans_and_keep_context_bounded() -> None:
 
 @pytest.mark.asyncio
 async def test_investigator_rejects_a_fabricated_quote() -> None:
-    execution: Final = Execution(
-        id="run1", source="traces", trace_id="t", team_id="alpha", name="search", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run1", trace_id="t", trace_ref="", summary=summary("", "t", span_count=1))
     examined: Final = Examined(
         execution=execution,
         observations=(),
@@ -326,9 +319,7 @@ async def test_investigator_rejects_a_fabricated_quote() -> None:
 @pytest.mark.parametrize("paginated", [False, True])
 @pytest.mark.parametrize("assessable", [False, True])
 async def test_assessable_content_is_not_overridden_by_unknown_chunks(paginated: bool, assessable: bool) -> None:
-    execution: Final = Execution(
-        id="run1", source="traces", trace_id="t", team_id="alpha", name="review", start_time="", span_count=4
-    )
+    execution: Final = Execution(id="run1", trace_id="t", trace_ref="", summary=summary("", "t", span_count=4))
     unknown: Final = tuple(
         TracePart(execution_id="run1", span_id=str(i), name="tool", kind="tool", content="x" * 8000) for i in range(3)
     )
@@ -360,9 +351,7 @@ async def test_assessable_content_is_not_overridden_by_unknown_chunks(paginated:
 
 @pytest.mark.asyncio
 async def test_investigator_keeps_final_outcome_ahead_of_repeated_model_history() -> None:
-    execution: Final = Execution(
-        id="run1", source="traces", trace_id="t", team_id="alpha", name="review", start_time="", span_count=6
-    )
+    execution: Final = Execution(id="run1", trace_id="t", trace_ref="", summary=summary("", "t", span_count=6))
     history: Final = tuple(
         TracePart(
             execution_id="run1", span_id=str(i), name="chat", kind="llm", parent_span_id="span", content="x" * 8000
@@ -401,9 +390,7 @@ async def test_investigator_keeps_final_outcome_ahead_of_repeated_model_history(
 async def test_many_model_citations_are_accepted_but_quotes_are_still_verified(
     quote: str, check_id: str, accepted: bool
 ) -> None:
-    execution: Final = Execution(
-        id="run1", source="traces", trace_id="t", team_id="alpha", name="review", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run1", trace_id="t", trace_ref="", summary=summary("", "t", span_count=1))
     part: Final = TracePart(execution_id="run1", span_id="span", name="tool", kind="tool", content="timeout")
     attempts: Final = iter((8,))
 
@@ -491,9 +478,7 @@ async def test_grouping_consolidates_prior_batches_and_reports_real_progress() -
 @pytest.mark.asyncio
 @pytest.mark.parametrize("later_span", ("later", "0"))
 async def test_investigator_can_cite_a_later_page_or_offset(later_span: str) -> None:
-    execution: Final = Execution(
-        id="run1", source="traces", trace_id="t", team_id="alpha", name="review", start_time="", span_count=7
-    )
+    execution: Final = Execution(id="run1", trace_id="t", trace_ref="", summary=summary("", "t", span_count=7))
     initial: Final = tuple(
         TracePart(execution_id="run1", span_id=str(i), name="agent", kind="agent", content="x" * 8000) for i in range(6)
     )
@@ -611,13 +596,7 @@ async def test_review_keeps_original_ids_in_per_run_assessments() -> None:
     from litellm.proxy.lens.analysis import analyze_sample
 
     execution: Final = Execution(
-        id="opaque-original-id",
-        source="requests",
-        trace_id="request",
-        team_id="",
-        name="call",
-        start_time="",
-        span_count=1,
+        id="opaque-original-id", trace_id="request", trace_ref="", summary=summary("", "request", span_count=1)
     )
 
     async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
@@ -645,15 +624,7 @@ async def test_review_keeps_original_ids_in_per_run_assessments() -> None:
 @pytest.mark.asyncio
 async def test_investigation_context_accounts_for_metadata_on_thousands_of_short_spans() -> None:
     executions: Final = tuple(
-        Execution(
-            id=f"run-{i}",
-            source="traces",
-            trace_id=f"trace-{i}",
-            team_id="",
-            name="Short successful task",
-            start_time="",
-            span_count=1,
-        )
+        Execution(id=f"run-{i}", trace_id=f"trace-{i}", trace_ref="", summary=summary("", f"trace-{i}", span_count=1))
         for i in range(2501)
     )
     examined: Final = tuple(
@@ -697,9 +668,7 @@ async def test_investigation_context_accounts_for_metadata_on_thousands_of_short
 async def test_completed_read_does_not_make_supported_review_unknown() -> None:
     from litellm.proxy.lens.analysis import Observation, SpanRead, TraceReview
 
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run", trace_id="t", trace_ref="", summary=summary("", "t", span_count=1))
     part: Final = TracePart(execution_id="run", span_id="s", name="task", kind="agent", content="timeout")
     observation: Final = Observation(
         check_id="retries", summary="Failed", evidence=(Evidence(execution_id="run", span_id="s", quote="timeout"),)
@@ -728,9 +697,7 @@ async def test_completed_read_does_not_make_supported_review_unknown() -> None:
 
 @pytest.mark.asyncio
 async def test_echoed_feedback_page_does_not_skip_requested_evidence() -> None:
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run", trace_id="t", trace_ref="", summary=summary("", "t", span_count=1))
     requests: Final = SimpleQueue[int]()
 
     async def read(_identity: str, _cursor: str, offset: int) -> ExecutionContent:
@@ -780,9 +747,7 @@ async def test_echoed_feedback_page_does_not_skip_requested_evidence() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ("catalog", "observations", "feedback", "read"))
 async def test_empty_navigation_requires_a_final_decision(action: str) -> None:
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run", trace_id="t", trace_ref="", summary=summary("", "t", span_count=1))
     examined: Final = Examined(execution=execution, observations=(), parts=(), partial=False, cannot_assess=False)
     calls: Final = SimpleQueue[int]()
 
@@ -813,9 +778,7 @@ async def test_empty_navigation_requires_a_final_decision(action: str) -> None:
 async def test_large_feedback_history_is_accessible_without_overflowing_context(phase: str) -> None:
     from litellm.proxy.lens.state import merge_finding
 
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run", trace_id="t", trace_ref="", summary=summary("", "t", span_count=1))
     part: Final = TracePart(execution_id="run", span_id="span", name="task", kind="agent", content="timeout")
     accepted: Final = merge_finding(lens(), finding("run"), 1, NOW)
     prior: Final = tuple(
@@ -931,9 +894,7 @@ async def test_distinct_patterns_are_consolidated_in_batches_without_losing_runs
 async def test_invalid_candidate_response_preserves_other_findings_and_reports_inconclusive() -> None:
     from litellm.proxy.lens.analysis import investigate_candidates
 
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run", trace_id="t", trace_ref="", summary=summary("", "t", span_count=1))
     part: Final = TracePart(execution_id="run", span_id="span", name="tool", kind="tool", content="timeout")
     item: Final = Examined(execution=execution, observations=(), parts=(part,), partial=False, cannot_assess=False)
     candidates: Final = tuple(
@@ -968,9 +929,7 @@ async def test_invalid_candidate_response_preserves_other_findings_and_reports_i
 
 @pytest.mark.asyncio
 async def test_investigator_keeps_the_issue_brief() -> None:
-    execution: Final = Execution(
-        id="run1", source="traces", trace_id="t", team_id="alpha", name="search", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run1", trace_id="t", trace_ref="", summary=summary("", "t", span_count=1))
     examined: Final = Examined(
         execution=execution,
         observations=(),
@@ -1044,9 +1003,7 @@ async def test_large_context_and_long_verified_quotes_do_not_silently_end_invest
 
     context: Final = "Read all recorded evidence. " * 5000
     long_quote: Final = "timeout detail " * 200
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run", trace_id="t", trace_ref="", summary=summary("", "t", span_count=1))
     part: Final = TracePart(execution_id="run", span_id="span", name="tool", kind="tool", content=long_quote)
     reviewed: Final = Examined(execution=execution, observations=(), parts=(part,), partial=False, cannot_assess=False)
     expected: Final = FindingDraft.model_validate(
@@ -1078,9 +1035,7 @@ async def test_large_context_and_long_verified_quotes_do_not_silently_end_invest
 
 @pytest.mark.asyncio
 async def test_reviewer_can_read_every_offset_of_a_long_span_before_deciding() -> None:
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run", trace_id="t", trace_ref="", summary=summary("", "t", span_count=1))
     original: Final = "trace evidence! " * 16000 + "late verified failure"
     offsets: Final = SimpleQueue[int]()
     seen: Final = SimpleQueue[str]()
@@ -1138,9 +1093,7 @@ async def test_reviewer_can_read_every_offset_of_a_long_span_before_deciding() -
 
 @pytest.mark.asyncio
 async def test_investigator_can_read_all_evidence_pages_across_successive_span_batches() -> None:
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=80
-    )
+    execution: Final = Execution(id="run", trace_id="t", trace_ref="", summary=summary("", "t", span_count=80))
     parts: Final = tuple(
         TracePart(
             execution_id="run",

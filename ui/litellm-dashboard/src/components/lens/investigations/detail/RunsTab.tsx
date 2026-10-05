@@ -95,9 +95,11 @@ export function RunsTab({ lens, job }: RunsTabProps) {
                 />
               }
             >
-              <span className="col-start-1 row-start-1 min-w-0 truncate text-sm font-medium">{run.name}</span>
+              <span className="col-start-1 row-start-1 min-w-0 truncate text-sm font-medium">
+                {run.summary?.name ?? run.trace_id}
+              </span>
               <span className="col-start-1 row-start-2 text-xs text-muted-foreground sm:col-start-2 sm:row-start-1">
-                {runTime(run.start_time)}
+                {run.summary ? runTime(run.summary.start_time) : ""}
               </span>
               <span className="col-start-1 row-start-3 text-xs text-muted-foreground sm:col-start-3 sm:row-start-1">
                 {assessmentLabel(assessments.get(run.id))}
@@ -141,7 +143,7 @@ export function RunsTab({ lens, job }: RunsTabProps) {
         )}
       </TabsContent>
       <Inspector.Panel label="Run details" testId="run-panel">
-        {(run: RunRef) => <EvidenceView lensId={lens.id} evidence={{ id: run.id, span: "" }} />}
+        {(run: RunRef) => <EvidenceView evidence={{ id: run.id, span: "" }} />}
       </Inspector.Panel>
     </Inspector.Root>
   );

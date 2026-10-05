@@ -22,6 +22,7 @@ from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE, OTLP_MAX_BODY_BYTES,
 from litellm.rust_bridge.trace.generated.types import (
     QueryScope,
     RunField,
+    RunOrder,
     RunValues,
     SpanDetail,
     SpanErrorPage,
@@ -29,7 +30,7 @@ from litellm.rust_bridge.trace.generated.types import (
     TraceHistogram,
     TracePage,
 )
-from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
+from litellm.rust_bridge.trace.storage import NEWEST, ClickHouseStorage, Tenant
 from litellm.tracing.config import trace_storage_config
 from litellm.tracing.otlp_http import InvalidOTLPPayloadError, TracingPayloadTooLargeError, decompress
 
@@ -106,9 +107,15 @@ class TraceReceiver:
             raise InvalidOTLPPayloadError(str(error)) from error
 
     async def list_traces(
-        self, scope: QueryScope, start_ms: int, end_ms: int, q: str = "", cursor: str | None = None
+        self,
+        scope: QueryScope,
+        start_ms: int,
+        end_ms: int,
+        q: str = "",
+        cursor: str | None = None,
+        order: RunOrder = NEWEST,
     ) -> TracePage:
-        return await self.storage.list_traces(scope, start_ms, end_ms, q, cursor, AGENT_TRACING_LIST_PAGE_SIZE)
+        return await self.storage.list_traces(scope, start_ms, end_ms, q, cursor, AGENT_TRACING_LIST_PAGE_SIZE, order)
 
     async def trace_histogram(
         self, scope: QueryScope, start_ms: int, end_ms: int, q: str, buckets: int

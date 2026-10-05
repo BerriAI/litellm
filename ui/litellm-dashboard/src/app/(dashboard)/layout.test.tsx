@@ -89,7 +89,7 @@ describe("(dashboard) Layout", () => {
     vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
   });
 
-  it("collapses the sidebar on Logs for a full-screen view and expands it again after leaving", async () => {
+  it("keeps the sidebar expanded on Logs instead of forcing it collapsed", async () => {
     const dashboard = () => (
       <AuthProvider>
         <Layout>
@@ -102,10 +102,6 @@ describe("(dashboard) Layout", () => {
     expect(await screen.findByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
 
     vi.mocked(usePathname).mockReturnValue("/ui/logs");
-    rerender(dashboard());
-    expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "true");
-
-    vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
     rerender(dashboard());
     expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
   });

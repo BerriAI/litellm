@@ -1,5 +1,13 @@
 import type { RunWindow } from "./types";
 
+const AGENT_TERM = /(?:^|\s)agent:(?:"([^"]*)"|(\S+))/i;
+
+/** The agent a saved search names, if any. */
+export function savedAgent(q: string | undefined): string {
+  const match = AGENT_TERM.exec(q ?? "");
+  return match?.[1] ?? match?.[2] ?? "";
+}
+
 export const RUN_PRESETS = [
   { label: "Since last run", hours: null },
   { label: "Last hour", hours: 1 },

@@ -16,20 +16,11 @@ export type Job = components["schemas"]["Job"];
 
 export type IssueBrief = NonNullable<Finding["brief"]>;
 
-export type ActivitySelection = Pick<Settings, "source"> &
-  Partial<
-    Pick<
-      Settings,
-      | "service"
-      | "agent_name"
-      | "filters"
-      | "lookback_hours"
-      | "sample_percent"
-      | "sample_size"
-      | "team_id"
-      | "execution_ids"
-    >
-  >;
+export type ActivitySelection = Partial<
+  Pick<Settings, "q" | "lookback_hours" | "sample_percent" | "sample_size" | "execution_ids">
+>;
+
+export type Execution = Sample["executions"][number];
 
 export type Worker = LensList["workers"][number];
 

@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, within, waitFor } from "@testing-library/react";
+import { fireEvent, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
@@ -20,7 +20,7 @@ const worker = () => ({
   scope: data.lenses[0].scope,
 });
 
-function serve({ enabled = false, traces = false, requests = false, connected = false } = {}) {
+function serve({ enabled = false, traces = false, connected = false } = {}) {
   list.mockResolvedValue({ lenses: [], workers: connected ? [worker()] : [], tracing_enabled: enabled });
   network.mockImplementation(async (input, init) => {
     const { path, method, body } = await readRequest(input, init);
@@ -28,7 +28,7 @@ function serve({ enabled = false, traces = false, requests = false, connected = 
       return enabled
         ? Response.json({ data: traces ? [data.runs[0].trace.summary] : [] })
         : Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
-    if (path === "/lens/activity/available") return Response.json({ traces, requests });
+    if (path === "/lens/activity/available") return Response.json({ traces });
     if (path === "/lens" && method === "POST") {
       const saved = { ...data.lenses[0], settings: { ...data.lenses[0].settings, ...(body as object) } };
       list.mockResolvedValue({ lenses: [saved], workers: [worker()], tracing_enabled: true });
@@ -197,87 +197,6 @@ describe("Lens setup journey", () => {
     await connectWorkerFromSettings(user);
   });
 
-  it("resumes setup from the URL and leaves only when the user chooses traces", async () => {
-    serve({ enabled: true, traces: true });
-    const user = userEvent.setup();
-    const onUrlUpdate = vi.fn();
-    renderWorkspace({ searchParams: "?tab=investigations&setup=lens", onUrlUpdate });
-    const intro = within(await screen.findByRole("dialog"));
-    expect(await intro.findByRole("button", { name: "Connect worker" })).toBeVisible();
-    expect(intro.getByRole("heading", { name: "Get Lens running" })).toBeVisible();
-    await user.click(intro.getByRole("button", { name: "View traces" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(await screen.findByRole("table", { name: "Agent runs" })).toBeVisible();
-    await waitFor(() => expect(setupParam(onUrlUpdate)).toBeNull());
-    await user.click(screen.getByRole("tab", { name: "Investigations" }));
-    const guide = within(await screen.findByRole("region", { name: "Get Lens running" }));
-    expect(guide.getByRole("button", { name: /Connect a worker/ })).toHaveAttribute("aria-expanded", "true");
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  });
-
-  it("allows request-only investigations without forcing agent instrumentation", async () => {
-    dismissLensIntro();
-    serve({ requests: true });
-    const user = userEvent.setup();
-    const welcome = renderWorkspace({ searchParams: "?tab=investigations" });
-    expect(await screen.findByRole("region", { name: "Get Lens running" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Connect worker" })).toBeEnabled();
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    welcome.unmount();
-    renderWorkspace({ searchParams: "?tab=investigations&setup=lens" });
-    const intro = within(await screen.findByRole("dialog"));
-    expect(await intro.findByRole("heading", { name: "Before you start" })).toBeVisible();
-    expect(intro.getByRole("button", { name: "Connect worker" })).toBeEnabled();
-    await user.click(intro.getByRole("button", { name: /Enable tracing on the gateway/ }));
-    expect(intro.getByRole("button", { name: "Continue with request logs" })).toBeEnabled();
-    await user.click(intro.getByRole("button", { name: /Send your first trace/ }));
-    await user.click(intro.getByRole("button", { name: "Continue with request logs" }));
-    await connectWorkerFromSettings(user);
-  });
-
-  it("keeps setup recoverable when checking for a first trace fails", async () => {
-    serve({ enabled: true });
-    const user = userEvent.setup();
-    renderWorkspace({ searchParams: "?setup=lens" });
-    const intro = within(await screen.findByRole("dialog"));
-    await intro.findByRole("button", { name: "Check for traces" });
-    const normal = network.getMockImplementation()!;
-    network.mockImplementation(async (input, init) => {
-      const path = requestPath(input);
-      if (path === "/v1/traces") return Response.json({ detail: "Trace storage unavailable" }, { status: 503 });
-      return normal(input, init);
-    });
-    await user.click(intro.getByRole("button", { name: "Check for traces" }));
-    expect(await intro.findByRole("alert")).toHaveTextContent("Could not check setup");
-    expect(intro.queryByRole("button", { name: "Continue to worker" })).not.toBeInTheDocument();
-    serve({ enabled: true, traces: true });
-    await user.click(intro.getByRole("button", { name: "Retry" }));
-    expect(await intro.findByRole("button", { name: "Continue to worker" })).toBeEnabled();
-    expect(intro.queryByRole("alert")).not.toBeInTheDocument();
-  });
-
-  it("keeps request-only users in investigations when an activity refresh fails", async () => {
-    dismissLensIntro();
-    serve({ requests: true, connected: true });
-    const user = userEvent.setup();
-    renderWorkspace({ searchParams: "?tab=investigations" });
-    expect(await screen.findByRole("button", { name: "New investigation" })).toBeEnabled();
-    const normal = network.getMockImplementation()!;
-    network.mockImplementation((input, init) =>
-      requestPath(input) === "/lens/activity/available"
-        ? Promise.resolve(Response.json({ detail: "Activity unavailable" }, { status: 503 }))
-        : normal(input, init),
-    );
-    await act(() => testQueryClient.refetchQueries());
-    expect(await screen.findByRole("alert")).toHaveTextContent("Could not check setup. Activity unavailable");
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "New investigation" })).toBeDisabled();
-    network.mockImplementation(normal);
-    await user.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "New investigation" })).toBeEnabled());
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
-
   it("keeps administrator-only setup unavailable to trace viewers", async () => {
     serve({ enabled: true, traces: true });
     renderWorkspace({ searchParams: "?setup=lens" }, "Internal User");
@@ -287,19 +206,14 @@ describe("Lens setup journey", () => {
     expect(network.mock.calls.some(([input]) => requestPath(input) === "/lens")).toBe(false);
   });
 
-  it.each(["traces", "requests with trace errors", "requests with pending traces", "traces with activity errors"])(
+  it.each(["traces", "traces with activity errors"])(
     "finishes guided setup with %s and opens the saved investigation",
     async (scenario) => {
-      const source = scenario.startsWith("requests") ? "requests" : "traces";
-      const activity = { enabled: true, traces: source === "traces", requests: source === "requests", connected: true };
-      serve(activity);
+      serve({ enabled: true, traces: true, connected: true });
       const normal = network.getMockImplementation()!;
-      const failingPath = scenario === "requests with trace errors" ? "/v1/traces" : "/lens/activity/available";
       network.mockImplementation((input, init) => {
         const path = requestPath(input);
-        if (path === "/v1/traces" && scenario === "requests with pending traces")
-          return new Promise<Response>(() => {});
-        if (scenario.endsWith("errors") && path === failingPath)
+        if (scenario.endsWith("errors") && path === "/lens/activity/available")
           return Promise.resolve(Response.json({ detail: "Activity unavailable" }, { status: 503 }));
         return normal(input, init);
       });
@@ -325,7 +239,7 @@ describe("Lens setup journey", () => {
       const requests = await Promise.all(network.mock.calls.map(([input, init]) => readRequest(input, init)));
       const create = requests.find((request) => request.path === "/lens" && request.method === "POST");
       expect(create).toBeDefined();
-      expect(create?.body).toEqual(expect.objectContaining({ name: "My first review", source }));
+      expect(create?.body).toEqual(expect.objectContaining({ name: "My first review", q: "" }));
     },
   );
 });

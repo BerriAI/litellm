@@ -21,7 +21,7 @@ vi.mock("@/components/lens/traces/detail/run/RunView", () => ({
 
 const lens = {
   id: "lens",
-  settings: { name: "Support reviews", agent_name: "support_agent" },
+  settings: { name: "Support reviews", q: "agent:support_agent" },
   jobs: [],
   findings: [],
 } as unknown as Lens;
@@ -103,7 +103,7 @@ it("keeps a feedback draft during refreshes, sends it with status changes, and r
 
 it("stacks a quote's original step over the finding and keeps the feedback draft on the way back", async () => {
   const user = userEvent.setup();
-  const traceOf = (id: string) => btoa(JSON.stringify(["traces", "", id]));
+  const traceOf = (id: string) => `${"A".repeat(64)}:${id}`;
   const quoted: Finding = {
     ...finding,
     evidence: [

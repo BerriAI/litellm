@@ -1,4 +1,3 @@
-use crate::cache::cache_error;
 use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{CacheCodec, CacheConnectionResult, Error, semantic::SemanticLookup};
@@ -25,6 +24,7 @@ use super::{
     request::{NativeRequest, now},
     semantic::{EmbeddingFailure, SemanticExecution, SemanticOperation, drive},
 };
+use crate::cache::cache_error;
 
 /// What the Python embedder receives for one semantic request.
 pub(in crate::cache) struct EmbeddingInput {

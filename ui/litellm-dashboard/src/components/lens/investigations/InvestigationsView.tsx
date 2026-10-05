@@ -177,7 +177,6 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
             ready={status.ready}
             mode={current.mode}
             initial={current.mode === "new" ? undefined : current.initial}
-            defaultSource={!status.tracesReady && status.requestsReady ? "requests" : "traces"}
             onClose={closeDialog}
             onSave={(settings) => saveSetup(current, settings)}
           />

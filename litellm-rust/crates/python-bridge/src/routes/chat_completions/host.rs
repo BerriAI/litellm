@@ -1,6 +1,5 @@
 use std::convert::Infallible;
 
-use super::super::inference::InferenceHost;
 use litellm_core::chat_completions::{Error, route::ChatCompletions, types::ChatCompletionsCall};
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
 use pyo3::{
@@ -8,6 +7,8 @@ use pyo3::{
     prelude::*,
     types::PyDict,
 };
+
+use super::super::inference::InferenceHost;
 
 pub(super) struct ChatCompletionsPythonHost(pub InferenceHost);
 

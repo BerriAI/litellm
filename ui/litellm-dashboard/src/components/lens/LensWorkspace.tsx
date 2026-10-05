@@ -15,14 +15,14 @@ import { InvestigationsView } from "./investigations/InvestigationsView";
 import { LensSettings } from "./settings/LensSettings";
 import { createLensDemo } from "./data/demo/createLensDemo";
 import { lensQueries } from "./data/queries";
-import { LensModeSwitch } from "./LensModeSwitch";
+import { LensModeSwitch, type SetupBadge } from "./LensModeSwitch";
 import { frameCard } from "./ui/frame";
 import { investigationActivity, listPollInterval } from "./model/status";
 import { cn } from "@/lib/cva.config";
 import { useDialogRoute, useLensRoute, type LensDialog, type LensTab } from "./route";
 import { LensIntroDialog, useLensIntro } from "./onboarding/LensIntroDialog";
 import { OnboardingProvider, type Onboarding } from "./onboarding/OnboardingContext";
-import { traceRefOf, useOpenTraceRouting } from "@/components/lens/traces/routing";
+import { traceRefOf, useOpenTraceRouting, useTracingSetupRoute } from "@/components/lens/traces/routing";
 
 type WorkspaceProps = { accessToken: string; userRole: string; readOnly: boolean };
 
@@ -59,8 +59,14 @@ function DemoToggle({ demo, onChange }: { demo: boolean; onChange: (demo: boolea
   );
 }
 
-/** The inline investigation editor marks the tab so the notch says where you are, not just which tab is open. */
+/** An inline editor marks its tab so the notch says where you are, not just which tab is open. */
 const SETUP_LABELS: Partial<Record<LensDialog, string>> = { new: "New", edit: "Editing", duplicate: "Duplicate" };
+
+function setupBadge(tab: LensTab, dialog: LensDialog | null, connecting: boolean): SetupBadge | undefined {
+  if (tab === "traces" && connecting) return { tab, label: "Setup" };
+  const label = tab === "investigations" && dialog ? SETUP_LABELS[dialog] : undefined;
+  return label ? { tab, label } : undefined;
+}
 
 /** The one always-mounted `/lens` observer; every other reader is a plain cache subscriber. */
 function useLensOverview(enabled: boolean, settingsOpen: boolean) {
@@ -81,6 +87,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
   const { tab, lensId, demo, settingUp, setTab, setDemo, setSetup } = useLensRoute();
   const { dialog, openDialog } = useDialogRoute();
   const { openTrace } = useOpenTraceRouting();
+  const [connecting] = useTracingSetupRoute();
   const [previewTarget, setPreviewTarget] = useState<HTMLDivElement | null>(null);
   const canViewInvestigations = isProxyAdminTierRole(userRole);
   const isAdmin = isProxyAdminRole(userRole);
@@ -163,7 +170,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
               activity={activity}
               demo={demo}
               workers={workers}
-              setup={activeTab === "investigations" && dialog ? SETUP_LABELS[dialog] : undefined}
+              setup={setupBadge(activeTab, dialog, connecting)}
             />
             <div className="flex min-w-0 flex-wrap items-center justify-end gap-3 pb-3">
               <div ref={setPreviewTarget} />

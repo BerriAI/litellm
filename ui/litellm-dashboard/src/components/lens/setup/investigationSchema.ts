@@ -1,17 +1,12 @@
 import { z } from "zod";
 import type { Settings } from "../model/types";
-import { normalizeFilters } from "./filters";
 import { initialWatches, isWatch, watchChecks } from "../model/watches";
 
 const selectionFields = {
-  source: z.enum(["traces", "requests", "both"]),
-  service: z.string(),
-  agent_name: z.string(),
-  filters: z.array(z.object({ key: z.string(), value: z.string() })),
+  q: z.string(),
   lookback_hours: z.custom<number>(),
   sample_size: z.custom<number | null>(),
   sample_percent: z.custom<number>(),
-  team_id: z.string(),
   execution_ids: z.array(z.string()),
 };
 
@@ -30,25 +25,6 @@ const draftFields = {
 const draftSchema = z.object(draftFields);
 
 type InvestigationDraft = z.infer<typeof draftSchema>;
-
-function validateFilters(draft: InvestigationDraft, ctx: z.RefinementCtx) {
-  draft.selection.filters.forEach((filter, index) => {
-    if (!filter.key.trim()) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Choose a key and value for every condition, or remove it",
-        path: ["selection", "filters", index, "key"],
-      });
-    }
-    if (!filter.value.trim()) {
-      ctx.addIssue({
-        code: "custom",
-        message: "Choose a key and value for every condition, or remove it",
-        path: ["selection", "filters", index, "value"],
-      });
-    }
-  });
-}
 
 function validateManualSelection(draft: InvestigationDraft, ctx: z.RefinementCtx) {
   if (draft.manualSelection && !draft.selection.execution_ids.length) {
@@ -128,7 +104,6 @@ function validateExpectations(draft: InvestigationDraft, ctx: z.RefinementCtx) {
 
 export const investigationSchema = draftSchema
   .superRefine((draft, ctx) => {
-    validateFilters(draft, ctx);
     validateManualSelection(draft, ctx);
     validateSampleWindow(draft, ctx);
     validateBudgetAndSchedule(draft, ctx);
@@ -137,7 +112,7 @@ export const investigationSchema = draftSchema
   .transform((draft) => ({
     ...draft,
     context: draft.context.trim(),
-    selection: { ...draft.selection, filters: normalizeFilters(draft.selection.filters) },
+    selection: { ...draft.selection, q: draft.selection.q.trim() },
     questions: draft.questions
       .filter((check) => check.instruction.trim())
       .map((check) => ({ ...check, instruction: check.instruction.trim() })),
@@ -155,11 +130,7 @@ export type InvestigationField = Exclude<keyof InvestigationInput, "selection"> 
 /** Every form field belongs to exactly one setup step; adding a schema field without a step fails to type-check. */
 const stepOfField = {
   name: "activity",
-  "selection.source": "activity",
-  "selection.service": "activity",
-  "selection.agent_name": "activity",
-  "selection.filters": "activity",
-  "selection.team_id": "activity",
+  "selection.q": "activity",
   "selection.lookback_hours": "activity",
   "selection.sample_percent": "activity",
   context: "criteria",
@@ -182,19 +153,12 @@ export const investigationStepFields: Readonly<Record<SetupStep, readonly Invest
   run: fields.filter((field) => stepOfField[field] === "run"),
 };
 
-function activitySelectionDefaults(
-  initial: Settings | undefined,
-  defaultSource: Settings["source"],
-): InvestigationInput["selection"] {
+function activitySelectionDefaults(initial: Settings | undefined): InvestigationInput["selection"] {
   return {
-    source: initial?.source ?? defaultSource,
-    service: initial?.service ?? "",
-    agent_name: initial?.agent_name ?? "",
-    filters: initial?.filters ?? [],
+    q: initial?.q ?? "",
     lookback_hours: initial?.lookback_hours ?? 24,
     sample_size: initial?.sample_size ?? null,
     sample_percent: initial?.sample_percent ?? 100,
-    team_id: initial?.team_id ?? "",
     execution_ids: initial?.execution_ids ?? [],
   };
 }
@@ -202,11 +166,10 @@ function activitySelectionDefaults(
 export function investigationDefaults(
   initial: Settings | undefined,
   mode: "new" | "edit" | "duplicate",
-  defaultSource: Settings["source"],
 ): InvestigationInput {
   return {
     name: initial?.name ?? "",
-    selection: activitySelectionDefaults(initial, defaultSource),
+    selection: activitySelectionDefaults(initial),
     context: initial?.context ?? "",
     watching: [...initialWatches(initial?.checks)],
     questions: (initial?.checks ?? []).filter((check) => !isWatch(check)),

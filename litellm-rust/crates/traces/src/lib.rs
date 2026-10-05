@@ -27,13 +27,12 @@ mod ui;
 mod view;
 pub mod wire;
 
-pub use error::{Error, InvalidCallKey, InvalidQuery, InvalidScope};
+pub use error::{Error, InvalidCallKey, InvalidScope};
 pub use normalize::{
     AgentMetadata, AgentType, CallEvidence, CallEvidenceKind, CallKey, Integration, NormalizedSpan,
     ObservationType,
 };
 pub use otlp::{DecodeLimits, DecodedEvent, DecodedSpan, decode_otlp, decode_otlp_with_limits};
-pub use query::ReadQuery;
 pub use query_access::QueryScope;
 pub use resolve::{SpendLookup, iso_time, listed_summary, resolve_trace};
 pub use shared::{Shared, SharedIdentity};

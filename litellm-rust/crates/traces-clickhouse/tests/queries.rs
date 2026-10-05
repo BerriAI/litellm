@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use litellm_traces::{
     search::RunFilter,
-    store::{RunQuery, RunRow, RunSelection, SpanQuery, SpanRow, SpanSelection},
+    store::{RunOrder, RunQuery, RunRow, RunSelection, SpanQuery, SpanRow, SpanSelection},
 };
 use litellm_traces_cache::{StoreResult, TraceStore};
 use litellm_traces_clickhouse::{ClickHouseTraces, Error, QueryScope, query_help, query_sql};
@@ -134,12 +134,14 @@ fn fixture_clock() -> TestResult<u64> {
 
 fn newest(limit: u32, after: Option<&RunRow>) -> RunQuery {
     RunQuery {
+        order: Default::default(),
         selection: RunSelection::Matching(RunFilter {
             start_ms: 0,
             end_ms: i64::MAX / 1_000_000,
             search: Default::default(),
+            ..Default::default()
         }),
-        after: after.map(RunRow::cursor),
+        after: after.map(|row| RunOrder::NEWEST.cursor(row)),
         limit,
     }
 }

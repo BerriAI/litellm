@@ -17,6 +17,10 @@ mod tokenizer;
 
 #[pymodule(gil_used = true)]
 mod _native {
+    #[pymodule_export]
+    use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
+    use pyo3::{prelude::*, types::PyModule};
+
     use crate::cache::ResolvedCache;
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
@@ -52,9 +56,6 @@ mod _native {
     use crate::tokenizer::HuggingFaceEncoding;
     #[pymodule_export]
     use crate::tokenizer::Tokenizer;
-    #[pymodule_export]
-    use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
-    use pyo3::{prelude::*, types::PyModule};
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {

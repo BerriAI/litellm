@@ -197,10 +197,20 @@ describe("SearchBox", () => {
     await user.keyboard("d");
     expect(box()).toHaveTextContent(/^abcd$/, { normalizeWhitespace: false });
     await waitFor(() =>
-      expect(undelivered()).toHaveTextContent(/^abcd$/, {
+      expect(undelivered()).toHaveTextContent(/^abc\|abcd$/, {
         normalizeWhitespace: false,
       }),
     );
+  });
+
+  it("hands over what was typed as soon as focus leaves, without waiting for the pause", async () => {
+    const user = userEvent.setup();
+    render(<LaggingHarness />);
+    await user.click(box());
+    await user.keyboard("tag:cron");
+    expect(undelivered()).toHaveTextContent(/^$/);
+    await user.click(document.body);
+    expect(undelivered()).toHaveTextContent(/^tag:cron$/, { normalizeWhitespace: false });
   });
 
   it("shows a query set from outside, such as the URL", async () => {

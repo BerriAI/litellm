@@ -11,8 +11,9 @@ use litellm_traces::{
     CallEvidenceKind, CallKey, ObservationType, QueryScope, SpanStatus,
     search::{AgentRuns, HistogramBucket, RunField, RunFilter, RunSearch},
     store::{
-        CallQuery, CallRow, CountBy, CountValue, RunCount, RunCountQuery, RunQuery, RunRow,
-        RunSelection, SpanPart, SpanQuery, SpanRow, SpanSelection, SpanText, SpanTextQuery,
+        CallQuery, CallRow, CountBy, CountValue, RunCount, RunCountQuery, RunOrder, RunQuery,
+        RunRow, RunSelection, SpanPart, SpanQuery, SpanRow, SpanSelection, SpanText, SpanTextQuery,
+        TextRange,
     },
 };
 use litellm_traces_cache::{
@@ -244,22 +245,38 @@ impl TraceStore for FakeStore {
         &self,
         _: &QueryScope,
         query: &SpanTextQuery,
-    ) -> StoreResult<Option<SpanText>, FakeError> {
+    ) -> StoreResult<Vec<SpanText>, FakeError> {
         self.record(Operation::SpanText);
         let state = self.state.lock().unwrap();
         Self::failure(&state, Operation::SpanText)?;
-        let Some(text) = state.texts.get(&(query.span_id.clone(), query.part)) else {
-            return Ok(None);
-        };
-        let rest = text.chars().skip(query.offset as usize);
-        Ok(Some(SpanText {
-            text: match query.max_chars {
-                Some(max) => rest.take(max as usize).collect(),
-                None => rest.collect(),
-            },
-            total_chars: text.chars().count() as u64,
-            version: format!("{:0>64}", text.len()),
-        }))
+        Ok(query
+            .span_ids
+            .iter()
+            .filter_map(|span_id| {
+                let text = state.texts.get(&(span_id.clone(), query.part))?;
+                let total = text.chars().count() as u64;
+                let (skip, take) = match query.range {
+                    TextRange::From { offset, max_chars } => {
+                        (offset, max_chars.unwrap_or(u64::MAX))
+                    }
+                    TextRange::Last { chars } => (total.saturating_sub(chars), chars),
+                };
+                Some(SpanText {
+                    span_id: span_id.clone(),
+                    text: text
+                        .chars()
+                        .skip(skip as usize)
+                        .take(take as usize)
+                        .collect(),
+                    total_chars: total,
+                    version: format!("{:0>64}", text.len()),
+                    contains: query
+                        .contains
+                        .as_ref()
+                        .is_some_and(|needle| text.contains(needle.as_str())),
+                })
+            })
+            .collect())
     }
 
     async fn calls(
@@ -294,6 +311,7 @@ fn everything() -> RunFilter {
         start_ms: 0,
         end_ms: i64::MAX,
         search: RunSearch::default(),
+        ..Default::default()
     }
 }
 
@@ -302,6 +320,7 @@ fn window(start_ms: i64, end_ms: i64, q: &str) -> RunFilter {
         start_ms,
         end_ms,
         search: RunSearch::parse(q),
+        ..Default::default()
     }
 }
 
@@ -309,6 +328,7 @@ fn newest(limit: u32) -> PageRequest {
     PageRequest {
         cursor: None,
         limit,
+        ..Default::default()
     }
 }
 
@@ -508,34 +528,37 @@ async fn response_size_splits_pages_and_rejects_a_single_oversized_span() {
 
 #[rstest]
 #[tokio::test]
-async fn list_run_budget_halves_the_limit_and_cursor_requires_a_full_page() {
-    let store = FakeStore::default();
-    store.set_list_runs(
-        (0..3)
+async fn list_run_budget_halves_the_limit_and_cursor_requires_a_run_past_the_page() {
+    let runs = |count: usize| {
+        (0..count)
             .map(|index| run(&format!("trace-{index}"), &format!("ref-{index}")))
-            .collect(),
-    );
-    store.set_list_runs_too_large_above(2);
+            .collect()
+    };
+    let store = FakeStore::default();
+    store.set_list_runs(runs(3));
+    store.set_list_runs_too_large_above(3);
     let reader = TraceReader::new(usize::MAX);
     let access = access();
     let page = reader
-        .list_traces(&store, &access, &everything(), &newest(8))
+        .list_traces(&store, &access, &everything(), RunOrder::NEWEST, &newest(8))
         .await
         .unwrap();
     assert_eq!(page.data.len(), 2);
     assert!(page.next_cursor.is_some());
     assert_eq!(store.calls(Operation::ListRuns), 3);
 
-    let shorter = FakeStore::default();
-    shorter.set_list_runs(vec![run("only", "ref-only")]);
-    shorter.set_list_runs_too_large_above(2);
-    let page = reader
-        .list_traces(&shorter, &access, &everything(), &newest(8))
-        .await
-        .unwrap();
-    assert_eq!(page.data.len(), 1);
-    assert!(page.next_cursor.is_none());
-    assert_eq!(shorter.calls(Operation::ListRuns), 1);
+    for (remaining, listed) in [(1, 1), (2, 2)] {
+        let rest = FakeStore::default();
+        rest.set_list_runs(runs(remaining));
+        rest.set_list_runs_too_large_above(3);
+        let page = reader
+            .list_traces(&rest, &access, &everything(), RunOrder::NEWEST, &newest(8))
+            .await
+            .unwrap();
+        assert_eq!(page.data.len(), listed);
+        assert!(page.next_cursor.is_none());
+        assert_eq!(rest.calls(Operation::ListRuns), 1);
+    }
 }
 
 #[rstest]
@@ -551,7 +574,13 @@ async fn oversized_run_batch_falls_back_to_each_run_and_keeps_listed_summaries()
     store.set_failure(Operation::RunSpans, Failure::TooLarge);
     let reader = TraceReader::new(usize::MAX);
     let page = reader
-        .list_traces(&store, &access(), &everything(), &newest(2))
+        .list_traces(
+            &store,
+            &access(),
+            &everything(),
+            RunOrder::NEWEST,
+            &newest(2),
+        )
         .await
         .unwrap();
     assert_eq!(page.data.len(), 2);
@@ -565,7 +594,13 @@ async fn oversized_run_batch_falls_back_to_each_run_and_keeps_listed_summaries()
     );
 
     let again = reader
-        .list_traces(&store, &access(), &everything(), &newest(2))
+        .list_traces(
+            &store,
+            &access(),
+            &everything(),
+            RunOrder::NEWEST,
+            &newest(2),
+        )
         .await
         .unwrap();
     assert_eq!(again.data, page.data);
@@ -624,7 +659,13 @@ async fn failed_batch_spend_lookup_falls_back_to_each_run_instead_of_losing_ever
     store.set_spend_fails_above_response_ids(1);
 
     let page = TraceReader::new(usize::MAX)
-        .list_traces(&store, &access(), &everything(), &newest(8))
+        .list_traces(
+            &store,
+            &access(),
+            &everything(),
+            RunOrder::NEWEST,
+            &newest(8),
+        )
         .await
         .unwrap();
 
@@ -715,7 +756,7 @@ async fn invalid_list_reads_are_rejected_before_storage(
     let store = FakeStore::default();
     assert!(matches!(
         TraceReader::new(usize::MAX)
-            .list_traces(&store, &access(), &filter, &newest(limit))
+            .list_traces(&store, &access(), &filter, RunOrder::NEWEST, &newest(limit))
             .await,
         Err(ReadError::InvalidParameters)
     ));
@@ -936,7 +977,7 @@ async fn listed_runs_are_read_once_until_a_live_run_expires() {
     let access = access();
     let filter = everything();
     let page = newest(2);
-    let list = || reader.list_traces(&store, &access, &filter, &page);
+    let list = || reader.list_traces(&store, &access, &filter, RunOrder::NEWEST, &page);
 
     let first = list().await.unwrap();
     assert!(first.data.iter().all(|summary| summary.name == "agent"));

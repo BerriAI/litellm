@@ -1,4 +1,3 @@
-use crate::execution::run_async;
 use litellm_cache_response::PartialHits;
 use litellm_host_python::{ExecutionStep, from_py, release_gil, to_py};
 use pyo3::{
@@ -12,13 +11,15 @@ use serde_json::Value;
 use super::{
     cache_error,
     future::{ready_none, ready_value},
-    native::activation::activate,
-    native::backend::{NativeResponseCache, SemanticReply},
-    native::config::{CacheConfigProjection, NativeCacheConfig},
-    native::request::{now, request, requests},
+    native::{
+        activation::activate,
+        backend::{NativeResponseCache, SemanticReply},
+        config::{CacheConfigProjection, NativeCacheConfig},
+        request::{now, request, requests},
+    },
     python::PythonCallback,
 };
-use crate::errors::RustBridgeDeclined;
+use crate::{errors::RustBridgeDeclined, execution::run_async};
 
 pub(super) enum CacheBinding {
     Disabled,

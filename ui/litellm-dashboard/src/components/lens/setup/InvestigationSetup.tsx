@@ -27,8 +27,8 @@ import { modelGate } from "./fields/analysisModels";
 import { Inspector } from "@/components/shared/Inspector";
 import { TraceEvidence } from "../investigations/Evidence";
 import { FINDING_PANEL_WIDTH_KEY } from "../storage";
-import type { Execution } from "./useMatchingActivity";
-import { durationLabel } from "../model/format";
+import { type TraceRef, traceKey, traceRefOf } from "../traces/routing";
+import { durationLabel, scopeLabel } from "../model/format";
 import { type Settings } from "../model/types";
 
 type SetupMode = "new" | "edit" | "duplicate";
@@ -45,9 +45,7 @@ function saveLabelFor(mode: SetupMode, repeat: boolean): string {
 }
 
 function activitySummary(selection: InvestigationInput["selection"]): string {
-  const who = selection.agent_name || selection.service || "All activity";
-  const conditions = selection.filters.length ? ` · ${selection.filters.length} conditions` : "";
-  return `${who} · Last ${durationLabel(selection.lookback_hours ?? 24, "hours")}${conditions}`;
+  return `${scopeLabel(selection)} · Last ${durationLabel(selection.lookback_hours ?? 24, "hours")}`;
 }
 
 function criteriaSummary(values: Pick<InvestigationInput, "context" | "watching" | "questions">): string {
@@ -60,7 +58,6 @@ function criteriaSummary(values: Pick<InvestigationInput, "context" | "watching"
 interface SetupProps {
   initial?: Settings;
   mode: SetupMode;
-  defaultSource?: Settings["source"];
   ready?: boolean;
   onClose: () => void;
   onSave: (settings: Settings) => Promise<void>;
@@ -68,9 +65,9 @@ interface SetupProps {
 
 /** Replaces the Investigations tab body: a three-step setup on the left, the activity it matches on the right. */
 export function InvestigationSetup(props: SetupProps) {
-  const { initial, mode, defaultSource = "traces" } = props;
+  const { initial, mode } = props;
   const form = useZodForm(investigationSchema, {
-    defaultValues: investigationDefaults(initial, mode, defaultSource),
+    defaultValues: investigationDefaults(initial, mode),
     mode: "onChange",
   });
   return (
@@ -91,26 +88,19 @@ function SetupEditor({
   const analysis = useAnalysisModels();
   const [step, setStep] = useState<SetupStepId>("activity");
   const [error, setError] = useState("");
-  const [trace, setTrace] = useState<Execution | null>(null);
+  const [trace, setTrace] = useState<TraceRef | null>(null);
   const { control, register, setValue, subscribe, trigger, formState } = form;
   const [selectedModel, repeat, selection, context, watching, questions] = useWatch({
     control,
     name: ["selectedModel", "repeat", "selection", "context", "watching", "questions"],
   });
   const activity = useMatchingActivity();
-  const traceRuns = activity.preview.page.executions.filter((run) => run.source === "traces");
+  const traceRuns = activity.preview.page.executions.flatMap((run) => (run.summary ? [traceRefOf(run.summary)] : []));
   const model = selectedModel ?? analysis.defaultModel ?? "";
   useEffect(
     () =>
       subscribe({
-        name: [
-          "selection.source",
-          "selection.service",
-          "selection.agent_name",
-          "selection.filters",
-          "selection.lookback_hours",
-          "selection.team_id",
-        ],
+        name: ["selection.q", "selection.lookback_hours"],
         formState: { values: true },
         callback: ({ values }) => {
           if (values.selection.execution_ids.length) setValue("selection.execution_ids", []);
@@ -211,18 +201,18 @@ function SetupEditor({
         </SetupSteps>
         <Inspector.Root
           items={traceRuns}
-          itemKey={(run) => run.id}
+          itemKey={traceKey}
           selected={trace}
           onSelectedChange={setTrace}
           noun="run"
           storageKey={FINDING_PANEL_WIDTH_KEY}
         >
-          <MatchingActivityPreview {...activity.preview} className="min-w-0 lg:sticky lg:top-0" onOpen={setTrace} />
+          <MatchingActivityPreview {...activity.preview} className="min-w-0 lg:sticky lg:top-0" />
           <Inspector.Panel label="Run details" testId="run-panel">
-            {(run: Execution) => (
+            {(run: TraceRef) => (
               <TraceEvidence
-                traceId={run.trace_id}
-                traceRef={run.trace_ref}
+                traceId={run.traceId}
+                traceRef={run.traceRef}
                 initialSpanId={null}
                 onBack={() => setTrace(null)}
               />

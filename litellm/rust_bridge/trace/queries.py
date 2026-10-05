@@ -1,22 +1,9 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Final, Generic, TypeVar
+from typing import Final
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue
 
-from .generated.models import (
-    ActivityAvailability,
-    AgentRow,
-    CountRow,
-    ExecutionRow,
-    LensAccessParams,
-    LensContentParams,
-    LensEvidenceParams,
-    LensSampleParams,
-    PartRow,
-    TraceQueryColumn,
-)
-from .generated.types import ReadQueryName
+from .generated.models import TraceQueryColumn
 
 _RESPONSE_CONFIG: Final = ConfigDict(frozen=True, extra="allow")
 
@@ -34,36 +21,3 @@ class TraceSQLResponse(BaseModel):
     data: tuple[Mapping[str, JsonValue], ...]
     rows: int | str
     statistics: TraceQueryStatistics
-
-
-ParamsT: Final = TypeVar("ParamsT", bound=BaseModel)
-RowT: Final = TypeVar("RowT")
-
-
-class QueryResponse(BaseModel, Generic[RowT]):
-    model_config = ConfigDict(frozen=True)
-    data: tuple[RowT, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class ReadQuery(Generic[ParamsT, RowT]):
-    name: ReadQueryName
-    parameters: type[ParamsT]
-    response: TypeAdapter[QueryResponse[RowT]]
-
-
-LENS_AVAILABILITY: Final[ReadQuery[LensAccessParams, ActivityAvailability]] = ReadQuery(
-    "availability", LensAccessParams, TypeAdapter(QueryResponse[ActivityAvailability])
-)
-LENS_AGENTS: Final[ReadQuery[LensAccessParams, AgentRow]] = ReadQuery(
-    "agents", LensAccessParams, TypeAdapter(QueryResponse[AgentRow])
-)
-LENS_SAMPLE: Final[ReadQuery[LensSampleParams, ExecutionRow]] = ReadQuery(
-    "sample", LensSampleParams, TypeAdapter(QueryResponse[ExecutionRow])
-)
-LENS_CONTENT: Final[ReadQuery[LensContentParams, PartRow]] = ReadQuery(
-    "content", LensContentParams, TypeAdapter(QueryResponse[PartRow])
-)
-LENS_EVIDENCE: Final[ReadQuery[LensEvidenceParams, CountRow]] = ReadQuery(
-    "evidence", LensEvidenceParams, TypeAdapter(QueryResponse[CountRow])
-)

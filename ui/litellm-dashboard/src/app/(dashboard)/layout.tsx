@@ -15,7 +15,7 @@ import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
 import { UserBanner } from "@/components/UserBanner";
 import { LiteAdminFrame } from "@/components/liteadmin/LiteAdmin";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
-import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
+import { uiHref } from "@/utils/uiHref";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
@@ -99,17 +99,11 @@ export function AgentControlPlaneView() {
   );
 }
 
-const FULL_BLEED_SEGMENTS = new Set(["logs"]);
-
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const { accessToken } = useAuth();
   const { mode } = usePluginMode();
-  const routeSegment = routeSegmentForPathname(usePathname());
-  const isFullBleed = FULL_BLEED_SEGMENTS.has(routeSegment);
-  // A manual toggle holds only for the route it was made on; full-bleed routes default to collapsed.
-  const [sidebarOverride, setSidebarOverride] = useState<{ segment: string; collapsed: boolean } | null>(null);
-  const sidebarCollapsed = sidebarOverride?.segment === routeSegment ? sidebarOverride.collapsed : isFullBleed;
-  const toggleSidebar = () => setSidebarOverride({ segment: routeSegment, collapsed: !sidebarCollapsed });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const toggleSidebar = () => setSidebarCollapsed((collapsed) => !collapsed);
 
   const isGateway = mode === "ai-gateway";
 

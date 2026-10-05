@@ -49,6 +49,13 @@ export const RUN_FILTER_PARSERS = {
   ...TIME_RANGE_PARSERS,
 };
 
+export const TRACING_SETUP_PARSERS = { connect: parseAsBoolean.withDefault(false) };
+
+export function useTracingSetupRoute(): [boolean, (connecting: boolean) => void] {
+  const [{ connect }, setParams] = useQueryStates(TRACING_SETUP_PARSERS, { history: "push" });
+  return [connect, useCallback((next: boolean) => void setParams({ connect: next || null }), [setParams])];
+}
+
 export const RUN_ORDER_PARSERS = {
   sort_by: parseAsStringLiteral(RUN_SORT_KEYS).withDefault(NEWEST.key),
   sort_dir: parseAsStringLiteral(SORT_DIRS).withDefault(sortDir(NEWEST)),

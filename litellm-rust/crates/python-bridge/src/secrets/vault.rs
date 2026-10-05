@@ -1,8 +1,7 @@
 mod operation;
 
-pub(super) use operation::{Failure, FailureKind, FailureStage, delete, rotate, write};
-
 use litellm_secrets::hashicorp::{Error, RawOperationError};
+pub(super) use operation::{Failure, FailureKind, FailureStage, delete, rotate, write};
 use pyo3::prelude::*;
 
 use super::mutation::{error_value, http_message, json_value};

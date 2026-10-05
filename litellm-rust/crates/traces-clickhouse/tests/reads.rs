@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use litellm_http::Client;
-use litellm_traces::search::RunFilter;
+use litellm_traces::{search::RunFilter, store::RunOrder};
 use litellm_traces_cache::{PageRequest, ReadError, TraceReader};
 use litellm_traces_clickhouse::{
     ClickHouseTraces, Connection, InsertTable, QueryScope, insert_rows,
@@ -14,6 +14,7 @@ fn all_runs() -> RunFilter {
         start_ms: 0,
         end_ms: 2_000_000_000_000,
         search: Default::default(),
+        ..Default::default()
     }
 }
 
@@ -105,9 +106,11 @@ async fn list_costs_match_each_run_when_response_ids_are_reused(
             &store,
             &access,
             &all_runs(),
+            RunOrder::NEWEST,
             &PageRequest {
                 cursor: None,
                 limit: 50,
+                ..Default::default()
             },
         )
         .await?;
@@ -241,9 +244,11 @@ async fn large_runs_remain_complete_under_default_reader_limits(
             &store,
             &access,
             &all_runs(),
+            RunOrder::NEWEST,
             &PageRequest {
                 cursor: None,
                 limit: 500,
+                ..Default::default()
             },
         )
         .await?;
@@ -401,9 +406,11 @@ async fn cursor_pages_keep_a_tenant_scoped_snapshot_when_more_spans_arrive(
             &store,
             &access,
             &all_runs(),
+            RunOrder::NEWEST,
             &PageRequest {
                 cursor: None,
                 limit: 10,
+                ..Default::default()
             },
         )
         .await?;
@@ -567,9 +574,11 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
             &store,
             &access,
             &all_runs(),
+            RunOrder::NEWEST,
             &PageRequest {
                 cursor: None,
                 limit: 50,
+                ..Default::default()
             },
         )
         .await?;
@@ -604,9 +613,11 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
             &store,
             &access,
             &all_runs(),
+            RunOrder::NEWEST,
             &PageRequest {
                 cursor: None,
                 limit: 50,
+                ..Default::default()
             },
         )
         .await?;
@@ -617,9 +628,11 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
             &store,
             &access,
             &all_runs(),
+            RunOrder::NEWEST,
             &PageRequest {
                 cursor: None,
                 limit: 50,
+                ..Default::default()
             },
         )
         .await?;
@@ -743,9 +756,11 @@ async fn gateway_ids_resolve_through_detail_and_batch_reads_with_legacy_fallback
             &store,
             &access,
             &all_runs(),
+            RunOrder::NEWEST,
             &PageRequest {
                 cursor: None,
                 limit: 50,
+                ..Default::default()
             },
         )
         .await?;
@@ -763,5 +778,81 @@ async fn gateway_ids_resolve_through_detail_and_batch_reads_with_legacy_fallback
         assert_eq!(detail.summary.spend, expected, "{id}");
         assert_eq!(summary.spend, expected, "{id}");
     }
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_run_shared_with_another_user_stays_hidden_before_its_rollup_rows_merge(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let client = &fixture.database.client;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let start_ms = 1_790_000_000_000_i64;
+    let span = |trace_id: &str, span_id: &str, user_id: &str, offset_ms: i64| {
+        BTreeMap::from([
+            (
+                "Timestamp".into(),
+                json!((start_ms + offset_ms) * 1_000_000),
+            ),
+            ("Duration".into(), json!(1_000_000)),
+            ("TraceId".into(), json!(trace_id)),
+            ("SpanId".into(), json!(span_id)),
+            (
+                "ParentSpanId".into(),
+                json!(if offset_ms == 0 { "" } else { "root" }),
+            ),
+            ("ObservationType".into(), json!("llm")),
+            ("TeamId".into(), json!("team-a")),
+            ("ApiKeyHash".into(), json!("key-a")),
+            ("UserId".into(), json!(user_id)),
+        ])
+    };
+    for batch in [
+        vec![
+            span("shared", "root", "alice", 0),
+            span("shared", "alice-call", "alice", 1),
+        ],
+        vec![span("shared", "bob-call", "bob", 2)],
+        vec![span("solo", "root", "alice", 10)],
+    ] {
+        insert_rows(client, &writer, DATABASE, InsertTable::OtelTraces, batch).await?;
+    }
+    let connection = fixture
+        .readers
+        .connection(client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let (reader, store) = make_reader(client, connection);
+    let page = PageRequest {
+        cursor: None,
+        limit: 50,
+        ..Default::default()
+    };
+    let team = QueryScope::Owned {
+        user_id: String::new(),
+        team_ids: vec!["team-a".into()],
+    };
+    let shared = reader
+        .list_traces(&store, &team, &all_runs(), RunOrder::NEWEST, &page)
+        .await?
+        .data
+        .into_iter()
+        .find(|run| run.trace_id == "shared")
+        .ok_or("missing shared run")?;
+    assert_eq!(shared.span_count, 3);
+    let alice = QueryScope::Owned {
+        user_id: "alice".into(),
+        team_ids: Vec::new(),
+    };
+    let listed = reader
+        .list_traces(&store, &alice, &all_runs(), RunOrder::NEWEST, &page)
+        .await?;
+    let trace_ids: Vec<&str> = listed
+        .data
+        .iter()
+        .map(|run| run.trace_id.as_str())
+        .collect();
+    assert_eq!(trace_ids, ["solo"]);
     Ok(())
 }

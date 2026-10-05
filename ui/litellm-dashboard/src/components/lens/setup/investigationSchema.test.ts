@@ -9,7 +9,7 @@ import {
 } from "./investigationSchema";
 import { watchChecks } from "../model/watches";
 
-const defaults = investigationDefaults(undefined, "new", "traces");
+const defaults = investigationDefaults(undefined, "new");
 
 function parse(
   patch: Partial<Omit<InvestigationInput, "selection">> & { selection?: Partial<InvestigationInput["selection"]> } = {},
@@ -32,12 +32,13 @@ function expectIssue(
 }
 
 describe("investigation validation", () => {
-  it("attaches incomplete metadata errors to the missing filter field", () => {
-    expectIssue(
-      { selection: { filters: [{ key: "swarm", value: " " }] } },
-      ["selection", "filters", 0, "value"],
-      "Choose a key and value for every condition, or remove it",
-    );
+  it("saves the search trimmed", () => {
+    const result = investigationSchema.parse({
+      ...defaults,
+      context: "Find failures",
+      selection: { ...defaults.selection, q: "  agent:a  " },
+    });
+    expect(result.selection.q).toBe("agent:a");
   });
 
   it.each([0, 0.5, NaN, Infinity])("rejects an invalid history window: %s", (lookback_hours) => {
@@ -110,7 +111,6 @@ describe("investigation validation", () => {
         { id: "custom", instruction: "  Find repetitive searches\nInclude retries  ", enabled: false },
         { id: "blank", instruction: " ", enabled: true },
       ],
-      selection: { ...defaults.selection, filters: [{ key: " swarm ", value: " research=v2 " }] },
     };
     const draft = investigationSchema.parse(input);
     const saved = investigationSettings(draft, undefined, "analysis");
@@ -119,7 +119,6 @@ describe("investigation validation", () => {
       context: "Expected behavior \n Keep sources",
       model: "analysis",
       concurrency: 8,
-      filters: [{ key: "swarm", value: "research=v2" }],
       checks: [
         ...watchChecks(new Set(["watch_invented"])),
         { id: "custom", instruction: "Find repetitive searches\nInclude retries", enabled: false },
@@ -132,8 +131,8 @@ describe("investigation validation", () => {
   it("preserves saved configuration and uses the same edit and duplicate defaults", () => {
     const saved = investigationSettings(investigationSchema.parse(defaults), undefined, "analysis");
     const initial = { ...saved, enabled: true, concurrency: 3, interval_minutes: 15 };
-    expect(investigationDefaults(initial, "edit", "requests")).toMatchObject({ repeat: true, interval: 15 });
-    const duplicate = investigationDefaults(initial, "duplicate", "requests");
+    expect(investigationDefaults(initial, "edit")).toMatchObject({ repeat: true, interval: 15 });
+    const duplicate = investigationDefaults(initial, "duplicate");
     expect(duplicate.repeat).toBe(false);
     expect(investigationSettings(investigationSchema.parse(duplicate), initial, "analysis")).toMatchObject({
       concurrency: 3,

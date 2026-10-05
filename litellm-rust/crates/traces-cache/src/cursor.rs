@@ -1,5 +1,5 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE};
-use litellm_traces::store::{RunCursor, SpanPart};
+use litellm_traces::store::{RunCursor, RunOrder, RunRow, SpanPart};
 use serde::{Deserialize, Serialize};
 
 use crate::ReadError;
@@ -12,7 +12,7 @@ use crate::ReadError;
     deny_unknown_fields
 )]
 pub(super) enum Cursor {
-    Run(RunCursor),
+    Run(RunPosition),
     Span(SpanPosition),
     Text(TextPosition),
 }
@@ -42,6 +42,25 @@ impl Cursor {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct RunPosition {
+    order: RunOrder,
+    value: i64,
+    trace_ref: String,
+}
+
+impl RunPosition {
+    pub(super) fn after(order: RunOrder, row: &RunRow) -> Self {
+        let RunCursor { value, trace_ref } = order.cursor(row);
+        Self {
+            order,
+            value,
+            trace_ref,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct SpanPosition {
     pub(super) trace_ref: String,
     pub(super) snapshot_ms: u64,
@@ -57,13 +76,19 @@ pub(super) struct TextPosition {
     pub(super) version: String,
 }
 
-pub(super) fn run_position<E>(cursor: Option<&str>) -> Result<Option<RunCursor>, ReadError<E>> {
+pub(super) fn run_position<E>(
+    cursor: Option<&str>,
+    order: RunOrder,
+) -> Result<Option<RunCursor>, ReadError<E>> {
     let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) else {
         return Ok(None);
     };
     match Cursor::decode(cursor, "trace")? {
-        Cursor::Run(position) if position.start_ms > 0 && !position.trace_ref.is_empty() => {
-            Ok(Some(position))
+        Cursor::Run(position) if position.order == order && !position.trace_ref.is_empty() => {
+            Ok(Some(RunCursor {
+                value: position.value,
+                trace_ref: position.trace_ref,
+            }))
         }
         _ => Err(ReadError::InvalidCursor("trace")),
     }
@@ -99,13 +124,15 @@ pub(super) fn text_position<E>(
 
 #[cfg(test)]
 mod tests {
+    use litellm_traces::store::RunSortKey;
     use rstest::rstest;
 
     use super::*;
 
-    fn run(start_ms: i64, trace_ref: &str) -> String {
-        Cursor::Run(RunCursor {
-            start_ms,
+    fn run(order: RunOrder, value: i64, trace_ref: &str) -> String {
+        Cursor::Run(RunPosition {
+            order,
+            value,
             trace_ref: trace_ref.into(),
         })
         .encode()
@@ -134,36 +161,49 @@ mod tests {
         URL_SAFE.encode(value.to_string())
     }
 
+    const BY_ERRORS: RunOrder = RunOrder {
+        key: RunSortKey::ErrorCount,
+        descending: false,
+    };
+
     #[rstest]
-    fn run_cursor_round_trips_the_last_listed_run() {
-        let position = run_position::<std::io::Error>(Some(&run(1_790_742_989_377, "4BAD")))
+    #[case::newest(RunOrder::NEWEST, 1_790_742_989_377)]
+    #[case::zero_value(BY_ERRORS, 0)]
+    fn run_cursor_round_trips_under_its_own_order(#[case] order: RunOrder, #[case] value: i64) {
+        let position = run_position::<std::io::Error>(Some(&run(order, value, "4BAD")), order)
             .unwrap()
             .unwrap();
         assert_eq!(
-            (position.start_ms, position.trace_ref.as_str()),
-            (1_790_742_989_377, "4BAD")
+            (position.value, position.trace_ref.as_str()),
+            (value, "4BAD")
         );
     }
 
     #[rstest]
     #[case::absent(None)]
     #[case::empty(Some(""))]
-    fn missing_run_cursor_starts_from_the_newest(#[case] cursor: Option<&str>) {
-        assert!(run_position::<std::io::Error>(cursor).unwrap().is_none());
+    fn missing_run_cursor_starts_from_the_first_page(#[case] cursor: Option<&str>) {
+        assert!(
+            run_position::<std::io::Error>(cursor, RunOrder::NEWEST)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[rstest]
     #[case::not_base64("abc".into())]
     #[case::not_json(URL_SAFE.encode("not-json"))]
     #[case::untagged_tuple(json(serde_json::json!([1, "ref"])))]
-    #[case::zero_start(run(0, "ref"))]
-    #[case::empty_ref(run(1, ""))]
+    #[case::other_key(run(BY_ERRORS, 1, "ref"))]
+    #[case::other_direction(run(RunOrder { descending: false, ..RunOrder::NEWEST }, 1, "ref"))]
+    #[case::empty_ref(run(RunOrder::NEWEST, 1, ""))]
     #[case::span_cursor(span())]
     #[case::text_cursor(text(SpanPart::Error, 0, "A".repeat(64)))]
-    #[case::unknown_field(json(serde_json::json!({"kind": "run", "position": {"start_ms": 1, "trace_ref": "r", "extra": 1}})))]
-    fn malformed_run_cursors_are_rejected(#[case] cursor: String) {
+    #[case::without_order(json(serde_json::json!({"kind": "run", "position": {"value": 1, "trace_ref": "r"}})))]
+    #[case::unknown_field(json(serde_json::json!({"kind": "run", "position": {"order": {"key": "start_ms", "descending": true}, "value": 1, "trace_ref": "r", "extra": 1}})))]
+    fn run_cursors_not_minted_under_the_requested_order_are_rejected(#[case] cursor: String) {
         assert!(matches!(
-            run_position::<std::io::Error>(Some(&cursor)),
+            run_position::<std::io::Error>(Some(&cursor), RunOrder::NEWEST),
             Err(ReadError::InvalidCursor("trace"))
         ));
     }
@@ -182,7 +222,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::run_cursor(run(1, "ref"))]
+    #[case::run_cursor(run(RunOrder::NEWEST, 1, "ref"))]
     #[case::text_cursor(text(SpanPart::Error, 0, "a".repeat(64)))]
     fn other_kinds_are_not_span_cursors(#[case] cursor: String) {
         assert!(matches!(

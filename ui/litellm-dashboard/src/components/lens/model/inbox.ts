@@ -1,4 +1,5 @@
-import type { Finding, Job, Lens } from "./types";
+import { savedAgent } from "./runRequest";
+import type { Execution, Finding, Job, Lens } from "./types";
 
 export type Step = Job["steps"][number];
 export type Priority = NonNullable<Finding["priority"]>;
@@ -11,12 +12,15 @@ export function sampledExecutions(lens: Lens) {
   return lens.jobs.flatMap((job) => job.sample?.executions ?? []);
 }
 
+const runAgents = (run: Execution): readonly string[] => {
+  const names = run.summary?.agent_names ?? [];
+  return names.length ? names : [run.summary?.service ?? ""].filter(Boolean);
+};
+
 export function findingAgents(lens: Lens, finding: Finding): readonly string[] {
-  const services = new Map(sampledExecutions(lens).map((run) => [run.id, run.service] as const));
-  const seen = new Set(finding.occurrences.map((id) => services.get(id)).filter((s): s is string => !!s));
-  if (seen.size) return [...seen].sort();
-  const configured = lens.settings.agent_name || lens.settings.service;
-  return [configured || UNKNOWN_AGENT];
+  const agents = new Map(sampledExecutions(lens).map((run) => [run.id, runAgents(run)] as const));
+  const seen = new Set(finding.occurrences.flatMap((id) => agents.get(id) ?? []));
+  return seen.size ? [...seen].sort() : [savedAgent(lens.settings.q) || UNKNOWN_AGENT];
 }
 
 function groupBy<T>(items: readonly T[], key: (item: T) => string): Map<string, T[]> {

@@ -1,0 +1,6 @@
+- Lens product rules live here, in Python: sample percent, cap and preview, analyzer excerpt budgets and labels, evidence verification, and job and finding state
+- Read traces only through the general trace reads the native bridge exposes: run listing with a sort order, run counts, the trace graph, and batched span text with ranges and substring checks
+- Never add a Lens-only read to the Rust trace reader (`litellm-rust/crates/traces-cache`) or the storage port (`litellm_traces::store`). If only Lens needs it, compose it here from the general reads
+- Never write SQL against trace storage from this package. Storage engines stay behind the Rust store port
+- A target run is a run of the traces list, identified by its `trace_ref`, and its filter is the same `q` search the Traces tab uses
+- Lens reads traces only, never the gateway request log

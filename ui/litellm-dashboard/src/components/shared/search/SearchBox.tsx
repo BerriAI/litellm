@@ -2,7 +2,7 @@
 
 import "prosemirror-view/style/prosemirror.css";
 
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
+import { useDebouncer } from "@tanstack/react-pacer/debouncer";
 import { ProseMirror, ProseMirrorDoc, reactKeys, useEditorEventCallback } from "@handlewithcare/react-prosemirror";
 import { Check, Copy, CornerDownLeft, Loader2, type LucideIcon, Search } from "lucide-react";
 import { Schema } from "prosemirror-model";
@@ -153,7 +153,7 @@ function Root<F extends string>({
     [listId, text, clauses, shownMenu, activeItem, language],
   );
 
-  const emit = useDebouncedCallback(
+  const emitter = useDebouncer(
     (next: string) => {
       setUnechoed((current) => [...current, next]);
       onValueChange(next);
@@ -166,7 +166,7 @@ function Root<F extends string>({
     if (tr.selectionSet || tr.docChanged) setActive(0);
     if (!tr.docChanged) return;
     setMenuOpen(!tr.getMeta(KEEP_MENU_CLOSED));
-    emit(tr.doc.textContent);
+    emitter.maybeExecute(tr.doc.textContent);
   };
 
   const handleKeyDown = (view: EditorView, event: KeyboardEvent): boolean => {
@@ -203,6 +203,7 @@ function Root<F extends string>({
         },
         blur: () => {
           setFocused(false);
+          emitter.flush();
           return false;
         },
       }}

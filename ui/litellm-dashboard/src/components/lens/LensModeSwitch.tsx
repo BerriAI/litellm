@@ -30,6 +30,11 @@ function ActivityDot({ activity }: { activity: InvestigationActivity }) {
   );
 }
 
+export interface SetupBadge {
+  tab: LensTab;
+  label: string;
+}
+
 /** Inverted corner joining the tab's side border to the card's top border; plain CSS borders so both snap to the same pixels. */
 function NotchCorner({ side, demo }: { side: "left" | "right"; demo: boolean }) {
   return (
@@ -54,7 +59,7 @@ export function LensModeSwitch({
   activity: InvestigationActivity;
   demo: boolean;
   workers: LensList["workers"] | null;
-  setup?: string;
+  setup?: SetupBadge;
 }) {
   const connected = useWorkerConnected(workers);
   const workerTitle = connected ? "Worker connected" : "Connect worker";
@@ -86,9 +91,9 @@ export function LensModeSwitch({
                 {workerDisconnected && <StatusDot state="error" className="absolute -top-0.5 -right-0.5 size-1.5" />}
               </span>
               <span className={cn(view === "settings" && "sr-only")}>{label}</span>
-              {view === "investigations" && setup && (
+              {setup?.tab === view && (
                 <span className="absolute -top-3 right-2 rounded-full border border-border bg-card px-1.5 py-0.5 text-xs leading-none font-medium text-muted-foreground animate-in fade-in-0 duration-200">
-                  {setup}
+                  {setup.label}
                 </span>
               )}
               {view === "investigations" && <ActivityDot activity={activity} />}

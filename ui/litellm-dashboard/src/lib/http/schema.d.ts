@@ -8956,23 +8956,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/lens/agents": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Agents */
-        get: operations["list_agents_lens_agents_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/lens/preview/sample": {
         parameters: {
             query?: never;
@@ -25582,11 +25565,6 @@ export interface components {
         /** ActivityAvailability */
         ActivityAvailability: {
             /**
-             * Requests
-             * @default false
-             */
-            requests: boolean;
-            /**
              * Traces
              * @default false
              */
@@ -25595,20 +25573,15 @@ export interface components {
         /** ActivitySelection */
         ActivitySelection: {
             /**
-             * Agent Name
-             * @default
-             */
-            agent_name: string;
-            /**
              * Execution Ids
              * @default []
              */
             execution_ids: string[];
             /**
-             * Filters
-             * @default []
+             * Q
+             * @default
              */
-            filters: components["schemas"]["MetadataFilter"][];
+            q: string;
             /**
              * Sample Percent
              * @default 100
@@ -25616,22 +25589,6 @@ export interface components {
             sample_percent: number;
             /** Sample Size */
             sample_size?: number | null;
-            /**
-             * Service
-             * @default
-             */
-            service: string;
-            /**
-             * Source
-             * @default traces
-             * @enum {string}
-             */
-            source: "traces" | "requests" | "both";
-            /**
-             * Team Id
-             * @default
-             */
-            team_id: string;
         };
         /** AdaptiveRouterWeights */
         AdaptiveRouterWeights: {
@@ -32023,40 +31980,10 @@ export interface components {
         Execution: {
             /** Id */
             id: string;
-            /**
-             * Metadata
-             * @default []
-             */
-            metadata: components["schemas"]["MetadataFilter"][];
-            /** Name */
-            name: string;
-            /**
-             * Root Seen
-             * @default false
-             */
-            root_seen: boolean;
-            /**
-             * Service
-             * @default
-             */
-            service: string;
-            /**
-             * Source
-             * @enum {string}
-             */
-            source: "traces" | "requests";
-            /** Span Count */
-            span_count: number;
-            /** Start Time */
-            start_time: string;
-            /** Team Id */
-            team_id: string;
+            summary?: components["schemas"]["TraceSummary"] | null;
             /** Trace Id */
             trace_id: string;
-            /**
-             * Trace Ref
-             * @default
-             */
+            /** Trace Ref */
             trace_ref: string;
         };
         /** ExecutionContent */
@@ -34007,11 +33934,6 @@ export interface components {
         /** LensSettings */
         LensSettings: {
             /**
-             * Agent Name
-             * @default
-             */
-            agent_name: string;
-            /**
              * Checks
              * @default []
              */
@@ -34037,11 +33959,6 @@ export interface components {
              */
             execution_ids: string[];
             /**
-             * Filters
-             * @default []
-             */
-            filters: components["schemas"]["MetadataFilter"][];
-            /**
              * Interval Minutes
              * @default 15
              */
@@ -34061,28 +33978,17 @@ export interface components {
             /** Name */
             name: string;
             /**
+             * Q
+             * @default
+             */
+            q: string;
+            /**
              * Sample Percent
              * @default 100
              */
             sample_percent: number;
             /** Sample Size */
             sample_size?: number | null;
-            /**
-             * Service
-             * @default
-             */
-            service: string;
-            /**
-             * Source
-             * @default traces
-             * @enum {string}
-             */
-            source: "traces" | "requests" | "both";
-            /**
-             * Team Id
-             * @default
-             */
-            team_id: string;
         };
         /** ListAccessGroupsResponse */
         ListAccessGroupsResponse: {
@@ -38175,13 +38081,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** MetadataFilter */
-        MetadataFilter: {
-            /** Key */
-            key: string;
-            /** Value */
-            value: string;
-        };
         /** MetricWithMetadata */
         MetricWithMetadata: {
             /** Api Key Breakdown */
@@ -41557,15 +41456,15 @@ export interface components {
             /** As Of */
             as_of?: string | null;
             /**
+             * Cursor
+             * @default
+             */
+            cursor: string;
+            /**
              * Lookback Hours
              * @default 24
              */
             lookback_hours: number;
-            /**
-             * Offset
-             * @default 0
-             */
-            offset: number;
             selection: components["schemas"]["ActivitySelection"];
         };
         /** Progress */
@@ -45380,8 +45279,6 @@ export interface components {
             executions: components["schemas"]["Execution"][];
             /** Next Cursor */
             next_cursor?: string | null;
-            /** Next Offset */
-            next_offset?: number | null;
             /**
              * Selected
              * @default 0
@@ -63114,26 +63011,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActivityAvailability"];
-                };
-            };
-        };
-    };
-    list_agents_lens_agents_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": string[];
                 };
             };
         };
@@ -81575,6 +81452,8 @@ export interface operations {
     agent_trace_values_v1_traces_values__field__get: {
         parameters: {
             query?: {
+                /** @description Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. Keys: name, agent, status, model, input, trace_id. `*` globs and a leading `-` negates */
+                q?: string;
                 contains?: string;
                 limit?: number;
                 /** @description Window start, unix ms. Default: 24h ago */
@@ -81584,7 +81463,7 @@ export interface operations {
             };
             header?: never;
             path: {
-                field: "name" | "agent" | "status" | "model" | "input" | "trace_id";
+                field: "name" | "agent" | "status" | "model" | "input" | "trace_id" | "service" | "team";
             };
             cookie?: never;
         };

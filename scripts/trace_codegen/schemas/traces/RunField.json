@@ -6,7 +6,9 @@
     "status",
     "model",
     "input",
-    "trace_id"
+    "trace_id",
+    "service",
+    "team"
   ],
   "title": "RunField",
   "type": "string"

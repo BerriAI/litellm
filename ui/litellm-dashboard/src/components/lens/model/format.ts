@@ -3,12 +3,8 @@ import type { Settings } from "./types";
 
 export { runTime };
 
-export function scopeLabel(settings: Partial<Pick<Settings, "service" | "agent_name" | "filters">>): string {
-  return (
-    [settings.agent_name, settings.service, ...(settings.filters ?? []).map((f) => `${f.key}: ${f.value}`)]
-      .filter(Boolean)
-      .join(" · ") || "All activity"
-  );
+export function scopeLabel(settings: Partial<Pick<Settings, "q">>): string {
+  return settings.q?.trim() || "All activity";
 }
 
 export function durationText(seconds: number): string {
@@ -40,5 +36,3 @@ export function agoLabel(thenMs: number, nowMs: number): string {
 export const money = (n: number) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 3 }).format(n);
 export const when = (value?: string | null) => (value ? runTime(value) : "Not yet");
-
-export const sourceLabels = { both: "Traces and requests", requests: "LLM requests", traces: "Agent traces" };

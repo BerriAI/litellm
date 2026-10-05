@@ -9,7 +9,6 @@ import litellm
 from litellm import Router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.lens.endpoints import (
-    list_agents,
     run_settings,
     run_window,
     user_scope,
@@ -19,6 +18,7 @@ from litellm.proxy.lens.endpoints import (
     worker_supports_model,
 )
 from litellm.proxy.lens.models import ActivitySelection, Lens, LensSettings, RunRequest, Scope
+from tests.unit.proxy.lens.test_sources import FakeStorage, summary
 
 
 @pytest.fixture
@@ -115,21 +115,6 @@ async def test_worker_without_active_billing_cannot_take_work(revoked: bool, key
     assert not await worker_supports_model(inactive, settings)
 
 
-@pytest.mark.parametrize("role", (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
-@pytest.mark.asyncio
-async def test_agent_discovery_without_trace_storage_is_empty(role: LitellmUserRoles) -> None:
-    auth: Final = UserAPIKeyAuth(user_role=role)
-    assert await list_agents(auth, None) == ()
-
-
-@pytest.mark.asyncio
-async def test_agent_discovery_without_trace_storage_still_requires_admin_access() -> None:
-    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
-    with pytest.raises(HTTPException) as error:
-        await list_agents(auth, None)
-    assert error.value.status_code == 403
-
-
 @pytest.mark.parametrize(
     "role",
     (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, LitellmUserRoles.TEAM),
@@ -187,7 +172,9 @@ def saved_lens() -> Lens:
     return Lens(
         id="lens",
         scope=Scope(all_teams=True),
-        settings=LensSettings(name="Support", model="analysis", context="Answer questions", agent_name="support"),
+        settings=LensSettings(
+            name="Support", model="analysis", context="Answer questions", q="agent:support status:error"
+        ),
         created_at=now,
         next_run_at=now,
         budget_month="2026-01",
@@ -198,8 +185,8 @@ def test_run_now_agent_override_only_changes_the_agent_for_that_run() -> None:
     lens: Final = saved_lens()
     overridden: Final = run_settings(lens, RunRequest(agent_name="billing"))
     assert overridden is not None
-    assert overridden.agent_name == "billing"
-    assert overridden.model_copy(update={"agent_name": "support"}) == lens.settings
+    assert overridden.q == "status:error agent:billing"
+    assert overridden.model_copy(update={"q": lens.settings.q}) == lens.settings
 
 
 def test_run_now_without_overrides_keeps_the_saved_settings() -> None:
@@ -285,19 +272,11 @@ def test_model_errors_reach_worker_with_status_and_redacted_provider_message(pro
 async def test_preview_samples_a_selection_without_investigation_settings() -> None:
     from litellm.proxy.lens.endpoints import Preview, preview_sample
 
-    class SelectionStorage:
-        async def lens_sample(self, parameters):
-            assert (parameters.source, parameters.agent_name, parameters.selected_team) == ("requests", "billing", "t1")
-            assert parameters.preview == 1 and parameters.offset == 3
-            return []
-
-    body: Final = Preview.model_validate(
-        {"selection": {"source": "requests", "agent_name": "billing", "team_id": "t1"}, "offset": 3}
-    )
-    sample: Final = await preview_sample(
-        body, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), SelectionStorage()
-    )
-    assert sample.eligible == 0 and not sample.executions
+    storage: Final = FakeStorage(runs=(summary("A" * 64), summary("B" * 64)))
+    body: Final = Preview.model_validate({"selection": {"q": "run", "sample_size": 1}})
+    sample: Final = await preview_sample(body, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), storage)
+    assert (sample.eligible, sample.selected, len(sample.executions)) == (2, 1, 2)
+    assert storage.listed[0][1] == "run"
 
 
 @pytest.mark.asyncio

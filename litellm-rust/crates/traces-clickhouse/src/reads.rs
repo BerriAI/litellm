@@ -12,8 +12,8 @@ use litellm_traces_cache::{StoreError, StoreResult, TraceStore};
 use crate::{
     Connection, Error,
     query::named::{
-        Calls, CallsParams, RunCounts, RunCountsParams, RunSpans, Runs, RunsParams, SpanTextParams,
-        SpanTexts, SpansParams, TraceSpans,
+        Calls, CallsParams, RunAttributeCounts, RunCounts, RunCountsParams, RunSpans, RunsPage,
+        RunsParams, SpanTextParams, SpanTexts, SpansParams, TraceSpans,
     },
 };
 
@@ -45,8 +45,14 @@ impl TraceStore for ClickHouseTraces {
     }
 
     async fn runs(&self, access: &QueryScope, query: &RunQuery) -> StoreResult<Vec<RunRow>, Error> {
-        let rows = self.fetch::<Runs>(&RunsParams::new(access, query)).await?;
-        Ok(rows.into_iter().map(|row| row.0).collect())
+        let mut rows: Vec<RunRow> = self
+            .fetch::<RunsPage>(&RunsParams::new(access, query))
+            .await?
+            .into_iter()
+            .map(|row| row.0)
+            .collect();
+        rows.sort_by(|left, right| query.order.compare(left, right));
+        Ok(rows)
     }
 
     async fn run_counts(
@@ -54,9 +60,12 @@ impl TraceStore for ClickHouseTraces {
         access: &QueryScope,
         query: &RunCountQuery,
     ) -> StoreResult<Vec<RunCount>, Error> {
-        let rows = self
-            .fetch::<RunCounts>(&RunCountsParams::new(access, query))
-            .await?;
+        let params = RunCountsParams::new(access, query);
+        let rows = if params.counts_attributes() {
+            self.fetch::<RunAttributeCounts>(&params).await?
+        } else {
+            self.fetch::<RunCounts>(&params).await?
+        };
         Ok(rows.into_iter().map(|row| row.0).collect())
     }
 
@@ -76,11 +85,11 @@ impl TraceStore for ClickHouseTraces {
         &self,
         access: &QueryScope,
         query: &SpanTextQuery,
-    ) -> StoreResult<Option<SpanText>, Error> {
+    ) -> StoreResult<Vec<SpanText>, Error> {
         let rows = self
             .fetch::<SpanTexts>(&SpanTextParams::new(access, query))
             .await?;
-        Ok(rows.into_iter().next().map(|row| row.0))
+        Ok(rows.into_iter().map(|row| row.0).collect())
     }
 
     async fn calls(

@@ -1,3 +1,4 @@
+import { savedAgent } from "../model/runRequest";
 import { Bot, CalendarClock, CircleDashed, SquareChevronRight } from "lucide-react";
 
 import { type ClientIndex, filterItems } from "@/components/shared/search/evaluate";
@@ -22,7 +23,7 @@ export const INVESTIGATION_QUERY: QueryLanguage<InvestigationField> = {
 export const INVESTIGATION_INDEX: ClientIndex<Lens, InvestigationField> = {
   read: {
     name: (lens) => [lens.settings.name],
-    agent: (lens) => [lens.settings.agent_name, lens.settings.service].filter(Boolean),
+    agent: (lens) => [savedAgent(lens.settings.q)].filter(Boolean),
     status: (lens) => [lens.jobs[0]?.status ?? "never"],
     schedule: (lens) => [lens.settings.enabled ? "watching" : "paused"],
   },

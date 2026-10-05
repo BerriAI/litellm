@@ -8,7 +8,7 @@ import { InvestigationProgress } from "../InvestigationProgress";
 import { StepFeed } from "../StepFeed";
 import { InvestigationSummary } from "./InvestigationSummary";
 import { InvestigationFailure } from "./InvestigationFailure";
-import { scopeLabel, sourceLabels } from "../../model/format";
+import { scopeLabel } from "../../model/format";
 import type { OwnedFinding } from "../../model/inbox";
 import { activeJob } from "../../model/status";
 import { type Finding, type Lens } from "../../model/types";
@@ -51,9 +51,7 @@ export function InvestigationDetail({
         <div className="flex flex-wrap justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold">{lens.settings.name}</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {sourceLabels[lens.settings.source ?? "traces"]} · {scopeLabel(lens.settings)}
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">{scopeLabel(lens.settings)}</p>
           </div>
           {!readOnly && <InvestigationActions lens={lens} ready={ready} busy={busy} {...intents} />}
         </div>
@@ -66,7 +64,7 @@ export function InvestigationDetail({
             <TabsList variant="line">
               <TabsTrigger value="findings">Findings</TabsTrigger>
               <TabsTrigger value="checks">Criteria</TabsTrigger>
-              <TabsTrigger value="runs">{sourceLabels[batchSettings?.source ?? "traces"]}</TabsTrigger>
+              <TabsTrigger value="runs">Runs</TabsTrigger>
               <TabsTrigger value="activity">History</TabsTrigger>
             </TabsList>
             {section !== "activity" && <RunPicker lens={lens} job={job} />}

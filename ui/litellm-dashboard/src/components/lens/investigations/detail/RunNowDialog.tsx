@@ -14,10 +14,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
-import { lensQueries } from "../../data/queries";
-import { useLensApi } from "../../data/LensServices";
+import { useLensServices } from "../../data/LensServices";
 import type { Lens, RunWindow } from "../../model/types";
-import { RUN_PRESETS, runRequest, type RunChoice, type RunPreset } from "../../model/runRequest";
+import { RUN_PRESETS, runRequest, savedAgent, type RunChoice, type RunPreset } from "../../model/runRequest";
+
+const SUGGESTION_WINDOW_MS = 7 * 24 * 3_600_000;
 
 const localInput = (date: Date) =>
   new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
@@ -33,17 +34,22 @@ export function RunNowDialog({
   onClose: () => void;
   onRun: (request: RunWindow) => Promise<void>;
 }) {
-  const api = useLensApi();
-  const agentsQuery = useQuery(lensQueries.agents(api, "traces"));
-  const agents = Array.isArray(agentsQuery.data) ? agentsQuery.data : [];
-  const now = new Date();
+  const { traces } = useLensServices();
+  const [now] = useState(() => new Date());
+  const agentsQuery = useQuery({
+    queryKey: ["lens", "run-now-agents", traces.scope],
+    queryFn: () => traces.values("agent", "", { startMs: now.getTime() - SUGGESTION_WINDOW_MS, endMs: now.getTime() }),
+    staleTime: 60_000,
+  });
+  const agents = agentsQuery.data ?? [];
+  const saved = savedAgent(lens.settings.q);
   const [preset, setPreset] = useState<RunPreset>(null);
-  const [agent, setAgent] = useState(lens.settings.agent_name ?? "");
+  const [agent, setAgent] = useState(saved);
   const [start, setStart] = useState(localInput(new Date(now.getTime() - 3_600_000)));
   const [end, setEnd] = useState(localInput(now));
   const [error, setError] = useState("");
   const submit = async () => {
-    const choice: RunChoice = { preset, agent, saved: lens.settings.agent_name ?? "", start, end };
+    const choice: RunChoice = { preset, agent, saved, start, end };
     const request = runRequest(choice);
     if (typeof request === "string") {
       setError(request);

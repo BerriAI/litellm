@@ -104,6 +104,7 @@ async fn resolve_runs<S: TraceStore>(
         return Ok(Vec::new());
     };
     let selection = SpanSelection::Runs {
+        trace_ids: runs.iter().map(|row| row.trace_id.clone()).collect(),
         trace_refs: runs.iter().map(|row| row.trace_ref.clone()).collect(),
         window: start_ms..end_ms.saturating_add(1),
     };

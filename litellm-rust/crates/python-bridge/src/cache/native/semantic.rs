@@ -1,5 +1,3 @@
-use crate::cache::cache_error;
-use crate::execution::run_async;
 use std::{collections::VecDeque, time::Duration};
 
 use litellm_cache::Error;
@@ -16,6 +14,7 @@ use super::{
     embedder::{PythonEmbedder, with_prepared_embedding},
     request::{NativeRequest, now},
 };
+use crate::{cache::cache_error, execution::run_async};
 
 pub(super) enum SemanticOperation {
     Lookup(NativeRequest),

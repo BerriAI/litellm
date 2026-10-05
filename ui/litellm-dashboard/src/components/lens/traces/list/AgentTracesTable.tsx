@@ -43,7 +43,32 @@ interface AgentTracesTableProps {
   onLoadMore: () => void;
   rangeEmpty?: boolean;
   onSetUpTracing: () => void;
+  /** When set, a leading checkbox column picks individual runs. */
+  picks?: RunPicks;
 }
+
+export interface RunPicks {
+  readonly isPicked: (run: TraceSummary) => boolean;
+  readonly toggle: (run: TraceSummary, picked: boolean) => void;
+}
+
+const pickColumn = (picks: RunPicks): ColumnDef<TraceSummary> => ({
+  id: "pick",
+  size: 36,
+  enableHiding: false,
+  enableSorting: false,
+  header: () => null,
+  cell: ({ row }) => (
+    <input
+      type="checkbox"
+      aria-label={`Select ${traceDisplayName(row.original)}`}
+      checked={picks.isPicked(row.original)}
+      onClick={(event) => event.stopPropagation()}
+      onChange={(event) => picks.toggle(row.original, event.target.checked)}
+    />
+  ),
+  meta: { title: "Pick" },
+});
 
 export const formatCost = (cost: number): string => {
   if (cost === 0) return "$0.00";
@@ -261,15 +286,17 @@ export function AgentTracesTable({
   onLoadMore,
   rangeEmpty = false,
   onSetUpTracing,
+  picks,
 }: AgentTracesTableProps) {
   const settled = !isLoading && !error;
   const isEmpty = settled && !hasMore && traces.length === 0;
   const autoContinue = settled && hasMore && traces.length > 0 && !isPlaceholder;
   const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility("lens-traces");
   const sorting = useMemo(() => toSorting(order), [order]);
+  const columns = useMemo(() => (picks ? [pickColumn(picks), ...RUN_COLUMNS] : RUN_COLUMNS), [picks]);
   const tableOptions: TableOptions<TraceSummary> = {
     data: traces,
-    columns: RUN_COLUMNS,
+    columns,
     getRowId: runKey,
     autoResetAll: false,
     manualSorting: true,

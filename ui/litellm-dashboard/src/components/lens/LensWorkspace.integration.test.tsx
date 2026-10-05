@@ -24,7 +24,7 @@ beforeEach(() => {
     const path = requestPath(input);
     if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
     if (path === "/lens") return Response.json({ lenses: [], workers: [], tracing_enabled: false });
-    return Response.json({ data: [], traces: false, requests: false });
+    return Response.json({ data: [], traces: false });
   });
 });
 
@@ -177,7 +177,7 @@ describe("Lens interactive demo", () => {
       if (path === "/lens") return Response.json({ lenses: [saved], workers: [], tracing_enabled: true });
       if (path.endsWith("/runs")) return Response.json(saved.jobs);
       if (path === "/v1/traces") return Response.json({ data: data.runs.map((run) => run.trace.summary) });
-      return Response.json({ data: [], traces: true, requests: false });
+      return Response.json({ data: [], traces: true });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
       searchParams: `?tab=investigations&lens=${saved.id}`,
@@ -198,7 +198,7 @@ describe("Lens interactive demo", () => {
       if (path === "/lens") return Response.json({ lenses: [saved], workers: [], tracing_enabled: false });
       if (path.endsWith("/runs")) return Response.json(saved.jobs);
       if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
-      return Response.json({ data: [], traces: false, requests: false });
+      return Response.json({ data: [], traces: false });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />);
     expect(await screen.findByRole("button", { name: "Preview sample" })).toBeVisible();
@@ -223,7 +223,7 @@ describe("Lens interactive demo", () => {
       const path = requestPath(input);
       if (path === "/lens") return Response.json({ lenses: lenses(), workers: [], tracing_enabled: false });
       if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
-      return Response.json({ data: [], traces: false, requests: false });
+      return Response.json({ data: [], traces: false });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />);
     const tab = within(screen.getByRole("tablist", { name: "Lens" })).getByRole("tab", { name: "Investigations" });
@@ -243,7 +243,7 @@ describe("Lens interactive demo", () => {
       if (path === "/lens/agents") return Response.json([]);
       if (path.startsWith("/lens/preview")) return Response.json({ eligible: 0, selected: 0, executions: [] });
       if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
-      return Response.json({ data: [], traces: true, requests: false });
+      return Response.json({ data: [], traces: true });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
       searchParams: "?tab=investigations&dialog=new",
@@ -256,6 +256,30 @@ describe("Lens interactive demo", () => {
     await user.click(screen.getByRole("button", { name: "Back to investigations" }));
     expect(await screen.findByRole("row", { name: new RegExp(saved.settings.name) })).toBeVisible();
     expect(within(tab).queryByText("New")).not.toBeInTheDocument();
+  });
+
+  it("marks the Traces tab while connecting another agent and clears it on back", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    network.mockImplementation(async (input) => {
+      const path = requestPath(input);
+      if (path === "/lens") return Response.json({ lenses: [], workers: [], tracing_enabled: true });
+      if (path === "/v1/traces") return Response.json({ data: [createLensDemoData().runs[0].trace.summary] });
+      return Response.json({ data: [], traces: true });
+    });
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
+      searchParams: "?tab=traces&connect=true",
+      onUrlUpdate,
+    });
+    expect(await screen.findByRole("heading", { name: "Connect another agent" })).toBeVisible();
+    const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
+    const tab = tabs.getByRole("tab", { name: /^Traces/ });
+    expect(within(tab).getByText("Setup")).toBeVisible();
+    expect(within(tabs.getByRole("tab", { name: /^Investigations/ })).queryByText("Setup")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back to traces" }));
+    expect(await screen.findByRole("combobox", { name: "Search runs" })).toBeVisible();
+    expect(within(tab).queryByText("Setup")).not.toBeInTheDocument();
+    await expectUrl(onUrlUpdate, (url) => expect(url.has("connect")).toBe(false));
   });
 
   it("adds a quiet Settings tab that manages the worker inline and reflects its health", async () => {
@@ -276,7 +300,7 @@ describe("Lens interactive demo", () => {
       if (path === "/lens") return Response.json({ lenses: [saved], workers: workers(), tracing_enabled: true });
       if (path.endsWith("/runs")) return Response.json(saved.jobs);
       if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
-      return Response.json({ data: [], traces: true, requests: false });
+      return Response.json({ data: [], traces: true });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, { onUrlUpdate });
     const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
@@ -311,7 +335,7 @@ describe("Lens interactive demo", () => {
       const path = requestPath(input);
       if (path === "/lens") return Response.json({ lenses: [], workers: [], tracing_enabled: true });
       if (path === "/v1/traces") return Response.json({ data: [{}] });
-      return Response.json({ data: [], traces: true, requests: false });
+      return Response.json({ data: [], traces: true });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
       searchParams: "?tab=investigations",
@@ -350,7 +374,7 @@ describe("Lens interactive demo", () => {
       if (path === "/lens/agents") return Response.json([]);
       if (path.startsWith("/lens/preview")) return Response.json({ eligible: 0, selected: 0, executions: [] });
       if (path === "/v1/traces") return Response.json({ data: [createLensDemoData().runs[0].trace.summary] });
-      return Response.json({ data: [], traces: true, requests: false });
+      return Response.json({ data: [], traces: true });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
       searchParams: "?tab=settings",
@@ -393,7 +417,7 @@ describe("Lens interactive demo", () => {
     network.mockImplementation(async (input) =>
       requestPath(input) === "/lens"
         ? Response.json({ detail: "boom" }, { status: 500 })
-        : Response.json({ data: [], traces: true, requests: false }),
+        : Response.json({ data: [], traces: true }),
     );
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />);
     const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
@@ -418,7 +442,7 @@ describe("Lens interactive demo", () => {
         const path = requestPath(input);
         if (path === "/lens") return Response.json({ lenses: [saved], workers: [worker], tracing_enabled: true });
         if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
-        return Response.json({ data: [], traces: true, requests: false });
+        return Response.json({ data: [], traces: true });
       });
       renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />);
       const tabs = within(screen.getByRole("tablist", { name: "Lens" }));
@@ -449,7 +473,7 @@ describe("Lens interactive demo", () => {
         const path = requestPath(input);
         if (path === "/lens") return Response.json({ lenses: [saved], workers: workers(), tracing_enabled: true });
         if (path === "/v1/traces") return Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
-        return Response.json({ data: [], traces: true, requests: false });
+        return Response.json({ data: [], traces: true });
       });
       renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
         searchParams: "?tab=settings",

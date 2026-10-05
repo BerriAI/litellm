@@ -102,8 +102,8 @@ impl TraceStore for FakeStore {
         &self,
         _: &QueryScope,
         _: &SpanTextQuery,
-    ) -> StoreResult<Option<SpanText>, FakeError> {
-        Ok(None)
+    ) -> StoreResult<Vec<SpanText>, FakeError> {
+        Ok(Vec::new())
     }
 
     async fn calls(&self, _: &QueryScope, _: &CallQuery) -> StoreResult<Vec<CallRow>, FakeError> {

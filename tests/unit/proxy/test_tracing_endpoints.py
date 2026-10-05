@@ -24,7 +24,7 @@ from litellm.rust_bridge.trace.errors import TraceChanged
 from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
 from litellm.rust_bridge.trace.generated.types import AllQueryScope, OwnedQueryScope, QueryScope
 from litellm.rust_bridge.trace.queries import TraceSQLResponse
-from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig
+from litellm.rust_bridge.trace.storage import NEWEST, ClickHouseStorage, TraceStorageConfig
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 
 SQL_ENVELOPE: Final = {
@@ -144,7 +144,9 @@ def test_trace_read_and_write_permissions(
     if scope is None:
         receiver.list_traces.assert_not_awaited()
     else:
-        receiver.list_traces.assert_awaited_once_with(scope=scope, start_ms=1, end_ms=2, q="", cursor=None)
+        receiver.list_traces.assert_awaited_once_with(
+            scope=scope, start_ms=1, end_ms=2, q="", cursor=None, order=NEWEST
+        )
 
     write: Final = client.post("/v1/traces", json={})
     assert write.status_code == (200 if can_write else 403), write.text
@@ -257,7 +259,29 @@ def test_list_traces_passes_scope_window_query_and_cursor(client, receiver):
         end_ms=2,
         q="agent:research* -status:ok",
         cursor="abc",
+        order=NEWEST,
     )
+
+
+@pytest.mark.parametrize(
+    ("params", "order"),
+    [
+        ({"sort_by": "duration_ms", "sort_dir": "asc"}, {"key": "duration_ms", "descending": False}),
+        ({"sort_by": "error_count"}, {"key": "error_count", "descending": True}),
+        ({"sort_dir": "asc"}, {"key": "start_ms", "descending": False}),
+    ],
+)
+def test_list_traces_orders_by_the_requested_run_key(client, receiver, params, order):
+    response = client.get("/v1/traces", params={"start_ms": 1, "end_ms": 2, **params})
+    assert response.status_code == 200, response.text
+    assert receiver.list_traces.await_args.kwargs["order"] == order
+
+
+@pytest.mark.parametrize("params", [{"sort_by": "trace_ref"}, {"sort_by": "spend"}, {"sort_dir": "up"}])
+def test_list_traces_rejects_orders_the_runs_table_does_not_offer(client, receiver, params):
+    response = client.get("/v1/traces", params={"start_ms": 1, "end_ms": 2, **params})
+    assert response.status_code == 422
+    receiver.list_traces.assert_not_awaited()
 
 
 def test_histogram_passes_scope_window_query_and_buckets(client, receiver):
@@ -603,7 +627,7 @@ def test_lens_reads_from_the_lifespan_storage() -> None:
 
     storage: Final = MagicMock(spec=ClickHouseStorage)
     storage.ensure_schema = AsyncMock()
-    storage.lens_sample = AsyncMock(return_value=[])
+    storage.count_traces = AsyncMock(return_value=0)
     tracing: Final = TraceReceiver(storage)
 
     @asynccontextmanager
@@ -618,12 +642,13 @@ def test_lens_reads_from_the_lifespan_storage() -> None:
     with TestClient(app) as client:
         response: Final = client.post(
             "/lens/preview/sample",
-            json={"settings": {"name": "Review", "model": "analysis", "context": "Find failed executions"}},
+            json={"selection": {"q": "service:checkout"}},
         )
     assert response.status_code == 200, response.text
     assert response.json()["executions"] == []
-    storage.lens_sample.assert_awaited_once()
-    assert storage.lens_sample.await_args.args[0].all_teams == 1
+    storage.count_traces.assert_awaited_once()
+    access, _, _, q, refs = storage.count_traces.await_args.args
+    assert (access, q, refs) == ({"kind": "all"}, "service:checkout", ())
 
 
 def test_lens_reads_from_injected_storage_without_receiver() -> None:
@@ -631,7 +656,7 @@ def test_lens_reads_from_injected_storage_without_receiver() -> None:
     from litellm.proxy.lens.sources import Storage
 
     storage: Final = MagicMock(spec=Storage)
-    storage.lens_sample = AsyncMock(return_value=[])
+    storage.count_traces = AsyncMock(return_value=0)
     app: Final = FastAPI()
     app.include_router(lens_router)
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -640,12 +665,12 @@ def test_lens_reads_from_injected_storage_without_receiver() -> None:
     with TestClient(app) as client:
         response: Final = client.post(
             "/lens/preview/sample",
-            json={"settings": {"name": "Review", "model": "analysis", "context": "Find failed executions"}},
+            json={"selection": {"q": "service:checkout"}},
         )
 
     assert response.status_code == 200, response.text
     assert response.json()["executions"] == []
-    storage.lens_sample.assert_awaited_once()
+    storage.count_traces.assert_awaited_once()
 
 
 @pytest.mark.parametrize(

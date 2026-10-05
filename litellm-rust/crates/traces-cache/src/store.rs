@@ -45,12 +45,11 @@ pub trait TraceStore: Sync {
         query: &SpanQuery,
     ) -> impl Future<Output = StoreResult<Vec<SpanRow>, Self::Error>> + Send;
 
-    /// `None` when the span is not visible to `access`.
     fn span_text(
         &self,
         access: &QueryScope,
         query: &SpanTextQuery,
-    ) -> impl Future<Output = StoreResult<Option<SpanText>, Self::Error>> + Send;
+    ) -> impl Future<Output = StoreResult<Vec<SpanText>, Self::Error>> + Send;
 
     fn calls(
         &self,

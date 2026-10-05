@@ -1,12 +1,11 @@
-use crate::cache::{CacheCall, Cached, PythonCache, Selection};
-use litellm_host_python::{PythonHostCalls, PythonOwned};
-
 use bytes::Bytes;
 use litellm_core::messages::{
     Error, MessagesCall, MessagesShaping, messages_body,
     route::{Messages, MessagesStreamHead},
 };
-use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
+use litellm_host_python::{
+    InvokeError, PythonBinding, PythonHostCalls, PythonOwned, from_py, lookup, to_py,
+};
 use litellm_http::transport::Error as TransportError;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use pyo3::{
@@ -18,6 +17,7 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use crate::{
+    cache::{CacheCall, Cached, PythonCache, Selection},
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{optional_timeout, python_timeout_seconds},
 };

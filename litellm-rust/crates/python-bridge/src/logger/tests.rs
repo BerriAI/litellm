@@ -4,7 +4,6 @@ use litellm_host::{
     machine::{HostFailure, Interrupted, Machine, MachineStep, Step},
     protocol::Protocol,
 };
-
 use pyo3::{prelude::*, types::PyDict};
 
 struct DiagnosticMachine;

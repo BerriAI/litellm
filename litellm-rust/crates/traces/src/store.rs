@@ -1,6 +1,6 @@
 //! What trace storage must answer, independent of the engine behind it.
 
-use std::ops::Range;
+use std::{cmp::Ordering, ops::Range};
 
 use serde::{Deserialize, Serialize};
 
@@ -13,17 +13,84 @@ pub enum RunSelection {
     TraceId(String),
 }
 
+/// The last row of a page in its order: the row's sort value and its reference.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunCursor {
-    pub start_ms: i64,
+    pub value: i64,
     pub trace_ref: String,
 }
 
-/// Runs newest first, by `(start_ms, trace_ref)` descending.
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunSortKey {
+    #[default]
+    StartMs,
+    DurationMs,
+    SpanCount,
+    ErrorCount,
+    TraceRef,
+}
+
+/// Runs by `key`, ties broken by `trace_ref` in the same direction.
+#[macro_rules_attribute::apply(wire_type)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RunOrder {
+    pub key: RunSortKey,
+    pub descending: bool,
+}
+
+impl RunOrder {
+    pub const NEWEST: Self = Self {
+        key: RunSortKey::StartMs,
+        descending: true,
+    };
+    pub const BY_REFERENCE: Self = Self {
+        key: RunSortKey::TraceRef,
+        descending: false,
+    };
+
+    pub fn value(self, row: &RunRow) -> i64 {
+        let count = |count: u64| i64::try_from(count).unwrap_or(i64::MAX);
+        match self.key {
+            RunSortKey::StartMs => row.start_ms,
+            RunSortKey::DurationMs => row.duration_ms,
+            RunSortKey::SpanCount => count(row.span_count),
+            RunSortKey::ErrorCount => count(row.error_count),
+            RunSortKey::TraceRef => 0,
+        }
+    }
+
+    pub fn compare(self, left: &RunRow, right: &RunRow) -> Ordering {
+        let ascending =
+            (self.value(left), &left.trace_ref).cmp(&(self.value(right), &right.trace_ref));
+        if self.descending {
+            ascending.reverse()
+        } else {
+            ascending
+        }
+    }
+
+    pub fn cursor(self, row: &RunRow) -> RunCursor {
+        RunCursor {
+            value: self.value(row),
+            trace_ref: row.trace_ref.clone(),
+        }
+    }
+}
+
+impl Default for RunOrder {
+    fn default() -> Self {
+        Self::NEWEST
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunQuery {
     pub selection: RunSelection,
+    pub order: RunOrder,
     pub after: Option<RunCursor>,
     pub limit: u32,
 }
@@ -57,25 +124,20 @@ pub struct RunRow {
     pub error_count: u64,
 }
 
-impl RunRow {
-    pub fn cursor(&self) -> RunCursor {
-        RunCursor {
-            start_ms: self.start_ms,
-            trace_ref: self.trace_ref.clone(),
-        }
-    }
-}
-
 /// What a run is counted under.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CountValue {
     Field(RunField),
     /// The run's alphabetically first agent label, or its service when it has none.
     PrimaryAgent,
+    /// Keys of the span and resource attributes its spans carry.
+    AttributeKey,
+    /// Values of one attribute across its spans.
+    Attribute(String),
 }
 
 /// Each dimension left unset collapses to one group: bucket 0, not failed, or an empty value.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CountBy {
     /// Equal-width slices of the filter window; run `i` lands in
     /// `(start_ms - window.start) * buckets / window.len()`.
@@ -114,8 +176,10 @@ pub enum SpanSelection {
         trace_id: String,
         trace_ref: String,
     },
-    /// Spans of several runs that started within `window`.
+    /// Spans of several runs that started within `window`. `trace_ids` are those runs' trace ids,
+    /// which narrow the read before references are checked.
     Runs {
+        trace_ids: Vec<String>,
         trace_refs: Vec<String>,
         window: Range<i64>,
     },
@@ -200,7 +264,18 @@ impl SpanRow {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, strum::IntoStaticStr)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Hash,
+    PartialEq,
+    Deserialize,
+    Serialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum SpanPart {
@@ -211,24 +286,43 @@ pub enum SpanPart {
     Attributes,
 }
 
-/// A character range of one part of one span, read from the copy [`SpanQuery`] would return.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TextRange {
+    /// Up to `max_chars` characters from `offset`; `None` reads to the end.
+    From { offset: u64, max_chars: Option<u64> },
+    /// The last `chars` characters.
+    Last { chars: u64 },
+}
+
+impl TextRange {
+    pub const ALL: Self = Self::From {
+        offset: 0,
+        max_chars: None,
+    };
+}
+
+/// One part of each listed span of one run, read from the copy [`SpanQuery`] would return.
+/// Spans that are not visible to the reader, or do not exist, are left out.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpanTextQuery {
     pub trace_id: String,
     pub trace_ref: String,
-    pub span_id: String,
+    pub span_ids: Vec<String>,
     pub part: SpanPart,
-    pub offset: u64,
-    /// `None` reads to the end.
-    pub max_chars: Option<u64>,
+    pub range: TextRange,
+    /// Reports whether the whole part contains this text, case-sensitive.
+    pub contains: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SpanText {
+    pub span_id: String,
     pub text: String,
     pub total_chars: u64,
     /// Uppercase hex SHA-256 of the whole part, so a reader can tell when it changed.
     pub version: String,
+    pub contains: bool,
 }
 
 /// Gateway calls that can be priced against spans: those whose response id, call id or trace id

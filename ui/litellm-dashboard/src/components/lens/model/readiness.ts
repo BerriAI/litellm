@@ -1,7 +1,6 @@
 export interface Readiness {
   readonly tracingEnabled: boolean;
   readonly tracesReady: boolean;
-  readonly requestsReady: boolean;
   readonly activityReady: boolean;
   readonly connected: boolean;
   readonly hasInvestigations: boolean;
@@ -16,7 +15,7 @@ export interface ReadinessInput {
     readonly checked: boolean;
   };
   readonly tracingConfigured: boolean;
-  readonly activity: { readonly traces: boolean; readonly requests: boolean } | undefined;
+  readonly activity: { readonly traces: boolean } | undefined;
   readonly activityError: unknown;
   readonly connected: boolean;
   readonly listError: unknown;
@@ -28,12 +27,10 @@ export function readiness(input: ReadinessInput): Readiness {
   /** Traces confirmed straight from trace storage count as recorded activity even if the activity check fails. */
   const tracesSeen = traces.recorded === true && !traces.failed;
   const tracesReady = tracesSeen || (activity?.traces === true && !activityError);
-  const requestsReady = activity?.requests === true && !activityError;
-  const activityReady = tracesReady || requestsReady;
+  const activityReady = tracesReady;
   return {
     tracingEnabled: !traces.disabled && (traces.checked || input.tracingConfigured),
     tracesReady,
-    requestsReady,
     activityReady,
     connected,
     hasInvestigations: input.investigations > 0,

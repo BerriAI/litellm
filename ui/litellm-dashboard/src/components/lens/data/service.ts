@@ -47,9 +47,7 @@ export interface LensApi {
   activity(): Promise<components["schemas"]["ActivityAvailability"]>;
   runs(lensId: string, offset: number): Promise<Job[]>;
   run(lensId: string, jobId: string): Promise<Job>;
-  execution(lensId: string, executionId: string, offset: number): Promise<ExecutionContent>;
-  sample(selection: ActivitySelection, offset: number, asOf: string): Promise<Sample>;
-  agents(): Promise<string[]>;
+  sample(selection: ActivitySelection, cursor: string, asOf: string): Promise<Sample>;
   models(): Promise<{ data: { id: string }[] }>;
   modelDetails(): Promise<{ data: AnalysisModelInfo[] }>;
   keys(alias: string, page: number, signal: AbortSignal): Promise<KeyPage>;
@@ -97,35 +95,23 @@ export function liveLensApi(client: LensClient, apiClient: ApiClient, accessToke
           params: { path: { lens_id: lensId, job_id: jobId } },
         }),
       ),
-    execution: (lensId, executionId, offset) =>
-      required(
-        client.GET("/lens/{lens_id}/executions/{execution_id}", {
-          headers,
-          params: { path: { lens_id: lensId, execution_id: executionId }, query: { offset } },
-        }),
-      ),
-    sample: (selection, offset, asOf) =>
+    sample: (selection, cursor, asOf) =>
       required(
         client.POST("/lens/preview/sample", {
           headers,
           body: {
-            offset,
+            cursor,
             as_of: asOf,
             selection: {
-              source: selection.source,
-              service: selection.service ?? "",
-              agent_name: selection.agent_name ?? "",
-              filters: selection.filters ?? [],
+              q: selection.q ?? "",
               sample_size: selection.sample_size,
               sample_percent: selection.sample_percent ?? 100,
-              team_id: selection.team_id ?? "",
               execution_ids: [],
             },
             lookback_hours: selection.lookback_hours ?? 24,
           },
         }),
       ),
-    agents: () => required(client.GET("/lens/agents", { headers })),
     models: () => apiClient.get("/models", { accessToken }),
     modelDetails: () => apiClient.get("/model_group/info", { accessToken }),
     keys: async (alias, page, signal) =>

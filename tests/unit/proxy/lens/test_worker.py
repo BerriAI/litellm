@@ -19,6 +19,7 @@ from litellm.proxy.lens.models import (
 from litellm.proxy.lens.state import queue_job
 from litellm.proxy.lens.worker import LensWorker, failure_message
 from tests.unit.proxy.lens.test_state import NOW, lens
+from tests.unit.proxy.lens.test_sources import summary
 
 
 @pytest.mark.asyncio
@@ -127,9 +128,7 @@ async def test_claim_without_an_identity_does_not_report_failure_for_another_inv
 @pytest.mark.parametrize("model_status", (200, 402, 503))
 async def test_worker_reads_claimed_activity_and_reports_analysis_or_failure(model_status: int) -> None:
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="trace", team_id="alpha", name="review", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run", trace_id="trace", trace_ref="", summary=summary("", "trace", span_count=1))
     sample: Final = Sample(executions=(execution,), eligible=1)
     content: Final = ExecutionContent(
         execution=execution,
@@ -214,9 +213,7 @@ async def test_worker_saves_validation_errors_from_every_analysis_stage(purpose:
     import json
 
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="trace", team_id="alpha", name="review", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run", trace_id="trace", trace_ref="", summary=summary("", "trace", span_count=1))
     sample: Final = Sample(executions=(execution,), eligible=1)
     content: Final = ExecutionContent(
         execution=execution,
@@ -300,9 +297,7 @@ def test_response_validation_diagnostics_omit_input_values_and_unexpected_field_
 @pytest.mark.parametrize("heartbeat_status", (401, 403, 409))
 async def test_losing_the_lease_interrupts_an_in_flight_model_request(heartbeat_status: int) -> None:
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run", trace_id="t", trace_ref="", summary=summary("", "t", span_count=1))
     started: Final = asyncio.Event()
     cancelled: Final = asyncio.Event()
     never: Final = asyncio.Event()
@@ -358,9 +353,7 @@ async def test_losing_the_lease_interrupts_an_in_flight_model_request(heartbeat_
 @pytest.mark.parametrize("failure", (429, 500, 502, 503, 504, "connection", "timeout"))
 async def test_transient_heartbeat_failure_recovers_without_cancelling_analysis(failure: int | str) -> None:
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
-    execution: Final = Execution(
-        id="run", source="traces", trace_id="t", team_id="", name="task", start_time="", span_count=1
-    )
+    execution: Final = Execution(id="run", trace_id="t", trace_ref="", summary=summary("", "t", span_count=1))
     started: Final = asyncio.Event()
     recovered: Final = asyncio.Event()
     never: Final = asyncio.Event()

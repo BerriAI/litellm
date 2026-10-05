@@ -15,6 +15,14 @@ macro_rules! owned_by {
     };
 }
 
+/// Rollup rows of one run merge in the background, so a user-owned row can belong to a run that
+/// other users also wrote to. Trusted reads drop such runs; a row policy cannot express this.
+macro_rules! whole_runs {
+    () => {
+        "({access_all:UInt8} = 1 OR has({access_teams:Array(String)}, TeamId) OR (TeamId, ApiKeyHash, TraceId) NOT IN (SELECT TeamId, ApiKeyHash, TraceId FROM agent_traces_by_key WHERE {access_user:String} != '' AND UserIds != [{access_user:String}]))"
+    };
+}
+
 /// Prefixes a read with the rows its caller may see: `owned_spans`, `owned_runs` and
 /// `owned_calls`. Trusted SQL reads only these, never the tables.
 macro_rules! owned {
@@ -24,6 +32,8 @@ macro_rules! owned {
             $crate::access::owned_by!(otel_traces),
             "),\nowned_runs AS (SELECT * FROM agent_traces_by_key WHERE ",
             $crate::access::owned_by!(agent_traces_by_key),
+            " AND ",
+            $crate::access::whole_runs!(),
             "),\nowned_calls AS (SELECT * FROM spend_logs FINAL WHERE ",
             $crate::access::owned_by!(spend_logs),
             ")",
@@ -34,6 +44,7 @@ macro_rules! owned {
 
 pub(crate) use owned;
 pub(crate) use owned_by;
+pub(crate) use whole_runs;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct AccessParams {

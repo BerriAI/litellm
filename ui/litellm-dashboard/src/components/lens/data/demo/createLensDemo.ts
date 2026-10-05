@@ -20,12 +20,10 @@ function demoLensApi(data: LensDemoData): LensApi {
   return {
     scope: "demo",
     lenses: async () => ({ lenses: data.lenses, workers: [], tracing_enabled: true }),
-    activity: async () => ({ traces: true, requests: false }),
+    activity: async () => ({ traces: true }),
     runs: (lensId, offset) => found(jobs(lensId)?.slice(offset)),
     run: (lensId, jobId) => found(jobs(lensId)?.find((job) => job.id === jobId)),
-    execution: notInDemo,
     sample: notInDemo,
-    agents: notInDemo,
     models: async () => ({ data: [] }),
     modelDetails: async () => ({ data: [] }),
     keys: notInDemo,

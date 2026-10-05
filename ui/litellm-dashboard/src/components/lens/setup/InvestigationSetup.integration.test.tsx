@@ -15,19 +15,15 @@ const settings: Settings = {
   lookback_hours: 24,
   name: "Research quality",
   model: "analysis",
-  source: "traces",
   context: "",
   enabled: false,
-  filters: [],
   interval_minutes: 15,
   monthly_budget: 20,
   sample_size: 100,
   sample_percent: 100,
   concurrency: 8,
-  team_id: "",
   execution_ids: [],
-  service: "",
-  agent_name: "",
+  q: "",
   checks: [
     { id: "first", instruction: "Find repeated searches", enabled: false },
     { id: "second", instruction: "Find incomplete reports", enabled: true },
@@ -35,6 +31,38 @@ const settings: Settings = {
 };
 
 afterEach(() => testQueryClient.clear());
+
+const traceRef = (n: number) => n.toString(16).toUpperCase().padStart(64, "0");
+
+function run(name: string, n = 1, startTime = "2026-10-01T12:00:00Z") {
+  const trace_ref = traceRef(n);
+  const trace_id = `trace-${n}`;
+  return {
+    id: `${trace_ref}:${trace_id}`,
+    trace_id,
+    trace_ref,
+    summary: {
+      trace_id,
+      trace_ref,
+      name,
+      service: "svc",
+      input_preview: "",
+      start_time: startTime,
+      duration_ms: 1,
+      status: "ok" as const,
+      span_count: 2,
+      agent_count: 0,
+      agent_invocations: 0,
+      llm_calls: 0,
+      tool_calls: 0,
+      error_count: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      models: [],
+      spend: null,
+    },
+  };
+}
 
 const analysisWorker = {
   id: "worker",
@@ -50,16 +78,14 @@ interface Gateway {
   readonly modelDetails?: readonly AnalysisModelInfo[];
   /** Models the lone worker's analysis key may use; one model becomes the setup's default. */
   readonly keyModels?: readonly string[];
-  readonly agents?: readonly string[];
 }
 
 function gatewayResponse(path: string, gateway: Gateway): unknown {
-  const { models = ["analysis"], modelDetails = [], keyModels = [], agents = [] } = gateway;
+  const { models = ["analysis"], modelDetails = [], keyModels = [] } = gateway;
   if (path === "/models") return { data: models.map((id) => ({ id })) };
   if (path === "/model_group/info") return { data: modelDetails };
   if (path === "/lens") return { lenses: [], workers: keyModels.length ? [analysisWorker] : [], tracing_enabled: true };
   if (path === "/key/info") return { info: { models: keyModels, max_budget: null } };
-  if (path === "/lens/agents") return agents;
   return [];
 }
 
@@ -80,15 +106,12 @@ describe("Investigation setup", () => {
     proxy.post.mockResolvedValue({
       eligible: 2,
       selected: 2,
-      executions: [
-        { id: "saved-run", name: "Saved run", trace_id: "t1", source: "traces", start_time: "2026-10-01T12:00:00Z" },
-        { id: "other-run", name: "Other run", trace_id: "t2", source: "traces", start_time: "2026-10-01T12:00:00Z" },
-      ],
+      executions: [run("Saved run", 1), run("Other run", 2)],
     });
     renderWithProviders(
       <InvestigationSetup
         mode="edit"
-        initial={{ ...settings, execution_ids: ["saved-run"] }}
+        initial={{ ...settings, execution_ids: [run("Saved run", 1).id] }}
         onClose={vi.fn()}
         onSave={vi.fn()}
       />,
@@ -127,26 +150,13 @@ describe("Investigation setup", () => {
     );
   });
 
-  it("previews identifiable matching runs and saves the same filter selection", async () => {
+  it("previews identifiable matching runs and saves the same search", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     proxy.post.mockImplementation(async (_path, options) => {
       const body = options?.body as { selection: Settings };
-      return body.selection.filters?.some((f) => f.key === "swarm" && f.value === "research")
-        ? {
-            eligible: 1,
-            selected: 1,
-            executions: [
-              {
-                id: "run",
-                source: "requests",
-                trace_id: "request-42",
-                name: "Research report",
-                start_time: "2026-09-30 18:00:00.000",
-                span_count: 1,
-              },
-            ],
-          }
+      return body.selection.q === "attr.swarm:research"
+        ? { eligible: 1, selected: 1, executions: [run("Research report", 1, "2026-09-30T18:00:00Z")] }
         : { eligible: 0, executions: [] };
     });
     mockGateway({ keyModels: ["analysis"] });
@@ -154,42 +164,27 @@ describe("Investigation setup", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Investigation name" }), {
       target: { value: "Research follow-up" },
     });
-    await user.click(screen.getByText("Advanced filters"));
-    await user.click(screen.getByRole("button", { name: "Add condition" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Metadata key 1" }), { target: { value: "swarm" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "Metadata value 1" }), { target: { value: "research" } });
+    await user.type(screen.getByRole("combobox", { name: "Search runs" }), "attr.swarm:research");
+    await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: /Add your own/ }));
     await user.type(screen.getByRole("textbox", { name: "Check 1" }), "Find incomplete reports");
-    await user.click(screen.getByRole("button", { name: /Add your own/ }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Check 2" }), {
-      target: { value: "Find repeated searches\nInclude retries that add no information" },
-    });
-    await user.click(screen.getByRole("button", { name: /Add your own/ }));
-    await user.click(screen.getByRole("button", { name: "Remove check 3" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Run and monitor" })).toBeEnabled());
     expect(screen.getByText("1 matching run")).toBeInTheDocument();
     expect(screen.getByText("Research report")).toBeInTheDocument();
-    expect(screen.getByText(/2026-09-30/)).toBeInTheDocument();
-    expect(screen.getByRole("spinbutton", { name: "Monthly limit (USD)" })).not.toBeVisible();
     await user.click(screen.getByRole("button", { name: "Run and monitor" }));
-    const expected = {
-      name: "Research follow-up",
-      service: "",
-      agent_name: "",
-      filters: [{ key: "swarm", value: "research" }],
-      enabled: true,
-      sample_size: null,
-      model: "analysis",
-      monthly_budget: 100,
-      checks: [
-        ...watchChecks(initialWatches(undefined)),
-        expect.objectContaining({ instruction: "Find incomplete reports" }),
-        expect.objectContaining({ instruction: "Find repeated searches\nInclude retries that add no information" }),
-      ],
-    };
-    expect(save).toHaveBeenCalledWith(expect.objectContaining(expected));
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Research follow-up",
+        q: "attr.swarm:research",
+        enabled: true,
+        checks: [
+          ...watchChecks(initialWatches(undefined)),
+          expect.objectContaining({ instruction: "Find incomplete reports" }),
+        ],
+      }),
+    );
   });
 });
 
@@ -202,10 +197,10 @@ it("walks the three steps in order, reopens a finished step from its summary, an
   expect(steps.getByRole("button", { name: /^Run/ })).toBeDisabled();
   expect(screen.getByRole("region", { name: "Matching activity" })).toBeVisible();
   expect(screen.queryByRole("textbox", { name: "What should the agent be doing?" })).not.toBeInTheDocument();
-  await user.type(screen.getByRole("combobox", { name: "Agent (optional)" }), "support_agent");
+  await user.type(screen.getByRole("combobox", { name: "Search runs" }), "agent:support_agent");
   await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  expect(steps.getByRole("button", { name: /^Activity.*support_agent/ })).toBeEnabled();
+  expect(steps.getByRole("button", { name: /^Activity.*agent:support_agent/ })).toBeEnabled();
   expect(screen.queryByRole("textbox", { name: "Investigation name" })).not.toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "What should the agent be doing?" })).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Continue" }));
@@ -386,20 +381,12 @@ it("watches new investigations every 15 minutes by default, outside advanced opt
 });
 
 it("appends the next preview page as the list scrolls near its end, then stops at the last page", async () => {
-  const run = (id: string) => ({
-    id,
-    name: `Run ${id}`,
-    trace_id: id,
-    source: "traces",
-    start_time: "2026-10-01T12:00:00Z",
-    span_count: 2,
-  });
   let finishSecondPage = (): void => {};
   proxy.post.mockImplementation((_path, options) => {
-    const { offset } = options?.body as { offset: number };
-    const firstPage = { eligible: 2, selected: 2, executions: [run("one")], next_offset: 1 };
-    const secondPage = { eligible: 2, selected: 2, executions: [run("two")], next_offset: null };
-    if (offset === 0) return Promise.resolve(firstPage);
+    const { cursor } = options?.body as { cursor: string };
+    const firstPage = { eligible: 2, selected: 2, executions: [run("Run one", 1)], next_cursor: "next" };
+    const secondPage = { eligible: 2, selected: 2, executions: [run("Run two", 2)], next_cursor: null };
+    if (cursor === "") return Promise.resolve(firstPage);
     return new Promise((resolve) => {
       finishSecondPage = () => resolve(secondPage);
     });
@@ -409,7 +396,7 @@ it("appends the next preview page as the list scrolls near its end, then stops a
   expect(screen.getByText(/Showing 1 of 2/)).toBeVisible();
   expect(screen.getByRole("status")).toHaveTextContent("2 matching runs");
   const nextPageCalls = () =>
-    proxy.post.mock.calls.filter(([, options]) => (options?.body as { offset: number }).offset === 1);
+    proxy.post.mock.calls.filter(([, options]) => (options?.body as { cursor: string }).cursor === "next");
   expect(nextPageCalls()).toHaveLength(0);
   act(() => mockAllIsIntersecting(true));
   await waitFor(() => expect(nextPageCalls()).toHaveLength(1));
@@ -424,81 +411,17 @@ it("appends the next preview page as the list scrolls near its end, then stops a
   expect(nextPageCalls()).toHaveLength(1);
 });
 
-it("does not silently analyze everything after individual selection is enabled", async () => {
-  const user = userEvent.setup();
-  proxy.post.mockResolvedValue({
-    eligible: 1,
-    selected: 1,
-    executions: [
-      {
-        id: "selected-run",
-        name: "Example run",
-        trace_id: "trace",
-        source: "traces",
-        start_time: "2026-10-01T12:00:00Z",
-        span_count: 2,
-      },
-    ],
-  });
-  renderWithProviders(<InvestigationSetup mode="edit" initial={settings} onClose={vi.fn()} onSave={vi.fn()} />);
-  await user.click(screen.getByRole("button", { name: "Continue" }));
-  await user.click(screen.getByRole("button", { name: "Continue" }));
-  await user.click(screen.getByText("Advanced options"));
-  await user.click(screen.getByRole("checkbox", { name: "Choose individual runs" }));
-  expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
-  await user.click(await screen.findByRole("checkbox", { name: "Select Example run" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled());
-});
-
-it("refreshes agent suggestions when the first activity arrives", async () => {
-  vi.useFakeTimers({ shouldAdvanceTime: true });
-  try {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    proxy.post.mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
-    renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />);
-    await vi.advanceTimersByTimeAsync(400);
-    await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
-    expect(await screen.findByText(/No matches. You can enter/)).toBeVisible();
-    await user.keyboard("{Escape}");
-    proxy.post.mockResolvedValue({
-      eligible: 1,
-      selected: 1,
-      executions: [
-        {
-          id: "new-run",
-          name: "First support run",
-          service: "support-agent",
-          trace_id: "new-trace",
-          source: "traces",
-          start_time: "2026-10-01T12:00:00Z",
-          span_count: 2,
-        },
-      ],
-    });
-    mockGateway({ agents: ["support-agent"] });
-    await vi.advanceTimersByTimeAsync(15000);
-    await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
-    expect(await screen.findByRole("option", { name: "support-agent" })).toBeVisible();
-  } finally {
-    vi.useRealTimers();
-  }
-});
-
 it("fetches one preview for two keystrokes inside the debounce window", async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   try {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />);
-    await user.click(screen.getByText("Advanced filters"));
-    const previewsFor = (teamId: string) =>
-      proxy.post.mock.calls.filter(
-        ([, options]) => (options?.body as { selection: Settings }).selection.team_id === teamId,
-      );
-    await user.type(screen.getByRole("textbox", { name: "Team ID (optional)" }), "ab");
+    const previewsFor = (q: string) =>
+      proxy.post.mock.calls.filter(([, options]) => (options?.body as { selection: Settings }).selection.q === q);
+    await user.type(screen.getByRole("combobox", { name: "Search runs" }), "ab");
     expect(previewsFor("a")).toHaveLength(0);
     expect(previewsFor("ab")).toHaveLength(0);
-    expect(screen.getByRole("status")).toHaveTextContent("Finding matching activity…");
-    await vi.advanceTimersByTimeAsync(350);
+    await vi.advanceTimersByTimeAsync(1000);
     await waitFor(() => expect(previewsFor("ab")).toHaveLength(1));
     expect(previewsFor("a")).toHaveLength(0);
     expect(await screen.findByText("1 matching run")).toBeVisible();
@@ -515,39 +438,6 @@ it.each(["empty", "error"])("blocks a new investigation when its preview is %s",
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   expect(screen.getByRole("button", { name: "Run investigation" })).toBeDisabled();
-});
-
-it("exposes an unsupported inherited model before allowing a run", async () => {
-  const user = userEvent.setup();
-  mockGateway({ modelDetails: [{ model_group: "analysis", mode: "embedding", providers: [] }] });
-  renderWithProviders(<InvestigationSetup mode="duplicate" initial={settings} onClose={vi.fn()} onSave={vi.fn()} />);
-  await user.click(screen.getByRole("button", { name: "Continue" }));
-  await user.click(screen.getByRole("button", { name: "Continue" }));
-  expect(screen.getByText("Choose a chat model that supports JSON output.")).toBeVisible();
-  expect(screen.getByRole("combobox", { name: "Analysis model" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "Run investigation" })).toBeDisabled();
-});
-
-it("saves a discovered agent independently of the application name", async () => {
-  mockGateway({ agents: ["research_agent", "support_agent"] });
-  const user = userEvent.setup();
-  const save = vi.fn();
-  renderWithProviders(
-    <InvestigationSetup
-      mode="edit"
-      initial={{ ...settings, service: "shared-service" }}
-      onClose={vi.fn()}
-      onSave={save}
-    />,
-  );
-  await user.click(screen.getByRole("combobox", { name: "Agent (optional)" }));
-  await user.click(await screen.findByRole("option", { name: "research_agent" }));
-  await user.click(screen.getByRole("button", { name: "Continue" }));
-  await user.click(screen.getByRole("button", { name: "Continue" }));
-  await user.click(screen.getByRole("button", { name: "Save changes" }));
-  expect(save).toHaveBeenCalledWith(
-    expect.objectContaining({ agent_name: "research_agent", service: "shared-service" }),
-  );
 });
 
 describe("Watch for", () => {

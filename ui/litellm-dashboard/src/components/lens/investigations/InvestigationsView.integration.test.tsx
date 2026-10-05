@@ -9,7 +9,6 @@ import { InvestigationsView } from "./InvestigationsView";
 import { LensPreviewContext } from "@/components/lens/ui/LensPreviewButton";
 import { briefMarkdown } from "../model/findings";
 import { findingKey } from "../model/inbox";
-import { runTime } from "../model/format";
 import { type Lens, type Finding } from "../model/types";
 
 const withPreview = (ui: React.ReactElement, open: () => void) => (
@@ -36,7 +35,7 @@ beforeEach(() => {
   proxy.post.mockResolvedValue({ eligible: 0, selected: 0, executions: [] });
 });
 
-const executionId = btoa(JSON.stringify(["traces", "", "trace-42"]));
+const executionId = `${"A".repeat(64)}:trace-42`;
 const pattern: Finding = {
   reason: "",
   suggestion: "",
@@ -70,16 +69,12 @@ const lens: Lens = {
   scope: { all_teams: true, api_key_hash: "", team_id: "" },
   settings: {
     context: "",
-    source: "traces",
     lookback_hours: 24,
-    service: "",
-    agent_name: "",
-    filters: [],
+    q: "",
     interval_minutes: 15,
     sample_size: 100,
     sample_percent: 100,
     concurrency: 8,
-    team_id: "",
     execution_ids: [],
     monthly_budget: 20,
     name: "Release reviews",
@@ -121,16 +116,12 @@ const lens: Lens = {
       end: "2026-09-30T10:00:00Z",
       settings: {
         context: "",
-        source: "traces",
         lookback_hours: 24,
-        service: "",
-        agent_name: "",
-        filters: [],
+        q: "",
         interval_minutes: 15,
         sample_size: 100,
         sample_percent: 100,
         concurrency: 8,
-        team_id: "",
         execution_ids: [],
         monthly_budget: 20,
         enabled: false,
@@ -145,16 +136,28 @@ const lens: Lens = {
         executions: [
           {
             id: executionId,
-            trace_ref: "",
-            metadata: [],
-            root_seen: true,
-            service: "",
-            source: "traces",
+            trace_ref: "A".repeat(64),
             trace_id: "trace-42",
-            team_id: "",
-            name: "Release-42",
-            start_time: "2026-09-30 10:00:00.000",
-            span_count: 12,
+            summary: {
+              trace_id: "trace-42",
+              trace_ref: "A".repeat(64),
+              name: "Release-42",
+              service: "release",
+              input_preview: "",
+              start_time: "2026-09-30 10:00:00.000",
+              duration_ms: 1,
+              status: "ok",
+              span_count: 12,
+              agent_count: 0,
+              agent_invocations: 0,
+              llm_calls: 0,
+              tool_calls: 0,
+              error_count: 0,
+              input_tokens: 0,
+              output_tokens: 0,
+              models: [],
+              spend: null,
+            },
           },
         ],
       },
@@ -239,7 +242,7 @@ describe("Lens findings and runs", () => {
   it("shows the actual frozen run selection in the Runs tab", async () => {
     const user = userEvent.setup();
     renderWithProviders(<InvestigationsView readOnly />);
-    await user.click(await screen.findByRole("tab", { name: "Agent traces" }));
+    await user.click(await screen.findByRole("tab", { name: "Runs" }));
     expect(screen.getByText("Release-42")).toBeInTheDocument();
     expect(screen.getByTitle("trace-42")).toHaveTextContent("Release-42");
     expect(screen.getByText(/1 selected from 1 matching runs/)).toBeInTheDocument();
@@ -289,7 +292,7 @@ it("runs with saved settings from Run now without opening setup, then accepts an
         ],
       };
     if (path === "/lens/lens/runs") return lens.jobs;
-    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/activity/available") return { traces: true };
     return { data: [] };
   });
   proxy.post.mockResolvedValue(lens);
@@ -336,7 +339,7 @@ it("offers the interactive demo without starting an investigation", async () => 
   testQueryClient.clear();
   proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: false };
-    return { traces: false, requests: false };
+    return { traces: false };
   });
   const onPreview = vi.fn();
   const user = userEvent.setup();
@@ -351,7 +354,6 @@ it("guides a first-time administrator into worker connection and lens setup", as
   testQueryClient.clear();
   proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: true };
-    if (path === "/lens/agents") return [];
     return { traces: true, requests: false, data: [] };
   });
   const user = userEvent.setup();
@@ -396,81 +398,6 @@ it("guides a first-time administrator into worker connection and lens setup", as
   expect(guide.getByRole("button", { name: "New investigation" })).toBeEnabled();
 });
 
-it("opens the saved results of an older batch", async () => {
-  testQueryClient.clear();
-  const older = {
-    ...lens.jobs[0],
-    id: "older",
-    created_at: "2026-09-29T10:00:00Z",
-    finished_at: "2026-09-29T10:02:13Z",
-    findings: [{ ...issue, title: "Earlier batch finding" }],
-  };
-  proxy.get.mockImplementation(async (path) => {
-    if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
-    if (path === "/lens/lens/runs") return [lens.jobs[0], older];
-    if (path === "/lens/lens/runs/older") return older;
-    return { data: [] };
-  });
-  const user = userEvent.setup();
-  renderWithProviders(<InvestigationsView readOnly />);
-  await screen.findByRole("option", { name: `${runTime(older.created_at)} · completed` });
-  await user.selectOptions(screen.getByRole("combobox", { name: "Investigation run" }), "older");
-  const investigation = within(screen.getByRole("complementary", { name: "Investigation details" }));
-  expect(await investigation.findByText("Earlier batch finding")).toBeVisible();
-  expect(investigation.queryByText(issue.title)).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Run details" }));
-  expect(screen.getByText(/Took 2m 13s/)).toBeVisible();
-  expect(screen.getByText("Activity window")).toBeVisible();
-  await user.keyboard("{Escape}");
-  await user.click(screen.getByRole("tab", { name: "History" }));
-  expect(within(screen.getByRole("tabpanel", { name: "History" })).getByText(/Took 2m 13s/)).toBeVisible();
-});
-
-it("reads request content from the beginning after its abbreviated preview", async () => {
-  testQueryClient.clear();
-  const requestId = btoa(JSON.stringify(["requests", "", "request-1"]));
-  const job = {
-    ...lens.jobs[0],
-    sample: {
-      eligible: 1,
-      executions: [{ ...lens.jobs[0].sample!.executions[0], id: requestId, source: "requests" as const }],
-    },
-  };
-  proxy.get.mockImplementation(async (path, options) => {
-    if (path === "/lens") return { lenses: [{ ...lens, jobs: [job] }], workers: [], tracing_enabled: true };
-    if (path === "/lens/lens/runs") return [job];
-    if (!path.includes("/executions/")) return { data: [] };
-    const offset = Number(options.query.offset ?? 0);
-    return {
-      parts: [
-        {
-          span_id: "request",
-          content: offset === 0 ? "Abbreviated preview" : `Original at ${offset}`,
-          truncated: true,
-        },
-      ],
-    };
-  });
-  const user = userEvent.setup();
-  renderWithProviders(<InvestigationsView readOnly />);
-  await user.click(await screen.findByRole("tab", { name: "Agent traces" }));
-  const row = screen.getByRole("button", { name: /Release-42/ });
-  await user.click(row);
-  const panel = await screen.findByRole("complementary", { name: "Run details" });
-  expect(row).toHaveAttribute("aria-selected", "true");
-  expect(panel).toHaveTextContent("1 / 1");
-  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  expect(await screen.findByText("Abbreviated preview")).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Next section" }));
-  expect(await screen.findByText("Original at 1")).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Next section" }));
-  expect(await screen.findByText("Original at 8001")).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Previous section" }));
-  expect(await screen.findByText("Original at 1")).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Previous section" }));
-  expect(await screen.findByText("Abbreviated preview")).toBeVisible();
-});
-
 it.each([false, true])(
   "directs a new user to traces when tracing_enabled=%s and there are no traces",
   async (enabled) => {
@@ -494,7 +421,7 @@ it.each([false, true])(
 it("enables first-lens setup when a trace arrives without leaving Investigations", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
-  const traceCheck = vi.fn().mockResolvedValue({ traces: false, requests: false });
+  const traceCheck = vi.fn().mockResolvedValue({ traces: false });
   proxy.get.mockImplementation(async (path) =>
     path === "/lens" ? { lenses: [], workers: [], tracing_enabled: true } : traceCheck(),
   );
@@ -504,7 +431,7 @@ it("enables first-lens setup when a trace arrives without leaving Investigations
     await act(async () => vi.advanceTimersByTimeAsync(50));
     expect(screen.queryByText(/Your first trace is ready/)).not.toBeInTheDocument();
 
-    traceCheck.mockResolvedValue({ traces: true, requests: false });
+    traceCheck.mockResolvedValue({ traces: true });
     await act(async () => vi.advanceTimersByTimeAsync(5000));
     expect(screen.getByText(/Your first trace is ready/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Continue to worker" })).toBeEnabled();
@@ -557,41 +484,11 @@ it("shows a centered failure with a retry when investigations cannot load, then 
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
-it("keeps saved investigations accessible when tracing is disabled", async () => {
-  testQueryClient.clear();
-  proxy.get.mockImplementation(async (path) => {
-    if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: false };
-    if (path === "/lens/lens/runs") return lens.jobs;
-    return { data: [] };
-  });
-  renderWithProviders(<InvestigationsView readOnly />);
-  expect(await screen.findByRole("row", { name: issue.title })).toBeVisible();
-  expect(screen.queryByRole("region", { name: "Get Lens running" })).not.toBeInTheDocument();
-});
-
-it("allows request-only accounts to connect a worker without requiring agent traces", async () => {
-  window.history.replaceState({}, "", "/lens/");
-  testQueryClient.clear();
-  proxy.get.mockImplementation(async (path) => {
-    if (path === "/lens") return { lenses: [], workers: [], tracing_enabled: true };
-    if (path === "/lens/activity/available") return { traces: false, requests: true };
-    return { data: [] };
-  });
-  const user = userEvent.setup();
-  renderWithProviders(<InvestigationsView />);
-  expect(await screen.findByRole("button", { name: "Connect worker" })).toBeEnabled();
-  await user.click(screen.getByRole("button", { name: /Send your first trace/ }));
-  const panel = within(screen.getByRole("region", { name: /Send your first trace/ }));
-  expect(panel.getByText(/Request logs are already available/)).toBeVisible();
-  expect(panel.getByRole("button", { name: "Continue with request logs" })).toBeEnabled();
-});
-
 it("reopens the inline editor from a shared link and drops it from the URL on cancel", async () => {
   testQueryClient.clear();
   proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
     if (path === "/lens/lens/runs") return lens.jobs;
-    if (path === "/lens/agents") return [];
     return { data: [] };
   });
   const onUrlUpdate = vi.fn();
@@ -654,7 +551,7 @@ it("steps across findings and investigations with J and K, skipping hidden findi
   };
   proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
-    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/activity/available") return { traces: true };
     if (path.endsWith("/runs")) return [];
     return { data: [] };
   });
@@ -691,7 +588,7 @@ it("opens an investigation beside the list and walks from it into its findings w
   testQueryClient.clear();
   proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], tracing_enabled: true, workers: [] };
-    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/activity/available") return { traces: true };
     if (path.endsWith("/runs")) return [];
     return { data: [] };
   });
@@ -724,7 +621,7 @@ it("lists each finding under the investigation that owns it and resolves only th
   const twin: Lens = { ...lens, id: "twin", settings: { ...lens.settings, name: "Twin reviews" } };
   proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
-    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/activity/available") return { traces: true };
     if (path.endsWith("/runs")) return [];
     return { data: [] };
   });
@@ -747,9 +644,8 @@ it("lists investigations without edit or run controls for read-only viewers", as
   testQueryClient.clear();
   proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], tracing_enabled: true, workers: [] };
-    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/activity/available") return { traces: true };
     if (path === "/lens/lens/runs") return [];
-    if (path === "/lens/agents") return [];
     return { data: [] };
   });
   const user = userEvent.setup();
@@ -766,9 +662,8 @@ it("opens investigations from the keyboard without treating nested edit keys as 
   testQueryClient.clear();
   proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens], tracing_enabled: true, workers: [] };
-    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/activity/available") return { traces: true };
     if (path === "/lens/lens/runs") return [];
-    if (path === "/lens/agents") return [];
     return { data: [] };
   });
   const user = userEvent.setup();
@@ -805,10 +700,9 @@ it("opens a failed investigation's details from its row and edits only from the 
   };
   proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [{ ...lens, jobs: [job] }], workers: [], tracing_enabled: true };
-    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/activity/available") return { traces: true };
     if (path === "/lens/lens/runs") return [job];
     if (path === "/lens/lens/runs/failed-run") return job;
-    if (path === "/lens/agents") return [];
     return { data: [] };
   });
   const user = userEvent.setup();
@@ -848,7 +742,7 @@ it("keeps a finding open to retry when its update fails", async () => {
   const twin: Lens = { ...lens, id: "twin", settings: { ...lens.settings, name: "Twin reviews" } };
   proxy.get.mockImplementation(async (path) => {
     if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
-    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/activity/available") return { traces: true };
     if (path.endsWith("/runs")) return [];
     return { data: [] };
   });

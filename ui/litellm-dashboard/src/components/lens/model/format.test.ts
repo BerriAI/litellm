@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { agoLabel, durationLabel, durationText, money, scopeLabel, when } from "./format";
 
 describe("Lens labels", () => {
-  it("formats an empty scope and joins recorded scope constraints in their original order", () => {
+  it("labels a scope by its search, or all activity when there is none", () => {
     expect(scopeLabel({})).toBe("All activity");
-    const settings = { agent_name: "research", service: "shared", filters: [{ key: "team", value: "quality" }] };
-    expect(scopeLabel(settings)).toBe("research · shared · team: quality");
+    expect(scopeLabel({ q: "  " })).toBe("All activity");
+    expect(scopeLabel({ q: " agent:research status:error " })).toBe("agent:research status:error");
   });
 
   it("formats elapsed time and treats a non-finite duration as zero", () => {

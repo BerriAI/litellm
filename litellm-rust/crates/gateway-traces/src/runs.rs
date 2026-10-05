@@ -10,6 +10,7 @@ use axum::{
 use litellm_traces::{
     QueryScope, TracePage,
     search::{RunField, RunFilter, RunSearch, RunValues, TraceHistogram},
+    store::RunOrder,
 };
 use litellm_traces_cache::{PageRequest, TraceStore};
 use serde::Deserialize;
@@ -34,6 +35,7 @@ impl Runs {
             start_ms: self.start_ms.unwrap_or(now_ms - DAY_MS),
             end_ms: self.end_ms.unwrap_or(now_ms),
             search: RunSearch::parse(&self.q),
+            trace_refs: Vec::new(),
         }
     }
 }
@@ -52,11 +54,18 @@ pub(crate) async fn list<S: TraceStore>(
     let page = PageRequest {
         cursor,
         limit: PAGE_SIZE,
+        ..PageRequest::default()
     };
     Ok(Json(
         traces
             .reader
-            .list_traces(&traces.store, &access, &runs.filter(), &page)
+            .list_traces(
+                &traces.store,
+                &access,
+                &runs.filter(),
+                RunOrder::NEWEST,
+                &page,
+            )
             .await?,
     ))
 }

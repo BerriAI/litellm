@@ -498,7 +498,7 @@ async def investigate_stored(
                 "workflow_outlines": tuple(
                     {
                         "execution_id": item.execution.id,
-                        "recorded_span_count": item.execution.span_count,
+                        "recorded_span_count": item.execution.summary["span_count"] if item.execution.summary else None,
                         "partial": item.partial,
                         "cannot_assess": item.cannot_assess,
                         "available_unique_spans": len(frozenset(p.span_id for p in item.parts)),

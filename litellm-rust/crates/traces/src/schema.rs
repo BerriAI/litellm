@@ -49,11 +49,13 @@ pub fn schemas() -> BTreeMap<&'static str, Schema> {
         ("QueryScope", received::<crate::QueryScope>()),
         ("Tenant", received::<crate::Tenant>()),
         ("TracePage", emitted::<crate::TracePage>()),
+        ("SpanText", emitted::<crate::store::SpanText>()),
         ("Trace", emitted::<crate::Trace>()),
         ("SpanDetail", emitted::<crate::SpanDetail>()),
         ("SpanErrorPage", emitted::<crate::SpanErrorPage>()),
         ("TraceHistogram", emitted::<crate::search::TraceHistogram>()),
         ("RunValues", emitted::<crate::search::RunValues>()),
         ("RunField", received::<crate::search::RunField>()),
+        ("RunOrder", received::<crate::store::RunOrder>()),
     ])
 }

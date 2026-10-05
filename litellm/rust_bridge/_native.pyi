@@ -11,7 +11,7 @@ from litellm.rust_bridge.embeddings.entrypoints import LiteLLMEmbeddingRequest
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
-from litellm.rust_bridge.trace.generated.types import QueryScope, ReadQueryName
+from litellm.rust_bridge.trace.generated.types import QueryScope
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import EmbeddingResponse, ModelResponse
@@ -43,7 +43,30 @@ class NativeTraceStorage:
     def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Future[None]: ...
     def ingest(self, payload: bytes, content_type: str | None, tenant: Mapping[str, str]) -> Future[int]: ...
     def list_traces(
-        self, scope: QueryScope, start_ms: int, end_ms: int, q: str, cursor: str | None, limit: int
+        self,
+        scope: QueryScope,
+        start_ms: int,
+        end_ms: int,
+        q: str,
+        cursor: str | None,
+        limit: int,
+        order: str = "newest",
+        trace_refs: Sequence[str] = (),
+    ) -> Future[JsonValue]: ...
+    def count_traces(
+        self, scope: QueryScope, start_ms: int, end_ms: int, q: str, trace_refs: Sequence[str] = ()
+    ) -> Future[JsonValue]: ...
+    def span_text(
+        self,
+        trace_id: str,
+        trace_ref: str,
+        span_ids: Sequence[str],
+        part: str,
+        scope: QueryScope,
+        offset: int = 0,
+        max_chars: int | None = None,
+        tail: bool = False,
+        contains: str | None = None,
     ) -> Future[JsonValue]: ...
     def trace_histogram(
         self, scope: QueryScope, start_ms: int, end_ms: int, q: str, buckets: int
@@ -60,7 +83,6 @@ class NativeTraceStorage:
     ) -> Future[JsonValue]: ...
     def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Future[str]: ...
     def query_help(self, scope: QueryScope, secret: str) -> Future[JsonValue]: ...
-    def query(self, query: ReadQueryName, parameters: Mapping[str, str | int | float | Sequence[str]]) -> Future[str]: ...
 
 @final
 class NativeDiagnosticProcessor:
@@ -403,27 +425,42 @@ class _SecretManagerRuntime:
     def read_secret(self, name: str, settings: Mapping[str, object] | None = None) -> JsonValue: ...
     def read_secret_async(self, name: str, settings: Mapping[str, object] | None = None) -> Future[JsonValue]: ...
     def async_write_secret(
-        self, secret_name: str, secret_value: str, description: str | None = None,
+        self,
+        secret_name: str,
+        secret_value: str,
+        description: str | None = None,
         optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None, tags: object = None,
+        timeout: float | httpx.Timeout | None = None,
+        tags: object = None,
     ) -> Future[dict[str, JsonValue]]: ...
     def async_delete_secret(
-        self, secret_name: str, recovery_window_in_days: int | None = None,
+        self,
+        secret_name: str,
+        recovery_window_in_days: int | None = None,
         optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> Future[dict[str, JsonValue]]: ...
     def async_rotate_secret(
-        self, current_secret_name: str, new_secret_name: str, new_secret_value: str,
+        self,
+        current_secret_name: str,
+        new_secret_name: str,
+        new_secret_value: str,
         optional_params: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> Future[dict[str, JsonValue]]: ...
     def sync_read_secret(
-        self, secret_name: str, optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None, primary_secret_name: str | None = None,
+        self,
+        secret_name: str,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        primary_secret_name: str | None = None,
     ) -> JsonValue: ...
     def async_read_secret(
-        self, secret_name: str, optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None, primary_secret_name: str | None = None,
+        self,
+        secret_name: str,
+        optional_params: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        primary_secret_name: str | None = None,
     ) -> Future[JsonValue]: ...
 
 @final
@@ -431,11 +468,18 @@ class NativeCacheHandle:
     def __new__(cls, _uninstantiable: Never, /) -> Never: ...
     @staticmethod
     def memory(
-        *, ttl: float = 600.0, capacity: int = 200, max_entry_bytes: int = 4194304,
+        *,
+        ttl: float = 600.0,
+        capacity: int = 200,
+        max_entry_bytes: int = 4194304,
     ) -> NativeCacheHandle: ...
     @staticmethod
     def redis(
-        url: str, *, namespace: str, ttl: float = 600.0, max_entry_bytes: int = 4194304,
+        url: str,
+        *,
+        namespace: str,
+        ttl: float = 600.0,
+        max_entry_bytes: int = 4194304,
     ) -> NativeCacheHandle: ...
     def get(self, key: str) -> object: ...
     def set(self, key: str, value: object, *, ttl: float | None = None) -> None: ...

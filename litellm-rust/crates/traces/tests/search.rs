@@ -1,12 +1,12 @@
 use litellm_traces::{
-    search::{AgentRuns, FieldFilter, RunField, RunSearch, histogram},
+    search::{AgentRuns, FieldFilter, RunField, RunSearch, SearchKey, histogram},
     store::RunCount,
 };
 use rstest::rstest;
 
 fn filter(field: RunField, pattern: &str, exclude: bool) -> FieldFilter {
     FieldFilter {
-        field,
+        key: SearchKey::Field(field),
         pattern: pattern.into(),
         exclude,
     }
@@ -29,6 +29,10 @@ fn filter(field: RunField, pattern: &str, exclude: bool) -> FieldFilter {
 #[case::unknown_key_is_text("color:red", &["color:red"], vec![])]
 #[case::non_word_key_is_text("k1:v", &["k1:v"], vec![])]
 #[case::negated_text_stays_text("-foo", &["-foo"], vec![])]
+#[case::service("service:billing", &[], vec![filter(RunField::Service, "billing", false)])]
+#[case::team("-team:acme", &[], vec![filter(RunField::Team, "acme", true)])]
+#[case::attribute("attr.gen_ai.system:openai", &[], vec![FieldFilter { key: SearchKey::Attribute("gen_ai.system".into()), pattern: "openai".into(), exclude: false }])]
+#[case::attribute_without_a_key_is_text("attr.:x", &["attr.:x"], vec![])]
 fn parse_matches_the_dashboard_search_grammar(
     #[case] q: &str,
     #[case] text: &[&str],

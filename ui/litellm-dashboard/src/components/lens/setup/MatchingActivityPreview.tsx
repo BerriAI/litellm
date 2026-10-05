@@ -1,29 +1,20 @@
 "use client";
 
-import { useEffect, useState, type ComponentProps } from "react";
-import { ChevronRight, RotateCw } from "lucide-react";
-import { useInView } from "react-intersection-observer";
+import { type ComponentProps } from "react";
+import { RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 
-import { runTime } from "../model/format";
-import type { Execution, MatchingPreview } from "./useMatchingActivity";
+import { AgentTracesTable, type RunPicks } from "../traces/list/AgentTracesTable";
+import type { TraceSummary } from "../traces/types";
+import type { MatchingPreview, PreviewSelection } from "./useMatchingActivity";
 
-const PREFETCH_MARGIN = "0px 0px 240px 0px";
+const executionOf = (run: TraceSummary) => `${run.trace_ref}:${run.trace_id}`;
 
-type RunRowProps = ComponentProps<"div"> & { run: Execution };
-
-function RunRow({ run, className, ...props }: RunRowProps) {
-  const steps = `${run.span_count} ${run.span_count === 1 ? "step" : "steps"}`;
-  return (
-    <div data-slot="run-row" className={cn("min-w-0 py-3", className)} {...props}>
-      <p className="text-sm font-medium">{run.name}</p>
-      <p className="mt-1 text-xs text-muted-foreground">
-        {runTime(run.start_time)} · {run.source === "traces" ? steps : "LLM request"}
-      </p>
-    </div>
-  );
-}
+const runPicks = (selection: PreviewSelection): RunPicks => ({
+  isPicked: (run) => selection.ids.includes(executionOf(run)),
+  toggle: (run, picked) => selection.toggle(executionOf(run), picked),
+});
 
 type PreviewFooterProps = ComponentProps<"div"> & Pick<MatchingPreview, "page" | "selection">;
 
@@ -58,31 +49,22 @@ function PreviewFooter({ page, selection, className, ...props }: PreviewFooterPr
   );
 }
 
-export type MatchingActivityPreviewProps = ComponentProps<"section"> &
-  MatchingPreview & {
-    onOpen: (run: Execution) => void;
-  };
+export type MatchingActivityPreviewProps = ComponentProps<"section"> & MatchingPreview;
 
+/** The runs the draft selection matches, in the same table as the Traces tab. */
 export function MatchingActivityPreview({
   status,
   page,
   selection,
-  onOpen,
   className,
   ...props
 }: MatchingActivityPreviewProps) {
-  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
-  const { ref: tailRef, inView: nearTail } = useInView({ root: scroller, rootMargin: PREFETCH_MARGIN });
-  const { loadMore, loadingMore } = page;
-  const canContinue = status.ready && page.hasMore && page.executions.length > 0;
-  useEffect(() => {
-    if (nearTail && canContinue && !loadingMore) loadMore();
-  }, [nearTail, canContinue, loadingMore, loadMore]);
+  const runs = page.executions.flatMap((run) => (run.summary ? [run.summary] : []));
   return (
     <section
       aria-label="Matching activity"
       data-slot="matching-activity-preview"
-      className={cn("self-start rounded-lg border", className)}
+      className={cn("self-start overflow-hidden rounded-lg border", className)}
       {...props}
     >
       <div className="border-b px-4 py-3">
@@ -102,46 +84,33 @@ export function MatchingActivityPreview({
         </div>
         <p className="mt-1 text-xs text-muted-foreground">{status.windowLabel} · No analysis cost</p>
       </div>
-      <div ref={setScroller} aria-busy={loadingMore} className="max-h-[60dvh] overflow-y-auto px-4">
-        {status.ready && status.error && (
-          <p role="alert" className="py-3 text-sm text-destructive">
-            {status.error.message}{" "}
-            <Button variant="link" onClick={status.refresh}>
-              Retry preview
-            </Button>
-          </p>
-        )}
-        {status.ready && page.eligible === 0 && (
-          <p className="py-4 text-sm text-muted-foreground">
-            No matches. Try removing a condition or check that your agent records this metadata. Recent trace updates
-            need two minutes to settle.
-          </p>
-        )}
-        {status.ready &&
-          page.executions.map((run) => (
-            <div key={run.id} className="flex items-center justify-between gap-3 border-b last:border-0">
-              {selection && (
-                <input
-                  type="checkbox"
-                  aria-label={`Select ${run.name}`}
-                  checked={selection.ids.includes(run.id)}
-                  onChange={(e) => selection.toggle(run.id, e.target.checked)}
-                />
-              )}
-              <RunRow run={run} />
-              {run.source === "traces" && (
-                <Button variant="ghost" size="icon-sm" aria-label={`Open ${run.name}`} onClick={() => onOpen(run)}>
-                  <ChevronRight className="size-4" />
-                </Button>
-              )}
-            </div>
-          ))}
-        {canContinue && (
-          <p ref={tailRef} data-testid="preview-placeholder" className="py-3 text-xs text-muted-foreground">
-            Loading more…
-          </p>
-        )}
-      </div>
+      {status.ready && status.error && (
+        <p role="alert" className="px-4 py-3 text-sm text-destructive">
+          {status.error.message}{" "}
+          <Button variant="link" onClick={status.refresh}>
+            Retry preview
+          </Button>
+        </p>
+      )}
+      {status.ready && page.eligible === 0 && (
+        <p className="px-4 py-4 text-sm text-muted-foreground">
+          No matches. Try removing a filter from the search. Recent trace updates need two minutes to settle.
+        </p>
+      )}
+      {status.ready && runs.length > 0 && (
+        <div className="max-h-[60dvh] min-h-0 overflow-auto">
+          <AgentTracesTable
+            traces={runs}
+            isLoading={false}
+            error={null}
+            hasMore={page.hasMore}
+            isFetching={page.loadingMore}
+            onLoadMore={page.loadMore}
+            onSetUpTracing={() => {}}
+            picks={selection ? runPicks(selection) : undefined}
+          />
+        </div>
+      )}
       {status.ready && <PreviewFooter page={page} selection={selection} />}
     </section>
   );

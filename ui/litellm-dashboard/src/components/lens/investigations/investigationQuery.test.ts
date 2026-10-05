@@ -12,16 +12,12 @@ function makeLens(id: string, settings: Partial<Lens["settings"]>, jobs: readonl
     scope: { all_teams: true, api_key_hash: "", team_id: "" },
     settings: {
       context: "",
-      source: "traces",
       lookback_hours: 24,
-      service: "",
-      agent_name: "",
-      filters: [],
+      q: "",
       interval_minutes: 15,
       sample_size: 100,
       sample_percent: 100,
       concurrency: 8,
-      team_id: "",
       execution_ids: [],
       monthly_budget: 20,
       name: id,
@@ -40,9 +36,9 @@ function makeLens(id: string, settings: Partial<Lens["settings"]>, jobs: readonl
 }
 
 const lenses = [
-  makeLens("Refund audit", { agent_name: "billing-agent" }, [{ status: "failed" }, { status: "completed" }]),
-  makeLens("Release reviews", { service: "reviewer", enabled: false }, [{ status: "completed" }]),
-  makeLens("Lead scoring", { filters: [{ key: "team", value: "sales" }] }),
+  makeLens("Refund audit", { q: "agent:billing-agent" }, [{ status: "failed" }, { status: "completed" }]),
+  makeLens("Release reviews", { q: 'agent:"reviewer bot"', enabled: false }, [{ status: "completed" }]),
+  makeLens("Lead scoring", { q: "attr.team:sales" }),
 ];
 
 const names = (query: string) => filterInvestigations(lenses, query).map((lens) => lens.settings.name);
@@ -52,6 +48,8 @@ describe("filterInvestigations", () => {
     expect(names("REFUND")).toEqual(["Refund audit"]);
     expect(names("sales")).toEqual(["Lead scoring"]);
     expect(names("reviewer")).toEqual(["Release reviews"]);
+    expect(names("agent:billing*")).toEqual(["Refund audit"]);
+    expect(names('agent:"reviewer bot"')).toEqual(["Release reviews"]);
   });
 
   it("filters by the latest run's status, treating no runs as never", () => {
@@ -60,17 +58,18 @@ describe("filterInvestigations", () => {
     expect(names("status:never")).toEqual(["Lead scoring"]);
   });
 
-  it("filters by schedule and by agent, falling back to the service", () => {
+  it("filters by schedule and by the agent the search names", () => {
     expect(names("schedule:paused")).toEqual(["Release reviews"]);
     expect(names("-schedule:paused")).toEqual(["Refund audit", "Lead scoring"]);
     expect(names("agent:billing-agent")).toEqual(["Refund audit"]);
-    expect(names("agent:reviewer")).toEqual(["Release reviews"]);
+    expect(names('agent:"reviewer bot"')).toEqual(["Release reviews"]);
+    expect(names("agent:reviewer")).toEqual([]);
   });
 });
 
 describe("INVESTIGATION_INDEX values", () => {
   it("offers only the agents and statuses present", () => {
-    expect(fieldValues(INVESTIGATION_INDEX, lenses, "agent")).toEqual(["billing-agent", "reviewer"]);
+    expect(fieldValues(INVESTIGATION_INDEX, lenses, "agent")).toEqual(["billing-agent", "reviewer bot"]);
     expect(fieldValues(INVESTIGATION_INDEX, lenses, "status")).toEqual(["completed", "failed", "never"]);
   });
 });

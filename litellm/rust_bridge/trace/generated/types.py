@@ -23,7 +23,15 @@ class OwnedQueryScope(typing_extensions.TypedDict):
 QueryScope: TypeAlias = AllQueryScope | OwnedQueryScope
 
 
-RunField: TypeAlias = Literal["name", "agent", "status", "model", "input", "trace_id"]
+RunField: TypeAlias = Literal["name", "agent", "status", "model", "input", "trace_id", "service", "team"]
+
+
+RunSortKey: TypeAlias = Literal["start_ms", "duration_ms", "span_count", "error_count", "trace_ref"]
+
+
+class RunOrder(typing_extensions.TypedDict):
+    key: ReadOnly[RunSortKey]
+    descending: ReadOnly[bool]
 
 
 class RunValues(typing_extensions.TypedDict):
@@ -53,6 +61,14 @@ class SpanErrorPage(typing_extensions.TypedDict):
     message: ReadOnly[str]
     total_chars: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
     next_cursor: ReadOnly[str | None]
+
+
+class SpanText(typing_extensions.TypedDict):
+    span_id: ReadOnly[str]
+    text: ReadOnly[str]
+    total_chars: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    version: ReadOnly[str]
+    contains: ReadOnly[bool]
 
 
 SpanStatus: TypeAlias = Literal["ok", "error", "unset"]
@@ -87,9 +103,6 @@ SpanType: TypeAlias = Literal[
 class AgentRuns(typing_extensions.TypedDict):
     agent: ReadOnly[str]
     runs: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
-
-
-ReadQueryName: TypeAlias = Literal["availability", "agents", "sample", "content", "evidence"]
 
 
 class UIFields(typing_extensions.TypedDict):
@@ -190,5 +203,14 @@ class SpanDetail(typing_extensions.TypedDict):
 
 
 TraceWireTypes: TypeAlias = (
-    QueryScope | RunField | RunValues | SpanDetail | SpanErrorPage | Trace | TraceHistogram | TracePage | ReadQueryName
+    QueryScope
+    | RunField
+    | RunOrder
+    | RunValues
+    | SpanDetail
+    | SpanErrorPage
+    | SpanText
+    | Trace
+    | TraceHistogram
+    | TracePage
 )

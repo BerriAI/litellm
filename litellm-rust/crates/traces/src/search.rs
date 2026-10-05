@@ -24,6 +24,28 @@ pub enum RunField {
     Model,
     Input,
     TraceId,
+    Service,
+    Team,
+}
+
+/// What a `key:value` filter matches: a run field, or `attr.<key>`, a span or resource
+/// attribute that any span of the run carries.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SearchKey {
+    Field(RunField),
+    Attribute(String),
+}
+
+const ATTRIBUTE_PREFIX: &str = "attr.";
+
+impl SearchKey {
+    pub fn parse(key: &str) -> Option<Self> {
+        if let Some(attribute) = key.strip_prefix(ATTRIBUTE_PREFIX) {
+            return (!attribute.is_empty()).then(|| Self::Attribute(attribute.to_owned()));
+        }
+        let named = !key.is_empty() && key.chars().all(|c| c.is_ascii_alphabetic() || c == '_');
+        named.then(|| key.parse().ok().map(Self::Field)).flatten()
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -31,11 +53,13 @@ pub struct RunFilter {
     pub start_ms: i64,
     pub end_ms: i64,
     pub search: RunSearch,
+    /// When not empty, only these runs can match.
+    pub trace_refs: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FieldFilter {
-    pub field: RunField,
+    pub key: SearchKey,
     /// Matched against the whole value, ignoring case; `*` matches any run of characters.
     pub pattern: String,
     pub exclude: bool,
@@ -67,11 +91,11 @@ impl RunSearch {
                 .into_iter()
                 .filter_map(|clause| match clause {
                     Clause::Field {
-                        field,
+                        key,
                         exclude,
                         value,
                     } => Some(FieldFilter {
-                        field,
+                        key,
                         pattern: value,
                         exclude,
                     }),
@@ -85,7 +109,7 @@ impl RunSearch {
 enum Clause {
     Text(String),
     Field {
-        field: RunField,
+        key: SearchKey,
         exclude: bool,
         value: String,
     },
@@ -135,16 +159,12 @@ fn clause(raw: &str) -> Clause {
     let (exclude, body) = raw
         .strip_prefix('-')
         .map_or((false, raw), |body| (true, body));
-    let field = body.split_once(':').and_then(|(key, value)| {
-        let named = !key.is_empty() && key.chars().all(|c| c.is_ascii_alphabetic() || c == '_');
-        named
-            .then(|| key.parse::<RunField>().ok())
-            .flatten()
-            .map(|field| (field, value))
-    });
+    let field = body
+        .split_once(':')
+        .and_then(|(key, value)| SearchKey::parse(key).map(|key| (key, value)));
     match field {
-        Some((field, value)) => Clause::Field {
-            field,
+        Some((key, value)) => Clause::Field {
+            key,
             exclude,
             value: unquote(value),
         },

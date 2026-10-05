@@ -84,10 +84,10 @@ export function FindingDetails({
             {evidenceGroups.map((group) => (
               <details key={group.id} className="rounded-lg border p-3">
                 <summary className="cursor-pointer text-sm font-medium">
-                  {group.run?.name ?? evidenceTarget(group.id)?.id.slice(0, 12) ?? "Recorded run"}
+                  {group.run?.summary?.name ?? evidenceTarget(group.id)?.id.slice(0, 12) ?? "Recorded run"}
                   <span className="ml-2 text-xs font-normal text-muted-foreground">
                     {group.quotes.length} {group.quotes.length === 1 ? "quote" : "quotes"}
-                    {group.run ? ` · ${runTime(group.run.start_time)}` : ""}
+                    {group.run?.summary ? ` · ${runTime(group.run.summary.start_time)}` : ""}
                   </span>
                 </summary>
                 <div className="mt-3 space-y-3">
@@ -103,7 +103,7 @@ export function FindingDetails({
                         className="mt-2"
                         onClick={() => onOpenEvidence({ id: e.execution_id, span: e.span_id })}
                       >
-                        {evidenceTarget(e.execution_id)?.source === "traces" ? "Open original step" : "Open request"}
+                        Open original step
                         <ArrowUpRight className="size-3" />
                       </Button>
                     </div>
@@ -178,14 +178,7 @@ export function FindingPanelBody({
           onReview={(status, reason) => onReview(owned, status, reason)}
         />
       </div>
-      {evidence && (
-        <EvidenceView
-          lensId={owned.lens.id}
-          evidence={evidence}
-          backLabel="Back to finding"
-          onBack={() => setEvidence(null)}
-        />
-      )}
+      {evidence && <EvidenceView evidence={evidence} backLabel="Back to finding" onBack={() => setEvidence(null)} />}
     </>
   );
 }

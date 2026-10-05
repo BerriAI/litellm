@@ -3,7 +3,8 @@ import type { Lens, Finding, Job, Settings } from "../../model/types";
 import { withReleaseCases } from "./lensDemoLongTrace";
 import { scenarios, type Scenario } from "./scenarios";
 
-const executionId = (traceId: string) => btoa(JSON.stringify(["traces", "", traceId]));
+const demoRef = (traceId: string) => traceId.padStart(64, "0").toUpperCase();
+const executionId = (traceId: string) => `${demoRef(traceId)}:${traceId}`;
 const iso = (time: number) => new Date(time).toISOString();
 
 function makeTrace(scene: Scenario, index: number, now: number) {
@@ -231,13 +232,9 @@ export function createLensDemoData(now = Date.now()) {
   const lenses: Lens[] = definitions.map((definition) => {
     const settings: Settings = {
       name: definition.name,
-      agent_name: definition.agent,
+      q: `agent:${definition.agent}`,
       context: definition.context,
       checks: [{ id: definition.check, instruction: definition.instruction, enabled: true }],
-      source: "traces",
-      service: "",
-      filters: [],
-      team_id: "",
       execution_ids: [],
       lookback_hours: 24,
       sample_size: 0,
@@ -252,16 +249,9 @@ export function createLensDemoData(now = Date.now()) {
       .filter(({ trace }) => trace.summary.name === definition.agent)
       .map(({ trace }) => ({
         id: executionId(trace.summary.trace_id),
-        trace_ref: "",
-        metadata: [],
-        root_seen: true,
-        service: trace.summary.service,
-        source: "traces" as const,
         trace_id: trace.summary.trace_id,
-        team_id: "",
-        name: trace.summary.name,
-        start_time: trace.summary.start_time,
-        span_count: trace.summary.span_count,
+        trace_ref: demoRef(trace.summary.trace_id),
+        summary: { ...trace.summary, trace_ref: demoRef(trace.summary.trace_id) },
       }));
     const relevant = findings.filter((f) => f.check_id === definition.check);
     const jobs: Job[] = [0, 1].map((day) => {

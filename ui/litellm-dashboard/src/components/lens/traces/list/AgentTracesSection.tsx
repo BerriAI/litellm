@@ -1,7 +1,8 @@
 "use client";
 
+import { ArrowLeft } from "lucide-react";
 import moment from "moment";
-import { useMemo, useState } from "react";
+import { type ComponentProps, useMemo, useState } from "react";
 
 import { RunsToolbar } from "./runSearch/RunsToolbar";
 import { Inspector } from "@/components/shared/Inspector";
@@ -15,6 +16,7 @@ import {
   useOpenTraceRouting,
   useRunFilterRouting,
   useRunOrderRouting,
+  useTracingSetupRoute,
 } from "../routing";
 import type { TraceSummary } from "../types";
 import { RunView } from "../detail/run/RunView";
@@ -82,8 +84,8 @@ export function AgentTracesSection({
   const live = useTracesLive();
   const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
   const { query, setQuery } = useRunFilterRouting();
+  const [connecting, setConnecting] = useTracingSetupRoute();
   const [order, setOrder] = useRunOrderRouting();
-  const [showSetup, setShowSetup] = useState(false);
   const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
   const traceQuery = { accessToken, range, enabled: isActive, q: query, zoom, order };
@@ -112,7 +114,7 @@ export function AgentTracesSection({
   };
 
   const openSentTrace = (trace: TraceSummary) => {
-    setShowSetup(false);
+    setConnecting(false);
     setRangeChanged(true);
     checkTraces();
     openRun(traceRefOf(trace));
@@ -126,24 +128,10 @@ export function AgentTracesSection({
     checking: traces.isFetching,
   };
 
-  if (setup.disabledDetail != null) return <TracingSetupCard detail={setup.disabledDetail} {...setupProps} />;
+  if (setup.disabledDetail != null) return <SetupPage detail={setup.disabledDetail} {...setupProps} />;
   // Onboarding only on the first, default view; an empty range the user picked keeps its controls.
-  if (checkHistory && !history.error && history.data === false)
-    return <TracingSetupCard detail={null} {...setupProps} />;
-  if (showSetup) {
-    return (
-      <div>
-        <button
-          type="button"
-          onClick={() => setShowSetup(false)}
-          className="mb-3 text-sm text-muted-foreground hover:text-foreground"
-        >
-          ← Back to traces
-        </button>
-        <TracingSetupCard detail={null} connected {...setupProps} />
-      </div>
-    );
-  }
+  if (checkHistory && !history.error && history.data === false) return <SetupPage detail={null} {...setupProps} />;
+  if (connecting) return <SetupPage detail={null} connected onBack={() => setConnecting(false)} {...setupProps} />;
 
   return (
     <Inspector.Root
@@ -209,7 +197,7 @@ export function AgentTracesSection({
           onRetry={traces.hasMore ? traces.loadMore : traces.refetch}
           onLoadMore={traces.loadMore}
           rangeEmpty={traces.traces.length === 0}
-          onSetUpTracing={() => setShowSetup(true)}
+          onSetUpTracing={() => setConnecting(true)}
         />
       </div>
     </Inspector.Root>
@@ -222,5 +210,22 @@ function TracesReceived({ received }: { received: boolean }) {
     <p role="status" className="border-b px-3 py-3 text-sm text-emerald-700 dark:text-emerald-400">
       Traces received. Select a run to inspect it.
     </p>
+  );
+}
+
+function SetupPage({ onBack, ...props }: ComponentProps<typeof TracingSetupCard> & { onBack?: () => void }) {
+  return (
+    <div className="p-6">
+      {onBack && (
+        <button
+          type="button"
+          onClick={onBack}
+          className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft aria-hidden="true" className="size-3.5" /> Back to traces
+        </button>
+      )}
+      <TracingSetupCard {...props} />
+    </div>
   );
 }

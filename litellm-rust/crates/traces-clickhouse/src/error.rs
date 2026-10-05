@@ -8,8 +8,6 @@ pub enum Error {
     InvalidTable,
     #[error("database must be a nonempty SQL identifier and retention must be positive")]
     InvalidSchema,
-    #[error("unknown ClickHouse read query")]
-    InvalidQuery,
     #[error("invalid ClickHouse query parameters")]
     InvalidParameters,
     #[error("ClickHouse returned an invalid or failed JSON query response")]

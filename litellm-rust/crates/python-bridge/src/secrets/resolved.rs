@@ -4,9 +4,9 @@ use futures_util::future::BoxFuture;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::PythonContext;
 use litellm_http::Client;
-use litellm_secrets::source::SecretSource;
 use litellm_secrets::{
     Error, FailurePolicy, OidcResolver, SecretManagerState, SecretResolver, SecretValue,
+    source::SecretSource,
 };
 
 use super::config::SecretManagerSnapshot;
@@ -49,11 +49,13 @@ impl SecretSource for ResolvedSecrets {
 mod tests {
     use std::sync::Arc;
 
-    use aws_sdk_secretsmanager::Client;
-    use aws_sdk_secretsmanager::config::{
-        BehaviorVersion, Credentials, Region, retry::RetryConfig,
+    use aws_sdk_secretsmanager::{
+        Client,
+        config::{BehaviorVersion, Credentials, Region, retry::RetryConfig},
     };
-    use litellm_secrets::{AccessMode, KeyManagementSettings, SecretManager, SecretManagerState};
+    use litellm_secrets::{
+        AccessMode, KeyManagementSettings, SecretManager, SecretManagerState, source::SecretSource,
+    };
     use litellm_secrets_aws::AwsSecretsManagerV2;
     use serde_json::json;
     use wiremock::{
@@ -62,7 +64,6 @@ mod tests {
     };
 
     use super::ResolvedSecrets;
-    use litellm_secrets::source::SecretSource;
 
     fn state(server: &MockServer, settings: KeyManagementSettings) -> Arc<SecretManagerState> {
         let client = Client::from_conf(

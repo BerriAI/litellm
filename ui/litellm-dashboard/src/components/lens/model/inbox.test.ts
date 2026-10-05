@@ -35,25 +35,42 @@ const lens = (
   id: string,
   agent: string,
   findings: Finding[],
-  { settings = {}, runs = [] }: { settings?: Partial<Lens["settings"]>; runs?: { id: string; service: string }[] } = {},
+  {
+    settings = {},
+    runs = [],
+  }: { settings?: Partial<Lens["settings"]>; runs?: { id: string; agents?: string[]; service: string }[] } = {},
 ): Lens =>
   ({
     id,
     findings,
-    jobs: [{ sample: { executions: runs } }],
+    jobs: [
+      {
+        sample: {
+          executions: runs.map((run) => ({
+            id: run.id,
+            summary: { agent_names: run.agents ?? [], service: run.service },
+          })),
+        },
+      },
+    ],
     next_run_at: "2026-10-03T12:10:00Z",
-    settings: { name: id, agent_name: agent, service: "", enabled: true, interval_minutes: 15, ...settings },
+    settings: { name: id, q: agent ? `agent:${agent}` : "", enabled: true, interval_minutes: 15, ...settings },
   }) as unknown as Lens;
 
 describe("findingAgents", () => {
-  it("names the agents the finding's runs were actually recorded under", () => {
+  it("names the agents the finding's runs were recorded under, or their service when unnamed", () => {
     const seen = lens("a", "", [], {
       runs: [
         { id: "run-1", service: "support-bot" },
-        { id: "run-2", service: "billing-bot" },
+        { id: "run-2", agents: ["billing-bot", "refund-bot"], service: "shared" },
+        { id: "run-3", agents: ["unrelated"], service: "x" },
       ],
     });
-    expect(findingAgents(seen, finding({ occurrences: ["run-2", "run-1"] }))).toEqual(["billing-bot", "support-bot"]);
+    expect(findingAgents(seen, finding({ occurrences: ["run-2", "run-1"] }))).toEqual([
+      "billing-bot",
+      "refund-bot",
+      "support-bot",
+    ]);
   });
 
   it("falls back to the configured agent, then to an explicit unknown, when no run says", () => {

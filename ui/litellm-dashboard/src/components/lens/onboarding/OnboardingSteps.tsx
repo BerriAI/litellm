@@ -50,7 +50,7 @@ function StorageStep({ state, goTo }: StepProps) {
 
 function continuationLabel(state: LensReadiness) {
   if (state.connected) return "Continue to investigation";
-  return state.tracesReady ? "Continue to worker" : "Continue with request logs";
+  return "Continue to worker";
 }
 
 function ActivityContinuation({ state }: { state: LensReadiness }) {
@@ -63,11 +63,6 @@ function ActivityContinuation({ state }: { state: LensReadiness }) {
         {continuationLabel(state)}
         <ArrowRight aria-hidden="true" className="size-4" />
       </Button>
-      {state.requestsReady && !state.tracesReady && (
-        <p className="mt-2 text-xs text-muted-foreground">
-          Request logs are already available. You can investigate them now and add agent traces later.
-        </p>
-      )}
     </div>
   );
 }

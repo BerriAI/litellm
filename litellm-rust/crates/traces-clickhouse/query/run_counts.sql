@@ -13,6 +13,8 @@ ARRAY JOIN multiIf(
     {value:String} = 'model', models,
     {value:String} = 'input', [input_preview],
     {value:String} = 'trace_id', [trace_id],
+    {value:String} = 'service', [service],
+    {value:String} = 'team', [team_id],
     []) AS value
 WHERE ({value:String} = '' OR value != '') AND value ILIKE {contains:String}
 GROUP BY bucket, failed, value
