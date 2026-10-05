@@ -233,7 +233,7 @@ class JWTHandler:
     # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
     # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
     #   the key in different ways (e.g. HS* and RS*)."
-    SUPPORTED_JWT_ALGORITHMS = [  # mutable-ok: list kept for backward compatibility
+    SUPPORTED_JWT_ALGORITHMS = [
         *APPROVED_JWT_ALGORITHMS,
         *LEGACY_JWT_ALGORITHMS,
     ]
@@ -975,9 +975,9 @@ class JWTHandler:
 
         allowed: Final = self.allowed_algorithms()
         usable_keys: Final[JWKKeyValue] = (
-            list(jwks_keys_for(keys, allowed))  # mutable-ok: parse_keys consumes a JWKKeyValue list
+            list(jwks_keys_for(keys, allowed))
             if isinstance(keys, list)
-            else next(iter(jwks_keys_for((keys,), allowed)), {})  # mutable-ok: single-key dict is a JWKKeyValue
+            else next(iter(jwks_keys_for((keys,), allowed)), {})
         )
         public_key: Final = self.parse_keys(keys=usable_keys, kid=kid)
         if public_key is not None:
