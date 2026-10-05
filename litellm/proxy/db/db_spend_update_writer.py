@@ -1022,6 +1022,27 @@ class DBSpendUpdateWriter:
         except Exception as e:
             verbose_proxy_logger.debug("_enqueue_tool_registry_upsert error (non-blocking): %s", e)
 
+    async def _update_target_agent_db(
+        self,
+        *,
+        response_cost: float,
+        spend_metadata: Mapping[str, object],
+        billing_counter: object,
+        prisma_client: PrismaClient,
+    ) -> None:
+        target_counter: Final = spend_metadata.get("target_agent_counter_key")
+        if not isinstance(target_counter, str) or target_counter == billing_counter:
+            return
+        target_agent_id: Final = spend_metadata.get("target_agent_id")
+        if not isinstance(target_agent_id, str):
+            return
+        await self._update_agent_db(
+            response_cost=response_cost,
+            agent_id=target_agent_id,
+            prisma_client=prisma_client,
+            counter_key=target_counter,
+        )
+
     async def _batch_database_updates(
         self,
         *,
@@ -1135,43 +1156,24 @@ class DBSpendUpdateWriter:
         metadata_json: Final = payload_copy.get("metadata") or "{}"
         try:
             spend_metadata: Final = _SPEND_METADATA_ADAPTER.validate_json(metadata_json)
+            billing_counter: Final = spend_metadata.get("billing_agent_counter_key")
+            await self._update_agent_db(
+                response_cost=response_cost,
+                agent_id=_agent_id_for_spend,
+                prisma_client=prisma_client,
+                counter_key=billing_counter if isinstance(billing_counter, str) else None,
+            )
+            await self._update_target_agent_db(
+                response_cost=response_cost,
+                spend_metadata=spend_metadata,
+                billing_counter=billing_counter,
+                prisma_client=prisma_client,
+            )
         except Exception:
             verbose_proxy_logger.debug(
                 "_batch_database_updates: _update_agent_db failed: %s",
                 traceback.format_exc(),
             )
-        else:
-            captured_counter: Final = spend_metadata.get("billing_agent_counter_key")
-            try:
-                await self._update_agent_db(
-                    response_cost=response_cost,
-                    agent_id=_agent_id_for_spend,
-                    prisma_client=prisma_client,
-                    counter_key=captured_counter if isinstance(captured_counter, str) else None,
-                )
-            except Exception:
-                verbose_proxy_logger.debug(
-                    "_batch_database_updates: _update_agent_db failed: %s",
-                    traceback.format_exc(),
-                )
-
-            try:
-                target_counter: Final = spend_metadata.get("target_agent_counter_key")
-                billing_counter: Final = spend_metadata.get("billing_agent_counter_key")
-                if isinstance(target_counter, str) and target_counter != billing_counter:
-                    target_agent_id: Final = spend_metadata.get("target_agent_id")
-                    if isinstance(target_agent_id, str):
-                        await self._update_agent_db(
-                            response_cost=response_cost,
-                            agent_id=target_agent_id,
-                            prisma_client=prisma_client,
-                            counter_key=target_counter,
-                        )
-            except Exception:
-                verbose_proxy_logger.debug(
-                    "_batch_database_updates: target _update_agent_db failed: %s",
-                    traceback.format_exc(),
-                )
 
         try:
             await self.add_spend_log_transaction_to_daily_user_transaction(

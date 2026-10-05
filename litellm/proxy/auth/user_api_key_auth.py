@@ -3350,7 +3350,7 @@ async def _authorize_authenticated_request(
             route, request.method
         ):
             raise HTTPException(403, "Agent identities can only access inference and agent discovery routes")
-        router_settings: Final[dict[str, object] | None] = (
+        router_settings: Final[Mapping[str, object] | None] = (
             await proxy_config.get_hierarchical_router_settings(
                 user_api_key_dict=user_api_key_auth_obj,
                 prisma_client=prisma_client,
@@ -3359,7 +3359,7 @@ async def _authorize_authenticated_request(
             if llm_router is not None and RouteChecks.is_llm_api_route(route=route)
             else None
         )
-        query_params: Final[dict[str, object]] = _safe_get_request_query_params(request)
+        query_params: Final[Mapping[str, object]] = _safe_get_request_query_params(request)
         inference_data: Final = managed_inference_request(
             route,
             request_data,

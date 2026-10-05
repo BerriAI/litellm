@@ -2731,6 +2731,10 @@ def _update_model_if_key_alias_exists(
         data["model"] = user_api_key_dict.aliases[_model]
 
 
+update_model_if_team_alias_exists: Final = _update_model_if_team_alias_exists
+update_model_if_key_alias_exists: Final = _update_model_if_key_alias_exists
+
+
 def _apply_credential_overrides_from_model_config(
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,

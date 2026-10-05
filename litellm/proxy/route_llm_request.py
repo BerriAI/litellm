@@ -597,7 +597,7 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     data.pop("enable_tag_filtering", None)
 
-    agent_request_data: Final[dict[str, object]] = data
+    agent_request_data: Final[Mapping[str, object]] = data
     agent_model: Final = agent_request_data.get("model")
     if isinstance(agent_model, str) and _is_a2a_agent_model(agent_model):
         from litellm.proxy.agent_endpoints.a2a_routing import route_a2a_agent_request

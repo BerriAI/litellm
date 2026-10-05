@@ -127,18 +127,18 @@ def managed_inference_request(
     )
     from litellm.proxy.common_utils.model_listing_utils import CallerAliases, alias_target
     from litellm.proxy.litellm_pre_call_utils import (
-        _update_model_if_key_alias_exists,
-        _update_model_if_team_alias_exists,
+        update_model_if_key_alias_exists,
+        update_model_if_team_alias_exists,
     )
 
     aliased_body: Final = dict(body)
     if auth is not None:
-        _update_model_if_team_alias_exists(aliased_body, auth)
-        _update_model_if_key_alias_exists(aliased_body, auth)
+        update_model_if_team_alias_exists(aliased_body, auth)
+        update_model_if_key_alias_exists(aliased_body, auth)
     selected: Final = resolve_inference_model(aliased_body.get("model"), settings, cli_model, endpoint_model, kind=kind)
     import litellm
 
-    key_aliases: Final[dict[str, object] | None] = auth.aliases if auth is not None else None
+    key_aliases: Final[Mapping[str, object] | None] = auth.aliases if auth is not None else None
     aliased: Final = (
         alias_target(selected, CallerAliases((), (litellm.model_alias_map, key_aliases))) or selected
         if isinstance(selected, str) and auth is not None
@@ -237,14 +237,20 @@ def actor_admission_failure(
     return None
 
 
+def _agent_max_budget(agent: AgentResponse | None) -> float | None:
+    if agent is None or agent.litellm_budget_table is None:
+        return None
+    return agent.litellm_budget_table.max_budget
+
+
 async def check_agent_budget(auth: UserAPIKeyAuth) -> None:
     import litellm
     from litellm.proxy.proxy_server import get_current_spend
 
     async def get_budget_state(agent: AgentResponse | None) -> tuple[float, float] | None:
-        if agent is None or agent.litellm_budget_table is None or agent.litellm_budget_table.max_budget is None:
+        budget: Final = _agent_max_budget(agent)
+        if agent is None or budget is None:
             return None
-        budget: Final = agent.litellm_budget_table.max_budget
         spend: Final = await get_current_spend(
             counter_key=agent.budget_counter_key,
             fallback_spend=agent.budget_spend,
@@ -278,15 +284,9 @@ def invocation_target(route: str, body: Mapping[str, object]) -> str | None:
     return model.removeprefix("a2a/") or None if isinstance(model, str) and model.startswith("a2a/") else None
 
 
-async def prepare_agent_invocation(
-    auth: UserAPIKeyAuth, target_name: str, store: AgentIdentityStore | None, *, billable: bool = True
-) -> None:
-    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import AgentRequestHandler
-    from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
-
-    registered: Final = await get_agent_with_read_through(target_name)
-    if registered is None:
-        return
+async def _load_effective_invocation_agent(
+    registered: AgentResponse, store: AgentIdentityStore | None
+) -> AgentResponse:
     registered_managed: Final = registered.identity_managed or registered.identity is not None
     if store is None and registered_managed:
         raise_identity_failure(
@@ -297,7 +297,19 @@ async def prepare_agent_invocation(
         raise_identity_failure(target)
     if target is None and registered_managed:
         raise_identity_failure(AgentIdentityFailure(message="Invoked agent no longer exists"))
-    effective: Final = target if target is not None else registered
+    return target if target is not None else registered
+
+
+async def prepare_agent_invocation(
+    auth: UserAPIKeyAuth, target_name: str, store: AgentIdentityStore | None, *, billable: bool = True
+) -> None:
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import AgentRequestHandler
+    from litellm.proxy.common_utils.registry_read_through import get_agent_with_read_through
+
+    registered: Final = await get_agent_with_read_through(target_name)
+    if registered is None:
+        return
+    effective: Final = await _load_effective_invocation_agent(registered=registered, store=store)
     pricing: Final = effective.litellm_params or MappingProxyType({})
     fixed_fee: Final = pricing.get("cost_per_query")
     if not await AgentRequestHandler.is_agent_allowed(effective.agent_id, auth):
@@ -320,19 +332,13 @@ async def prepare_agent_invocation(
         auth.billing_agent_policy = effective
     if (
         billable
-        and effective.litellm_budget_table is not None
-        and effective.litellm_budget_table.max_budget is not None
+        and _agent_max_budget(effective) is not None
         and (auth.billing_agent_policy is None or auth.billing_agent_policy.agent_id != effective.agent_id)
     ):
         auth.target_agent_budget_policy = effective
     billing_policy: Final = auth.billing_agent_policy
     target_policy: Final = auth.target_agent_budget_policy
-    bounded: Final = any(
-        policy is not None
-        and policy.litellm_budget_table is not None
-        and policy.litellm_budget_table.max_budget is not None
-        for policy in (billing_policy, target_policy)
-    )
+    bounded: Final = _agent_max_budget(billing_policy) is not None or _agent_max_budget(target_policy) is not None
     try:
         fee: Final = _INVOCATION_COST.validate_python(fixed_fee if billable and fixed_fee is not None else 0.0)
         unbounded_token_price: Final = (

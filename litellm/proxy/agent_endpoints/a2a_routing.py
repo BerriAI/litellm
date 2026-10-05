@@ -5,6 +5,7 @@ Handles routing for A2A agents (models with "a2a/<agent-name>" prefix).
 Looks up agents in the registry and injects their API base URL.
 """
 
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
 
 
 async def route_a2a_agent_request(
-    data: dict[str, object],
+    data: Mapping[str, object],
     route_type: str,
     user_api_key_dict: UserAPIKeyAuth | None = None,
     *,

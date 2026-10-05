@@ -505,8 +505,8 @@ async def _get_budget_counters(
     end_user_id: str | None = None,
     end_user_object: object = None,
     apply_user_budget_to_team_keys: bool = False,
-) -> list[_BudgetCounter]:
-    counters: Final[list[_BudgetCounter]] = [
+) -> tuple[_BudgetCounter, ...]:
+    agent_counters: Final = tuple(
         _BudgetCounter(
             counter_key=agent.budget_counter_key,
             source_cache_key=None,
@@ -519,44 +519,54 @@ async def _get_budget_counters(
         if agent is not None
         and (budget_table := agent.litellm_budget_table) is not None
         and (max_budget := budget_table.max_budget) is not None
-    ]
+    )
 
-    if valid_token.token is not None:
-        if valid_token.max_budget is not None and valid_token.max_budget > 0:
-            counters.append(
-                _BudgetCounter(
-                    counter_key=f"spend:key:{valid_token.token}",
-                    source_cache_key=valid_token.token,
-                    max_budget=float(valid_token.max_budget),
-                    fallback_spend=float(valid_token.spend or 0.0),
-                    entity_type="Key",
-                    entity_id=valid_token.token,
-                )
-            )
-        counters.extend(
+    token: Final = valid_token.token
+    token_counter: Final = (
+        _BudgetCounter(
+            counter_key=f"spend:key:{token}",
+            source_cache_key=token,
+            max_budget=float(valid_token.max_budget),
+            fallback_spend=float(valid_token.spend or 0.0),
+            entity_type="Key",
+            entity_id=token,
+        )
+        if token is not None and valid_token.max_budget is not None and valid_token.max_budget > 0
+        else None
+    )
+    token_limit_counters: Final = (
+        tuple(
             _get_budget_limit_counters(
-                entity_prefix=f"spend:key:{valid_token.token}",
+                entity_prefix=f"spend:key:{token}",
                 entity_type="Key",
-                entity_id=valid_token.token,
+                entity_id=token,
                 budget_limits=valid_token.budget_limits,
                 fallback_spend=float(valid_token.spend or 0.0),
             )
         )
+        if token is not None
+        else ()
+    )
+    key_counters: Final = ((token_counter,) if token_counter is not None else ()) + token_limit_counters
 
-    if team_object is not None and team_object.team_id is not None:
-        team_id: Final = team_object.team_id
-        if team_object.max_budget is not None and team_object.max_budget > 0:
-            counters.append(
-                _BudgetCounter(
-                    counter_key=f"spend:team:{team_id}",
-                    source_cache_key=f"team_id:{team_id}",
-                    max_budget=float(team_object.max_budget),
-                    fallback_spend=float(team_object.spend or 0.0),
-                    entity_type="Team",
-                    entity_id=team_id,
-                )
-            )
-        counters.extend(
+    team_id: Final = team_object.team_id if team_object is not None else None
+    team_counter: Final = (
+        _BudgetCounter(
+            counter_key=f"spend:team:{team_id}",
+            source_cache_key=f"team_id:{team_id}",
+            max_budget=float(team_object.max_budget),
+            fallback_spend=float(team_object.spend or 0.0),
+            entity_type="Team",
+            entity_id=team_id,
+        )
+        if team_object is not None
+        and team_id is not None
+        and team_object.max_budget is not None
+        and team_object.max_budget > 0
+        else None
+    )
+    team_limit_counters: Final = (
+        tuple(
             _get_budget_limit_counters(
                 entity_prefix=f"spend:team:{team_id}",
                 entity_type="Team",
@@ -565,35 +575,36 @@ async def _get_budget_counters(
                 fallback_spend=float(team_object.spend or 0.0),
             )
         )
+        if team_object is not None and team_id is not None
+        else ()
+    )
+    team_counters: Final = ((team_counter,) if team_counter is not None else ()) + team_limit_counters
 
     is_team_key: Final = team_object is not None and team_object.team_id is not None
-    if (
-        (not is_team_key or apply_user_budget_to_team_keys)
+    user_counter: Final = (
+        _BudgetCounter(
+            counter_key=f"spend:user:{user_object.user_id}",
+            source_cache_key=user_object.user_id,
+            max_budget=float(user_object.max_budget),
+            fallback_spend=float(user_object.spend or 0.0),
+            entity_type="User",
+            entity_id=user_object.user_id,
+        )
+        if (not is_team_key or apply_user_budget_to_team_keys)
         and user_object is not None
         and user_object.user_id is not None
         and user_object.max_budget is not None
         and user_object.max_budget > 0
-    ):
-        counters.append(
-            _BudgetCounter(
-                counter_key=f"spend:user:{user_object.user_id}",
-                source_cache_key=user_object.user_id,
-                max_budget=float(user_object.max_budget),
-                fallback_spend=float(user_object.spend or 0.0),
-                entity_type="User",
-                entity_id=user_object.user_id,
-            )
-        )
+        else None
+    )
+    user_counters: Final = (user_counter,) if user_counter is not None else ()
 
     end_user_counter: Final = await _get_end_user_budget_counter(
         valid_token=valid_token,
         end_user_id=end_user_id,
         end_user_object=end_user_object,
     )
-    if end_user_counter is not None:
-        counters.append(end_user_counter)
-
-    counters.extend(
+    tag_counters: Final = tuple(
         await _get_tag_budget_counters(
             request_body=request_body,
             prisma_client=prisma_client,
@@ -601,40 +612,41 @@ async def _get_budget_counters(
             proxy_logging_obj=proxy_logging_obj,
         )
     )
-
-    counters.extend(
+    model_access_group_counters: Final = tuple(
         await _get_model_access_group_budget_counters(
             valid_token=valid_token,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
     )
-
     team_member_counter: Final = await _get_team_member_budget_counter(
         valid_token=valid_token,
         team_object=team_object,
         user_object=user_object,
         user_api_key_cache=user_api_key_cache,
     )
-    if team_member_counter is not None:
-        counters.append(team_member_counter)
-
     org_counter: Final = await _get_org_budget_counter(
         valid_token=valid_token,
         team_object=team_object,
         user_api_key_cache=user_api_key_cache,
     )
-    if org_counter is not None:
-        counters.append(org_counter)
-
     project_counter: Final = await _get_project_budget_counter(
         valid_token=valid_token,
         user_api_key_cache=user_api_key_cache,
     )
-    if project_counter is not None:
-        counters.append(project_counter)
 
-    return counters
+    return (
+        agent_counters
+        + key_counters
+        + team_counters
+        + user_counters
+        + ((end_user_counter,) if end_user_counter is not None else ())
+        + tag_counters
+        + model_access_group_counters
+        + ((team_member_counter,) if team_member_counter is not None else ())
+        + ((org_counter,) if org_counter is not None else ())
+        + ((project_counter,) if project_counter is not None else ())
+    )
 
 
 async def _get_end_user_budget_counter(

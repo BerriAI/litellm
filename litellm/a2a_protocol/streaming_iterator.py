@@ -3,7 +3,7 @@ A2A Streaming Iterator with token tracking and logging support.
 """
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Generic, TypeVar
 
@@ -43,7 +43,7 @@ class A2AStreamingIterator(Generic[_StreamChunk]):
         self.start_time = datetime.now()
 
         # Collect chunks for token counting
-        self.chunks: list[_StreamChunk] = []
+        self.last_chunk: _StreamChunk | None = None
         self.collected_text_parts: list[str] = []
         self.final_chunk: _StreamChunk | None = None
 
@@ -55,7 +55,7 @@ class A2AStreamingIterator(Generic[_StreamChunk]):
             chunk: Final = await self.stream.__anext__()
 
             # Store chunk
-            self.chunks.append(chunk)
+            self.last_chunk = chunk
 
             # Extract text from chunk for token counting
             self._collect_text_from_chunk(chunk)
@@ -68,8 +68,8 @@ class A2AStreamingIterator(Generic[_StreamChunk]):
 
         except StopAsyncIteration:
             # Stream ended - handle logging
-            if self.final_chunk is None and self.chunks:
-                self.final_chunk = self.chunks[-1]
+            if self.final_chunk is None and self.last_chunk is not None:
+                self.final_chunk = self.last_chunk
             await self._handle_stream_complete()
             raise
 
@@ -131,7 +131,7 @@ class A2AStreamingIterator(Generic[_StreamChunk]):
             # Build result for logging
             result: Final = self._build_logging_result(usage)
 
-            litellm_params: Final[dict[str, object]] = self.logging_obj.litellm_params
+            litellm_params: Final[Mapping[str, object]] = self.logging_obj.litellm_params
             bind_budget_reservation_to_callbacks(litellm_params)
 
             # Call success handlers - they will build standard_logging_object
