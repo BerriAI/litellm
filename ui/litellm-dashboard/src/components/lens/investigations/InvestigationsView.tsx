@@ -5,7 +5,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
-import { LensPreviewButton } from "@/components/lens/ui/LensPreviewButton";
 
 import { useInvalidateLenses } from "../data/mutations";
 import { lensQueries } from "../data/queries";
@@ -114,10 +113,11 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
       case "welcome":
         if (status.loading) return <InvestigationsLoading />;
         return (
-          <>
-            {!status.ready && <LensPreviewButton />}
-            <OnboardingSetup state={status} className="mx-auto w-full max-w-3xl py-6" />
-          </>
+          <OnboardingSetup
+            state={status}
+            includeTracing={!status.hasRecordedActivity}
+            className="mx-auto w-full max-w-3xl p-4 sm:p-6"
+          />
         );
       case "list":
         return (

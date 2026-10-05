@@ -225,6 +225,7 @@ export function AgentTracesTable({
   const tableOptions: TableOptions<TraceSummary> = {
     data: traces,
     columns: RUN_COLUMNS,
+    defaultColumn: { size: undefined },
     getRowId: runKey,
     autoResetAll: false,
     state: { columnVisibility },

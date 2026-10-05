@@ -15,6 +15,7 @@ use litellm_traces::{
         ListTracesParams, ReadAccessParams, SpanDetailParams, SpanErrorParams, TraceIdentityParams,
         TraceSpansParams,
     },
+    request::{TRACE_PAGE_SIZE_MAX, TRACE_PAGE_SIZE_MIN},
     resolve_trace, to_ui_content,
 };
 
@@ -133,7 +134,7 @@ impl TraceReader {
         cursor: Option<&str>,
         page_size: u32,
     ) -> Result<Option<Trace>, ReadError<S::Error>> {
-        if !(1..=500).contains(&page_size) {
+        if !(u32::from(TRACE_PAGE_SIZE_MIN)..=u32::from(TRACE_PAGE_SIZE_MAX)).contains(&page_size) {
             return Err(ReadError::InvalidParameters);
         }
         let Some(trace_ref) = reference(store, access, trace_id, trace_ref).await? else {

@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 
 import type { TraceSummary } from "../../types";
-import type { TimeWindow } from "../TracesTimeline";
+import type { TimeWindow } from "@/components/shared/timeline/Timeline";
 
 import { SearchBox } from "@/components/shared/search/SearchBox";
 import { itemValues } from "@/components/shared/search/valueSource";
@@ -31,10 +31,10 @@ export function RunSearch({ value, onChange, runs, range }: RunSearchProps) {
       value={value}
       onValueChange={onChange}
       label="Search runs"
-      className="h-full min-w-0"
+      className="h-11 min-w-0"
     >
       <SearchBox.Input
-        className="h-full rounded-none border-0 px-3 focus-within:bg-muted/40 focus-within:ring-0 dark:bg-transparent"
+        className="h-full overflow-hidden rounded-none border-0 px-3 whitespace-nowrap focus-within:bg-muted/40 focus-within:ring-0 dark:bg-transparent"
         placeholder="Search runs, or filter like agent:researcher status:error"
       />
       <SearchBox.Suggestions>
