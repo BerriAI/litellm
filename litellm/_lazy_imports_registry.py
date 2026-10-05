@@ -296,6 +296,7 @@ LLM_CONFIG_NAMES: Final = (
     "LiteLLMProxyChatConfig",
     "VLLMConfig",
     "DeepSeekChatConfig",
+    "TokenKioskConfig",
     "TencentChatConfig",
     "LMStudioChatConfig",
     "LmStudioEmbeddingConfig",
@@ -1153,6 +1154,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     ),
     "VLLMConfig": (".llms.vllm.completion.transformation", "VLLMConfig"),
     "DeepSeekChatConfig": (".llms.deepseek.chat.transformation", "DeepSeekChatConfig"),
+    "TokenKioskConfig": (
+        ".llms.token_kiosk.chat.transformation",
+        "TokenKioskConfig",
+    ),
     "TencentChatConfig": (".llms.tencent.chat.transformation", "TencentChatConfig"),
     "LMStudioChatConfig": (".llms.lm_studio.chat.transformation", "LMStudioChatConfig"),
     "LmStudioEmbeddingConfig": (
