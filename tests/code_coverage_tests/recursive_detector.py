@@ -2,6 +2,8 @@ import ast
 import os
 
 IGNORE_FUNCTIONS = [
+    "_json_cost",  # estimator: depth 32, lazy traversal stops at aggregate byte/node budgets before validation
+    "_without_controls",  # estimator: only receives JSON already bounded by _json_cost, including depth and nodes
     "_format_type",
     "_remove_additional_properties",
     "_remove_strict_from_schema",

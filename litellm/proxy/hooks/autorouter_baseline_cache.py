@@ -35,8 +35,10 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
 from litellm.proxy.spend_tracking.baseline_accounting import BaselineObservation
 from litellm.proxy.spend_tracking.cache_history import (
     EstimatedCacheRequest,
-    capture_cache_request,
+    PreparedCacheRequest,
+    count_prefix_tokens,
     normalize_cache_usage,
+    prepare_cache_request,
 )
 from litellm.proxy.spend_tracking.savings import (
     _cost_of_usage,  # pyright: ignore[reportPrivateUsage]  # shared token-pricing owner
@@ -83,7 +85,7 @@ class BaselineCacheContext:
     capture: CapturedBaselineObservation
     target: NativePredictionTarget | UnsupportedPredictionTarget
     baseline_deployment_id: str | None
-    estimated_request: EstimatedCacheRequest | None = None
+    estimated_request: PreparedCacheRequest | None = None
     estimated: bool = False
     invalidated: str | None = None
 
@@ -126,12 +128,16 @@ class AutoRouterBaselineCache(CustomLogger):
         router: Callable[[], Router | None] = _proxy_llm_router,
         token_counter: TokenCounter | None = None,
         clock: Callable[[], float] = time.time,
+        prefix_token_counter: Callable[[str, str], int] = count_prefix_tokens,
     ) -> None:
         super().__init__()  # pyright: ignore[reportUnknownMemberType]  # legacy callback constructor
         self.router: Final = router
         self.token_counter: Final = token_counter
         self.clock: Final = clock
+        self.prefix_token_counter: Final = prefix_token_counter
         self.count_slots: Final = asyncio.Semaphore(8)
+        self.estimate_slots: Final = asyncio.Semaphore(8)
+        self.estimate_workers: Final = asyncio.Semaphore(2)
         self.counts: Mapping[str, tuple[int, float]] = MappingProxyType({})
 
     async def async_pre_call_deployment_hook(self, kwargs: Mapping[str, object], call_type: CallTypes | None) -> None:
@@ -194,7 +200,7 @@ class AutoRouterBaselineCache(CustomLogger):
                 target, NativePredictionTarget
             )
             estimated_request: Final = (
-                capture_cache_request(kwargs, identity.model, identity.provider, prices, params) if estimated else None
+                prepare_cache_request(kwargs, identity.model, identity.provider, prices, params) if estimated else None
             )
             scope: Final = "autorouter-baseline:v3:" + _digest(
                 (
@@ -204,7 +210,7 @@ class AutoRouterBaselineCache(CustomLogger):
                     request.route.baseline_deployment_id,
                     params,
                     prices,
-                    *((identity, "estimated_prefixes_v1") if estimated else ()),
+                    *((identity, "estimated_prefixes_v2") if estimated else ()),
                 )
             )
             started: Final = logging_obj.start_time.timestamp()
@@ -225,7 +231,7 @@ class AutoRouterBaselineCache(CustomLogger):
                     baseline_equivalent=False,
                     reason="incomplete_response",
                     cache_policy="estimated" if estimated else "anthropic",
-                    assumptions=estimated_request.assumptions if estimated_request else (),
+                    assumptions=(),
                     cache_write_pricing="standard"
                     if estimated and (prices is None or prices.get("cache_creation_input_token_cost_above_1hr") is None)
                     else "duration",
@@ -236,6 +242,23 @@ class AutoRouterBaselineCache(CustomLogger):
             )
         except Exception:  # noqa: BLE001  # optional observation cannot fail inference
             verbose_proxy_logger.warning("Auto-router baseline observation could not be initialized")
+
+    async def estimate(self, request: PreparedCacheRequest, model: str) -> EstimatedCacheRequest | None:
+        if self.estimate_slots.locked():
+            return None
+        await self.estimate_slots.acquire()
+        task: Final = asyncio.create_task(self._estimate(request, model))
+        task.add_done_callback(self._release_estimate_slot)
+        return await asyncio.shield(task)
+
+    async def _estimate(self, request: PreparedCacheRequest, model: str) -> EstimatedCacheRequest:
+        async with self.estimate_workers:
+            return await asyncio.to_thread(request.count, model, self.prefix_token_counter)
+
+    def _release_estimate_slot(self, task: asyncio.Task[EstimatedCacheRequest]) -> None:
+        self.estimate_slots.release()
+        if not task.cancelled():
+            task.exception()
 
     async def _count(self, target: NativePredictionTarget, body: Mapping[str, JsonValue]) -> int | None:
         key: Final = _digest((target.model, target.api_key, target.api_base, _JSON_BODY.validate_python(body)))
@@ -333,7 +356,7 @@ async def _capture(
             )
         )
     if context.estimated:
-        return _capture_estimated(context, logging_obj, response_obj)
+        return await _capture_estimated(context, logging_obj, response_obj)
     event: Final = _WireEvent.model_validate(details)
     wire: Final = event.httpx_response.request
     usage: Final = _ResponseUsage.model_validate(response_obj).usage
@@ -402,7 +425,7 @@ async def _capture(
     )
 
 
-def _capture_estimated(
+async def _capture_estimated(
     context: BaselineCacheContext, logging_obj: Logging, response_obj: object
 ) -> CapturedBaselineObservation:
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -420,7 +443,12 @@ def _capture_estimated(
         if raw_usage is not None
         else None
     )
-    plan: Final = context.estimated_request.plan(usage) if context.estimated_request and usage else None
+    estimated: Final = (
+        await context.collector.estimate(context.estimated_request, context.capture.model)
+        if context.estimated_request is not None and usage is not None and not context.invalidated
+        else None
+    )
+    plan: Final = estimated.plan(usage) if estimated is not None and usage is not None else None
     provider: Final = _METADATA.validate_python(logging_obj.model_call_details).get("custom_llm_provider")
     selected: Final = _resolve_model(logging_obj.model, provider if isinstance(provider, str) else None)
     prices: Final = _PRICES.validate_python(logging_obj.get_router_deployment_model_info()) or (
@@ -441,6 +469,7 @@ def _capture_estimated(
                     "usage": usage,
                     "plan": plan,
                     "minimum_cache_tokens": get_prompt_cache_min_tokens(context.capture.baseline_model),
+                    "assumptions": estimated.assumptions if estimated else (),
                     "reason": context.invalidated
                     or ("missing_usage" if usage is None else "unsupported_cache_request" if plan is None else None),
                 }

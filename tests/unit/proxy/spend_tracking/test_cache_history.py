@@ -280,3 +280,84 @@ def test_openai_lookup_keeps_initial_developer_group_but_limits_earlier_user_end
         user.plan(_usage()).breakpoints[-1].fingerprint
         not in users.plan(_usage()).breakpoints[-1].lookback_fingerprints
     )
+
+
+def test_multipart_tool_envelope_is_counted_once_in_bounded_chunks() -> None:
+    from queue import SimpleQueue
+
+    from litellm.proxy.spend_tracking.cache_history import prepare_cache_request
+
+    samples: Final[SimpleQueue[str]] = SimpleQueue()
+    arguments: Final = "X" * 32768
+    request: Final = _request(
+        messages=[
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call", "type": "function", "function": {"name": "tool", "arguments": arguments}}
+                ],
+                "content": [{"type": "text", "text": "part"} for _ in range(1000)],
+            }
+        ]
+    )
+
+    def count(model: str, text: str) -> int:
+        samples.put(text)
+        return len(text)
+
+    prepared: Final = prepare_cache_request(request, "gpt-6-astra", "openai", _PRICES, {})
+    assert prepared is not None
+    captured: Final = prepared.count("gpt-6-astra", count)
+    counted: Final = tuple(samples.get_nowait() for _ in range(samples.qsize()))
+    assert sum(part.count("X") for part in counted) == len(arguments)
+    assert max(map(len, counted)) <= 8192
+    assert captured.weight < 100000
+    assert arguments not in repr(captured) and arguments not in repr(prepared)
+
+
+@pytest.mark.parametrize("location", ("messages", "input", "system", "tools", "extra_body", "baseline"))
+def test_oversized_fields_are_rejected_before_tokenization(location: str) -> None:
+    from litellm.proxy.spend_tracking.cache_history import prepare_cache_request
+
+    large: Final = "x" * 750000
+    request: Final = {
+        "messages": [{"role": "user", "content": "small"}],
+        **({location: [{"role": "user", "content": large}]} if location in ("messages", "input") else {}),
+        **({location: large} if location in ("system", "tools") else {}),
+        **({"extra_body": {"system": large}} if location == "extra_body" else {}),
+    }
+    baseline: Final = {"system": large} if location == "baseline" else {}
+    assert prepare_cache_request(request, "gpt-6-astra", "openai", _PRICES, baseline) is None
+
+
+@pytest.mark.parametrize("shape", ("blocks", "nodes", "depth", "integer"))
+def test_small_text_cannot_bypass_estimator_structure_budgets(shape: str) -> None:
+    from functools import reduce
+
+    from litellm.proxy.spend_tracking.cache_history import prepare_cache_request
+
+    request: Final = _request(
+        messages=[{"role": "user", "content": [{} for _ in range(2049)]}]
+        if shape == "blocks"
+        else [{"role": "user", "content": "small"}],
+        tools={str(index): 0 for index in range(12000)}
+        if shape == "nodes"
+        else reduce(lambda value, _: {"value": value}, range(40), {})
+        if shape == "depth"
+        else {"oversized_integer": 1 << 10000}
+        if shape == "integer"
+        else [],
+    )
+    assert prepare_cache_request(request, "gpt-6-astra", "openai", _PRICES, {}) is None
+
+
+def test_deferred_capture_owns_a_snapshot_before_provider_mutation() -> None:
+    from litellm.proxy.spend_tracking.cache_history import prepare_cache_request
+
+    content: Final = [{"type": "text", "text": _PROMPT, "cache_control": {"type": "ephemeral"}}]
+    request: Final = _request(messages=[{"role": "user", "content": content}])
+    prepared: Final = prepare_cache_request(request, "gpt-6-astra", "openai", _PRICES, {})
+    assert prepared is not None
+    original: Final = prepared.count("gpt-6-astra").plan(_usage())
+    content.clear()
+    assert prepared.count("gpt-6-astra").plan(_usage()) == original

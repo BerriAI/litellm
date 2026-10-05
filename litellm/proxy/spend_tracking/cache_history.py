@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass, field
 from itertools import accumulate
-from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
 from litellm.llms.anthropic.prompt_cache_prediction import CountedBreakpoint, CountedPromptCachePlan
+from litellm.llms.prompt_cache_policy import CacheHistoryPolicy, cache_history_policy, cache_ttl
 from litellm.types.utils import CacheCreationTokenDetails, ModelInfo, PromptTokensDetailsWrapper, Usage
 from litellm.utils import token_counter
 
@@ -37,7 +37,128 @@ _SETTINGS: Final = (
     "context_management",
     "compaction",
 )
-_TTLS: Final = MappingProxyType({"5m": 300, "30m": 1800, "1h": 3600, "24h": 86400})
+_REQUEST_KEYS: Final = (*_SETTINGS, "messages", "input", "prompt_cache_options", "prompt_cache_retention")
+_MAX_BYTES: Final = 4 * 1024 * 1024
+_MAX_NODES: Final = 32768
+_MAX_PARTS: Final = 2048
+_MAX_DEPTH: Final = 32
+_TOKEN_CHUNK: Final = 8192
+
+
+def count_prefix_tokens(model: str, text: str) -> int:
+    return token_counter(model=model, text=text)
+
+
+@dataclass(frozen=True, slots=True)
+class _Part:
+    value: JsonValue = field(repr=False)
+    role: JsonValue
+    end: bool
+    control: JsonValue = None
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedCacheRequest:
+    parts: tuple[_Part, ...] = field(repr=False)
+    settings: Mapping[str, JsonValue] = field(repr=False)
+    policy: CacheHistoryPolicy
+    enabled: bool
+
+    def count(self, model: str, counter: Callable[[str, str], int] = count_prefix_tokens) -> EstimatedCacheRequest:
+        serialized: Final = tuple(_json(_without_controls(part.value)) for part in self.parts)
+        settings: Final = _json(self.settings)
+        weights: Final = tuple(
+            accumulate((_weight(model, settings, counter), *(_weight(model, part, counter) for part in serialized)))
+        )
+        digests: Final = tuple(
+            accumulate(
+                serialized,
+                lambda prior, item: hashlib.sha256((prior + item).encode()).hexdigest(),
+                initial=hashlib.sha256(settings.encode()).hexdigest(),
+            )
+        )
+        initial_end: Final = next(
+            (index - 1 for index, part in enumerate(self.parts) if part.role not in ("developer", "system")),
+            len(self.parts) - 1,
+        )
+        prefixes: Final = tuple(
+            _Prefix(
+                fingerprint=digests[index + 1],
+                weight=weights[index + 1],
+                explicit=isinstance(part.control, dict)
+                and bool(part.control.get("prompt_cache_breakpoint") or part.control.get("cache_control")),
+                eligible=part.end
+                and self.policy.eligible(
+                    part.role,
+                    self.parts[index + 1].role if index + 1 < len(self.parts) else None,
+                    index == initial_end,
+                ),
+                ttl=cache_ttl(part.control.get("cache_control"), self.policy.lifetime)
+                if isinstance(part.control, dict)
+                else self.policy.lifetime,
+                initial=index == initial_end,
+            )
+            for index, part in enumerate(self.parts)
+        )
+        return EstimatedCacheRequest(
+            prefixes=prefixes,
+            weight=weights[-1],
+            implicit=self.policy.implicit,
+            enabled=self.enabled,
+            assumptions=(
+                "cold_cache_at_session_start",
+                "reported_input_tokens_scaled_across_prefixes",
+                "same_output_tokens",
+                "supplied_request_settings_with_baseline_overrides",
+                *self.policy.assumptions,
+                "message_boundary_cache_approximation",
+                "chunked_prefix_token_weights",
+            ),
+        )
+
+
+def _weight(model: str, text: str, counter: Callable[[str, str], int]) -> int:
+    return max(
+        1,
+        sum(counter(model, text[start : start + _TOKEN_CHUNK]) for start in range(0, len(text), _TOKEN_CHUNK)),
+    )
+
+
+def _json_cost(value: object, depth: int = 0) -> Iterator[int]:
+    if depth > _MAX_DEPTH:
+        yield _MAX_BYTES + 1
+    elif isinstance(value, str):
+        yield (6 if value.isascii() else 12) * len(value) + 2
+    elif isinstance(value, dict):
+        yield 2
+        for key, item in cast(dict[object, object], value).items():
+            yield from _json_cost(key, depth + 1)
+            yield from _json_cost(item, depth + 1)
+            yield 2
+    elif isinstance(value, (list, tuple)):
+        yield 2
+        for item in cast(list[object] | tuple[object, ...], value):
+            yield from _json_cost(item, depth + 1)
+            yield 1
+    elif isinstance(value, int) and value.bit_length() > 64:
+        yield _MAX_BYTES + 1
+    elif value is None or isinstance(value, (bool, int, float)):
+        yield 32
+    else:
+        yield _MAX_BYTES + 1
+
+
+def _within_budget(value: object) -> bool:
+    return all(
+        size <= _MAX_BYTES and nodes <= _MAX_NODES for nodes, size in enumerate(accumulate(_json_cost(value)), 1)
+    )
+
+
+def _selected(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    mapping: Final = cast(Mapping[str, object], value)
+    return {key: mapping[key] for key in _REQUEST_KEYS if key in mapping}
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,24 +218,15 @@ def _json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def _ttl(control: JsonValue, default: int) -> int:
-    if not isinstance(control, dict):
-        return default
-    value: Final = control.get("ttl")
-    return _TTLS.get(value, default) if isinstance(value, str) else default
-
-
-def _parts(message: Mapping[str, JsonValue]) -> tuple[dict[str, JsonValue], ...]:
+def _parts(message: dict[str, JsonValue]) -> Iterator[_Part]:
     content: Final = message.get("content")
+    role: Final = message.get("role")
     if not isinstance(content, list) or not content:
-        return (dict(message),)
-    envelope: Final = {key: value for key, value in message.items() if key != "content"}
-    return tuple({**envelope, "content": part} for part in content)
-
-
-def _control(part: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
-    content: Final = part.get("content")
-    return content if isinstance(content, dict) else part
+        yield _Part(message, role, True, message)
+        return
+    yield _Part({key: value for key, value in message.items() if key != "content"}, role, False)
+    for index, part in enumerate(content):
+        yield _Part(part, role, index == len(content) - 1, part)
 
 
 def _without_controls(value: JsonValue) -> JsonValue:
@@ -129,6 +241,55 @@ def _without_controls(value: JsonValue) -> JsonValue:
     return value
 
 
+def prepare_cache_request(
+    kwargs: Mapping[str, object],
+    model: str,
+    provider: str,
+    prices: ModelInfo | None,
+    baseline_params: Mapping[str, object],
+) -> PreparedCacheRequest | None:
+    request: Final = _selected(kwargs)
+    extra: Final = _selected(kwargs.get("extra_body"))
+    baseline: Final = _selected(baseline_params)
+    baseline_extra: Final = _selected(baseline_params.get("extra_body"))
+    if not _within_budget((request, extra, baseline, baseline_extra)):
+        return None
+    supplied: Final = request.get("messages")
+    messages: Final = resolve_structured_messages(_MESSAGES.validate_python(supplied) if supplied else None, request)
+    if not messages or not _within_budget(messages):
+        return None
+    combined: Final = {
+        **request,
+        **extra,
+        **{key: value for key, value in baseline.items() if value is not None},
+        **baseline_extra,
+    }
+    settings: Final = _OBJECT.validate_python({key: combined[key] for key in _SETTINGS if key in combined})
+    if not _within_budget((messages, settings)):
+        return None
+    if any(settings.get(key) for key in ("previous_response_id", "conversation", "cached_content")):
+        return None
+    options: Final = _OBJECT.validate_python(combined.get("prompt_cache_options") or {})
+    policy: Final = cache_history_policy(model, provider, prices, options, combined.get("prompt_cache_retention"))
+    validated: Final = _MESSAGES.validate_python(messages)
+    part_count: Final = sum(
+        len(content) + 1 if isinstance(content, list) else 1
+        for content in (message.get("content") for message in validated)
+    )
+    if part_count > _MAX_PARTS:
+        return None
+    parts: Final = tuple(
+        part for message in validated for part in _parts(message)
+    )  # comprehension-ok: flatten bounded message blocks
+    return PreparedCacheRequest(
+        parts=parts,
+        settings=settings,
+        policy=policy,
+        enabled=prices is not None
+        and (prices.get("cache_read_input_token_cost") is not None or prices.get("supports_prompt_caching") is True),
+    )
+
+
 def capture_cache_request(
     kwargs: Mapping[str, object],
     model: str,
@@ -136,101 +297,8 @@ def capture_cache_request(
     prices: ModelInfo | None,
     baseline_params: Mapping[str, object],
 ) -> EstimatedCacheRequest | None:
-    supplied: Final = kwargs.get("messages")
-    messages: Final = resolve_structured_messages(
-        _MESSAGES.validate_python(supplied) if supplied else None, dict(kwargs)
-    )
-    if not messages:
-        return None
-    extra: Final = _OBJECT.validate_python(kwargs.get("extra_body") or {})
-    baseline_extra: Final = _OBJECT.validate_python(baseline_params.get("extra_body") or {})
-    combined: Final = {
-        **kwargs,
-        **extra,
-        **{key: value for key, value in baseline_params.items() if value is not None},
-        **baseline_extra,
-    }
-    settings: Final = _OBJECT.validate_python({key: combined[key] for key in _SETTINGS if key in combined})
-    if any(settings.get(key) for key in ("previous_response_id", "conversation", "cached_content")):
-        return None
-    options: Final = _OBJECT.validate_python(combined.get("prompt_cache_options") or {})
-    anthropic: Final = provider == "anthropic" or "claude" in model
-    modern_openai: Final = (
-        provider in ("openai", "azure")
-        and prices is not None
-        and prices.get("supports_prompt_cache_breakpoint") is True
-    )
-    retention: Final = combined.get("prompt_cache_retention")
-    default_lifetime: Final = 300 if anthropic else 600 if retention == "in_memory" else 1800
-    lifetime: Final = _ttl(options, default_lifetime)
-    lifetime_known: Final = (
-        (isinstance(options.get("ttl"), str) and options.get("ttl") in _TTLS) or anthropic or modern_openai
-    )
-
-    implicit: Final = not anthropic and options.get("mode") != "explicit"
-    groups: Final = tuple(_parts(message) for message in _MESSAGES.validate_python(messages))
-    parts: Final = tuple(
-        part for group in groups for part in group
-    )  # comprehension-ok: flatten normalized message blocks
-    ends: Final = frozenset(index - 1 for index in accumulate(len(group) for group in groups))
-    initial_end: Final = next(
-        (index - 1 for index, part in enumerate(parts) if part.get("role") not in ("developer", "system")),
-        len(parts) - 1,
-    )
-    serialized: Final = tuple(_json(_without_controls(part)) for part in parts)
-    weights: Final = tuple(
-        accumulate(
-            (
-                max(1, token_counter(model=model, text=_json(settings))),
-                *(max(1, token_counter(model=model, text=part)) for part in serialized),
-            )
-        )
-    )
-    digests: Final = tuple(
-        accumulate(
-            serialized,
-            lambda prior, item: hashlib.sha256((prior + item).encode()).hexdigest(),
-            initial=hashlib.sha256(_json(settings).encode()).hexdigest(),
-        )
-    )
-    prefixes: Final = tuple(
-        _Prefix(
-            fingerprint=digests[index + 1],
-            weight=weights[index + 1],
-            explicit=bool(_control(part).get("prompt_cache_breakpoint") or _control(part).get("cache_control")),
-            eligible=index in ends
-            and (
-                not modern_openai
-                or part.get("role") == "user"
-                or (part.get("role") == "tool" and (index == len(parts) - 1 or parts[index + 1].get("role") != "tool"))
-                or index == initial_end
-            ),
-            ttl=_ttl(_control(part).get("cache_control"), lifetime),
-            initial=index == initial_end,
-        )
-        for index, part in enumerate(parts)
-    )
-    return EstimatedCacheRequest(
-        prefixes=prefixes,
-        weight=weights[-1],
-        implicit=implicit,
-        enabled=prices is not None
-        and (prices.get("cache_read_input_token_cost") is not None or prices.get("supports_prompt_caching") is True),
-        assumptions=(
-            "cold_cache_at_session_start",
-            "reported_input_tokens_scaled_across_prefixes",
-            "same_output_tokens",
-            "supplied_request_settings_with_baseline_overrides",
-            *(
-                ("cache_lifetime_assumed_10m",)
-                if retention == "in_memory"
-                else ("cache_lifetime_assumed_30m",)
-                if not lifetime_known
-                else ()
-            ),
-            "message_boundary_cache_approximation",
-        ),
-    )
+    prepared: Final = prepare_cache_request(kwargs, model, provider, prices, baseline_params)
+    return prepared.count(model) if prepared else None
 
 
 class _CacheDetails(BaseModel):

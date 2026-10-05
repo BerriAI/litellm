@@ -133,7 +133,10 @@ def _upstream(request: httpx.Request) -> httpx.Response:
     assert isinstance(model, str)
     stream: Final = body.get("stream") is True
     content: Final = b"".join(_sse(model=model)) if stream else json.dumps(_message(True, model)).encode()
-    return httpx.Response(200, content=content, request=request,
+    return httpx.Response(
+        200,
+        content=content,
+        request=request,
         headers=MappingProxyType({"content-type": "text/event-stream" if stream else "application/json"}),
     )
 
@@ -182,6 +185,7 @@ async def _call(
         stream: Final = cast(AsyncIterator[object], response)  # cast-ok: iterator checked; all items satisfy object
         assert tuple([chunk async for chunk in stream])
 
+
 class _Capture(CustomLogger):
     def __init__(self, call_id: str) -> None:
         self.call_id: Final = call_id
@@ -200,8 +204,12 @@ class _Capture(CustomLogger):
 
 class _Rig:
     def __init__(self, monkeypatch: pytest.MonkeyPatch, *, retries: int = 0, count: TokenCounter = _count) -> None:
-        self.router: Final = Router(model_list=_MODELS, num_retries=retries,
-            retry_policy=RetryPolicy(RateLimitErrorRetries=retries), disable_cooldowns=True)
+        self.router: Final = Router(
+            model_list=_MODELS,
+            num_retries=retries,
+            retry_policy=RetryPolicy(RateLimitErrorRetries=retries),
+            disable_cooldowns=True,
+        )
 
         def router() -> Router:
             return self.router
@@ -218,9 +226,16 @@ class _Rig:
         monkeypatch.setattr(litellm, "_async_success_callback", [self.capture])
 
     def logging(self, stream: bool = False) -> Logging:
-        return Logging(model="anthropic/claude-sonnet-5", messages=_MESSAGES.validate_json(_MESSAGES_JSON),
-            stream=stream, call_type=CallTypes.anthropic_messages.value, start_time=datetime.now(),
-            litellm_call_id=self.call_id, function_id=self.call_id, kwargs={"litellm_session_id":"baseline-session"})
+        return Logging(
+            model="anthropic/claude-sonnet-5",
+            messages=_MESSAGES.validate_json(_MESSAGES_JSON),
+            stream=stream,
+            call_type=CallTypes.anthropic_messages.value,
+            start_time=datetime.now(),
+            litellm_call_id=self.call_id,
+            function_id=self.call_id,
+            kwargs={"litellm_session_id": "baseline-session"},
+        )
 
 
 def _observation(payload: Mapping[str, object]) -> CapturedBaselineObservation:
@@ -232,7 +247,9 @@ def _observation(payload: Mapping[str, object]) -> CapturedBaselineObservation:
 
 @pytest.mark.parametrize("stream,baseline", ((False, False), (True, False), (False, True), (True, True)))
 async def test_native_logging_captures_usage_without_publishing_hypothetical_savings(
-    monkeypatch: pytest.MonkeyPatch, stream: bool, baseline: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    baseline: bool,
 ) -> None:
     rig: Final = _Rig(monkeypatch)
     messages: Final = _MESSAGES_JSON.replace("question", "question USE_OPUS") if baseline else _MESSAGES_JSON
@@ -283,11 +300,14 @@ async def test_caller_cannot_forge_an_observation_scope(monkeypatch: pytest.Monk
     assert payload["autorouter_savings"] is None
 
 
-@pytest.mark.parametrize("model,key,endpoint", (
-    ("claude-sonnet-5", "test-first", None),
-    ("claude-opus-5", "test-second", None),
-    ("claude-opus-5", "test-first", "https://example.test"),
-))
+@pytest.mark.parametrize(
+    "model,key,endpoint",
+    (
+        ("claude-sonnet-5", "test-first", None),
+        ("claude-opus-5", "test-second", None),
+        ("claude-opus-5", "test-first", "https://example.test"),
+    ),
+)
 async def test_count_memo_is_scoped_to_provider_recipient(model: str, key: str, endpoint: str | None) -> None:
     counts: Final = iter((5000, 6000))
 
@@ -304,7 +324,8 @@ async def test_count_memo_is_scoped_to_provider_recipient(model: str, key: str, 
 
 @pytest.mark.parametrize("stream", (False, True))
 async def test_provider_counting_does_not_hold_the_inference_response(
-    monkeypatch: pytest.MonkeyPatch, stream: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
 ) -> None:
     counting: Final = asyncio.Event()
     release: Final = asyncio.Event()
@@ -473,3 +494,87 @@ async def test_openai_chat_success_logging_publishes_captured_history(monkeypatc
     )
     assert _OBJECTS.validate_python(payload["autorouter_savings_estimate"])["reason"] == "pending_projection"
     assert payload["autorouter_savings"] is None
+
+
+async def test_estimated_capture_defers_token_counting_until_completion_off_event_loop() -> None:
+    from queue import SimpleQueue
+    from threading import get_ident
+
+    from litellm.proxy.hooks.autorouter_baseline_cache import finalize_baseline_cache
+    from litellm.types.utils import ModelResponse, Usage
+
+    threads: Final[SimpleQueue[int]] = SimpleQueue()
+
+    def count(model: str, text: str) -> int:
+        threads.put(get_ident())
+        return len(text)
+
+    collector: Final = AutoRouterBaselineCache(None, router=lambda: None, prefix_token_counter=count)
+    logging: Final = Logging(
+        model="gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=False,
+        call_type=CallTypes.acompletion.value,
+        start_time=datetime.now(),
+        litellm_call_id=uuid4().hex,
+        function_id=uuid4().hex,
+    )
+    request: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "a long stable prompt " * 1000}],
+        "litellm_logging_obj": logging,
+        "litellm_metadata": {"user_api_key_hash": "test-key", "session_id": "test-session"},
+    }
+    Router._record_routing_decision(
+        request,
+        StandardLoggingRoutingDecision(
+            router_model_name="test-router",
+            router_type="complexity",
+            routed_model="openai/gpt-6.1-sol",
+            savings_baseline_model="openai/gpt-6-astra",
+        ),
+    )
+    await collector.async_pre_call_deployment_hook(request, CallTypes.acompletion)
+    assert logging.baseline_cache_context is not None
+    assert threads.empty()
+    await finalize_baseline_cache(
+        logging, ModelResponse(usage=Usage(prompt_tokens=5000, completion_tokens=1, total_tokens=5001))
+    )
+    assert not threads.empty()
+    assert all(threads.get_nowait() != get_ident() for _ in range(threads.qsize()))
+    captured: Final = logging.baseline_observation
+    assert captured is not None and captured.observation.plan is not None
+    assert captured.observation.plan.total_tokens == 5000
+
+
+async def test_estimator_capacity_remains_bounded_when_caller_is_cancelled() -> None:
+    from threading import Event
+
+    from litellm.proxy.spend_tracking.cache_history import prepare_cache_request
+
+    loop: Final = asyncio.get_running_loop()
+    entered: Final = asyncio.Queue[None]()
+    release: Final = Event()
+
+    def count(model: str, text: str) -> int:
+        loop.call_soon_threadsafe(entered.put_nowait, None)
+        assert release.wait(timeout=5), "test did not release token counting"
+        return len(text)
+
+    collector: Final = AutoRouterBaselineCache(None, prefix_token_counter=count)
+    prepared: Final = prepare_cache_request(
+        {"messages": [{"role": "user", "content": "text"}]}, "model", "other", None, {}
+    )
+    assert prepared is not None
+    pending: Final = tuple(asyncio.create_task(collector.estimate(prepared, "model")) for _ in range(8))
+    try:
+        await asyncio.wait_for(entered.get(), timeout=5)
+        await asyncio.wait_for(entered.get(), timeout=5)
+        assert await collector.estimate(prepared, "model") is None
+        pending[0].cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending[0]
+        assert await collector.estimate(prepared, "model") is None
+    finally:
+        release.set()
+        await asyncio.gather(*pending, return_exceptions=True)
+    assert all(task.result() is not None for task in pending[1:])
