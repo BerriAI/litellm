@@ -300,8 +300,40 @@ describe("payload helpers", () => {
     expect(
       parseMessages(JSON.stringify({ role: "assistant", content: [{ type: "text", text: "An execution record" }] })),
     ).toEqual([{ role: "assistant", content: "An execution record" }]);
+    expect(parseMessages(JSON.stringify({ role: "assistant", content: "hello", tool_calls: {} }))).toEqual([
+      { role: "assistant", content: "hello", tool_calls: [{ name: "Tool call", args: {} }] },
+    ]);
+    expect(
+      parseMessages(
+        JSON.stringify({ role: "assistant", content: "hello", tool_calls: [{ name: "lookup", args: "42" }] }),
+      ),
+    ).toEqual([{ role: "assistant", content: "hello", tool_calls: [{ name: "lookup", args: "42" }] }]);
     expect(parseMessages('[{"role":"assistant","tool_calls":[]}]')).toBeNull();
     expect(parseMessages('[{"role":"user","content":42}]')).toBeNull();
+  });
+
+  it("preserves conversation text and incomplete calls beside valid function calls", () => {
+    const incomplete = { id: "pending", function: { arguments: '{"path":"README.md"}' } };
+    const tool_calls = [incomplete, { function: { name: "read_file", arguments: '{"path":"AGENTS.md"}' } }, null];
+    expect(
+      parseMessages(
+        JSON.stringify([
+          { role: "user", content: "Read the project instructions" },
+          { role: "assistant", content: "Checking the files", tool_calls },
+        ]),
+      ),
+    ).toEqual([
+      { role: "user", content: "Read the project instructions" },
+      {
+        role: "assistant",
+        content: "Checking the files",
+        tool_calls: [
+          { name: "Tool call", args: incomplete },
+          { name: "read_file", args: { path: "AGENTS.md" } },
+          { name: "Tool call", args: null },
+        ],
+      },
+    ]);
   });
 
   it("reads LangChain's serialized messages with their roles, names and tool calls", () => {
