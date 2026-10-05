@@ -422,6 +422,7 @@ class MCPServerConfig(TypedDict, total=False):
     client_assertion_signing_alg: str
     timeout: float
     max_concurrent_requests: int
+    rpm: ReadOnly[int | None]
 
 
 class _ProtectedResourceMetadataPayload(TypedDict, total=False):
@@ -2697,6 +2698,7 @@ class MCPServerManager:
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
                 timeout=server_config.get("timeout", None),
                 max_concurrent_requests=server_config.get("max_concurrent_requests", None),
+                rpm=server_config.get("rpm", None),
                 token_validation=server_config.get("token_validation", None),
                 oauth_identity_binding=server_config.get("oauth_identity_binding", None),
             )
@@ -3278,6 +3280,7 @@ class MCPServerManager:
             or "rfc8693",
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
+            rpm=getattr(mcp_server, "rpm", None),
         )
         _warn_legacy_delegate_auth_if_applicable(new_server, source="database")
         self._set_oauth_discovery_deferred(
@@ -5756,6 +5759,7 @@ class MCPServerManager:
         hook_result: Final[dict[str, Any]] = {}
         if proxy_logging_obj is None:
             return hook_result
+        await proxy_logging_obj.enforce_mcp_server_rate_limits(user_api_key_auth, server)
 
         # Extract incoming Bearer token from raw request headers so
         # guardrails like MCPJWTSigner can verify + re-sign it (FR-5).
@@ -7161,6 +7165,7 @@ class MCPServerManager:
             instructions=server.instructions,
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
+            rpm=server.rpm,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -7284,6 +7289,7 @@ class MCPServerManager:
             instructions=server.instructions,
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
+            rpm=server.rpm,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> list[LiteLLM_MCPServerTable]:

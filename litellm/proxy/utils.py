@@ -272,6 +272,7 @@ if TYPE_CHECKING:
     from litellm.proxy.db.model_usage_rollup import ModelUsageTransaction
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
     from litellm.repositories.prisma_protocols import TableActions
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 
     Span = _Span | object
@@ -4203,6 +4204,16 @@ class ProxyLogging:
         if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
             return
         await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+
+    async def enforce_mcp_server_rate_limits(
+        self,
+        user_api_key_dict: UserAPIKeyAuth | None,
+        server: "MCPServer",
+    ) -> None:
+        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
+        if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
+            return
+        await limiter.enforce_mcp_server_rate_limits(user_api_key_dict, server)
 
     def _init_response_taking_too_long_task(self, data: dict | None = None):
         """

@@ -100,6 +100,10 @@ def test_wire_value_carries_no_prose():
     assert outcome_wire_value(fault) == {"status": "upstream_error", "http_status": 500}
     assert outcome_wire_value(ServerListOk(tool_count=7)) == {"status": "ok", "tool_count": 7}
     assert outcome_wire_value(ServerListFault(tag="timeout")) == {"status": "timeout"}
+    assert outcome_wire_value(ServerListFault(tag="rate_limited", status_code=429)) == {
+        "status": "rate_limited",
+        "http_status": 429,
+    }
 
 
 @pytest.mark.parametrize(
@@ -108,6 +112,7 @@ def test_wire_value_carries_no_prose():
         ("auth_required", 401, 401),
         ("auth_required", None, 401),
         ("forbidden", 403, 403),
+        ("rate_limited", 429, 429),
         ("timeout", None, 504),
         ("unreachable", None, 502),
         ("upstream_error", 500, 502),

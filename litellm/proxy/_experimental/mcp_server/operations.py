@@ -5,6 +5,7 @@ import traceback
 import types
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final, NoReturn, TypeAlias, overload
 
@@ -75,6 +76,7 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     SERVER_OUTCOMES_META_KEY,
     AggregateToolListing,
+    ServerListFault,
     ServerListOk,
     ServerOutcome,
     classify_list_exception,
@@ -129,6 +131,7 @@ from litellm.proxy._types import (
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     publish_auth_cache_invalidation,
 )
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
@@ -223,6 +226,40 @@ class ListMCPToolsRestAPIResponseObject(MCPTool):
 
     mcp_info: MCPInfo | None = Field(default=None, alias="mcp_info")
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+@dataclass(frozen=True, slots=True)
+class _MCPServerRateLimitAdmission:
+    admitted_servers: tuple[MCPServer, ...]
+    rejected_servers: tuple[tuple[MCPServer, ProxyRateLimitError], ...]
+
+
+async def _enforce_mcp_server_rate_limit(
+    user_api_key_auth: UserAPIKeyAuth | None,
+    server: MCPServer,
+) -> None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    if proxy_logging_obj is not None:
+        await proxy_logging_obj.enforce_mcp_server_rate_limits(user_api_key_auth, server)
+
+
+async def _admit_mcp_servers(
+    servers: Sequence[MCPServer],
+    user_api_key_auth: UserAPIKeyAuth | None,
+) -> _MCPServerRateLimitAdmission:
+    async def _admit_server(server: MCPServer) -> tuple[MCPServer, ProxyRateLimitError | None]:
+        try:
+            await _enforce_mcp_server_rate_limit(user_api_key_auth, server)
+        except ProxyRateLimitError as error:
+            return server, error
+        return server, None
+
+    results: Final = await asyncio.gather(*(_admit_server(server) for server in servers))
+    return _MCPServerRateLimitAdmission(
+        admitted_servers=tuple(server for server, error in results if error is None),
+        rejected_servers=tuple((server, error) for server, error in results if error is not None),
+    )
 
 
 async def _build_virtual_call_logging_obj(
@@ -958,6 +995,7 @@ async def _get_tools_from_mcp_servers(
     mcp_proxy_mode: bool = False,
     *,
     record_listing: bool = False,
+    enforce_rate_limits: bool = True,
 ) -> AggregateToolListing:
     """
     Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -1051,6 +1089,7 @@ async def _get_tools_from_mcp_servers(
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
+
         if mcp_servers and not allowed_mcp_servers:
             await raise_denied_scoped_mcp_access(
                 requested_names=mcp_servers,
@@ -1058,9 +1097,18 @@ async def _get_tools_from_mcp_servers(
                 client_ip=client_ip,
             )
 
+        server_admission: Final = (
+            await _admit_mcp_servers(allowed_mcp_servers, user_api_key_auth)
+            if enforce_rate_limits
+            else _MCPServerRateLimitAdmission(admitted_servers=tuple(allowed_mcp_servers), rejected_servers=())
+        )
+        if not server_admission.admitted_servers and server_admission.rejected_servers:
+            raise server_admission.rejected_servers[0][1]
+        admitted_mcp_servers: Final = server_admission.admitted_servers
+
         # Pre-fetch OAuth credentials only when at least one server uses OAuth2,
         # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
-        _has_oauth2_server = any(getattr(s, "auth_type", None) == MCPAuth.oauth2 for s in allowed_mcp_servers)
+        _has_oauth2_server = any(getattr(s, "auth_type", None) == MCPAuth.oauth2 for s in admitted_mcp_servers)
         _prefetched_oauth_creds: Final = (
             await _prefetch_oauth_creds_for_user(user_api_key_auth) if _has_oauth2_server else {}
         )
@@ -1191,23 +1239,23 @@ async def _get_tools_from_mcp_servers(
                 return [], classify_list_exception(e)
 
         # Fetch tools from all servers in parallel
-        tasks: Final = [_fetch_and_filter_server_tools(server) for server in allowed_mcp_servers]
+        tasks: Final = [_fetch_and_filter_server_tools(server) for server in admitted_mcp_servers]
         results: Final = await asyncio.gather(*tasks)
 
         # Flatten results into single list
         all_tools: Final[list[MCPTool]] = [tool for tools, _ in results for tool in tools]
         server_outcomes: Final[dict[str, ServerOutcome]] = {
-            _aggregate_server_key(server): outcome
-            for server, (_, outcome) in zip(allowed_mcp_servers, results)
-            if server is not None
+            _aggregate_server_key(server): outcome for server, (_, outcome) in zip(admitted_mcp_servers, results)
+        } | {
+            _aggregate_server_key(server): ServerListFault(tag="rate_limited", status_code=429)
+            for server, _ in server_admission.rejected_servers
         }
 
         # If logging is enabled, enrich spend_logs_metadata with counts
         if litellm_logging_obj:
             per_server_tool_counts: Final[dict[str, int]] = {
                 _aggregate_server_key(server): len(server_tools)
-                for server, (server_tools, _) in zip(allowed_mcp_servers, results)
-                if server is not None
+                for server, (server_tools, _) in zip(admitted_mcp_servers, results)
             }
 
             metadata_dict: Final = litellm_logging_obj.model_call_details.get("metadata")
@@ -1289,13 +1337,14 @@ async def _get_prompts_from_mcp_servers(
         mcp_servers=mcp_servers,
         client_ip=client_ip,
     )
+    server_admission: Final = await _admit_mcp_servers(allowed_mcp_servers, user_api_key_auth)
+    if not server_admission.admitted_servers and server_admission.rejected_servers:
+        raise server_admission.rejected_servers[0][1]
+    admitted_mcp_servers: Final = server_admission.admitted_servers
 
     # Get prompts from each allowed server
     all_prompts: Final = []
-    for server in allowed_mcp_servers:
-        if server is None:
-            continue
-
+    for server in admitted_mcp_servers:
         server_auth_header, extra_headers = _prepare_mcp_server_headers(
             server=server,
             mcp_server_auth_headers=mcp_server_auth_headers,
@@ -1345,12 +1394,13 @@ async def _get_resources_from_mcp_servers(
         mcp_servers=mcp_servers,
         client_ip=client_ip,
     )
+    server_admission: Final = await _admit_mcp_servers(allowed_mcp_servers, user_api_key_auth)
+    if not server_admission.admitted_servers and server_admission.rejected_servers:
+        raise server_admission.rejected_servers[0][1]
+    admitted_mcp_servers: Final = server_admission.admitted_servers
 
     all_resources: Final[list[Resource]] = []
-    for server in allowed_mcp_servers:
-        if server is None:
-            continue
-
+    for server in admitted_mcp_servers:
         server_auth_header, extra_headers = _prepare_mcp_server_headers(
             server=server,
             mcp_server_auth_headers=mcp_server_auth_headers,
@@ -1398,12 +1448,13 @@ async def _get_resource_templates_from_mcp_servers(
         mcp_servers=mcp_servers,
         client_ip=client_ip,
     )
+    server_admission: Final = await _admit_mcp_servers(allowed_mcp_servers, user_api_key_auth)
+    if not server_admission.admitted_servers and server_admission.rejected_servers:
+        raise server_admission.rejected_servers[0][1]
+    admitted_mcp_servers: Final = server_admission.admitted_servers
 
     all_resource_templates: Final[list[ResourceTemplate]] = []
-    for server in allowed_mcp_servers:
-        if server is None:
-            continue
-
+    for server in admitted_mcp_servers:
         server_auth_header, extra_headers = _prepare_mcp_server_headers(
             server=server,
             mcp_server_auth_headers=mcp_server_auth_headers,
@@ -1563,6 +1614,8 @@ async def _list_mcp_prompts(
             client_ip=client_ip,
         )
         verbose_logger.debug("Successfully fetched %s prompts from managed MCP servers", len(managed_prompts))
+    except ProxyRateLimitError:
+        raise
     except Exception as e:
         verbose_logger.exception("Error getting tools from managed MCP servers: %s", e)
         # Continue with empty managed tools list instead of failing completely
@@ -1593,6 +1646,8 @@ async def _list_mcp_resources(
             client_ip=client_ip,
         )
         verbose_logger.debug("Successfully fetched %s resources from managed MCP servers", len(managed_resources))
+    except ProxyRateLimitError:
+        raise
     except Exception as e:
         verbose_logger.exception("Error getting resources from managed MCP servers: %s", e)
 
@@ -1625,6 +1680,8 @@ async def _list_mcp_resource_templates(
             "Successfully fetched %s resource templates from managed MCP servers",
             len(managed_resource_templates),
         )
+    except ProxyRateLimitError:
+        raise
     except Exception as e:
         verbose_logger.exception(
             "Error getting resource templates from managed MCP servers: %s",
@@ -1831,6 +1888,7 @@ async def _list_tools_before_first_call(
             raw_headers=raw_headers,
             client_ip=client_ip,
             record_listing=False,
+            enforce_rate_limits=False,
         )
     except Exception as e:  # noqa: BLE001  # best effort: resolution below answers as it did before
         verbose_logger.debug("MCP tools/call: listing %s before its first call failed: %s", server.name, e)
@@ -2534,6 +2592,7 @@ async def mcp_get_prompt(
         user_api_key_auth=user_api_key_auth,
     )
 
+    await _enforce_mcp_server_rate_limit(user_api_key_auth, server)
     return await global_mcp_server_manager.get_prompt_from_server(
         server=server,
         user_api_key_auth=user_api_key_auth,
@@ -2587,6 +2646,7 @@ async def mcp_read_resource(
         user_api_key_auth=user_api_key_auth,
     )
 
+    await _enforce_mcp_server_rate_limit(user_api_key_auth, server)
     return await global_mcp_server_manager.read_resource_from_server(
         server=server,
         user_api_key_auth=user_api_key_auth,
@@ -2980,6 +3040,11 @@ async def _execute_list_prompts(
         )
         verbose_logger.info("MCP list_prompts - Successfully returned %s prompts", len(prompts))
         return ListPromptsResult(prompts=prompts)
+    except ProxyRateLimitError as e:
+        from mcp.shared.exceptions import MCPError
+        from mcp.types import INVALID_REQUEST
+
+        raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(e.detail)) from e
     except Exception as e:
         verbose_logger.exception("Error in list_prompts endpoint: %s", e)
         # Return empty list instead of failing completely
@@ -3049,8 +3114,15 @@ async def _execute_list_resources(
         )
         verbose_logger.info("MCP list_resources - Successfully returned %s resources", len(resources))
         return ListResourcesResult(resources=resources)
+    except ProxyRateLimitError as e:
+        from mcp.shared.exceptions import MCPError
+        from mcp.types import INVALID_REQUEST
+
+        raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(e.detail)) from e
     except Exception as e:
         verbose_logger.exception("Error in list_resources endpoint: %s", e)
+        # Return empty list instead of failing completely
+        # This prevents the HTTP stream from failing and allows the client to get a response
         return ListResourcesResult(resources=[])
 
 
@@ -3089,8 +3161,15 @@ async def _execute_list_resource_templates(
             "MCP list_resource_templates - Successfully returned %s resource templates", len(resource_templates)
         )
         return ListResourceTemplatesResult(resource_templates=resource_templates)
+    except ProxyRateLimitError as e:
+        from mcp.shared.exceptions import MCPError
+        from mcp.types import INVALID_REQUEST
+
+        raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(e.detail)) from e
     except Exception as e:
         verbose_logger.exception("Error in list_resource_templates endpoint: %s", e)
+        # Return empty list instead of failing completely
+        # This prevents the HTTP stream from failing and allows the client to get a response
         return ListResourceTemplatesResult(resource_templates=[])
 
 

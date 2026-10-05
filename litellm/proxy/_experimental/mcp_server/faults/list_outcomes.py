@@ -28,6 +28,7 @@ from litellm.proxy._experimental.mcp_server.faults.traversal import iter_excepti
 ListFaultCategory: TypeAlias = Literal[
     "auth_required",
     "forbidden",
+    "rate_limited",
     "timeout",
     "unreachable",
     "upstream_error",
@@ -150,7 +151,7 @@ def outcome_wire_value(outcome: ServerOutcome) -> dict[str, object]:
     match outcome.tag:
         case "ok":
             return {"status": "ok", "tool_count": outcome.tool_count}
-        case "auth_required" | "forbidden" | "timeout" | "unreachable" | "upstream_error" | "internal":
+        case "auth_required" | "forbidden" | "rate_limited" | "timeout" | "unreachable" | "upstream_error" | "internal":
             return {
                 "status": outcome.tag,
                 **({"http_status": outcome.status_code} if outcome.status_code is not None else {}),
@@ -168,6 +169,8 @@ def list_fault_http_status(fault: ServerListFault) -> int:
             return fault.status_code or 401
         case "forbidden":
             return 403
+        case "rate_limited":
+            return 429
         case "timeout":
             return 504
         case "unreachable" | "upstream_error":

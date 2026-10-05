@@ -76,6 +76,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import (
     CallTypes,
@@ -2961,6 +2962,48 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
 
+    async def enforce_mcp_server_rate_limits(
+        self,
+        user_api_key_dict: UserAPIKeyAuth | None,
+        server: MCPServer,
+    ) -> None:
+        descriptors: Final[list[RateLimitDescriptor]] = []  # mutable-ok: existing descriptor helpers append in place
+        mcp_server_name: Final = server.alias or server.server_name or server.name
+        if user_api_key_dict is not None:
+            self._add_mcp_per_key_rate_limit_descriptor(
+                user_api_key_dict=user_api_key_dict,
+                mcp_server_name=mcp_server_name,
+                descriptors=descriptors,
+            )
+            self._add_mcp_per_team_rate_limit_descriptor(
+                user_api_key_dict=user_api_key_dict,
+                mcp_server_name=mcp_server_name,
+                descriptors=descriptors,
+            )
+        if server.rpm is not None:
+            descriptors.append(
+                RateLimitDescriptor(
+                    key="mcp_server",
+                    value=server.server_id,
+                    rate_limit={
+                        "requests_per_unit": server.rpm,
+                        "tokens_per_unit": None,
+                        "window_size": self.window_size,
+                    },
+                )
+            )
+        if not descriptors:
+            return
+
+        parent_otel_span: Final = user_api_key_dict.parent_otel_span if user_api_key_dict is not None else None
+        response: Final = await self.should_rate_limit(
+            descriptors,
+            parent_otel_span=parent_otel_span,
+            skip_tpm_check=True,
+        )
+        if response["overall_code"] == "OVER_LIMIT":
+            self._handle_rate_limit_error(response, descriptors)
+
     def _should_enforce_rate_limit(
         self,
         limit_type: str | None,
@@ -3246,21 +3289,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             data=data,
             descriptors=descriptors,
         )
-
-        # REST MCP calls pass the raw body through this hook before server
-        # resolution; only the later synthetic hook payload may carry this key.
-        if call_type == CallTypes.call_mcp_tool.value and "server_id" not in data:
-            mcp_server_name: Final = data.get("mcp_server_name", None)
-            self._add_mcp_per_key_rate_limit_descriptor(
-                user_api_key_dict=user_api_key_dict,
-                mcp_server_name=mcp_server_name,
-                descriptors=descriptors,
-            )
-            self._add_mcp_per_team_rate_limit_descriptor(
-                user_api_key_dict=user_api_key_dict,
-                mcp_server_name=mcp_server_name,
-                descriptors=descriptors,
-            )
 
         self._add_team_model_rate_limit_descriptor_from_metadata(
             user_api_key_dict=user_api_key_dict,

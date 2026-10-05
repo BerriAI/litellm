@@ -3,6 +3,7 @@ from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi import HTTPException
 from mcp.types import GetPromptRequest, GetPromptRequestParams, GetPromptResult
 from mcp.types import Tool as MCPTool
 
@@ -16,7 +17,11 @@ from litellm.proxy._experimental.mcp_server.operations import GatewayOperations,
 from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _PROXY_MaxParallelRequestsHandler_v3,
+)
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -282,6 +287,251 @@ def _catalog_case(method):
         ),
     }
     return cases[method]
+
+
+def _mcp_rate_limited_proxy_logging() -> ProxyLogging:
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+    proxy_logging.proxy_hook_mapping["parallel_request_limiter"] = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    return proxy_logging
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operation",
+    ["tools/list", "prompts/list", "resources/list", "resources/templates/list", "prompts/get", "resources/read"],
+)
+async def test_mcp_server_rpm_limits_every_catalog_operation(operation: str) -> None:
+    from mcp import types
+
+    server: Final = MCPServer(
+        server_id="catalog-rpm",
+        name="catalog",
+        server_name="catalog",
+        transport=MCPTransport.http,
+        rpm=1,
+    )
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-catalog-rpm"))
+    proxy_logging: Final = _mcp_rate_limited_proxy_logging()
+    operation_to_manager_method: Final = {
+        "tools/list": "_get_tools_from_server",
+        "prompts/list": "get_prompts_from_server",
+        "resources/list": "get_resources_from_server",
+        "resources/templates/list": "get_resource_templates_from_server",
+        "prompts/get": "get_prompt_from_server",
+        "resources/read": "read_resource_from_server",
+    }
+    upstream: Final = AsyncMock(
+        return_value=(
+            [types.Tool(name="echo", description="echo", inputSchema={"type": "object"})]
+            if operation == "tools/list"
+            else GetPromptResult(messages=[])
+            if operation == "prompts/get"
+            else types.ReadResourceResult(contents=[])
+            if operation == "resources/read"
+            else []
+        )
+    )
+    manager_method: Final = operation_to_manager_method[operation]
+
+    async def invoke() -> object:
+        if operation == "tools/list":
+            return await operations._get_tools_from_mcp_servers(
+                user_api_key_auth=caller,
+                mcp_auth_header=None,
+                mcp_servers=[server.server_id],
+            )
+        if operation == "prompts/list":
+            return await operations._get_prompts_from_mcp_servers(
+                user_api_key_auth=caller,
+                mcp_auth_header=None,
+                mcp_servers=[server.server_id],
+            )
+        if operation == "resources/list":
+            return await operations._get_resources_from_mcp_servers(
+                user_api_key_auth=caller,
+                mcp_auth_header=None,
+                mcp_servers=[server.server_id],
+            )
+        if operation == "resources/templates/list":
+            return await operations._get_resource_templates_from_mcp_servers(
+                user_api_key_auth=caller,
+                mcp_auth_header=None,
+                mcp_servers=[server.server_id],
+            )
+        if operation == "prompts/get":
+            return await operations.mcp_get_prompt(
+                name=f"{server.name}-catalog-prompt",
+                user_api_key_auth=caller,
+                mcp_servers=[server.server_id],
+            )
+        return await operations.mcp_read_resource(
+            url="https://example.com/document",
+            user_api_key_auth=caller,
+            mcp_servers=[server.server_id],
+        )
+
+    with (
+        patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        patch.object(operations.global_mcp_server_manager, manager_method, upstream),
+    ):
+        await invoke()
+        with pytest.raises(ProxyRateLimitError):
+            await invoke()
+
+    assert upstream.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_tools_list_rate_limit_keeps_admitted_servers_and_reports_rejected_servers() -> None:
+    from mcp import types
+
+    rejected: Final = MCPServer(
+        server_id="catalog-rejected",
+        name="catalog-rejected",
+        server_name="catalog-rejected",
+        transport=MCPTransport.http,
+        rpm=0,
+    )
+    admitted: Final = MCPServer(
+        server_id="catalog-admitted",
+        name="catalog-admitted",
+        server_name="catalog-admitted",
+        transport=MCPTransport.http,
+    )
+    proxy_logging: Final = _mcp_rate_limited_proxy_logging()
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-catalog-partial"))
+
+    async def fetch_tools(*, server: MCPServer, **_: object) -> list[types.Tool]:
+        return [types.Tool(name=f"{server.name}-echo", inputSchema={"type": "object"})]
+
+    upstream: Final = AsyncMock(side_effect=fetch_tools)
+    with (
+        patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[rejected, admitted])),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        patch.object(operations.global_mcp_server_manager, "_get_tools_from_server", upstream),
+    ):
+        listing: Final = await operations._get_tools_from_mcp_servers(
+            user_api_key_auth=caller,
+            mcp_auth_header=None,
+            mcp_servers=[rejected.server_id, admitted.server_id],
+        )
+
+    assert [tool.name for tool in listing.tools] == ["catalog-admitted-echo"]
+    assert listing.outcomes["catalog-rejected"].tag == "rate_limited"
+    assert upstream.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_tools_call_warmup_does_not_consume_mcp_server_rpm() -> None:
+    from mcp import types
+
+    server: Final = MCPServer(
+        server_id="catalog-warmup",
+        name="catalog-warmup",
+        server_name="catalog-warmup",
+        transport=MCPTransport.http,
+        rpm=1,
+    )
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-catalog-warmup"))
+    proxy_logging: Final = _mcp_rate_limited_proxy_logging()
+    upstream: Final = AsyncMock(
+        return_value=[types.Tool(name="echo", inputSchema={"type": "object"})]
+    )
+    with (
+        patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch.object(operations.global_mcp_server_manager, "server_exposes_tool", return_value=False),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        patch.object(operations.global_mcp_server_manager, "_get_tools_from_server", upstream),
+    ):
+        await operations._list_tools_before_first_call(
+            server=server,
+            tool_name="echo",
+            allowed_mcp_servers=[server],
+            user_api_key_auth=caller,
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        )
+        listing: Final = await operations._get_tools_from_mcp_servers(
+            user_api_key_auth=caller,
+            mcp_auth_header=None,
+            mcp_servers=[server.server_id],
+        )
+
+    assert [tool.name for tool in listing.tools] == ["echo"]
+
+
+@pytest.mark.asyncio
+async def test_tools_call_pre_call_check_enforces_mcp_server_rpm() -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    server: Final = MCPServer(
+        server_id="catalog-call",
+        name="catalog-call",
+        server_name="catalog-call",
+        transport=MCPTransport.http,
+        rpm=1,
+    )
+    proxy_logging: Final = _mcp_rate_limited_proxy_logging()
+    manager: Final = MCPServerManager()
+
+    await manager.pre_call_tool_check(
+        name="echo",
+        arguments={},
+        server_name=server.name,
+        user_api_key_auth=None,
+        proxy_logging_obj=proxy_logging,
+        server=server,
+    )
+    with pytest.raises(ProxyRateLimitError):
+        await manager.pre_call_tool_check(
+            name="echo",
+            arguments={},
+            server_name=server.name,
+            user_api_key_auth=None,
+            proxy_logging_obj=proxy_logging,
+            server=server,
+        )
+
+
+@pytest.mark.asyncio
+async def test_disallowed_tool_does_not_consume_mcp_server_rpm() -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    server: Final = MCPServer(
+        server_id="catalog-call-authorization",
+        name="catalog-call-authorization",
+        server_name="catalog-call-authorization",
+        transport=MCPTransport.http,
+        allowed_tools=["allowed"],
+        rpm=1,
+    )
+    proxy_logging: Final = _mcp_rate_limited_proxy_logging()
+    manager: Final = MCPServerManager()
+
+    with pytest.raises(HTTPException) as denied_call:
+        await manager.pre_call_tool_check(
+            name="disallowed",
+            arguments={},
+            server_name=server.name,
+            user_api_key_auth=None,
+            proxy_logging_obj=proxy_logging,
+            server=server,
+        )
+
+    assert denied_call.value.status_code == 403
+    await manager.pre_call_tool_check(
+        name="allowed",
+        arguments={},
+        server_name=server.name,
+        user_api_key_auth=None,
+        proxy_logging_obj=proxy_logging,
+        server=server,
+    )
 
 
 @pytest.mark.asyncio

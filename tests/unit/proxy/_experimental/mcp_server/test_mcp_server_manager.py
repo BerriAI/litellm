@@ -5851,7 +5851,7 @@ class TestMCPServerManager:
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
         user_api_key_auth: Final = UserAPIKeyAuth()
-        proxy_logging_obj = MagicMock()
+        proxy_logging_obj = _mock_proxy_logging()
 
         # Mock the async methods that pre_call_tool_check calls
         proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
@@ -5884,7 +5884,7 @@ class TestMCPServerManager:
 
         # Mock dependencies
         user_api_key_auth = MagicMock()
-        proxy_logging_obj = MagicMock()
+        proxy_logging_obj = _mock_proxy_logging()
 
         # This should raise an HTTPException
         with pytest.raises(HTTPException) as exc_info:
@@ -5918,7 +5918,7 @@ class TestMCPServerManager:
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
         user_api_key_auth: Final = UserAPIKeyAuth()
-        proxy_logging_obj = MagicMock()
+        proxy_logging_obj = _mock_proxy_logging()
 
         # Mock the async methods that pre_call_tool_check calls
         proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
@@ -5951,7 +5951,7 @@ class TestMCPServerManager:
 
         # Mock dependencies
         user_api_key_auth = MagicMock()
-        proxy_logging_obj = MagicMock()
+        proxy_logging_obj = _mock_proxy_logging()
 
         # This should raise an HTTPException
         with pytest.raises(HTTPException) as exc_info:
@@ -5985,7 +5985,7 @@ class TestMCPServerManager:
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
         user_api_key_auth: Final = UserAPIKeyAuth()
-        proxy_logging_obj = MagicMock()
+        proxy_logging_obj = _mock_proxy_logging()
 
         # Mock the async methods that pre_call_tool_check calls
         proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
@@ -6020,7 +6020,7 @@ class TestMCPServerManager:
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
         user_api_key_auth: Final = UserAPIKeyAuth()
-        proxy_logging_obj = MagicMock()
+        proxy_logging_obj = _mock_proxy_logging()
 
         # Mock the async methods that pre_call_tool_check calls
         proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
@@ -6888,7 +6888,7 @@ class TestMCPServerManager:
             object_permission=object_permission,
         )
 
-        proxy_logging = MagicMock()
+        proxy_logging = _mock_proxy_logging()
         proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
         proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
         proxy_logging.pre_call_hook = AsyncMock(return_value=None)
@@ -6931,7 +6931,7 @@ class TestMCPServerManager:
             object_permission=object_permission,
         )
 
-        proxy_logging = MagicMock()
+        proxy_logging = _mock_proxy_logging()
         proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
         proxy_logging._convert_mcp_to_llm_format = MagicMock(return_value={})
         proxy_logging.pre_call_hook = AsyncMock(return_value=None)
@@ -7072,7 +7072,7 @@ class TestMCPServerManager:
         # Mock dependencies - set object_permission and object_permission_id to None
         # so permission checks return None (no restrictions)
         user_api_key_auth: Final = UserAPIKeyAuth()
-        proxy_logging_obj = MagicMock()
+        proxy_logging_obj = _mock_proxy_logging()
 
         # Mock the async methods that pre_call_tool_check calls
         proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
@@ -7157,7 +7157,7 @@ class TestMCPServerManager:
         user_api_key_auth: Final = UserAPIKeyAuth(api_key="sk-test")
 
         # Mock proxy logging
-        proxy_logging_obj = MagicMock()
+        proxy_logging_obj = _mock_proxy_logging()
         proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
         proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
         proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
@@ -7203,7 +7203,7 @@ class TestMCPServerManager:
         mock_client.call_tool.return_value = MagicMock(spec=CallToolResult, content=[], isError=False)
         manager._create_mcp_client = AsyncMock(return_value=mock_client)
 
-        proxy_logging_obj = MagicMock()
+        proxy_logging_obj = _mock_proxy_logging()
         proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
         proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
         proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
@@ -7688,7 +7688,7 @@ class TestMCPServerManager:
         manager._fetch_tools_with_timeout = AsyncMock(
             return_value=[MCPTool(name="turn", description="stored cred catalog", inputSchema={})]
         )
-        proxy_logging_obj = MagicMock()
+        proxy_logging_obj = _mock_proxy_logging()
         proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
         proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
         proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
@@ -8022,7 +8022,7 @@ class TestMCPServerManager:
                 record_listing=True,
             )
 
-        proxy_logging_obj = MagicMock()
+        proxy_logging_obj = _mock_proxy_logging()
         proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
         proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
         proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
@@ -9539,19 +9539,28 @@ class TestMCPServerTimestamps:
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_preserves_timeout(self, config_only_mcp_manager_factory):
-        """timeout from proxy config is loaded into MCPServer."""
+        """MCP server request limits from proxy config are loaded into MCPServer."""
         manager = config_only_mcp_manager_factory()
         config = {
             "my_server": {
                 "url": "https://example.com/mcp",
                 "transport": MCPTransport.http,
                 "timeout": 90.0,
+                "max_concurrent_requests": 4,
+                "rpm": 7,
+            },
+            "unlimited_server": {
+                "url": "https://example.com/other-mcp",
+                "transport": MCPTransport.http,
             }
         }
         await manager.load_servers_from_config(config)
         servers = list(manager.config_mcp_servers.values())
-        assert len(servers) == 1
+        assert len(servers) == 2
         assert servers[0].timeout == 90.0
+        assert servers[0].max_concurrent_requests == 4
+        assert servers[0].rpm == 7
+        assert servers[1].rpm is None
 
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_timeout_returns_504(self):
@@ -12836,8 +12845,14 @@ def _unrestricted_auth() -> UserAPIKeyAuth:
     return UserAPIKeyAuth()
 
 
+def _mock_proxy_logging() -> MagicMock:
+    proxy_logging_obj: Final = MagicMock()
+    proxy_logging_obj.enforce_mcp_server_rate_limits = AsyncMock()
+    return proxy_logging_obj
+
+
 def _permissive_proxy_logging() -> MagicMock:
-    proxy_logging_obj = MagicMock()
+    proxy_logging_obj: Final = _mock_proxy_logging()
     proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
     proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
     proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})
@@ -17159,7 +17174,7 @@ class TestToolCatalogGuard:
         manager = MCPServerManager()
         server = _notes_server({"list_notes": _pin(LIST_NOTES)})
         user_api_key_auth = MagicMock(object_permission=None, object_permission_id=None)
-        proxy_logging_obj = MagicMock()
+        proxy_logging_obj = _mock_proxy_logging()
         proxy_logging_obj._create_mcp_request_object_from_kwargs = MagicMock(return_value={})
         proxy_logging_obj._convert_mcp_to_llm_format = MagicMock(return_value={})
         proxy_logging_obj.pre_call_hook = AsyncMock(return_value={})

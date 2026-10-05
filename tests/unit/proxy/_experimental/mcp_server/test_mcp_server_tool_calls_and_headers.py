@@ -9137,6 +9137,7 @@ def _mock_mcp_logging_obj() -> MagicMock:
 def _mock_mcp_proxy_logging() -> MagicMock:
     """ProxyLogging stand-in whose post_mcp_call_hook passes the result through."""
     proxy_logging_mock = MagicMock()
+    proxy_logging_mock.enforce_mcp_server_rate_limits = AsyncMock()
     proxy_logging_mock.post_call_failure_hook = AsyncMock()
     proxy_logging_mock.post_mcp_call_hook = AsyncMock(side_effect=lambda response, **_: response)
     return proxy_logging_mock
