@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
 
-import type { TimeWindow } from "./TracesTimeline";
+import type { TimeWindow } from "./Timeline";
 
 export const RANGE_PRESETS = [
   { hours: 1, label: "Last hour" },

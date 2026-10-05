@@ -19,8 +19,9 @@ import {
 } from "../routing";
 import type { TraceSummary } from "../types";
 import { RunView } from "../detail/run/RunView";
-import { TimeRangeControls } from "./TimeRangeControls";
-import { TracesTimeline, type TimeWindow } from "./TracesTimeline";
+import { TimeRangeControls } from "@/components/shared/timeline/TimeRangeControls";
+import { TracesTimeline } from "./TracesTimeline";
+import type { TimeWindow } from "@/components/shared/timeline/Timeline";
 import { TracingSetupCard } from "../../onboarding/tracing/TracingSetupCard";
 import { useTracesLive } from "../api";
 import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
