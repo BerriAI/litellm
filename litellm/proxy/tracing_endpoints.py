@@ -29,6 +29,13 @@ from litellm.proxy.common_utils.http_parsing_utils import is_otlp_trace_request
 from litellm.proxy.tracing_runtime import provide_receiver, require_receiver
 from litellm.rust_bridge.trace.errors import TraceChanged
 from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
+from litellm.rust_bridge.trace.generated.requests import (
+    TraceDetailRequest,
+    TraceErrorPageRequest,
+    TraceListRequest,
+    TraceQueryRequest,
+    TraceSpanRequest,
+)
 from litellm.rust_bridge.trace.generated.types import (
     AllQueryScope,
     OwnedQueryScope,
@@ -192,21 +199,17 @@ async def list_agent_traces(
     end_ms: Annotated[int | None, Query(description="Window end, unix ms. Default: now")] = None,
     cursor: Annotated[str | None, Query(max_length=512)] = None,
 ) -> TracePage:
+    request: Final = TraceListRequest(start_ms=start_ms, end_ms=end_ms, cursor=cursor)
     try:
         tracing, scope = context.reader()
         return await tracing.list_traces(
             scope=scope,
-            start_ms=start_ms if start_ms is not None else now_ms - MS_PER_DAY,
-            end_ms=end_ms if end_ms is not None else now_ms,
-            cursor=cursor,
+            start_ms=request.start_ms if request.start_ms is not None else now_ms - MS_PER_DAY,
+            end_ms=request.end_ms if request.end_ms is not None else now_ms,
+            cursor=request.cursor,
         )
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
         raise read_failure(error) from error
-
-
-class TraceQueryRequest(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    sql: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,9 +283,10 @@ async def get_agent_trace(
     cursor: Annotated[str | None, Query(max_length=512)] = None,
     page_size: Annotated[int | None, Query(ge=1, le=500)] = None,
 ) -> Trace:
+    request: Final = TraceDetailRequest(trace_ref=trace_ref, cursor=cursor, page_size=page_size)
     tracing, scope = context.reader()
     try:
-        trace: Final = await tracing.get_trace(trace_id, scope, trace_ref, cursor, page_size)
+        trace: Final = await tracing.get_trace(trace_id, scope, request.trace_ref, request.cursor, request.page_size)
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
         raise read_failure(error) from error
     if trace is None:
@@ -297,9 +301,10 @@ async def get_agent_trace_span(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
     trace_ref: Annotated[str, Query()] = "",
 ) -> SpanDetail:
+    request: Final = TraceSpanRequest(trace_ref=trace_ref)
     tracing, scope = context.reader()
     try:
-        span: Final = await tracing.get_span(trace_id, span_id, scope, trace_ref)
+        span: Final = await tracing.get_span(trace_id, span_id, scope, request.trace_ref)
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
         raise read_failure(error) from error
     if span is None:
@@ -315,9 +320,10 @@ async def get_agent_trace_span_error(
     trace_ref: Annotated[str, Query()] = "",
     cursor: Annotated[str | None, Query(max_length=512)] = None,
 ) -> SpanErrorPage:
+    request: Final = TraceErrorPageRequest(trace_ref=trace_ref, cursor=cursor)
     try:
         tracing, scope = context.reader()
-        page: Final = await tracing.get_span_error(trace_id, span_id, scope, trace_ref, cursor)
+        page: Final = await tracing.get_span_error(trace_id, span_id, scope, request.trace_ref, request.cursor)
     except (TraceChanged, ValueError, OverflowError, RuntimeError) as error:
         raise read_failure(error) from error
     if page is None:

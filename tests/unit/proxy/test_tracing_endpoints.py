@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from httpx import Response
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 from litellm.constants import TRACE_READ_RETRY_AFTER_SECONDS
 from litellm.proxy import tracing_endpoints
@@ -109,8 +110,8 @@ NOW_MS: Final = 1_800_000_000_000
 
 
 class RequestValidationError(TypedDict):
-    type: str
-    loc: list[str | int]
+    type: ReadOnly[str]
+    loc: ReadOnly[list[str | int]]
 
 
 def _validation_errors(response: Response) -> tuple[RequestValidationError, ...]:
