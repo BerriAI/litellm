@@ -46,13 +46,13 @@ class TestTopxAIProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="topxai/claude-sonnet-5",
+            model="topxai/claude-sonnet-5-5",
             custom_llm_provider=None,
             api_base=None,
             api_key=None,
         )
 
-        assert model == "claude-sonnet-5"
+        assert model == "claude-sonnet-5-5"
         assert provider == "topxai"
         assert api_base == TOPXAI_BASE_URL
 
@@ -60,7 +60,7 @@ class TestTopxAIProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="topxai/claude-sonnet-5",
+            model="topxai/claude-sonnet-5-5",
             custom_llm_provider=None,
             api_base="https://relay.example.com/v1",
             api_key="sk-test",
@@ -167,7 +167,7 @@ class TestTopxAIProviderConfig:
                 {
                     "model_name": "sonnet",
                     "litellm_params": {
-                        "model": "topxai/claude-sonnet-5",
+                        "model": "topxai/claude-sonnet-5-5",
                         "api_key": "test-key",
                     },
                 }
@@ -181,7 +181,7 @@ class TestTopxAIProviderConfig:
 class TestTopxAIModelMetadata:
     # Catalog and capabilities: https://ai.topxea.com/api/pricing (verified 2026-09-30)
     TOPXAI_MODELS: Final = (
-        "topxai/claude-sonnet-5",
+        "topxai/claude-sonnet-5-5",
         "topxai/claude-opus-5-5",
         "topxai/claude-fable-5-1",
         "topxai/gpt-6.1-sol",
@@ -195,7 +195,7 @@ class TestTopxAIModelMetadata:
     TEXT_ONLY_MODELS: Final = ("topxai/GLM-5.3-Abliterated", "topxai/deepseek-v4-pro")
     # Only these routes publish a cache-write price; the rest bill cache writes as input
     CACHE_WRITE_MODELS: Final = (
-        "topxai/claude-sonnet-5",
+        "topxai/claude-sonnet-5-5",
         "topxai/claude-opus-5-5",
         "topxai/claude-fable-5-1",
         "topxai/gpt-6.1-sol",

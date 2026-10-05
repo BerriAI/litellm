@@ -45750,7 +45750,7 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "topxai/claude-sonnet-5": {
+    "topxai/claude-sonnet-5-5": {
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -45761,7 +45761,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 5e-06,
-        "source": "https://ai.topxea.com/pricing/claude-sonnet-5",
+        "source": "https://ai.topxea.com/pricing/claude-sonnet-5-5",
         "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
