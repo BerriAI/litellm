@@ -4591,3 +4591,28 @@ def test_drop_params_false_still_rejects_an_invalid_stream_chunk_size() -> None:
             drop_params=False,
             mock_response="hi",
         )
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_router_scaffold_rejects_execution_before_provider_resolution(stream: bool) -> None:
+    with pytest.raises(NotImplementedError, match="routed execution"):
+        litellm.completion(model="unconfigured-alias", messages=[], router=object(), stream=stream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True))
+async def test_async_router_scaffold_rejects_execution_before_provider_resolution(stream: bool) -> None:
+    with pytest.raises(NotImplementedError, match="routed execution"):
+        await litellm.acompletion(model="unconfigured-alias", messages=[], router=object(), stream=stream)
+
+
+def test_completion_without_a_router_keeps_the_existing_response_contract() -> None:
+    response: Final = litellm.completion(
+        model="openai/test-model",
+        messages=[{"role": "user", "content": "hello"}],
+        mock_response="plain response",
+        router=None,
+    )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "plain response"

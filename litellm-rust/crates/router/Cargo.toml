@@ -8,6 +8,8 @@ repository.workspace = true
 [dependencies]
 litellm-config.workspace = true
 litellm-core.workspace = true
+serde.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

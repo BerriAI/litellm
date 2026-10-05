@@ -354,6 +354,7 @@ __all__ = [
     "NativeTraceStorage",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
+    "RouterHandle",
     "RustBridgeDeclined",
     "RustUpstreamError",
     "TokenCounter",
@@ -376,6 +377,10 @@ __all__ = [
     "process_state_started",
     "reserve_process_for_forking",
     "responses",
+    "routing_close",
+    "routing_create",
+    "routing_reconfigure",
+    "routing_snapshot",
     "trace_encode_error",
     "trace_span_rows",
     "transcription",
@@ -441,3 +446,12 @@ class NativeCacheHandle:
     def ping(self) -> Future[bool]: ...
     def disconnect(self) -> Future[None]: ...
     def delete(self, keys: Sequence[str]) -> Future[None]: ...
+
+@final
+class RouterHandle:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
+
+def routing_create(config: Mapping[str, JsonValue]) -> RouterHandle: ...
+def routing_snapshot(router: RouterHandle) -> JsonValue: ...
+def routing_reconfigure(router: RouterHandle, config: Mapping[str, JsonValue]) -> None: ...
+def routing_close(router: RouterHandle) -> None: ...

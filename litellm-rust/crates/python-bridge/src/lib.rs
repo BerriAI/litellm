@@ -12,6 +12,7 @@ mod marshal;
 mod preflight;
 mod python_settings;
 mod routes;
+mod routing;
 mod secrets;
 mod tokenizer;
 
@@ -46,6 +47,10 @@ mod _native {
     #[pymodule_export]
     use crate::routes::traces::{
         NativeTraceConfig, NativeTraceStorage, trace_encode_error, trace_span_rows,
+    };
+    #[pymodule_export]
+    use crate::routing::{
+        RouterHandle, routing_close, routing_create, routing_reconfigure, routing_snapshot,
     };
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
@@ -89,6 +94,11 @@ mod tests {
         Python::attach(|py| {
             let mut expected = vec![
                 "NativeCacheHandle",
+                "RouterHandle",
+                "routing_create",
+                "routing_snapshot",
+                "routing_reconfigure",
+                "routing_close",
                 "RustBridgeDeclined",
                 "RustUpstreamError",
                 "ForkedAfterNativeRuntimeStarted",

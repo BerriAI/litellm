@@ -92,3 +92,149 @@ fn programmatic_deployments_preserve_overrides_and_last_entry_wins() {
     assert_eq!(selected.timeout, deployment.timeout);
     assert_eq!(selected.shaping, deployment.shaping);
 }
+
+use litellm_router::{
+    Error,
+    call::{Endpoint, RoutingOptions, RoutingRequest},
+    config::RouterConfig,
+    selection::{SelectionContext, Selector},
+};
+use rstest::fixture;
+
+#[fixture]
+fn grouped_config() -> RouterConfig {
+    let config = Config::from_yaml(
+        "model_list:
+  - model_name: primary
+    model_info: {id: first}
+    litellm_params: {model: provider/a, api_key: private-key}
+  - model_name: primary
+    model_info: {id: second}
+    litellm_params: {model: provider/b}
+  - model_name: backup
+    model_info: {id: third}
+    litellm_params: {model: provider/c}",
+    )
+    .unwrap();
+    RouterConfig {
+        model_list: config.model_list.into_vec(),
+        ..RouterConfig::default()
+    }
+}
+
+fn request(model: &str) -> RoutingRequest {
+    RoutingRequest {
+        model: model.into(),
+        endpoint: Endpoint::ChatCompletions,
+        options: RoutingOptions::default(),
+    }
+}
+
+struct Pinned<'a>(&'a str);
+
+impl Selector for Pinned<'_> {
+    fn select(&self, _context: &SelectionContext) -> Result<String, Error> {
+        Ok(self.0.to_owned())
+    }
+}
+
+#[rstest]
+fn selection_retains_every_deployment_in_the_requested_group(grouped_config: RouterConfig) {
+    let router = Router::new(grouped_config).unwrap();
+    let call = router.start(request("primary")).unwrap();
+    let context = call.selection_context();
+
+    assert_eq!(
+        context
+            .candidates
+            .iter()
+            .map(|candidate| candidate.deployment_id.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second"]
+    );
+    assert_eq!(router.snapshot().deployments.len(), 3);
+    assert_eq!(router.get("primary").unwrap().model, "provider/b");
+    assert_eq!(
+        call.select(&Pinned("first"))
+            .unwrap()
+            .deployment()
+            .api_key
+            .as_deref(),
+        Some("private-key")
+    );
+}
+
+#[rstest]
+#[case::eligible("second", true)]
+#[case::other_group("third", false)]
+#[case::unknown("missing", false)]
+fn selectors_cannot_escape_the_candidate_group(
+    grouped_config: RouterConfig,
+    #[case] id: &str,
+    #[case] allowed: bool,
+) {
+    let router = Router::new(grouped_config).unwrap();
+    let call = router.start(request("primary")).unwrap();
+    let result = call.select(&Pinned(id));
+
+    if allowed {
+        assert_eq!(result.unwrap().deployment_id(), id);
+    } else {
+        assert!(matches!(result, Err(Error::InvalidSelection { id: selected }) if selected == id));
+    }
+}
+
+#[rstest]
+fn reconfiguration_and_close_preserve_started_calls(grouped_config: RouterConfig) {
+    let mut router = Router::new(grouped_config).unwrap();
+    let call = router.start(request("primary")).unwrap();
+    let original = call.selection_context();
+    router.reconfigure(RouterConfig::default()).unwrap();
+    router.close();
+    router.close();
+
+    assert_eq!(call.selection_context().candidates, original.candidates);
+    assert_eq!(router.snapshot().generation, call.generation() + 1);
+    assert!(router.snapshot().closed);
+    assert!(matches!(
+        router.start(request("primary")),
+        Err(Error::Closed)
+    ));
+    assert!(matches!(
+        router.reconfigure(RouterConfig::default()),
+        Err(Error::Closed)
+    ));
+    assert_eq!(
+        call.select(&Pinned("first")).unwrap().deployment().model,
+        "provider/a"
+    );
+}
+
+#[rstest]
+fn invalid_reconfiguration_does_not_replace_the_catalog(grouped_config: RouterConfig) {
+    let mut router = Router::new(grouped_config.clone()).unwrap();
+    let original = router.snapshot();
+    let duplicate = RouterConfig {
+        model_list: vec![
+            grouped_config.model_list[0].clone(),
+            grouped_config.model_list[0].clone(),
+        ],
+        ..RouterConfig::default()
+    };
+
+    assert!(matches!(
+        router.reconfigure(duplicate),
+        Err(Error::DuplicateDeployment { .. })
+    ));
+    assert_eq!(router.snapshot().generation, original.generation);
+    assert_eq!(router.snapshot().deployments, original.deployments);
+}
+
+#[rstest]
+fn starting_an_unknown_group_reports_the_requested_alias(grouped_config: RouterConfig) {
+    let router = Router::new(grouped_config).unwrap();
+
+    assert!(
+        matches!(router.start(request("missing")), Err(Error::UnknownModel { model }) if model == "missing")
+    );
+}
