@@ -1954,7 +1954,16 @@ class CustomStreamWrapper:
                 raise  # Re-raise StopIteration
             else:
                 self.sent_last_chunk = True
-                processed_chunk: Final = self.finish_reason_handler()
+                try:
+                    processed_chunk: Final = self.finish_reason_handler()
+                except litellm.exceptions.IncompleteStreamError as strict_error:
+                    self._record_partial_usage_for_failure()
+                    if self.logging_obj is not None:
+                        threading.Thread(
+                            target=self.logging_obj.failure_handler,
+                            args=(strict_error, traceback.format_exc()),
+                        ).start()
+                    raise
                 # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
                 # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
                 if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:
@@ -2222,7 +2231,17 @@ class CustomStreamWrapper:
             raise StopAsyncIteration  # Re-raise StopIteration
         else:
             self.sent_last_chunk = True
-            processed_chunk: Final = self.finish_reason_handler()
+            try:
+                processed_chunk: Final = self.finish_reason_handler()
+            except litellm.exceptions.IncompleteStreamError as strict_error:
+                self._record_partial_usage_for_failure()
+                if self.logging_obj is not None:
+                    asyncio.create_task(
+                        self.logging_obj.dispatch_failure_handlers(
+                            strict_error, traceback.format_exc(), prefer_async_handlers=True
+                        )
+                    )
+                raise
             # The logged response is built from self.chunks; keep a finish_reason the provider sent on its
             # last content chunk (stripped there), but never add the synthetic "stop" used when it sent none.
             if self.received_finish_reason is not None or self.intermittent_finish_reason is not None:

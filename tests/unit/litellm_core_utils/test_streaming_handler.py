@@ -5248,3 +5248,40 @@ def test_an_empty_finish_reason_still_marks_the_stream_finished():
 
     assert wrapper.stream_reported_finished is True
     assert wrapper.finish_reason_handler().choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_strict_incomplete_stream_records_partial_usage_before_raising(
+    sync_mode: bool, logging_obj: Logging
+):
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-1",
+            created=1,
+            model=None,
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None, index=0, delta=Delta(content="partial", role="assistant")
+                )
+            ],
+        )
+    ]
+    response = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+    response.strict_stream_completion = True
+    recorded = MagicMock()
+    response._record_partial_usage_for_failure = recorded
+
+    with pytest.raises(litellm.exceptions.IncompleteStreamError):
+        if sync_mode:
+            list(response)
+        else:
+            [c async for c in response]
+
+    recorded.assert_called_once()
