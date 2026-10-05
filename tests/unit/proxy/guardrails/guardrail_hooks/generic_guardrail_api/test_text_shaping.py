@@ -744,17 +744,25 @@ async def test_an_invalid_option_is_ignored_with_a_warning_and_the_whole_convers
     assert endpoint.payloads[0]["texts"] == ["rules <ts>1</ts>", "hi", "noted <ts>2</ts>", f"my ssn is {SSN}"]
 
 
+@pytest.mark.parametrize(
+    "invalid_pattern",
+    ["(", "(" * 5000 + "a" + ")" * 5000],
+    ids=["syntax_error", "nested_too_deep_to_compile"],
+)
 @pytest.mark.asyncio
-async def test_an_invalid_strip_pattern_is_ignored_with_a_warning_and_the_valid_ones_still_strip(caplog):
+async def test_an_invalid_strip_pattern_is_ignored_with_a_warning_and_the_valid_ones_still_strip(
+    caplog, invalid_pattern
+):
     endpoint: Final = _GuardrailEndpoint()
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        guardrail: Final = _guardrail(endpoint, strip_patterns=["(", TIMESTAMP])
+        guardrail: Final = _guardrail(endpoint, strip_patterns=[invalid_pattern, TIMESTAMP])
 
     await _chat_request(guardrail, _conversation())
 
     warnings: Final = [message for message in caplog.messages if message.startswith("Ignoring")]
     assert len(warnings) == 1
-    assert warnings[0].startswith("Ignoring strip_patterns entry '(', it is not a valid regex: ")
+    assert warnings[0].startswith(f"Ignoring strip_patterns entry '{invalid_pattern[:20]}")
+    assert "', it is not a valid regex: " in warnings[0]
     assert warnings[0].endswith(". The other patterns still apply")
     assert endpoint.payloads[0]["texts"] == ["rules ", "hi", "noted ", f"my ssn is {SSN}"]
 

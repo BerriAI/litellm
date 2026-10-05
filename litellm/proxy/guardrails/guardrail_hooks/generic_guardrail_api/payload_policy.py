@@ -167,7 +167,7 @@ def _positive_int(value: object, *, option_name: str, fallback: str) -> int | No
 def _compiled_pattern(pattern: str) -> regex.Pattern[str] | None:
     try:
         return regex.compile(pattern)
-    except regex.error as error:
+    except (regex.error, RecursionError) as error:
         verbose_proxy_logger.warning(
             "Ignoring strip_patterns entry %r, it is not a valid regex: %s. The other patterns still apply",
             pattern,
