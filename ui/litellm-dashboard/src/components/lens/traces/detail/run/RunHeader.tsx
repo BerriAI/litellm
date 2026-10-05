@@ -82,17 +82,19 @@ export function RunHeader({ trace, handoff, onBack, embedded }: RunHeaderProps) 
   const { summary } = trace;
   const failed = summary.status === "error";
   return (
-    <header className="flex shrink-0 flex-col gap-2 border-b bg-background px-4 pt-3 pb-2.5">
-      <div className="flex min-w-0 items-center gap-2">
-        {!embedded && (
-          <Button variant="ghost" size="icon-xs" onClick={onBack} aria-label="Back to runs">
-            <ArrowLeft className="size-4" />
-          </Button>
-        )}
-        <h1 className="min-w-0 truncate text-base font-semibold">{traceDisplayName(summary)}</h1>
-        <IdChip value={summary.trace_id} label="Copy trace ID" />
-        <RunIcon summary={summary} failed={failed} />
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+    <header className="@container/run-header flex shrink-0 flex-col gap-2 border-b bg-background px-4 pt-3 pb-2.5">
+      <div className="flex min-w-0 flex-col gap-2 @xl/run-header:flex-row @xl/run-header:items-center">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          {!embedded && (
+            <Button variant="ghost" size="icon-xs" onClick={onBack} aria-label="Back to runs">
+              <ArrowLeft className="size-4" />
+            </Button>
+          )}
+          <h1 className="min-w-0 flex-1 truncate text-base font-semibold">{traceDisplayName(summary)}</h1>
+          <IdChip value={summary.trace_id} label="Copy trace ID" />
+          <RunIcon summary={summary} failed={failed} />
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 @xl/run-header:ml-auto">
           <TabsList aria-label="Trace view" className="group-data-horizontal/tabs:h-7">
             <TabsTrigger value="steps" className="px-2.5 text-xs">
               Steps

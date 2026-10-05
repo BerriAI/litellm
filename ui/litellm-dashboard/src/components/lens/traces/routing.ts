@@ -9,8 +9,8 @@ import {
 } from "nuqs";
 import { useCallback, useState } from "react";
 
-import { RANGE_PRESETS } from "./list/TimeRangeControls";
-import type { TimeWindow } from "./list/TracesTimeline";
+import { RANGE_PRESETS } from "@/components/shared/timeline/TimeRangeControls";
+import type { TimeWindow } from "@/components/shared/timeline/Timeline";
 import type { TraceSummary } from "./types";
 
 export const TRACE_VIEWS = ["steps", "conversation"] as const;

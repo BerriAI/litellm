@@ -30790,7 +30790,8 @@
             "role": "user",
             "content": "proxy behaviour probe"
           }
-        ]
+        ],
+        "max_tokens": 412
       },
       "response": {
         "content_type": "application/json",
