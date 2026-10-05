@@ -291,15 +291,15 @@ async fn logical_trace_core_metrics_agree_with_curated_metrics_after_duplicate_e
         .iter()
         .find(|row| row["api_key_hash"] == "key-a")
         .ok_or("missing primary trace")?;
-    assert_eq!(primary["span_count"], 2);
-    assert_eq!(primary["error_count"], 1);
-    assert_eq!(primary["duration_ns"], 1_900_000);
+    assert_eq!(primary["span_count"], "2");
+    assert_eq!(primary["error_count"], "1");
+    assert_eq!(primary["duration_ns"], "1900000");
     assert_eq!(primary["duration_ms"], 1.9);
-    assert_eq!(primary["span_input_tokens"], 15);
-    assert_eq!(primary["agent_span_count"], 1);
-    assert_eq!(primary["agent_label_count"], 1);
-    assert_eq!(primary["llm_span_count"], 1);
-    assert_eq!(primary["tool_span_count"], 0);
+    assert_eq!(primary["span_input_tokens"], "15");
+    assert_eq!(primary["agent_span_count"], "1");
+    assert_eq!(primary["agent_label_count"], "1");
+    assert_eq!(primary["llm_span_count"], "1");
+    assert_eq!(primary["tool_span_count"], "0");
     assert_eq!(primary["input_preview"], "child input");
     assert_eq!(primary["root_status"], "ok");
     assert_eq!(primary["has_error"], true);
@@ -308,7 +308,7 @@ async fn logical_trace_core_metrics_agree_with_curated_metrics_after_duplicate_e
         .iter()
         .find(|row| row["api_key_hash"] == "key-alt")
         .ok_or("missing alternate trace")?;
-    assert_eq!(alternate["span_count"], 1);
+    assert_eq!(alternate["span_count"], "1");
     let store = ClickHouseTraces::new(fixture.database.client.clone(), connection);
     let curated = store.runs(&scope, &newest(10, None)).await?;
     for row in curated {
@@ -317,9 +317,9 @@ async fn logical_trace_core_metrics_agree_with_curated_metrics_after_duplicate_e
             .iter()
             .find(|value| value["id"] == row.trace_ref)
             .ok_or("missing logical trace")?;
-        assert_eq!(sql_row["span_count"], row.span_count);
-        assert_eq!(sql_row["error_count"], row.error_count);
-        assert_eq!(sql_row["duration_ns"], row.duration_ns);
+        assert_eq!(sql_row["span_count"], row.span_count.to_string());
+        assert_eq!(sql_row["error_count"], row.error_count.to_string());
+        assert_eq!(sql_row["duration_ns"], row.duration_ns.to_string());
         assert_eq!(sql_row["input_preview"], row.input_preview);
     }
     Ok(())

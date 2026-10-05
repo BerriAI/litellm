@@ -106,20 +106,27 @@ impl QueryReaders {
             memory_bytes,
             execution_seconds,
         } = READER_LIMITS;
+        let settings = format!(
+            "readonly = 1 CONST, max_execution_time = {execution_seconds} CONST, \
+             max_result_rows = {result_rows} CONST, max_result_bytes = {result_bytes} CONST, \
+             result_overflow_mode = 'throw' CONST, max_memory_usage = {memory_bytes} CONST, \
+             max_threads = 2 CONST, max_concurrent_queries_for_user = 8 CONST, \
+             output_format_json_quote_64bit_integers = 1 CONST"
+        );
         self.execute(
             client,
             format!(
                 "CREATE USER IF NOT EXISTS {user} IDENTIFIED WITH sha256_hash BY '{password_hash}' \
-             SETTINGS readonly = 1 CONST, max_execution_time = {execution_seconds} CONST, \
-             max_result_rows = {result_rows} CONST, max_result_bytes = {result_bytes} CONST, \
-             result_overflow_mode = 'throw' CONST, max_memory_usage = {memory_bytes} CONST, \
-             max_threads = 2 CONST, max_concurrent_queries_for_user = 8 CONST"
+                 SETTINGS {settings}"
             ),
         )
         .await?;
         self.execute(
             client,
-            format!("ALTER USER {user} IDENTIFIED WITH sha256_hash BY '{password_hash}'"),
+            format!(
+                "ALTER USER {user} IDENTIFIED WITH sha256_hash BY '{password_hash}' \
+                 SETTINGS {settings}"
+            ),
         )
         .await?;
         for table in TraceTable::iter() {

@@ -28,7 +28,6 @@ from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageCon
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.types import SpendLogRecord
 from scripts.seed_tracing_fixtures import (
-    TRACE,
     TRACE_FIXTURES,
     Copies,
     FixtureReplay,
@@ -47,6 +46,7 @@ from tests.test_litellm_rust.support.recording_server import RecordingServer, Re
 
 pytestmark = pytest.mark.requires_rust_extension
 QUERY_ROWS: Final = TypeAdapter(tuple[dict[str, JsonValue], ...])
+_TRACE: Final = TypeAdapter(Trace)
 _TRACE_PAGE: Final = TypeAdapter(TracePage)
 
 
@@ -806,7 +806,7 @@ def _trace(api: SeededTraceAPI, trace_id: str) -> Trace:
     metadata: Final = TraceMetadata.model_validate_json(response.content)
     first: Final = _span_page(api, summary["id"], None)
     spans: Final = tuple(_trace_spans(api, summary["id"], first))
-    return TRACE.validate_python(
+    return _TRACE.validate_python(
         {
             **metadata.model_dump(mode="json"),
             "spans": tuple(span.model_dump(mode="json") for span in spans),

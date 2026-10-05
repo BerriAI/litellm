@@ -100,7 +100,7 @@ async fn queries_and_help_are_scoped_by_the_database(
         )
         .await?,
     )?;
-    assert_eq!(summary["data"][0]["count"], json!(expected.len()));
+    assert_eq!(summary["data"][0]["count"], expected.len().to_string());
     let canonical: Value = serde_json::from_str(
         &query_sql(
             &database.client,
@@ -144,6 +144,7 @@ async fn native_parameters_preserve_values_and_cannot_change_reader_scope(
         ("text".into(), SqlParameter::String(text.into())),
         ("signed".into(), SqlParameter::Integer(i64::MIN)),
         ("unsigned".into(), SqlParameter::Unsigned(u64::MAX)),
+        ("wide".into(), SqlParameter::String(u128::MAX.to_string())),
         ("number".into(), SqlParameter::Number(12.5)),
         ("enabled".into(), SqlParameter::Boolean(true)),
         ("optional".into(), SqlParameter::Null),
@@ -155,7 +156,7 @@ async fn native_parameters_preserve_values_and_cannot_change_reader_scope(
     ]);
     let body: Value = serde_json::from_str(&query_sql_with_params(
         &database.client, &reader,
-        "SELECT {text:String} AS text, toString({signed:Int64}) AS signed, toString({unsigned:UInt64}) AS unsigned, {number:Float64} AS number, {enabled:Bool} AS enabled, {optional:Nullable(String)} AS optional, {strings:Array(String)} AS strings",
+        "SELECT {text:String} AS text, {signed:Int64} AS signed, {unsigned:UInt64} AS unsigned, {number:Float64} AS number, {enabled:Bool} AS enabled, {optional:Nullable(String)} AS optional, {strings:Array(String)} AS strings, {wide:UInt128} AS wide, [{unsigned:UInt64}] AS nested, tuple({signed:Int64}, toUInt16(7)) AS mixed",
         &params,
     ).await?)?;
     assert_eq!(
@@ -163,6 +164,8 @@ async fn native_parameters_preserve_values_and_cannot_change_reader_scope(
         json!([{
             "text": text, "signed": i64::MIN.to_string(), "unsigned": u64::MAX.to_string(),
             "number": 12.5, "enabled": true, "optional": null, "strings": strings,
+            "wide": u128::MAX.to_string(), "nested": [u64::MAX.to_string()],
+            "mixed": [i64::MIN.to_string(), 7],
         }])
     );
     let invisible: Value = serde_json::from_str(
@@ -186,6 +189,44 @@ async fn native_parameters_preserve_values_and_cannot_change_reader_scope(
         .await?,
     )?;
     assert_eq!(invisible["data"], json!([]));
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn reprovisioning_restores_exact_integer_encoding(
+    #[future(awt)] database: Result<Database, Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let database = database?;
+    let previous = database
+        .readers
+        .connection(&database.client, &QueryScope::All, "test-secret")
+        .await?;
+    database
+        .client
+        .post(database.writer.url().clone())
+        .body(format!(
+            "ALTER USER {} SETTINGS output_format_json_quote_64bit_integers = 0 CONST",
+            previous.url().username()
+        ))
+        .send()
+        .await?
+        .error_for_status()?;
+    let readers = QueryReaders::new(database.writer, "trace_test".into());
+    let current = readers
+        .connection(&database.client, &QueryScope::All, "test-secret")
+        .await?;
+    let params = BTreeMap::from([("value".into(), SqlParameter::Unsigned(u64::MAX))]);
+    let result: Value = serde_json::from_str(
+        &query_sql_with_params(
+            &database.client,
+            &current,
+            "SELECT {value:UInt64} AS value",
+            &params,
+        )
+        .await?,
+    )?;
+    assert_eq!(result["data"], json!([{"value": u64::MAX.to_string()}]));
     Ok(())
 }
 
@@ -236,7 +277,7 @@ async fn logical_views_never_expose_foreign_rows_within_a_mixed_owner_trace(
     ).await?)?;
     assert_eq!(
         traces["data"],
-        json!([{"name":"visible-root", "span_count":1, "error_count":0, "duration_ns":1}])
+        json!([{"name":"visible-root", "span_count":"1", "error_count":"0", "duration_ns":"1"}])
     );
     let calls: Value = serde_json::from_str(
         &query_sql(
@@ -362,6 +403,7 @@ async fn managed_reader_rejects_privilege_and_scope_bypasses(
         "SELECT * FROM otel_traces SETTINGS readonly = 0",
         "SELECT * FROM otel_traces SETTINGS max_memory_usage = 0",
         "SELECT * FROM otel_traces SETTINGS max_execution_time = 0",
+        "SELECT toUInt64(1) SETTINGS output_format_json_quote_64bit_integers = 0",
         "CREATE USER scope_bypass",
         "CREATE NAMED COLLECTION scope_bypass AS host = 'localhost'",
         "BACKUP TABLE otel_traces TO Disk('default', 'scope-bypass')",

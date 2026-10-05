@@ -164,6 +164,7 @@ Filter calls by nested metadata
 Always bound start_time and use LIMIT; add team_id/api_key_hash filters when investigating one tenant
 Raw SQL returns one bounded response without a cursor. Callers own ORDER BY, LIMIT and keyset predicates for pagination
 SQL views are live relations; separate queries do not freeze membership or span versions
+Filtering traces.start_time happens after canonical span aggregation and can scan all retained span partitions; tenant filters can reduce the rows processed
 {%- endblock %}
 
 {% block reader_limits -%}
@@ -175,7 +176,7 @@ LiteLLM provisions SELECT-only readers and INVOKER views using ClickHouse row po
 {%- endblock %}
 
 {% block output_format -%}
-The endpoint fixes output to ClickHouse JSON, overriding any SQL FORMAT clause. Trace SQL queries require ClickHouse 26.8 or later
+The endpoint fixes output to ClickHouse JSON, overriding any SQL FORMAT clause. Result data encodes 64-bit and larger integers as decimal strings, including integers nested in arrays and tuples. Trace SQL queries require ClickHouse 26.8 or later
 {%- endblock %}
 
 {% block json_values -%}
