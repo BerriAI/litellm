@@ -84,7 +84,6 @@ const ACTIONS_COLUMN_WIDTH = 120;
 
 interface MemberColumnDeps {
   canEdit: boolean;
-  onEdit: (member: Member) => void;
   onDelete: (member: Member) => void;
   roleColumnTitle: string;
   roleTooltip?: string;
@@ -120,7 +119,6 @@ const extraColumnDef = (column: MemberTableColumn): ColumnDef<Member> => {
 
 const buildColumns = ({
   canEdit,
-  onEdit,
   onDelete,
   roleColumnTitle,
   roleTooltip,
@@ -190,12 +188,6 @@ const buildColumns = ({
     cell: ({ row }) =>
       canEdit ? (
         <span className="inline-flex items-center gap-2">
-          <TableIconActionButton
-            variant="Edit"
-            tooltipText="Edit member"
-            dataTestId="edit-member"
-            onClick={() => onEdit(row.original)}
-          />
           {onResetSpend && (showResetSpendForMember?.(row.original) ?? true) && (
             <TableIconActionButton
               variant="Reset"
@@ -239,7 +231,6 @@ export default function MemberTable({
 
   const columnDeps: MemberColumnDeps = {
     canEdit,
-    onEdit,
     onDelete,
     roleColumnTitle,
     roleTooltip,
@@ -265,6 +256,7 @@ export default function MemberTable({
         data={members}
         columns={columns}
         getRowId={memberRowId}
+        onRowClick={canEdit ? onEdit : undefined}
         enableRowSelection={selection !== undefined}
         {...(selection ?? NO_SELECTION)}
         sortingMode="client"

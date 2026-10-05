@@ -385,8 +385,7 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    const editButtons = screen.getAllByTestId("edit-member");
-    await user.click(editButtons[0]);
+    await user.click(screen.getAllByRole("cell", { name: "user1@test.com" })[0]);
 
     expect(mockSetIsEditMemberModalVisible).toHaveBeenCalledWith(true);
     expect(mockSetSelectedEditMember).toHaveBeenCalled();
@@ -426,7 +425,7 @@ describe("TeamMembersComponent", () => {
     expect(within(memberRow).getByText("0 RPM / 0 TPM")).toBeInTheDocument();
     expect(within(memberRow).queryByText("No Limits")).not.toBeInTheDocument();
 
-    await user.click(within(memberRow).getByTestId("edit-member"));
+    await user.click(within(memberRow).getAllByRole("cell", { name: "user1@test.com" })[0]);
 
     const zeroLimitsMember = { user_id: "user1@test.com", max_budget_in_team: 0, tpm_limit: 0, rpm_limit: 0 };
     expect(mockSetSelectedEditMember).toHaveBeenCalledWith(expect.objectContaining(zeroLimitsMember));
@@ -512,7 +511,6 @@ describe("TeamMembersComponent", () => {
     );
 
     expect(screen.queryByTestId("delete-member")).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("edit-member")).toHaveLength(2);
   });
 
   it("should show delete button for proxy admin when canEditTeam is true", () => {
@@ -534,10 +532,10 @@ describe("TeamMembersComponent", () => {
     );
 
     expect(screen.getAllByTestId("delete-member")).toHaveLength(2);
-    expect(screen.getAllByTestId("edit-member")).toHaveLength(2);
   });
 
-  it("should hide action buttons when canEditTeam is false", () => {
+  it("should hide action buttons and not open edit from a row when canEditTeam is false", async () => {
+    const user = userEvent.setup();
     renderWithProviders(
       <TeamMembersComponent
         teamData={createMockTeamData()}
@@ -552,8 +550,10 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    expect(screen.queryByTestId("edit-member")).not.toBeInTheDocument();
     expect(screen.queryByTestId("delete-member")).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("cell", { name: "user1@test.com" })[0]);
+    expect(mockSetIsEditMemberModalVisible).not.toHaveBeenCalled();
   });
 
   describe("reset spend", () => {

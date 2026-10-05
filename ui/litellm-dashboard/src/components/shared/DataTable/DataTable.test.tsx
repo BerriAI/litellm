@@ -1,5 +1,5 @@
 import type { ColumnDef, ExpandedState, OnChangeFn, PaginationState, VisibilityState } from "@tanstack/react-table";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -773,6 +773,53 @@ describe("DataTable row click guard", () => {
 
     await user.click(screen.getByTestId("row-input"));
     expect(onRowClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a focused row with Enter, but not Enter typed inside a control in the row", async () => {
+    const user = userEvent.setup();
+    const onRowClick = vi.fn();
+    render(<DataTable data={[person("a", "Alice")]} columns={rowClickColumns} onRowClick={onRowClick} />);
+
+    await user.click(screen.getByTestId("row-input"));
+    await user.keyboard("{Enter}");
+    expect(onRowClick).not.toHaveBeenCalled();
+
+    screen.getByRole("row", { name: /Alice/ }).focus();
+    await user.keyboard("{Enter}");
+    expect(onRowClick).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }));
+  });
+
+  it("ignores a click whose press started on a control, such as a drag off a checkbox", () => {
+    const onRowClick = vi.fn();
+    render(<DataTable data={[person("a", "Alice")]} columns={rowClickColumns} onRowClick={onRowClick} />);
+
+    fireEvent.pointerDown(screen.getByTestId("row-button"));
+    fireEvent.click(screen.getByTestId("name-cell"));
+    expect(onRowClick).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(screen.getByTestId("name-cell"));
+    fireEvent.click(screen.getByTestId("name-cell"));
+    expect(onRowClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not open the row when the click finishes a text selection", () => {
+    const onRowClick = vi.fn();
+    render(<DataTable data={[person("a", "Alice")]} columns={rowClickColumns} onRowClick={onRowClick} />);
+
+    window.getSelection()?.selectAllChildren(screen.getByTestId("name-cell"));
+    fireEvent.click(screen.getByTestId("name-cell"));
+    window.getSelection()?.removeAllRanges();
+
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
+
+  it("only makes rows focusable when they open something", () => {
+    const { unmount } = render(<DataTable data={[person("a", "Alice")]} columns={rowClickColumns} />);
+    expect(screen.getByRole("row", { name: /Alice/ })).not.toHaveAttribute("tabindex");
+    unmount();
+
+    render(<DataTable data={[person("a", "Alice")]} columns={rowClickColumns} onRowClick={vi.fn()} />);
+    expect(screen.getByRole("row", { name: /Alice/ })).toHaveAttribute("tabindex", "0");
   });
 });
 
