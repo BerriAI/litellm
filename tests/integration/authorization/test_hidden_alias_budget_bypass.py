@@ -587,6 +587,41 @@ def test_hidden_alias_shadowing_an_explicitly_free_group_is_refused_like_its_unp
         _assert_refused_like_target(rig, rig.peer, key, shadow, target)
 
 
+def _assert_refused_on_every_route(rig: AliasRig, candidate: Gateway, key: str, model: str) -> None:
+    for route, send in (("chat", fresh_chat), ("responses", fresh_response), ("messages", fresh_message)):
+        marker: Final = f"chain-{route}-" + uuid.uuid4().hex
+        refused: Final = send(candidate, model, key, marker)
+        assert refused.status_code == BUDGET_EXCEEDED, refused.text
+        assert error_type(refused) == "budget_exceeded", refused.text
+        assert upstream_hits(upstream_requests(rig.gateway.upstream_url), marker) == 0
+
+
+def test_hidden_alias_shadow_chain_is_judged_by_the_deployment_it_is_served_from(rig: AliasRig) -> None:
+    """A shadowing alias routes one hop to its target's own deployment, even when that target is an alias too."""
+    with rig.gateway.scenario() as scenario:
+        middle: Final = scenario.model(model=UNPRICED_FREE_PROVIDER_MODEL)
+        assert _reported_per_token_price(rig, middle) == (0.0, 0.0), (
+            f"{UNPRICED_FREE_PROVIDER_MODEL} must price at $0 in the cost map with no explicit price on the "
+            "deployment, or the shadowed alias is refused by the price gate and never reaches the one under test"
+        )
+        shadow: Final = _shadowing_alias(
+            rig, scenario, middle, (rig.gateway, rig.peer), input_cost_per_token=0, output_cost_per_token=0
+        )
+        served_from: Final = _serving_deployment(rig.gateway, middle)
+        install_aliases(rig.gateway, {middle: hidden(rig.free)})
+        scenario.cleanups.callback(remove_aliases, rig.gateway, frozenset({middle}))
+        for candidate in (rig.gateway, rig.peer):
+            _await_alias(candidate, middle, rig.free)
+            assert _serving_deployment(candidate, shadow) == served_from
+        key: Final = exhausted_key(rig, scenario)
+        for candidate in (rig.gateway, rig.peer):
+            marker: Final = "chain-target-" + uuid.uuid4().hex
+            by_name: Final = fresh_chat(candidate, middle, key, marker)
+            assert by_name.status_code == 200, by_name.text
+            assert upstream_hits(upstream_requests(rig.gateway.upstream_url), marker) == 1
+            _assert_refused_on_every_route(rig, candidate, key, shadow)
+
+
 def _ptu_shadow_config(rig: AliasRig, directory: Path, name: str) -> Path:
     base: Final = _base_config()["model_list"]
     assert isinstance(base, list), base
