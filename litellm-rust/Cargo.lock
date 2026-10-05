@@ -4086,29 +4086,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-migrate"
-version = "0.1.0"
-dependencies = [
- "litellm-migrate-macros",
- "rstest",
- "sha2 0.10.9",
- "thiserror 2.0.19",
-]
-
-[[package]]
-name = "litellm-migrate-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "rstest",
- "sha2 0.10.9",
- "syn 2.0.119",
- "tempfile",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
@@ -4173,6 +4150,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sha2 0.10.9",
+ "sqlx",
  "strum",
  "thiserror 2.0.19",
  "tokio",
@@ -4368,11 +4346,12 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "litellm-http",
- "litellm-migrate",
  "rstest",
  "serde",
  "serde_json",
  "serde_with",
+ "sqlx",
+ "testcontainers-modules",
  "thiserror 2.0.19",
  "tokio",
  "url",
@@ -4503,7 +4482,6 @@ dependencies = [
  "hmac 0.12.1",
  "jsonschema",
  "litellm-http",
- "litellm-migrate",
  "litellm-storage-clickhouse",
  "litellm-traces",
  "litellm-traces-cache",
@@ -4514,6 +4492,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sqlx",
  "strum",
  "testcontainers-modules",
  "thiserror 2.0.19",

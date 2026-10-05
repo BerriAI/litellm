@@ -35,5 +35,7 @@ pub enum Error {
     #[error(transparent)]
     Storage(#[from] litellm_storage_clickhouse::Error),
     #[error(transparent)]
+    Migration(#[from] sqlx::migrate::MigrateError),
+    #[error(transparent)]
     Cached(#[from] std::sync::Arc<Error>),
 }

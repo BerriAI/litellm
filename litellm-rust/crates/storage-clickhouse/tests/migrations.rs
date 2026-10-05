@@ -1,35 +1,59 @@
 use std::time::Duration;
 
 use litellm_http::Client;
-use litellm_migrate::{ChangedMigration, Migration};
 use litellm_storage_clickhouse::{
-    Connection, Error, READ_LIMITS, apply_migrations, execute_statement,
+    ClickHouseMigrate, Connection, Error, READ_LIMITS, execute_statement, storage_error,
 };
 use rstest::{fixture, rstest};
+use sqlx::{
+    SqlStr,
+    migrate::{Migrate, MigrateError, Migration, MigrationType, Migrator},
+};
+use testcontainers_modules::{
+    clickhouse::ClickHouse,
+    testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner},
+};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{body_string, method, query_param},
 };
 
-const FIRST_CHECKSUM: &str = "a408b4b0f9fd588711feef16b8dfe6e8aa3a322a51f410ae6d05b142b5cd5704";
-const SECOND_CHECKSUM: &str = "352216a05ec02310c33edf7ab06b18ac241f287bb163b6f2a825626e90c223e1";
-const MIGRATIONS: [Migration; 2] = [
-    Migration {
-        version: 1,
-        description: "first",
-        sql: "CREATE TABLE IF NOT EXISTS `trace_test`.marker (id UInt64) ENGINE=MergeTree ORDER BY id",
-        checksum: FIRST_CHECKSUM,
-    },
-    Migration {
-        version: 2,
-        description: "second",
-        sql: "ALTER TABLE `trace_test`.marker ADD COLUMN IF NOT EXISTS name String",
-        checksum: SECOND_CHECKSUM,
-    },
-];
+const CLICKHOUSE_TAG: &str =
+    "26.9.6.6@sha256:eb4870e7ca7ed70c259eebfcfbee6cf797017f6b5436c2926bbbfe3d4d28486e";
+const DATABASE: &str = "storage_migrate_test";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const SELECT_APPLIED: &str = "SELECT DISTINCT version, checksum FROM `trace_test`._sqlx_migrations \
+                              WHERE success ORDER BY version FORMAT JSONEachRow";
+
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
+
+struct ClickHouseDatabase {
+    _container: ContainerAsync<ClickHouse>,
+    url: String,
+    client: Client,
+}
 
 #[fixture]
-async fn server() -> MockServer {
+async fn database() -> TestResult<ClickHouseDatabase> {
+    let container = ClickHouse::default()
+        .with_tag(CLICKHOUSE_TAG)
+        .with_env_var("CLICKHOUSE_SKIP_USER_SETUP", "1")
+        .start()
+        .await?;
+    let url = format!(
+        "http://{}:{}",
+        container.get_host().await?,
+        container.get_host_port_ipv4(8123).await?
+    );
+    Ok(ClickHouseDatabase {
+        _container: container,
+        url,
+        client: Client::no_redirect_for_test(),
+    })
+}
+
+#[fixture]
+async fn mock_server() -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200))
@@ -39,217 +63,335 @@ async fn server() -> MockServer {
     server
 }
 
-fn create_ledger_statement(database: &str) -> String {
-    format!(
-        "CREATE TABLE IF NOT EXISTS `{database}`.schema_migrations \
-         (version UInt64, description String, checksum String, applied_at DateTime DEFAULT now()) \
-         ENGINE = MergeTree ORDER BY version"
+fn migration(version: i64, sql: &'static str) -> Migration {
+    Migration::new(
+        version,
+        format!("migration_{version}").into(),
+        MigrationType::Simple,
+        SqlStr::from_static(sql),
+        false,
     )
 }
 
-async fn received_bodies(server: &MockServer) -> Vec<String> {
-    server
-        .received_requests()
-        .await
-        .expect("requests were recorded")
+fn migrator(migrations: Vec<Migration>) -> Migrator {
+    Migrator {
+        ignore_missing: true,
+        locking: false,
+        ..Migrator::with_migrations(migrations)
+    }
+}
+
+fn render_database(sql: &str) -> String {
+    sql.replace("{database}", &format!("`{DATABASE}`"))
+}
+
+async fn run_migrations<R>(
+    database: &ClickHouseDatabase,
+    migrator: &Migrator,
+    schema: &str,
+    render: R,
+) -> Result<(), MigrateError>
+where
+    R: Fn(&str) -> String + Send + Sync,
+{
+    let connection = Connection::writer(&database.url).expect("valid ClickHouse URL");
+    let mut adapter = ClickHouseMigrate::new(
+        &database.client,
+        &connection,
+        schema,
+        render,
+        REQUEST_TIMEOUT,
+    )
+    .expect("valid schema");
+    migrator.run_direct(None, &mut adapter, false).await
+}
+
+async fn execute_write(database: &ClickHouseDatabase, sql: &str) -> TestResult {
+    database
+        .client
+        .post(&database.url)
+        .body(sql.to_owned())
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(())
+}
+
+async fn read_json(database: &ClickHouseDatabase, sql: &str) -> TestResult<serde_json::Value> {
+    let response = database
+        .client
+        .post(&database.url)
+        .body(sql.to_owned())
+        .send()
+        .await?
+        .error_for_status()?;
+    Ok(serde_json::from_str(&response.text().await?)?)
+}
+
+async fn ledger_versions(database: &ClickHouseDatabase) -> TestResult<Vec<i64>> {
+    let response = read_json(
+        database,
+        &format!(
+            "SELECT version FROM `{DATABASE}`._sqlx_migrations \
+             GROUP BY version ORDER BY version FORMAT JSON"
+        ),
+    )
+    .await?;
+    Ok(response["data"]
+        .as_array()
+        .expect("ClickHouse returns versions")
         .iter()
-        .map(|request| String::from_utf8(request.body.clone()).expect("request body is UTF-8"))
-        .collect()
+        .map(|row| row["version"].as_i64().expect("version is Int64"))
+        .collect())
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+#[rstest]
+#[tokio::test]
+async fn only_pending_migrations_execute_on_the_second_run(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let migrator = migrator(vec![
+        migration(
+            1,
+            "CREATE TABLE IF NOT EXISTS {database}.migration_one (id UInt8) ENGINE = MergeTree ORDER BY id",
+        ),
+        migration(
+            2,
+            "CREATE TABLE IF NOT EXISTS {database}.migration_two (id UInt8) ENGINE = MergeTree ORDER BY id",
+        ),
+    ]);
+    run_migrations(&database, &migrator, DATABASE, render_database).await?;
+    run_migrations(&database, &migrator, DATABASE, render_database).await?;
+    execute_statement(
+        &database.client,
+        &Connection::writer(&database.url)?,
+        "SYSTEM FLUSH LOGS",
+        REQUEST_TIMEOUT,
+    )
+    .await?;
+
+    let queries = read_json(
+        &database,
+        "SELECT count() AS executions FROM system.query_log \
+         WHERE type = 'QueryFinish' AND query LIKE \
+         'CREATE TABLE IF NOT EXISTS `storage_migrate_test`.migration_%' FORMAT JSON",
+    )
+    .await?;
+    assert_eq!(queries["data"][0]["executions"].as_u64(), Some(2));
+    assert_eq!(ledger_versions(&database).await?, vec![1, 2]);
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn edited_migration_checksum_returns_version_mismatch(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let original = migrator(vec![migration(
+        1,
+        "CREATE TABLE IF NOT EXISTS {database}.original (id UInt8) ENGINE = MergeTree ORDER BY id",
+    )]);
+    let changed = migrator(vec![migration(
+        1,
+        "CREATE TABLE IF NOT EXISTS {database}.changed (id UInt8) ENGINE = MergeTree ORDER BY id",
+    )]);
+    run_migrations(&database, &original, DATABASE, render_database).await?;
+
+    assert!(matches!(
+        run_migrations(&database, &changed, DATABASE, render_database).await,
+        Err(MigrateError::VersionMismatch(1))
+    ));
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn failed_migration_is_not_recorded_and_retains_storage_error(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let migrator = migrator(vec![migration(1, "THIS IS NOT VALID CLICKHOUSE SQL")]);
+    let error = run_migrations(&database, &migrator, DATABASE, render_database)
+        .await
+        .expect_err("invalid SQL must fail");
+    assert!(matches!(&error, MigrateError::ExecuteMigration(_, 1)));
+    assert!(matches!(
+        storage_error(&error),
+        Some(Error::SchemaFailed(_))
+    ));
+
+    let rows = read_json(
+        &database,
+        &format!(
+            "SELECT count() AS rows FROM `{DATABASE}`._sqlx_migrations \
+             WHERE version = 1 FORMAT JSON"
+        ),
+    )
+    .await?;
+    assert_eq!(rows["data"][0]["rows"].as_u64(), Some(0));
+    Ok(())
+}
+
+#[rstest]
+fn invalid_database_identifier_is_rejected() {
+    let client = Client::no_redirect_for_test();
+    let connection = Connection::writer("http://127.0.0.1:1").expect("valid URL");
+    assert!(matches!(
+        ClickHouseMigrate::new(
+            &client,
+            &connection,
+            "storage_test; DROP DATABASE default",
+            str::to_owned,
+            REQUEST_TIMEOUT,
+        ),
+        Err(Error::InvalidSchema)
+    ));
+}
+
+#[rstest]
+#[tokio::test]
+async fn unknown_source_version_is_tolerated(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    run_migrations(&database, &migrator(vec![]), DATABASE, render_database).await?;
+    execute_write(
+        &database,
+        &format!(
+            "INSERT INTO `{DATABASE}`._sqlx_migrations \
+             (version, description, success, checksum, execution_time) \
+             VALUES (99, 'unknown', true, '{}', 0)",
+            "00".repeat(48)
+        ),
+    )
+    .await?;
+    let migrator = migrator(vec![migration(
+        1,
+        "CREATE TABLE IF NOT EXISTS {database}.known (id UInt8) ENGINE = MergeTree ORDER BY id",
+    )]);
+
+    run_migrations(&database, &migrator, DATABASE, render_database).await?;
+
+    assert_eq!(ledger_versions(&database).await?, vec![1, 99]);
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn duplicate_ledger_rows_are_tolerated(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let applied = migration(
+        1,
+        "CREATE TABLE IF NOT EXISTS {database}.duplicate_test (id UInt8) ENGINE = MergeTree ORDER BY id",
+    );
+    let checksum = encode_hex(&applied.checksum);
+    let migrator = migrator(vec![applied]);
+    run_migrations(&database, &migrator, DATABASE, render_database).await?;
+    execute_write(
+        &database,
+        &format!(
+            "INSERT INTO `{DATABASE}`._sqlx_migrations \
+             (version, description, success, checksum, execution_time) \
+             VALUES (1, 'migration_1', true, '{checksum}', 0)"
+        ),
+    )
+    .await?;
+
+    run_migrations(&database, &migrator, DATABASE, render_database).await?;
+
+    let rows = read_json(
+        &database,
+        &format!(
+            "SELECT count() AS rows, uniqExact(version) AS versions \
+             FROM `{DATABASE}`._sqlx_migrations FORMAT JSON"
+        ),
+    )
+    .await?;
+    assert_eq!(rows["data"][0]["rows"].as_u64(), Some(2));
+    assert_eq!(rows["data"][0]["versions"].as_u64(), Some(1));
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn revert_reports_forward_only_error() {
+    let client = Client::no_redirect_for_test();
+    let connection = Connection::writer("http://127.0.0.1:1").expect("valid URL");
+    let migration = migration(
+        1,
+        "CREATE TABLE IF NOT EXISTS {database}.revert_test (id UInt8) ENGINE = MergeTree ORDER BY id",
+    );
+    let mut adapter = ClickHouseMigrate::new(
+        &client,
+        &connection,
+        DATABASE,
+        render_database,
+        REQUEST_TIMEOUT,
+    )
+    .expect("valid schema");
+
+    let error = adapter
+        .revert("_sqlx_migrations", &migration)
+        .await
+        .expect_err("ClickHouse migrations cannot be reverted");
+    assert!(
+        error
+            .to_string()
+            .contains("ClickHouse migrations are forward-only")
+    );
 }
 
 #[rstest]
 #[case::numeric("1")]
 #[case::quoted("\"1\"")]
 #[tokio::test]
-async fn applies_only_pending_migrations_and_records_their_checksums(
-    #[future(awt)] server: MockServer,
+async fn applied_int64_versions_accept_numeric_and_quoted_json(
+    #[future(awt)] mock_server: MockServer,
     #[case] version: &str,
 ) {
     Mock::given(method("POST"))
-        .and(body_string(
-            "SELECT version, checksum FROM `trace_test`.schema_migrations FORMAT JSONEachRow",
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
-            "{{\"version\":{version},\"checksum\":\"{FIRST_CHECKSUM}\"}}\n"
-        )))
-        .mount(&server)
+        .and(body_string(SELECT_APPLIED))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(format!("{{\"version\":{version},\"checksum\":\"00\"}}\n")),
+        )
+        .mount(&mock_server)
         .await;
     let client = Client::no_redirect_for_test();
-    let connection = Connection::parse(&server.uri()).expect("valid URL");
-
-    apply_migrations(
+    let connection = Connection::writer(&mock_server.uri()).expect("valid URL");
+    let migrator = migrator(vec![]);
+    let mut adapter = ClickHouseMigrate::new(
         &client,
         &connection,
         "trace_test",
-        &MIGRATIONS,
-        |migration| migration.sql.to_owned(),
-        Duration::from_secs(5),
+        str::to_owned,
+        REQUEST_TIMEOUT,
     )
-    .await
-    .expect("pending migration applies");
+    .expect("valid schema");
 
-    assert_eq!(
-        received_bodies(&server).await,
-        [
-            "CREATE DATABASE IF NOT EXISTS `trace_test`".to_owned(),
-            create_ledger_statement("trace_test"),
-            "SELECT version, checksum FROM `trace_test`.schema_migrations FORMAT JSONEachRow".to_owned(),
-            "ALTER TABLE `trace_test`.marker ADD COLUMN IF NOT EXISTS name String".to_owned(),
-            "INSERT INTO `trace_test`.schema_migrations (version, description, checksum) VALUES (2, 'second', '352216a05ec02310c33edf7ab06b18ac241f287bb163b6f2a825626e90c223e1')".to_owned(),
-        ]
-    );
+    migrator
+        .run_direct(None, &mut adapter, false)
+        .await
+        .expect("applied version parses");
 }
 
 #[rstest]
 #[tokio::test]
-async fn rejects_applied_migration_with_a_changed_checksum(#[future(awt)] server: MockServer) {
-    Mock::given(method("POST"))
-        .and(body_string(
-            "SELECT version, checksum FROM `trace_test`.schema_migrations FORMAT JSONEachRow",
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_string(
-            "{\"version\":1,\"checksum\":\"d121be3103007b41edf96f8262925f8c7d61894afe9a041843b631f69445bc57\"}\n",
-        ))
-        .mount(&server)
-        .await;
-    let client = Client::no_redirect_for_test();
-    let connection = Connection::parse(&server.uri()).expect("valid URL");
-
-    let result = apply_migrations(
-        &client,
-        &connection,
-        "trace_test",
-        &MIGRATIONS,
-        |migration| migration.sql.to_owned(),
-        Duration::from_secs(5),
-    )
-    .await;
-
-    assert!(matches!(
-        result,
-        Err(Error::Migration(ChangedMigration { version: 1 }))
-    ));
-    assert_eq!(
-        received_bodies(&server).await,
-        [
-            "CREATE DATABASE IF NOT EXISTS `trace_test`".to_owned(),
-            create_ledger_statement("trace_test"),
-            "SELECT version, checksum FROM `trace_test`.schema_migrations FORMAT JSONEachRow"
-                .to_owned(),
-        ]
-    );
-}
-
-#[rstest]
-#[tokio::test]
-async fn rejects_invalid_database_before_sending_requests(#[future(awt)] server: MockServer) {
-    let client = Client::no_redirect_for_test();
-    let connection = Connection::parse(&server.uri()).expect("valid URL");
-
-    let result = apply_migrations(
-        &client,
-        &connection,
-        "trace_test; DROP DATABASE default",
-        &MIGRATIONS,
-        |migration| migration.sql.to_owned(),
-        Duration::from_secs(5),
-    )
-    .await;
-
-    assert!(matches!(result, Err(Error::InvalidSchema)));
-    assert!(received_bodies(&server).await.is_empty());
-}
-
-#[rstest]
-#[case::http_error(500, "")]
-#[case::json_error(200, "{\"exception\":\"failed\"}\n")]
-#[case::streamed_error(200, "{\"row\":1}\n{\"exception\":\"failed\"}\n")]
-#[case::text_error(200, "Code: 395. DB::Exception: failed\n")]
-#[case::framed_error(
-    200,
-    "\r\n__exception__\r\ntag\r\nfailed\r\n6 tag\r\n__exception__\r\n"
-)]
-#[case::unexpected_output(200, "1\n")]
-#[tokio::test]
-async fn failed_migration_statement_is_not_recorded(
-    #[future(awt)] server: MockServer,
-    #[case] status: u16,
-    #[case] body: &str,
+async fn schema_requests_override_unsafe_connection_settings(
+    #[future(awt)] mock_server: MockServer,
 ) {
-    Mock::given(method("POST"))
-        .and(body_string(
-            "SELECT version, checksum FROM `trace_test`.schema_migrations FORMAT JSONEachRow",
-        ))
-        .respond_with(ResponseTemplate::new(200))
-        .mount(&server)
-        .await;
-    Mock::given(method("POST"))
-        .and(body_string("CREATE TABLE IF NOT EXISTS `trace_test`.marker (id UInt64) ENGINE=MergeTree ORDER BY id"))
-        .respond_with(ResponseTemplate::new(status).set_body_string(body))
-        .mount(&server)
-        .await;
-    let client = Client::no_redirect_for_test();
-    let connection = Connection::parse(&server.uri()).expect("valid URL");
-
-    let result = apply_migrations(
-        &client,
-        &connection,
-        "trace_test",
-        &MIGRATIONS[..1],
-        |migration| migration.sql.to_owned(),
-        Duration::from_secs(5),
-    )
-    .await;
-
-    match status {
-        500 => assert!(matches!(result, Err(Error::SchemaFailed(500)))),
-        _ => assert!(matches!(result, Err(Error::InvalidResponse))),
-    }
-    assert_eq!(
-        received_bodies(&server).await,
-        [
-            "CREATE DATABASE IF NOT EXISTS `trace_test`".to_owned(),
-            create_ledger_statement("trace_test"),
-            "SELECT version, checksum FROM `trace_test`.schema_migrations FORMAT JSONEachRow"
-                .to_owned(),
-            "CREATE TABLE IF NOT EXISTS `trace_test`.marker (id UInt64) ENGINE=MergeTree ORDER BY id".to_owned(),
-        ]
-    );
-}
-
-#[rstest]
-#[case::missing_version("{\"checksum\":\"first\"}")]
-#[case::invalid_version("{\"version\":\"invalid\",\"checksum\":\"first\"}")]
-#[case::negative_version("{\"version\":-1,\"checksum\":\"first\"}")]
-#[case::exception("{\"exception\":\"failed\"}")]
-#[tokio::test]
-async fn invalid_ledger_stops_before_migrations(
-    #[future(awt)] server: MockServer,
-    #[case] body: &str,
-) {
-    Mock::given(method("POST"))
-        .and(body_string(
-            "SELECT version, checksum FROM `trace_test`.schema_migrations FORMAT JSONEachRow",
-        ))
-        .respond_with(ResponseTemplate::new(200).set_body_string(body))
-        .mount(&server)
-        .await;
-    let result = apply_migrations(
-        &Client::no_redirect_for_test(),
-        &Connection::parse(&server.uri()).expect("valid URL"),
-        "trace_test",
-        &MIGRATIONS,
-        |migration| migration.sql.to_owned(),
-        Duration::from_secs(5),
-    )
-    .await;
-    assert!(matches!(result, Err(Error::InvalidResponse)));
-    assert_eq!(received_bodies(&server).await.len(), 3);
-}
-
-#[rstest]
-#[tokio::test]
-async fn schema_requests_override_unsafe_connection_settings(#[future(awt)] server: MockServer) {
     Mock::given(method("POST"))
         .and(query_param("wait_end_of_query", "1"))
         .and(query_param("send_progress_in_http_headers", "0"))
@@ -257,21 +399,24 @@ async fn schema_requests_override_unsafe_connection_settings(#[future(awt)] serv
         .and(query_param("custom_setting", "preserved"))
         .respond_with(ResponseTemplate::new(200))
         .expect(1)
-        .mount(&server)
+        .mount(&mock_server)
         .await;
     let url = format!(
         "{}/?wait_end_of_query=0&send_progress_in_http_headers=1&async_insert=1&custom_setting=preserved",
-        server.uri()
+        mock_server.uri()
     );
     execute_statement(
         &Client::no_redirect_for_test(),
-        &Connection::parse(&url).expect("valid URL"),
+        &Connection::writer(&url).expect("valid URL"),
         "CREATE DATABASE IF NOT EXISTS trace_test",
-        Duration::from_secs(5),
+        REQUEST_TIMEOUT,
     )
     .await
     .expect("schema execution succeeds");
-    let requests = server.received_requests().await.expect("requests recorded");
+    let requests = mock_server
+        .received_requests()
+        .await
+        .expect("requests recorded");
     for name in [
         "wait_end_of_query",
         "send_progress_in_http_headers",
@@ -290,25 +435,42 @@ async fn schema_requests_override_unsafe_connection_settings(#[future(awt)] serv
 
 #[rstest]
 #[tokio::test]
-async fn oversized_ledger_stops_before_migrations(#[future(awt)] server: MockServer) {
+async fn oversized_ledger_response_is_rejected_before_migrations(
+    #[future(awt)] mock_server: MockServer,
+) {
     Mock::given(method("POST"))
-        .and(body_string(
-            "SELECT version, checksum FROM `trace_test`.schema_migrations FORMAT JSONEachRow",
-        ))
+        .and(body_string(SELECT_APPLIED))
         .respond_with(
             ResponseTemplate::new(200).set_body_string(" ".repeat(READ_LIMITS.response_bytes + 1)),
         )
-        .mount(&server)
+        .mount(&mock_server)
         .await;
-    let result = apply_migrations(
-        &Client::no_redirect_for_test(),
-        &Connection::parse(&server.uri()).expect("valid URL"),
+    let client = Client::no_redirect_for_test();
+    let connection = Connection::writer(&mock_server.uri()).expect("valid URL");
+    let migrator = migrator(vec![]);
+    let mut adapter = ClickHouseMigrate::new(
+        &client,
+        &connection,
         "trace_test",
-        &MIGRATIONS,
-        |migration| migration.sql.to_owned(),
-        Duration::from_secs(5),
+        str::to_owned,
+        REQUEST_TIMEOUT,
     )
-    .await;
-    assert!(matches!(result, Err(Error::ResponseTooLarge)));
-    assert_eq!(received_bodies(&server).await.len(), 3);
+    .expect("valid schema");
+    let error = migrator
+        .run_direct(None, &mut adapter, false)
+        .await
+        .expect_err("oversized result is rejected");
+
+    assert!(matches!(
+        storage_error(&error),
+        Some(Error::ResponseTooLarge)
+    ));
+    assert_eq!(
+        mock_server
+            .received_requests()
+            .await
+            .expect("requests recorded")
+            .len(),
+        3
+    );
 }

@@ -52,6 +52,7 @@ fn map_error_ref(error: &Error) -> PyErr {
         | Error::InvalidParameters
         | Error::InvalidScope => PyValueError::new_err(error.to_string()),
         Error::Task
+        | Error::Migration(_)
         | Error::MissingSecret
         | Error::Busy
         | Error::ProvisionFailed(_)
@@ -70,7 +71,6 @@ fn map_error_ref(error: &Error) -> PyErr {
             StorageError::InvalidUrl
             | StorageError::QueryFailed(_)
             | StorageError::InsertFailed(_)
-            | StorageError::Migration(_)
             | StorageError::SchemaFailed(_)
             | StorageError::ResponseTooLarge
             | StorageError::InvalidResponse
@@ -453,6 +453,10 @@ mod tests {
     #[case::scope(Error::InvalidScope, "ValueError")]
     #[case::schema(
         Error::Storage(litellm_storage_clickhouse::Error::SchemaFailed(503)),
+        "RuntimeError"
+    )]
+    #[case::migration(
+        Error::Migration(sqlx::migrate::MigrateError::VersionMismatch(1)),
         "RuntimeError"
     )]
     #[case::reader(Error::MissingSecret, "RuntimeError")]

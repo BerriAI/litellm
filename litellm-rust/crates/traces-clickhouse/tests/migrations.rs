@@ -1,13 +1,14 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use litellm_http::Client;
-use litellm_migrate::ChangedMigration;
 use litellm_storage_clickhouse::Error as StorageError;
 use litellm_traces_clickhouse::{
     Connection, Error, InsertTable, NORMALIZED_FIELD_DEFINITIONS, Parameter, ReadQuery,
-    encode_rows, ensure_schema, execute_named_read, execute_read, schema_statements,
+    apply_migrations, encode_rows, ensure_schema, execute_named_read, execute_read,
+    reconcile_retention, schema_statements,
 };
 use rstest::rstest;
+use sqlx::migrate::MigrateError;
 mod support;
 
 use support::{ClickHouseDatabase, TestResult, database};
@@ -96,7 +97,7 @@ fn migration_versions() -> Vec<u64> {
 async fn migration_ledger_versions(database: &ClickHouseDatabase) -> TestResult<Vec<u64>> {
     let response = read_json(
         database,
-        "SELECT version FROM trace_test.schema_migrations GROUP BY version ORDER BY version",
+        "SELECT version FROM trace_test._sqlx_migrations GROUP BY version ORDER BY version",
     )
     .await?;
     Ok(response["data"]
@@ -124,8 +125,8 @@ async fn schema_supports_span_rollups_and_spend_joins(
     let ledger = read_json(
         &database,
         "SELECT count() AS rows, uniqExact(version) AS versions, \
-         countIf(NOT match(checksum, '^[0-9a-f]{64}$')) AS invalid_checksums \
-         FROM trace_test.schema_migrations",
+         countIf(NOT match(checksum, '^[0-9a-f]{96}$')) AS invalid_checksums \
+         FROM trace_test._sqlx_migrations",
     )
     .await?;
     assert_eq!(
@@ -298,16 +299,14 @@ async fn changed_migration_is_rejected(
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     execute_write(
         &database,
-        "INSERT INTO trace_test.schema_migrations (version, description, checksum) \
-         VALUES (1, 'otel_traces', 'tampered')",
+        "ALTER TABLE trace_test._sqlx_migrations UPDATE checksum = '00' \
+         WHERE version = 1 SETTINGS mutations_sync = 1",
     )
     .await?;
 
     assert!(matches!(
         ensure_schema(&database.client, &writer, "trace_test", 7).await,
-        Err(Error::Storage(StorageError::Migration(ChangedMigration {
-            version: 1
-        })))
+        Err(Error::Migration(MigrateError::VersionMismatch(1)))
     ));
     Ok(())
 }
@@ -951,6 +950,60 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     let mutation_count = mutation_rows(&database).await?;
     ensure_schema(&database.client, &writer, "trace_test", 14).await?;
     assert_eq!(mutation_rows(&database).await?, mutation_count);
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn retention_reconciliation_updates_each_table_ttl(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&database.url)?;
+    apply_migrations(&database.client, &writer, "trace_test", 7).await?;
+    reconcile_retention(&database.client, &writer, "trace_test", 7).await?;
+    let ttl_queries = read_json(
+        &database,
+        "SELECT name, create_table_query FROM system.tables \
+         WHERE database = 'trace_test' AND name IN \
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs') ORDER BY name",
+    )
+    .await?;
+    let ttl_queries = ttl_queries["data"].as_array().expect("retention tables");
+    assert_eq!(
+        ttl_queries
+            .iter()
+            .map(|row| row["name"].as_str().expect("table name"))
+            .collect::<Vec<_>>(),
+        ["agent_traces_by_key", "otel_traces", "spend_logs"]
+    );
+    for row in ttl_queries {
+        let query = row["create_table_query"]
+            .as_str()
+            .expect("table creation query");
+        assert!(
+            query.contains("toIntervalDay(7)") || query.contains("INTERVAL 7 DAY"),
+            "{query}"
+        );
+    }
+
+    reconcile_retention(&database.client, &writer, "trace_test", 3).await?;
+    let ttl_queries = read_json(
+        &database,
+        "SELECT name, create_table_query FROM system.tables \
+         WHERE database = 'trace_test' AND name IN \
+         ('otel_traces', 'agent_traces_by_key', 'spend_logs') ORDER BY name",
+    )
+    .await?;
+    for row in ttl_queries["data"].as_array().expect("retention tables") {
+        let query = row["create_table_query"]
+            .as_str()
+            .expect("table creation query");
+        assert!(
+            query.contains("toIntervalDay(3)") || query.contains("INTERVAL 3 DAY"),
+            "{query}"
+        );
+    }
     Ok(())
 }
 

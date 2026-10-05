@@ -74,6 +74,7 @@ serde_with.workspace = true
 criterion.workspace = true
 futures-util.workspace = true
 rstest.workspace = true
+sqlx = { workspace = true, features = ["migrate"] }
 sha2.workspace = true
 tokio-tungstenite.workspace = true
 wiremock.workspace = true
