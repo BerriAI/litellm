@@ -446,11 +446,19 @@ class Cache:
         2. Else if a model_group is set, then return the model_group as the model. This is used for all requests sent through the litellm.Router()
         3. Else use the `model` passed in kwargs
         """
-        metadata: Final[dict] = kwargs.get("metadata", {}) or {}
         litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
-        metadata_in_litellm_params: Final[dict] = litellm_params.get("metadata", {}) or {}
-        model_group: Final[str | None] = metadata.get("model_group") or metadata_in_litellm_params.get("model_group")
-        caching_group: Final = self._get_caching_group(metadata, model_group)
+        metadata_sources: Final[tuple[dict, ...]] = (
+            kwargs.get("metadata") or {},
+            kwargs.get("litellm_metadata") or {},
+            litellm_params.get("metadata") or {},
+            litellm_params.get("litellm_metadata") or {},
+        )
+        model_group: Final[str | None] = next(
+            (source["model_group"] for source in metadata_sources if source.get("model_group")), None
+        )
+        caching_group: Final = next(
+            (group for source in metadata_sources if (group := self._get_caching_group(source, model_group))), None
+        )
         return caching_group or model_group or kwargs["model"]
 
     def _get_caching_group(self, metadata: dict, model_group: str | None) -> str | None:

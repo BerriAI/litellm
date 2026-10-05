@@ -66,7 +66,7 @@ def test_a_team_model_is_listed_and_served_only_for_keys_of_its_team(gateway: Ga
 
 
 def _v2_team_public_names(gateway: Gateway, key: str, model: str) -> list[JsonValue]:
-    response: Final = gateway.request("GET", "/v2/model/info", key=key, params={"model_name": model})
+    response: Final = gateway.request("GET", "/v2/model/info", key=key, params={"model": model})
     assert response.status_code == 200, response.text
     return [entry["model_info"].get("team_public_model_name") for entry in response.json()["data"]]
 

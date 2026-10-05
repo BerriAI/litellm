@@ -281,6 +281,8 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
                 {
                     "path": f"/{scenario_id}/v1/decisions",
                     "authorization": "Bearer sk-scripted-provider",
+                    "method": "POST",
+                    "api_key": "",
                     "body": {
                         "model": "pplx-decider-v1-27b",
                         "state": {"source": "cost-tracking"},
