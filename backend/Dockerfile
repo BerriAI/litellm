@@ -44,6 +44,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-install-workspace --no-default-groups --no-editable \
         --extra proxy \
         --extra proxy-runtime \
+        --group admin-mcp \
         --extra extra_proxy \
         --extra semantic-router \
         --extra saml \
@@ -56,6 +57,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-default-groups --no-editable \
         --extra proxy \
         --extra proxy-runtime \
+        --group admin-mcp \
         --extra extra_proxy \
         --extra semantic-router \
         --extra saml \

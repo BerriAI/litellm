@@ -1,6 +1,9 @@
 import os
+import sys
 import traceback
-from typing import Final
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from typing import Final, Literal
 from unittest import mock
 
 from dotenv import load_dotenv
@@ -30,7 +33,7 @@ logging.basicConfig(
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 # test /chat/completion request to the proxy
 from fastapi.testclient import TestClient
@@ -43,6 +46,191 @@ from litellm.proxy.proxy_server import (  # Replace with the actual module where
     save_worker_config,
 )
 from litellm.proxy.utils import ProxyLogging
+
+@pytest.fixture
+def admin_mcp_proxy(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.litellm_license import LicenseCheck
+
+    monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", "true")
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-" + "1234567890abcdef" * 4)
+    for name in ("WORKER_CONFIG", "CONFIG_FILE_PATH", "DATABASE_URL", "LITELLM_LICENSE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(proxy_server, "_license_check", LicenseCheck())
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {"disable_model_info_refresh": True})
+    monkeypatch.setattr(proxy_server, "scheduler", None)
+    return FastAPI(lifespan=proxy_server.proxy_startup_event)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+@pytest.mark.parametrize("failure_phase", ["startup", "serving", "shutdown", "cancelled", "license"])
+async def test_admin_mcp_failure_still_closes_proxy_resources(
+    admin_mcp_proxy: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_phase: Literal["startup", "serving", "shutdown", "cancelled", "license"],
+) -> None:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.schedulers.base import STATE_PAUSED
+    from litellm_admin_mcp import server as connector_server
+    from litellm_admin_mcp.gateway import Gateway
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+    from litellm.proxy.shutdown.scheduled_jobs import AwaitableAsyncIOExecutor
+
+    monkeypatch.setattr(proxy_server, "premium_user", failure_phase != "license")
+    executor: Final = AwaitableAsyncIOExecutor()
+    scheduler: Final = AsyncIOScheduler(executors={"default": executor})
+    monkeypatch.setattr(proxy_server, "scheduler", scheduler)
+    monkeypatch.setattr(proxy_server, "scheduler_executor", executor)
+    scheduler.start()
+
+    @asynccontextmanager
+    async def failing_connector(_app: FastAPI) -> AsyncGenerator[None, None]:
+        if failure_phase == "startup":
+            raise RuntimeError("startup failed")
+        yield
+        assert scheduler.state == STATE_PAUSED
+        assert GracefulShutdownManager.is_shutting_down()
+        assert proxy_server.shared_aiohttp_session is not None
+        assert not proxy_server.shared_aiohttp_session.closed
+        if failure_phase == "shutdown":
+            raise RuntimeError("shutdown failed")
+
+    def connector_app(_gateway: Gateway) -> FastAPI:
+        return FastAPI(lifespan=failing_connector)
+
+    monkeypatch.setattr(connector_server, "create_http_app", connector_app)
+    expected_error: Final = (
+        HTTPException if failure_phase == "license"
+        else asyncio.CancelledError if failure_phase == "cancelled"
+        else RuntimeError
+    )
+    message: Final = "LITELLM_LICENSE" if failure_phase == "license" else f"{failure_phase} failed"
+    async def run_lifespan() -> None:
+        async with admin_mcp_proxy.router.lifespan_context(admin_mcp_proxy) as state:
+            assert state == {"tracing_receiver": None}
+            if failure_phase == "serving":
+                raise RuntimeError("serving failed")
+            if failure_phase == "cancelled":
+                raise asyncio.CancelledError("cancelled failed")
+
+    with pytest.raises(expected_error, match=message):
+        await run_lifespan()
+
+    assert proxy_server.shared_aiohttp_session is not None
+    assert proxy_server.shared_aiohttp_session.closed
+    assert proxy_server.master_key is None
+    assert all(route.name != "admin_mcp" for route in admin_mcp_proxy.routes)
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+async def test_proxy_shutdown_drains_active_admin_tool_before_closing_connector(
+    admin_mcp_proxy: FastAPI, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx2
+
+    from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    monkeypatch.setenv("LITELLM_ADMIN_TOOLS", "list_teams")
+    admin_mcp_proxy.add_middleware(InFlightRequestsMiddleware)
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    @admin_mcp_proxy.get("/user/info")
+    async def user_info() -> dict[str, object]:
+        return {"user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"}}
+
+    @admin_mcp_proxy.get("/team/list", operation_id="list_team_team_list_get")
+    async def list_teams() -> dict[str, object]:
+        started.set()
+        await release.wait()
+        return {"teams": ["completed-before-shutdown"]}
+
+    async def complete_during_drain() -> None:
+        async with asyncio.timeout(5):
+            while not GracefulShutdownManager.is_shutting_down():
+                await asyncio.sleep(0)
+        release.set()
+
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=admin_mcp_proxy), base_url="http://localhost:4000"
+    ) as client:
+        async with admin_mcp_proxy.router.lifespan_context(admin_mcp_proxy) as state:
+            assert state == {"tracing_receiver": None}
+            request: Final = asyncio.create_task(client.post(
+                "/admin/mcp",
+                headers={"Authorization": "Bearer admin", "Accept": "application/json, text/event-stream"},
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "list_teams"}},
+            ))
+            await asyncio.wait_for(started.wait(), timeout=5)
+            completion: Final = asyncio.create_task(complete_during_drain())
+        await asyncio.wait_for(completion, timeout=5)
+        response: Final = await asyncio.wait_for(request, timeout=5)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["isError"] is False
+    assert json.loads(response.json()["result"]["content"][0]["text"]) == {
+        "teams": ["completed-before-shutdown"]
+    }
+    assert InFlightRequestsMiddleware.get_count() == 0
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+async def test_proxy_shutdown_closes_admin_connector_when_drain_is_cancelled(
+    admin_mcp_proxy: FastAPI,
+) -> None:
+    import httpx2
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
+    from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+
+    admin_mcp_proxy.add_middleware(InFlightRequestsMiddleware)
+    ready: Final = asyncio.Event()
+    shutdown: Final = asyncio.Event()
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    @admin_mcp_proxy.get("/hold")
+    async def hold_request() -> dict[str, bool]:
+        started.set()
+        await release.wait()
+        return {"complete": True}
+
+    async def serve() -> None:
+        async with admin_mcp_proxy.router.lifespan_context(admin_mcp_proxy):
+            ready.set()
+            await shutdown.wait()
+
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=admin_mcp_proxy), base_url="http://localhost:4000"
+    ) as client:
+        serving: Final = asyncio.create_task(serve())
+        await asyncio.wait_for(ready.wait(), timeout=5)
+        assert any(route.name == "admin_mcp" for route in admin_mcp_proxy.routes)
+        request: Final = asyncio.create_task(client.get("/hold"))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=5)
+            shutdown.set()
+            async with asyncio.timeout(5):
+                while not GracefulShutdownManager.is_shutting_down():
+                    await asyncio.sleep(0)
+            serving.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await serving
+            assert all(route.name != "admin_mcp" for route in admin_mcp_proxy.routes)
+            assert proxy_server.shared_aiohttp_session is not None
+            assert proxy_server.shared_aiohttp_session.closed
+        finally:
+            release.set()
+            await asyncio.wait_for(request, timeout=5)
+
+    assert InFlightRequestsMiddleware.get_count() == 0
+
 
 # Your bearer token
 token = "sk-1234"

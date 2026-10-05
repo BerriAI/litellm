@@ -32,6 +32,7 @@ from functools import partial
 from typing import Final, Literal
 
 import pytest
+from fastapi import FastAPI
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -368,3 +369,54 @@ def test_every_app_mount_is_assigned_to_a_component():
         f"Add them to GATEWAY_MOUNT_PATHS, BACKEND_MOUNT_PATHS, or serve them "
         f"from the UI container:\n  " + "\n  ".join(sorted(unassigned))
     )
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+@pytest.mark.parametrize(
+    "component_lifespan", (None, _gateway_lifespan, _backend_lifespan), ids=("proxy", "gateway", "backend")
+)
+@pytest.mark.parametrize("enabled", (False, True))
+def test_admin_mcp_survives_only_management_component_lifespans(
+    monkeypatch: pytest.MonkeyPatch, component_lifespan: Lifespan[Starlette] | None, enabled: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.admin_mcp import admin_mcp_lifespan
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", str(enabled).lower())
+    for name in (
+        "PROXY_BASE_URL", "LITELLM_MCP_PUBLIC_URL", "LITELLM_ADMIN_TOOLS", "LITELLM_ADMIN_READ_ONLY",
+        "LITELLM_ADMIN_RESPONSE_VIEW", "LITELLM_ADMIN_SCHEMA_MODE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncGenerator[Mapping[str, object], None]:
+        async with admin_mcp_lifespan(application):
+            yield {"tracing_receiver": None}
+
+    application: Final = FastAPI(lifespan=lifespan)
+
+    @application.get("/user/info")
+    async def user_info() -> dict[str, object]:
+        return {"user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"}}
+
+    if component_lifespan is not None:
+        application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
+    for _ in range(2):
+        with TestClient(application, base_url="http://localhost:4000") as client:
+            response: Final = client.post(
+                "/admin/mcp",
+                headers={"Authorization": "Bearer admin", "Accept": "application/json, text/event-stream"},
+                json={
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26", "capabilities": {},
+                        "clientInfo": {"name": "component-test", "version": "1"},
+                    },
+                },
+            )
+            expected_status: Final = 200 if enabled and component_lifespan is not _gateway_lifespan else 404
+            assert response.status_code == expected_status, response.text
+            if response.status_code == 200:
+                assert response.json()["result"]["serverInfo"]["name"] == "litellm-admin-mcp"
