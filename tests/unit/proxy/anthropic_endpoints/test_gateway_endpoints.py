@@ -476,6 +476,34 @@ def test_token_unknown_device_code_is_expired_token():
     assert resp.json()["error"] == "expired_token"
 
 
+def test_token_signs_in_without_a_refresh_token_when_session_signing_is_unusable():
+    """An ``mcp_session_token_signing`` block whose key reference does not resolve must not turn the device
+    sign-in that worked before refresh tokens existed into a 500: the login still answers the session token
+    and consumes the device code, only the refresh token is left out, and the refresh grant stays fail-closed."""
+    unusable_signing: Final = {"algorithm": "RS256", "kid": "rotated", "private_key": "os.environ/LITELLM_TEST_NO_PEM"}
+    with _gateway_env(extra_settings={"mcp_session_token_signing": unusable_signing}) as (client, cache):
+        device_code = _start_device_flow(client)
+        _complete_flow(cache, device_code)
+        with patch(_MINT, return_value="sk-litellm-session-token"):
+            resp = _request_token(client, device_code)
+        assert resp.status_code == 200
+        assert resp.headers["cache-control"] == "no-store"
+        body = resp.json()
+        assert body["access_token"] == "sk-litellm-session-token"
+        assert body["token_type"] == "Bearer"
+        assert body["expires_in"] > 0
+        assert "refresh_token" not in body
+        replay = _request_token(client, device_code)
+        assert replay.status_code == 400
+        assert replay.json()["error"] == "expired_token"
+        principal = SessionPrincipal(
+            user_id="user-123", client_id=gateway_endpoints.CLAUDE_CODE_CLIENT_ID, audience="proxy_api", team_id="team-a"
+        )
+        refused = _refresh(client, _foreign_refresh_token(principal))
+    assert refused.status_code == 500
+    assert refused.json()["error"] == "server_error"
+
+
 def test_refresh_grant_mints_a_new_bearer_and_rotates_the_refresh_token():
     """Claude Code refreshes with grant_type and refresh_token alone, no client_id: the gateway
     re-mints the session JWT from the live user row for the team the login picked, hands back a

@@ -41,11 +41,13 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     PROXY_API_AUDIENCE,
     MintedProxyCredential,
     MintProxyCredential,
+    SessionSigning,
     proxy_credential_response,
     refresh_proxy_credential,
     resolve_session_signing,
     revoke_session_refresh_token,
 )
+from litellm.proxy._experimental.mcp_server.oauth_utils import TOKEN_NO_CACHE_HEADERS
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import SessionPrincipal
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 from litellm.proxy.anthropic_endpoints.endpoints import anthropic_response, count_tokens
@@ -283,6 +285,34 @@ def _mint_access_token(login: _GatewayLogin) -> str:
     )
 
 
+def _session_only_credential(login: _GatewayLogin) -> Response:
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "access_token": _mint_access_token(login),
+            "token_type": "Bearer",
+            "expires_in": CLI_JWT_EXPIRATION_HOURS * _SECONDS_PER_HOUR,
+        },
+        headers=TOKEN_NO_CACHE_HEADERS,
+    )
+
+
+def _renewable_credential(login: _GatewayLogin, signing: SessionSigning) -> Response:
+    user_id: Final = login.user_info.user_id
+    return proxy_credential_response(
+        MintedProxyCredential(
+            key=_mint_access_token(login),
+            expires_in=CLI_JWT_EXPIRATION_HOURS * _SECONDS_PER_HOUR,
+            user_id=user_id,
+            team_id=login.team_id,
+        ),
+        SessionPrincipal(
+            user_id=user_id, client_id=CLAUDE_CODE_CLIENT_ID, audience=PROXY_API_AUDIENCE, team_id=login.team_id
+        ),
+        signing,
+    )
+
+
 @with_service_target(CLI_SSO_SESSIONS_TARGET)
 async def _claim_device_code(login_id: str, cache: DualCache) -> bool:
     from litellm.proxy.management_endpoints.ui_sso import (
@@ -336,20 +366,8 @@ async def _handle_device_code_grant(device_code: str | None) -> Response:
         return _oauth_error_response(login)
 
     signing: Final = resolve_session_signing(master_key, f"{CLAUDE_CODE_CLIENT_ID} token grant")
-    if isinstance(signing, Response):
-        return signing
-    user_id: Final = login.user_info.user_id
-    credential: Final = proxy_credential_response(
-        MintedProxyCredential(
-            key=_mint_access_token(login),
-            expires_in=CLI_JWT_EXPIRATION_HOURS * _SECONDS_PER_HOUR,
-            user_id=user_id,
-            team_id=login.team_id,
-        ),
-        SessionPrincipal(
-            user_id=user_id, client_id=CLAUDE_CODE_CLIENT_ID, audience=PROXY_API_AUDIENCE, team_id=login.team_id
-        ),
-        signing,
+    credential: Final = (
+        _session_only_credential(login) if isinstance(signing, Response) else _renewable_credential(login, signing)
     )
     if credential.status_code != status.HTTP_200_OK:
         return credential
