@@ -609,8 +609,15 @@ def _served(gateway: Gateway, key: str, identity: str) -> bool:
     ]
 
 
-def _withdrawn(gateway: Gateway, key: str, identity: str) -> bool:
-    return not _served(gateway, key, identity)
+def _not_found(gateway: Gateway, key: str, identity: str) -> bool:
+    response: Final = gateway.client.post(
+        "/mcp-rest/tools/call",
+        headers={"x-litellm-api-key": key},
+        json={"server_id": identity, "name": "add", "arguments": ADD},
+    )
+    return response.status_code == 404 and JSON_OBJECT.validate_json(response.content) == {
+        "detail": {"error": "server_not_found", "message": f"MCP server '{identity}' was not found"}
+    }
 
 
 def test_team_submission_is_inert_until_approved_serves_both_workers_and_stops_after_reject(
@@ -645,7 +652,7 @@ def test_team_submission_is_inert_until_approved_serves_both_workers_and_stops_a
             assert pending_list.status_code == 200, pending_list.text
             listed = ToolListing.model_validate_json(pending_list.content).tools
             assert [tool.name for tool in listed if tool.mcp_info.server_id == identity] == [], pending_list.text
-            assert not _served(worker, member, identity), "a pending submission served a tool call"
+            assert _not_found(worker, member, identity), "a pending submission was not refused as server_not_found"
         assert tool_calls(upstream.drain()) == ()
 
         approved: Final = gateway.request("PUT", f"/v1/mcp/server/{identity}/approve")
@@ -668,8 +675,8 @@ def test_team_submission_is_inert_until_approved_serves_both_workers_and_stops_a
         submission: Final = _submission(gateway, identity)
         assert (submission.approval_status, submission.review_notes) == ("rejected", notes)
         for worker in (gateway, peer):
-            assert eventually(partial(_withdrawn, worker, member, identity), bool, seconds=70)
+            assert eventually(partial(_not_found, worker, member, identity), bool, seconds=70)
         upstream.drain()
         for worker in (gateway, peer):
-            assert not _served(worker, member, identity)
+            assert _not_found(worker, member, identity), "a rejected submission was not refused as server_not_found"
         assert tool_calls(upstream.drain()) == ()
