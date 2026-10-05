@@ -47,11 +47,11 @@ def _team_key_scoped_to(scenario: Scenario, allowed: str) -> str:
     return scenario.key(team_id=team, user_id=scenario.member(team))
 
 
-def _listed_names(gateway: Gateway, key: str, path: str, field: str, candidates: set[str]) -> list[str]:
+def _listed_names(gateway: Gateway, key: str, path: str, field: str) -> list[str]:
     response: Final = gateway.request("GET", path, key=key)
     assert response.status_code == 200, response.text
     entries: Final = response.json()[field]
-    return sorted(entry["search_tool_name"] for entry in entries if entry["search_tool_name"] in candidates)
+    return sorted(entry["search_tool_name"] for entry in entries)
 
 
 def _two_tools(gateway: Gateway, scenario: Scenario, wire: Wire) -> tuple[str, str]:
@@ -90,7 +90,7 @@ def test_search_tool_allowlist_refuses_other_tools_before_any_upstream_call(
         served: Final = gateway.request("POST", f"/v1/search/{allowed}", _SEARCH_BODY, key=key)
         assert (served.status_code, served.json()) == (200, {"object": "search", "results": []}), served.text
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/allowed/search")]
-        assert _listed_names(gateway, key, "/search_tools/list", "search_tools", {allowed, denied}) == [allowed]
+        assert _listed_names(gateway, key, "/search_tools/list", "search_tools") == [allowed]
 
 
 def test_search_tools_listing_route_hides_tools_outside_the_key_allowlist(gateway: Gateway) -> None:
@@ -101,7 +101,7 @@ def test_search_tools_listing_route_hides_tools_outside_the_key_allowlist(gatewa
         allowed, denied = _two_tools(gateway, scenario, wire)
         key: Final = _key_scoped_to(scenario, allowed)
         for path in ("/v1/search/tools", "/search/tools"):
-            assert _listed_names(gateway, key, path, "data", {allowed, denied}) == [allowed]
+            assert _listed_names(gateway, key, path, "data") == [allowed]
         assert wire.drain() == ()
 
 
