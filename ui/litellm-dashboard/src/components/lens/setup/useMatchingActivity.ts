@@ -87,7 +87,7 @@ function previewTitle(
   if (!state.valid) return "Complete your sampling settings to preview matches";
   if (state.pending) return "Finding matching runs…";
   if (!data) return "Preview unavailable";
-  return `${data.eligible} matching run${data.eligible === 1 ? "" : "s"}`;
+  return `${data.eligible.toLocaleString()} matching run${data.eligible === 1 ? "" : "s"}`;
 }
 
 function manualSelectedCount(selection: Selection): number {

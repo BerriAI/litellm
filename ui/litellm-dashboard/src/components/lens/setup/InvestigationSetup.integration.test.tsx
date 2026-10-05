@@ -194,21 +194,21 @@ it("walks the three steps in order, reopens a finished step from its summary, an
   renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />);
   const steps = within(screen.getByRole("list", { name: "Investigation setup" }));
   expect(steps.getByRole("button", { name: /^Activity/ })).toHaveAttribute("aria-current", "step");
-  expect(steps.getByRole("button", { name: /^Run/ })).toBeDisabled();
+  expect(steps.getByRole("button", { name: /^Schedule/ })).toBeDisabled();
   expect(screen.getByRole("region", { name: "Matching activity" })).toBeVisible();
   expect(screen.queryByRole("textbox", { name: "What should the agent be doing?" })).not.toBeInTheDocument();
   await user.type(screen.getByRole("combobox", { name: "Search runs" }), "agent:support_agent");
   await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "Continue" }));
   expect(steps.getByRole("button", { name: /^Activity.*agent:support_agent/ })).toBeEnabled();
-  expect(screen.queryByRole("textbox", { name: "Investigation name" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox", { name: "Search runs" })).not.toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "What should the agent be doing?" })).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  expect(screen.getByRole("checkbox", { name: "Keep watching for new traces" })).toBeVisible();
+  expect(screen.getByRole("switch", { name: "Keep watching for new traces" })).toBeVisible();
   expect(screen.getByRole("region", { name: "Matching activity" })).toBeVisible();
   await user.click(steps.getByRole("button", { name: /^Activity/ }));
-  expect(screen.getByRole("textbox", { name: "Investigation name" })).toBeVisible();
-  expect(screen.queryByRole("checkbox", { name: "Keep watching for new traces" })).not.toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "Search runs" })).toBeVisible();
+  expect(screen.queryByRole("switch", { name: "Keep watching for new traces" })).not.toBeInTheDocument();
 });
 
 it("searches providers and saves custom history while preserving existing schedule values", async () => {
@@ -354,10 +354,9 @@ it("keeps a duplicated investigation's schedule off and saves the interval once 
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await waitFor(() => expect(screen.getByRole("button", { name: "Run investigation" })).toBeEnabled());
-  expect(screen.getByRole("checkbox", { name: "Keep watching for new traces" })).not.toBeChecked();
-  await user.click(screen.getByText("Advanced options"));
-  fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly limit (USD)" }), { target: { value: "8" } });
-  await user.click(screen.getByRole("checkbox", { name: "Keep watching for new traces" }));
+  expect(screen.getByRole("switch", { name: "Keep watching for new traces" })).not.toBeChecked();
+  fireEvent.change(screen.getByRole("spinbutton", { name: "Monthly limit" }), { target: { value: "8" } });
+  await user.click(screen.getByRole("switch", { name: "Keep watching for new traces" }));
   fireEvent.change(screen.getByRole("spinbutton", { name: "Check every" }), { target: { value: "120" } });
   await user.click(screen.getByRole("button", { name: "Run and monitor" }));
   expect(save).toHaveBeenCalledWith(
@@ -365,14 +364,14 @@ it("keeps a duplicated investigation's schedule off and saves the interval once 
   );
 });
 
-it("watches new investigations every 15 minutes by default, outside advanced options", async () => {
+it("watches new investigations every 15 minutes by default", async () => {
   const user = userEvent.setup();
   const save = vi.fn().mockResolvedValue(undefined);
   mockGateway({ keyModels: ["analysis"] });
   renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={save} />);
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
-  const watching = await screen.findByRole("checkbox", { name: "Keep watching for new traces" });
+  const watching = await screen.findByRole("switch", { name: "Keep watching for new traces" });
   expect(watching).toBeChecked();
   expect(watching).toBeVisible();
   await waitFor(() => expect(screen.getByRole("button", { name: "Run and monitor" })).toBeEnabled());
@@ -462,6 +461,51 @@ it.each(["empty", "error"])("blocks a new investigation when its preview is %s",
   await user.click(screen.getByRole("button", { name: "Continue" }));
   await user.click(screen.getByRole("button", { name: "Continue" }));
   expect(screen.getByRole("button", { name: "Run investigation" })).toBeDisabled();
+});
+
+describe("URL draft", () => {
+  const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
+    new URLSearchParams((onUrlUpdate.mock.lastCall?.[0] as { queryString: string } | undefined)?.queryString ?? "");
+
+  it("opens a new investigation filled from the URL, previews that search, and writes edits back", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />, {
+      searchParams: "?q=agent:support_agent&lookback=72&sample=50&name=Refunds&step=criteria",
+      onUrlUpdate,
+    });
+    expect(screen.getByRole("textbox", { name: "Investigation name" })).toHaveValue("Refunds");
+    expect(screen.getByRole("button", { name: /^Criteria/ })).toHaveAttribute("aria-current", "step");
+    expect(screen.getByRole("button", { name: /^Activity.*agent:support_agent.*3 days/ })).toBeEnabled();
+    await waitFor(() =>
+      expect(proxy.post).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          body: expect.objectContaining({
+            lookback_hours: 72,
+            selection: expect.objectContaining({ q: "agent:support_agent", sample_percent: 50 }),
+          }),
+        }),
+      ),
+    );
+    await user.type(screen.getByRole("textbox", { name: "What should the agent be doing?" }), "Refund with receipts");
+    await waitFor(() => expect(lastUrl(onUrlUpdate).get("context")).toBe("Refund with receipts"));
+    expect(lastUrl(onUrlUpdate).get("q")).toBe("agent:support_agent");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(lastUrl(onUrlUpdate).get("step")).toBe("run"));
+  });
+
+  it("edits an investigation from its saved settings, never from a draft left in the URL", () => {
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<InvestigationSetup mode="edit" initial={settings} onClose={vi.fn()} onSave={vi.fn()} />, {
+      searchParams: "?name=Draft&lookback=72",
+      onUrlUpdate,
+    });
+    expect(screen.getByRole("textbox", { name: "Investigation name" })).toHaveValue("Research quality");
+    expect(screen.getByRole("spinbutton", { name: "Review the last" })).toHaveValue(1);
+    fireEvent.change(screen.getByRole("textbox", { name: "Investigation name" }), { target: { value: "Renamed" } });
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+  });
 });
 
 describe("Watch for", () => {

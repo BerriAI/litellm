@@ -10,17 +10,18 @@ import type { ScopeOptions } from "../useMatchingActivity";
 export function ScopeFields({ runs, range }: ScopeOptions) {
   const { control } = useFormContext<InvestigationInput>();
   return (
-    <div className="grid gap-2 text-sm font-medium">
-      Runs to review
-      <div className="h-9 rounded-md border">
+    <div className="grid gap-2">
+      <span className="text-sm font-medium">Runs to review</span>
+      <div className="h-9 overflow-hidden rounded-md border border-input shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30">
         <Controller
           control={control}
           name="selection.q"
           render={({ field }) => <RunSearch value={field.value} onChange={field.onChange} runs={runs} range={range} />}
         />
       </div>
-      <p className="text-xs font-normal text-muted-foreground">
-        Leave empty to review every run, or filter like agent:researcher status:error attr.environment:prod
+      <p className="text-xs text-muted-foreground">
+        Same search as the Traces tab, like <code className="font-mono">agent:researcher status:error</code>. Leave
+        empty to review every run.
       </p>
     </div>
   );

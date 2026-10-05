@@ -1,11 +1,11 @@
 "use client";
 
 import { FormProvider, useWatch, type UseFormReturn } from "react-hook-form";
-import { useEffect, useState } from "react";
-import { ChevronLeft } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { ArrowLeft } from "lucide-react";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { FieldError } from "@/components/ui/field";
 import {
   investigationSchema,
   investigationDefaults,
@@ -13,8 +13,8 @@ import {
   investigationStepFields,
   type InvestigationInput,
   type InvestigationOutput,
-  type SetupStep as SetupStepId,
 } from "./investigationSchema";
+import { draftFromParams, useSetupDraftRoute, useSetupStepRoute } from "./setupRoute";
 import { nextSetupStep, SetupStep, SetupSteps } from "./SetupSteps";
 import { ScopeFields } from "./fields/ScopeFields";
 import { SampleFields } from "./fields/SampleFields";
@@ -44,8 +44,11 @@ function saveLabelFor(mode: SetupMode, repeat: boolean): string {
   return repeat ? "Run and monitor" : "Run investigation";
 }
 
-function activitySummary(selection: InvestigationInput["selection"]): string {
-  return `${scopeLabel(selection)} · Last ${durationLabel(selection.lookback_hours ?? 24, "hours")}`;
+function activitySummary(selection: InvestigationInput["selection"], manual: boolean): string {
+  const span = `Last ${durationLabel(selection.lookback_hours ?? 24, "hours")}`;
+  const picked = selection.execution_ids.length;
+  if (manual) return `${picked} picked ${picked === 1 ? "run" : "runs"} · ${span}`;
+  return `${scopeLabel(selection)} · ${span}`;
 }
 
 function criteriaSummary(values: Pick<InvestigationInput, "context" | "watching" | "questions">): string {
@@ -66,10 +69,16 @@ interface SetupProps {
 /** Replaces the Investigations tab body: a three-step setup on the left, the activity it matches on the right. */
 export function InvestigationSetup(props: SetupProps) {
   const { initial, mode } = props;
+  const draft = useSetupDraftRoute();
   const form = useZodForm(investigationSchema, {
-    defaultValues: investigationDefaults(initial, mode),
+    defaultValues: mode === "new" ? draftFromParams(draft.params) : investigationDefaults(initial, mode),
     mode: "onChange",
   });
+  const { saveDraft } = draft;
+  useEffect(() => {
+    if (mode !== "new") return;
+    return form.subscribe({ formState: { values: true }, callback: ({ values }) => saveDraft(values) });
+  }, [form, mode, saveDraft]);
   return (
     <FormProvider {...form}>
       <SetupEditor {...props} form={form} />
@@ -86,13 +95,13 @@ function SetupEditor({
   form,
 }: SetupProps & { form: UseFormReturn<InvestigationInput, unknown, InvestigationOutput> }) {
   const analysis = useAnalysisModels();
-  const [step, setStep] = useState<SetupStepId>("activity");
+  const [step, setStep] = useSetupStepRoute();
   const [error, setError] = useState("");
   const [trace, setTrace] = useState<TraceRef | null>(null);
   const { control, register, setValue, subscribe, trigger, formState } = form;
-  const [selectedModel, repeat, selection, context, watching, questions] = useWatch({
+  const [selectedModel, repeat, selection, manualSelection, context, watching, questions] = useWatch({
     control,
-    name: ["selectedModel", "repeat", "selection", "context", "watching", "questions"],
+    name: ["selectedModel", "repeat", "selection", "manualSelection", "context", "watching", "questions"],
   });
   const activity = useMatchingActivity();
   const traceRuns = activity.preview.page.executions.flatMap((run) => (run.summary ? [traceRefOf(run.summary)] : []));
@@ -127,52 +136,50 @@ function SetupEditor({
   const saveLabel = saveLabelFor(mode, repeat);
   const offline = !ready && mode !== "edit";
   return (
-    <section aria-label={TITLES[mode]} className="flex min-w-0 flex-1 flex-col gap-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-start gap-1">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="-ml-2 shrink-0 text-muted-foreground"
-            aria-label="Back to investigations"
-            disabled={formState.isSubmitting}
-            onClick={onClose}
-          >
-            <ChevronLeft className="size-5" />
-          </Button>
-          <div>
-            <h2 className="text-lg font-semibold tracking-tight">{TITLES[mode]}</h2>
-            <p className="text-xs text-muted-foreground">
-              Matching activity on the right updates as you change the setup.
-            </p>
-          </div>
-        </div>
-        <Button variant="outline" disabled={formState.isSubmitting} onClick={onClose}>
+    <section aria-label={TITLES[mode]} className="flex min-w-0 flex-1 flex-col">
+      <header className="flex items-center gap-1 border-b pb-3">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="shrink-0 text-muted-foreground"
+          aria-label="Back to investigations"
+          disabled={formState.isSubmitting}
+          onClick={onClose}
+        >
+          <ArrowLeft className="size-4" />
+        </Button>
+        <input
+          {...register("name")}
+          aria-label="Investigation name"
+          placeholder={TITLES[mode]}
+          autoComplete="off"
+          className="h-8 min-w-0 flex-1 appearance-none rounded-md border-0 bg-transparent px-2 text-lg font-semibold tracking-tight shadow-none ring-0 outline-none placeholder:text-muted-foreground/60 hover:bg-muted/50 focus:bg-muted/50 focus:ring-0 focus:outline-none"
+        />
+        <Button variant="ghost" size="sm" disabled={formState.isSubmitting} onClick={onClose}>
           Cancel
         </Button>
       </header>
       {offline && (
-        <p role="status" className="text-sm text-warning">
+        <p
+          role="status"
+          className="mt-4 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning"
+        >
           The worker or trace storage is unavailable. Your draft is safe; you can start when it reconnects.
         </p>
       )}
-      <div className="grid min-w-0 gap-8 lg:grid-cols-2">
+      <div className="grid min-w-0 flex-1 items-start gap-8 pt-6 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] xl:gap-10">
         <SetupSteps aria-label="Investigation setup" current={step} onOpen={setStep}>
           <SetupStep
             id="activity"
             heading="Activity"
-            description="Which traces or requests to review"
-            summary={activitySummary(selection)}
+            description="Which runs to review"
+            summary={activitySummary(selection, manualSelection)}
           >
-            <label className="grid gap-2 text-sm font-medium">
-              Investigation name
-              <Input {...register("name")} placeholder="e.g. Support quality" />
-            </label>
             <ScopeFields {...activity.scope} />
             <SampleFields />
-            <div className="flex justify-end pt-1">
+            <StepFooter>
               <Button onClick={() => void next()}>Continue</Button>
-            </div>
+            </StepFooter>
           </SetupStep>
           <SetupStep
             id="criteria"
@@ -181,22 +188,18 @@ function SetupEditor({
             summary={criteriaSummary({ context, watching, questions })}
           >
             <ExpectationsFields />
-            <div className="flex justify-end pt-1">
+            <StepFooter>
               <Button onClick={() => void next()}>Continue</Button>
-            </div>
+            </StepFooter>
           </SetupStep>
-          <SetupStep id="run" heading="Run" description="Schedule, analysis model, and budget" summary="">
+          <SetupStep id="run" heading="Schedule" description="How often to run, the model, and a budget" summary="">
             <RunFields models={analysis} gate={gate} />
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
-            <div className="flex justify-end pt-1">
+            <FieldError>{formState.errors.selection?.execution_ids?.message || error}</FieldError>
+            <StepFooter>
               <Button disabled={!canSave} onClick={() => void save()}>
                 {formState.isSubmitting ? "Saving…" : saveLabel}
               </Button>
-            </div>
+            </StepFooter>
           </SetupStep>
         </SetupSteps>
         <Inspector.Root
@@ -222,4 +225,8 @@ function SetupEditor({
       </div>
     </section>
   );
+}
+
+function StepFooter({ children }: { children: ReactNode }) {
+  return <div className="flex justify-end border-t pt-4">{children}</div>;
 }

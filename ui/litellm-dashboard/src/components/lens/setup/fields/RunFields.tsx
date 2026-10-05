@@ -1,90 +1,75 @@
 "use client";
 
+import { useId } from "react";
 import { Controller, useFormContext, useWatch } from "react-hook-form";
-import { Input } from "@/components/ui/input";
 import { DurationInput } from "@/components/shared/DurationInput";
+import { FieldError } from "@/components/ui/field";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import type { InvestigationInput } from "../investigationSchema";
+import { SwitchRow } from "./SwitchRow";
 import { AnalysisModelField, type AnalysisModelFieldProps } from "./AnalysisModelField";
 
 export function RunFields({ models, gate }: AnalysisModelFieldProps) {
   const {
     control,
     register,
-    setValue,
     formState: { errors },
   } = useFormContext<InvestigationInput>();
   const repeat = useWatch({ control, name: "repeat" });
+  const id = useId();
   return (
     <>
-      <div className="space-y-3">
-        <label className="flex items-center gap-2 text-sm font-medium">
-          <input type="checkbox" className="size-4 rounded border-input accent-foreground" {...register("repeat")} />
-          Keep watching for new traces
-        </label>
+      <div className="grid gap-4 rounded-md border px-3 py-2.5">
+        <Controller
+          control={control}
+          name="repeat"
+          render={({ field }) => (
+            <SwitchRow
+              label="Keep watching for new traces"
+              description={field.value ? "Reviews new runs as they arrive" : "Reviews the runs that match now, once"}
+              checked={field.value}
+              onCheckedChange={field.onChange}
+            />
+          )}
+        />
         {repeat && (
-          <Controller
-            control={control}
-            name="interval"
-            render={({ field }) => (
-              <DurationInput label="Check every" value={field.value} onChange={field.onChange} base="minutes" />
-            )}
-          />
-        )}
-        {errors.interval?.message && (
-          <p role="alert" className="text-sm text-destructive">
-            {errors.interval.message}
-          </p>
+          <div className="grid gap-2 pb-1">
+            <Controller
+              control={control}
+              name="interval"
+              render={({ field }) => (
+                <DurationInput label="Check every" value={field.value} onChange={field.onChange} base="minutes" />
+              )}
+            />
+            <FieldError>{errors.interval?.message}</FieldError>
+          </div>
         )}
       </div>
-      <details open={!gate.modelValid || undefined}>
-        <summary className="cursor-pointer text-sm font-medium">Advanced options</summary>
-        <div className="mt-4 space-y-5">
-          <AnalysisModelField models={models} gate={gate} />
-          <div className="grid gap-5 sm:grid-cols-2">
-            <label className="grid content-start gap-2 text-sm font-medium">
-              Maximum runs (optional)
-              <Input
-                {...register("selection.sample_size", {
-                  setValueAs: (value: unknown) => (value == null || value === "" ? null : Number(value)),
-                })}
-                type="number"
-                min="1"
-                placeholder="No limit"
-              />
-              {errors.selection?.sample_size?.message && (
-                <p role="alert" className="text-sm text-destructive">
-                  {errors.selection.sample_size.message}
-                </p>
-              )}
-            </label>
-            <label className="flex items-center gap-2 text-sm font-medium">
-              <input
-                type="checkbox"
-                {...register("manualSelection", {
-                  onChange: () => setValue("selection.execution_ids", [], { shouldValidate: true }),
-                })}
-              />
-              Choose individual runs
-            </label>
-          </div>
-          {errors.selection?.execution_ids?.message && (
-            <p role="alert" className="text-sm text-destructive">
-              {errors.selection.execution_ids.message}
-            </p>
-          )}
-          <div className="grid gap-5 sm:grid-cols-2">
-            <label className="grid content-start gap-2 text-sm font-medium">
-              Monthly limit (USD)
-              <Input {...register("budget", { valueAsNumber: true })} type="number" min="0.01" step="1" />
-              {errors.budget?.message && (
-                <p role="alert" className="text-sm text-destructive">
-                  {errors.budget.message}
-                </p>
-              )}
-            </label>
-          </div>
-        </div>
-      </details>
+      <AnalysisModelField models={models} gate={gate} />
+      <div className="grid gap-2">
+        <label htmlFor={`${id}-budget`} className="text-sm font-medium">
+          Monthly limit
+        </label>
+        <InputGroup>
+          <InputGroupAddon aria-hidden="true">$</InputGroupAddon>
+          <InputGroupInput
+            id={`${id}-budget`}
+            aria-describedby={`${id}-budget-hint`}
+            {...register("budget", { valueAsNumber: true })}
+            type="number"
+            min="0.01"
+            step="1"
+            className="tabular-nums"
+          />
+          <InputGroupAddon aria-hidden="true" align="inline-end">
+            USD
+          </InputGroupAddon>
+        </InputGroup>
+        <p id={`${id}-budget-hint`} className="text-xs text-muted-foreground">
+          Analysis pauses once this month&apos;s spend reaches the limit
+        </p>
+        <FieldError>{errors.budget?.message}</FieldError>
+      </div>
     </>
   );
 }

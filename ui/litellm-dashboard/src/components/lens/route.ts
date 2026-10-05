@@ -3,6 +3,7 @@
 import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useCallback } from "react";
 import { OPEN_TRACE_PARSERS, RUN_FILTER_PARSERS, TRACING_SETUP_PARSERS } from "@/components/lens/traces/routing";
+import { SETUP_DRAFT_PARSERS, SETUP_KEYS, SETUP_STEP_PARSERS } from "@/components/lens/setup/setupRoute";
 
 export const LENS_TABS = { traces: "Traces", investigations: "Investigations", settings: "Settings" } as const;
 export type LensTab = keyof typeof LENS_TABS;
@@ -47,12 +48,15 @@ const SESSION_PARSERS = {
   ...LIST_PARSERS,
   ...RESULT_PARSERS,
   ...DIALOG_PARSERS,
+  ...SETUP_DRAFT_PARSERS,
+  ...SETUP_STEP_PARSERS,
 };
 const nulls = <K extends string>(keys: readonly K[]) =>
   Object.fromEntries(keys.map((key) => [key, null])) as Record<K, null>;
 /** Switching the sample session clears every Lens key but the tab so ids never cross between live and sample data. */
 const CLEARED_SESSION = nulls(Object.keys(SESSION_PARSERS).filter((key) => key !== "tab"));
 const CLEARED_RESULTS = nulls(Object.keys(RESULT_PARSERS));
+const CLEARED_SETUP = nulls(SETUP_KEYS);
 
 export interface LensRoute {
   readonly tab: LensTab | null;
@@ -100,14 +104,40 @@ export function useListSearchRoute(): [string, (search: string) => void] {
   return [search, useCallback((next: string) => void setParams({ search: next }), [setParams])];
 }
 
+const SETUP_ROUTE_PARSERS = { ...DIALOG_PARSERS, ...SETUP_DRAFT_PARSERS, ...SETUP_STEP_PARSERS };
+
+/** Opening or closing any dialog drops a setup draft left in the URL, so the next setup starts blank. */
 export function useDialogRoute() {
-  const [{ dialog, target }, setParams] = useQueryStates(DIALOG_PARSERS, { history: "push" });
+  const [{ dialog, target }, setParams] = useQueryStates(SETUP_ROUTE_PARSERS, { history: "push" });
   const openDialog = useCallback(
-    (next: LensDialog, targetId: string | null = null) => void setParams({ dialog: next, target: targetId }),
+    (next: LensDialog, targetId: string | null = null) =>
+      void setParams({ ...CLEARED_SETUP, dialog: next, target: targetId }),
     [setParams],
   );
-  const closeDialog = useCallback(() => void setParams({ dialog: null, target: null }), [setParams]);
+  const closeDialog = useCallback(() => void setParams({ ...CLEARED_SETUP, dialog: null, target: null }), [setParams]);
   return { dialog, target, openDialog, closeDialog };
+}
+
+export interface InvestigateScope {
+  readonly q: string;
+  readonly lookbackHours: number;
+}
+
+/** Starts a new investigation over the runs a Traces search shows. */
+export function useInvestigateRoute(): (scope: InvestigateScope) => void {
+  const [, setParams] = useQueryStates({ ...LENS_PARSERS, ...SETUP_ROUTE_PARSERS }, { history: "push" });
+  return useCallback(
+    ({ q, lookbackHours }: InvestigateScope) =>
+      void setParams({
+        ...CLEARED_SETUP,
+        tab: "investigations",
+        dialog: "new",
+        target: null,
+        q,
+        lookback: lookbackHours,
+      }),
+    [setParams],
+  );
 }
 
 const isResultTab = (tab: string): tab is ResultTab => (RESULT_TABS as readonly string[]).includes(tab);

@@ -28,20 +28,20 @@ function PreviewFooter({ page, selection, className, ...props }: PreviewFooterPr
   return (
     <div
       data-slot="preview-footer"
-      className={cn("flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3", className)}
+      className={cn("flex flex-wrap items-center justify-between gap-3 border-t bg-muted/30 px-4 py-2", className)}
       {...props}
     >
-      <p className="text-xs text-muted-foreground">
-        {count} selected for analysis
+      <p className="text-xs tabular-nums text-muted-foreground">
+        {count.toLocaleString()} selected for analysis
         {partial && (
           <>
             {" "}
-            · Showing {page.executions.length} of {page.eligible}
+            · Showing {page.executions.length.toLocaleString()} of {page.eligible.toLocaleString()}
           </>
         )}
       </p>
       {selection && picked > 0 && (
-        <Button variant="outline" size="sm" onClick={selection.clear}>
+        <Button variant="ghost" size="xs" onClick={selection.clear}>
           Clear {picked} selected runs
         </Button>
       )}
@@ -65,26 +65,27 @@ export function MatchingActivityPreview({
     <section
       aria-label="Matching activity"
       data-slot="matching-activity-preview"
-      className={cn("self-start overflow-hidden rounded-lg border", className)}
+      className={cn("self-start overflow-hidden rounded-lg border bg-card", className)}
       {...props}
     >
-      <div className="border-b px-4 py-3">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-sm font-medium" role="status">
+      <header className="flex items-start justify-between gap-3 border-b px-4 py-3">
+        <div className="grid min-w-0 gap-0.5">
+          <p className="text-sm font-semibold tabular-nums" role="status">
             {status.title}
           </p>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Refresh matching activity"
-            onClick={status.refresh}
-            disabled={!status.ready}
-          >
-            <RotateCw className="size-3" />
-          </Button>
+          <p className="text-xs text-muted-foreground">{status.windowLabel} · Previewing is free</p>
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">{status.windowLabel} · No analysis cost</p>
-      </div>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="-mr-1.5 text-muted-foreground"
+          aria-label="Refresh matching activity"
+          onClick={status.refresh}
+          disabled={!status.ready}
+        >
+          <RotateCw className={cn("size-3.5", (status.loading || status.stale) && "motion-safe:animate-spin")} />
+        </Button>
+      </header>
       {status.ready && status.error && (
         <p role="alert" className="px-4 py-3 text-sm text-destructive">
           {status.error.message}{" "}
@@ -94,12 +95,15 @@ export function MatchingActivityPreview({
         </p>
       )}
       {status.ready && page.eligible === 0 && (
-        <p className="px-4 py-4 text-sm text-muted-foreground">
-          No matches. Try removing a filter from the search. Recent trace updates need two minutes to settle.
-        </p>
+        <div className="grid gap-1 px-4 py-10 text-center">
+          <p className="text-sm font-medium">No matches</p>
+          <p className="text-xs text-muted-foreground">
+            Try removing a filter from the search. Recent trace updates need two minutes to settle.
+          </p>
+        </div>
       )}
       {(status.loading || (shown && !status.error && runs.length > 0)) && (
-        <div className="max-h-[60dvh] min-h-0 overflow-auto">
+        <div className="max-h-[calc(100dvh-16rem)] min-h-0 overflow-auto">
           <AgentTracesTable
             traces={runs}
             isLoading={status.loading}

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ScanSearch } from "lucide-react";
 import moment from "moment";
 import { type ComponentProps, useMemo, useState } from "react";
 
@@ -29,6 +29,7 @@ import { TracingSetupCard } from "../../onboarding/tracing/TracingSetupCard";
 import { useTracesLive } from "../api";
 import { type AgentTracesResult, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
 import { useTraceHistogram } from "./useTraceHistogram";
+import type { InvestigateScope } from "../../route";
 
 const DRAWER_WIDTH_KEY = "litellm.agentTraces.drawerWidth";
 const RUN_NOUN = { singular: "run", plural: "runs" };
@@ -43,7 +44,11 @@ interface AgentTracesSectionProps {
   timeControls?: TimeControls;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
+  /** Offered once a search narrows the runs, to review exactly those runs in a new investigation. */
+  onInvestigate?: (scope: InvestigateScope) => void;
 }
+
+const HOUR_MS = 3_600_000;
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
   const [setupResult, setSetupResult] = useState<{ detail: string | null } | null>(null);
@@ -80,6 +85,7 @@ export function AgentTracesSection({
   timeControls,
   readOnly = false,
   canMintTracingKey = false,
+  onInvestigate,
 }: AgentTracesSectionProps) {
   const live = useTracesLive();
   const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
@@ -104,6 +110,7 @@ export function AgentTracesSection({
   const minuteEndMs = moment().endOf("minute").valueOf();
   const window = useMemo(() => timeWindow(range, minuteEndMs), [range, minuteEndMs]);
   const histogram = useTraceHistogram(accessToken, { window, q: query }, isActive);
+  const shownRange = zoom ?? window;
   const runs = traces.traces;
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
 
@@ -163,10 +170,13 @@ export function AgentTracesSection({
           query={query}
           onQueryChange={setQuery}
           runs={traces.traces}
-          range={zoom ?? window}
+          range={shownRange}
           order={order}
           busy={traces.isPlaceholder}
         >
+          {onInvestigate && (
+            <InvestigateButton query={query} startMs={shownRange.startMs} onInvestigate={onInvestigate} />
+          )}
           {timeControls && (
             <TimeRangeControls
               range={range}
@@ -201,6 +211,28 @@ export function AgentTracesSection({
         />
       </div>
     </Inspector.Root>
+  );
+}
+
+interface InvestigateButtonProps {
+  readonly query: string;
+  readonly startMs: number;
+  readonly onInvestigate: (scope: InvestigateScope) => void;
+}
+
+function InvestigateButton({ query, startMs, onInvestigate }: InvestigateButtonProps) {
+  const q = query.trim();
+  if (!q) return null;
+  const lookbackHours = () => Math.max(1, Math.ceil((Date.now() - startMs) / HOUR_MS));
+  return (
+    <button
+      type="button"
+      onClick={() => onInvestigate({ q, lookbackHours: lookbackHours() })}
+      className="flex items-center gap-1.5 border-l border-border px-3 text-sm font-medium whitespace-nowrap text-foreground transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60"
+    >
+      <ScanSearch aria-hidden="true" className="size-3.5 text-muted-foreground" />
+      Investigate these runs
+    </button>
   );
 }
 

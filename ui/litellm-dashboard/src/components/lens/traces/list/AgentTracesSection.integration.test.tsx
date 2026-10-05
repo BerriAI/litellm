@@ -115,6 +115,27 @@ describe("AgentTracesSection", () => {
     vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
   });
 
+  it("offers to investigate exactly the searched runs over the shown range, and only once a search narrows them", async () => {
+    pinNowToFixtures();
+    serve(runs);
+    const user = userEvent.setup();
+    const onInvestigate = vi.fn();
+    const week = { hours: 168, anchorMs: null };
+    const unfiltered = renderWithProviders(
+      <AgentTracesSection accessToken="sk-test" isActive range={week} onInvestigate={onInvestigate} />,
+    );
+    expect(await screen.findByRole("combobox", { name: "Search runs" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Investigate these runs" })).not.toBeInTheDocument();
+    unfiltered.unmount();
+
+    renderWithProviders(
+      <AgentTracesSection accessToken="sk-test" isActive range={week} onInvestigate={onInvestigate} />,
+      { searchParams: "?q=status:error" },
+    );
+    await user.click(await screen.findByRole("button", { name: "Investigate these runs" }));
+    expect(onInvestigate).toHaveBeenCalledWith({ q: "status:error", lookbackHours: 168 });
+  });
+
   it("loads the next page only once the list scrolls near its end, then stops at the last page", async () => {
     vi.mocked(agentTraceListCall)
       .mockResolvedValueOnce({ data: runs.slice(0, 1), next_cursor: "next" })
