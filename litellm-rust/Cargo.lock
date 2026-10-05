@@ -4145,6 +4145,7 @@ dependencies = [
  "litellm-callbacks-legacy-python",
  "litellm-core",
  "litellm-core-utils",
+ "litellm-framing",
  "litellm-host",
  "litellm-host-python",
  "litellm-http",

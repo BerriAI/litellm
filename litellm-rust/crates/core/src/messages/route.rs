@@ -68,7 +68,9 @@ impl crate::caching::StreamCachable for Messages {
             head: MessagesStreamHead {
                 headers: Vec::new(),
             },
-            chunks: Box::pin(futures_util::stream::iter([Ok(data)])),
+            chunks: Box::pin(futures_util::stream::iter(
+                litellm_framing::sse::split_raw_blocks(data).map(Ok),
+            )),
         })
     }
 

@@ -8,7 +8,7 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_framing::{
     SseError, frames,
-    sse::{SseCodec, SseEvent},
+    sse::{SseCodec, SseEvent, split_raw_blocks},
 };
 use proptest::prelude::*;
 use rstest::rstest;
@@ -166,4 +166,39 @@ async fn a_body_error_keeps_earlier_events_and_its_cause_then_terminates(
     assert_eq!(body_cause::<io::Error>(&body).unwrap().kind(), kind);
     assert!(events.next().await.is_none());
     assert!(events.next().await.is_none());
+}
+
+#[rstest]
+#[case::lf(
+    b"event: one\n\nevent: two\n\n",
+    vec![&b"event: one\n\n"[..], &b"event: two\n\n"[..]]
+)]
+#[case::crlf(
+    b"event: one\r\n\r\nevent: two\r\n\r\n",
+    vec![&b"event: one\r\n\r\n"[..], &b"event: two\r\n\r\n"[..]]
+)]
+#[case::mixed_delimiters(
+    b"event: one\r\n\r\nevent: two\r\nevent: three\r\r",
+    vec![&b"event: one\r\n\r\n"[..], &b"event: two\r\nevent: three\r\r"[..]]
+)]
+#[case::unterminated_suffix(
+    b"event: complete\n\nevent: partial",
+    vec![&b"event: complete\n\n"[..], &b"event: partial"[..]]
+)]
+#[case::empty(b"", vec![])]
+fn raw_blocks_preserve_boundaries_and_concatenation(
+    #[case] input: &'static [u8],
+    #[case] expected: Vec<&'static [u8]>,
+) {
+    let blocks: Vec<Bytes> = split_raw_blocks(Bytes::copy_from_slice(input)).collect();
+    assert_eq!(
+        blocks.iter().map(Bytes::as_ref).collect::<Vec<_>>(),
+        expected
+    );
+    let concatenated: Vec<u8> = blocks
+        .iter()
+        .flat_map(|block| block.iter())
+        .copied()
+        .collect();
+    assert_eq!(concatenated.as_slice(), input);
 }

@@ -18,6 +18,8 @@ use litellm_cache_response::{
 use litellm_core::{
     RouteError,
     caching::{Cachable, CacheRequest, StreamCachable, execute_streaming, execute_unary},
+    messages::route::Messages,
+    responses::route::Responses,
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
@@ -53,7 +55,7 @@ impl StreamCachable for TestRoute {
     fn replay(data: Bytes) -> Option<OutputOf<Self>> {
         Some(CallOutput::Stream {
             head: (),
-            chunks: stream::iter([Ok(data)]).boxed(),
+            chunks: stream::iter(litellm_framing::sse::split_raw_blocks(data).map(Ok)).boxed(),
         })
     }
     fn bytes(chunk: &Bytes) -> &[u8] {
@@ -226,6 +228,138 @@ async fn consume(output: OutputOf<TestRoute>) -> Result<Vec<u8>, RouteError> {
             Ok(bytes)
         })
         .await
+}
+
+async fn collect_stream_chunks(output: OutputOf<TestRoute>) -> Vec<Bytes> {
+    let CallOutput::Stream { chunks, .. } = output else {
+        panic!("expected a stream");
+    };
+    chunks.try_collect().await.unwrap()
+}
+
+#[rstest]
+#[tokio::test]
+async fn messages_and_responses_replay_one_chunk_per_sse_event() {
+    let data = Bytes::from_static(
+        b"data: {\"type\":\"content_block_delta\",\"text\":\"hello\"}\n\ndata: {\"type\":\"message_stop\"}\n\n",
+    );
+    let expected = vec![
+        Bytes::from_static(b"data: {\"type\":\"content_block_delta\",\"text\":\"hello\"}\n\n"),
+        Bytes::from_static(b"data: {\"type\":\"message_stop\"}\n\n"),
+    ];
+
+    let CallOutput::Stream {
+        chunks: messages_chunks,
+        ..
+    } = <Messages as StreamCachable>::replay(data.clone()).unwrap()
+    else {
+        panic!("expected a Messages stream");
+    };
+    assert_eq!(
+        messages_chunks.try_collect::<Vec<_>>().await.unwrap(),
+        expected
+    );
+
+    let CallOutput::Stream {
+        chunks: responses_chunks,
+        ..
+    } = <Responses as StreamCachable>::replay(data).unwrap()
+    else {
+        panic!("expected a Responses stream");
+    };
+    assert_eq!(
+        responses_chunks.try_collect::<Vec<_>>().await.unwrap(),
+        expected
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn cached_stream_replay_yields_one_chunk_per_event(cache: Arc<dyn ResponseCacheService>) {
+    let calls = AtomicUsize::new(0);
+    let first = b"data: {\"type\":\"content_block_delta\",\"text\":\"hello\"}\n\n";
+    let terminal = b"data: {\"type\":\"message_stop\"}\n\n";
+    let text = [first.as_slice(), terminal.as_slice()].concat();
+    let text = std::str::from_utf8(&text).unwrap();
+
+    assert_eq!(
+        consume(streamed(&cache, &calls, text, false).await)
+            .await
+            .unwrap(),
+        text.as_bytes()
+    );
+    assert_eq!(
+        collect_stream_chunks(streamed(&cache, &calls, text, false).await).await,
+        vec![Bytes::from_static(first), Bytes::from_static(terminal)]
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn cached_stream_replay_preserves_utf8_split_across_provider_chunks(
+    cache: Arc<dyn ResponseCacheService>,
+) {
+    let calls = AtomicUsize::new(0);
+    let first = "data: {\"type\":\"content_block_delta\",\"text\":\"é🙂\"}\n\n".as_bytes();
+    let terminal = b"data: {\"type\":\"message_stop\"}\n\n";
+    let text = [first, terminal].concat();
+    let text = std::str::from_utf8(&text).unwrap();
+
+    assert_eq!(
+        consume(streamed(&cache, &calls, text, false).await)
+            .await
+            .unwrap(),
+        text.as_bytes()
+    );
+    let chunks = collect_stream_chunks(streamed(&cache, &calls, text, false).await).await;
+    assert_eq!(
+        chunks,
+        vec![Bytes::copy_from_slice(first), Bytes::from_static(terminal)]
+    );
+    assert_eq!(
+        chunks
+            .iter()
+            .flat_map(|chunk| chunk.iter())
+            .copied()
+            .collect::<Vec<_>>(),
+        text.as_bytes()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn dropping_cached_replay_after_first_event_polls_no_more_chunks(
+    cache: Arc<dyn ResponseCacheService>,
+) {
+    let calls = AtomicUsize::new(0);
+    let first = b"data: {\"type\":\"content_block_delta\",\"text\":\"first\"}\n\n";
+    let terminal = b"data: {\"type\":\"message_stop\"}\n\n";
+    let text = [first.as_slice(), terminal.as_slice()].concat();
+    let text = std::str::from_utf8(&text).unwrap();
+    let _stored = consume(streamed(&cache, &calls, text, false).await)
+        .await
+        .unwrap();
+    let CallOutput::Stream { chunks, .. } = streamed(&cache, &calls, text, false).await else {
+        panic!("expected a stream");
+    };
+    let polled = Arc::new(AtomicUsize::new(0));
+    let count = polled.clone();
+    let mut chunks = chunks
+        .map(move |chunk| {
+            count.fetch_add(1, Ordering::SeqCst);
+            chunk
+        })
+        .boxed();
+
+    assert_eq!(
+        chunks.next().await.unwrap().unwrap(),
+        Bytes::from_static(first)
+    );
+    drop(chunks);
+    assert_eq!(polled.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[rstest]

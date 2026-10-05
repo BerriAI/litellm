@@ -64,7 +64,9 @@ impl crate::caching::StreamCachable for Responses {
             head: ResponsesStreamHead {
                 headers: Vec::new(),
             },
-            chunks: Box::pin(futures_util::stream::iter([Ok(data)])),
+            chunks: Box::pin(futures_util::stream::iter(
+                litellm_framing::sse::split_raw_blocks(data).map(Ok),
+            )),
         })
     }
 

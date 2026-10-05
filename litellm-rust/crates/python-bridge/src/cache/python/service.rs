@@ -1,5 +1,6 @@
 use std::{future::Future, pin::Pin, time::Duration};
 
+use bytes::Bytes;
 use litellm_cache::Error;
 use litellm_cache_response::{
     ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
@@ -30,9 +31,13 @@ fn to_python(value: Value) -> Result<Value, Error> {
         serde_json::from_value(value).map_err(|_| Error::InvalidEntry)?;
     match envelope.decode("messages").ok_or(Error::InvalidEntry)? {
         CachedOutput::Response(response) => Ok(response),
-        CachedOutput::Stream(text) => Ok(serde_json::json!({
-            STREAM_EVENTS_KEY: text.split_inclusive("\n\n").collect::<Vec<_>>()
-        })),
+        CachedOutput::Stream(text) => {
+            let events: Result<Vec<String>, Error> =
+                litellm_framing::sse::split_raw_blocks(Bytes::from(text))
+                    .map(|block| String::from_utf8(block.to_vec()).map_err(|_| Error::InvalidEntry))
+                    .collect();
+            Ok(serde_json::json!({ STREAM_EVENTS_KEY: events? }))
+        }
     }
 }
 
