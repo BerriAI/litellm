@@ -29,9 +29,7 @@ class GuardrailToolParam(BaseModel):
         data: Final[Mapping[str, object]] = handler(self)
         if not isinstance(data, dict) or data.get("type") is not None:
             return data
-        return {  # mutable-ok: pydantic's json serializer rejects a mapping that is not a dict
-            key: value for key, value in data.items() if key != "type"
-        }
+        return {key: value for key, value in data.items() if key != "type"}
 
 
 class GenericGuardrailAPIMetadata(TypedDict, total=False):
