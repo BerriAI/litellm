@@ -95,6 +95,8 @@ async fn calls_defer_execution_until_polled(
 #[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
+#[case::baseten("baseten")]
+#[case::deepseek("deepseek")]
 #[tokio::test]
 async fn the_provider_message_is_returned(call: MessagesCall, #[case] provider: &str) {
     let upstream = upstream([message_response()]).await;

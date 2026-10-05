@@ -10,6 +10,8 @@ use super::*;
 #[rstest]
 #[case::anthropic_key("anthropic", Some("sk-ant"), &[], ("x-api-key", "sk-ant"), &["authorization"])]
 #[case::azure_key("azure_ai", Some("sk-azure"), &[], ("x-api-key", "sk-azure"), &["authorization"])]
+#[case::baseten_key("baseten", Some("sk-baseten"), &[("X-Api-Key", "unrelated-key")], ("authorization", "Bearer sk-baseten"), &["x-api-key"])]
+#[case::deepseek_key("deepseek", Some("sk-deepseek"), &[], ("x-api-key", "sk-deepseek"), &["authorization"])]
 #[case::caller_x_api_key_wins(
     "azure_ai",
     Some("rust-fallback-key"),
@@ -76,6 +78,8 @@ async fn credentials_become_exactly_one_auth_header(
 #[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
+#[case::baseten("baseten")]
+#[case::deepseek("deepseek")]
 #[tokio::test]
 async fn a_call_without_credentials_fails_before_sending(
     call: MessagesCall,

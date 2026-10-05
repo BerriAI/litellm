@@ -2,6 +2,7 @@ use litellm_http::request::string_headers as shared_string_headers;
 use litellm_llms::{
     anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
     base_llm::chat::transformation::BaseConfig,
+    baseten::chat::transformation::BASETEN_CHAT_COMPLETIONS_CONFIG,
     bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
     openai_like::chat::transformation::OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG,
 };
@@ -15,6 +16,7 @@ const HEADER_CONTEXT: &str = "chat completions";
 pub(super) enum ChatProvider {
     Anthropic,
     Bedrock,
+    Baseten,
     OpenaiLike,
 }
 
@@ -23,6 +25,7 @@ impl ChatProvider {
         match self {
             Self::Anthropic => &ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
             Self::Bedrock => &BEDROCK_CHAT_COMPLETIONS_CONFIG,
+            Self::Baseten => &BASETEN_CHAT_COMPLETIONS_CONFIG,
             Self::OpenaiLike => &OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG,
         }
     }
@@ -32,9 +35,11 @@ pub(super) fn chat_completions_provider(provider: LlmProviders) -> Option<ChatPr
     match provider {
         LlmProviders::Anthropic => Some(ChatProvider::Anthropic),
         LlmProviders::Bedrock => Some(ChatProvider::Bedrock),
+        LlmProviders::Baseten => Some(ChatProvider::Baseten),
         LlmProviders::OpenaiLike => Some(ChatProvider::OpenaiLike),
         LlmProviders::AwsTextract
         | LlmProviders::AzureAi
+        | LlmProviders::Deepseek
         | LlmProviders::Cohere
         | LlmProviders::Mistral
         | LlmProviders::Openai

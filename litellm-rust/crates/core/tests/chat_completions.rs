@@ -17,6 +17,44 @@ use support::*;
 
 const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
+#[rstest]
+#[tokio::test]
+async fn baseten_round_trip_uses_bearer_auth_and_normalizes_the_response(
+    request: ChatCompletionsRequest<'static>,
+) {
+    let response_body = json!({
+        "model": "served-model", "created": 123,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8}
+    });
+    let upstream = upstream([json_response(response_body.clone())]).await;
+    let base = upstream.uri();
+    let response = complete(ChatCompletionsRequest {
+        model: "baseten/test-model",
+        api_base: Some(&base),
+        optional_params: object(json!({"max_completion_tokens": 12})),
+        ..request
+    })
+    .await
+    .unwrap();
+    let sent = only_request(&upstream).await;
+    assert_eq!(sent.url.path(), "/v1/chat/completions");
+    assert_eq!(sent.header_values("authorization"), ["Bearer sk-test"]);
+    assert_eq!(
+        sent.json(),
+        json!({"model": "test-model", "messages": hi(), "max_tokens": 12})
+    );
+    assert_eq!(response.model, response_body["model"].as_str().unwrap());
+    assert_eq!(
+        response.choices[0].message.content.as_deref(),
+        response_body["choices"][0]["message"]["content"].as_str()
+    );
+    assert_eq!(
+        response.usage.total_tokens,
+        response_body["usage"]["total_tokens"].as_u64().unwrap()
+    );
+}
+
 async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletionsResponse, Error> {
     chat_completions_route().execute(request, &(), None).await
 }

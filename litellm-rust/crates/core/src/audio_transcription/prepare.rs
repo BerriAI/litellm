@@ -23,6 +23,8 @@ fn provider_config(provider: LlmProviders) -> Option<&'static dyn BaseAudioTrans
         | LlmProviders::AzureAi
         | LlmProviders::Cohere
         | LlmProviders::Mistral
+        | LlmProviders::Baseten
+        | LlmProviders::Deepseek
         | LlmProviders::Openai
         | LlmProviders::OpenaiLike
         | LlmProviders::Reducto

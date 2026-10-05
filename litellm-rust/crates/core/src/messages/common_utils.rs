@@ -4,7 +4,9 @@ use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
     base_llm::messages::transformation::BaseMessagesConfig,
+    baseten::messages::transformation::BASETEN_MESSAGES_CONFIG,
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+    deepseek::messages::transformation::DEEPSEEK_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
 
@@ -17,6 +19,8 @@ const HEADER_CONTEXT: &str = "messages";
 pub(crate) enum MessagesProvider {
     Anthropic,
     AzureAi,
+    Baseten,
+    Deepseek,
     Bedrock,
 }
 
@@ -25,6 +29,8 @@ impl MessagesProvider {
         match self {
             Self::Anthropic => LlmProviders::Anthropic,
             Self::AzureAi => LlmProviders::AzureAi,
+            Self::Baseten => LlmProviders::Baseten,
+            Self::Deepseek => LlmProviders::Deepseek,
             Self::Bedrock => LlmProviders::Bedrock,
         }
         .into()
@@ -34,6 +40,8 @@ impl MessagesProvider {
         match self {
             Self::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
             Self::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
+            Self::Baseten => &BASETEN_MESSAGES_CONFIG,
+            Self::Deepseek => &DEEPSEEK_MESSAGES_CONFIG,
             Self::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
         }
     }
@@ -43,6 +51,8 @@ pub(crate) fn messages_provider(provider: LlmProviders) -> Option<MessagesProvid
     match provider {
         LlmProviders::Anthropic => Some(MessagesProvider::Anthropic),
         LlmProviders::AzureAi => Some(MessagesProvider::AzureAi),
+        LlmProviders::Baseten => Some(MessagesProvider::Baseten),
+        LlmProviders::Deepseek => Some(MessagesProvider::Deepseek),
         LlmProviders::Bedrock => Some(MessagesProvider::Bedrock),
         LlmProviders::AwsTextract
         | LlmProviders::Cohere
@@ -73,6 +83,8 @@ mod tests {
     #[rstest]
     #[case::anthropic("anthropic", MessagesProvider::Anthropic)]
     #[case::azure_ai("azure_ai", MessagesProvider::AzureAi)]
+    #[case::baseten("baseten", MessagesProvider::Baseten)]
+    #[case::deepseek("deepseek", MessagesProvider::Deepseek)]
     #[case::bedrock("bedrock", MessagesProvider::Bedrock)]
     fn provider_round_trips_through_its_python_name(
         #[case] name: &str,
