@@ -192,7 +192,7 @@ class XAIImageEditConfig(BaseImageEditConfig):
     ) -> ImageResponse:
         try:
             response_data: Final = raw_response.json()
-        except Exception:
+        except Exception:  # noqa: BLE001  # any body-parse failure becomes a provider error carrying the raw payload
             raise self.get_error_class(
                 error_message=raw_response.text,
                 status_code=raw_response.status_code,

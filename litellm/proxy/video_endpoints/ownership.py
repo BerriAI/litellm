@@ -98,7 +98,7 @@ async def record_video_owner(response: object, user_api_key_dict: UserAPIKeyAuth
             where={"model_object_id": model_object_id},
             data={"create": row, "update": {"updated_by": owner}},
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # ownership recording is best-effort; a failure must not block the video
         verbose_proxy_logger.exception(
             "Video ownership recording failed; video_id=%s is untracked and admin-only: %s", video_id, e
         )
