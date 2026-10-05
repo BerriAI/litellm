@@ -22,6 +22,7 @@ from litellm.proxy.lens.inference import Deployment, deployment_prices
 from litellm.proxy.lens.models import (
     ActivitySelection,
     Claim,
+    Coverage,
     Execution,
     ExecutionContent,
     FindingDraft,
@@ -632,7 +633,7 @@ async def result(lens_id: str, job_id: str, body: Result, worker: WorkerAuth, st
             end_job(active, "failed" if body.error else "completed", now).model_copy(
                 update=MappingProxyType(
                     {
-                        "coverage": active.coverage if body.error else body.coverage,
+                        "coverage": active.coverage if body.error and body.coverage == Coverage() else body.coverage,
                         "error": body.error,
                         "assessments": body.assessments,
                         "findings": tuple(snapshot_finding(e, f, job.revision, now) for f in body.findings),
