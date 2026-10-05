@@ -29867,6 +29867,8 @@ export interface components {
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
             /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
             spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
+            /** @description Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key */
+            spend_logs_metadata_fields?: components["schemas"]["SpendLogsMetadataFields"] | null;
             /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
@@ -44942,6 +44944,13 @@ export interface components {
              * @default 0.9
              */
             threshold: number;
+        };
+        /** SpendLogsMetadataFields */
+        SpendLogsMetadataFields: {
+            /** Exclude */
+            exclude?: string[] | null;
+            /** Include */
+            include?: string[] | null;
         };
         /** SpendMetrics */
         SpendMetrics: {
