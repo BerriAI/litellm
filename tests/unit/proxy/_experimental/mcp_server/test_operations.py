@@ -3,7 +3,6 @@ from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from fastapi import HTTPException
 from mcp.types import GetPromptRequest, GetPromptRequestParams, GetPromptResult
 from mcp.types import Tool as MCPTool
 
@@ -12,7 +11,10 @@ from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._experimental.mcp_server import operations
 from litellm.proxy._experimental.mcp_server import rest_endpoints
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    HTTPException as MCPServerManagerHTTPException,
+    ListedToolsCaller,
+)
 from litellm.proxy._experimental.mcp_server.operations import GatewayOperations, prepare_context
 from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy._types import UserAPIKeyAuth
@@ -513,7 +515,7 @@ async def test_disallowed_tool_does_not_consume_mcp_server_rpm() -> None:
     proxy_logging: Final = _mcp_rate_limited_proxy_logging()
     manager: Final = MCPServerManager()
 
-    with pytest.raises(HTTPException) as denied_call:
+    with pytest.raises(MCPServerManagerHTTPException) as denied_call:
         await manager.pre_call_tool_check(
             name="disallowed",
             arguments={},
