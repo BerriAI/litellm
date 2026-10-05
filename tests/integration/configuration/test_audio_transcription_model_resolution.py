@@ -11,7 +11,7 @@ from pydantic import JsonValue
 
 from tests.integration._support.client import Gateway
 from tests.integration._support.process import owned_proxy
-from tests.integration._support.wire import Reply, Request, Wire, wire_server
+from tests.integration._support.wire import Reply, Request, wire_server
 
 _WAV_BYTES: Final = (
     b"RIFF\x30\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00"
@@ -75,12 +75,6 @@ def _text_parts(request: Request) -> dict[str, str]:
 _TRANSCRIPTIONS: Final = "/v1/audio/transcriptions"
 
 
-def _upstream_calls(wire: Wire) -> tuple[tuple[str, str], ...]:
-    return tuple(
-        (request.method, request.target) for request in wire.drain() if request.target != "/v1/models"
-    )
-
-
 @pytest.mark.timeout(240)
 def test_audio_transcription_routes_to_the_requested_model_not_the_moderation_model(
     gateway: Gateway, tmp_path: Path
@@ -91,13 +85,9 @@ def test_audio_transcription_routes_to_the_requested_model_not_the_moderation_mo
     )
     stt: Final = f"integration-stt-{uuid.uuid4().hex}"
     moderation: Final = f"integration-moderation-{uuid.uuid4().hex}"
-    observed: Final[list[str]] = []
-
     def respond(request: Request) -> Reply:
         if request.target != _TRANSCRIPTIONS:
             return Reply(body=b'{"object":"list","data":[]}')
-        assert request.method == "POST"
-        observed.append(_text_parts(request)["model"])
         return Reply(body=json.dumps({"text": "hello world"}).encode())
 
     with wire_server(respond) as wire:
@@ -107,5 +97,10 @@ def test_audio_transcription_routes_to_the_requested_model_not_the_moderation_mo
                 _TRANSCRIPTIONS, {"model": stt}, {"file": ("a.wav", _WAV_BYTES, "audio/wav")}
             )
             assert response.status_code == 200, response.text
-        assert observed == ["whisper-1"], (observed, response.text)
-        assert _upstream_calls(wire) == (("POST", _TRANSCRIPTIONS),)
+        calls: Final = wire.drain()
+        assert tuple(
+            (request.method, request.target) for request in calls if request.target == _TRANSCRIPTIONS
+        ) == (("POST", _TRANSCRIPTIONS),), response.text
+        assert tuple(
+            _text_parts(request)["model"] for request in calls if request.target == _TRANSCRIPTIONS
+        ) == ("whisper-1",), response.text

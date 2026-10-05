@@ -223,23 +223,24 @@ def test_audio_transcription_reaches_upstream_identically_on_prefixed_and_unpref
         unprefixed: Final = scenario.model(
             model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
         )
-        bodies: Final[list[dict]] = []
-        for base_path, model in (("/v1", prefixed), ("", unprefixed)):
+        def transcribe(base_path: str, model: str) -> dict[str, object]:
             with _sdk(gateway, base_path) as sdk:
-                bodies.append(
-                    json.loads(
-                        sdk.audio.transcriptions.with_raw_response.create(
-                            model=model,
-                            file=("a.wav", _WAV_BYTES, "audio/wav"),
-                            temperature=0.2,
-                            language="en",
-                            prompt="hi",
-                            response_format="verbose_json",
-                            timestamp_granularities=["word", "segment"],
-                            include=["logprobs"],
-                        ).content
-                    )
+                return json.loads(
+                    sdk.audio.transcriptions.with_raw_response.create(
+                        model=model,
+                        file=("a.wav", _WAV_BYTES, "audio/wav"),
+                        temperature=0.2,
+                        language="en",
+                        prompt="hi",
+                        response_format="verbose_json",
+                        timestamp_granularities=["word", "segment"],
+                        include=["logprobs"],
+                    ).content
                 )
+
+        bodies: Final = tuple(
+            transcribe(base_path, model) for base_path, model in (("/v1", prefixed), ("", unprefixed))
+        )
         assert bodies[0] == bodies[1] == _VERBOSE_TRANSCRIPT
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/v1/audio/transcriptions"),
