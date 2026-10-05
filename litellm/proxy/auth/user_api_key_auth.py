@@ -3246,6 +3246,7 @@ async def _reserve_budget_after_common_checks(
             fail_closed_budget_enforcement=(
                 general_settings.get("fail_closed_budget_enforcement") is True
                 or user_api_key_auth_obj.billing_agent_policy is not None
+                or user_api_key_auth_obj.target_agent_budget_policy is not None
             ),
             raw_body=await read_raw_json_body(request=request),
         )

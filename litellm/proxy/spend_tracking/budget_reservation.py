@@ -506,23 +506,20 @@ async def _get_budget_counters(
     end_user_object: object = None,
     apply_user_budget_to_team_keys: bool = False,
 ) -> list[_BudgetCounter]:
-    agent: Final = valid_token.billing_agent_policy
-    counters: Final[list[_BudgetCounter]] = (
-        [
-            _BudgetCounter(
-                counter_key=agent.budget_counter_key,
-                source_cache_key=None,
-                max_budget=agent.litellm_budget_table.max_budget,
-                fallback_spend=agent.budget_spend,
-                entity_type="Agent",
-                entity_id=agent.agent_id,
-            )
-        ]
+    counters: Final[list[_BudgetCounter]] = [
+        _BudgetCounter(
+            counter_key=agent.budget_counter_key,
+            source_cache_key=None,
+            max_budget=max_budget,
+            fallback_spend=agent.budget_spend,
+            entity_type="Agent",
+            entity_id=agent.agent_id,
+        )
+        for agent in (valid_token.billing_agent_policy, valid_token.target_agent_budget_policy)
         if agent is not None
-        and agent.litellm_budget_table is not None
-        and agent.litellm_budget_table.max_budget is not None
-        else []
-    )
+        and (budget_table := agent.litellm_budget_table) is not None
+        and (max_budget := budget_table.max_budget) is not None
+    ]
 
     if valid_token.token is not None:
         if valid_token.max_budget is not None and valid_token.max_budget > 0:

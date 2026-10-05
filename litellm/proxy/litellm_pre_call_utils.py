@@ -1684,6 +1684,11 @@ class LiteLLMProxyRequestSetup:
                         if user_api_key_dict.billing_agent_policy is not None
                         else None
                     ),
+                    "target_agent_counter_key": (
+                        user_api_key_dict.target_agent_budget_policy.budget_counter_key
+                        if user_api_key_dict.target_agent_budget_policy is not None
+                        else None
+                    ),
                     "agent_execution_mode": managed_context.mode if managed_context else None,
                     "verified_human_user_id": managed_context.user_id if managed_context else None,
                 }

@@ -1132,8 +1132,9 @@ class DBSpendUpdateWriter:
         )
 
         _agent_id_for_spend: Final = payload_copy.get("billing_agent_id", payload_copy.get("agent_id"))
+        metadata_json: Final = (payload_copy["metadata"] if "metadata" in payload_copy else None) or "{}"
         try:
-            spend_metadata: Final = _SPEND_METADATA_ADAPTER.validate_json(payload_copy.get("metadata") or "{}")
+            spend_metadata: Final = _SPEND_METADATA_ADAPTER.validate_json(metadata_json)
             captured_counter: Final = spend_metadata.get("billing_agent_counter_key")
             await self._update_agent_db(
                 response_cost=response_cost,
@@ -1144,6 +1145,25 @@ class DBSpendUpdateWriter:
         except Exception:
             verbose_proxy_logger.debug(
                 "_batch_database_updates: _update_agent_db failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            target_metadata: Final = _SPEND_METADATA_ADAPTER.validate_json(metadata_json)
+            target_counter: Final = target_metadata.get("target_agent_counter_key")
+            billing_counter: Final = target_metadata.get("billing_agent_counter_key")
+            if isinstance(target_counter, str) and target_counter != billing_counter:
+                target_agent_filter: Final = cast(Mapping[str, object], agent_spend_filter(target_counter))
+                target_agent_id: Final = cast(str, target_agent_filter["agent_id"])
+                await self._update_agent_db(
+                    response_cost=response_cost,
+                    agent_id=target_agent_id,
+                    prisma_client=prisma_client,
+                    counter_key=target_counter,
+                )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: target _update_agent_db failed: %s",
                 traceback.format_exc(),
             )
 

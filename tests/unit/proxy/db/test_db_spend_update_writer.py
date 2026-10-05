@@ -4944,6 +4944,49 @@ async def test_agent_admission_window_survives_logging_payload_and_background_qu
 
 
 @pytest.mark.asyncio
+async def test_target_agent_counter_key_queues_spend_for_billing_and_target_agents() -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    now: Final = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    billing_counter: Final = "spend:agent:billing-agent"
+    target_counter: Final = "spend:agent:target-agent"
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "demo-model",
+            "litellm_params": {
+                "metadata": {
+                    "billing_agent_id": "billing-agent",
+                    "billing_agent_counter_key": billing_counter,
+                    "target_agent_counter_key": target_counter,
+                }
+            },
+        },
+        response_obj={},
+        start_time=now,
+        end_time=now,
+    )
+    assert json.loads(payload["metadata"])["target_agent_counter_key"] == target_counter
+
+    writer: Final = DBSpendUpdateWriter()
+    await writer._batch_database_updates(
+        response_cost=0.4,
+        user_id=None,
+        hashed_token=None,
+        team_id=None,
+        org_id=None,
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload=payload,
+    )
+    transactions: Final = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["agent_list_transactions"] == {
+        billing_counter: 0.4,
+        target_counter: 0.4,
+    }
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("counter", ["spend:agent:another-agent", "spend:agent_window:malformed:window-agent"])
 async def test_invalid_agent_window_cannot_charge_another_agent(counter: str) -> None:
     writer: Final = DBSpendUpdateWriter()

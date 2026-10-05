@@ -241,18 +241,29 @@ async def check_agent_budget(auth: UserAPIKeyAuth) -> None:
     import litellm
     from litellm.proxy.proxy_server import get_current_spend
 
-    agent: Final = auth.billing_agent_policy
-    if agent is None or agent.litellm_budget_table is None or agent.litellm_budget_table.max_budget is None:
-        return
-    budget: Final = agent.litellm_budget_table.max_budget
-    spend: Final = await get_current_spend(
-        counter_key=agent.budget_counter_key,
-        fallback_spend=agent.budget_spend,
-        max_budget=budget,
-        fallback_authoritative=True,
+    async def get_budget_state(agent: AgentResponse | None) -> tuple[float, float] | None:
+        if agent is None or agent.litellm_budget_table is None or agent.litellm_budget_table.max_budget is None:
+            return None
+        budget: Final = agent.litellm_budget_table.max_budget
+        spend: Final = await get_current_spend(
+            counter_key=agent.budget_counter_key,
+            fallback_spend=agent.budget_spend,
+            max_budget=budget,
+            fallback_authoritative=True,
+        )
+        return spend, budget
+
+    budget_states: Final = (
+        await get_budget_state(auth.billing_agent_policy),
+        await get_budget_state(auth.target_agent_budget_policy),
     )
-    if spend >= budget:
-        raise litellm.BudgetExceededError(current_cost=spend, max_budget=budget, message="Agent budget exceeded")
+    for budget_state in budget_states:
+        if budget_state is not None and budget_state[0] >= budget_state[1]:
+            raise litellm.BudgetExceededError(
+                current_cost=budget_state[0],
+                max_budget=budget_state[1],
+                message="Agent budget exceeded",
+            )
 
 
 _INVOCATION_COST: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])
@@ -307,11 +318,20 @@ async def prepare_agent_invocation(
         and (effective.identity_managed or effective.litellm_budget_table is not None)
     ):
         auth.billing_agent_policy = effective
+    if (
+        billable
+        and effective.litellm_budget_table is not None
+        and effective.litellm_budget_table.max_budget is not None
+        and (auth.billing_agent_policy is None or auth.billing_agent_policy.agent_id != effective.agent_id)
+    ):
+        auth.target_agent_budget_policy = effective
     billing_policy: Final = auth.billing_agent_policy
-    bounded: Final = (
-        billing_policy is not None
-        and billing_policy.litellm_budget_table is not None
-        and billing_policy.litellm_budget_table.max_budget is not None
+    target_policy: Final = auth.target_agent_budget_policy
+    bounded: Final = any(
+        policy is not None
+        and policy.litellm_budget_table is not None
+        and policy.litellm_budget_table.max_budget is not None
+        for policy in (billing_policy, target_policy)
     )
     try:
         fee: Final = _INVOCATION_COST.validate_python(fixed_fee if billable and fixed_fee is not None else 0.0)

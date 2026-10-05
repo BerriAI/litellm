@@ -333,6 +333,9 @@ class _ProxyDBLogger(CustomLogger):
                 if isinstance(counter_key_value := metadata.get("billing_agent_counter_key"), str)
                 else None
             )
+            target_metadata: Final = cast(Mapping[str, object], metadata)
+            target_counter_value: Final = target_metadata.get("target_agent_counter_key")
+            target_agent_counter_key: Final = target_counter_value if isinstance(target_counter_value, str) else None
             if (
                 isinstance(completion_response, LiteLLMBatch)
                 and kwargs.get("call_type") == CallTypes.aretrieve_batch.value
@@ -414,6 +417,7 @@ class _ProxyDBLogger(CustomLogger):
                         ),
                         billing_agent_id=billing_agent_id,
                         billing_agent_counter_key=billing_agent_counter_key,
+                        target_agent_counter_key=target_agent_counter_key,
                     )
                     if not charged:
                         return
@@ -721,6 +725,7 @@ class _IncrementSpendCounters(Protocol):
         project_id: str | None = None,
         billing_agent_id: str | None = None,
         billing_agent_counter_key: str | None = None,
+        target_agent_counter_key: str | None = None,
     ) -> None: ...
 
 
@@ -744,6 +749,7 @@ async def _update_database_and_spend_counters(
     update_cache_read_keys: Sequence[str] = (),
     billing_agent_id: str | None = None,
     billing_agent_counter_key: str | None = None,
+    target_agent_counter_key: str | None = None,
 ) -> bool:
     """The reservation is reconciled before the spend is persisted, from its own read. One spend counter batch then
     spans the database write and the counter update, so the post-call counters are read with a single MGET after the
@@ -768,6 +774,7 @@ async def _update_database_and_spend_counters(
         project_id=project_id,
         billing_agent_id=billing_agent_id,
         billing_agent_counter_key=billing_agent_counter_key,
+        target_agent_counter_key=target_agent_counter_key,
     )
     with spend_counter_batch_scope(spend_counter_cache.redis_cache, counter_keys=counter_keys):
         return await _update_database_and_spend_counters_in_batch(
@@ -790,6 +797,7 @@ async def _update_database_and_spend_counters(
             update_cache_read_keys=update_cache_read_keys,
             billing_agent_id=billing_agent_id,
             billing_agent_counter_key=billing_agent_counter_key,
+            target_agent_counter_key=target_agent_counter_key,
         )
 
 
@@ -813,6 +821,7 @@ async def _update_database_and_spend_counters_in_batch(
     update_cache_read_keys: Sequence[str],
     billing_agent_id: str | None,
     billing_agent_counter_key: str | None,
+    target_agent_counter_key: str | None = None,
 ) -> bool:
     from litellm.proxy.proxy_server import arm_update_cache_read
 
@@ -869,6 +878,11 @@ async def _update_database_and_spend_counters_in_batch(
             **(
                 MappingProxyType({"billing_agent_counter_key": billing_agent_counter_key})
                 if billing_agent_counter_key is not None
+                else MappingProxyType({})
+            ),
+            **(
+                MappingProxyType({"target_agent_counter_key": target_agent_counter_key})
+                if target_agent_counter_key is not None
                 else MappingProxyType({})
             ),
         )

@@ -3749,7 +3749,13 @@ class TestSpendLogsPayload:
             expected_metadata: Final = cast(dict[str, object], json.loads(expected_payload["metadata"]))
             expected_payload_with_agent_counter_key: Final[dict[str, object]] = {
                 **expected_payload,
-                "metadata": json.dumps({**expected_metadata, "billing_agent_counter_key": None}),
+                "metadata": json.dumps(
+                    {
+                        **expected_metadata,
+                        "billing_agent_counter_key": None,
+                        "target_agent_counter_key": None,
+                    }
+                ),
             }
             differences = _compare_nested_dicts(
                 cast(dict[str, object], payload),

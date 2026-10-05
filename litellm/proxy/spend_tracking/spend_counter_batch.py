@@ -239,6 +239,7 @@ def post_call_counter_keys(
     project_id: str | None = None,
     billing_agent_id: str | None = None,
     billing_agent_counter_key: str | None = None,
+    target_agent_counter_key: str | None = None,
 ) -> frozenset[str]:
     """Every counter ``increment_spend_counters`` warm-checks, except budget windows which bind on read."""
     entity_keys: Final = frozenset(
@@ -257,10 +258,17 @@ def post_call_counter_keys(
         for group in model_access_groups or ()
         if group and isinstance(group, str)
     )
-    agent_key: Final = billing_agent_counter_key or (
+    agent_key: Final[str | None] = billing_agent_counter_key or (
         f"spend:agent:{billing_agent_id}" if billing_agent_id is not None else None
     )
-    return entity_keys | tag_keys | group_keys | (frozenset((agent_key,)) if agent_key else frozenset())
+    target_agent_key: Final[str | None] = (
+        target_agent_counter_key
+        if target_agent_counter_key is not None and target_agent_counter_key != agent_key
+        else None
+    )
+    agent_keys: Final[frozenset[str]] = frozenset[str]((agent_key,)) if agent_key else frozenset()
+    target_agent_keys: Final[frozenset[str]] = frozenset[str]((target_agent_key,)) if target_agent_key else frozenset()
+    return entity_keys | tag_keys | group_keys | agent_keys | target_agent_keys
 
 
 def bind_admission_counter_keys(token: UserAPIKeyAuth, end_user_id: str | None) -> None:

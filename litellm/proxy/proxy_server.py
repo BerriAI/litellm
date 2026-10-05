@@ -3103,6 +3103,7 @@ async def increment_spend_counters(
     project_id: str | None = None,
     billing_agent_id: str | None = None,
     billing_agent_counter_key: str | None = None,
+    target_agent_counter_key: str | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3127,6 +3128,7 @@ async def increment_spend_counters(
             project_id=project_id,
             billing_agent_id=billing_agent_id,
             billing_agent_counter_key=billing_agent_counter_key,
+            target_agent_counter_key=target_agent_counter_key,
         ),
     ):
         await _increment_spend_counters_batched(
@@ -3143,6 +3145,7 @@ async def increment_spend_counters(
             project_id=project_id,
             billing_agent_id=billing_agent_id,
             billing_agent_counter_key=billing_agent_counter_key,
+            target_agent_counter_key=target_agent_counter_key,
         )
 
 
@@ -3160,6 +3163,7 @@ async def _increment_spend_counters_batched(
     project_id: str | None = None,
     billing_agent_id: str | None = None,
     billing_agent_counter_key: str | None = None,
+    target_agent_counter_key: str | None = None,
 ):
     """Runs inside one spend counter batch: the reservation reconcile and the warm checks share a single MGET, and
     the reconcile adjustments go out in the same INCRBYFLOAT pipeline as the counter increments."""
@@ -3341,10 +3345,29 @@ async def _increment_spend_counters_batched(
             return ()
         return (await _prepare_spend_counter_increment(counter_key=counter_key, source_cache_key=[], increment=cost),)
 
+    async def _target_agent_scope() -> tuple[PendingSpendIncrement, ...]:
+        billing_counter_key: Final = billing_agent_counter_key or (
+            f"spend:agent:{billing_agent_id}" if billing_agent_id is not None else None
+        )
+        if (
+            target_agent_counter_key is None
+            or target_agent_counter_key == billing_counter_key
+            or target_agent_counter_key in reserved_counter_keys
+        ):
+            return ()
+        return (
+            await _prepare_spend_counter_increment(
+                counter_key=target_agent_counter_key,
+                source_cache_key=[],
+                increment=cost,
+            ),
+        )
+
     scope_coros: Final = tuple(
         coro
         for coro in (
             _agent_scope(billing_agent_id) if billing_agent_id is not None else None,
+            _target_agent_scope() if target_agent_counter_key is not None else None,
             _key_scope(token) if token is not None else None,
             _team_scope(team_id) if team_id is not None else None,
             _team_member_scope(user_id, team_id) if user_id is not None and team_id is not None else None,
