@@ -165,9 +165,7 @@ class _ToolCallAccumulator:
 
 
 def _append_fragment(current: str | None, fragment: str | None) -> str | None:
-    # a streamed id/name may arrive whole on every chunk or split across
-    # chunks: append each new piece, but a piece equal to what is already
-    # accumulated is the same value repeated, not an extension (#44392)
+    # equal consecutive fragments are a whole-value repeat, not an extension (#44392)
     if not fragment:
         return current
     if not current:
@@ -616,9 +614,7 @@ class ChunkProcessor:
                             if getattr(object_custom, "name", None):
                                 tool_call_map[index] = replace(
                                     tool_call_map[index],
-                                    custom_name=_append_fragment(
-                                        tool_call_map[index].custom_name, object_custom.name
-                                    ),
+                                    custom_name=_append_fragment(tool_call_map[index].custom_name, object_custom.name),
                                 )
 
                     # Preserve provider_specific_fields from streaming chunks
