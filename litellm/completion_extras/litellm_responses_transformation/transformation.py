@@ -877,7 +877,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
-                built_reasoning_item: Final = _build_reasoning_item(
+                built_reasoning_item = _build_reasoning_item(
                     item_id=item.id,
                     encrypted_content=getattr(item, "encrypted_content", None),
                     summary_raw=item.summary,
