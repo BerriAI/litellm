@@ -3,7 +3,7 @@ Dynamic configuration class generator for JSON-based providers.
 """
 
 from collections.abc import Coroutine
-from typing import Any, Final, Literal, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, overload
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -15,6 +15,9 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
 from .json_loader import SimpleProviderConfig
+
+if TYPE_CHECKING:
+    from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -173,7 +176,7 @@ def create_config_class(provider: SimpleProviderConfig):
 _responses_config_cache: Final[dict] = {}
 
 
-def create_responses_config_class(provider: SimpleProviderConfig):
+def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenAILikeResponsesConfig]":
     """Generate a Responses API config class dynamically from JSON configuration.
 
     Parallel to create_config_class() but for /v1/responses endpoints.

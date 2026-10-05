@@ -8,15 +8,18 @@ higher than the base it merges into, so a change is blamed for the violations it
 adds, never for drift that already exists in the base.
 
 Rules not present in the budget are ignored, but today every rule the checker
-emits is gated: LIT001 (mutable collection in any annotation), LIT002
-(mutable-collection construction), LIT003/LIT004 (noqa / pyright-mypy ignore
-without codes or reason), LIT006 (cast), LIT008 (`**kwargs`), LIT009 (inert
+emits is gated: LIT001 (mutable collection in any annotation), LIT003/LIT004
+(noqa / pyright-mypy ignore without codes or reason), LIT006 (cast), LIT008 (`**kwargs`), LIT009 (inert
 `# type: ignore`, dead syntax while enableTypeIgnoreComments is false), LIT010
 (assignment without a Final declaration; suppress deliberate rebinding with
 `# rebind-ok: <reason>`), LIT011 (parameter rebinding or in-place mutation), and
 LIT012 (TypedDict field without a `ReadOnly[...]` qualifier; suppress with
-`# writable-ok: <reason>`) carry limits at or above their current count to
-ratchet down; LIT005 (`*-ok` suppression without a reason) is frozen at limit 0
+`# writable-ok: <reason>`), and LIT014 (comprehension with more than one `for`
+or `if` clause; suppress with `# comprehension-ok: <reason>` on a spanned
+line, which belongs to the innermost violating comprehension spanning it and
+to any single-line violating comprehension on that line) carry limits at
+or above their current count to ratchet down; LIT005 (`*-ok` suppression
+without a reason) is frozen at limit 0
 so any net-new reasonless suppression trips the gate; LIT013 (`*-ok` suppression
 that suppresses nothing) is frozen at 0 for the same reason; and LIT007
 (TypeGuard/TypeIs) is a hard zero.
@@ -198,7 +201,8 @@ def cmd_check(base: str) -> None:
         "Remove the new violations, give each a reason (`# noqa: XXX  # <reason>`, "
         "`# pyright: ignore[rule]  # <reason>`, `# mutable-ok: <reason>`, "
         "`# cast-ok: <reason>`, `# guard-ok: <reason>`, `# kwargs-ok: <reason>`, "
-        "`# rebind-ok: <reason>`, `# writable-ok: <reason>`), or remove an equal "
+        "`# rebind-ok: <reason>`, `# writable-ok: <reason>`, "
+        "`# comprehension-ok: <reason>`), or remove an equal "
         "number elsewhere; the ceiling "
         "is the limit in type-discipline-budget.json."
     )

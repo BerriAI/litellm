@@ -123,6 +123,7 @@ def _get_modified_max_tokens() -> "Callable[..., int | None]":
 
 # Lazy loader for token_counter to avoid importing token_counter module at module import time
 _token_counter_new_func: "Callable[..., int] | None" = None
+_messages_reach_token_count_func: "Callable[..., bool] | None" = None
 
 
 def _get_token_counter_new() -> "Callable[..., int]":
@@ -143,6 +144,18 @@ def _get_token_counter_new() -> "Callable[..., int]":
 
         _token_counter_new_func = _token_counter_imported
     return _token_counter_new_func
+
+
+def _get_messages_reach_token_count() -> "Callable[..., bool]":
+    """Lazily load ``messages_reach_token_count`` for the same reason as ``_get_token_counter_new``."""
+    global _messages_reach_token_count_func
+    if _messages_reach_token_count_func is None:
+        from litellm.litellm_core_utils.token_counter import (
+            messages_reach_token_count as _messages_reach_token_count_imported,
+        )
+
+        _messages_reach_token_count_func = _messages_reach_token_count_imported
+    return _messages_reach_token_count_func
 
 
 # ============================================================================

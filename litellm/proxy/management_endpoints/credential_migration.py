@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.db.db_span import db_span
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -264,10 +265,11 @@ async def _migrate_config_settings_row(
             report.plaintext += 1
 
     if changed and not dry_run:
-        await prisma_client.db.litellm_config.update(
-            where={"param_name": param_name},
-            data={"param_value": json.dumps(settings)},
-        )
+        async with db_span("migrate_config_credentials", "LiteLLM_Config"):
+            await prisma_client.db.litellm_config.update(
+                where={"param_name": param_name},
+                data={"param_value": json.dumps(settings)},
+            )
     return report
 
 
@@ -316,10 +318,11 @@ async def _migrate_sso_config(prisma_client: object, dry_run: bool) -> LocationR
             report.plaintext += 1
 
     if changed and not dry_run:
-        await prisma_client.db.litellm_ssoconfig.update(
-            where={"id": "sso_config"},
-            data={"sso_settings": json.dumps(new_settings)},
-        )
+        async with db_span("migrate_sso_credentials", "LiteLLM_SSOConfig"):
+            await prisma_client.db.litellm_ssoconfig.update(
+                where={"id": "sso_config"},
+                data={"sso_settings": json.dumps(new_settings)},
+            )
     return report
 
 
@@ -464,6 +467,7 @@ _COVERED_TABLE_SPECS: Final = [
     ("mcp_user_credentials", "litellm_mcpusercredentials", (), ("credential_b64",)),
     ("mcp_user_env_vars", "litellm_mcpuserenvvars", (), ("values_b64",)),
     ("mcp_oauth_client", "litellm_mcpserveroauthclient", ("credentials",), ()),
+    ("search_tools", "litellm_searchtoolstable", ("litellm_params",), ()),
     ("sso_identity_assertion", "litellm_ssoidentityassertion", (), ("assertion_b64",)),
 ]
 _MCP_CREDENTIAL_TABLES: Final = frozenset({"litellm_mcpservertable", "litellm_mcpserveroauthclient"})
