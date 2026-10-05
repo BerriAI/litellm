@@ -9,6 +9,7 @@ repository.workspace = true
 futures-util.workspace = true
 litellm-auth.workspace = true
 litellm-coroutine.workspace = true
+litellm-http.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 

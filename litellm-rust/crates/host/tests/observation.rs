@@ -74,15 +74,20 @@ fn snapshots_do_not_retain_runtime_objects(capacity: NonZeroUsize, #[case] faile
 
 #[rstest]
 fn provider_snapshots_own_the_response_body(capacity: NonZeroUsize) {
-    let mut raw = RawResponse {
-        body: "provider response".into(),
-    };
+    let mut raw = RawResponse::cached("provider response".into());
+    raw.head
+        .headers
+        .append("x-repeat", "first".parse().unwrap());
+    raw.head
+        .headers
+        .append("x-repeat", "second".parse().unwrap());
     let event: CallEvent<(), (), &RawResponse> =
         CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw: &raw });
     let expected = raw.clone();
     let (sender, mut receiver) = observation_channel(capacity);
     sender.emit(event.snapshot());
     raw.body.clear();
+    raw.head.headers.clear();
     assert_eq!(
         receiver.try_recv().unwrap(),
         CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw: expected })

@@ -58,6 +58,9 @@ async def test_native_messages_callbacks_see_the_provider_request_and_the_public
     messages_server: RecordingServer,
 ) -> None:
     recorder: Final = RecordingLogger()
+    messages_server.enqueue(
+        ResponseSpec(body=MESSAGES_RESPONSE, status=201, headers={"request-id": "completed-attempt"})
+    )
 
     response: Final = await litellm.anthropic.messages.acreate(
         **arguments(messages_server, callbacks=[recorder], litellm_call_id="messages-success")
@@ -65,6 +68,10 @@ async def test_native_messages_callbacks_see_the_provider_request_and_the_public
 
     assert_served_natively(messages_server)
     assert response["content"] == MESSAGES_RESPONSE["content"]
+    hidden: Final = get_hidden_params_dict(response)
+    assert hidden["status_code"] == 201
+    assert hidden["response_headers"]["request-id"] == "completed-attempt"
+    assert hidden["additional_headers"]["llm_provider-request-id"] == "completed-attempt"
     sent: Final = messages_server.requests[0]
     assert sent.path == "/v1/messages"
     assert sent.body == {"model": "claude-sonnet-5", "messages": list(MESSAGES), "max_tokens": 64, "stream": False}
@@ -93,7 +100,11 @@ async def test_native_messages_provider_error_reaches_caller_and_failure_callbac
     messages_server: RecordingServer,
 ) -> None:
     messages_server.enqueue(
-        ResponseSpec(body={"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}}, status=400)
+        ResponseSpec(
+            body={"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}},
+            status=400,
+            headers={"request-id": "failed-attempt"},
+        )
     )
     observed: Final = []
 
@@ -110,6 +121,7 @@ async def test_native_messages_provider_error_reaches_caller_and_failure_callbac
     assert_served_natively(messages_server)
     assert [phase for phase, _ in observed] == ["sync", "async"]
     assert all(error is raised.value for _, error in observed)
+    assert raised.value.response.headers["request-id"] == "failed-attempt"
 
 
 def sse_payload() -> bytes:
@@ -120,7 +132,9 @@ def sse_payload() -> bytes:
 async def test_native_messages_stream_relays_provider_events_and_logs_success_once_after_the_last_chunk(
     messages_server: RecordingServer,
 ) -> None:
-    messages_server.enqueue(STREAM)
+    messages_server.enqueue(
+        ResponseSpec(body=None, events=MESSAGES_EVENTS, status=201, headers={"request-id": "stream-attempt"})
+    )
     recorder: Final = RecordingLogger()
 
     stream: Final = await litellm.anthropic.messages.acreate(
@@ -128,6 +142,9 @@ async def test_native_messages_stream_relays_provider_events_and_logs_success_on
     )
     assert isinstance(stream, AsyncIterator)
     assert get_hidden_params_dict(stream)["additional_headers"]["x-litellm-rust"] == "true"
+    hidden: Final = get_hidden_params_dict(stream)
+    assert hidden["status_code"] == 201
+    assert hidden["response_headers"]["request-id"] == "stream-attempt"
     first: Final = await anext(stream)
     await drain_logging()
     assert "async_log_success_event" not in recorder.names

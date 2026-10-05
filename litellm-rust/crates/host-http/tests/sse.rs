@@ -61,10 +61,14 @@ async fn sse_preserves_encoded_chunks_and_uses_the_supplied_error_format(#[case]
         });
     let errors = Arc::new(AtomicUsize::new(0));
     let formatted_errors = errors.clone();
-    let adapter = Sse::new(std::convert::identity, move |error| {
-        formatted_errors.fetch_add(1, Ordering::SeqCst);
-        Bytes::from(format!("event: custom_error\ndata: {error:?}\n\n"))
-    });
+    let adapter = Sse::new(
+        std::convert::identity,
+        |_| http::Response::new(()),
+        move |error| {
+            formatted_errors.fetch_add(1, Ordering::SeqCst);
+            Bytes::from(format!("event: custom_error\ndata: {error:?}\n\n"))
+        },
+    );
     let response = serve(machine, (), (), adapter, None).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
@@ -91,6 +95,7 @@ async fn completed_calls_use_the_response_converter_without_sse_headers() {
     });
     let adapter = Sse::new(
         |response| (StatusCode::CREATED, [("x-converted", "yes")], response).into_response(),
+        |_| http::Response::new(()),
         |_| panic!("a completed call cannot format a stream error"),
     );
     let response = serve(machine, (), (), adapter, None).await.unwrap();

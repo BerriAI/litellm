@@ -24,7 +24,10 @@ use tokio_util::codec::Decoder;
 
 use crate::RouteError;
 
-pub trait Cachable: Protocol<Error = RouteError> {
+pub trait Cachable:
+    Protocol<Error = RouteError, Response = litellm_http::response::Response<Self::Body>>
+{
+    type Body: Serialize + DeserializeOwned;
     const SURFACE: &'static str;
 
     fn reusable(_response: &Self::Response) -> bool {
@@ -86,16 +89,13 @@ impl CacheSession {
         Some(Self { service, request })
     }
 
-    async fn lookup<P: Cachable>(&self) -> Option<CachedOutput<P::Response>>
-    where
-        P::Response: DeserializeOwned,
-    {
+    async fn lookup<P: Cachable>(&self) -> Option<CachedOutput<P::Body>> {
         if !self.request.controls.reads() {
             return None;
         }
         match self.service.lookup(&self.request, now()).await {
             Ok(Some(value)) => {
-                serde_json::from_value::<ResponseEnvelope<CachedOutput<P::Response>>>(value)
+                serde_json::from_value::<ResponseEnvelope<CachedOutput<P::Body>>>(value)
                     .ok()
                     .and_then(|entry| entry.decode(P::SURFACE))
             }
@@ -121,14 +121,11 @@ impl CacheSession {
         }
     }
 
-    async fn store_response<P: Cachable>(&self, response: &P::Response)
-    where
-        P::Response: Serialize,
-    {
+    async fn store_response<P: Cachable>(&self, response: &P::Response) {
         if !self.request.controls.writes() || !P::reusable(response) {
             return;
         }
-        if let Ok(value) = serde_json::to_value(response)
+        if let Ok(value) = serde_json::to_value(&response.body)
             && let Ok(entry) = serde_json::to_value(ResponseEnvelope::new(
                 P::SURFACE,
                 CachedOutput::Response(value),
@@ -149,7 +146,6 @@ pub async fn execute_unary<P, F, Fut>(
 ) -> Result<P::Response, RouteError>
 where
     P: Cachable,
-    P::Response: Serialize + DeserializeOwned,
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<P::Response, RouteError>>,
 {
@@ -158,7 +154,10 @@ where
     let session = CacheSession::prepare::<P>(cache, options, &request);
     let hit = match &session {
         Some(session) => session.lookup::<P>().await.and_then(|entry| match entry {
-            CachedOutput::Response(response) => Some((response, cache_key(&session.request.key))),
+            CachedOutput::Response(response) => Some((
+                litellm_http::response::Response::cached(response),
+                cache_key(&session.request.key),
+            )),
             CachedOutput::Stream(_) => None,
         }),
         None => None,
@@ -193,7 +192,6 @@ pub async fn execute_streaming<P, F, Fut>(
 ) -> Result<OutputOf<P>, RouteError>
 where
     P: StreamCachable,
-    P::Response: Serialize + DeserializeOwned,
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<OutputOf<P>, RouteError>>,
 {
@@ -254,13 +252,12 @@ impl<P: StreamCachable> CallCache<P> {
         }
     }
 
-    pub(crate) async fn lookup(&self) -> Option<(OutputOf<P>, ResultSource)>
-    where
-        P::Response: DeserializeOwned,
-    {
+    pub(crate) async fn lookup(&self) -> Option<(OutputOf<P>, ResultSource)> {
         let session = self.session.as_ref()?;
         let output = match session.lookup::<P>().await? {
-            CachedOutput::Response(response) => CallOutput::Complete(response),
+            CachedOutput::Response(body) => {
+                CallOutput::Complete(litellm_http::response::Response::cached(body))
+            }
             CachedOutput::Stream(data) => P::replay(Bytes::from(data))?,
         };
         Some((
@@ -271,10 +268,7 @@ impl<P: StreamCachable> CallCache<P> {
         ))
     }
 
-    pub(crate) async fn finish(self, output: OutputOf<P>, source: &ResultSource) -> OutputOf<P>
-    where
-        P::Response: Serialize,
-    {
+    pub(crate) async fn finish(self, output: OutputOf<P>, source: &ResultSource) -> OutputOf<P> {
         let Some(session) = self.session.filter(|session| {
             *source == ResultSource::Provider && session.request.controls.writes()
         }) else {

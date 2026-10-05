@@ -134,11 +134,21 @@ impl MessagesRoute {
                 provider_name,
             ));
         }
+        let head = litellm_http::response::ResponseHead::from_response(&response);
         let text = response.text().await.map_err(network)?;
         log_response_body(&text);
-        context.response_received(&text).await?;
-        decode_response(config, &identity.model, &text)
-            .map(|message| MessagesCallResponse::Complete(Box::new(message)))
+        context
+            .response_received(litellm_host::interceptors::RawResponse {
+                head: head.clone(),
+                body: text.clone(),
+            })
+            .await?;
+        decode_response(config, &identity.model, &text).map(|message| {
+            MessagesCallResponse::Complete(litellm_http::response::Response {
+                head,
+                body: Box::new(message),
+            })
+        })
     }
 }
 
@@ -170,12 +180,14 @@ async fn send(
 }
 
 async fn provider_error(response: reqwest::Response) -> Error {
-    let status = response.status().as_u16();
+    let head = litellm_http::response::ResponseHead::from_response(&response);
+    let status = head.status.as_u16();
     match response.text().await {
         Ok(text) => {
             log_error_body(status, &text);
             Error::Transport(TransportError::Http {
                 status,
+                headers: head.headers.into(),
                 body: truncate_error_body(&text),
             })
         }
@@ -204,11 +216,7 @@ fn streaming_response(
     decoder: Option<StreamDecoder>,
     provider: &'static str,
 ) -> MessagesCallResponse {
-    let headers = response
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
-        .collect();
+    let head = litellm_http::response::ResponseHead::from_response(&response);
     let chunks = match decoder {
         None => futures_util::stream::try_unfold(response, move |mut response| async move {
             let chunk = response.chunk().await.map_err(network)?;
@@ -220,10 +228,7 @@ fn streaming_response(
         .boxed(),
         Some(decode) => decoded_chunks(response, decode, provider),
     };
-    MessagesCallResponse::Stream {
-        head: super::route::MessagesStreamHead { headers },
-        chunks,
-    }
+    MessagesCallResponse::Stream { head, chunks }
 }
 
 fn decoded_chunks(

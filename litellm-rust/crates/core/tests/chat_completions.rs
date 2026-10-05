@@ -18,7 +18,10 @@ use support::*;
 const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
 async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletionsResponse, Error> {
-    chat_completions_route().execute(request, &(), None).await
+    chat_completions_route()
+        .execute(request, &(), None)
+        .await
+        .map(|response| response.body)
 }
 
 fn object(value: Value) -> Map<String, Value> {
@@ -55,20 +58,30 @@ fn request() -> ChatCompletionsRequest<'static> {
 async fn anthropic_round_trip_translates_the_conversation_and_normalizes_the_response(
     request: ChatCompletionsRequest<'static>,
 ) {
-    let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
+    let upstream = upstream([
+        anthropic_response(ANTHROPIC_MESSAGE).insert_header("request-id", "chat-attempt")
+    ])
+    .await;
     let base = upstream.uri();
 
-    let response = complete(ChatCompletionsRequest {
-        messages: json!([
-            {"role": "system", "content": "be terse"},
-            {"role": "user", "content": "hi"}
-        ]),
-        api_base: Some(&base),
-        ..request
-    })
-    .await
-    .expect("call succeeds");
+    let response = chat_completions_route()
+        .execute(
+            ChatCompletionsRequest {
+                messages: json!([
+                    {"role": "system", "content": "be terse"},
+                    {"role": "user", "content": "hi"}
+                ]),
+                api_base: Some(&base),
+                ..request
+            },
+            &(),
+            None,
+        )
+        .await
+        .expect("call succeeds");
 
+    assert_eq!(response.head.headers["request-id"], "chat-attempt");
+    let response = response.body;
     let sent = only_request(&upstream).await;
     assert_eq!(sent.url.path(), "/v1/messages");
     assert_eq!(sent.header_values("x-api-key"), ["sk-test"]);
@@ -201,13 +214,15 @@ async fn an_upstream_error_status_keeps_its_code_and_body(
     .await
     .expect_err("upstream rejects");
 
-    assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status,
-            body: "slow down".into()
-        })
-    );
+    let Error::Transport(litellm_http::transport::Error::Http {
+        status: actual_status,
+        body: actual_body,
+        ..
+    }) = error
+    else {
+        panic!("expected an upstream HTTP error");
+    };
+    assert_eq!((actual_status, actual_body), (status, "slow down".into()));
 }
 
 #[rstest]
@@ -302,7 +317,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
             .unwrap()
     };
     assert_eq!(
-        response.choices[0].message.content.as_deref(),
+        response.body.choices[0].message.content.as_deref(),
         Some("hello")
     );
     assert_eq!(

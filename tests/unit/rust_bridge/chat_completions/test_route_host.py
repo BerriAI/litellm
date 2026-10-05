@@ -1,15 +1,17 @@
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 import pytest
 
 import litellm
-from litellm.rust_bridge.chat_completions.route_host import arguments, connection_defaults, response
 from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompletionsRequest
+from litellm.rust_bridge.chat_completions.route_host import arguments, connection_defaults, response
 from litellm.types.utils import ModelResponse
 
 
 def test_response_builds_the_public_model_response() -> None:
+    headers: Final = httpx.Headers([(b"x-repeat", b"first"), (b"x-repeat", b"second")])
     built: Final = response(
         MappingProxyType(
             {
@@ -26,7 +28,9 @@ def test_response_builds_the_public_model_response() -> None:
                 ],
                 "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
             }
-        )
+        ),
+        headers,
+        201,
     )
 
     assert isinstance(built, ModelResponse)
@@ -34,6 +38,9 @@ def test_response_builds_the_public_model_response() -> None:
     assert built.choices[0].message.content == "native"
     assert built.usage is not None
     assert built.usage.total_tokens == 5
+
+    assert built._hidden_params["response_headers"] is headers
+    assert built._hidden_params["status_code"] == 201
 
 
 def test_arguments_are_the_public_kwargs_view() -> None:

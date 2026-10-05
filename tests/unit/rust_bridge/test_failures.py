@@ -1,6 +1,7 @@
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 import pytest
 
 import litellm
@@ -10,6 +11,27 @@ from litellm.rust_bridge import failures
 class UpstreamRateLimited(Exception):
     status_code = 429
     message = "rate limited"
+
+
+class NativeHttpFailure(Exception):
+    def __init__(self, status: int, body: str, headers: httpx.Headers | list[tuple[bytes, bytes]]) -> None:
+        super().__init__(status, body)
+        self.headers: Final = headers
+
+
+@pytest.mark.parametrize("as_bytes", (False, True))
+def test_native_http_failure_retains_raw_response_headers_and_body(as_bytes: bool) -> None:
+    headers: Final = httpx.Headers([(b"x-repeat", b"first"), (b"x-repeat", b"second"), (b"x-opaque", b"\x80\xff")])
+    native: Final = NativeHttpFailure(429, '{"message":"slow down"}', headers.raw if as_bytes else headers)
+
+    mapped: Final = failures.map_native_failure(native, "test-model", "openai", MappingProxyType({}))
+
+    assert isinstance(mapped, litellm.RateLimitError)
+    assert mapped.response.status_code == native.args[0]
+    assert mapped.response.text == native.args[1]
+    names: Final = frozenset(name for name, _ in headers.raw)
+    assert tuple((name, value) for name, value in mapped.response.headers.raw if name in names) == tuple(headers.raw)
+    assert mapped.__context__ is native
 
 
 def test_upstream_status_maps_onto_the_public_exception_contract() -> None:

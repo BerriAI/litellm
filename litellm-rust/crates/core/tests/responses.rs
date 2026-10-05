@@ -37,7 +37,16 @@ fn call() -> ResponsesCall {
 #[tokio::test]
 async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] hosted: bool) {
     let body = json!({"id": "response-1", "model": "test-model", "output": [{"type":"message", "content":[]}], "usage":{"total_tokens":7}, "provider_extra": true});
-    let upstream = upstream([json_response(body.clone())]).await;
+    let upstream = upstream([ResponseTemplate::new(201)
+        .set_body_json(body.clone())
+        .append_header("x-request-id", "buffered")
+        .append_header("x-repeat", "first")
+        .append_header("x-repeat", "second")
+        .append_header(
+            "x-opaque",
+            reqwest::header::HeaderValue::from_bytes(b"\x80\xff").unwrap(),
+        )])
+    .await;
     let host = RecordingCall::<Responses>::new(ResponsesCall {
         api_base: Some(upstream.uri()),
         ..call
@@ -64,7 +73,26 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
         };
         response
     };
-    assert_eq!(serde_json::to_value(response).unwrap(), body);
+    assert_eq!(response.head.status.as_u16(), 201);
+    assert_eq!(response.head.headers["x-request-id"], "buffered");
+    assert_eq!(response.head.headers["x-opaque"].as_bytes(), b"\x80\xff");
+    assert_eq!(
+        response
+            .head
+            .headers
+            .get_all("x-repeat")
+            .iter()
+            .map(|value| value.as_bytes())
+            .collect::<Vec<_>>(),
+        [b"first".as_slice(), b"second".as_slice()]
+    );
+    let events = host.events.0.lock().unwrap();
+    let CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) = &events[1] else {
+        panic!("expected a provider response");
+    };
+    assert_eq!(raw.head, response.head);
+    drop(events);
+    assert_eq!(serde_json::to_value(response.body).unwrap(), body);
     let sent = only_request(&upstream).await;
     assert_eq!(sent.url.path(), "/responses");
     assert_eq!(sent.header("authorization"), Some("Bearer test-key"));
@@ -145,7 +173,7 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
             chunks.try_collect::<Vec<_>>().await.unwrap().concat(),
         )
     };
-    assert!(headers.contains(&("x-request-id".into(), "response-stream".into())));
+    assert_eq!(headers["x-request-id"], "response-stream");
     assert_eq!(bytes, body.as_bytes());
     assert!(matches!(
         &host.events.0.lock().unwrap()[..],

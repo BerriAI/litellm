@@ -15,7 +15,7 @@ use super::{
 pub struct ChatCompletions;
 
 impl Protocol for ChatCompletions {
-    type Response = ChatCompletionsResponse;
+    type Response = litellm_http::response::Response<ChatCompletionsResponse>;
     type Error = Error;
     type Request = ChatCompletionsCall;
     type HostCall = Infallible;
@@ -58,7 +58,7 @@ impl ChatCompletionsRoute {
         cache_options: Option<litellm_cache_response::CachePolicy>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
-    ) -> Result<ChatCompletionsResponse, Error> {
+    ) -> Result<litellm_http::response::Response<ChatCompletionsResponse>, Error> {
         crate::diagnostic::unary(async {
             let request = ChatCompletionsRequest {
                 model: &call.model,
@@ -78,5 +78,7 @@ impl ChatCompletionsRoute {
 }
 
 impl crate::caching::Cachable for ChatCompletions {
+    type Body = ChatCompletionsResponse;
+
     const SURFACE: &'static str = "chat_completions";
 }

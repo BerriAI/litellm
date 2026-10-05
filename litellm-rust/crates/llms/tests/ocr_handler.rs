@@ -65,15 +65,21 @@ async fn an_oversized_error_keeps_its_status_and_a_bounded_body_without_draining
     };
 
     let error = read_bounded(
-        format!("HTTP/1.1 429 Too Many Requests\r\n{headers}\r\n\r\n{body}"),
+        format!("HTTP/1.1 429 Too Many Requests\r\n{headers}\r\nRequest-Id: failed-attempt\r\n\r\n{body}"),
         prefix.len(),
     )
     .await
     .unwrap_err();
 
-    let Error::Transport(litellm_http::transport::Error::Http { status, body }) = error else {
+    let Error::Transport(litellm_http::transport::Error::Http {
+        headers: response_headers,
+        status,
+        body,
+    }) = error
+    else {
         panic!("unexpected error: {error}");
     };
     assert_eq!(status, 429);
+    assert_eq!(response_headers["request-id"], "failed-attempt");
     assert_eq!(body, prefix);
 }

@@ -18,7 +18,7 @@ pub(crate) async fn perform_ocr_request(
     host: &impl Interceptors<Error>,
     caller_document: bool,
     observers: Option<&ObservationSender>,
-) -> Result<LiteLLMOcrResponse, Error> {
+) -> Result<litellm_http::response::Response<LiteLLMOcrResponse>, Error> {
     request.response_format()?;
     let config = request.config;
     let secrets = client
@@ -74,8 +74,13 @@ impl<H: Interceptors<Error>> CallHooks<Error> for OcrCallHooks<'_, H> {
         )
     }
 
-    fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
+    fn response_received<'a>(
+        &'a self,
+        head: &'a litellm_http::response::ResponseHead,
+        body: &'a [u8],
+    ) -> BoxFuture<'a, Result<(), Error>> {
         let raw = RawResponse {
+            head: head.clone(),
             body: String::from_utf8_lossy(body).into_owned(),
         };
         if let Some(observers) = self.observers {

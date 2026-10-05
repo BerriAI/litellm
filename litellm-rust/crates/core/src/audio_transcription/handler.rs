@@ -14,7 +14,7 @@ pub async fn execute_audio_transcription_provider_call(
     http: &Client,
     auth: &litellm_auth::AuthServices,
     request: ProviderAudioTranscriptionRequest,
-) -> Result<Value, Error> {
+) -> Result<litellm_http::response::Response<Value>, Error> {
     let env_lookup = |key: &str| request.secrets.get(key);
     let authenticated = resolve_auth(auth, request.environment.clone(), &env_lookup).await?;
     let outbound = crate::outbound::outbound_request(
@@ -32,13 +32,15 @@ pub async fn execute_audio_transcription_provider_call(
         .map_err(|error| {
             Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
         })?;
-    let status = response.status();
+    let head = litellm_http::response::ResponseHead::from_response(&response);
+    let status = head.status;
     let text = response.text().await.map_err(|error| {
         Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
     })?;
     if !status.is_success() {
         return Err(Error::Transport(litellm_http::transport::Error::Http {
             status: status.as_u16(),
+            headers: head.headers.into(),
             body: truncate_error_body(&text),
         }));
     }
@@ -48,8 +50,9 @@ pub async fn execute_audio_transcription_provider_call(
             error,
         ))
     })?;
-    Ok(request
+    let body = request
         .config
         .transform_audio_transcription_response(&request.model, response_json)?
-        .into_json())
+        .into_json();
+    Ok(litellm_http::response::Response { head, body })
 }

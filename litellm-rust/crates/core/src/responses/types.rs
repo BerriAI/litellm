@@ -1,3 +1,4 @@
+use litellm_http::response::ResponseHead;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -21,11 +22,8 @@ pub struct ResponsesCall {
     pub timeout: Option<Duration>,
 }
 
-pub struct ResponsesStreamHead {
-    pub headers: Vec<(String, String)>,
-}
-
-pub type ResponsesOutput = CallOutput<ResponsesApiResponse, ResponsesStreamHead, Bytes, Error>;
+pub type ResponsesOutput =
+    CallOutput<litellm_http::response::Response<ResponsesApiResponse>, ResponseHead, Bytes, Error>;
 
 pub(super) struct ProviderResponsesRequest {
     pub config: &'static dyn BaseResponsesApiConfig,

@@ -123,7 +123,7 @@ def response_has_hidden_params(response: object) -> bool:
 
 def ensure_response_additional_headers(response: object) -> dict[str, object]:
     hidden_params: Final = get_hidden_params_dict(response, create=isinstance(response, dict))
-    _write_hidden_params(response, hidden_params)
+    set_hidden_params_dict(response, hidden_params)
     additional_headers = hidden_params.get("additional_headers")
     if not isinstance(additional_headers, dict):
         additional_headers = {}
@@ -141,7 +141,7 @@ def apply_response_model_id(response: object, request_metadata: Mapping[str, obj
     if hidden_params.get("model_id"):
         return
     hidden_params["model_id"] = model_id
-    _write_hidden_params(response, hidden_params)
+    set_hidden_params_dict(response, hidden_params)
 
 
 def apply_quality_router_decision_headers(
@@ -209,7 +209,7 @@ def get_hidden_params_dict(
     return hidden_params
 
 
-def _write_hidden_params(response: object, hidden_params: dict[str, object]) -> None:
+def set_hidden_params_dict(response: object, hidden_params: dict[str, object]) -> None:
     if isinstance(response, dict):
         response["_hidden_params"] = hidden_params
     elif hasattr(response, "_hidden_params"):
@@ -277,7 +277,7 @@ def _add_headers_to_response(response: object, headers: dict[str, object]) -> ob
     additional_headers.update(headers)
     hidden_params["additional_headers"] = additional_headers
 
-    _write_hidden_params(response, hidden_params)
+    set_hidden_params_dict(response, hidden_params)
     return response
 
 
@@ -330,5 +330,5 @@ def add_fallback_headers_to_response(
     ]
     additional_headers["x-litellm-fallback-errors"] = json.dumps(merged_errors)
     hidden_params["additional_headers"] = additional_headers
-    _write_hidden_params(response, hidden_params)
+    set_hidden_params_dict(response, hidden_params)
     return response

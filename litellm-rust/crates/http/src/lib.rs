@@ -14,6 +14,7 @@ pub mod outbound;
 mod pool;
 mod proxy;
 pub mod request;
+pub mod response;
 mod settings;
 mod tls;
 pub mod transport;

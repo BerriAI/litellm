@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
+from litellm.rust_bridge.transport import hidden_params
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 _DROP_PATHS: Final = TypeAdapter(list[object])
@@ -47,19 +48,17 @@ class MessagesShaping:
     additional_drop_params: Sequence[str]
 
 
-def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
+def response(
+    value: Mapping[str, object], headers: httpx.Headers | None = None, status: int = 200
+) -> AnthropicMessagesResponse:
     return cast(  # cast-ok: AnthropicMessagesResponse is a TypedDict over the normalized native payload
         AnthropicMessagesResponse,
-        dict(value),
+        {**value, "_hidden_params": hidden_params(headers, status)} if headers is not None else dict(value),
     )
 
 
-def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, object]:
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
-        anthropic_messages_stream_hidden_params,
-    )
-
-    return anthropic_messages_stream_hidden_params(httpx.Headers(list(headers)))
+def stream_hidden_params(headers: httpx.Headers | Sequence[tuple[str, str]], status: int = 200) -> Mapping[str, object]:
+    return hidden_params(headers if isinstance(headers, httpx.Headers) else httpx.Headers(headers), status)
 
 
 def arguments(request: LiteLLMMessagesRequest) -> Mapping[str, object]:

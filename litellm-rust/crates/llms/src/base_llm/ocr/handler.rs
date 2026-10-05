@@ -29,7 +29,11 @@ use litellm_secrets::source::SecretSource;
 pub trait CallHooks<E>: Send + Sync {
     fn before_provider_request(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, E>>;
 
-    fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), E>>;
+    fn response_received<'a>(
+        &'a self,
+        head: &'a litellm_http::response::ResponseHead,
+        body: &'a [u8],
+    ) -> BoxFuture<'a, Result<(), E>>;
 }
 
 #[derive(Clone)]
@@ -119,7 +123,7 @@ pub async fn ocr<C: BaseOcrConfig>(
     client: &OcrClient,
     request: &PreparedOcrRequest,
     hooks: &dyn CallHooks<Error>,
-) -> Result<LiteLLMOcrResponse, Error> {
+) -> Result<litellm_http::response::Response<LiteLLMOcrResponse>, Error> {
     let http = config.prepare_request(request, client, hooks).await?;
     let url = http.url().to_string();
     let headers = http.headers().to_vec();
@@ -128,20 +132,12 @@ pub async fn ocr<C: BaseOcrConfig>(
         .await
         .map_err(transport_error)?;
     if !response.status().is_success() {
-        let headers = response
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .map(|value| (name.to_string(), value.to_string()))
-            })
-            .collect();
         return match read_response_bytes(response, request.connection.max_response_bytes).await {
-            Err(Error::Transport(transport::Error::Http { status, body })) => {
-                Err(config.get_error_class(body, status, headers))
-            }
+            Err(Error::Transport(transport::Error::Http {
+                status,
+                body,
+                headers,
+            })) => Err(config.get_error_class(body, status, *headers)),
             Err(error) => Err(error),
             Ok(_) => unreachable!("non-success response produces an HTTP error"),
         };
@@ -173,6 +169,7 @@ pub async fn read_response_bytes(
     limit: usize,
 ) -> Result<Bytes, Error> {
     let status = response.status();
+    let headers = response.headers().clone();
     if status.is_success()
         && response
             .content_length()
@@ -194,6 +191,7 @@ pub async fn read_response_bytes(
     if !status.is_success() {
         return Err(transport::Error::Http {
             status: status.as_u16(),
+            headers: headers.into(),
             body: String::from_utf8_lossy(&bytes).into_owned(),
         }
         .into());
@@ -205,6 +203,7 @@ pub fn transport_error(error: reqwest::Error) -> Error {
     if error.is_timeout() {
         return Error::Transport(transport::Error::Http {
             status: 408,
+            headers: Default::default(),
             body: "OCR request timed out".into(),
         });
     }

@@ -81,16 +81,31 @@ impl Error {
             Self::UnknownModel(model) => format!("Invalid model name passed in model={model}"),
             _ => self.to_string(),
         };
-        (
-            status,
-            Json(json!({"error": {
-                "message": message,
-                "type": error_type(status),
-                "param": null,
-                "code": status.as_u16(),
-            }})),
+        self.apply_provider_headers(
+            (
+                status,
+                Json(json!({"error": {
+                    "message": message,
+                    "type": error_type(status),
+                    "param": null,
+                    "code": status.as_u16(),
+                }})),
+            )
+                .into_response(),
         )
-            .into_response()
+    }
+
+    pub(crate) fn apply_provider_headers(&self, mut response: Response) -> Response {
+        let headers = match self {
+            Self::Route(RouteError::Transport(TransportError::Http { headers, .. }))
+            | Self::Ocr(OcrError::Transport(TransportError::Http { headers, .. }))
+            | Self::Ocr(OcrError::Provider { headers, .. }) => Some(headers),
+            _ => None,
+        };
+        if let Some(headers) = headers {
+            crate::response::append_provider_headers(response.headers_mut(), headers);
+        }
+        response
     }
 
     /// The Anthropic error envelope Python's `AnthropicExceptionMapping` builds: an upstream
@@ -176,6 +191,7 @@ mod tests {
 
     fn upstream(status: u16, body: &str) -> Error {
         Error::Route(RouteError::Transport(TransportError::Http {
+            headers: Default::default(),
             status,
             body: body.into(),
         }))

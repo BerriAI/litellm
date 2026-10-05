@@ -1038,9 +1038,7 @@ check = lambda: None
         let step = logging
             .before_provider_request(py, Box::new(wire), context)
             .unwrap();
-        let raw = RawResponse {
-            body: "raw response".into(),
-        };
+        let raw = RawResponse::cached("raw response".into());
         assert!(matches!(
             logging
                 .on_event(

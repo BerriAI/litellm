@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::{Json, body::Bytes, extract::State, response::Response};
+use axum::{body::Bytes, extract::State, response::Response};
 use litellm_core::responses::{route::Responses, types::ResponsesCall};
 use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_host_http::Sse;
@@ -39,13 +39,17 @@ pub(crate) async fn create(
         timeout: deployment.timeout,
     };
     let machine = route.machine(call, cache_options.policy);
-    let stream = Sse::<Responses, _, _>::new(Json, |error| {
-        let error = Error::from(error);
-        Bytes::from(format!(
-            "event: error\ndata: {}\n\n",
-            json!({"type": "error", "code": error.status().as_u16().to_string(), "message": error.to_string(), "param": null})
-        ))
-    });
+    let stream = Sse::<Responses, _, _, _>::new(
+        crate::response::json,
+        crate::response::stream_head,
+        |error| {
+            let error = Error::from(error);
+            Bytes::from(format!(
+                "event: error\ndata: {}\n\n",
+                json!({"type": "error", "code": error.status().as_u16().to_string(), "message": error.to_string(), "param": null})
+            ))
+        },
+    );
     let headers = crate::caching::CacheHeaders::default();
     let response = litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?;
     Ok(headers.apply(response))

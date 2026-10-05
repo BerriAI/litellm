@@ -215,9 +215,7 @@ async fn projection_custom_operations_and_hooks_feed_the_http_response(intercept
                 )
                 .await?;
             route_hooks
-                .after_provider_response(RawResponse {
-                    body: wire.url.clone(),
-                })
+                .after_provider_response(RawResponse::cached(wire.url.clone()))
                 .await?;
             Ok(CallOutput::Complete(Bytes::from(wire.url)))
         },
@@ -501,9 +499,7 @@ async fn hook_rejection_stops_execution_and_is_reported_once(
         move |_, _, route_hooks, _observations| async move {
             if event {
                 route_hooks
-                    .after_provider_response(RawResponse {
-                        body: "response".into(),
-                    })
+                    .after_provider_response(RawResponse::cached("response".into()))
                     .await?;
             } else {
                 route_hooks
@@ -637,9 +633,7 @@ async fn unary_calls_use_into_response_after_hooks_and_before_success(intercepto
                 )
                 .await?;
             route_hooks
-                .after_provider_response(RawResponse {
-                    body: wire.url.clone(),
-                })
+                .after_provider_response(RawResponse::cached(wire.url.clone()))
                 .await?;
             Ok(CallOutput::Complete(json!({"url": wire.url})))
         },
@@ -689,7 +683,7 @@ async fn unary_failure_preserves_the_error_without_converting(
         None,
         |_, _, route_hooks, _observations| async move {
             route_hooks
-                .after_provider_response(RawResponse { body: "raw".into() })
+                .after_provider_response(RawResponse::cached("raw".into()))
                 .await?;
             Err(TestError::Provider)
         },

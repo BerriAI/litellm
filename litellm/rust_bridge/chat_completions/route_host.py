@@ -3,10 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Final
 
+import httpx
+
 import litellm
 from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict, set_hidden_params_dict
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompletionsRequest
+from litellm.rust_bridge.transport import hidden_params
 from litellm.types.utils import ModelResponse
 
 _TRANSPORT_PARAMETERS: Final = frozenset(
@@ -33,8 +37,11 @@ def connection_defaults(provider: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def response(value: Mapping[str, object]) -> ModelResponse:
-    return ModelResponse(**value)
+def response(value: Mapping[str, object], headers: httpx.Headers | None = None, status: int = 200) -> ModelResponse:
+    built: Final = ModelResponse(**value)
+    if headers is not None:
+        set_hidden_params_dict(built, {**get_hidden_params_dict(built), **hidden_params(headers, status)})
+    return built
 
 
 def arguments(request: LiteLLMChatCompletionsRequest) -> Mapping[str, object]:
