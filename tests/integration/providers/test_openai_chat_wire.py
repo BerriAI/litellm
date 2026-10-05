@@ -414,7 +414,29 @@ def test_openai_chat_sdk_parameter_set_reaches_upstream_whole(gateway: Gateway) 
         assert (request.method, request.target) == ("POST", "/chat/completions"), request
         assert request.headers["authorization"] == f"Bearer {_API_KEY}"
         assert _JSON_OBJECT.validate_json(request.body) == {"model": _BACKEND, **parameters}
-        return Reply(body=_completion(identity, '{"total": 8}'))
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": identity,
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": _BACKEND,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": '{"total": 8}'},
+                            "finish_reason": "stop",
+                        },
+                        {
+                            "index": 1,
+                            "message": {"role": "assistant", "content": '{"total": 9}'},
+                            "finish_reason": "length",
+                        },
+                    ],
+                    "usage": {"prompt_tokens": 19, "completion_tokens": 14, "total_tokens": 33},
+                }
+            ).encode()
+        )
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"openai/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
@@ -423,6 +445,7 @@ def test_openai_chat_sdk_parameter_set_reaches_upstream_whole(gateway: Gateway) 
             completion: Final = client.chat.completions.create(model=model, **parameters)
         assert (completion.id, completion.model) == (identity, model), completion
         assert [(choice.index, choice.finish_reason, choice.message.content) for choice in completion.choices] == [
-            (0, "stop", '{"total": 8}')
+            (0, "stop", '{"total": 8}'),
+            (1, "length", '{"total": 9}'),
         ], completion
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/chat/completions")]

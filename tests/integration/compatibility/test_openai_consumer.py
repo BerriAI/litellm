@@ -288,7 +288,13 @@ async def test_azure_openai_clients_reach_openai_deployment_through_deployments_
             == "Hello"
         ), raw.text
         assert json.loads(lines[-2].removeprefix("data: "))["usage"]["total_tokens"] == 5, raw.text
-        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/chat/completions")] * 5
+        assert [
+            (request.method, request.target, json.loads(request.body)["messages"][0]["content"])
+            for request in wire.drain()
+        ] == [
+            ("POST", "/chat/completions", f"{kind} {identity}")
+            for kind in ("sync", "sync-stream", "async", "async-stream", "raw-stream")
+        ]
 
 
 def _text_provider(identity: str, prompts: set[str]) -> Callable[[Request], Reply]:
@@ -403,7 +409,10 @@ async def test_openai_clients_parse_text_completion_streams_and_choices(gateway:
             (0, "first", "stop"),
             (1, "second", "length"),
         ], choices
-        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/completions")] * 4
+        assert [(request.method, request.target, json.loads(request.body)["prompt"]) for request in wire.drain()] == [
+            ("POST", "/completions", f"{kind} {identity}")
+            for kind in ("sync-stream", "sync-n", "async-stream", "raw-stream")
+        ]
 
 
 def test_text_completion_usage_chunk_has_empty_choices(gateway: Gateway) -> None:
