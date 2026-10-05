@@ -97,7 +97,9 @@ def create_never_benched_refusing_deployment(proxy: ProxyClient, name: str) -> s
 
 def create_timeout_deployment(proxy: ProxyClient, name: str) -> str:
     """Register a deployment with a 1ms deadline the real backend always exceeds."""
-    return proxy.create_model(name, LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, timeout=0.001))
+    return proxy.create_model(
+        name, LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, timeout=0.001), provider_live=True
+    )
 
 
 def create_small_context_deployment(proxy: ProxyClient, name: str) -> str:
@@ -149,7 +151,7 @@ def create_caching_deployment(proxy: ProxyClient, name: str) -> str:
 
 
 def _register_benched_on_first_failure(
-    proxy: ProxyClient, name: str, litellm_params: LiteLLMParamsBody, allowed_fails: str
+    proxy: ProxyClient, name: str, litellm_params: LiteLLMParamsBody, allowed_fails: str, *, provider_live: bool = False
 ) -> str:
     """The always-picked half of a failing pair: all of the group's shuffle weight,
     and a cooldown policy that benches it on its first failure of the given class,
@@ -159,7 +161,8 @@ def _register_benched_on_first_failure(
             model_name=name,
             litellm_params=litellm_params,
             model_info=ModelInfoBody(allowed_fails_policy={allowed_fails: 0}),
-        )
+        ),
+        provider_live=provider_live,
     )
 
 
@@ -170,6 +173,7 @@ def create_always_timing_out_deployment(proxy: ProxyClient, name: str, cooldown_
         name,
         LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, timeout=0.001, weight=1, cooldown_time=cooldown_time),
         "TimeoutErrorAllowedFails",
+        provider_live=True,
     )
 
 

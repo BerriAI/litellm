@@ -19,7 +19,7 @@ const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
 
 #[derive(Clone)]
 pub struct AzureKeyVault {
-    client: reqwest::Client,
+    client: litellm_http::Client,
     vault: reqwest::Url,
     auth: Arc<AzureAuthService>,
     inputs: Arc<AzureAuthInputs>,
@@ -33,7 +33,7 @@ struct SecretResponse {
 
 impl AzureKeyVault {
     pub fn with_client(
-        client: reqwest::Client,
+        client: litellm_http::Client,
         vault: reqwest::Url,
         environment: Arc<dyn Lookup + Send + Sync>,
     ) -> Result<Self, Error> {
@@ -57,7 +57,10 @@ impl AzureKeyVault {
         })
     }
 
-    pub fn new(environment: Arc<dyn Lookup + Send + Sync>) -> Result<Self, Error> {
+    pub fn new(
+        client: litellm_http::Client,
+        environment: Arc<dyn Lookup + Send + Sync>,
+    ) -> Result<Self, Error> {
         let value = environment
             .get(AZURE_KEY_VAULT_URI)
             .ok_or(Error::MissingEnvironment(AZURE_KEY_VAULT_URI))?;
@@ -65,7 +68,7 @@ impl AzureKeyVault {
         if vault.scheme() != "https" || vault.host_str().is_none() {
             return Err(Error::VaultUri);
         }
-        Self::with_client(reqwest::Client::new(), vault, environment)
+        Self::with_client(client, vault, environment)
     }
 
     pub fn scope(&self) -> &str {

@@ -5,7 +5,7 @@ MiniMax Anthropic transformation config - extends AnthropicConfig for MiniMax's 
 from typing import Any, Final  # noqa: TID251  # override below must mirror the legacy base signature
 
 import litellm
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.secret_managers.main import get_secret_str

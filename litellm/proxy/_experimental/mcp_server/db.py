@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, cast
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
@@ -28,9 +29,7 @@ from litellm.proxy._types import (
     MCPServerUserCredentialListItem,
     MCPSubmissionsSummary,
     NewMCPServerRequest,
-    SpecialMCPServerName,
     UpdateMCPServerRequest,
-    UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     SecretMapDecodeError,
@@ -54,7 +53,8 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.mcp import MCPCredentials
+from litellm.types.mcp import MCPCredentials, MCPTransportType, MCPUpstreamProtocol, validate_mcp_protocol_transport
+from litellm.types.mcp_server.mcp_server_manager import MCPInfo, PinnedMCPTool
 
 if TYPE_CHECKING:
     from prisma import models as prisma_db_models
@@ -414,7 +414,6 @@ def _prepare_mcp_server_data(
         data_dict["tool_name_to_display_name"] = safe_dumps(data_dict["tool_name_to_display_name"] or {})
     if "tool_name_to_description" in data_dict:
         data_dict["tool_name_to_description"] = safe_dumps(data_dict["tool_name_to_description"] or {})
-
     # mcp_access_groups is already List[str], no serialization needed
 
     # On create, force is_byok so a False value is always written to the DB. On
@@ -516,22 +515,16 @@ def _db_transaction_manager(prisma_client: PrismaClient) -> _UserEnvVarsTransact
 
 
 def _identifier_where(value: str, exclude_server_id: str | None) -> "prisma_db_types.LiteLLM_MCPServerTableWhereInput":
-    own_row_guard: Final = (
-        ({"NOT": [{"server_id": exclude_server_id}]},)  # mutable-ok: prisma where-inputs must be plain dicts
-        if exclude_server_id is not None
-        else ()
-    )
+    own_row_guard: Final = ({"NOT": [{"server_id": exclude_server_id}]},) if exclude_server_id is not None else ()
     where: Final[prisma_db_types.LiteLLM_MCPServerTableWhereInput] = {
-        "AND": [  # mutable-ok: prisma where-inputs must be plain dicts
+        "AND": [
             {
-                "OR": [  # mutable-ok: prisma where-inputs must be plain dicts
+                "OR": [
                     {"server_name": {"equals": value, "mode": "insensitive"}},
                     {"alias": {"equals": value, "mode": "insensitive"}},
                 ]
             },
-            {
-                "OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]
-            },  # mutable-ok: prisma where-inputs must be plain dicts
+            {"OR": [{"approval_status": None}, {"approval_status": {"not": MCPApprovalStatus.draft}}]},
             *own_row_guard,
         ]
     }
@@ -608,6 +601,7 @@ async def _mcp_server_write_if_identifier_free(
     alias: str | None,
     exclude_server_id: str | None,
     write: "Callable[[TableActions[prisma_db_models.LiteLLM_MCPServerTable]], Awaitable[prisma_db_models.LiteLLM_MCPServerTable | None]]",
+    lock_server_id: str | None = None,
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
     """Run ``write`` only when no other live row owns ``server_name``/``alias``.
 
@@ -627,6 +621,10 @@ async def _mcp_server_write_if_identifier_free(
         )
         if conflict is not None:
             return conflict
+        if lock_server_id is not None:
+            await tx.execute_raw(
+                'SELECT server_id FROM "LiteLLM_MCPServerTable" WHERE server_id=$1 FOR UPDATE', lock_server_id
+            )
         return await write(tx.litellm_mcpservertable)
 
 
@@ -837,35 +835,6 @@ async def get_mcp_servers_by_team(prisma_client: PrismaClient, team_id: str) -> 
     if team_record is not None and team_record.object_permission is not None:
         mcp_servers = team_record.object_permission.mcp_servers
     return mcp_servers or []
-
-
-async def get_all_mcp_servers_for_user(
-    prisma_client: PrismaClient,
-    user: UserAPIKeyAuth,
-) -> list[LiteLLM_MCPServerTable]:
-    """
-    Get all the mcp servers filtered by the given user has access to.
-
-    Following Least-Privilege Principle - the requestor should only be able to see the mcp servers that they have access to.
-    """
-
-    mcp_server_ids: Final[set[str]] = set()
-    mcp_servers = []
-
-    # Get the mcp servers for the key
-    if user.api_key:
-        token_mcp_servers: Final = await get_mcp_servers_by_verificationtoken(prisma_client, user.api_key)
-        mcp_server_ids.update(token_mcp_servers)
-
-        # check for special team membership
-        if SpecialMCPServerName.all_team_servers in mcp_server_ids and user.team_id is not None:
-            team_mcp_servers: Final = await get_mcp_servers_by_team(prisma_client, user.team_id)
-            mcp_server_ids.update(team_mcp_servers)
-
-    if len(mcp_server_ids) > 0:
-        mcp_servers = await get_mcp_servers(prisma_client, mcp_server_ids)
-
-    return mcp_servers
 
 
 async def get_objectpermissions_for_mcp_server(
@@ -1137,6 +1106,27 @@ async def get_draft_mcp_server(
     return table
 
 
+def _validate_mcp_protocol_write(
+    stored: "prisma_db_models.LiteLLM_MCPServerTable", data_dict: Mapping[str, object]
+) -> None:
+    raw_info: Final = data_dict.get("mcp_info", stored.mcp_info)
+    adapter: Final = TypeAdapter[MCPInfo | None](MCPInfo | None)
+    try:
+        info: Final = (
+            adapter.validate_json(raw_info) if isinstance(raw_info, str) else adapter.validate_python(raw_info)
+        )
+        validate_mcp_protocol_transport(
+            TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
+                (info or {}).get("protocol_version", "auto")
+            ),
+            TypeAdapter[MCPTransportType](MCPTransportType).validate_python(
+                data_dict.get("transport", stored.transport)
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 async def _update_mcp_server_row(
     prisma_client: PrismaClient,
     *,
@@ -1144,29 +1134,36 @@ async def _update_mcp_server_row(
     data_dict: Mapping[str, object],
 ) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
     identifier_write: Final = any(field in data_dict for field in ("server_name", "alias"))
+    protocol_write: Final = bool({"transport", "mcp_info"}.intersection(data_dict))
 
     async def _update(
         table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
     ) -> "prisma_db_models.LiteLLM_MCPServerTable | None":
+        if protocol_write:
+            stored: Final = await table.find_unique(where={"server_id": server_id})
+            if stored is None:
+                return None
+            _validate_mcp_protocol_write(stored, data_dict)
         return await table.update(
-            where={"server_id": server_id},  # mutable-ok: prisma where-inputs must be plain dicts
+            where={"server_id": server_id},
             data=data_dict,
         )
 
-    if not identifier_write:
+    if not identifier_write and not protocol_write:
         return await _update(_mcp_server_table_actions(prisma_client))
     if "alias" in data_dict and not data_dict["alias"] and "server_name" not in data_dict:
         # Clearing the alias drops the prefix to the stored server_name, which
         # may already belong to another row, so that name needs the check too.
         existing: Final = await _db_find_mcp_server_row(prisma_client, server_id)
         if existing is None:
-            return await _update(_mcp_server_table_actions(prisma_client))
+            return None
         return await _mcp_server_write_if_identifier_free(
             prisma_client,
             server_name=existing.server_name,
             alias=None,
             exclude_server_id=server_id,
             write=_update,
+            lock_server_id=server_id if protocol_write else None,
         )
     return await _mcp_server_write_if_identifier_free(
         prisma_client,
@@ -1174,6 +1171,7 @@ async def _update_mcp_server_row(
         alias=_identifier_field(data_dict, "alias"),
         exclude_server_id=server_id,
         write=_update,
+        lock_server_id=server_id if protocol_write else None,
     )
 
 
@@ -1746,7 +1744,7 @@ async def list_server_user_credentials(
     """Every user's stored credential for one server, typed but without the secret, for admins."""
     rows: Final = await _db_find_user_credential_rows(
         prisma_client,
-        {"server_id": server_id},  # mutable-ok: prisma where-inputs must be plain dicts
+        {"server_id": server_id},
     )
     return tuple(_server_user_credential_item(row) for row in rows)
 
@@ -2168,6 +2166,28 @@ async def approve_mcp_server(
             "reviewed_at": now,
             "updated_by": touched_by,
         },
+    )
+    table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
+    decrypt_global_env_var_values(table.env_vars)
+    return table
+
+
+async def set_mcp_server_pinned_tools(
+    prisma_client: PrismaClient,
+    server_id: str,
+    pinned_tools: Mapping[str, PinnedMCPTool] | None,
+    touched_by: str,
+) -> LiteLLM_MCPServerTable | None:
+    """Replace the server's pinned catalog; ``None`` unpins. Only this write path sets the pin."""
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+    if await _db_find_mcp_server_row(prisma_client, server_id) is None:
+        return None
+    snapshot: Final = {name: tool.model_dump() for name, tool in (pinned_tools or {}).items()}
+    updated: Final = await _db_update_mcp_server_row(
+        prisma_client,
+        server_id,
+        {"pinned_tools": safe_dumps(snapshot), "updated_by": touched_by},
     )
     table: Final = LiteLLM_MCPServerTable.model_validate(updated.model_dump())
     decrypt_global_env_var_values(table.env_vars)
