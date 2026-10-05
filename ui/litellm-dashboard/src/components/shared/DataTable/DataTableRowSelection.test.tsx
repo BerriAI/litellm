@@ -1,8 +1,8 @@
 import type { ColumnDef, RowSelectionState } from "@tanstack/react-table";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createSelectionColumn, DataTable } from "./index";
 
@@ -99,6 +99,105 @@ describe("DataTable row selection", () => {
     await user.click(screen.getByTestId("clear"));
     expect(screen.getByTestId("keys")).toBeEmptyDOMElement();
     expect(rowBox("m1")).toHaveAttribute("aria-checked", "false");
+  });
+
+  describe("drag to select", () => {
+    const OTHER_TABLE_Y = 99;
+    const rowAtY: Readonly<Record<number, string>> = { 10: "m1", 20: "m2", 30: "m3" };
+    const expectKeys = (expected: string) =>
+      expect(screen.getByTestId("keys")).toHaveTextContent(new RegExp(`^${expected}$`));
+    const pressRow = (id: string, y: number, button = 0) =>
+      fireEvent.pointerDown(rowBox(id), { button, clientX: 5, clientY: y });
+    const moveTo = (y: number) => fireEvent.pointerMove(document, { clientX: 5, clientY: y });
+
+    beforeEach(() => {
+      Object.defineProperty(document, "elementFromPoint", {
+        configurable: true,
+        value: (_x: number, y: number) =>
+          y === OTHER_TABLE_Y ? screen.getByTestId("other-table-row") : rowBox(rowAtY[y]),
+      });
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(document, "elementFromPoint");
+    });
+
+    it("selects every row between the pressed row and the pointer, and shrinks when dragged back", () => {
+      render(<ControlledHarness />);
+
+      pressRow("m1", 10);
+      expectKeys("m1");
+
+      moveTo(30);
+      expectKeys("m1,m2,m3");
+
+      moveTo(20);
+      expectKeys("m1,m2");
+
+      fireEvent.pointerUp(document);
+      moveTo(30);
+      expectKeys("m1,m2");
+    });
+
+    it("deselects the dragged range when the pressed row was already selected", async () => {
+      const user = userEvent.setup();
+      render(<ControlledHarness />);
+      await user.click(selectAll());
+
+      pressRow("m3", 30);
+      moveTo(20);
+      fireEvent.pointerUp(document);
+
+      expectKeys("m1");
+    });
+
+    it("ignores presses with a button other than the primary one", () => {
+      render(<ControlledHarness />);
+
+      pressRow("m1", 10, 2);
+      moveTo(30);
+
+      expectKeys("");
+    });
+
+    it("ignores rows in a different table that share an id", () => {
+      render(
+        <>
+          <ControlledHarness />
+          <table>
+            <tbody>
+              <tr data-row-id="m3">
+                <td data-testid="other-table-row" />
+              </tr>
+            </tbody>
+          </table>
+        </>,
+      );
+
+      pressRow("m1", 10);
+      moveTo(OTHER_TABLE_Y);
+
+      expectKeys("m1");
+    });
+
+    it("skips rows that cannot be selected", () => {
+      render(
+        <DataTable
+          data={data}
+          columns={columns}
+          getRowId={(row) => row.id}
+          enableRowSelection={(row) => row.original.id !== "m2"}
+          toolbar={(table) => <span data-testid="count">{table.getSelectedRowModel().rows.length}</span>}
+        />,
+      );
+
+      pressRow("m1", 10);
+      moveTo(30);
+      fireEvent.pointerUp(document);
+
+      expect(selectedCount()).toHaveTextContent("2");
+      expect(rowBox("m2")).toHaveAttribute("aria-checked", "false");
+    });
   });
 
   it("respects an enableRowSelection predicate", async () => {
