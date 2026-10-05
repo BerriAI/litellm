@@ -41,7 +41,9 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import (
+    decode_video_id_with_provider,
     encode_character_id_with_provider,
     encode_video_id_with_provider,
 )
@@ -68,6 +70,28 @@ RESOLVED_MODELS: Dict[str, str] = {VIDEO_MODEL_ID: "azure-sora"}
 
 # Sentinel propagated by base_process for the passthrough endpoints.
 SENTINEL = object()
+
+
+def _video_with_empty_model_id(hidden_params: Optional[Dict[str, Any]] = None) -> VideoObject:
+    """A VideoObject as the provider transforms return it: the id is encoded with
+    the provider but an empty model_id (#33423)."""
+    video = VideoObject(
+        id=encode_video_id_with_provider("video_new456", "azure", ""),
+        object="video",
+        status="queued",
+    )
+    video._hidden_params = hidden_params or {}
+    return video
+
+
+def _assert_id_resolves_to_deployment(video_id: str) -> None:
+    """The returned id must carry VIDEO_MODEL_ID, so a follow-up status/content
+    call resolves the deployment (and its per-model api_key)."""
+    assert decode_video_id_with_provider(video_id) == {
+        "custom_llm_provider": "azure",
+        "model_id": VIDEO_MODEL_ID,
+        "video_id": "video_new456",
+    }
 
 
 class FakeRequest:
@@ -245,6 +269,26 @@ async def test_generation__input_reference_attached(harness):
 
 
 @pytest.mark.asyncio
+async def test_generation__restamps_id_with_router_model_id(harness):
+    harness.base_process.return_value = _video_with_empty_model_id(
+        hidden_params={"model_id": VIDEO_MODEL_ID}
+    )
+
+    resp = await call_generation(harness, body={"model": "sora-2", "prompt": "x"})
+
+    _assert_id_resolves_to_deployment(resp.id)
+
+
+@pytest.mark.asyncio
+async def test_generation__restamps_id_with_request_model_when_no_hidden_model_id(harness):
+    harness.base_process.return_value = _video_with_empty_model_id()
+
+    resp = await call_generation(harness, body={"model": "sora-2", "prompt": "x"})
+
+    assert decode_video_id_with_provider(resp.id)["model_id"] == "sora-2"
+
+
+@pytest.mark.asyncio
 async def test_generation__exception_routed_through_handler(harness):
     harness.base_process.side_effect = ValueError("provider boom")
 
@@ -282,6 +326,17 @@ async def test_status__model_encoded_id_full_contract(harness):
         "custom_llm_provider": "azure",
         "model": "azure-sora",
     }
+
+
+@pytest.mark.asyncio
+async def test_status__restamps_response_id_with_decoded_model_id(harness):
+    """The status transform drops the model_id from the returned id; re-using
+    that id for content would then fail with invalid_api_key."""
+    harness.base_process.return_value = _video_with_empty_model_id()
+
+    resp = await call_status(harness, AZURE_VIDEO_ID)
+
+    _assert_id_resolves_to_deployment(resp.id)
 
 
 @pytest.mark.asyncio
@@ -398,6 +453,17 @@ async def test_edit__extracts_nested_video_id_full_contract(harness):
         "custom_llm_provider": "azure",
         "model": "azure-sora",
     }
+
+
+@pytest.mark.asyncio
+async def test_edit__restamps_new_video_id_with_source_model_id(harness):
+    harness.base_process.return_value = _video_with_empty_model_id()
+
+    resp = await call_edit(
+        harness, body={"prompt": "brighter", "video": {"id": AZURE_VIDEO_ID}}
+    )
+
+    _assert_id_resolves_to_deployment(resp.id)
 
 
 @pytest.mark.asyncio
@@ -541,6 +607,15 @@ async def test_remix__model_encoded_id_full_contract(harness):
         "custom_llm_provider": "azure",
         "model": "azure-sora",
     }
+
+
+@pytest.mark.asyncio
+async def test_remix__restamps_new_video_id_with_source_model_id(harness):
+    harness.base_process.return_value = _video_with_empty_model_id()
+
+    resp = await call_remix(harness, AZURE_VIDEO_ID, body={"prompt": "new colors"})
+
+    _assert_id_resolves_to_deployment(resp.id)
 
 
 @pytest.mark.asyncio
@@ -701,3 +776,14 @@ async def test_extension__extracts_nested_video_id_full_contract(harness):
         "custom_llm_provider": "azure",
         "model": "azure-sora",
     }
+
+
+@pytest.mark.asyncio
+async def test_extension__restamps_new_video_id_with_source_model_id(harness):
+    harness.base_process.return_value = _video_with_empty_model_id()
+
+    resp = await call_extension(
+        harness, body={"prompt": "continue", "video": {"id": AZURE_VIDEO_ID}}
+    )
+
+    _assert_id_resolves_to_deployment(resp.id)

@@ -18,6 +18,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
 from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
+    encode_video_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
     video_reference_to_id,
@@ -115,7 +116,11 @@ async def video_generation(
             version=version,
         )
     else:
-        return generated
+        return encode_video_id_in_response(
+            response=generated,
+            fallback_provider=data.get("custom_llm_provider"),
+            fallback_model_id=data.get("model"),
+        )
 
 
 @router.get(
@@ -302,7 +307,11 @@ async def video_status(
             version=version,
         )
     else:
-        return status
+        return encode_video_id_in_response(
+            response=status,
+            fallback_provider=custom_llm_provider,
+            fallback_model_id=model_id_from_decoded,
+        )
 
 
 @router.get(
@@ -510,7 +519,11 @@ async def video_remix(
             version=version,
         )
     else:
-        return remixed
+        return encode_video_id_in_response(
+            response=remixed,
+            fallback_provider=custom_llm_provider,
+            fallback_model_id=model_id_from_decoded or data.get("model"),
+        )
 
 
 @router.post(
@@ -823,7 +836,11 @@ async def video_edit(
             version=version,
         )
     else:
-        return edited
+        return encode_video_id_in_response(
+            response=edited,
+            fallback_provider=custom_llm_provider,
+            fallback_model_id=model_id_from_decoded or data.get("model"),
+        )
 
 
 @router.post(
@@ -920,4 +937,8 @@ async def video_extension(
             version=version,
         )
     else:
-        return extended
+        return encode_video_id_in_response(
+            response=extended,
+            fallback_provider=custom_llm_provider,
+            fallback_model_id=model_id_from_decoded or data.get("model"),
+        )
