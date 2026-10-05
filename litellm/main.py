@@ -8230,8 +8230,9 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         if asyncio.iscoroutine(init_response):
             response = await init_response
         else:
-            # Call the synchronous function using run_in_executor
-            response = await loop.run_in_executor(None, func_with_context)
+            # The synchronous provider already ran inside run_in_executor above;
+            # re-running it would call the provider twice and bill the user twice.
+            response = init_response
         return response
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
