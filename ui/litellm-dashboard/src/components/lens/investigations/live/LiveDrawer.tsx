@@ -114,7 +114,12 @@ export function LiveDrawer({
                     <h2 className={PANE_TITLE}>Traces</h2>
                     <span className="text-xs leading-relaxed tabular-nums text-muted-foreground">
                       {done ?? `${reviewed} reviewed`}
-                      {done && <ModelName model={model} />}
+                      {done && (
+                        <>
+                          {" "}
+                          <ModelName model={model} />
+                        </>
+                      )}
                       {reviewed > reviews.length && reviews.length ? ` · showing latest ${reviews.length}` : ""}
                     </span>
                   </div>
