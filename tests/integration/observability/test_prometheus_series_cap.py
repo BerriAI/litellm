@@ -403,35 +403,48 @@ def excluded(tmp_path_factory: pytest.TempPathFactory) -> Iterator[CapRig]:
         yield rig
 
 
+def _owned_fallback_series(samples: Sequence[Sample], name: str) -> tuple[Sample, ...]:
+    return tuple(sample for sample in samples if sample.name == name and not sample.is_overflow())
+
+
+def _fallback_counter_settled(samples: Sequence[Sample], name: str) -> bool:
+    """The counter has admitted the cap and sent the next key to `other`, or has handed out more series than the
+    cap, which is what a proxy without the cap does and what the caller's assertion then reports."""
+    owned: Final = _owned_fallback_series(samples, name)
+    return len(owned) > CAP or (len(owned) == CAP and overflow_total(samples, name) >= 1)
+
+
+def _expect_capped_fallback_counter(rig: CapRig, name: str) -> None:
+    samples: Final = eventually(
+        lambda: scrape(rig.gateway), lambda seen: _fallback_counter_settled(seen, name), seconds=60
+    )
+    owned: Final = _owned_fallback_series(samples, name)
+    assert len(owned) == CAP, owned
+    assert overflow_total(samples, name) == 1, samples
+    assert all(sample.labels.get("fallback_model") == FALLBACK for sample in owned), owned
+    assert len({sample.labels["hashed_api_key"] for sample in owned}) == CAP, owned
+    assert all("api_key_alias" not in sample.labels for sample in samples if sample.name == name), samples
+
+
 class TestExcluded:
-    def test_fallback_counters_drop_excluded_labels(self, excluded: CapRig) -> None:
-        """X1: the successful and failed fallback counters honor prometheus_exclude_labels like every other metric."""
-        key: Final = excluded.key("x1")
-        call: Final = Call.new()
-        response: Final = chat_once(excluded.base_url, key, PRIMARY, call)
-        assert response.status_code == 200 and call.answer in response.text, response.text
-        after_success: Final = eventually(
-            lambda: scrape(excluded.gateway),
-            lambda samples: any(sample.name == SUCCESSFUL_FALLBACKS for sample in samples),
-            seconds=60,
-        )
-        successes: Final = tuple(sample for sample in after_success if sample.name == SUCCESSFUL_FALLBACKS)
-        assert any(sample.labels.get("fallback_model") == FALLBACK for sample in successes), successes
-        assert all("api_key_alias" not in sample.labels for sample in successes), successes
+    def test_fallback_counters_are_capped_and_drop_excluded_labels(self, excluded: CapRig) -> None:
+        """X1: the successful and failed fallback counters are capped like every other metric (their label names
+        reached the factory positionally before, so the cap never wrapped them) and keep honoring
+        prometheus_exclude_labels, which get_labels_for_metric already applied to them."""
+        keys: Final = tuple(excluded.key("x1") for _ in range(CAP + 1))
+        for key in keys:
+            call: Final = Call.new()
+            response: Final = chat_once(excluded.base_url, key, PRIMARY, call)
+            assert response.status_code == 200 and call.answer in response.text, response.text
+        _expect_capped_fallback_counter(excluded, SUCCESSFUL_FALLBACKS)
         excluded.outage.set()
         try:
-            failed: Final = chat_once(excluded.base_url, key, PRIMARY, Call.new())
+            for key in keys:
+                failed: Final = chat_once(excluded.base_url, key, PRIMARY, Call.new())
+                assert failed.status_code == 500, failed.text
         finally:
             excluded.outage.clear()
-        assert failed.status_code == 500, failed.text
-        after_failure: Final = eventually(
-            lambda: scrape(excluded.gateway),
-            lambda samples: any(sample.name == FAILED_FALLBACKS for sample in samples),
-            seconds=60,
-        )
-        failures: Final = tuple(sample for sample in after_failure if sample.name == FAILED_FALLBACKS)
-        assert any(sample.labels.get("fallback_model") == FALLBACK for sample in failures), failures
-        assert all("api_key_alias" not in sample.labels for sample in failures), failures
+        _expect_capped_fallback_counter(excluded, FAILED_FALLBACKS)
 
 
 @pytest.fixture(scope="class")
