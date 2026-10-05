@@ -324,9 +324,10 @@ async def ingest_replays(
         ).raise_for_status()
     identity: Final = await storage.query_sql(
         "SELECT DISTINCT TeamId AS team_id, ApiKeyHash AS api_key, UserId AS user "
-        f"FROM otel_traces WHERE TraceId = '{trace_id}'",
+        "FROM otel_traces WHERE TraceId = {trace_id:String}",
         AllQueryScope(kind="all"),
         os.environ["LITELLM_MASTER_KEY"],
+        {"trace_id": trace_id},
     )
     return TenantIdentity.model_validate(identity.data[0])
 
