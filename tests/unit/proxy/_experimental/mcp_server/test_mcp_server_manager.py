@@ -18625,3 +18625,88 @@ async def test_access_group_resolution_uses_the_operation_catalog(monkeypatch, g
         allowed = await MCPRequestHandler._get_mcp_servers_from_access_groups(["catalog-group"])
         assert set(allowed) == ({row.server_id} if groups else set())
     stale.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "level,inheritance",
+    [
+        ("key", True),
+        ("team", True),
+        ("user", True),
+        ("org", True),
+        ("end_user", True),
+        ("agent", True),
+        ("key", False),
+        ("team", False),
+    ],
+)
+@pytest.mark.parametrize("additive", [False, True])
+@pytest.mark.parametrize("declared,direct", [(False, False), (True, False), (True, True)])
+async def test_empty_access_group_scope_cannot_inherit_unrelated_server(
+    monkeypatch, level, inheritance, declared, direct, additive
+):
+    from types import SimpleNamespace
+
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+    row = _catalog_row()
+    _catalog_database(monkeypatch, AsyncMock(return_value=[row]))
+    manager = MCPServerManager()
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
+    permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="group-scope",
+        mcp_access_groups=["missing-group"] if declared else [],
+        mcp_servers=[row.server_id] if direct else [],
+    )
+    auth = UserAPIKeyAuth(api_key="test", team_id="team", org_id="org", end_user_id="end", agent_id="agent")
+    methods = {
+        "key": "_get_allowed_mcp_servers_for_key",
+        "team": "_get_allowed_mcp_servers_for_team",
+        "user": "_get_allowed_mcp_servers_for_user",
+        "org": "_get_allowed_mcp_servers_for_org",
+        "end_user": "_get_allowed_mcp_servers_for_end_user",
+        "agent": "get_allowed_mcp_servers_for_agent",
+    }
+    selected = getattr(MCPRequestHandler, methods[level])
+    for name, method in methods.items():
+        monkeypatch.setattr(
+            MCPRequestHandler,
+            method,
+            AsyncMock(return_value=[row.server_id] if inheritance and name in ("key", "team") else []),
+        )
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_key_access_group_mcp_server_extras",
+        AsyncMock(return_value=[row.server_id] if additive else []),
+    )
+    monkeypatch.setattr(MCPRequestHandler, "_get_agent_access_group_server_ceiling", AsyncMock(return_value=None))
+    monkeypatch.setattr(MCPRequestHandler, "_key_or_team_declares_toolsets", AsyncMock(return_value=False))
+    monkeypatch.setattr(
+        MCPRequestHandler, "_get_key_object_permission", lambda auth: permission if level == "key" else None
+    )
+    if level == "team":
+
+        async def team_servers(auth):
+            return list(
+                await MCPRequestHandler._team_granted_servers(SimpleNamespace(object_permission=permission), [])
+            )
+
+        monkeypatch.setattr(MCPRequestHandler, methods[level], team_servers)
+    else:
+        monkeypatch.setattr(MCPRequestHandler, methods[level], selected)
+        if level != "key":
+            monkeypatch.setattr(
+                MCPRequestHandler, f"_get_{level}_object_permission", AsyncMock(return_value=permission)
+            )
+    async with manager.catalog.operation():
+        access = await MCPRequestHandler.get_mcp_server_access(auth)
+    assert set(access.server_ids) == (
+        {row.server_id}
+        if direct or (not declared and inheritance) or (additive and level in ("key", "team"))
+        else set()
+    )
+    if declared:
+        assert access.scope == "scoped"

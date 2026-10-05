@@ -1,5 +1,6 @@
 import re
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -1617,9 +1618,13 @@ class MCPRequestHandler:
             # Get allowed servers from key and team
             allowed_mcp_servers_for_key = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
 
-            # The key explicitly opted out of every MCP server. This overrides
-            # team inheritance and additive grants (mirrors no-default-models).
-            if SpecialMCPServerNames.no_mcp_servers.value in allowed_mcp_servers_for_key:
+            # Only an explicit opt-out overrides additive grants. An empty group
+            # scope uses the same marker to restrict inheritance below.
+            if SpecialMCPServerNames.no_mcp_servers.value in allowed_mcp_servers_for_key and (
+                user_api_key_auth is None
+                or (permission := await MCPRequestHandler._key_object_permission_hydrated(user_api_key_auth)) is None
+                or SpecialMCPServerNames.no_mcp_servers.value in (permission.mcp_servers or [])
+            ):
                 return MCPServerAccess(server_ids=(), scope="scoped")
 
             allowed_mcp_servers_for_team = await MCPRequestHandler._get_allowed_mcp_servers_for_team(user_api_key_auth)
@@ -1746,7 +1751,7 @@ class MCPRequestHandler:
 
             declares_key_mcp_scope: Final = getattr(key_object_permission, "mcp_servers", None) is not None
             return MCPServerAccess(
-                server_ids=tuple(set(allowed_mcp_servers)),
+                server_ids=tuple(set(allowed_mcp_servers) - {SpecialMCPServerNames.no_mcp_servers.value}),
                 scope=(
                     "scoped"
                     if has_lower_level_mcp_restrictions or org_restricts or declares_key_mcp_scope
@@ -2548,6 +2553,20 @@ class MCPRequestHandler:
             return []
 
     @staticmethod
+    def _server_grants_with_group_scope(
+        servers: AbstractSet[str],
+        permission: LiteLLM_ObjectPermissionTable,
+    ) -> AbstractSet[str]:
+        """Keep a configured empty group scope distinct from an unrestricted level.
+
+        Combine same-level grants first; the existing zero-server marker prevents
+        inheritance and ceiling substitution without discarding independent grants.
+        """
+        if servers or not permission.mcp_access_groups:
+            return servers
+        return {SpecialMCPServerNames.no_mcp_servers.value}
+
+    @staticmethod
     async def _get_allowed_mcp_servers_for_key(
         user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> list[str]:
@@ -2629,7 +2648,7 @@ class MCPRequestHandler:
 
             # Combine all lists
             all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers + toolset_servers
-            return list(set(all_servers))
+            return list(MCPRequestHandler._server_grants_with_group_scope(set(all_servers), key_object_permission))
         except Exception as e:
             verbose_logger.warning("Failed to get allowed MCP servers for key: %s", e)
             return []
@@ -2702,7 +2721,7 @@ class MCPRequestHandler:
         team_access_group_servers: list[str],
         *,
         requires_fresh_policy: bool = False,
-    ) -> set[str]:
+    ) -> AbstractSet[str]:
         """The raw MCP-server set a team grants (before any org ceiling): its object_permission (direct
         ``mcp_servers``, the ``all_proxy_servers`` sentinel → the full registry, legacy access groups,
         tool-perm-referenced servers, toolset-referenced servers) unioned with its unified
@@ -2723,13 +2742,14 @@ class MCPRequestHandler:
         toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(
             object_permissions, requires_fresh_policy=requires_fresh_policy
         )
-        return (
+        servers: Final = (
             set(global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or []))
             | set(legacy_access_group_servers)
             | set(global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys())
             | toolset_grants.keys()
             | set(team_access_group_servers)
         )
+        return MCPRequestHandler._server_grants_with_group_scope(servers, object_permissions)
 
     @staticmethod
     async def _allowed_mcp_servers_for_single_team(
@@ -2939,7 +2959,7 @@ class MCPRequestHandler:
             all_servers: Final = tuple(
                 {*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants}
             )
-            return list(set(all_servers))
+            return list(MCPRequestHandler._server_grants_with_group_scope(set(all_servers), object_permissions))
         except Exception as e:
             # None = ceiling UNRESOLVED, distinct from [] = org places no restriction. Collapsing them
             # let a DB fault silently drop a ceiling; the caller picks fail-open/closed from this signal.
@@ -3037,7 +3057,7 @@ class MCPRequestHandler:
 
             # Combine all lists
             all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers
-            return list(set(all_servers))
+            return list(MCPRequestHandler._server_grants_with_group_scope(set(all_servers), object_permission))
         except Exception as e:
             verbose_logger.warning("Failed to get allowed MCP servers for end_user: %s", e)
             return []
@@ -3172,7 +3192,12 @@ class MCPRequestHandler:
             toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(
                 object_permissions, requires_fresh_policy=fresh
             )
-            return tuple({*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants})
+            return tuple(
+                MCPRequestHandler._server_grants_with_group_scope(
+                    {*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants},
+                    object_permissions,
+                )
+            )
         except Exception as e:  # noqa: BLE001  # any resolution fault is an unresolved ceiling, never "no ceiling"
             verbose_logger.warning("Failed to get allowed MCP servers for user: %s", e)
             return None
@@ -3519,7 +3544,12 @@ class MCPRequestHandler:
                 obj_perm, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
             )
             inline_tools: Final = global_mcp_server_manager.expand_tool_permissions(obj_perm.mcp_tool_permissions)
-            return list({*expanded_direct_servers, *access_group_servers, *toolset_grants, *inline_tools})
+            return list(
+                MCPRequestHandler._server_grants_with_group_scope(
+                    {*expanded_direct_servers, *access_group_servers, *toolset_grants, *inline_tools},
+                    obj_perm,
+                )
+            )
         except Exception as e:
             if managed_agent_policy(user_api_key_auth) is not None or isinstance(e, UnloadableEntitlementError):
                 raise

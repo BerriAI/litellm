@@ -10208,3 +10208,21 @@ async def test_managed_agent_permission_resolution_outage_is_not_an_unrestricted
     )
     with pytest.raises(RuntimeError, match="policy unavailable"):
         await resolution
+
+
+@pytest.mark.asyncio
+async def test_unreadable_empty_key_scope_cannot_gain_additive_grants(monkeypatch):
+    auth = UserAPIKeyAuth(api_key="test-key", object_permission_id="key-scope")
+    monkeypatch.setattr(
+        MCPRequestHandler,
+        "_get_allowed_mcp_servers_for_key",
+        AsyncMock(return_value=[SpecialMCPServerNames.no_mcp_servers.value]),
+    )
+    monkeypatch.setattr(MCPRequestHandler, "_key_object_permission_hydrated", AsyncMock(return_value=None))
+    monkeypatch.setattr(MCPRequestHandler, "_get_allowed_mcp_servers_for_team", AsyncMock(return_value=[]))
+    monkeypatch.setattr(
+        MCPRequestHandler, "_get_key_access_group_mcp_server_extras", AsyncMock(return_value=["unrelated-server"])
+    )
+    access = await MCPRequestHandler.get_mcp_server_access(auth)
+    assert access.server_ids == ()
+    assert access.scope == "scoped"
