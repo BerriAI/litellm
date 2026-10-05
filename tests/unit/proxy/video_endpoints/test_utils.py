@@ -218,7 +218,7 @@ def test_encode__object_without_id_attr_returned_unchanged():
 # =========================================================================== #
 
 
-def _video(video_id: str, hidden_params=None) -> VideoObject:
+def _video(video_id: str, hidden_params: dict[str, object] | None = None) -> VideoObject:
     video = VideoObject(id=video_id, object="video", status="queued")
     video._hidden_params = hidden_params or {}
     return video
@@ -227,46 +227,49 @@ def _video(video_id: str, hidden_params=None) -> VideoObject:
 def test_encode_video__fills_empty_model_id_from_hidden_params():
     """Regression for #33423: the provider transform encodes the id with an empty
     model_id; the router-recorded model_id must be stamped back in."""
-    video = _video(
-        encode_video_id_with_provider("video_raw", "openai", ""),
-        hidden_params={"model_id": "deployment-1"},
-    )
+    original_id = encode_video_id_with_provider("video_raw", "openai", "")
+    video = _video(original_id, hidden_params={"model_id": "deployment-1"})
 
     out = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="sora-2")
 
-    assert out is video
-    assert decode_video_id_with_provider(video.id) == {
+    assert decode_video_id_with_provider(out.id) == {
         "custom_llm_provider": "openai",
         "model_id": "deployment-1",
         "video_id": "video_raw",
     }
+    # a new object is returned; the input and its hidden params are left intact
+    assert out is not video
+    assert video.id == original_id
+    assert out._hidden_params == {"model_id": "deployment-1"}
+    assert out.status == "queued"
 
 
 def test_encode_video__falls_back_to_given_model_id():
     video = _video(encode_video_id_with_provider("video_raw", "openai", ""))
 
-    encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="sora-2")
+    out = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="sora-2")
 
-    decoded = decode_video_id_with_provider(video.id)
+    decoded = decode_video_id_with_provider(out.id)
     assert decoded["model_id"] == "sora-2"
     assert decoded["video_id"] == "video_raw"
 
 
 def test_encode_video__keeps_existing_model_id_over_fallback():
     original_id = encode_video_id_with_provider("video_raw", "azure", "deployment-1")
-    video = _video(original_id)
 
-    encode_video_id_in_response(video, fallback_provider="openai", fallback_model_id="other")
+    out = encode_video_id_in_response(
+        _video(original_id), fallback_provider="openai", fallback_model_id="other"
+    )
 
-    assert video.id == original_id
+    assert out.id == original_id
 
 
 def test_encode_video__plain_id_encoded_with_fallback_provider():
     video = _video("video_raw", hidden_params={"model_id": "deployment-1"})
 
-    encode_video_id_in_response(video, fallback_provider="openai", fallback_model_id=None)
+    out = encode_video_id_in_response(video, fallback_provider="openai", fallback_model_id=None)
 
-    assert decode_video_id_with_provider(video.id) == {
+    assert decode_video_id_with_provider(out.id) == {
         "custom_llm_provider": "openai",
         "model_id": "deployment-1",
         "video_id": "video_raw",
@@ -274,20 +277,19 @@ def test_encode_video__plain_id_encoded_with_fallback_provider():
 
 
 def test_encode_video__no_model_id_anywhere_unchanged():
-    original_id = encode_video_id_with_provider("video_raw", "openai", "")
-    video = _video(original_id)
+    video = _video(encode_video_id_with_provider("video_raw", "openai", ""))
 
-    encode_video_id_in_response(video, fallback_provider=None, fallback_model_id=None)
+    out = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id=None)
 
-    assert video.id == original_id
+    assert out is video
 
 
 def test_encode_video__no_provider_anywhere_unchanged():
     video = _video("video_raw")
 
-    encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="sora-2")
+    out = encode_video_id_in_response(video, fallback_provider=None, fallback_model_id="sora-2")
 
-    assert video.id == "video_raw"
+    assert out is video
 
 
 @pytest.mark.parametrize("response", [b"video-bytes", {"id": "video_raw"}, None])

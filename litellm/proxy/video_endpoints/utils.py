@@ -2,6 +2,7 @@ from typing import Any, Final
 
 import orjson
 
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -81,7 +82,7 @@ def encode_video_id_in_response(
     fallback_model_id: str | None,
 ) -> object:
     """
-    Re-stamp a returned VideoObject id with the resolved model_id.
+    Return a copy of a VideoObject whose id is re-stamped with the resolved model_id.
 
     Provider transforms encode video ids without a model_id, so a later
     status/content call cannot resolve the deployment (and its per-model
@@ -90,7 +91,7 @@ def encode_video_id_in_response(
     if not isinstance(response, VideoObject) or not response.id:
         return response
 
-    hidden_params: Final = response._hidden_params or {}
+    hidden_params: Final = get_hidden_params_dict(response)
     decoded: Final = decode_video_id_with_provider(response.id)
     model_id: Final = (
         _non_empty_str(hidden_params.get("model_id"))
@@ -105,9 +106,9 @@ def encode_video_id_in_response(
     if not model_id or not provider:
         return response
 
-    response.id = encode_video_id_with_provider(
+    restamped_id: Final = encode_video_id_with_provider(
         video_id=decoded.get("video_id") or response.id,
         provider=provider,
         model_id=model_id,
     )
-    return response
+    return response.model_copy(update={"id": restamped_id})
