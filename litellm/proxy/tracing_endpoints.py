@@ -36,6 +36,7 @@ from litellm.rust_bridge.trace.generated.requests import (
     TraceQueryRequest,
     TraceSpanRequest,
 )
+from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
 from litellm.rust_bridge.trace.generated.types import (
     AllQueryScope,
     OwnedQueryScope,
@@ -46,7 +47,6 @@ from litellm.rust_bridge.trace.generated.types import (
     TracePage,
     TraceScope,
 )
-from litellm.rust_bridge.trace.queries import TraceSQLResponse
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, Tenant
 from litellm.tracing import TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.otlp_http import InvalidOTLPPayloadError, encode_otlp_response
