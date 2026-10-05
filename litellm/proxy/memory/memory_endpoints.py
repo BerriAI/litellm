@@ -32,7 +32,7 @@ from litellm.proxy._types import (
     user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import MemoryRepository

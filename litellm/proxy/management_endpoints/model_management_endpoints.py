@@ -75,7 +75,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY, is_team_admin
+from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, is_team_admin
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,

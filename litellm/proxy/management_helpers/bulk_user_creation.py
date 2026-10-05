@@ -34,7 +34,7 @@ from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_endpoints.internal_user_endpoints import (

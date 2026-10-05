@@ -123,7 +123,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     build_model_max_budget_usage,
     resolve_model_budget,
 )
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_daily_activity import (
     InvalidDateRange,

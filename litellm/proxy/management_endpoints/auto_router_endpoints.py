@@ -43,7 +43,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     refresh_proxy_server_request_body_snapshot,
 )
-from litellm.proxy.management.teams.access import is_team_admin
+from litellm.proxy.management.teams.authz import is_team_admin
 from litellm.proxy.management_endpoints.common_daily_activity import daily_activity_scope
 from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_dependencies,

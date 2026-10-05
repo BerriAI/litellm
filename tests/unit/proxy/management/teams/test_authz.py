@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, UserAPIKeyAuth
-from litellm.proxy.management.teams.access import (
+from litellm.proxy.management.teams.authz import (
     TEAM_ADMIN_ONLY,
     TEAM_OR_ORG_ADMIN,
     TeamAccess,
@@ -134,3 +134,10 @@ def test_team_access_denied_is_the_403_management_routes_have_always_raised() ->
         team_access_denied()
     assert denied.value.status_code == 403
     assert denied.value.detail == "You do not have access to this team"
+
+
+def test_the_old_access_module_still_serves_the_published_enterprise_wheel() -> None:
+    from litellm.proxy.management.teams import access, authz
+
+    assert access.is_team_admin is authz.is_team_admin
+    assert set(access.__all__) <= set(dir(authz))
