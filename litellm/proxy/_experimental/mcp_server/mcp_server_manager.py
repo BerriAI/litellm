@@ -4310,6 +4310,8 @@ class MCPServerManager:
         )
 
         if self._skip_blocked_stdio_listing(server, "tool"):
+            if params is not None and params.cursor is not None:
+                raise RuntimeError("Upstream catalog is unavailable")
             return ListToolsResult(tools=[])
 
         verbose_logger.debug("Connecting to url: %s", server.url)
