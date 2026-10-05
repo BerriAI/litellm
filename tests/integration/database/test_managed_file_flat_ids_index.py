@@ -4,16 +4,18 @@ import shutil
 import subprocess
 import sys
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Final
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
+import psycopg
 import pytest
 from integration._support.client import Gateway, object_value, string_value
 from integration._support.database import read_rows, scratch_database
-from integration._support.process import owned_proxy
+from integration._support.process import owned_proxy, proxy_database_environment
 from integration._support.wire import Reply, Request, wire_server
+from psycopg import sql
 from pydantic import JsonValue, TypeAdapter
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[3]
@@ -90,6 +92,18 @@ def _run_migration_entrypoint(database_url: str) -> subprocess.CompletedProcess[
     )
 
 
+def _scratch_replica_environment(database_url: str) -> Mapping[str, str]:
+    replica_url: Final = proxy_database_environment().get("DATABASE_URL_READ_REPLICA")
+    if replica_url is None:
+        return {}
+    replica: Final = urlsplit(replica_url)
+    reader: Final = replica.username
+    assert reader, replica_url
+    with psycopg.connect(database_url, autocommit=True) as admin:
+        admin.execute(sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA public TO {}").format(sql.Identifier(reader)))
+    return {"DATABASE_URL_READ_REPLICA": urlunsplit(replica._replace(path=urlsplit(database_url).path))}
+
+
 def _provider(store: str, provider_file_id: str) -> Callable[[Request], Reply]:
     page: Final[dict[str, JsonValue]] = {
         "object": "list",
@@ -146,7 +160,11 @@ def test_migration_entrypoint_adds_the_gin_index_and_the_upgraded_proxy_maps_man
         assert GIN_MIGRATION in _applied_migrations(database_url), entrypoint.stdout
         store: Final = "vs_" + uuid.uuid4().hex
         provider_file_id: Final = "file-" + uuid.uuid4().hex[:16]
-        upgraded_environment: Final = {"DATABASE_URL": database_url, "DISABLE_SCHEMA_UPDATE": "true"}
+        upgraded_environment: Final = {
+            "DATABASE_URL": database_url,
+            "DISABLE_SCHEMA_UPDATE": "true",
+            **_scratch_replica_environment(database_url),
+        }
         with (
             wire_server(_provider(store, provider_file_id)) as wire,
             owned_proxy(gateway, tmp_path, upgraded_environment) as upgraded,
