@@ -103,6 +103,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     end_user_cache_key,
     end_user_restricted_registry_cache_key,
+    get_management_object_redis_ttl,
     get_management_object_ttl,
     model_access_group_cache_key,
     model_access_group_registry_cache_key,
@@ -1737,10 +1738,11 @@ async def _cache_registry_answer(
     value: tuple[str, ...] | str,
     ttl: float,
     user_api_key_cache: UserApiKeyCache,
+    redis_ttl: float | None = None,
 ) -> None:
     """Best-effort: a cache backend failure must not turn a registry load into a failed request."""
     try:
-        await user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
+        await user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl, redis_ttl=redis_ttl)
     except Exception as e:  # noqa: BLE001  # best-effort cache write: auth must survive a cache backend error
         verbose_proxy_logger.warning("Failed to cache registry %s: %s", cache_key, e)
 
@@ -1785,6 +1787,7 @@ async def _fetch_and_cache_registry(
         value=registry_ids,
         ttl=get_management_object_ttl(user_api_key_cache),
         user_api_key_cache=user_api_key_cache,
+        redis_ttl=get_management_object_redis_ttl(user_api_key_cache),
     )
     return frozenset(registry_ids)
 
@@ -1965,6 +1968,7 @@ async def get_end_user_object(
             value=end_user_row,
             model_type=LiteLLM_EndUserTable,
             ttl=get_management_object_ttl(user_api_key_cache),
+            redis_ttl=get_management_object_redis_ttl(user_api_key_cache),
         )
 
         if key_end_user_budget_id is None:
@@ -2165,6 +2169,7 @@ async def _fetch_uncached_model_access_group_budgets(
                 value=fetched_obj,
                 model_type=ModelAccessGroupBudget,
                 ttl=get_management_object_ttl(user_api_key_cache),
+                redis_ttl=get_management_object_redis_ttl(user_api_key_cache),
             )
     except Exception as e:  # noqa: BLE001  # fail-safe: a budget fetch error must yield "no budget rows", never break auth
         verbose_proxy_logger.debug("Error batch fetching model access group budgets from database: %s", e)
@@ -2805,6 +2810,7 @@ async def _cache_management_object(
         value=value,
         model_type=model_type,
         ttl=get_management_object_ttl(user_api_key_cache),
+        redis_ttl=get_management_object_redis_ttl(user_api_key_cache),
     )
 
 
@@ -4057,6 +4063,7 @@ async def get_object_permission(
             value=_perm_obj,
             model_type=LiteLLM_ObjectPermissionTable,
             ttl=get_management_object_ttl(user_api_key_cache),
+            redis_ttl=get_management_object_redis_ttl(user_api_key_cache),
         )
 
         return _perm_obj
