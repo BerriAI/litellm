@@ -250,13 +250,11 @@ function TracesReceived({ received }: { received: boolean }) {
 }
 
 function TraceCounts({ runs }: { runs: readonly TraceSummary[] }) {
-  const failed = runs.filter((run) => run.status === "error").length;
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-2 text-xs text-muted-foreground">
       <span>
         {runs.length} {runs.length === 1 ? "run" : "runs"} from {new Set(runs.flatMap(traceAgentNames)).size} agents
       </span>
-      {failed > 0 && <span className="text-destructive">{failed} failed runs</span>}
     </div>
   );
 }

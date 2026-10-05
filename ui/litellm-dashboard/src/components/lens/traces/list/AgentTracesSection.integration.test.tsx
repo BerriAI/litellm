@@ -10,7 +10,7 @@ import traceList from "../__fixtures__/trace_list.json";
 import AgentTracesPage from "./AgentTracesPage";
 import { filterRuns } from "./runSearch/runQuery";
 import { AgentTracesSection, type TimeControls } from "./AgentTracesSection";
-import type { TracePage, TraceSummary } from "../types";
+import type { TraceFindingCount, TracePage, TraceSummary } from "../types";
 
 vi.mock("../../../networking", () => ({
   apiClient: { get: vi.fn(), post: vi.fn() },
@@ -333,12 +333,39 @@ describe("AgentTracesSection", () => {
     expect(await screen.findByTitle("3 findings from completed investigations")).toHaveTextContent("3");
   });
 
+  it("keeps failure labels out of the run totals above the findings table", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({
+      data: [{ ...runs[0], status: "error", error_count: 8 }],
+      next_cursor: null,
+    });
+    renderSection();
+    expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
+    expect(screen.getByText(/1 run from/)).toBeVisible();
+    expect(screen.queryByText(/failed runs|with errors/)).not.toBeInTheDocument();
+  });
+
   it("does not present a failed findings lookup as an uninvestigated or clean trace", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({ data: runs.slice(0, 1), next_cursor: null });
     vi.mocked(apiClient.post).mockRejectedValue(new ApiError("Unavailable", 503, {}));
     renderSection();
     expect(await screen.findByTitle("Could not load findings")).toHaveTextContent("Unavailable");
     expect(screen.queryByTitle("No conclusive investigation for this trace")).not.toBeInTheDocument();
+  });
+
+  it("keeps the column picker open when findings finish loading", async () => {
+    const user = userEvent.setup();
+    const pending = Promise.withResolvers<TraceFindingCount[]>();
+    vi.mocked(agentTraceListCall).mockResolvedValue({ data: runs.slice(0, 1), next_cursor: null });
+    vi.mocked(apiClient.post).mockReturnValue(pending.promise);
+    renderSection();
+    expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    expect(await screen.findByTestId("view-option-cost")).toBeVisible();
+    await act(async () => {
+      pending.resolve([{ trace_id: runs[0].trace_id, trace_ref: runs[0].trace_ref ?? "", finding_count: 1 }]);
+    });
+    expect(await screen.findByTitle("1 findings from completed investigations")).toBeVisible();
+    expect(screen.getByTestId("view-option-cost")).toBeVisible();
   });
 
   it("keeps traces available without requesting investigation data for users without access", async () => {

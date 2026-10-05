@@ -2,7 +2,7 @@
 
 import { getCoreRowModel, useReactTable, type ColumnDef, type TableOptions } from "@tanstack/react-table";
 import { ArrowDown, ChevronRight } from "lucide-react";
-import { useEffect } from "react";
+import { createContext, useContext, useEffect } from "react";
 import { useInView } from "react-intersection-observer";
 
 import { DataTableViewOptions } from "@/components/shared/DataTable/DataTableViewOptions";
@@ -48,6 +48,7 @@ const SKELETON_ROWS = Array.from({ length: 12 }, (_, i) => i);
 const ROW_HEIGHT = 36;
 const MUTED_NUM = "font-mono text-muted-foreground";
 const NUM = "font-mono text-foreground";
+const FindingsContext = createContext<ReadonlyMap<string, TraceFindingState>>(new Map());
 
 function AgentCell({ run }: { run: TraceSummary }) {
   const framework = traceFramework(run);
@@ -80,7 +81,8 @@ function InputCell({ run }: { run: TraceSummary }) {
   );
 }
 
-function FindingCount({ state }: { state?: TraceFindingState }) {
+function FindingCount({ run }: { run: TraceSummary }) {
+  const state = useContext(FindingsContext).get(runKey(run));
   if (!state || state.status === "pending")
     return <Skeleton aria-label="Loading findings" className="ml-auto h-3 w-5" />;
   if (state.status === "error") return <span title="Could not load findings">Unavailable</span>;
@@ -88,7 +90,7 @@ function FindingCount({ state }: { state?: TraceFindingState }) {
   return <span title={`${state.count} findings from completed investigations`}>{state.count.toLocaleString()}</span>;
 }
 
-const runColumns = (findings: ReadonlyMap<string, TraceFindingState>): ColumnDef<TraceSummary>[] => [
+const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
   {
     id: "time",
     size: 170,
@@ -160,7 +162,7 @@ const runColumns = (findings: ReadonlyMap<string, TraceFindingState>): ColumnDef
     id: "findings",
     size: 96,
     header: "Findings",
-    cell: ({ row }) => <FindingCount state={findings.get(runKey(row.original))} />,
+    cell: ({ row }) => <FindingCount run={row.original} />,
     meta: { numeric: true, className: NUM },
   },
   {
@@ -230,7 +232,7 @@ export function AgentTracesTable({
   const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility("lens-traces");
   const tableOptions: TableOptions<TraceSummary> = {
     data: traces,
-    columns: runColumns(findings).filter((column) => canViewFindings || column.id !== "findings"),
+    columns: RUN_COLUMNS.filter((column) => canViewFindings || column.id !== "findings"),
     defaultColumn: { size: undefined },
     getRowId: runKey,
     autoResetAll: false,
@@ -240,54 +242,56 @@ export function AgentTracesTable({
   };
   const table = useReactTable(tableOptions);
   return (
-    <InspectorTable.Root table={table} data-testid="runs-table">
-      <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">
-        <InspectorTable.Header />
-        <InspectorTable.Body<TraceSummary>
-          rowHeight={() => ROW_HEIGHT}
-          after={
-            <>
-              {isLoading && SKELETON_ROWS.map((row) => <PlaceholderRow key={row} index={row} />)}
-              {autoContinue && <LoadMoreRows isFetching={isFetching} onLoadMore={onLoadMore} />}
-            </>
-          }
-        >
-          {(row) => (
-            <InspectorTable.Row
-              row={row}
-              item={traceRefOf(row.original)}
-              data-testid="agent-trace-row"
-              className="h-9"
-            />
-          )}
-        </InspectorTable.Body>
-      </InspectorTable.Grid>
-      {isLoading && (
-        <p role="status" className="sr-only">
-          Loading runs…
-        </p>
-      )}
-      {error && (
-        <div role="alert" className="flex items-center justify-center gap-3 py-6 text-xs text-muted-foreground">
-          <span>
-            {traces.length ? "Could not load more runs" : "Could not load runs"}: {error.message}
-          </span>
-          {onRetry && (
-            <Button size="xs" variant="outline" disabled={isFetching} onClick={onRetry}>
-              Retry
+    <FindingsContext.Provider value={findings}>
+      <InspectorTable.Root table={table} data-testid="runs-table">
+        <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">
+          <InspectorTable.Header />
+          <InspectorTable.Body<TraceSummary>
+            rowHeight={() => ROW_HEIGHT}
+            after={
+              <>
+                {isLoading && SKELETON_ROWS.map((row) => <PlaceholderRow key={row} index={row} />)}
+                {autoContinue && <LoadMoreRows isFetching={isFetching} onLoadMore={onLoadMore} />}
+              </>
+            }
+          >
+            {(row) => (
+              <InspectorTable.Row
+                row={row}
+                item={traceRefOf(row.original)}
+                data-testid="agent-trace-row"
+                className="h-9"
+              />
+            )}
+          </InspectorTable.Body>
+        </InspectorTable.Grid>
+        {isLoading && (
+          <p role="status" className="sr-only">
+            Loading runs…
+          </p>
+        )}
+        {error && (
+          <div role="alert" className="flex items-center justify-center gap-3 py-6 text-xs text-muted-foreground">
+            <span>
+              {traces.length ? "Could not load more runs" : "Could not load runs"}: {error.message}
+            </span>
+            {onRetry && (
+              <Button size="xs" variant="outline" disabled={isFetching} onClick={onRetry}>
+                Retry
+              </Button>
+            )}
+          </div>
+        )}
+        {canContinue && traces.length === 0 && (
+          <div className="flex items-center justify-center gap-3 py-16 text-xs text-muted-foreground">
+            <span>No loaded runs match these filters.</span>
+            <Button size="xs" variant="outline" disabled={isFetching} onClick={onLoadMore}>
+              Load older runs
             </Button>
-          )}
-        </div>
-      )}
-      {canContinue && traces.length === 0 && (
-        <div className="flex items-center justify-center gap-3 py-16 text-xs text-muted-foreground">
-          <span>No loaded runs match these filters.</span>
-          <Button size="xs" variant="outline" disabled={isFetching} onClick={onLoadMore}>
-            Load older runs
-          </Button>
-        </div>
-      )}
-      {isEmpty && <EmptyRuns rangeEmpty={rangeEmpty} onSetUpTracing={onSetUpTracing} />}
-    </InspectorTable.Root>
+          </div>
+        )}
+        {isEmpty && <EmptyRuns rangeEmpty={rangeEmpty} onSetUpTracing={onSetUpTracing} />}
+      </InspectorTable.Root>
+    </FindingsContext.Provider>
   );
 }
