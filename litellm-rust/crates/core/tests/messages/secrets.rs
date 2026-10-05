@@ -8,6 +8,7 @@ use super::*;
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
     "/v1/messages",
+    ("x-api-key", "sk-from-manager"),
     &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"]
 )]
 #[case::azure_ai(
@@ -15,7 +16,23 @@ use super::*;
     "AZURE_API_KEY",
     "AZURE_API_BASE",
     "/anthropic/v1/messages",
+    ("x-api-key", "sk-from-manager"),
     &["AZURE_API_KEY", "AZURE_API_BASE"]
+)]
+#[case::baseten(
+    "baseten", "BASETEN_API_KEY", "BASETEN_API_BASE", "/v1/messages",
+    ("authorization", "Bearer sk-from-manager"),
+    &["BASETEN_API_KEY", "BASETEN_API_BASE"]
+)]
+#[case::deepseek_anthropic_base(
+    "deepseek", "DEEPSEEK_API_KEY", "DEEPSEEK_ANTHROPIC_API_BASE", "/anthropic/v1/messages",
+    ("x-api-key", "sk-from-manager"),
+    &["DEEPSEEK_API_KEY", "DEEPSEEK_ANTHROPIC_API_BASE", "DEEPSEEK_API_BASE"]
+)]
+#[case::deepseek_generic_base(
+    "deepseek", "DEEPSEEK_API_KEY", "DEEPSEEK_API_BASE", "/anthropic/v1/messages",
+    ("x-api-key", "sk-from-manager"),
+    &["DEEPSEEK_API_KEY", "DEEPSEEK_ANTHROPIC_API_BASE", "DEEPSEEK_API_BASE"]
 )]
 #[tokio::test]
 async fn the_credential_and_base_come_from_the_secret_source(
@@ -24,6 +41,7 @@ async fn the_credential_and_base_come_from_the_secret_source(
     #[case] key_name: &str,
     #[case] base_name: &str,
     #[case] path: &str,
+    #[case] credential: (&str, &str),
     #[case] looked_up: &[&str],
 ) {
     let upstream = upstream([message_response()]).await;
@@ -46,7 +64,7 @@ async fn the_credential_and_base_come_from_the_secret_source(
     assert!(matches!(output, MessagesOutput::Complete(_)));
     let request = only_request(&upstream).await;
     assert_eq!(request.url.path(), path);
-    assert_eq!(request.header("x-api-key"), Some("sk-from-manager"));
+    assert_eq!(request.header(credential.0), Some(credential.1));
     assert_eq!(secrets.requested(), looked_up);
 }
 
