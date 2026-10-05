@@ -1117,7 +1117,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     if original_type == "text":
                         converted = with_prompt_cache_breakpoint(
                             self._convert_content_str_to_input_text(item.get("text", ""), role),
-                            cast(dict[str, object], item).get(  # cast-ok: isinstance confirms the content block is a mapping
+                            cast(
+                                dict[str, object], item
+                            ).get(  # cast-ok: isinstance confirms the content block is a mapping
                                 "prompt_cache_breakpoint"
                             ),
                         )
@@ -1132,7 +1134,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                     role,
                                 )
                             ),
-                            cast(dict[str, object], item).get(  # cast-ok: isinstance confirms the content block is a mapping
+                            cast(
+                                dict[str, object], item
+                            ).get(  # cast-ok: isinstance confirms the content block is a mapping
                                 "prompt_cache_breakpoint"
                             ),
                         )
@@ -1150,7 +1154,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                 _input_file_from_file_value(
                                     cast("ChatCompletionFileObject", item).get("file"),  # cast-ok: type tag checked
                                 ),
-                                cast(dict[str, object], item).get(  # cast-ok: isinstance confirms the content block is a mapping
+                                cast(
+                                    dict[str, object], item
+                                ).get(  # cast-ok: isinstance confirms the content block is a mapping
                                     "prompt_cache_breakpoint"
                                 ),
                             )
