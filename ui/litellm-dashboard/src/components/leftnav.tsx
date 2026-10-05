@@ -25,7 +25,6 @@ import {
   Activity,
   Aperture,
   BarChart3,
-  Calculator,
   Bell,
   Blocks,
   Bot,
@@ -221,17 +220,6 @@ const menuGroups: MenuGroup[] = [
         label: (
           <span className="flex items-center gap-2">
             Model Leaderboard <BetaBadge />
-          </span>
-        ),
-      },
-      {
-        key: "roi-calculator",
-        page: "roi-calculator",
-        icon: <Calculator {...ICON} />,
-        roles: all_admin_roles,
-        label: (
-          <span className="flex items-center gap-2">
-            ROI Calculator <BetaBadge />
           </span>
         ),
       },
