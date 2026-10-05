@@ -39,6 +39,7 @@ const TREATMENT_BY_ASSET: Readonly<Record<string, LogoTreatment>> = {
   "fireworks.svg": "plate",
   "llm_guard.png": "plate",
   "pangea.png": "plate",
+  "quicksilverpro.svg": "plate",
   "repelloai.png": "plate",
   "sambanova.svg": "plate",
   "sentry.svg": "plate",

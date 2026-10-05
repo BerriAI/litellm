@@ -73,6 +73,17 @@ describe("provider_info_helpers", () => {
       expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.SCX_AI]);
     });
 
+    it("should map quicksilverpro slug and QUICKSILVERPRO enum key to the QuickSilver Pro display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("quicksilverpro");
+      expect(fromSlug.displayName).toBe(Providers.QUICKSILVERPRO);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.QUICKSILVERPRO]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("QUICKSILVERPRO");
+      expect(fromEnumKey.displayName).toBe(Providers.QUICKSILVERPRO);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.QUICKSILVERPRO]);
+    });
+
     it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
       const result = getProviderLogoAndName("bedrock_mantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
@@ -227,6 +238,10 @@ describe("provider_info_helpers", () => {
 
     it("should return an scx-ai model placeholder for SCX_AI provider", () => {
       expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/GLM-5.2");
+    });
+
+    it("should return a quicksilverpro model placeholder for QUICKSILVERPRO provider", () => {
+      expect(getPlaceholder(Providers.QUICKSILVERPRO)).toBe("quicksilverpro/claude-sonnet-5-5");
     });
 
     it("should return an edenai model placeholder for EDENAI provider", () => {
