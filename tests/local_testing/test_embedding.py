@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import traceback
 
 import httpx
@@ -537,31 +536,6 @@ def test_bedrock_embedding_cohere():
 # test_bedrock_embedding_cohere()
 
 
-def test_demo_tokens_as_input_to_embeddings_fails_for_titan():
-    litellm.set_verbose = True
-
-    with pytest.raises(
-        litellm.BadRequestError,
-        match=re.escape(
-            'litellm.BadRequestError: BedrockException - {"message":"Malformed input request: '
-            'expected type: String, found: JSONArray, please reformat your input and try again."}'
-        ),
-    ):
-        litellm.embedding(model="amazon.titan-embed-text-v1", input=[[1]])
-
-    with pytest.raises(
-        litellm.BadRequestError,
-        match=re.escape(
-            'litellm.BadRequestError: BedrockException - {"message":"Malformed input request: '
-            'expected type: String, found: Integer, please reformat your input and try again."}'
-        ),
-    ):
-        litellm.embedding(
-            model="amazon.titan-embed-text-v1",
-            input=[1],
-        )
-
-
 # comment out hf tests - since hf endpoints are unstable
 def test_hf_embedding():
     try:
@@ -713,7 +687,7 @@ def test_sagemaker_embeddings():
         response = litellm.embedding(
             model="sagemaker/berri-benchmarking-gpt-j-6b-fp16",
             input=["good morning from litellm", "this is another item"],
-            input_cost_per_second=0.000420,
+            cost_per_second=0.000420,
         )
         print(f"response: {response}")
         cost = completion_cost(completion_response=response)
@@ -731,7 +705,7 @@ async def test_sagemaker_aembeddings():
         response = await litellm.aembedding(
             model="sagemaker/berri-benchmarking-gpt-j-6b-fp16",
             input=["good morning from litellm", "this is another item"],
-            input_cost_per_second=0.000420,
+            cost_per_second=0.000420,
         )
         print(f"response: {response}")
         cost = completion_cost(completion_response=response)

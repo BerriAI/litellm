@@ -11,9 +11,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cva.config";
-import { AUTH_TYPE, type MCPServer } from "@/components/mcp_tools/types";
+import { AUTH_TYPE, MCP_REACHABLE_DESCRIPTION, type MCPServer } from "@/components/mcp_tools/types";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { getMaskedAndFullUrl } from "./utils";
+import { getMaskedAndFullUrl, getMCPNetworkAccess } from "./utils";
+import { STDIO_DISABLED_MESSAGE } from "./StdioAvailability";
 
 interface MCPServerCardProps {
   server: MCPServer;
@@ -29,10 +30,12 @@ interface MCPServerCardProps {
   onByokConnect?: () => void;
   onOpenFillFields?: () => void;
   onDelete?: () => void;
+  stdioEnabled?: boolean;
 }
 
 const HEALTH_TONE: Record<string, { dot: string }> = {
   healthy: { dot: "bg-success" },
+  reachable: { dot: "bg-info" },
   unhealthy: { dot: "bg-destructive" },
   unknown: { dot: "bg-border" },
 };
@@ -51,6 +54,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   onByokConnect,
   onOpenFillFields,
   onDelete,
+  stdioEnabled = true,
 }) => {
   const alias = server.alias || server.server_name || "";
   const name = server.server_name || alias || server.server_id;
@@ -69,7 +73,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
     server.auth_type === AUTH_TYPE.OAUTH2 && !server.oauth2_flow && !server.delegate_auth_to_upstream;
   const status = server.status || "unknown";
   const healthTone = HEALTH_TONE[status] ?? HEALTH_TONE.unknown;
-  const isPublic = server.available_on_public_internet;
+  const networkAccess = getMCPNetworkAccess(server);
   const accessGroups = (server.mcp_access_groups ?? []).filter((g): g is string => typeof g === "string");
 
   const missing = missingUserFields ?? [];
@@ -219,6 +223,19 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
           />
           <Badge variant="outline">{displayTransport.toUpperCase()}</Badge>
           <Badge variant="outline">{authType}</Badge>
+          {transport === "stdio" && !stdioEnabled && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Badge variant="outline">
+                    <CircleAlert />
+                    stdio disabled
+                  </Badge>
+                }
+              />
+              <TooltipContent>{STDIO_DISABLED_MESSAGE}</TooltipContent>
+            </Tooltip>
+          )}
           {oauthFlowUnset && (
             <Tooltip>
               <TooltipTrigger
@@ -235,10 +252,17 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
               </TooltipContent>
             </Tooltip>
           )}
-          <Badge variant="outline">
-            <span className={cn("h-1.5 w-1.5 rounded-full", isPublic ? "bg-success" : "bg-warning")} />
-            {isPublic ? "Public" : "Internal"}
-          </Badge>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Badge variant="outline">
+                  <span className={cn("h-1.5 w-1.5 rounded-full", networkAccess.dotClassName)} />
+                  {networkAccess.label}
+                </Badge>
+              }
+            />
+            <TooltipContent>{networkAccess.description}</TooltipContent>
+          </Tooltip>
           {accessGroups.slice(0, 2).map((g) => (
             <Tooltip key={g}>
               <TooltipTrigger
@@ -332,6 +356,7 @@ const HealthChip: FC<HealthChipProps> = ({
       </Badge>
     );
   }
+  const hasHealthData = Boolean(lastCheck || error || status === "reachable");
   return (
     <Tooltip>
       <TooltipTrigger
@@ -355,6 +380,7 @@ const HealthChip: FC<HealthChipProps> = ({
       />
       <TooltipContent side="top" className="max-w-xs">
         <div className="mb-1 font-semibold">Health: {status}</div>
+        {status === "reachable" && <div className="mb-1 text-xs">{MCP_REACHABLE_DESCRIPTION}</div>}
         {lastCheck && <div className="mb-1 text-xs">Last check: {new Date(lastCheck).toLocaleString()}</div>}
         {error && (
           <div className="text-xs">
@@ -362,7 +388,7 @@ const HealthChip: FC<HealthChipProps> = ({
             <div className="wrap-break-word">{error}</div>
           </div>
         )}
-        {!lastCheck && !error && <div className="text-xs">No health data</div>}
+        {!hasHealthData && <div className="text-xs">No health data</div>}
         {onRecheck && <div className="mt-1 text-xs">Click to recheck</div>}
       </TooltipContent>
     </Tooltip>

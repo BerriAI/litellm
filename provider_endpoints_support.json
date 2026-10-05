@@ -6,6 +6,7 @@
       "url": "Link to provider documentation",
       "endpoints": {
         "chat_completions": "Supports /chat/completions endpoint",
+        "systemone": "Supports native System One typed decisions",
         "messages": "Supports /messages endpoint (Anthropic format)",
         "responses": "Supports /responses endpoint (OpenAI/Anthropic unified)",
         "embeddings": "Supports /embeddings endpoint",
@@ -669,6 +670,24 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "cortecs": {
+      "display_name": "Cortecs (`cortecs`)",
+      "url": "https://docs.litellm.ai/docs/providers/cortecs",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "crusoe": {
@@ -1458,6 +1477,20 @@
         "rerank": false
       }
     },
+    "bespoke": {
+      "display_name": "Bespoke Nimble (`bespoke`)",
+      "url": "https://docs.litellm.ai/docs/auto_router/decision_classifiers",
+      "endpoints": {
+        "systemone": true
+      }
+    },
+    "laya": {
+      "display_name": "Laya (`laya`)",
+      "url": "https://docs.litellm.ai/docs/auto_router/decision_classifiers",
+      "endpoints": {
+        "systemone": true
+      }
+    },
     "lambda_ai": {
       "display_name": "Lambda AI (`lambda_ai`)",
       "url": "https://docs.litellm.ai/docs/providers/lambda_ai",
@@ -2075,6 +2108,23 @@
         "interactions": true
       }
     },
+    "sail": {
+      "display_name": "Sail (`sail`)",
+      "url": "https://docs.litellm.ai/docs/providers/sail",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "meta": {
       "display_name": "Meta Model API (`meta`)",
       "url": "https://docs.litellm.ai/docs/providers/meta",
@@ -2176,6 +2226,23 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "prism": {
+      "display_name": "Prism (`prism`)",
+      "url": "https://docs.litellm.ai/docs/providers/prism",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
       }
     },
     "recraft": {
@@ -2330,7 +2397,7 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false,
+        "rerank": true,
         "a2a": true,
         "interactions": true
       }
@@ -2497,6 +2564,20 @@
       "url": "https://docs.litellm.ai/docs/providers/topaz",
       "endpoints": {
         "image_variations": true
+      }
+    },
+    "typesafe": {
+      "display_name": "TypeSafe (`typesafe`)",
+      "url": "https://docs.typesafe.ai/models",
+      "endpoints": {
+        "systemone": true
+      }
+    },
+    "strands_decider": {
+      "display_name": "Strands Decider (`strands_decider`)",
+      "url": "https://docs.litellm.ai/docs/providers",
+      "endpoints": {
+        "systemone": true
       }
     },
     "tavily": {
@@ -3301,6 +3382,13 @@
       "leftnav_label": "/skills",
       "provider_json_field": "skills",
       "url": "https://docs.litellm.ai/docs/skills"
+    },
+    "systemone": {
+      "docs_label": "systemone",
+      "display_name": "System One Decision API",
+      "leftnav_label": "/laya/v1/systemone",
+      "provider_json_field": "systemone",
+      "url": "https://docs.litellm.ai/docs/auto_router/decision_classifiers"
     },
     "text_completion": {
       "docs_label": "text_completion",

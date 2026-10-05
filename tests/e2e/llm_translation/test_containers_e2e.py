@@ -31,10 +31,11 @@ A proxy whose env carries ``AZURE_API_BASE`` for the same resource masks the
 second regression, since the global-credential fallback then reaches the
 container anyway.
 
-The streaming variant is not here: a streamed ``/v1/responses`` writes the
-container ownership row only after the ``[DONE]`` frame, and the OpenAI SDK
-closes the connection at ``[DONE]``, so the write is cancelled and every
-follow-up container call 403s (LIT-8612). That cell comes with its fix.
+The streaming cell repeats the flow with ``stream=True`` and uploads right
+after the last event. The OpenAI SDK closes the connection at ``[DONE]``, so an
+ownership row written after the stream is cancelled with the body task and every
+follow-up container call 403s (LIT-8612); the row has to land before the
+``response.completed`` frame goes out.
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ import os
 from types import MappingProxyType
 from typing import Final
 
+import openai
 import pytest
 from e2e_config import REQUEST_TIMEOUT, unique_marker
 from e2e_http import unwrap
@@ -52,7 +54,7 @@ from lifecycle import ResourceManager
 from management.management_client import ManagementClient, build_client
 from models import KeyGenerateBody, KeyGenerateResponse, LiteLLMParamsBody, TeamNewBody, UserNewBody
 from openai import OpenAI
-from openai.types.responses import Response, ResponseCodeInterpreterToolCall
+from openai.types.responses import Response, ResponseCodeInterpreterToolCall, ResponseCompletedEvent
 from openai.types.responses.tool_param import CodeInterpreter
 from proxy_client import ProxyClient
 from sdk_clients import NO_PROXY_CACHE, SdkClients
@@ -120,6 +122,24 @@ def _response_with_code_interpreter(client: OpenAI, model: str) -> Response:
     )
 
 
+def _streamed_response_with_code_interpreter(client: OpenAI, model: str) -> Response:
+    events: Final = tuple(
+        client.with_options(timeout=CODE_INTERPRETER_TIMEOUT).responses.create(
+            model=model,
+            input=PROMPT,
+            tools=[CODE_INTERPRETER],
+            tool_choice="required",
+            stream=True,
+            extra_body=NO_PROXY_CACHE,
+        )
+    )
+    assert events, "responses stream returned no events"
+    assert isinstance(events[-1], ResponseCompletedEvent), (
+        f"responses stream did not terminate with response.completed: {events[-1].type}"
+    )
+    return events[-1].response
+
+
 def _container_id(response: Response) -> str:
     calls: Final = tuple(item for item in response.output if isinstance(item, ResponseCodeInterpreterToolCall))
     assert calls, f"no code_interpreter_call in the responses output: {response.output!r}"
@@ -165,3 +185,39 @@ class TestAzureContainerFiles:
             f"container id is not the provider's own id: {native_id}"
         )
         _assert_file_round_trip(client, native_id, marker)
+
+    @pytest.mark.covers("llm.responses.azure_openai.code_interpreter.stream.works")
+    def test_service_account_key_reads_container_file_created_by_a_streamed_response(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        marker: Final = unique_marker()
+        model: Final = _register_two_azure_deployments(proxy, resources, marker)
+        key: Final = _service_account_key(proxy, resources, build_client(proxy), marker, model)
+        client: Final = sdk.openai(key)
+        native_id: Final = _native_container_id(
+            _container_id(_streamed_response_with_code_interpreter(client, model))
+        )
+        resources.defer(lambda: client.containers.delete(native_id, extra_query=AZURE_PROVIDER_QUERY))
+        _assert_file_round_trip(client, native_id, marker)
+
+
+class TestOpenAIContainerFiles:
+    def test_container_file_lifecycle_through_the_gateway(self, resources: ResourceManager, sdk: SdkClients) -> None:
+        client: Final = sdk.openai(resources.key())
+        marker: Final = unique_marker()
+
+        container: Final = client.containers.create(
+            name=f"e2e-container-{marker}", expires_after={"anchor": "last_active_at", "minutes": 5}
+        )
+        resources.defer(lambda: client.containers.delete(container.id))
+        assert not client.containers.files.list(container.id).data, "a new container must start with no files"
+
+        payload: Final = f"e2e container payload {marker}".encode()
+        uploaded: Final = client.containers.files.create(container.id, file=(f"{marker}.txt", payload))
+        listed: Final = tuple(entry.id for entry in client.containers.files.list(container.id).data)
+        assert uploaded.id in listed, f"uploaded file {uploaded.id} missing from the container listing {listed}"
+        assert client.containers.files.content.retrieve(uploaded.id, container_id=container.id).read() == payload
+
+        client.containers.files.delete(uploaded.id, container_id=container.id)
+        with pytest.raises(openai.NotFoundError):
+            client.containers.files.retrieve(uploaded.id, container_id=container.id)

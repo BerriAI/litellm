@@ -597,7 +597,6 @@ async def get_agent_card(
         if agent is None:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
 
-        # Check agent permission (skip for admin users)
         is_allowed: Final = await AgentRequestHandler.is_agent_allowed(
             agent_id=agent.agent_id,
             user_api_key_auth=user_api_key_dict,
@@ -723,6 +722,8 @@ async def invoke_agent_a2a(
                 detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
             )
 
+        user_api_key_dict.invoked_agent_id = agent.agent_id
+
         _enforce_inbound_trace_id(agent, request)
 
         # Get backend URL and agent name
@@ -760,6 +761,8 @@ async def invoke_agent_a2a(
         if "metadata" not in body:
             body["metadata"] = {}
         body["metadata"]["agent_id"] = agent.agent_id
+        body["metadata"]["model_group"] = f"a2a_agent/{agent_name}"
+        body["metadata"]["model_info"] = {"id": agent.agent_id}
         body["agent_id"] = agent.agent_id
 
         body.update(
@@ -863,6 +866,7 @@ async def invoke_agent_a2a(
             # results written by the unified_guardrail hook are captured.
             logging_obj._defer_async_logging = True
             response = await asend_message(
+                model=f"a2a_agent/{agent_name}",
                 request=a2a_request,
                 api_base=agent_url,
                 litellm_params=litellm_params,

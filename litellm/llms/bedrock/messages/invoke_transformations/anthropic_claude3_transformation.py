@@ -18,7 +18,7 @@ from litellm.llms.anthropic.chat.transformation import (
     AnthropicConfig,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -49,6 +49,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
+    AnthropicThinkingParam,
 )
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
@@ -348,8 +349,18 @@ class AmazonAnthropicClaudeMessagesConfig(
         if not isinstance(output_config, dict):
             output_config = {}
         output_config.setdefault("effort", self._effort_from_thinking_budget(budget_tokens))
+        thinking: Final = anthropic_messages_request.get("thinking")
+        display: Final = thinking.get("display") if isinstance(thinking, dict) else None
         anthropic_messages_request["output_config"] = output_config
-        anthropic_messages_request["thinking"] = {"type": "adaptive"}
+        if display is None:
+            adaptive_thinking: Final[AnthropicThinkingParam] = {"type": "adaptive"}
+            anthropic_messages_request["thinking"] = adaptive_thinking
+        else:
+            adaptive_thinking_with_display: Final[AnthropicThinkingParam] = {
+                "type": "adaptive",
+                "display": display,
+            }
+            anthropic_messages_request["thinking"] = adaptive_thinking_with_display
         verbose_logger.debug(
             "Bedrock clear_thinking_20251015: injected adaptive thinking with effort=%s for model=%s",
             output_config.get("effort"),
@@ -515,7 +526,13 @@ class AmazonAnthropicClaudeMessagesConfig(
         tool_search_used: Final = anthropic_model_info.is_tool_search_used(tools)
         programmatic_tool_calling_used: Final = anthropic_model_info.is_programmatic_tool_calling_used(tools)
         input_examples_used: Final = anthropic_model_info.is_input_examples_used(tools)
-
+        outgoing_messages_typed: Final = cast(
+            list[AllMessageValues],
+            anthropic_messages_request["messages"],
+        )
+        is_mid_conversation_output_config_used: Final = anthropic_model_info.is_mid_conversation_output_config_used(
+            outgoing_messages_typed
+        )
         user_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
         beta_set: Final = set(user_beta_set)
         auto_betas: Final = anthropic_model_info.get_anthropic_beta_list(
@@ -528,6 +545,13 @@ class AmazonAnthropicClaudeMessagesConfig(
                 anthropic_messages_optional_request_params.get("mcp_servers")
             ),
             custom_llm_provider="bedrock",
+            is_mid_conversation_output_config_used=is_mid_conversation_output_config_used,
+            is_thinking_display_updates_used=anthropic_model_info.is_thinking_display_updates_used(
+                anthropic_messages_request.get("thinking")
+            ),
+            is_mid_conversation_tool_change_used=anthropic_model_info.is_mid_conversation_tool_change_used(
+                outgoing_messages_typed
+            ),
         )
         beta_set.update(auto_betas)
 
@@ -657,6 +681,8 @@ class AmazonAnthropicClaudeMessagesConfig(
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
+        requested_thinking: Final = anthropic_messages_optional_request_params.get("thinking")
+        requested_display_updates: Final = AnthropicModelInfo().is_thinking_display_updates_used(requested_thinking)
         self._clamp_adaptive_reasoning_effort_for_bedrock(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -669,6 +695,14 @@ class AmazonAnthropicClaudeMessagesConfig(
             litellm_params=litellm_params,
             headers=headers,
         )
+        translated_thinking: Final = anthropic_messages_request.get("thinking")
+        if (
+            requested_display_updates
+            and isinstance(translated_thinking, dict)
+            and translated_thinking.get("type") == "adaptive"
+        ):
+            thinking_with_display: Final[AnthropicThinkingParam] = {"type": "adaptive", "display": "updates"}
+            anthropic_messages_request["thinking"] = thinking_with_display
         self._normalize_system_role_messages(anthropic_messages_request, model=model)
         #########################################################
         ############## BEDROCK Invoke SPECIFIC TRANSFORMATION ###
@@ -770,7 +804,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         aws_decoder: Final = AmazonAnthropicClaudeMessagesStreamDecoder(
             model=model,
         )
-        completion_stream: Final = aws_decoder.aiter_bytes(httpx_response.aiter_bytes())
+        completion_stream: Final = aws_decoder.aiter_bytes(
+            httpx_response.aiter_bytes(), response_headers=httpx_response.headers
+        )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
         return self.bedrock_sse_wrapper(
             completion_stream=completion_stream,
@@ -796,7 +832,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         merge them from ``message_start`` so logging/cost sees a consistent usage
         object (fixes negative input costs: LIT-2411).
         """
-        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             BaseAnthropicMessagesStreamingIterator,
         )
 

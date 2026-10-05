@@ -3,6 +3,7 @@
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
@@ -20,7 +21,7 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 OPENAI_ADMIN_KEY_ENV_VAR: Final = "OPENAI_ADMIN_KEY"
 
 BillingHttpGet: TypeAlias = Callable[
-    [str, Mapping[str, object], Mapping[str, str]],  # mutable-ok: Callable parameter list is type syntax
+    [str, Mapping[str, object], Mapping[str, str]],
     Awaitable[httpx.Response],
 ]
 
@@ -62,8 +63,8 @@ async def provider_billing_get(url: str, params: Mapping[str, object], headers: 
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.ProviderBilling)
     return await client.get(
         url,
-        params=dict(params),  # mutable-ok: AsyncHTTPHandler.get takes dict params
-        headers=dict(headers),  # mutable-ok: AsyncHTTPHandler.get takes dict headers
+        params=dict(params),
+        headers=dict(headers),
         timeout=PROVIDER_BILLING_TIMEOUT_SECONDS,
     )
 
@@ -126,7 +127,8 @@ async def fetch_openai_daily_costs(
     return MappingProxyType(
         {
             day: sum(
-                result.amount.value for bucket in buckets if _bucket_day(bucket) == day for result in bucket.results
+                result.amount.value
+                for result in chain.from_iterable(bucket.results for bucket in buckets if _bucket_day(bucket) == day)
             )
             for day in days
         }
