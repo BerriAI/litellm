@@ -5949,6 +5949,67 @@ def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools(
     assert result.choices[0].finish_reason == "stop"
 
 
+def test_transform_response_json_mode_truncated_tool_call_keeps_length_finish_reason():
+    """
+    When json_mode filters out the synthetic json_tool_call but Bedrock
+    stopped on max_tokens, finish_reason must stay "length", not be
+    downgraded to "stop" — otherwise truncated structured output looks
+    completed.
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_001",
+                            "name": "json_tool_call",
+                            "input": {"a": "cut"},
+                        }
+                    }
+                ],
+            }
+        },
+        "stopReason": "max_tokens",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 60,
+            "totalTokens": 70,
+        },
+    }
+
+    class MockResponse:
+        def json(self) -> dict[str, object]:
+            return response_json
+
+        @property
+        def text(self) -> str:
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params={"json_mode": True},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    assert result.choices[0].finish_reason == "length"
+
+
 def test_transform_response_citations_content_maps_to_annotations():
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
     from litellm.types.utils import ModelResponse

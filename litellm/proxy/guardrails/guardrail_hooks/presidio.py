@@ -1550,7 +1550,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     def _unmask_responses_api_completed_chunk(self, chunk: object, pii_tokens: dict[str, str]) -> None:
         """
-        Unmask PII tokens in-place for a ``response.completed`` Responses API event.
+        Unmask PII tokens in-place for a ``response.completed`` / ``response.incomplete`` Responses API event.
 
         The chunk carries a ``response`` attribute (ResponsesAPIResponse) whose
         ``output`` list holds message items.  Each item has a ``content`` list of
@@ -1610,7 +1610,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             yield buffered_chunk
                         remaining_chunks = []
                     chunk_type = getattr(chunk, "type", None)
-                    if chunk_type == "response.completed" and pii_tokens:
+                    if chunk_type in ("response.completed", "response.incomplete") and pii_tokens:
                         self._unmask_responses_api_completed_chunk(chunk, pii_tokens)
                     saw_non_chat_chunk = True
                     yield chunk
