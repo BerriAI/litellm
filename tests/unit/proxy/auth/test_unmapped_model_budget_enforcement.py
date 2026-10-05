@@ -372,11 +372,12 @@ class TestUnmappedModelBudgetEnforcement:
         assert _is_model_cost_zero(model="hidden-alias", llm_router=router) is False
 
     @pytest.mark.parametrize("alias_name_first", [True, False])
-    def test_alias_shadowing_a_real_group_gives_each_name_its_own_verdict(self, alias_name_first: bool):
-        """An alias whose name is also a real PTU-priced group never shares a verdict with its target.
+    def test_alias_shadowing_a_real_group_answers_for_its_target_in_either_order(self, alias_name_first: bool):
+        """An alias whose name is also a real PTU-priced group is judged by the free target it routes to.
 
-        The verdict is cached per requested name, so whichever name is asked first, the free target
-        stays free and the shadowed PTU name stays enforced.
+        The router resolves the alias before it looks at deployments, so the PTU deployment sharing
+        the alias's name is never served under it. The verdict is cached per requested name, so
+        whichever name is asked first, both names read as free.
         """
         router = Router(
             model_list=[
@@ -405,7 +406,7 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"ptu-model": "free-model"},
         )
         order = ("ptu-model", "free-model") if alias_name_first else ("free-model", "ptu-model")
-        expected = {"ptu-model": False, "free-model": True}
+        expected = {"ptu-model": True, "free-model": True}
 
         assert [_is_model_cost_zero(model=name, llm_router=router) for name in order] == [
             expected[name] for name in order
@@ -413,6 +414,117 @@ class TestUnmappedModelBudgetEnforcement:
         assert [_is_model_cost_zero(model=name, llm_router=router) for name in order] == [
             expected[name] for name in order
         ], "the cached verdicts must match the first evaluation"
+
+    def test_hidden_alias_shadowing_an_explicitly_free_group_answers_for_its_unpriced_target(self):
+        """A hidden alias keyed like an explicitly free real group is judged by its target alone.
+
+        The router serves the alias name from its target, a group whose cost-map price is zero with
+        no explicit price on the deployment, so the budget stays enforced exactly as it is for the
+        target by name. The shadowed explicitly free deployment is never served under that name and
+        must not lend it the bypass.
+        """
+        litellm.model_cost["ollama/slp-unpriced-target"] = {
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "litellm_provider": "ollama",
+            "mode": "chat",
+        }
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "free-model-id"},
+                },
+                {
+                    "model_name": "unpriced-target",
+                    "litellm_params": {
+                        "model": "ollama/slp-unpriced-target",
+                        "api_base": "http://localhost:11434",
+                    },
+                    "model_info": {"id": "unpriced-target-id"},
+                },
+            ],
+            model_group_alias={"free-model": {"model": "unpriced-target", "hidden": True}},
+        )
+
+        assert _is_model_cost_zero(model="unpriced-target", llm_router=router) is False
+        assert _is_model_cost_zero(model="free-model", llm_router=router) is False, (
+            "the alias routes to the unpriced target, so it must be refused like the target by name"
+        )
+
+    def test_hidden_alias_shadowing_a_ptu_group_answers_for_its_free_target(self):
+        """A hidden alias keyed like a PTU-priced real group reads as free when its target is free.
+
+        The PTU deployment sharing the alias's name is never served under it, so its flat cost must
+        not keep the alias enforced while the router serves every call from the free target.
+        """
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "ptu-model",
+                    "litellm_params": {
+                        "model": "azure/ptu-deployment",
+                        "api_base": "https://fake.openai.azure.com",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "ptu-model-id", "ptu_count": 100, "cost_per_ptu_per_hour": 2.0},
+                },
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "ollama/llama2",
+                        "api_base": "http://localhost:11434",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "free-model-id"},
+                },
+            ],
+            model_group_alias={"ptu-model": {"model": "free-model", "hidden": True}},
+        )
+
+        assert _is_model_cost_zero(model="free-model", llm_router=router) is True
+        assert _is_model_cost_zero(model="ptu-model", llm_router=router) is True, (
+            "the alias routes to the free target, so it must bypass budget like the target by name"
+        )
+
+    def test_hidden_alias_shadowing_an_explicitly_free_group_to_a_priced_target_enforces_budget(self):
+        """A hidden alias keyed like an explicitly free real group stays enforced when its target is priced."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                    "model_info": {"id": "free-model-id"},
+                },
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {
+                        "model": "gpt-3.5-turbo",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0000002,
+                        "output_cost_per_token": 0.0000012,
+                    },
+                    "model_info": {"id": "paid-model-id"},
+                },
+            ],
+            model_group_alias={"free-model": {"model": "paid-model", "hidden": True}},
+        )
+
+        assert _is_model_cost_zero(model="free-model", llm_router=router) is False
 
     def test_alias_chain_through_a_priced_group_enforces_budget(self):
         """An alias to a group that is itself an alias key resolves one hop, like the router does.

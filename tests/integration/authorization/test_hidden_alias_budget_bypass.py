@@ -9,7 +9,7 @@ import httpx
 import pytest
 import yaml
 from integration._support.anthropic_thinking import JSON_OBJECT
-from integration._support.client import Gateway, object_value
+from integration._support.client import Gateway, Scenario, eventually, object_value
 from integration._support.process import owned_proxy
 from integration.authorization._hidden_alias_budget import (
     BUDGET,
@@ -29,6 +29,8 @@ from integration.authorization._hidden_alias_budget import (
     error_type,
     exhausted_key,
     fresh_chat,
+    fresh_message,
+    fresh_response,
     hidden,
     install_aliases,
     landed,
@@ -45,6 +47,8 @@ from integration.authorization._hidden_alias_budget import (
 from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(240)
+
+UNPRICED_FREE_PROVIDER_MODEL: Final = "lemonade/Gemma-3-4b-it-GGUF"
 
 
 @pytest.fixture(scope="module")
@@ -503,6 +507,131 @@ def test_hidden_alias_to_a_group_priced_by_the_cost_map_stays_budgeted(rig: Alia
         key: Final = exhausted_key(rig, scenario)
         response: Final = fresh_chat(rig.gateway, rig.hidden_unpriced, key, marker)
         assert response.status_code == BUDGET_EXCEEDED, response.text
+        assert upstream_hits(upstream_requests(rig.gateway.upstream_url), marker) == 0
+
+
+def _reported_per_token_price(rig: AliasRig, group: str) -> tuple[float, float]:
+    entries: Final = rig.gateway.get("/model/info")["data"]
+    assert isinstance(entries, list), entries
+    infos: Final = tuple(
+        object_value(object_value(entry)["model_info"])
+        for entry in entries
+        if object_value(entry)["model_name"] == group
+    )
+    assert len(infos) == 1, infos
+    return float(str(infos[0]["input_cost_per_token"])), float(str(infos[0]["output_cost_per_token"]))
+
+
+def _serving_deployment(candidate: Gateway, model: str) -> str | None:
+    response: Final = fresh_chat(candidate, model, candidate.key, "route-" + uuid.uuid4().hex)
+    return response.headers.get("x-litellm-model-id") if response.status_code == 200 else None
+
+
+def _routes_alike(candidate: Gateway, name: str, target: str) -> bool:
+    served: Final = _serving_deployment(candidate, name)
+    return served is not None and served == _serving_deployment(candidate, target)
+
+
+def _await_alias(candidate: Gateway, name: str, target: str) -> None:
+    """Wait until ``candidate`` serves ``name`` from ``target``'s deployment.
+
+    ``/router/settings`` answers from the stored config before a replica's next reload applies it, and a
+    shadowing alias's name answers 200 either way, so the serving deployment is the only signal on the wire.
+    """
+    eventually(lambda: _routes_alike(candidate, name, target), bool, seconds=90)
+
+
+def _shadowing_alias(
+    rig: AliasRig, scenario: Scenario, target: str, candidates: tuple[Gateway, ...], **shadow: JsonValue
+) -> str:
+    """A hidden alias whose name is also a real group, live on every candidate so the name routes to ``target``."""
+    name: Final = scenario.model(**shadow)
+    install_aliases(rig.gateway, {name: hidden(target)})
+    scenario.cleanups.callback(remove_aliases, rig.gateway, frozenset({name}))
+    for candidate in candidates:
+        _await_alias(candidate, name, target)
+    return name
+
+
+def _refusal(response: httpx.Response) -> tuple[int, str]:
+    return response.status_code, error_type(response)
+
+
+def _assert_refused_like_target(rig: AliasRig, candidate: Gateway, key: str, shadow: str, target: str) -> None:
+    for route, send in (("chat", fresh_chat), ("responses", fresh_response), ("messages", fresh_message)):
+        shadow_marker: Final = f"shadow-{route}-" + uuid.uuid4().hex
+        target_marker: Final = f"target-{route}-" + uuid.uuid4().hex
+        via_shadow: Final = send(candidate, shadow, key, shadow_marker)
+        by_name: Final = send(candidate, target, key, target_marker)
+        assert _refusal(by_name) == (BUDGET_EXCEEDED, "budget_exceeded"), by_name.text
+        assert via_shadow.status_code == by_name.status_code, via_shadow.text
+        assert error_type(via_shadow) == error_type(by_name), via_shadow.text
+        observed: Final = upstream_requests(rig.gateway.upstream_url)
+        assert upstream_hits(observed, shadow_marker) == 0
+        assert upstream_hits(observed, target_marker) == 0
+
+
+def test_hidden_alias_shadowing_an_explicitly_free_group_is_refused_like_its_unpriced_target(rig: AliasRig) -> None:
+    with rig.gateway.scenario() as scenario:
+        target: Final = scenario.model(model=UNPRICED_FREE_PROVIDER_MODEL)
+        assert _reported_per_token_price(rig, target) == (0.0, 0.0), (
+            f"{UNPRICED_FREE_PROVIDER_MODEL} must price at $0 in the cost map with no explicit price on the "
+            "deployment, or the shadowed alias is refused by the price gate and never reaches the one under test"
+        )
+        shadow: Final = _shadowing_alias(
+            rig, scenario, target, (rig.gateway, rig.peer), input_cost_per_token=0, output_cost_per_token=0
+        )
+        key: Final = exhausted_key(rig, scenario)
+        settle_chat(rig, target, key, BUDGET_EXCEEDED)
+        _assert_refused_like_target(rig, rig.gateway, key, shadow, target)
+        _assert_refused_like_target(rig, rig.peer, key, shadow, target)
+
+
+def _ptu_shadow_config(rig: AliasRig, directory: Path, name: str) -> Path:
+    base: Final = _base_config()["model_list"]
+    assert isinstance(base, list), base
+    deployment: Final[JsonValue] = {
+        "model_name": name,
+        "litellm_params": {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "integration-provider-key",
+            "api_base": f"{rig.gateway.upstream_url}/v1",
+            "input_cost_per_token": 0,
+            "output_cost_per_token": 0,
+        },
+        "model_info": {"ptu_count": 100, "cost_per_ptu_per_hour": 2.0},
+    }
+    return _own_config(directory, "ptu-shadow.yaml", "model_list", [*base, deployment])
+
+
+@pytest.mark.timeout(480)
+def test_hidden_alias_shadowing_a_ptu_group_is_served_through_its_free_target(rig: AliasRig, tmp_path: Path) -> None:
+    shadow: Final = "ptu-shadow-" + uuid.uuid4().hex
+    marker: Final = "ptu-shadow-served-" + uuid.uuid4().hex
+    config: Final = _ptu_shadow_config(rig, tmp_path, shadow)
+    with rig.gateway.scenario() as scenario:
+        install_aliases(rig.gateway, {shadow: hidden(rig.free)})
+        scenario.cleanups.callback(remove_aliases, rig.gateway, frozenset({shadow}))
+        key: Final = exhausted_key(rig, scenario)
+        with owned_proxy(rig.gateway, tmp_path, {}, config=config) as candidate:
+            _await_alias(candidate, shadow, rig.free)
+            settle_candidate(candidate, rig.paid, key, BUDGET_EXCEEDED, seconds=120)
+            served: Final = fresh_chat(candidate, shadow, key, marker)
+            assert served.status_code == 200, served.text
+            assert served.json()["choices"][0]["message"]["content"] == CHAT_REPLY, served.text
+            assert upstream_hits(upstream_requests(rig.gateway.upstream_url), marker) == 1
+            assert_free_row(landed_once(key, marker), shadow)
+
+
+def test_hidden_alias_shadowing_an_explicitly_free_group_to_a_paid_target_stays_budgeted(rig: AliasRig) -> None:
+    marker: Final = "paid-shadow-" + uuid.uuid4().hex
+    with rig.gateway.scenario() as scenario:
+        shadow: Final = _shadowing_alias(
+            rig, scenario, rig.paid, (rig.gateway, rig.peer), input_cost_per_token=0, output_cost_per_token=0
+        )
+        key: Final = exhausted_key(rig, scenario)
+        refused: Final = fresh_chat(rig.gateway, shadow, key, marker)
+        assert _refusal(refused) == (BUDGET_EXCEEDED, "budget_exceeded"), refused.text
         assert upstream_hits(upstream_requests(rig.gateway.upstream_url), marker) == 0
 
 

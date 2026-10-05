@@ -524,7 +524,8 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
             # not from defaulted sparse auto-registration entries.
             # See: https://github.com/BerriAI/litellm/issues/24770
             safe_name = str(model_name).replace("\n", "").replace("\r", "")
-            if not _is_cost_explicitly_configured(model_name, llm_router):
+            routed_group = llm_router.routable_model_group(model_name)
+            if not _is_cost_explicitly_configured(routed_group, llm_router):
                 verbose_proxy_logger.debug(
                     "Model %s has zero cost but no explicit cost "
                     "configuration in model_cost entry — treating as unknown "
@@ -535,7 +536,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                     zero_cost_cache[model_name] = False
                 return False
 
-            if _has_ptu_flat_cost(model_name, llm_router):
+            if _has_ptu_flat_cost(routed_group, llm_router):
                 verbose_proxy_logger.debug(
                     "Model %s prices reserved PTU capacity as a flat cost, so its zero per-token "
                     "rate is not a free model (enforce budget)",
@@ -573,9 +574,9 @@ def _has_ptu_flat_cost(model: str, llm_router: "Router") -> bool:
     Such a deployment carries an explicit zero per-token price so the flat cost is not charged
     twice, which otherwise reads here as a free model and waives every budget check for it.
 
-    Resolved through ``Router.get_model_list()``, which includes ``model_group_alias``, because
-    this runs after the explicit-cost gate: resolving that gate alone would let an aliased PTU
-    group through as free.
+    ``model`` is the group the request routes to (an alias already resolved to its target by the
+    caller), read through ``Router.get_model_list()`` like the explicit-cost gate, so a deployment
+    that merely shares the alias's name never decides this.
     """
     for deployment in llm_router.get_model_list(model_name=model) or ():
         model_info = deployment.get("model_info") or _NO_MODEL_INFO
@@ -594,11 +595,13 @@ def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
     fields. _get_model_info_helper() then defaults missing costs to 0.
     This function detects that scenario by checking the raw model_cost entry.
 
-    The group is resolved through ``Router.get_model_list()``, the same resolution
-    ``get_model_group_info()`` applies when the caller reads the cost a few lines earlier, so the
-    two lookups cannot disagree, including for names defined in ``Router.model_group_alias``.
-    It also reaches a deployment that prices itself through its ``model_info`` block, whose entry
-    lands in the cost map under the deployment id.
+    ``model`` is the group the request routes to: the caller resolves a ``model_group_alias``
+    name to its target first, because ``Router.get_model_list()`` would otherwise union the
+    target's deployments with any real deployment that shares the alias's name, which the router
+    never serves under that name. Reading the routed group keeps this lookup on the same
+    deployments ``get_model_group_info()`` priced a few lines earlier. It also reaches a
+    deployment that prices itself through its ``model_info`` block, whose entry lands in the cost
+    map under the deployment id.
     """
     for deployment in llm_router.get_model_list(model_name=model) or ():
         model_id = (deployment.get("model_info") or _EMPTY_COST_ENTRY).get("id")
