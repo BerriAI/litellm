@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   UNKNOWN_AGENT,
+  inboxRows,
+  inboxFinding,
+  filterInbox,
   findFinding,
   findingAgents,
   findingKey,
@@ -148,4 +151,46 @@ describe("scheduleLabel", () => {
     expect(scheduleLabel(lens("a", "x", [], { settings: { enabled: false } }), now)).toBe("paused");
     expect(scheduleLabel(lens("a", "x", []), Date.parse("2026-10-03T12:30:00Z"))).toBe("every 15m · due now");
   });
+});
+
+it("groups matching findings by agent, combines distinct runs and evidence, and takes the highest priority", () => {
+  const quote = { execution_id: "run-1", span_id: "step", quote: "Failed", role: "support" as const };
+  const firstInput: Partial<Finding> = {
+    title: "Tool errors swallowed",
+    occurrences: ["run-1"],
+    evidence: [quote],
+    priority: "low",
+  };
+  const first = finding(firstInput);
+  const secondInput: Partial<Finding> = {
+    title: " tool ERRORS swallowed ",
+    occurrences: ["run-1", "run-2"],
+    evidence: [quote],
+    priority: "high",
+    last_seen: "2026-10-02T00:00:00Z",
+  };
+  const second = finding(secondInput);
+  const rows = inboxRows([
+    lens("a", "support", [first]),
+    lens("b", "support", [second]),
+    lens("c", "billing", [first]),
+  ]);
+  expect(rows).toHaveLength(2);
+  expect(rows[0]).toMatchObject({ priority: "high", runs: 2, lastSeen: second.last_seen });
+  expect(rows[0].sources.map(({ lens }) => lens.id)).toEqual(["a", "b"]);
+  expect(inboxFinding(rows[0])).toMatchObject({ occurrences: ["run-1", "run-2"], evidence: [quote], priority: "high" });
+  expect(filterInbox(rows, { agent: "support", priority: "high" })).toEqual([rows[0]]);
+  expect(filterInbox(rows, { agent: "billing", priority: "high" })).toEqual([]);
+});
+
+it("keeps only open issues in the cross-investigation inbox", () => {
+  expect(
+    inboxRows([
+      lens("a", "support", [
+        finding({ kind: "pattern" }),
+        finding({ status: "resolved" }),
+        finding({ status: "dismissed" }),
+      ]),
+    ]),
+  ).toEqual([]);
 });

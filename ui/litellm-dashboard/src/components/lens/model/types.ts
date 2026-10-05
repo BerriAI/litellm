@@ -46,3 +46,8 @@ export interface AnalysisModelInfo {
   mode?: string | null;
   supported_openai_params?: string[] | null;
 }
+export type Review = components["schemas"]["Review"];
+
+export type InFlight = components["schemas"]["InFlight"];
+
+export type ReviewVerdict = components["schemas"]["ReviewVerdict"];

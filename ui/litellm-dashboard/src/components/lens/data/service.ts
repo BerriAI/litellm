@@ -7,6 +7,7 @@ import type {
   ActivitySelection,
   AnalysisModelInfo,
   Job,
+  Review,
   Lens,
   LensList,
   RunWindow,
@@ -35,6 +36,11 @@ export type Key = z.infer<typeof keySchema>;
 export type KeyPage = z.infer<typeof keyPageSchema>;
 export type KeyInfo = z.infer<typeof keyInfoSchema>["info"];
 
+export interface ReviewPage {
+  readonly reviews: readonly Review[];
+  readonly reviewed: number;
+}
+
 export interface AnalysisKeyRequest {
   readonly model: string;
   readonly budget: number;
@@ -47,6 +53,7 @@ export interface LensApi {
   activity(): Promise<components["schemas"]["ActivityAvailability"]>;
   runs(lensId: string, offset: number): Promise<Job[]>;
   run(lensId: string, jobId: string): Promise<Job>;
+  reviews(lensId: string, jobId: string, after: number): Promise<ReviewPage>;
   execution(lensId: string, executionId: string, offset: number): Promise<ExecutionContent>;
   sample(selection: ActivitySelection, offset: number, asOf: string): Promise<Sample>;
   agents(): Promise<string[]>;
@@ -95,6 +102,13 @@ export function liveLensApi(client: LensClient, apiClient: ApiClient, accessToke
         client.GET("/lens/{lens_id}/runs/{job_id}", {
           headers,
           params: { path: { lens_id: lensId, job_id: jobId } },
+        }),
+      ),
+    reviews: (lensId, jobId, after) =>
+      required(
+        client.GET("/lens/{lens_id}/runs/{job_id}/reviews", {
+          headers,
+          params: { path: { lens_id: lensId, job_id: jobId }, query: { after } },
         }),
       ),
     execution: (lensId, executionId, offset) =>

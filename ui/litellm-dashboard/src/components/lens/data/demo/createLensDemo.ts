@@ -18,6 +18,10 @@ function demoLensApi(data: LensDemoData): LensApi {
     activity: async () => ({ traces: true, requests: false }),
     runs: (lensId, offset) => found(jobs(lensId)?.slice(offset)),
     run: (lensId, jobId) => found(jobs(lensId)?.find((job) => job.id === jobId)),
+    reviews: (lensId, jobId, after) => {
+      const job = jobs(lensId)?.find((candidate) => candidate.id === jobId);
+      return found(job && { reviews: job.reviews.slice(after), reviewed: job.reviewed });
+    },
     execution: notInDemo,
     sample: notInDemo,
     agents: notInDemo,

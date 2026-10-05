@@ -5,7 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RunsTab } from "./RunsTab";
 import { InvestigationProgress } from "../InvestigationProgress";
-import { StepFeed } from "../StepFeed";
+import { LiveRunLoader } from "../live/LiveRunLoader";
+import type { QueueContext } from "../useQueueReason";
+import { liveJob } from "../../model/live";
 import { InvestigationSummary } from "./InvestigationSummary";
 import { InvestigationFailure } from "./InvestigationFailure";
 import { scopeLabel, sourceLabels } from "../../model/format";
@@ -28,6 +30,7 @@ export type InvestigationDetailProps = InvestigationIntents & {
   readonly ready: boolean;
   readonly busy: boolean;
   readonly connected: boolean;
+  readonly queue: QueueContext;
   readonly onReviewFinding: (owned: OwnedFinding, status: Finding["status"], reason: string) => void;
 };
 
@@ -37,6 +40,7 @@ export function InvestigationDetail({
   ready,
   busy,
   connected,
+  queue,
   onCancelRun,
   onReviewFinding,
   ...intents
@@ -45,6 +49,7 @@ export function InvestigationDetail({
   const snapshot = useRunSnapshot(lens);
   const { job, batchId, batchSettings, batchFindings, missingSnapshot } = snapshot;
   const active = activeJob(lens.jobs);
+  const live = liveJob(lens.jobs);
   return (
     <div>
       <section className="min-w-0 space-y-5">
@@ -58,8 +63,15 @@ export function InvestigationDetail({
           {!readOnly && <InvestigationActions lens={lens} ready={ready} busy={busy} {...intents} />}
         </div>
         <InvestigationSummary lens={lens} connected={connected} />
-        {active && <InvestigationProgress key={active.id} job={active} onCancel={readOnly ? undefined : onCancelRun} />}
-        {active && <StepFeed job={active} />}
+        {active && (
+          <InvestigationProgress
+            key={active.id}
+            job={active}
+            queue={queue}
+            onCancel={readOnly ? undefined : onCancelRun}
+          />
+        )}
+        {live && <LiveRunLoader key={live.id} lensId={lens.id} job={live} name={lens.settings.name} queue={queue} />}
         {job?.error && <InvestigationFailure job={job} connected={connected} />}
         <Tabs value={section} onValueChange={setSection} key={lens.id}>
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b">

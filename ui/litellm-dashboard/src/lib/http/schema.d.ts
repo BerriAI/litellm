@@ -9283,6 +9283,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/{lens_id}/runs/{job_id}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Reviews */
+        get: operations["read_reviews_lens__lens_id__runs__job_id__reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/liteadmin/slack/connect/{token}": {
         parameters: {
             query?: never;
@@ -33006,6 +33023,20 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** InFlight */
+        InFlight: {
+            /** Agent */
+            agent: string;
+            /** Execution Id */
+            execution_id: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Trace Id */
+            trace_id: string;
+        };
         /**
          * IncompleteDetails
          * @description Details about why the response is incomplete.
@@ -33314,6 +33345,21 @@ export interface components {
             id: string;
             /** Lease Until */
             lease_until?: string | null;
+            /**
+             * Reading
+             * @default []
+             */
+            reading: components["schemas"]["InFlight"][];
+            /**
+             * Reviewed
+             * @default 0
+             */
+            reviewed: number;
+            /**
+             * Reviews
+             * @default []
+             */
+            reviews: components["schemas"]["Review"][];
             /** Revision */
             revision: number;
             sample?: components["schemas"]["Sample"] | null;
@@ -40908,6 +40954,9 @@ export interface components {
              *     }
              */
             coverage: components["schemas"]["Coverage"];
+            /** Reading */
+            reading?: components["schemas"]["InFlight"][] | null;
+            review?: components["schemas"]["Review"] | null;
             /** Stage */
             stage: string;
         };
@@ -43670,6 +43719,81 @@ export interface components {
             ServiceUnavailableErrorRetries?: number | null;
             /** Timeouterrorretries */
             TimeoutErrorRetries?: number | null;
+        };
+        /** Review */
+        Review: {
+            /** Agent */
+            agent: string;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Cannot Assess
+             * @default false
+             */
+            cannot_assess: boolean;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Execution Id */
+            execution_id: string;
+            /** Model */
+            model: string;
+            /** Name */
+            name: string;
+            /**
+             * Reasoning
+             * @default
+             */
+            reasoning: string;
+            /**
+             * Spans
+             * @default []
+             */
+            spans: components["schemas"]["ReviewSpan"][];
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Verdicts
+             * @default []
+             */
+            verdicts: components["schemas"]["ReviewVerdict"][];
+        };
+        /** ReviewPage */
+        ReviewPage: {
+            /** Reviewed */
+            reviewed: number;
+            /** Reviews */
+            reviews: components["schemas"]["Review"][];
+        };
+        /** ReviewSpan */
+        ReviewSpan: {
+            /**
+             * Cited
+             * @default false
+             */
+            cited: boolean;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Preview */
+            preview: string;
+            /** Span Id */
+            span_id: string;
+        };
+        /** ReviewVerdict */
+        ReviewVerdict: {
+            /** Check Id */
+            check_id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "issue" | "pattern";
+            /** Summary */
+            summary: string;
         };
         /**
          * RoleMappings
@@ -62681,6 +62805,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_reviews_lens__lens_id__runs__job_id__reviews_get: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path: {
+                lens_id: string;
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewPage"];
                 };
             };
             /** @description Validation Error */
