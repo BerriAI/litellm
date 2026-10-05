@@ -38425,6 +38425,15 @@ export interface components {
              */
             purpose: "extract" | "cluster" | "investigate";
         };
+        /** ModelRequestDefaults */
+        ModelRequestDefaults: {
+            /** Output Token Budget */
+            output_token_budget?: number | null;
+            /** Output Token Budget By Reasoning Effort */
+            output_token_budget_by_reasoning_effort?: {
+                [key: string]: number;
+            } | null;
+        };
         /** ModelResponse */
         ModelResponse: {
             /** Choices */
@@ -50339,6 +50348,8 @@ export interface components {
              * @description Exact effort values this route accepts
              */
             reasoning_effort_levels?: string[] | null;
+            /** @description Configured request defaults, independent of supplier capability limits */
+            request_defaults?: components["schemas"]["ModelRequestDefaults"] | null;
             /**
              * Supported Endpoints
              * @description Inference endpoints exposed by this route

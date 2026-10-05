@@ -1,10 +1,43 @@
 from collections.abc import Mapping, Sequence
-from typing import Final
+from types import MappingProxyType
+from typing import Annotated, Final
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    ValidationInfo,
+    field_serializer,
+    field_validator,
+)
 
 _STRING_VALUES_ADAPTER: Final = TypeAdapter(tuple[str, ...])
 _VALIDATED_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+class ModelRequestDefaults(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    output_token_budget: Annotated[int, Field(gt=0, strict=True)] | None = None
+    output_token_budget_by_reasoning_effort: Mapping[str, Annotated[int, Field(gt=0, strict=True)]] | None = None
+
+    @field_validator("output_token_budget_by_reasoning_effort")
+    @classmethod
+    def immutable_budgets(cls, value: Mapping[str, int] | None) -> Mapping[str, int] | None:
+        return MappingProxyType(dict(value)) if value is not None else None
+
+    @field_serializer("output_token_budget_by_reasoning_effort")
+    def serialize_budgets(self, value: Mapping[str, int] | None) -> Mapping[str, int] | None:
+        return dict(value) if value is not None else None
+
+    def output_budget(self, effort: str | None) -> int | None:
+        return (
+            (self.output_token_budget_by_reasoning_effort or {}).get(effort, self.output_token_budget)
+            if effort is not None
+            else self.output_token_budget
+        )
 
 
 class GatewayModelMetadata(BaseModel):
@@ -27,6 +60,9 @@ class GatewayModelMetadata(BaseModel):
     )
     supported_modalities: Sequence[str] | None = None
     supported_output_modalities: Sequence[str] | None = None
+    request_defaults: ModelRequestDefaults | None = Field(
+        default=None, description="Configured request defaults, independent of supplier capability limits"
+    )
 
     @field_validator("context_window", "max_input_tokens", "max_output_tokens", mode="before")
     @classmethod

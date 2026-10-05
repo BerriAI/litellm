@@ -40,3 +40,21 @@ Native Codex UI reasoning aliases are normalized to API effort values. `ultra` i
 For a model group with an explicit total context contract, discovery advertises the smallest known input, output, and total limit across its deployments. A limit is omitted if any deployment does not declare it. Capabilities require agreement across deployments, supported lists are intersected, and a default must agree across deployments. Existing input/output aggregation is preserved for legacy groups without a total context field
 
 Only configured models are exposed. Fetching a supplier's catalog does not add its other models to the downstream listing. Set `general_settings.disable_model_info_refresh: true` to disable upstream catalog polling
+
+Configured output budgets are request defaults, independent of supplier limits. Set `model_info.request_defaults` to advertise and apply the same policy centrally
+
+```yaml
+model_info:
+  context_window: 262144
+  request_defaults:
+    output_token_budget: 8192
+    output_token_budget_by_reasoning_effort:
+      low: 65536
+      high: 65536
+      xhigh: 65536
+      max: 131072
+```
+
+The route chooses a configured budget from the effective request or deployment reasoning effort when the caller omits all explicit output budget parameters. An unmatched effort uses `output_token_budget`. Chat Completions and Anthropic Messages receive `max_tokens`, and Responses receives `max_output_tokens`. Caller-provided `max_tokens`, `max_completion_tokens`, or `max_output_tokens` takes precedence. The policy object is not sent to the supplier
+
+Discovery advertises `request_defaults` only when every deployment has the same policy. These chosen budgets do not populate `max_output_tokens`, establish a supplier maximum, or change the total context window. Clients can reserve the selected budget during compaction while the supplier's independent output limit remains unknown

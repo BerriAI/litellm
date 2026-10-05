@@ -107,6 +107,7 @@ class _ModelCard(GatewayModelMetadata):
             default_reasoning_effort=self.default_reasoning_effort
             or (self.reasoning.default_effort if provider == "openrouter" and self.reasoning is not None else None),
             supported_endpoints=self.supported_endpoints,
+            request_defaults=self.request_defaults,
             supported_modalities=self.supported_modalities
             if self.supported_modalities is not None
             else (

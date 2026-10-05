@@ -227,6 +227,7 @@ from litellm.router_utils.handle_error import (
     send_llm_exception_alert,
 )
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
+from litellm.router_utils.model_request_defaults import deployment_params_with_request_defaults, model_request_defaults
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
     warn_on_unknown_model_group_affinity_flags,
@@ -2596,10 +2597,19 @@ class Router:
             )
             # Check for silent model experiment
             # Make a local copy of litellm_params to avoid mutating the Router's state
-            litellm_params: Final = self._deployment_params_with_request_reasoning_override(
+            selected_params: Final = self._deployment_params_with_request_reasoning_override(
                 deployment["litellm_params"], kwargs
             )
-            silent_model: Final = litellm_params.pop("silent_model", None)
+            request_defaults: Final = model_request_defaults(
+                deployment.get("model_info", {}), selected_params, kwargs, "completion"
+            )
+            litellm_params: Final = deployment_params_with_request_defaults(
+                {key: value for key, value in selected_params.items() if key != "silent_model"},
+                request_defaults,
+                deployment.get("model_info", {}),
+                kwargs,
+            )
+            silent_model: Final = selected_params.get("silent_model")
 
             for silent_target in _silent_experiment_targets(silent_model):
                 # Mirroring traffic to a secondary model
@@ -2640,6 +2650,7 @@ class Router:
                 "caching": self.cache_responses,
                 "client": model_client,
                 **kwargs,
+                **request_defaults,
             }
             response: Final = litellm.completion(**input_kwargs)
             verbose_router_logger.info("litellm.completion(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
@@ -3745,10 +3756,19 @@ class Router:
 
             # Check for silent model experiment
             # Make a local copy of litellm_params to avoid mutating the Router's state
-            litellm_params: Final = self._deployment_params_with_request_reasoning_override(
+            selected_params: Final = self._deployment_params_with_request_reasoning_override(
                 deployment["litellm_params"], kwargs
             )
-            silent_model: Final = litellm_params.pop("silent_model", None)
+            request_defaults: Final = model_request_defaults(
+                deployment.get("model_info", {}), selected_params, kwargs, "completion"
+            )
+            litellm_params: Final = deployment_params_with_request_defaults(
+                {key: value for key, value in selected_params.items() if key != "silent_model"},
+                request_defaults,
+                deployment.get("model_info", {}),
+                kwargs,
+            )
+            silent_model: Final = selected_params.get("silent_model")
 
             for silent_target in _silent_experiment_targets(silent_model):
                 # Mirroring traffic to a secondary model
@@ -3779,6 +3799,7 @@ class Router:
                 "caching": self.cache_responses,
                 "client": model_client,
                 **kwargs,
+                **request_defaults,
             }
             input_kwargs.pop("silent_model", None)
             input_kwargs.pop("include_fallback_errors", None)
@@ -5380,9 +5401,17 @@ class Router:
                     return await original_generic_function(model=model, **kwargs)
                 raise e
 
+            request_defaults: Final = model_request_defaults(
+                deployment.get("model_info", {}),
+                deployment["litellm_params"],
+                kwargs,
+                getattr(original_generic_function, "__name__", ""),
+            )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
 
-            data: Final = deployment["litellm_params"].copy()
+            data: Final = deployment_params_with_request_defaults(
+                deployment["litellm_params"], request_defaults, deployment.get("model_info", {}), kwargs
+            )
             model_name: Final = data["model"]
             self.total_calls[model_name] += 1
 
@@ -5398,6 +5427,7 @@ class Router:
                 **kwargs,
                 "model": model_name,
                 **_with_router_resolved_session_model(kwargs.get("session"), model_name),
+                **request_defaults,
             }
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
@@ -5850,9 +5880,14 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
+            request_defaults: Final = model_request_defaults(
+                deployment.get("model_info", {}), deployment["litellm_params"], kwargs, handler_name
+            )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="generic_api_call")
 
-            data: Final = deployment["litellm_params"].copy()
+            data: Final = deployment_params_with_request_defaults(
+                deployment["litellm_params"], request_defaults, deployment.get("model_info", {}), kwargs
+            )
             model_name: Final = data["model"]
 
             self.total_calls[model_name] += 1
@@ -5874,6 +5909,7 @@ class Router:
                     "custom_llm_provider": custom_llm_provider,
                     "caching": self.cache_responses,
                     **kwargs,
+                    **request_defaults,
                 }
             )
 

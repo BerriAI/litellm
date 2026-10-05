@@ -2448,6 +2448,10 @@ def test_model_listing_advertises_complete_configured_metadata_and_no_secrets():
         "supported_endpoints": ["/v1/responses"],
         "supported_modalities": ["text", "image"],
         "supported_output_modalities": ["text"],
+        "request_defaults": {
+            "output_token_budget": 100,
+            "output_token_budget_by_reasoning_effort": {"xhigh": 150},
+        },
     }
     router: Final = litellm.Router(
         model_list=[

@@ -43,6 +43,12 @@ def discover_model_metadata(sources: tuple[GatewayModelMetadata, ...]) -> ModelD
     defaults: Final = tuple(source.default_reasoning_effort for source in sources)
     default: Final = defaults[0] if defaults and all(value == defaults[0] for value in defaults) else None
     valid_default: Final = default if efforts is None or default in efforts else None
+    request_defaults: Final = tuple(source.request_defaults for source in sources)
+    common_request_defaults: Final = (
+        request_defaults[0]
+        if request_defaults and all(value == request_defaults[0] for value in request_defaults)
+        else None
+    )
     metadata: Final = GatewayModelMetadata(
         context_window=guaranteed_token_limit(sources, "context_window"),
         supports_function_calling=_common_boolean(tuple(source.supports_function_calling for source in sources)),
@@ -55,5 +61,6 @@ def discover_model_metadata(sources: tuple[GatewayModelMetadata, ...]) -> ModelD
         supported_endpoints=_common_list(tuple(source.supported_endpoints for source in sources)),
         supported_modalities=_common_list(tuple(source.supported_modalities for source in sources)),
         supported_output_modalities=_common_list(tuple(source.supported_output_modalities for source in sources)),
+        request_defaults=common_request_defaults,
     )
     return _ADAPTER.validate_python(metadata.model_dump(mode="json", exclude_none=True))
