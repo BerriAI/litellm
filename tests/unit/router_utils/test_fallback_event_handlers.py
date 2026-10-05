@@ -29,6 +29,7 @@ class StreamingWrapper:
 class FakeRouter:
     fallback_access_check = None
     fallback_budget_check = None
+    tag_routing_prefix = None
 
     def log_retry(self, kwargs, e):
         return kwargs
@@ -40,6 +41,7 @@ class FakeRouter:
 class AlwaysFailRouter:
     fallback_access_check = None
     fallback_budget_check = None
+    tag_routing_prefix = None
 
     def log_retry(self, kwargs, e):
         return kwargs
@@ -105,6 +107,7 @@ async def test_run_async_fallback_raises_when_all_fallbacks_fail():
 class RecordingRouter:
     fallback_access_check = None
     fallback_budget_check = None
+    tag_routing_prefix = None
 
     def __init__(self):
         self.received_kwargs = None
@@ -167,6 +170,7 @@ async def test_run_async_fallback_skips_original_model_group():
 class AttemptRecordingRouter:
     fallback_access_check = None
     fallback_budget_check = None
+    tag_routing_prefix = None
 
     def __init__(self):
         self.attempted_model_groups = []
@@ -547,8 +551,6 @@ async def test_run_async_fallback_does_not_consult_access_check_for_same_model_g
     assert router.access_checks == []
 
 
-
-
 class TagRoutingFallbackRouter:
     """Records fallback attempts while exposing tag-routing deployment lookups."""
 
@@ -723,9 +725,11 @@ def test_can_satisfy_confirmed_routing_tags_true_when_deployment_matches():
         is True
     )
 
+
 class RecordingFailRouter:
     fallback_access_check = None
     fallback_budget_check = None
+    tag_routing_prefix = None
 
     def __init__(self):
         self.attempted_models = []
@@ -1238,6 +1242,7 @@ class TestRunAsyncFallbackTriggersCooldown:
     class RouterWithLoggingKwarg:
         fallback_access_check = None
         fallback_budget_check = None
+        tag_routing_prefix = None
 
         def __init__(self):
             self.cooldown_time = 60.0

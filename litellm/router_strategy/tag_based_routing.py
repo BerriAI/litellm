@@ -10,7 +10,7 @@ Use this to route requests between Teams
 import re
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload  # noqa: TID251  # Router pool narrowing
 
 from litellm._logging import verbose_logger
 from litellm.constants import CONSUMED_REQUEST_TAGS_METADATA_KEY, ROUTING_REQUEST_TAGS_METADATA_KEY
@@ -721,12 +721,9 @@ def can_satisfy_confirmed_routing_tags(
     if not routing_confirmed:
         return True
 
-    try:
-        deployments: Final[_DeploymentPool] = cast(
-            _DeploymentPool, llm_router_instance._get_all_deployments(model_name=model)
-        )
-    except Exception:  # noqa: BLE001  # fail safe toward attempting the leg on lookup errors
-        return True
+    deployments: Final = cast(  # cast-ok: [LIT006] router deployment dicts are read through _DeploymentLike
+        _DeploymentPool, _all_deployments_or_fallback(llm_router_instance, model, ())
+    )
     if not deployments:
         return True
 
@@ -758,9 +755,7 @@ def can_satisfy_confirmed_routing_tags(
         return True
 
     match_any: Final = llm_router_instance.tag_filtering_match_any
-    for deployment in candidates:
-        litellm_params: Final = deployment.get("litellm_params", {})
-        deployment_tags: Final[Sequence[str] | None] = litellm_params.get("tags")
-        if is_valid_deployment_tag(deployment_tags or (), positive_tags, match_any):
-            return True
-    return False
+    return any(
+        is_valid_deployment_tag(d.get("litellm_params", {}).get("tags") or (), positive_tags, match_any)
+        for d in candidates
+    )

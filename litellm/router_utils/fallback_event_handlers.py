@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # narrows untyped **kwargs for the tag check
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -679,7 +679,9 @@ async def run_async_fallback(
         if not await _is_fallback_target_within_budget(litellm_router, mg, original_model_group, kwargs):
             continue
         if not _is_fallback_target_tag_satisfiable(
-            litellm_router, mg, cast(Mapping[str, object], kwargs)
+            litellm_router,
+            mg,
+            cast(Mapping[str, object], kwargs),  # cast-ok: [LIT006] **kwargs is untyped here
         ):
             continue
         attempt_key = fallback_attempt_key(mg)
