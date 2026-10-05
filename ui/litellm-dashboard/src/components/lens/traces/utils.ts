@@ -353,9 +353,52 @@ const parseMessage = (value: unknown): TraceMessage | null => {
   if (!("role" in value) && "data" in value) return parseLangchainMessage(value);
   const role: unknown = Reflect.get(value, "role");
   const content: unknown = Reflect.get(value, "content") ?? Reflect.get(value, "parts");
-  if (typeof role !== "string" || (typeof content !== "string" && !Array.isArray(content))) return null;
-  return { ...value, role, content: messageText(typeof content === "string" ? content : JSON.stringify(content)) };
+  const rawCalls: unknown = Reflect.get(value, "tool_calls");
+  const hasCalls = Array.isArray(rawCalls) && rawCalls.length > 0;
+  const emptyToolMessage = content == null && hasCalls;
+  const hasContent = typeof content === "string" || Array.isArray(content) || emptyToolMessage;
+  if (typeof role !== "string" || !hasContent) return null;
+  const calls = Array.isArray(rawCalls)
+    ? rawCalls.map((call): TraceToolCall | null => {
+        if (!call || typeof call !== "object") return null;
+        const fn: unknown = Reflect.get(call, "function");
+        const source = fn && typeof fn === "object" ? fn : call;
+        const name: unknown = Reflect.get(source, "name");
+        if (typeof name !== "string") return null;
+        if ("args" in source) return { name, args: source.args };
+        const args: unknown = Reflect.get(source, "arguments");
+        return { name, args: typeof args === "string" ? parseJson(args) ?? args : args };
+      })
+    : undefined;
+  if (calls?.some((call) => call === null)) return null;
+  const text = typeof content === "string" ? content : JSON.stringify(content ?? "");
+  return {
+    ...value,
+    role,
+    content: content == null ? "" : messageText(text),
+    ...(calls ? { tool_calls: calls as TraceToolCall[] } : {}),
+  };
 };
+
+export function parseAssistantSummary(value: string): TraceMessage[] | null {
+  const parsed = parseJson(value);
+  if (!Array.isArray(parsed) || !parsed.length) return null;
+  const isSummary = (item: unknown): item is { content: string | null; tool_names: string[] } => {
+    if (!item || typeof item !== "object") return false;
+    const content: unknown = Reflect.get(item, "content");
+    const tools: unknown = Reflect.get(item, "tool_names");
+    const knownFields = Object.keys(item).every((key) => key === "content" || key === "tool_names");
+    const validContent = content === null || typeof content === "string";
+    const validTools = Array.isArray(tools) && tools.every((name: unknown) => typeof name === "string");
+    return knownFields && validContent && validTools;
+  };
+  if (!parsed.every(isSummary)) return null;
+  return parsed.map((item) => ({
+    role: "assistant",
+    content: item.content ?? "",
+    tool_calls: item.tool_names.map((name: string) => ({ name, args: undefined })),
+  }));
+}
 
 /** An llm span's input (array of messages) or output (one message); null when it isn't one. */
 export function parseMessages(value: string): TraceMessage[] | null {

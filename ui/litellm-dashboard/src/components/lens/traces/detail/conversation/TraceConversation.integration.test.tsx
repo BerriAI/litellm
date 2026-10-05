@@ -56,7 +56,10 @@ describe("TraceConversation", () => {
     expect(conversationTab).toHaveAttribute("aria-selected", "true");
     const conversation = await screen.findByRole("region", { name: "Trace conversation" });
     expect(await within(conversation).findByText("Read the release notes")).toBeVisible();
-    await user.click(await within(conversation).findByRole("button", { name: "Expand read_file tool call" }));
+    expect(await within(conversation).findByRole("button", { name: "Expand read_file tool call" })).toHaveTextContent(
+      "CHANGELOG.md",
+    );
+    await user.click(within(conversation).getByRole("button", { name: "Expand read_file tool call" }));
     expect(await within(conversation).findByText("CHANGELOG.md")).toBeVisible();
     expect(await within(conversation).findByText("All checks passed")).toBeVisible();
     expect(await within(conversation).findByText("The release is ready")).toBeVisible();
@@ -65,6 +68,56 @@ describe("TraceConversation", () => {
     expect(screen.getByRole("tab", { name: "Steps", selected: true })).toBeVisible();
     expect(screen.getByRole("treeitem", { selected: true })).toHaveAttribute("data-row-id", "tool");
     expect(screen.getByRole("heading", { name: "read_file" })).toBeVisible();
+  });
+
+  it("renders a failed shell exchange in both views and preserves its raw result", async () => {
+    const user = userEvent.setup();
+    const command = "npm test -- checkout\nprintf 'finished\\n'";
+    const output = JSON.stringify({ output: "PASS cart.test.ts\nFAIL checkout.test.ts", exit_code: 1, error: null });
+    const failedTool = { ...tool, name: "terminal", status: "error", error: null };
+    vi.mocked(agentTraceCall).mockResolvedValue({ ...trace, spans: [root, failedTool] } as Trace);
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) =>
+      id === "root"
+        ? rootDetail
+        : {
+            ...toolDetail,
+            input: JSON.stringify({ command, workdir: "/workspace" }),
+            output,
+            input_ui: {
+              kind: "fields",
+              fields: [
+                { key: "command", value: command },
+                { key: "workdir", value: "/workspace" },
+              ],
+            },
+            output_ui: {
+              kind: "fields",
+              fields: [
+                { key: "output", value: "PASS cart.test.ts\nFAIL checkout.test.ts" },
+                { key: "exit_code", value: "1" },
+              ],
+            },
+          },
+    );
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Conversation" }));
+    const conversation = await screen.findByRole("region", { name: "Trace conversation" });
+    expect(await within(conversation).findByText(/npm test -- checkout/, { selector: "pre" })).toHaveTextContent(
+      "printf 'finished\\n'",
+    );
+    expect(within(conversation).getByText(/PASS cart.test.ts/, { selector: "pre" })).toHaveTextContent(
+      "FAIL checkout.test.ts",
+    );
+    expect(within(conversation).getByText("exit_code")).toBeVisible();
+    await user.click(within(conversation).getByRole("button", { name: "Inspect step terminal" }));
+    const details = screen.getByRole("complementary", { name: "Span details" });
+    expect(await within(details).findByText(/npm test -- checkout/, { selector: "pre" })).toBeVisible();
+    const result = within(details).getByRole("region", { name: "Output", exact: true });
+    expect(within(result).getByText("exit_code")).toBeVisible();
+    await user.click(within(result).getByRole("radio", { name: "Raw" }));
+    expect(within(result).getByText(/"exit_code": 1/, { selector: "pre" })).toHaveTextContent('"error": null');
   });
 
   it("loads only twenty full steps at a time and fetches the remainder on demand", async () => {

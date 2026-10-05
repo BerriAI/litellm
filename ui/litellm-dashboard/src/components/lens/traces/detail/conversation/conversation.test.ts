@@ -252,3 +252,56 @@ describe("trace conversation", () => {
     expect(items.flatMap((item) => item.messages)).toEqual([answer, answer]);
   });
 });
+
+describe("recorded tool summaries", () => {
+  it("pairs repeated named calls within their own branch and preserves unmatched calls and custom text", () => {
+    const model = { ...root, span_id: "model", parent_span_id: "root", type: "llm", start_offset_ms: 1 } as Span;
+    const first = { ...model, span_id: "first", name: "terminal", type: "tool", start_offset_ms: 2 } as Span;
+    const second = { ...first, span_id: "second", start_offset_ms: 3 };
+    const child = { ...root, span_id: "child", parent_span_id: "root", start_offset_ms: 4 };
+    const childTool = { ...first, span_id: "child-tool", parent_span_id: "child", start_offset_ms: 5 };
+    const saved = "SAVED TASK RESUMED: Continue the unfinished task exactly as recorded";
+    const summary = JSON.stringify([{ content: "Checking", tool_names: ["terminal", "terminal", "read_file"] }]);
+    const details = new Map([
+      ["root", detail("root", [{ role: "user", content: saved }], [])],
+      [
+        "model",
+        { ...detail("model", [], []), output: summary, output_ui: { kind: "text", text: summary } } as SpanDetail,
+      ],
+      ["first", detail("first", { command: "pwd" }, { output: "/workspace", exit_code: 0 })],
+      ["second", detail("second", { command: "pwd" }, { output: "/workspace", exit_code: 0 })],
+      ["child", detail("child", [{ role: "user", content: saved }], [])],
+      ["child-tool", detail("child-tool", { path: "README.md" }, "content")],
+    ]);
+    const items = buildConversation([root, model, first, second, child, childTool], details, true);
+    expect(items.flatMap((item) => item.messages).filter((message) => message.content === saved)).toHaveLength(2);
+    expect(items.flatMap((item) => item.messages.flatMap((message) => message.tool_calls ?? []))).toEqual([
+      { name: "read_file", args: undefined },
+    ]);
+    expect(items.filter((item) => item.toolCall).map((item) => item.id)).toEqual(["first", "second", "child-tool"]);
+    expect(JSON.parse(items.find((item) => item.id === "first")!.toolResult!)).toEqual({
+      output: "/workspace",
+      exit_code: 0,
+    });
+  });
+
+  it("deduplicates native OpenAI function calls without requiring message text", () => {
+    const model = { ...root, span_id: "model", parent_span_id: "root", type: "llm", start_offset_ms: 1 } as Span;
+    const tool = { ...model, span_id: "tool", name: "read_file", type: "tool", start_offset_ms: 2 } as Span;
+    const output = [
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ type: "function", function: { name: "read_file", arguments: '{"path":"README.md"}' } }],
+      },
+    ];
+    const details = new Map([
+      ["root", detail("root", [], [])],
+      ["model", detail("model", [], output)],
+      ["tool", detail("tool", { path: "README.md" }, "file content")],
+    ]);
+    expect(
+      buildConversation([root, model, tool], details, true).filter((item) => item.toolCall || item.messages.length),
+    ).toHaveLength(1);
+  });
+});
