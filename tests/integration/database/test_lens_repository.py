@@ -3,6 +3,7 @@ import os
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
@@ -13,6 +14,7 @@ import pytest_asyncio
 from prisma import Prisma
 from psycopg import sql
 
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.db.prisma_client import PrismaWrapper
 from litellm.proxy.lens.models import (
     Check,
@@ -26,6 +28,7 @@ from litellm.proxy.lens.models import (
     Sample,
     Scope,
     TraceFindingCount,
+    TraceFindingsRequest,
     TraceIdentity,
     Worker,
 )
@@ -86,7 +89,12 @@ async def test_heartbeat_never_restores_revoked_access(lens_db: Prisma) -> None:
 @pytest.mark.asyncio
 async def test_trace_findings_include_archived_assessments_without_counting_retries_or_counterexamples(
     lens_db: Prisma,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.endpoints import trace_findings
+
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=lens_db))
     now: Final = datetime.now(timezone.utc)
     prefix: Final = uuid4().hex
     repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
@@ -166,7 +174,9 @@ async def test_trace_findings_include_archived_assessments_without_counting_retr
             TraceFindingCount(**identity.model_dump(), finding_count=1 if i == 0 else 0 if i == 1 else None)
             for i, identity in enumerate(identities)
         )
-        counts: Final = await repo.trace_findings(identities)
+        counts: Final = await trace_findings(
+            TraceFindingsRequest(traces=identities), UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+        )
         assert sorted(counts, key=lambda item: item.trace_ref) == list(expected)
         await repo.update(prefix, lambda item: item.model_copy(update={"jobs": unfinished}))
         archived_counts: Final = await repo.trace_findings(identities)
