@@ -463,6 +463,47 @@ it.each(["empty", "error"])("blocks a new investigation when its preview is %s",
   expect(screen.getByRole("button", { name: "Run investigation" })).toBeDisabled();
 });
 
+describe("Sample", () => {
+  it("slides the sample rate to scale the run count, caps it by typing, and saves both", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    proxy.post.mockResolvedValue({ eligible: 2000, selected: 2000, executions: [run("Run one", 1)] });
+    mockGateway({ keyModels: ["analysis"] });
+    renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={save} />);
+    const count = screen.getByRole("textbox", { name: "Runs to analyze" });
+    await waitFor(() => expect(count).toHaveValue("2,000"));
+    const slider = screen.getByLabelText("Sample", { selector: "input[type=range]" });
+    slider.focus();
+    await user.keyboard("{Home}{ArrowRight}{ArrowRight}");
+    expect(screen.getByText("3% of 2,000")).toBeInTheDocument();
+    expect(count).toHaveValue("60");
+    await user.clear(count);
+    await user.type(count, "25");
+    expect(count).toHaveValue("25");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run and monitor" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Run and monitor" }));
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ sample_percent: 3, sample_size: 25 }));
+  });
+
+  it("drops a cap that no longer limits anything once the field is left", async () => {
+    const user = userEvent.setup();
+    proxy.post.mockResolvedValue({ eligible: 40, selected: 40, executions: [run("Run one", 1)] });
+    renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />);
+    const count = screen.getByRole("textbox", { name: "Runs to analyze" });
+    await waitFor(() => expect(count).toHaveValue("40"));
+    await user.clear(count);
+    await user.type(count, "10");
+    expect(screen.getByRole("button", { name: /Remove cap/ })).toBeInTheDocument();
+    await user.clear(count);
+    await user.type(count, "500");
+    await user.tab();
+    expect(count).toHaveValue("40");
+    expect(screen.queryByRole("button", { name: /Remove cap/ })).not.toBeInTheDocument();
+  });
+});
+
 describe("URL draft", () => {
   const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
     new URLSearchParams((onUrlUpdate.mock.lastCall?.[0] as { queryString: string } | undefined)?.queryString ?? "");

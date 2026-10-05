@@ -41,13 +41,13 @@ export function DurationInput({ label, value, onChange, base, max, className, ..
           step={1 / scale}
           value={Number.isFinite(value) ? value / scale : ""}
           onChange={(event) => onChange(event.target.value === "" ? NaN : Number(event.target.value) * scale)}
-          className="min-w-0 flex-1 bg-transparent px-3 text-base tabular-nums outline-none md:text-sm"
+          className="min-w-0 flex-1 border-0 bg-transparent px-3 py-0 shadow-none focus:ring-0 text-base tabular-nums outline-none md:text-sm"
         />
         <div className="relative shrink-0 border-l border-input">
           <select
             aria-label={`${label} unit`}
             value={scale}
-            className="h-full appearance-none rounded-r-md bg-transparent pr-8 pl-3 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground"
+            className="h-full appearance-none rounded-r-md border-0 bg-transparent bg-none py-0 pr-8 pl-3 shadow-none focus:ring-0 text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:text-foreground"
             onChange={(event) => setScale(Number(event.target.value))}
           >
             {units.map((unit) => (

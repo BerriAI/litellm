@@ -1,22 +1,45 @@
 "use client";
 
-import { useId } from "react";
-import { Controller, useFormContext } from "react-hook-form";
+import { useState } from "react";
+import { Controller, useFormContext, useWatch } from "react-hook-form";
+import { X } from "lucide-react";
 import { DurationInput } from "@/components/shared/DurationInput";
 import { FieldError } from "@/components/ui/field";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { Slider } from "@/components/ui/slider";
 import type { InvestigationInput } from "../investigationSchema";
 
-const optionalNumber = (value: unknown) => (value == null || value === "" ? null : Number(value));
+/** Runs the sampling percentage keeps out of `eligible`, before any cap. */
+export const sampledRuns = (eligible: number, percent: number): number => Math.ceil((eligible * percent) / 100);
 
-export function SampleFields() {
+const capFromText = (text: string): number | null => {
+  const digits = text.replace(/\D/g, "");
+  return digits ? Number(digits) : null;
+};
+
+export interface SampleFieldsProps {
+  /** Runs the search matches; undefined while the preview loads. */
+  readonly eligible: number | undefined;
+}
+
+export function SampleFields({ eligible }: SampleFieldsProps) {
   const {
     control,
-    register,
+    setValue,
     formState: { errors },
   } = useFormContext<InvestigationInput>();
+  const [percentValue, cap] = useWatch({ control, name: ["selection.sample_percent", "selection.sample_size"] });
   const selectionErrors = errors.selection;
-  const id = useId();
+  const percent = Number.isFinite(percentValue) ? percentValue : 100;
+  const sampled = eligible === undefined ? undefined : sampledRuns(eligible, percent);
+  const capped = cap != null && (sampled === undefined || cap < sampled);
+  const analyzed = sampled === undefined ? cap : Math.min(sampled, cap ?? Infinity);
+  const setCap = (next: number | null) => setValue("selection.sample_size", next, { shouldValidate: true });
+  const [typing, setTyping] = useState<string | null>(null);
+  const shown = typing ?? analyzed?.toLocaleString() ?? "";
+  const finishTyping = () => {
+    setTyping(null);
+    if (cap != null && sampled !== undefined && cap >= sampled) setCap(null);
+  };
   return (
     <>
       <div className="grid gap-2">
@@ -29,46 +52,62 @@ export function SampleFields() {
         />
         <FieldError>{selectionErrors?.lookback_hours?.message}</FieldError>
       </div>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="grid content-start gap-2">
-          <label htmlFor={`${id}-sample`} className="text-sm font-medium">
-            Sample
-          </label>
-          <InputGroup>
-            <InputGroupInput
-              id={`${id}-sample`}
-              {...register("selection.sample_percent", { valueAsNumber: true })}
-              type="number"
-              min="0.01"
-              max="100"
-              step="any"
-              className="tabular-nums"
-            />
-            <InputGroupAddon aria-hidden="true" align="inline-end">
-              %
-            </InputGroupAddon>
-          </InputGroup>
-          <FieldError>{selectionErrors?.sample_percent?.message}</FieldError>
+      <div className="grid gap-3 rounded-md border px-3 pt-2.5 pb-3.5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="grid gap-0.5">
+            <span className="text-sm font-medium">Sample</span>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {eligible === undefined ? `${percent}% of matching runs` : `${percent}% of ${eligible.toLocaleString()}`}
+            </span>
+          </div>
+          <div className="grid justify-items-end gap-0.5">
+            <label className="flex items-baseline gap-1.5">
+              <input
+                inputMode="numeric"
+                aria-label="Runs to analyze"
+                value={shown}
+                placeholder="All"
+                onFocus={(event) => event.target.select()}
+                onChange={(event) => {
+                  setTyping(event.target.value);
+                  setCap(capFromText(event.target.value));
+                }}
+                onBlur={finishTyping}
+                style={{ width: `${Math.max((shown || "All").length, 2) + 1}ch` }}
+                className="-mr-1 rounded-sm border-0 bg-transparent px-1 py-0 shadow-none focus:ring-0 text-right text-xl font-semibold tabular-nums tracking-tight outline-none hover:bg-muted/60 focus:bg-muted/60"
+              />
+              <span className="text-sm text-muted-foreground">runs</span>
+            </label>
+            {capped ? (
+              <button
+                type="button"
+                aria-label="Remove cap"
+                onClick={() => setCap(null)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                Capped
+                <X aria-hidden="true" className="size-3" />
+              </button>
+            ) : (
+              <span className="text-xs text-muted-foreground">Type a number to cap</span>
+            )}
+          </div>
         </div>
-        <div className="grid content-start gap-2">
-          <label htmlFor={`${id}-max`} className="text-sm font-medium">
-            At most
-          </label>
-          <InputGroup>
-            <InputGroupInput
-              id={`${id}-max`}
-              {...register("selection.sample_size", { setValueAs: optionalNumber })}
-              type="number"
-              min="1"
-              placeholder="No limit"
-              className="tabular-nums"
+        <Controller
+          control={control}
+          name="selection.sample_percent"
+          render={({ field }) => (
+            <Slider
+              thumbLabel="Sample"
+              min={1}
+              max={100}
+              step={1}
+              value={[Math.min(100, Math.max(1, Math.round(percent)))]}
+              onValueChange={(value) => field.onChange(Array.isArray(value) ? value[0] : value)}
             />
-            <InputGroupAddon aria-hidden="true" align="inline-end">
-              runs
-            </InputGroupAddon>
-          </InputGroup>
-          <FieldError>{selectionErrors?.sample_size?.message}</FieldError>
-        </div>
+          )}
+        />
+        <FieldError>{selectionErrors?.sample_percent?.message ?? selectionErrors?.sample_size?.message}</FieldError>
       </div>
       <FieldError>{selectionErrors?.execution_ids?.message}</FieldError>
     </>

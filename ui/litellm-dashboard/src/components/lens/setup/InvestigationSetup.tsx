@@ -153,7 +153,7 @@ function SetupEditor({
           aria-label="Investigation name"
           placeholder={TITLES[mode]}
           autoComplete="off"
-          className="h-8 min-w-0 flex-1 appearance-none rounded-md border-0 bg-transparent px-2 text-lg font-semibold tracking-tight shadow-none ring-0 outline-none placeholder:text-muted-foreground/60 hover:bg-muted/50 focus:bg-muted/50 focus:ring-0 focus:outline-none"
+          className="h-8 min-w-0 flex-1 appearance-none rounded-md border-0 bg-transparent px-2 py-0 text-lg font-semibold tracking-tight shadow-none ring-0 outline-none placeholder:text-muted-foreground/60 hover:bg-muted/50 focus:bg-muted/50 focus:ring-0 focus:outline-none"
         />
         <Button variant="ghost" size="sm" disabled={formState.isSubmitting} onClick={onClose}>
           Cancel
@@ -176,7 +176,7 @@ function SetupEditor({
             summary={activitySummary(selection, manualSelection)}
           >
             <ScopeFields {...activity.scope} />
-            <SampleFields />
+            <SampleFields eligible={activity.preview.page.eligible} />
             <StepFooter>
               <Button onClick={() => void next()}>Continue</Button>
             </StepFooter>
