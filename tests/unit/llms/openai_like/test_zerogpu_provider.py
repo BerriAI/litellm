@@ -73,6 +73,42 @@ def test_prefixed_model_reaches_zerogpu_chat_completions_without_the_prefix():
     }
 
 
+def test_responses_request_is_bridged_to_zerogpu_chat_completions():
+    requests: Final[list[httpx.Request]] = []
+    client: Final = _zerogpu_client(requests, {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
+
+    with client:
+        response: Final = litellm.responses(model="zerogpu/gpt-oss-120b", input="hello", client=client)
+
+    assert [str(request.url) for request in requests] == [f"{ZEROGPU_API_BASE}/chat/completions"]
+    assert json.loads(requests[0].content) == {
+        "model": "gpt-oss-120b",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    assert response.output[0].content[0].text == "hi"
+
+
+def test_anthropic_messages_request_is_bridged_to_zerogpu_chat_completions():
+    requests: Final[list[httpx.Request]] = []
+    client: Final = _zerogpu_client(requests, {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
+
+    with client:
+        response: Final = litellm.anthropic.messages.create(
+            model="zerogpu/gpt-oss-120b",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=10,
+            client=client,
+        )
+
+    assert [str(request.url) for request in requests] == [f"{ZEROGPU_API_BASE}/chat/completions"]
+    assert json.loads(requests[0].content) == {
+        "model": "gpt-oss-120b",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 10,
+    }
+    assert response["content"] == [{"type": "text", "text": "hi"}]
+
+
 def test_transcription_is_rejected_without_calling_zerogpu():
     requests: Final[list[httpx.Request]] = []
     client: Final = _zerogpu_client(requests, {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
