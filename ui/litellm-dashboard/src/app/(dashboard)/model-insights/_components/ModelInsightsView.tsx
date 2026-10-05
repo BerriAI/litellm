@@ -28,6 +28,7 @@ import {
   rankModels,
   RankedModel,
 } from "./modelInsightsData";
+import TaskClassifierSetup from "./TaskClassifierSetup";
 
 const PALETTE = [
   "#ec4899",
@@ -113,7 +114,13 @@ const TaskTileContent = ({ x, y, width, height, category, label, leader }: TileP
   );
 };
 
-export default function ModelInsightsView({ accessToken }: { accessToken: string | null }) {
+export default function ModelInsightsView({
+  accessToken,
+  canEditTaskClassifier = false,
+}: {
+  accessToken: string | null;
+  canEditTaskClassifier?: boolean;
+}) {
   const [loaded, setLoaded] = React.useState<{ metric: Metric; response: ModelInsightsResponse } | null>(null);
   const [metric, setMetric] = React.useState<Metric>("tokens");
   const [scale, setScale] = React.useState<Scale>("linear");
@@ -177,6 +184,7 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
     [data, shown, range],
   );
   const tiles = React.useMemo(() => taskData?.tasks ?? [], [taskData]);
+  const hasTaskValues = tiles.some((tile) => tile.value > 0);
   const categoryShares = React.useMemo(
     () =>
       [...new Set(tiles.map((tile) => tile.category))].map((category) => ({
@@ -339,20 +347,34 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
           </Select>
         </CardHeader>
         <CardContent className="space-y-4">
+          <TaskClassifierSetup accessToken={accessToken} canEdit={canEditTaskClassifier} />
           {taskError && (
             <Alert variant="destructive">
               <AlertTitle>Could not load tasks</AlertTitle>
               <AlertDescription>{taskError}</AlertDescription>
             </Alert>
           )}
-          <ChartContainer config={{}} className="h-[360px] w-full aspect-auto">
-            <Treemap
-              data={tiles.map((tile) => ({ ...tile, name: tile.task_type }))}
-              dataKey="value"
-              isAnimationActive={false}
-              content={<TaskTileContent {...({} as TileProps)} />}
-            />
-          </ChartContainer>
+          {taskData && !hasTaskValues ? (
+            <div className="flex h-[200px] flex-col items-center justify-center gap-1 rounded-md border border-dashed text-center">
+              <p className="font-medium">
+                {tiles.length === 0 ? "No task data yet" : `No ${METRIC_LABELS[taskMetric]} recorded for these tasks`}
+              </p>
+              <p className="max-w-md text-sm text-muted-foreground">
+                {tiles.length === 0
+                  ? "Task data appears here as new requests are logged"
+                  : "Requests were logged but this metric adds up to zero. Try Share of requests"}
+              </p>
+            </div>
+          ) : (
+            <ChartContainer config={{}} className="h-[360px] w-full aspect-auto">
+              <Treemap
+                data={tiles.map((tile) => ({ ...tile, name: tile.task_type }))}
+                dataKey="value"
+                isAnimationActive={false}
+                content={<TaskTileContent {...({} as TileProps)} />}
+              />
+            </ChartContainer>
+          )}
           <ul className="flex flex-wrap gap-x-6 gap-y-2">
             {categoryShares.map(({ category, share }) => (
               <li key={category} className="flex items-center gap-2 text-sm">
