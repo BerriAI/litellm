@@ -7,6 +7,7 @@ import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 
 import { SearchBox } from "@/components/shared/search/SearchBox";
 import { itemValues } from "@/components/shared/search/valueSource";
+import { NEWEST, type RunOrder } from "../runOrder";
 import { RUN_INDEX, RUN_QUERY } from "./runQuery";
 import { runQueryCommand } from "./runSql";
 
@@ -17,13 +18,14 @@ interface RunSearchProps {
   onChange: (value: string) => void;
   /** Loaded runs, the source of value suggestions. */
   runs: readonly TraceSummary[];
-  /** The range the list shows; the copied query bounds itself to it. */
+  /** The range and order the list shows; the copied query follows both. */
   range?: TimeWindow;
+  order?: RunOrder;
 }
 
 /** The runs list query box: free text plus `key:value` filters over run fields, copyable as a trace query. */
-export function RunSearch({ value, onChange, runs, range }: RunSearchProps) {
-  const command = useMemo(() => runQueryCommand(range), [range]);
+export function RunSearch({ value, onChange, runs, range, order = NEWEST }: RunSearchProps) {
+  const command = useMemo(() => runQueryCommand(range, order), [range, order]);
   return (
     <SearchBox.Root
       language={RUN_QUERY}

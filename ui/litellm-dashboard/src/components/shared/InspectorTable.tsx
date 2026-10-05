@@ -2,7 +2,7 @@
 
 import "@/components/shared/DataTable/columnMeta";
 
-import { flexRender, type Row as TanStackRow, type Table as TanStackTable } from "@tanstack/react-table";
+import { type Column, flexRender, type Row as TanStackRow, type Table as TanStackTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRight } from "lucide-react";
 import { createContext, Fragment, useContext, useState, type ComponentProps, type ReactNode } from "react";
@@ -63,7 +63,21 @@ function Grid({ className, children, ...props }: ComponentProps<"table">) {
   );
 }
 
-function Header({ hidden = false }: { readonly hidden?: boolean }) {
+const ARIA_SORT = { asc: "ascending", desc: "descending" } as const;
+
+function ariaSort<T>(column: Column<T>): "ascending" | "descending" | "none" | undefined {
+  if (!column.getCanSort()) return undefined;
+  const sorted = column.getIsSorted();
+  return sorted === false ? "none" : ARIA_SORT[sorted];
+}
+
+interface HeaderProps {
+  readonly hidden?: boolean;
+  /** Shows a progress line under the headings while the rows below are being replaced. */
+  readonly busy?: boolean;
+}
+
+function Header({ hidden = false, busy = false }: HeaderProps) {
   const { table } = useInspectorTable();
   return (
     <TableHeader
@@ -74,6 +88,7 @@ function Header({ hidden = false }: { readonly hidden?: boolean }) {
           {group.headers.map(({ id, column, isPlaceholder, getContext }) => (
             <TableHead
               key={id}
+              aria-sort={ariaSort(column)}
               className={cn(
                 "h-auto px-3 text-muted-foreground",
                 column.columnDef.meta?.numeric && NUMERIC,
@@ -85,6 +100,17 @@ function Header({ hidden = false }: { readonly hidden?: boolean }) {
           ))}
         </tr>
       ))}
+      {busy && (
+        <tr className="h-0.5">
+          <th colSpan={table.getVisibleLeafColumns().length} className="p-0">
+            <div
+              role="progressbar"
+              aria-label="Updating rows"
+              className="h-0.5 w-full animate-pulse bg-primary/70 motion-reduce:animate-none"
+            />
+          </th>
+        </tr>
+      )}
     </TableHeader>
   );
 }
@@ -93,9 +119,10 @@ interface BodyProps<T> {
   readonly rowHeight: (row: TanStackRow<T>) => number;
   readonly children: (row: TanStackRow<T>) => ReactNode;
   readonly after?: ReactNode;
+  readonly className?: string;
 }
 
-function Body<T>({ rowHeight, children, after }: BodyProps<T>) {
+function Body<T>({ rowHeight, children, after, className }: BodyProps<T>) {
   const { table, scroller } = useInspectorTable<T>();
   const rows = table.getRowModel().rows;
   const virtualizerOptions = {
@@ -110,7 +137,7 @@ function Body<T>({ rowHeight, children, after }: BodyProps<T>) {
   const padTop = items[0]?.start ?? 0;
   const padBottom = virtualizer.getTotalSize() - (items.at(-1)?.end ?? 0);
   return (
-    <TableBody>
+    <TableBody className={className}>
       {padTop > 0 && <tr aria-hidden style={{ height: padTop }} />}
       {items.map(({ key, index }) => (
         <Fragment key={key}>{children(rows[index])}</Fragment>

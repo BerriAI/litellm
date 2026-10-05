@@ -10,15 +10,25 @@ import {
   getProxyBaseUrl,
 } from "../../networking";
 import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
+import type { RunOrder } from "./list/runOrder";
 import type { RunField, SpanDetail, SpanErrorPage, Trace, TraceHistogram, TracePage } from "./types";
 
-export interface TraceWindow extends TimeWindow {
-  readonly cursor?: string | null;
+/** Which runs: the window and the `q` search the server applies before counting or paging. */
+export interface RunSelection {
+  readonly window: TimeWindow;
+  readonly q: string;
 }
 
-/** One page of the runs list: the window, the `q` search the server applies, and where to resume. */
-export interface RunListRequest extends TraceWindow {
-  readonly q: string;
+/** Where in the ordered sequence a page starts; `null` is the first page. */
+export interface RunPage {
+  readonly cursor: string | null;
+}
+
+/** One page of the runs list, as the server's independent read axes. */
+export interface RunListRequest {
+  readonly selection: RunSelection;
+  readonly order: RunOrder;
+  readonly page: RunPage;
 }
 
 export interface TraceHandoff {
@@ -33,7 +43,7 @@ export interface TracesApi {
   readonly live: boolean;
   handoff(traceId: string, spanId?: string | null, traceRef?: string): TraceHandoff;
   list(request: RunListRequest): Promise<TracePage>;
-  histogram(range: TimeWindow, q: string, buckets: number): Promise<TraceHistogram>;
+  histogram(selection: RunSelection, buckets: number): Promise<TraceHistogram>;
   values(field: RunField, contains: string, range: TimeWindow): Promise<readonly string[]>;
   anyRecorded(): Promise<boolean>;
   trace(traceId: string, traceRef?: string, cursor?: string | null): Promise<Trace>;
@@ -60,11 +70,11 @@ export function liveTracesApi(accessToken: string): TracesApi {
       text: agentHandoffText(traceId, spanId, traceRef),
       copied: "Command copied",
     }),
-    list: (request) => agentTraceListCall({ accessToken, ...request }),
-    histogram: (range, q, buckets) =>
+    list: (request) => agentTraceListCall(accessToken, request),
+    histogram: ({ window, q }, buckets) =>
       apiClient.get<TraceHistogram>("/v1/traces/histogram", {
         accessToken,
-        query: { start_ms: range.startMs, end_ms: range.endMs, q: q || undefined, buckets },
+        query: { start_ms: window.startMs, end_ms: window.endMs, q: q || undefined, buckets },
       }),
     values: async (field, contains, range) => {
       const found = await apiClient.get<{ values: string[] }>(`/v1/traces/values/${field}`, {

@@ -6,6 +6,7 @@ import { renderWithProviders } from "../../../../../tests/test-utils";
 import { Inspector } from "@/components/shared/Inspector";
 import traceList from "../__fixtures__/trace_list.json";
 import { AgentTracesTable } from "./AgentTracesTable";
+import { NEWEST, type RunOrder } from "./runOrder";
 import { traceKey } from "../routing";
 import type { TracePage, TraceSummary } from "../types";
 
@@ -150,5 +151,94 @@ describe("AgentTracesTable column picker", () => {
     renderRuns();
     expect(headers()).not.toContain("Cost");
     expect(headers()).toHaveLength(before - 1);
+  });
+});
+
+describe("AgentTracesTable sorting", () => {
+  beforeEach(() => localStorage.clear());
+  const runs = (traceList as TracePage).data as TraceSummary[];
+  const sortable = (order: RunOrder, onOrderChange = vi.fn()) =>
+    inList(
+      <AgentTracesTable
+        traces={runs}
+        isLoading={false}
+        error={null}
+        hasMore={false}
+        order={order}
+        onOrderChange={onOrderChange}
+        onLoadMore={vi.fn()}
+        onSetUpTracing={vi.fn()}
+      />,
+    );
+  const header = (id: string) => screen.getByTestId(`sort-header-${id}`);
+
+  it("asks the server for a column descending first, flips it on the next click, and never clears the order", () => {
+    const onOrderChange = vi.fn();
+    const view = renderWithProviders(sortable(NEWEST, onOrderChange));
+    fireEvent.click(header("duration_ms"));
+    expect(onOrderChange).toHaveBeenLastCalledWith({ key: "duration_ms", descending: true });
+
+    view.rerender(sortable({ key: "duration_ms", descending: true }, onOrderChange));
+    fireEvent.click(header("duration_ms"));
+    expect(onOrderChange).toHaveBeenLastCalledWith({ key: "duration_ms", descending: false });
+
+    view.rerender(sortable({ key: "duration_ms", descending: false }, onOrderChange));
+    fireEvent.click(header("duration_ms"));
+    expect(onOrderChange).toHaveBeenLastCalledWith({ key: "duration_ms", descending: true });
+    expect(onOrderChange).toHaveBeenCalledTimes(3);
+  });
+
+  it("exposes the active order on the column header and offers no sort on values the server cannot order by", () => {
+    renderWithProviders(sortable({ key: "error_count", descending: false }));
+    const headers = screen.getAllByRole("columnheader");
+    const byName = (name: RegExp) => headers.find((cell) => name.test(cell.textContent ?? ""));
+    expect(byName(/Failed/)).toHaveAttribute("aria-sort", "ascending");
+    expect(byName(/Time/)).toHaveAttribute("aria-sort", "none");
+    expect(byName(/Cost/)).not.toHaveAttribute("aria-sort");
+    expect(within(byName(/Cost/) as HTMLElement).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(byName(/Agents/) as HTMLElement).queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sort-header-cost")).not.toBeInTheDocument();
+  });
+
+  it("renders plain headings when the order cannot be changed", () => {
+    renderWithProviders(
+      inList(
+        <AgentTracesTable
+          traces={runs}
+          isLoading={false}
+          error={null}
+          hasMore={false}
+          onLoadMore={vi.fn()}
+          onSetUpTracing={vi.fn()}
+        />,
+      ),
+    );
+    expect(screen.queryByTestId("sort-header-start_ms")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("columnheader").some((cell) => cell.hasAttribute("aria-sort"))).toBe(false);
+  });
+
+  it("keeps the previous rows visible and pauses paging while a new order loads", () => {
+    const onLoadMore = vi.fn();
+    renderWithProviders(
+      inList(
+        <AgentTracesTable
+          traces={runs}
+          isLoading={false}
+          error={null}
+          hasMore
+          isFetching
+          isPlaceholder
+          order={NEWEST}
+          onOrderChange={vi.fn()}
+          onLoadMore={onLoadMore}
+          onSetUpTracing={vi.fn()}
+        />,
+      ),
+    );
+    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
+    expect(screen.getByRole("progressbar", { name: "Updating rows" })).toBeInTheDocument();
+    expect(screen.queryByTestId("runs-placeholder")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(onLoadMore).not.toHaveBeenCalled();
   });
 });

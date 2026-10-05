@@ -3,12 +3,27 @@ import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 
 import { isNegatedOp, valueMatcher } from "@/components/shared/search/language";
 import type { SearchFilter, SearchQuery } from "@/components/shared/search/searchQuery";
+import { NEWEST, type RunOrder, type RunSortKey } from "../runOrder";
 import type { RunField } from "./runQuery";
 
 const RUN_ROWS = `SELECT TraceId AS trace_id, any(RootName) AS name, any(RootInput) AS input, sum(ErrorCount) AS errors,
-       groupUniqArrayArray(AgentNames) AS agents, groupUniqArrayArray(Models) AS models
+       groupUniqArrayArray(AgentNames) AS agents, groupUniqArrayArray(Models) AS models,
+       sum(SpanCount) AS steps, dateDiff('millisecond', min(StartTs), max(EndTs)) AS duration_ms
 FROM agent_traces_by_key
 GROUP BY TraceId`;
+
+const ORDER_COLUMNS: Record<RunSortKey, string> = {
+  start_ms: "min(StartTs)",
+  duration_ms: "duration_ms",
+  span_count: "steps",
+  error_count: "errors",
+};
+
+/** The list's order with the same tie-break the server pages by. */
+const orderBy = (order: RunOrder): string => {
+  const direction = order.descending ? "DESC" : "ASC";
+  return `ORDER BY ${ORDER_COLUMNS[order.key]} ${direction}, trace_id ${direction}`;
+};
 
 const sqlString = (value: string): string => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
 
@@ -60,10 +75,10 @@ export const runPredicates = (query: SearchQuery<RunField>): string[] => [
   ...query.filters.map(filterPredicate),
 ];
 
-/** The runs list as a trace query: one row per trace from the per-key rollup, filtered like the list. */
-export function runQuerySql(query: SearchQuery<RunField>, range?: TimeWindow): string {
+/** The runs list as a trace query: one row per trace from the per-key rollup, filtered and ordered like the list. */
+export function runQuerySql(query: SearchQuery<RunField>, range?: TimeWindow, order: RunOrder = NEWEST): string {
   const having = [timeBound(range), ...runPredicates(query)].join("\n   AND ");
-  return `${RUN_ROWS}\nHAVING ${having}\nORDER BY min(StartTs) DESC\nLIMIT 100`;
+  return `${RUN_ROWS}\nHAVING ${having}\n${orderBy(order)}\nLIMIT 100`;
 }
 
 /** Runs `sql` through the trace query API; the quoted heredoc keeps the SQL's own quotes intact. */
@@ -76,6 +91,6 @@ export const traceQueryCommand = (sql: string): string =>
   ].join("\n");
 
 export const runQueryCommand =
-  (range?: TimeWindow) =>
+  (range?: TimeWindow, order: RunOrder = NEWEST) =>
   (query: SearchQuery<RunField>): string =>
-    traceQueryCommand(runQuerySql(query, range));
+    traceQueryCommand(runQuerySql(query, range, order));

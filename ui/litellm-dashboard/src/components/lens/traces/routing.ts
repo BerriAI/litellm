@@ -1,7 +1,8 @@
 import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryState, useQueryStates } from "nuqs";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { TIME_RANGE_PARSERS } from "@/components/shared/timeRange/routing";
+import { NEWEST, RUN_SORT_KEYS, type RunOrder, SORT_DIRS, sortDir } from "./list/runOrder";
 import type { TraceSummary } from "./types";
 
 export const TRACE_VIEWS = ["steps", "conversation"] as const;
@@ -46,6 +47,11 @@ export const OPEN_TRACE_PARSERS = {
 export const RUN_FILTER_PARSERS = {
   q: parseAsString.withDefault(""),
   ...TIME_RANGE_PARSERS,
+};
+
+export const RUN_ORDER_PARSERS = {
+  sort_by: parseAsStringLiteral(RUN_SORT_KEYS).withDefault(NEWEST.key),
+  sort_dir: parseAsStringLiteral(SORT_DIRS).withDefault(sortDir(NEWEST)),
 };
 
 export interface OpenTraceRouting {
@@ -126,4 +132,15 @@ export function useLocalRunSelection(initialSpanId: string | null): RunSelection
 export function useRunFilterRouting(): { query: string; setQuery: (query: string) => void } {
   const [query, setQuery] = useQueryState("q", RUN_FILTER_PARSERS.q);
   return { query, setQuery: useCallback((q: string) => void setQuery(q), [setQuery]) };
+}
+
+/** The order the runs list is cut in. Newest first is the default and stays out of the URL. */
+export function useRunOrderRouting(): [RunOrder, (order: RunOrder) => void] {
+  const [{ sort_by, sort_dir }, setParams] = useQueryStates(RUN_ORDER_PARSERS);
+  const order = useMemo<RunOrder>(() => ({ key: sort_by, descending: sort_dir === "desc" }), [sort_by, sort_dir]);
+  const setOrder = useCallback(
+    (next: RunOrder) => void setParams({ sort_by: next.key, sort_dir: sortDir(next) }),
+    [setParams],
+  );
+  return [order, setOrder];
 }

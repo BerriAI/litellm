@@ -1,6 +1,7 @@
 import { ApiError } from "@/lib/http/client";
 import type { TracesApi } from "@/components/lens/traces/api";
 import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
+import { orderRuns } from "@/components/lens/traces/list/runOrder";
 import { filterRuns, RUN_INDEX } from "@/components/lens/traces/list/runSearch/runQuery";
 import type { TraceHistogram, TraceSummary } from "@/components/lens/traces/types";
 import { traceAgentNames } from "@/components/lens/traces/utils";
@@ -89,8 +90,11 @@ function demoTracesApi(data: LensDemoData): TracesApi {
       const step = spanId ? found?.details.find((span) => span.span_id === spanId) : found;
       return { text: JSON.stringify(step, null, 2), copied: spanId ? "Step copied" : "Trace copied" };
     },
-    list: async ({ startMs, endMs, q }) => ({ data: matching({ startMs, endMs }, q), next_cursor: null }),
-    histogram: async (range, q, buckets) => demoHistogram(matching(range, q), range, buckets),
+    list: async ({ selection, order }) => ({
+      data: orderRuns(matching(selection.window, selection.q), order),
+      next_cursor: null,
+    }),
+    histogram: async ({ window, q }, buckets) => demoHistogram(matching(window, q), window, buckets),
     values: async (field, contains, range) => {
       const read = field in RUN_INDEX.read ? RUN_INDEX.read[field as keyof typeof RUN_INDEX.read] : null;
       if (!read) return [];

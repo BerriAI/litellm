@@ -117,6 +117,7 @@ import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
+import type { RunListRequest } from "./lens/traces/api";
 import type { SpanDetail, SpanErrorPage, Trace, TracePage } from "./lens/traces/types";
 import {
   createApiClient,
@@ -1957,20 +1958,18 @@ export const uiSpendLogsCall = async ({
  * Agent tracing. All three respond 501 `{detail}` when `general_settings.tracing` is not
  * configured; callers can detect that through the thrown `ApiError`'s `status`.
  */
-export const agentTraceListCall = async ({
-  accessToken,
-  startMs,
-  endMs,
-  q,
-  cursor,
-}: {
-  accessToken: string;
-  startMs: number;
-  endMs: number;
-  q: string;
-  cursor?: string | null;
-}): Promise<TracePage> => {
-  const query = { start_ms: startMs, end_ms: endMs, q: q || undefined, cursor: cursor ?? undefined };
+export const agentTraceListCall = async (
+  accessToken: string,
+  { selection, order, page }: RunListRequest,
+): Promise<TracePage> => {
+  const query = {
+    start_ms: selection.window.startMs,
+    end_ms: selection.window.endMs,
+    q: selection.q || undefined,
+    sort_by: order.key,
+    sort_dir: order.descending ? "desc" : "asc",
+    cursor: page.cursor ?? undefined,
+  };
   return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
 };
 

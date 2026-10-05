@@ -4,6 +4,7 @@ import { parseQuery } from "@/components/shared/search/language";
 import { toSearchQuery } from "@/components/shared/search/searchQuery";
 import { RUN_QUERY } from "./runQuery";
 import { runPredicates, runQueryCommand, runQuerySql, traceQueryCommand } from "./runSql";
+import type { RunOrder } from "../runOrder";
 
 const query = (text: string) => toSearchQuery(parseQuery(RUN_QUERY, text));
 const predicates = (text: string) => runPredicates(query(text));
@@ -52,13 +53,14 @@ describe("runQuerySql", () => {
     expect(sql).toBe(
       [
         "SELECT TraceId AS trace_id, any(RootName) AS name, any(RootInput) AS input, sum(ErrorCount) AS errors,",
-        "       groupUniqArrayArray(AgentNames) AS agents, groupUniqArrayArray(Models) AS models",
+        "       groupUniqArrayArray(AgentNames) AS agents, groupUniqArrayArray(Models) AS models,",
+        "       sum(SpanCount) AS steps, dateDiff('millisecond', min(StartTs), max(EndTs)) AS duration_ms",
         "FROM agent_traces_by_key",
         "GROUP BY TraceId",
         `HAVING min(StartTs) >= fromUnixTimestamp64Milli(${RANGE.startMs}) AND min(StartTs) < fromUnixTimestamp64Milli(${RANGE.endMs})`,
         "   AND arrayExists(x -> x ILIKE 'researcher', agents)",
         "   AND errors > 0",
-        "ORDER BY min(StartTs) DESC",
+        "ORDER BY min(StartTs) DESC, trace_id DESC",
         "LIMIT 100",
       ].join("\n"),
     );
@@ -66,6 +68,16 @@ describe("runQuerySql", () => {
 
   it("falls back to the last day without a range", () => {
     expect(runQuerySql(query(""))).toContain("HAVING min(StartTs) >= now() - INTERVAL 1 DAY\nORDER BY");
+  });
+
+  it.each<{ order: RunOrder; clause: string }>([
+    { order: { key: "duration_ms", descending: false }, clause: "ORDER BY duration_ms ASC, trace_id ASC" },
+    { order: { key: "span_count", descending: true }, clause: "ORDER BY steps DESC, trace_id DESC" },
+    { order: { key: "error_count", descending: true }, clause: "ORDER BY errors DESC, trace_id DESC" },
+    { order: { key: "start_ms", descending: false }, clause: "ORDER BY min(StartTs) ASC, trace_id ASC" },
+  ])("orders the copied rows like the list, $clause", ({ order, clause }) => {
+    expect(runQuerySql(query(""), RANGE, order)).toContain(`\n${clause}\nLIMIT 100`);
+    expect(runQueryCommand(RANGE, order)(query(""))).toContain(clause);
   });
 });
 

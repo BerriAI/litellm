@@ -1,15 +1,23 @@
 "use client";
 
-import { getCoreRowModel, useReactTable, type ColumnDef, type TableOptions } from "@tanstack/react-table";
-import { ArrowDown, ChevronRight } from "lucide-react";
-import { useEffect } from "react";
+import {
+  getCoreRowModel,
+  useReactTable,
+  type ColumnDef,
+  type HeaderContext,
+  type TableOptions,
+} from "@tanstack/react-table";
+import { ChevronRight } from "lucide-react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import { useInView } from "react-intersection-observer";
 
+import { DataTableSortHeader } from "@/components/shared/DataTable/DataTableSortHeader";
 import { DataTableViewOptions } from "@/components/shared/DataTable/DataTableViewOptions";
 import { usePersistedColumnVisibility } from "@/components/shared/DataTable/usePersistedColumnVisibility";
 import { InspectorTable, useInspectorTable } from "@/components/shared/InspectorTable";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/cva.config";
 import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation } from "@/utils/activityTimestamp";
 
 import { SpanIcon } from "../ui/SpanIcon";
@@ -18,6 +26,7 @@ import { FrameworkLogo, traceFramework } from "../ui/TraceFramework";
 import type { TraceSummary } from "../types";
 import { traceRefOf } from "../routing";
 import { fmtMs, previewText, traceDisplayName, traceAgentNames } from "../utils";
+import { fromSorting, NEWEST, type RunOrder, toSorting } from "./runOrder";
 
 interface AgentTracesTableProps {
   traces: TraceSummary[];
@@ -25,6 +34,11 @@ interface AgentTracesTableProps {
   error: Error | null;
   hasMore: boolean;
   isFetching?: boolean;
+  /** Rows belong to the previous order, search or window while this one loads. */
+  isPlaceholder?: boolean;
+  /** The order rows arrive in; with `onOrderChange`, the sortable headers change it on the server. */
+  order?: RunOrder;
+  onOrderChange?: (order: RunOrder) => void;
   onRetry?: () => void;
   onLoadMore: () => void;
   rangeEmpty?: boolean;
@@ -79,19 +93,32 @@ function InputCell({ run }: { run: TraceSummary }) {
   );
 }
 
+const sortHeader = (title: ReactNode) =>
+  function SortHeaderCell({ column }: HeaderContext<TraceSummary, unknown>) {
+    return (
+      <DataTableSortHeader
+        column={column}
+        title={title}
+        className={cn("w-full font-normal uppercase", column.columnDef.meta?.numeric && "justify-end")}
+      />
+    );
+  };
+
+const TIME_TITLE = (
+  <span className="inline-flex items-center gap-1 whitespace-nowrap">
+    Time
+    <span className="normal-case tracking-normal text-muted-foreground/70">{localTimeZoneAbbreviation()}</span>
+  </span>
+);
+
 const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
   {
-    id: "time",
+    id: "start_ms",
+    accessorKey: "start_time",
+    enableSorting: true,
     size: 170,
     enableHiding: false,
-    header: () => (
-      <span className="inline-flex items-center gap-1 whitespace-nowrap">
-        Time <ArrowDown className="size-2.5" />
-        <span className="font-normal normal-case tracking-normal text-muted-foreground/70">
-          {localTimeZoneAbbreviation()}
-        </span>
-      </span>
-    ),
+    header: sortHeader(TIME_TITLE),
     cell: ({ row }) => (
       <span title={formatActivityTimestamp(row.original.start_time)}>
         {formatRunTimestamp(row.original.start_time)}
@@ -127,18 +154,22 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
     meta: { numeric: true, className: MUTED_NUM },
   },
   {
-    id: "steps",
+    id: "span_count",
+    accessorKey: "span_count",
+    enableSorting: true,
     size: 74,
-    header: "Steps",
+    header: sortHeader("Steps"),
     cell: ({ row }) => row.original.span_count.toLocaleString(),
-    meta: { numeric: true, className: MUTED_NUM },
+    meta: { title: "Steps", numeric: true, className: MUTED_NUM },
   },
   {
-    id: "duration",
+    id: "duration_ms",
+    accessorKey: "duration_ms",
+    enableSorting: true,
     size: 86,
-    header: "Duration",
+    header: sortHeader("Duration"),
     cell: ({ row }) => fmtMs(row.original.duration_ms),
-    meta: { numeric: true, className: NUM },
+    meta: { title: "Duration", numeric: true, className: NUM },
   },
   {
     id: "cost",
@@ -148,16 +179,18 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
     meta: { numeric: true, className: NUM },
   },
   {
-    id: "failed",
+    id: "error_count",
+    accessorKey: "error_count",
+    enableSorting: true,
     size: 72,
-    header: "Failed",
+    header: sortHeader("Failed"),
     cell: ({ row }) =>
       row.original.error_count > 0 ? (
         <StatusMark status="error" count={row.original.error_count} />
       ) : (
         <span className="font-mono text-muted-foreground/60">0</span>
       ),
-    meta: { numeric: true },
+    meta: { title: "Failed", numeric: true },
   },
   {
     id: "open",
@@ -184,6 +217,15 @@ function LoadMoreRows({ isFetching, onLoadMore }: { isFetching: boolean; onLoadM
   ));
 }
 
+/** A new order starts at its first row, wherever the previous order had been scrolled to. */
+function ScrollToTop({ order }: { order: RunOrder }) {
+  const { scroller } = useInspectorTable();
+  useEffect(() => {
+    scroller?.scrollTo({ top: 0 });
+  }, [scroller, order.key, order.descending]);
+  return null;
+}
+
 function EmptyRuns({ rangeEmpty, onSetUpTracing }: { rangeEmpty: boolean; onSetUpTracing: () => void }) {
   if (!rangeEmpty)
     return (
@@ -205,13 +247,16 @@ function EmptyRuns({ rangeEmpty, onSetUpTracing }: { rangeEmpty: boolean; onSetU
   );
 }
 
-/** Devtool-dense runs list: one row per agent run, newest first. */
+/** Devtool-dense runs list: one row per agent run, in the server's order. */
 export function AgentTracesTable({
   traces,
   isLoading,
   error,
   hasMore,
   isFetching = false,
+  isPlaceholder = false,
+  order = NEWEST,
+  onOrderChange,
   onRetry,
   onLoadMore,
   rangeEmpty = false,
@@ -219,24 +264,33 @@ export function AgentTracesTable({
 }: AgentTracesTableProps) {
   const settled = !isLoading && !error;
   const isEmpty = settled && !hasMore && traces.length === 0;
-  const autoContinue = settled && hasMore && traces.length > 0;
+  const autoContinue = settled && hasMore && traces.length > 0 && !isPlaceholder;
   const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility("lens-traces");
+  const sorting = useMemo(() => toSorting(order), [order]);
   const tableOptions: TableOptions<TraceSummary> = {
     data: traces,
     columns: RUN_COLUMNS,
     getRowId: runKey,
     autoResetAll: false,
-    state: { columnVisibility },
+    manualSorting: true,
+    enableSorting: onOrderChange !== undefined,
+    enableMultiSort: false,
+    enableSortingRemoval: false,
+    sortDescFirst: true,
+    state: { columnVisibility, sorting },
     onColumnVisibilityChange,
+    onSortingChange: (updater) => onOrderChange?.(fromSorting(updater, order)),
     getCoreRowModel: getCoreRowModel(),
   };
   const table = useReactTable(tableOptions);
   return (
     <InspectorTable.Root table={table} data-testid="runs-table">
+      <ScrollToTop order={order} />
       <InspectorTable.Grid aria-label="Agent runs" aria-busy={isFetching} className="min-w-[900px] text-xs">
-        <InspectorTable.Header />
+        <InspectorTable.Header busy={isPlaceholder} />
         <InspectorTable.Body<TraceSummary>
           rowHeight={() => ROW_HEIGHT}
+          className={cn(isPlaceholder && "opacity-60 transition-opacity motion-reduce:transition-none")}
           after={
             <>
               {isLoading && SKELETON_ROWS.map((row) => <PlaceholderRow key={row} index={row} />)}

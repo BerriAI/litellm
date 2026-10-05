@@ -12,10 +12,15 @@ import {
 } from "@/components/shared/timeRange/timeRange";
 
 import type { TracePage, TraceSummary } from "../types";
-import type { TraceWindow } from "../api";
+import type { RunOrder } from "./runOrder";
 
 interface LoadedTracePage extends TracePage {
-  window: TraceWindow;
+  window: TimeWindow;
+}
+
+interface PagePosition {
+  readonly window: TimeWindow;
+  readonly cursor: string;
 }
 
 export const TRACING_NOT_ENABLED_STATUS = 501;
@@ -46,12 +51,15 @@ interface UseAgentTracesOptions {
   q: string;
   /** A window inside the range that replaces it for the list. */
   zoom: TimeWindow | null;
+  order: RunOrder;
 }
 
 export interface AgentTracesResult {
   traces: TraceSummary[];
   isLoading: boolean;
   isFetching: boolean;
+  /** Rows belong to the previous order, search or window while this one loads. */
+  isPlaceholder: boolean;
   /** Set when the proxy answered 501: tracing isn't configured. */
   notEnabledDetail: string | null;
   error: Error | null;
@@ -64,20 +72,30 @@ export interface AgentTracesResult {
  * GET /v1/traces for the range (or the zoom inside it) and search, cursor-paginated as the runs list scrolls.
  * A live range rolls on refresh; subsequent pages keep the first page's window.
  */
-export function useAgentTraces({ accessToken, range, enabled, q, zoom }: UseAgentTracesOptions): AgentTracesResult {
+export function useAgentTraces({
+  accessToken,
+  range,
+  enabled,
+  q,
+  zoom,
+  order,
+}: UseAgentTracesOptions): AgentTracesResult {
   const traces = useTracesApi(accessToken);
   const isLiveTail = isLive(range);
   const fetchPage = async (pageParam: unknown): Promise<LoadedTracePage> => {
-    const window = (pageParam as TraceWindow | null) ?? zoom ?? timeWindow(range, Date.now());
-    return { ...(await traces.list({ ...window, q })), window };
+    const position = pageParam as PagePosition | null;
+    const window = position?.window ?? zoom ?? timeWindow(range, Date.now());
+    const selection = { window, q };
+    const page = { cursor: position?.cursor ?? null };
+    return { ...(await traces.list({ selection, order, page })), window };
   };
   const queryOptions: Parameters<typeof useInfiniteQuery<LoadedTracePage, Error>>[0] = {
-    queryKey: ["agentTraces", traces.scope, range.hours, range.anchorMs, q, zoom],
+    queryKey: ["agentTraces", traces.scope, range.hours, range.anchorMs, q, zoom, order.key, order.descending],
     placeholderData: keepPreviousData,
     queryFn: ({ pageParam }) => fetchPage(pageParam),
     initialPageParam: null,
-    getNextPageParam: (lastPage) =>
-      lastPage.next_cursor ? { ...lastPage.window, cursor: lastPage.next_cursor } : undefined,
+    getNextPageParam: (lastPage): PagePosition | undefined =>
+      lastPage.next_cursor ? { window: lastPage.window, cursor: lastPage.next_cursor } : undefined,
     enabled,
     staleTime: LIVE_TAIL_INTERVAL_MS,
     retry: (failureCount, error) => !requiresUserAction(error) && failureCount < 1,
@@ -95,6 +113,7 @@ export function useAgentTraces({ accessToken, range, enabled, q, zoom }: UseAgen
     traces: loaded,
     isLoading: query.isLoading,
     isFetching: query.isFetching,
+    isPlaceholder: query.isPlaceholderData,
     notEnabledDetail: notEnabled ? query.error?.message || "Agent tracing is not enabled" : null,
     error: notEnabled ? null : displayError(query.error),
     hasMore: query.hasNextPage,

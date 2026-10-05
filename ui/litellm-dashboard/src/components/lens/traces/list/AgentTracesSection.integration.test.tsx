@@ -9,6 +9,8 @@ import { renderWithProviders, testQueryClient } from "../../../../../tests/test-
 import traceList from "../__fixtures__/trace_list.json";
 import { LensPreviewContext } from "../../ui/LensPreviewButton";
 import AgentTracesPage from "./AgentTracesPage";
+import { previewText } from "../utils";
+import { NEWEST, orderRuns, type RunOrder } from "./runOrder";
 import { filterRuns } from "./runSearch/runQuery";
 import { demoHistogram } from "../../data/demo/createLensDemo";
 import { AgentTracesSection, type TimeControls } from "./AgentTracesSection";
@@ -51,8 +53,8 @@ const serve = (data: readonly TraceSummary[]) => {
       data.filter((run) => startedWithin(run, startMs, endMs)),
       q,
     );
-  vi.mocked(agentTraceListCall).mockImplementation(async ({ startMs, endMs, q }) => ({
-    data: matching(startMs, endMs, q),
+  vi.mocked(agentTraceListCall).mockImplementation(async (_token, { selection, order }) => ({
+    data: orderRuns(matching(selection.window.startMs, selection.window.endMs, selection.q), order),
     next_cursor: null,
   }));
   vi.mocked(apiClient.get).mockImplementation(async (path: string, options?: { query?: Record<string, unknown> }) => {
@@ -65,6 +67,9 @@ const serve = (data: readonly TraceSummary[]) => {
 
 const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
   new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
+
+const listRequest = (index: number) => vi.mocked(agentTraceListCall).mock.calls.at(index)?.[1];
+const lastWindow = () => listRequest(-1)?.selection.window;
 
 /** A day that rolls with now, as the page opens by default. */
 const ROLLING_DAY = { hours: 24, anchorMs: null };
@@ -121,7 +126,7 @@ describe("AgentTracesSection", () => {
     expect(agentTraceListCall).toHaveBeenCalledOnce();
     act(() => mockAllIsIntersecting(true));
     await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(2));
-    expect(vi.mocked(agentTraceListCall).mock.calls[1][0]).toMatchObject({ cursor: "next" });
+    expect(listRequest(1)).toMatchObject({ page: { cursor: "next" } });
     expect(screen.queryByTestId("runs-placeholder")).not.toBeInTheDocument();
     expect(agentTraceListCall).toHaveBeenCalledTimes(2);
   });
@@ -132,7 +137,7 @@ describe("AgentTracesSection", () => {
     vi.mocked(agentTraceListCall).mockResolvedValueOnce({ data: runs.slice(0, 1), next_cursor: "next" });
     renderSection();
     expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
-    const first = vi.mocked(agentTraceListCall).mock.calls[0][0];
+    const first = listRequest(0);
     now.mockReturnValue(Date.parse("2026-10-01T01:00Z"));
     vi.mocked(agentTraceListCall).mockRejectedValue(new ApiError("Please try again", 403, {}));
     act(() => mockAllIsIntersecting(true));
@@ -140,7 +145,7 @@ describe("AgentTracesSection", () => {
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1);
     expect(screen.queryByTestId("runs-placeholder")).not.toBeInTheDocument();
     expect(agentTraceListCall).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(agentTraceListCall).mock.calls[1][0]).toEqual({ ...first, cursor: "next" });
+    expect(listRequest(1)).toEqual({ ...first, page: { cursor: "next" } });
     vi.mocked(agentTraceListCall).mockResolvedValueOnce({ data: runs.slice(1, 2), next_cursor: null });
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(2));
@@ -595,7 +600,7 @@ describe("AgentTracesPage", () => {
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last 7 days" }));
     expect(trigger).toHaveTextContent("Last 7 days");
     await waitFor(() => {
-      const last = vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0];
+      const last = lastWindow();
       expect((last?.endMs ?? 0) - (last?.startMs ?? 0)).toBeGreaterThanOrEqual(7 * 24 * 3600 * 1000 - 60_000);
     });
 
@@ -604,7 +609,7 @@ describe("AgentTracesPage", () => {
     expect(trigger).toHaveTextContent(/ to /);
     expect(trigger).not.toHaveTextContent("Last 7 days");
 
-    await waitFor(() => expect(vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0].endMs).toBe(pausedAt));
+    await waitFor(() => expect(lastWindow()?.endMs).toBe(pausedAt));
   });
 
   it("keeps the time controls on an empty range the user picked, instead of showing onboarding", async () => {
@@ -626,16 +631,55 @@ describe("AgentTracesPage", () => {
     const onUrlUpdate = vi.fn();
     renderWithProviders(<AgentTracesPage accessToken="sk-test" />, { searchParams: "?hours=168", onUrlUpdate });
     await screen.findByTestId("runs-table");
-    const { startMs, endMs } = vi.mocked(agentTraceListCall).mock.calls[0][0];
+    const { startMs, endMs } = listRequest(0)!.selection.window;
     expect(endMs - startMs).toBeGreaterThanOrEqual(7 * 24 * 3600 * 1000 - 60_000);
 
     fireEvent.click(screen.getByRole("button", { name: "Time range" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last hour" }));
     await waitFor(() => {
-      const last = vi.mocked(agentTraceListCall).mock.calls.at(-1)?.[0];
+      const last = lastWindow();
       expect((last?.endMs ?? 0) - (last?.startMs ?? 0)).toBeLessThanOrEqual(3600 * 1000 + 60_000);
     });
     await waitFor(() => expect(lastUrl(onUrlUpdate).get("hours")).toBe("1"));
+  });
+
+  it("re-sorts on the server from the first page, keeps the rows meanwhile, and remembers the order in the URL", async () => {
+    pinNowToFixtures();
+    serve(runs);
+    const onUrlUpdate = vi.fn();
+    renderWithProviders(<AgentTracesPage accessToken="sk-test" />, { onUrlUpdate });
+    const rowsBefore = await screen.findAllByTestId("agent-trace-row");
+    expect(listRequest(0)).toMatchObject({ order: { key: "start_ms", descending: true }, page: { cursor: null } });
+    const firstInput = (order: RunOrder) => previewText(orderRuns(runs, order)[0].input_preview).split("\n")[0];
+    // A first click sorts descending; pick a key whose top run is not already the newest one.
+    const key = (["duration_ms", "span_count", "error_count"] as const).find(
+      (candidate) => firstInput({ key: candidate, descending: true }) !== firstInput(NEWEST),
+    );
+    if (key === undefined) throw new Error("fixtures need a run that leads a non-time order");
+    const topAfter = firstInput({ key, descending: true });
+    expect(rowsBefore[0]).not.toHaveTextContent(topAfter);
+
+    let release = () => {};
+    vi.mocked(agentTraceListCall).mockImplementationOnce(
+      (_token, { selection, order }) =>
+        new Promise((resolve) => {
+          release = () =>
+            resolve({
+              data: orderRuns(filterRuns(runs, selection.q), order),
+              next_cursor: null,
+            });
+        }),
+    );
+    fireEvent.click(screen.getByTestId(`sort-header-${key}`));
+    expect(await screen.findByRole("progressbar", { name: "Updating rows" })).toBeInTheDocument();
+    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(rowsBefore.length);
+    expect(listRequest(-1)).toMatchObject({ order: { key, descending: true }, page: { cursor: null } });
+
+    act(release);
+    await waitFor(() => expect(screen.queryByRole("progressbar")).not.toBeInTheDocument());
+    expect(screen.getAllByTestId("agent-trace-row")[0]).toHaveTextContent(topAfter);
+    expect(lastUrl(onUrlUpdate).get("sort_by")).toBe(key);
+    expect(lastUrl(onUrlUpdate).has("sort_dir")).toBe(false);
   });
 
   it("asks the proxy for the last 24 hours by default", async () => {
@@ -643,7 +687,7 @@ describe("AgentTracesPage", () => {
     renderWithProviders(<AgentTracesPage accessToken="sk-test" />);
     await screen.findByTestId("runs-table");
 
-    const { startMs, endMs } = vi.mocked(agentTraceListCall).mock.calls[0][0];
+    const { startMs, endMs } = listRequest(0)!.selection.window;
     expect(endMs - startMs).toBeGreaterThanOrEqual(24 * 3600 * 1000 - 60_000);
     expect(endMs - startMs).toBeLessThan(24 * 3600 * 1000 + 120_000);
   });

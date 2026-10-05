@@ -8,7 +8,14 @@ import { Inspector } from "@/components/shared/Inspector";
 import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
-import { type TraceRef, traceKey, traceRefOf, useOpenTraceRouting, useRunFilterRouting } from "../routing";
+import {
+  type TraceRef,
+  traceKey,
+  traceRefOf,
+  useOpenTraceRouting,
+  useRunFilterRouting,
+  useRunOrderRouting,
+} from "../routing";
 import type { TraceSummary } from "../types";
 import { RunView } from "../detail/run/RunView";
 import { useZoomRouting } from "@/components/shared/timeRange/routing";
@@ -75,10 +82,11 @@ export function AgentTracesSection({
   const live = useTracesLive();
   const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
   const { query, setQuery } = useRunFilterRouting();
+  const [order, setOrder] = useRunOrderRouting();
   const [showSetup, setShowSetup] = useState(false);
   const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
-  const traceQuery = { accessToken, range, enabled: isActive, q: query, zoom };
+  const traceQuery = { accessToken, range, enabled: isActive, q: query, zoom, order };
   const traces = useAgentTraces(traceQuery);
   const narrowed = rangeChanged || zoom !== null || query.trim() !== "";
   const setup = useTracingSetup(traces, isActive, narrowed);
@@ -93,7 +101,7 @@ export function AgentTracesSection({
   // A live range ends "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
   const minuteEndMs = moment().endOf("minute").valueOf();
   const window = useMemo(() => timeWindow(range, minuteEndMs), [range, minuteEndMs]);
-  const histogram = useTraceHistogram(accessToken, window, query, isActive);
+  const histogram = useTraceHistogram(accessToken, { window, q: query }, isActive);
   const runs = traces.traces;
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
 
@@ -163,7 +171,7 @@ export function AgentTracesSection({
             />
           )}
         </Inspector.Panel>
-        <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces} range={zoom ?? window}>
+        <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces} range={zoom ?? window} order={order}>
           {timeControls && (
             <TimeRangeControls
               range={range}
@@ -188,6 +196,9 @@ export function AgentTracesSection({
           error={traces.error}
           hasMore={traces.hasMore}
           isFetching={traces.isFetching}
+          isPlaceholder={traces.isPlaceholder}
+          order={order}
+          onOrderChange={setOrder}
           onRetry={traces.hasMore ? traces.loadMore : traces.refetch}
           onLoadMore={traces.loadMore}
           rangeEmpty={traces.traces.length === 0}
