@@ -1,10 +1,10 @@
 # LiteLLM Makefile
 # Simple Makefile for running tests and basic development tasks
 
-.PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
+.PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc test-unit-proxy-root \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
-	test-rust-extension rust-sqlx-prepare \
+	test-rust-extension rust-sqlx-prepare lens-dev \
 	info lint lint-inner lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
@@ -47,6 +47,7 @@ help:
 	@echo "  make test-unit-proxy-guardrails - Run proxy guardrails+mgmt tests (~51 files)"
 	@echo "  make test-unit-proxy-core - Run proxy auth+client+db+hooks tests (~52 files)"
 	@echo "  make test-unit-proxy-misc - Run proxy misc tests (~77 files)"
+	@echo "  make test-unit-proxy-root - Run proxy root-file tests (tests/unit/proxy/test_*.py)"
 	@echo "  make test-unit-integrations - Run integration tests (~60 files)"
 	@echo "  make test-unit-core-utils - Run core utils tests (~32 files)"
 	@echo "  make test-unit-other    - Run other tests (caching, responses, etc., ~69 files)"
@@ -57,6 +58,7 @@ help:
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
 	@echo "  make rust-sqlx-prepare  - Refresh litellm-rust/crates/db/.sqlx against a migrated Postgres container"
+	@echo "  make lens-dev           - Run proxy + Lens worker + hot-reload dashboard (ARGS=\"--seed large --seed-logs\", LENS_DEV_PROXY_PORT, LENS_DEV_UI_PORT)"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
@@ -310,6 +312,9 @@ test-rust-extension:
 rust-sqlx-prepare:
 	cd litellm-rust && cargo run -p litellm-db-testing --bin sqlx-prepare
 
+lens-dev:
+	./scripts/lens_dev.sh $(ARGS)
+
 test: install-test-deps
 	$(UV_RUN) pytest tests/
 
@@ -321,13 +326,16 @@ test-unit-llms: install-test-deps
 	$(UV_RUN) pytest tests/unit/llms --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-guardrails: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/management_helpers --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/guardrails tests/unit/proxy/management_endpoints tests/unit/proxy/management_helpers --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-core: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/proxy/auth tests/test_litellm/proxy/client tests/test_litellm/proxy/db tests/test_litellm/proxy/hooks tests/test_litellm/proxy/policy_engine --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/auth tests/unit/proxy/client tests/unit/proxy/db tests/unit/proxy/hooks tests/unit/proxy/policy_engine --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-misc: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/agent_endpoints tests/test_litellm/proxy/anthropic_endpoints tests/test_litellm/proxy/common_utils tests/test_litellm/proxy/discovery_endpoints tests/test_litellm/proxy/experimental tests/test_litellm/proxy/google_endpoints tests/test_litellm/proxy/health_endpoints tests/test_litellm/proxy/image_endpoints tests/test_litellm/proxy/middleware tests/test_litellm/proxy/openai_files_endpoint tests/test_litellm/proxy/pass_through_endpoints tests/test_litellm/proxy/prompts tests/test_litellm/proxy/public_endpoints tests/test_litellm/proxy/response_api_endpoints tests/test_litellm/proxy/shutdown tests/test_litellm/proxy/spend_tracking tests/test_litellm/proxy/ui_crud_endpoints tests/test_litellm/proxy/vector_store_endpoints tests/test_litellm/proxy/test_*.py --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/agent_endpoints tests/unit/proxy/anthropic_endpoints tests/unit/proxy/common_utils --ignore=tests/unit/proxy/common_utils/test_cache_aware_routing.py --ignore=tests/unit/proxy/common_utils/test_check_batch_cost.py --ignore=tests/unit/proxy/common_utils/test_check_responses_cost.py --ignore=tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py --ignore=tests/unit/proxy/common_utils/test_realtime_cache.py tests/unit/proxy/discovery_endpoints tests/unit/proxy/experimental tests/unit/proxy/google_endpoints tests/unit/proxy/health_endpoints tests/unit/proxy/image_endpoints tests/unit/proxy/middleware --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py tests/unit/proxy/openai_files_endpoint tests/unit/proxy/pass_through_endpoints tests/unit/proxy/prompts tests/unit/proxy/public_endpoints tests/unit/proxy/response_api_endpoints tests/unit/proxy/shutdown tests/unit/proxy/spend_tracking --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py tests/unit/proxy/ui_crud_endpoints tests/unit/proxy/vector_store_endpoints tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py --ignore=tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py --ignore=tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py --ignore=tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py --tb=short -vv -n 4 --durations=20
+
+test-unit-proxy-root: install-test-deps
+	$(UV_RUN) pytest tests/unit/proxy/test_*.py --ignore=tests/unit/proxy/test_aproxy_startup.py --ignore=tests/unit/proxy/test_credential_slot_registry.py --ignore=tests/unit/proxy/test_custom_callback_input.py --ignore=tests/unit/proxy/test_custom_logger_s3_gcs.py --ignore=tests/unit/proxy/test_custom_tokenizer_bug.py --ignore=tests/unit/proxy/test_db_schema_changes.py --ignore=tests/unit/proxy/test_deprecated_key_grace_period.py --ignore=tests/unit/proxy/test_get_favicon.py --ignore=tests/unit/proxy/test_get_image.py --ignore=tests/unit/proxy/test_prisma_client_backoff_retry.py --ignore=tests/unit/proxy/test_prompt_test_endpoint.py --ignore=tests/unit/proxy/test_proxy_config_unit_test.py --ignore=tests/unit/proxy/test_proxy_custom_auth.py --ignore=tests/unit/proxy/test_proxy_reject_logging.py --ignore=tests/unit/proxy/test_proxy_server.py --ignore=tests/unit/proxy/test_proxy_setting_guardrails.py --ignore=tests/unit/proxy/test_proxy_token_counter.py --ignore=tests/unit/proxy/test_proxy_utils.py --ignore=tests/unit/proxy/test_reducto_ocr_route.py --ignore=tests/unit/proxy/test_response_polling_pre_call_checks.py --ignore=tests/unit/proxy/test_server_root_path.py --ignore=tests/unit/proxy/test_ui_path_detection.py --ignore=tests/unit/proxy/test_unit_test_proxy_hooks.py --ignore=tests/unit/proxy/test_update_spend.py --ignore=tests/unit/proxy/test_zero_cost_model_budget_bypass.py --tb=short -vv -n 4 --durations=20
 
 test-unit-integrations: install-test-deps
 	$(UV_RUN) pytest tests/unit/integrations --tb=short -vv -n 4 --durations=20

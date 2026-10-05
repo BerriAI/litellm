@@ -19,10 +19,12 @@ import openai
 import pytest
 import respx
 from fastapi import HTTPException
+from opentelemetry import trace
 
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.exceptions import GuardrailRaisedException, MidStreamFallbackError, ModifyResponseException
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -2274,6 +2276,73 @@ def test_model_group_info_cost_none_for_unpriced_deployment_but_zero_when_declar
     assert priced is not None
     assert priced.input_cost_per_token is not None and priced.input_cost_per_token > 0
     assert priced.output_cost_per_token is not None and priced.output_cost_per_token > 0
+
+
+def _alias_cost_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "vllm-free",
+                "litellm_params": {
+                    "model": "openai/my-vllm-free",
+                    "api_key": "fake",
+                    "api_base": "http://localhost:8000/v1",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                },
+            },
+            {
+                "model_name": "gpt-priced",
+                "litellm_params": {"model": "gpt-4o", "api_key": "fake"},
+            },
+        ],
+        model_group_alias={"hidden-free": {"model": "vllm-free", "hidden": True}, "visible": "vllm-free"},
+    )
+
+
+def test_get_model_group_info_include_hidden_resolves_a_hidden_alias():
+    router = _alias_cost_router()
+
+    assert router.get_model_group_info(model_group="hidden-free") is None
+
+    hidden: Final = router.get_model_group_info(model_group="hidden-free", include_hidden=True)
+    assert hidden is not None
+    assert hidden.model_group == "hidden-free"
+    assert hidden.input_cost_per_token == 0
+    assert hidden.output_cost_per_token == 0
+
+
+def test_update_settings_model_group_alias_drops_cached_group_info():
+    router = _alias_cost_router()
+    before: Final = router.cached_model_group_info("visible")
+    assert before is not None and before.input_cost_per_token == 0
+
+    router.update_settings(model_group_alias={"visible": "gpt-priced"})
+
+    after: Final = router.cached_model_group_info("visible")
+    assert after is not None
+    assert after.input_cost_per_token is not None and after.input_cost_per_token > 0
+
+
+def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selector():
+    router = _alias_cost_router()
+
+    router._switch_routing_strategy(
+        "lar1",
+        {
+            "routing_strategy_args": {
+                "confidence_threshold_low": 0.1,
+                "confidence_threshold_medium": 0.3,
+                "confidence_threshold_high": 0.9,
+            }
+        },
+    )
+    assert router.routing_strategy == "lar1"
+    assert "async_get_available_deployment" in router.__dict__
+
+    router._switch_routing_strategy("usage-based-routing-v2", {})
+    assert router.lowesttpm_logger_v2 is not None
+    assert "async_get_available_deployment" not in router.__dict__
 
 
 @pytest.mark.parametrize(
@@ -10272,6 +10341,200 @@ def test_get_configured_display_name_skips_wildcard_pattern_matching():
             router.get_configured_display_name("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
             is None
         )
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [["ultrafast"], ["priority", {"id": "ultrafast", "name": "Ultrafast", "description": "Fastest"}], [], "not-a-list"],
+)
+def test_get_configured_service_tiers_returns_the_deployment_model_info_value_as_set(configured):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": configured},
+            }
+        ]
+    )
+
+    assert router.get_configured_service_tiers("gpt-6-astra") == (configured,)
+
+
+def test_get_configured_service_tiers_returns_one_value_per_deployment_in_model_list_order():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            },
+            {"model_name": "gpt-6-astra", "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://a.example"}},
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://b.example"},
+                "model_info": {"service_tiers": ["priority", "ultrafast"]},
+            },
+        ]
+    )
+
+    assert router.get_configured_service_tiers("gpt-6-astra") == (["ultrafast"], None, ["priority", "ultrafast"])
+
+
+def test_get_configured_service_tiers_returns_none_for_an_unset_deployment_and_nothing_for_an_unknown_name():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "no-tiers-model",
+                "litellm_params": {"model": "openai/some-unmapped-model"},
+            }
+        ]
+    )
+
+    assert router.get_configured_service_tiers("no-tiers-model") == (None,)
+    assert router.get_configured_service_tiers("not-a-real-model") == ()
+
+
+def test_get_configured_service_tiers_does_not_apply_a_wildcard_deployment_to_matched_names():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            }
+        ]
+    )
+
+    assert router.get_configured_service_tiers("openai/gpt-6-astra") == ()
+
+
+def test_get_configured_service_tiers_reads_only_the_deployments_a_request_can_route_to():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://paused.example"},
+                "model_info": {"blocked": True},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://team-2.example"},
+                "model_info": {"team_id": "team-2"},
+            },
+        ]
+    )
+
+    assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-1") == (["ultrafast"],)
+    assert router.get_configured_service_tiers("gpt-6-astra", team_id="team-2") == (["ultrafast"], None)
+    assert router.get_configured_service_tiers("gpt-6-astra") == (["ultrafast"],)
+
+
+@pytest.mark.parametrize(
+    "alias_value, expected_group",
+    [
+        ("gpt-6-astra", "gpt-6-astra"),
+        ({"model": "gpt-6-astra", "hidden": True}, "gpt-6-astra"),
+        ({"model": "", "hidden": False}, "gpt-6"),
+    ],
+    ids=["string-alias", "item-alias", "malformed-alias-is-itself"],
+)
+def test_routable_model_group_is_the_alias_target_else_the_name_itself(alias_value, expected_group):
+    router = litellm.Router(
+        model_list=[{"model_name": "gpt-6-astra", "litellm_params": {"model": "openai/gpt-6-astra"}}],
+        model_group_alias={"gpt-6": alias_value},
+    )
+
+    assert router.routable_model_group("gpt-6") == expected_group
+    assert router.routable_model_group("gpt-6-astra") == "gpt-6-astra"
+    assert router.routable_model_group("not-a-real-model") == "not-a-real-model"
+
+
+def test_get_configured_service_tiers_reads_an_alias_off_its_target_deployments():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra"},
+                "model_info": {"service_tiers": ["ultrafast"]},
+            },
+            {
+                "model_name": "gpt-6-astra",
+                "litellm_params": {"model": "openai/gpt-6-astra", "api_base": "https://team-2.example"},
+                "model_info": {"team_id": "team-2", "service_tiers": ["priority"]},
+            },
+        ],
+        model_group_alias={"gpt-6": "gpt-6-astra", "gpt-6-quiet": {"model": "gpt-6-astra", "hidden": True}},
+    )
+
+    assert router.get_configured_service_tiers("gpt-6") == router.get_configured_service_tiers("gpt-6-astra")
+    assert router.get_configured_service_tiers("gpt-6", team_id="team-1") == (["ultrafast"],)
+    assert router.get_configured_service_tiers("gpt-6", team_id="team-2") == (["ultrafast"], ["priority"])
+    assert router.get_configured_service_tiers("gpt-6-quiet", team_id="team-1") == (["ultrafast"],)
+
+
+def _router_with_team_owned_deployments():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "owned-by-teams",
+                "litellm_params": {"model": "openai/gpt-5.5"},
+                "model_info": {"team_id": "team-1", "service_tiers": ["priority"]},
+            },
+            {
+                "model_name": "owned-by-teams",
+                "litellm_params": {"model": "openai/paused-model"},
+                "model_info": {"team_id": "team-2", "blocked": True, "service_tiers": ["paused"]},
+            },
+            {
+                "model_name": "owned-by-teams",
+                "litellm_params": {"model": "openai/team-2-model"},
+                "model_info": {"team_id": "team-2", "service_tiers": ["flex"]},
+            },
+            {
+                "model_name": "owned-and-shared",
+                "litellm_params": {"model": "openai/team-1-model"},
+                "model_info": {"team_id": "team-1", "service_tiers": ["priority"]},
+            },
+            {
+                "model_name": "owned-and-shared",
+                "litellm_params": {"model": "openai/shared-model"},
+                "model_info": {"service_tiers": ["flex"]},
+            },
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}},
+        ],
+        model_group_alias={"nickname": "owned-by-teams"},
+    )
+
+
+@pytest.mark.parametrize(
+    "model_name, team_id, upstream_model, service_tiers",
+    [
+        ("owned-by-teams", "team-1", "openai/gpt-5.5", (["priority"],)),
+        ("owned-by-teams", "team-2", "openai/team-2-model", (["flex"],)),
+        ("nickname", "team-1", "openai/gpt-5.5", (["priority"],)),
+        ("nickname", "team-2", "openai/team-2-model", (["flex"],)),
+        ("owned-by-teams", "team-3", None, ()),
+        ("owned-by-teams", None, "openai/gpt-5.5", (["priority"], ["flex"])),
+        ("owned-and-shared", "team-1", "openai/team-1-model", (["priority"], ["flex"])),
+        ("owned-and-shared", "team-2", "openai/shared-model", (["flex"],)),
+        ("owned-and-shared", None, "openai/shared-model", (["flex"],)),
+        ("openai/gpt-5.5", "team-1", None, ()),
+        ("not-a-real-model", None, None, ()),
+    ],
+)
+def test_upstream_model_and_service_tiers_are_read_off_the_deployments_the_team_can_route_to(
+    model_name, team_id, upstream_model, service_tiers
+):
+    router = _router_with_team_owned_deployments()
+
+    assert router.get_routable_upstream_model(model_name, team_id) == upstream_model
+    assert router.get_configured_service_tiers(model_name, team_id) == service_tiers
 
 
 def test_get_configured_display_name_treats_malformed_values_as_absent():
@@ -18882,3 +19145,297 @@ async def test_router_subclass_overriding_async_get_healthy_deployments_with_the
     response: Final = await router.acompletion(model="m", messages=[{"role": "user", "content": "x"}])
 
     assert response.choices[0].message.content == "hi"
+
+
+def test_get_deployment_credentials_with_provider_preserves_anthropic_wif_params():
+    """
+    Test that get_deployment_credentials_with_provider preserves a litellm_params-configured
+    Anthropic workload identity federation setup (both the legacy token_file fields and the
+    Phase 1 internal_issuer/keycloak identity-source fields) so files/batches/passthrough
+    deployments using WIF do not silently fall back to a missing credential.
+    """
+    wif_params = {
+        "anthropic_federation_rule_id": "fdrl_deployment",
+        "anthropic_organization_id": "org-deployment",
+        "anthropic_identity_source": "keycloak",
+        "anthropic_keycloak_token_url": "https://keycloak.internal.example/realms/r/protocol/openid-connect/token",
+        "anthropic_keycloak_client_id": "litellm",
+        "anthropic_keycloak_client_secret_ref": "oidc/env/KEYCLOAK_CLIENT_SECRET",
+    }
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "anthropic-wif-model",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-5",
+                    **wif_params,
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="anthropic-wif-model")
+
+    assert credentials is not None
+    for key, value in wif_params.items():
+        assert credentials.get(key) == value, key
+
+
+def test_router_keeps_wif_secret_pointers_unresolved(monkeypatch):
+    monkeypatch.setenv("WIF_TEST_KC_SECRET", "kc-secret")
+    monkeypatch.setenv("WIF_TEST_FDRL", "fdrl_from_env")
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-wif",
+                "litellm_params": {
+                    "model": "anthropic/claude-haiku-4-5",
+                    "anthropic_federation_rule_id": "os.environ/WIF_TEST_FDRL",
+                    "anthropic_identity_source": "keycloak",
+                    "anthropic_keycloak_token_url": "https://keycloak.example/token",
+                    "anthropic_keycloak_client_id": "litellm",
+                    "anthropic_keycloak_client_secret_ref": "os.environ/WIF_TEST_KC_SECRET",
+                },
+            }
+        ]
+    )
+
+    litellm_params = router.get_model_list()[0]["litellm_params"]
+
+    assert litellm_params["anthropic_federation_rule_id"] == "fdrl_from_env"
+    assert litellm_params["anthropic_keycloak_client_secret_ref"] == "os.environ/WIF_TEST_KC_SECRET"
+
+
+@pytest.mark.asyncio
+async def test_failure_rpm_increment_declares_the_router_usage_key_family():
+    """The RPM bump a failed call still earns is router usage bookkeeping, so its Redis span
+    reads ``redis.incr router_usage`` rather than a bare ``redis.incr``."""
+    from unittest.mock import AsyncMock
+
+    from litellm._internal_context import current_service_target
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+                "model_info": {"id": "dep-1"},
+            }
+        ]
+    )
+    seen: list[str | None] = []
+
+    async def _increment(**_kwargs):
+        seen.append(current_service_target())
+
+    with patch.object(router.cache, "async_increment_cache", new=AsyncMock(side_effect=_increment)):
+        await router.async_deployment_callback_on_failure(
+            kwargs={
+                "call_type": "acompletion",
+                "litellm_params": {
+                    "metadata": {"deployment": "openai/gpt-4o", "model_group": "gpt-group"},
+                    "model_info": {"id": "dep-1"},
+                },
+            },
+            completion_response=None,
+            start_time=None,
+            end_time=None,
+        )
+
+    assert seen == ["router_usage"]
+    assert current_service_target() is None
+
+class _SpanRecordingInMemoryCache(InMemoryCache):
+    """Records the live OTel span each read runs under, so the test sees what a Redis span would nest in."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_span_names: list[str] = []
+
+    async def async_batch_get_cache(self, keys, **kwargs):
+        self.active_span_names.append(trace.get_current_span().name)
+        return await super().async_batch_get_cache(keys, **kwargs)
+
+    async def async_get_cache(self, key, **kwargs):
+        self.active_span_names.append(trace.get_current_span().name)
+        return await super().async_get_cache(key, **kwargs)
+
+
+@pytest.fixture
+def v2_span_exporter(monkeypatch):
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.otel import OpenTelemetryV2Config
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.plumbing import providers
+    from litellm.proxy import proxy_server
+
+    config = OpenTelemetryV2Config(exporter="in_memory")
+    exporter = InMemorySpanExporter()
+    logger = OpenTelemetryV2(config=config, tracer_provider=providers.build_tracer_provider(config, exporter=exporter))
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    return exporter
+
+
+@pytest.mark.asyncio
+async def test_deployment_selection_runs_inside_a_route_phase_named_after_the_model_group(v2_span_exporter):
+    """Picking a deployment opens ``route {model_group}`` (the requested group, not the deployment
+    it picks) under the server span, and the cooldown reads it issues run inside it, so their Redis
+    spans nest there instead of lying flat under the request."""
+    from opentelemetry.sdk.trace import TracerProvider
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake", "mock_response": "a"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "gpt-group",
+                "litellm_params": {"model": "openai/gpt-5.4", "api_key": "fake", "mock_response": "b"},
+                "model_info": {"id": "dep-b"},
+            },
+        ]
+    )
+    recording_cache = _SpanRecordingInMemoryCache()
+    router.cache.in_memory_cache = recording_cache
+    router.cooldown_cache.cooldown_store.in_memory_cache = recording_cache
+
+    with TracerProvider().get_tracer("test").start_as_current_span("POST /v1/chat/completions") as server_span:
+        deployment = await router.async_get_available_deployment(model="gpt-group", request_kwargs={})
+
+    assert deployment["model_info"]["id"] in {"dep-a", "dep-b"}
+    (route_span,) = v2_span_exporter.get_finished_spans()
+    assert route_span.name == "route gpt-group"
+    assert route_span.parent is not None and route_span.parent.span_id == server_span.get_span_context().span_id
+    assert route_span.end_time is not None
+    assert recording_cache.active_span_names and set(recording_cache.active_span_names) == {"route gpt-group"}
+
+
+def _record_phase_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, str | int]]]:
+    events: list[tuple[str, dict[str, str | int]]] = []  # mutable-ok: recorder for the injected phase_event double
+
+    def record(name: str, attributes: dict[str, str | int]) -> None:
+        events.append((name, dict(attributes)))
+
+    monkeypatch.setattr(litellm.router, "phase_event", record)
+    return events
+
+
+def _pick(model_group: str, reason: str, attempt: int) -> tuple[str, dict[str, str | int]]:
+    return (
+        "litellm.request.deployment_selected",
+        {
+            "litellm.deployment.attempt": attempt,
+            "litellm.deployment.reason": reason,
+            "litellm.deployment.model_group": model_group,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "request_kwargs, expected_reason, expected_attempt",
+    [
+        (None, "initial", 1),
+        ({"metadata": {"attempted_retries": 0}, "fallback_depth": 0}, "initial", 1),
+        ({"metadata": {"attempted_retries": 2}}, "retry", 3),
+        ({"litellm_metadata": {"attempted_retries": 1}, "metadata": {"attempted_retries": 4}}, "retry", 2),
+        ({"metadata": {}, "fallback_depth": 1}, "fallback", 1),
+        ({"metadata": {"attempted_retries": 1}, "fallback_depth": 1}, "retry", 2),
+    ],
+)
+def test_deployment_pick_attributes_derive_attempt_and_reason(
+    request_kwargs: dict[str, object] | None, expected_reason: str, expected_attempt: int
+):
+    attributes: Final = litellm.router._deployment_pick_attributes("gpt-4o", request_kwargs)
+
+    assert dict(attributes) == {
+        "litellm.deployment.attempt": expected_attempt,
+        "litellm.deployment.reason": expected_reason,
+        "litellm.deployment.model_group": "gpt-4o",
+    }
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marks_deployment_selected_once(monkeypatch: pytest.MonkeyPatch):
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+            }
+        ]
+    )
+
+    await router.acompletion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
+
+    assert events == [_pick("gpt-4o", "initial", 1)]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marks_every_retry_pick(monkeypatch: pytest.MonkeyPatch):
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "flaky",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": Exception("boom")},
+            }
+        ],
+        num_retries=2,
+        retry_after=0,
+    )
+
+    with pytest.raises(Exception, match="boom"):
+        await router.acompletion(model="flaky", messages=[{"role": "user", "content": "hi"}])
+
+    assert events == [_pick("flaky", "initial", 1), _pick("flaky", "retry", 2), _pick("flaky", "retry", 3)]
+
+
+@pytest.mark.asyncio
+async def test_acompletion_marks_fallback_pick_with_its_model_group(monkeypatch: pytest.MonkeyPatch):
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": Exception("boom")},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake", "mock_response": "hi"},
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+
+    response: Final = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
+
+    assert response.choices[0].message.content == "hi"
+    assert events == [_pick("primary", "initial", 1), _pick("backup", "fallback", 1)]
+
+
+@pytest.mark.asyncio
+async def test_non_chat_surfaces_mark_their_deployment_pick(monkeypatch: pytest.MonkeyPatch):
+    """The event is emitted where the router picks, so embeddings and the sync path report it too."""
+    events: Final = _record_phase_events(monkeypatch)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "embed",
+                "litellm_params": {"model": "openai/text-embedding-3-small", "api_key": "fake", "mock_response": [0.1]},
+            },
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake", "mock_response": "hi"},
+            },
+        ]
+    )
+
+    await router.aembedding(model="embed", input="hi")
+    router.completion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
+
+    assert events == [_pick("embed", "initial", 1), _pick("gpt-4o", "initial", 1)]

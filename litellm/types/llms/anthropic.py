@@ -733,7 +733,7 @@ ANTHROPIC_API_ONLY_HEADERS: Final = {  # fails if calling anthropic on vertex ai
 class AnthropicThinkingParam(TypedDict, total=False):
     type: ReadOnly[Literal["enabled", "adaptive", "disabled"]]
     budget_tokens: int
-    display: ReadOnly[Literal["summarized", "omitted"]]
+    display: ReadOnly[Literal["summarized", "omitted", "updates"]]
 
 
 class ANTHROPIC_HOSTED_TOOLS(str, Enum):
@@ -776,10 +776,14 @@ ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"
 
 ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER: Final = "mid-conversation-output-config-2026-07-01"
 
+ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER: Final = "thinking-display-updates-2026-08-18"
+ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER: Final = "mid-conversation-tool-changes-2026-07-01"
+
 ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER: Final = "fine-grained-tool-streaming-2025-05-14"
 
 # OAuth constants
 ANTHROPIC_OAUTH_TOKEN_PREFIX: Final = "sk-ant-oat"
 ANTHROPIC_OAUTH_BETA_HEADER: Final = "oauth-2025-04-20"
+ANTHROPIC_TOKEN_EXCHANGE_PATH: Final = "/v1/oauth/token"
 
 ANTHROPIC_PROMPT_CACHING_SCOPE_BETA_HEADER: Final = "prompt-caching-scope-2026-01-05"
