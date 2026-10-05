@@ -8967,18 +8967,23 @@ async def test_common_checks_allows_model_with_empty_customer_allowlist() -> Non
 async def test_common_checks_matches_team_alias_target_against_customer_allowlist() -> None:
     team_model_aliases: Final = {"fast": "m1", "slow": "gpt-4o"}
 
-    assert (
-        await _common_checks_for_customer_model(
-            model="fast", customer_models=["m1"], team_model_aliases=team_model_aliases
+    for customer_models in (["m1"], ["fast"]):
+        assert (
+            await _common_checks_for_customer_model(
+                model="fast", customer_models=customer_models, team_model_aliases=team_model_aliases
+            )
+            is True
         )
-        is True
-    )
     with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
         await _common_checks_for_customer_model(
             model="slow", customer_models=["m1"], team_model_aliases=team_model_aliases
         )
 
     assert exc_info.value.type == ProxyErrorTypes.customer_model_access_denied
+    with pytest.raises(ModelAccessDeniedProxyException):
+        await _common_checks_for_customer_model(
+            model="m1", customer_models=["fast"], team_model_aliases=team_model_aliases
+        )
 
 
 @pytest.mark.parametrize(

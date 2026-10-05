@@ -5365,13 +5365,16 @@ def can_customer_access_model(
     llm_router: Router | None,
     valid_token: UserAPIKeyAuth | None,
 ) -> Literal[True]:
-    team_alias_target: Final = (
-        _resolve_team_alias(model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router)
-        if valid_token is not None
-        else model
+    team_model_aliases: Final = team_model_aliases_for_auth_check(valid_token) if valid_token is not None else None
+    listed_names: Final = frozenset(end_user_object.models or ())
+    unlisted_aliases: Final = (
+        MappingProxyType({alias: target for alias, target in team_model_aliases.items() if alias not in listed_names})
+        if team_model_aliases
+        else None
     )
+    team_id: Final = valid_token.team_id if valid_token is not None else None
     return _can_object_call_model(
-        model=team_alias_target,
+        model=_resolve_team_alias(model, unlisted_aliases, team_id, llm_router),
         llm_router=llm_router,
         models=end_user_object.models,
         key_model_aliases=key_model_aliases_for_auth_check(valid_token),
