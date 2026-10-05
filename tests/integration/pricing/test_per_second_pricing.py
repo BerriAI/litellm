@@ -70,8 +70,11 @@ def _clear_observations(upstream: httpx.Client) -> None:
 def _observed_request_body(upstream: httpx.Client) -> dict[str, JsonValue]:
     observations: Final = JSON_OBJECT.validate_json(upstream.get("/__observations").content)["requests"]
     assert isinstance(observations, list)
-    assert len(observations) == 1
-    return object_value(object_value(observations[0])["body"])
+    post_observations: Final = tuple(
+        observation for observation in observations if isinstance(observation, dict) and observation.get("method") == "POST"
+    )
+    assert len(post_observations) == 1
+    return object_value(object_value(post_observations[0])["body"])
 
 
 @pytest.mark.parametrize(

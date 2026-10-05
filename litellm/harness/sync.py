@@ -186,7 +186,7 @@ class Session:
 
     def history(
         self,
-    ) -> list[dict[str, Any]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
+    ) -> list[dict[str, object]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
         return run_sync(self._inner.history(), "history")
 
     @property
@@ -411,7 +411,7 @@ def agent(
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> Result | EventStream:
-    """Run an agent harness (Claude Code, Codex, OpenCode, Deep Agents) on one prompt.
+    """Run an agent harness (Claude Code, Codex, OpenCode, Deep Agents, Tool Loop) on one prompt.
 
     Returns a Result. With stream=True it returns an iterator of events instead.
     Prefix the model with `litellm_proxy/` to route every model call through your

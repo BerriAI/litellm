@@ -1,4 +1,14 @@
-model_list: []
+model_list:
+  - model_name: anthropic/claude-opus-5-5
+    litellm_params:
+      model: anthropic/claude-opus-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
+  - model_name: anthropic/claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
@@ -23,3 +33,5 @@ vector_store_registry:
       api_base: os.environ/INTEGRATION_UPSTREAM_URL
       api_key: integration-provider-key
       vector_store_description: declared in tests/integration/proxy_config.yaml
+environment_variables:
+  PERPLEXITYAI_API_KEY: synthetic-decisions-env-key

@@ -1,16 +1,26 @@
 use litellm_http::Client;
-use litellm_migrate::Migration;
+use litellm_storage_clickhouse::{ClickHouseMigrate, execute_statement, storage_error};
 use serde::Serialize;
+use sqlx::migrate::Migrator;
 use std::time::Duration;
 
-use super::Connection;
-use super::Error;
+use super::{Connection, Error};
 
 const SCHEMA_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-const MIGRATIONS: &[Migration] = litellm_migrate::migrate!("migrations");
+static MIGRATOR: Migrator = Migrator {
+    ignore_missing: true,
+    locking: false,
+    ..sqlx::migrate!("./migrations")
+};
 
-pub fn schema_statements(database: &str, retention_days: u32) -> Result<Vec<String>, Error> {
+const RETENTION: [(&str, &str); 3] = [
+    ("otel_traces", "toDateTime(Timestamp)"),
+    ("agent_traces_by_key", "toDateTime(StartTs)"),
+    ("spend_logs", "toDateTime(start_time)"),
+];
+
+fn validate_schema(database: &str, retention_days: u32) -> Result<(), Error> {
     if database.is_empty()
         || !database
             .bytes()
@@ -19,17 +29,107 @@ pub fn schema_statements(database: &str, retention_days: u32) -> Result<Vec<Stri
     {
         return Err(Error::InvalidSchema);
     }
+    Ok(())
+}
+
+fn render(sql: &str, database: &str, retention_days: u32) -> String {
+    sql.replace("{database}", database)
+        .replace("{retention_days}", &retention_days.to_string())
+}
+
+pub fn schema_statements(database: &str, retention_days: u32) -> Result<Vec<String>, Error> {
+    validate_schema(database, retention_days)?;
     let database = format!("`{database}`");
     Ok(
         std::iter::once(format!("CREATE DATABASE IF NOT EXISTS {database}"))
-            .chain(MIGRATIONS.iter().map(|migration| {
-                migration
-                    .sql
-                    .replace("{database}", &database)
-                    .replace("{retention_days}", &retention_days.to_string())
-            }))
+            .chain(
+                MIGRATOR
+                    .migrations
+                    .iter()
+                    .map(|migration| render(migration.sql.as_str(), &database, retention_days)),
+            )
             .collect(),
     )
+}
+
+pub async fn apply_migrations(
+    client: &Client,
+    connection: &Connection,
+    database: &str,
+    retention_days: u32,
+) -> Result<(), Error> {
+    apply_migrations_with_timeout(
+        client,
+        connection,
+        database,
+        retention_days,
+        SCHEMA_REQUEST_TIMEOUT,
+    )
+    .await
+}
+
+async fn apply_migrations_with_timeout(
+    client: &Client,
+    connection: &Connection,
+    database: &str,
+    retention_days: u32,
+    request_timeout: Duration,
+) -> Result<(), Error> {
+    validate_schema(database, retention_days)?;
+    let quoted_database = format!("`{database}`");
+    let mut adapter = ClickHouseMigrate::new(
+        client,
+        connection,
+        database,
+        |sql| render(sql, &quoted_database, retention_days),
+        request_timeout,
+    )?;
+    MIGRATOR
+        .run_direct(None, &mut adapter, false)
+        .await
+        .map_err(|error| match storage_error(&error) {
+            Some(storage_error) => Error::Storage(storage_error.clone()),
+            None => Error::Migration(error),
+        })
+}
+
+pub async fn reconcile_retention(
+    client: &Client,
+    connection: &Connection,
+    database: &str,
+    retention_days: u32,
+) -> Result<(), Error> {
+    reconcile_retention_with_timeout(
+        client,
+        connection,
+        database,
+        retention_days,
+        SCHEMA_REQUEST_TIMEOUT,
+    )
+    .await
+}
+
+async fn reconcile_retention_with_timeout(
+    client: &Client,
+    connection: &Connection,
+    database: &str,
+    retention_days: u32,
+    request_timeout: Duration,
+) -> Result<(), Error> {
+    validate_schema(database, retention_days)?;
+    let database = format!("`{database}`");
+    for (table, expression) in RETENTION {
+        execute_statement(
+            client,
+            connection,
+            &format!(
+                "ALTER TABLE {database}.{table} MODIFY TTL {expression} + INTERVAL {retention_days} DAY"
+            ),
+            request_timeout,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 pub async fn ensure_schema(
@@ -55,19 +155,22 @@ async fn ensure_schema_with_timeout(
     retention_days: u32,
     request_timeout: Duration,
 ) -> Result<(), Error> {
-    for statement in schema_statements(database, retention_days)? {
-        let response = client
-            .post(connection.url().clone())
-            .timeout(request_timeout)
-            .body(statement)
-            .send()
-            .await
-            .map_err(|_| Error::SchemaTransport)?;
-        if !response.status().is_success() {
-            return Err(Error::SchemaFailed(response.status().as_u16()));
-        }
-    }
-    Ok(())
+    apply_migrations_with_timeout(
+        client,
+        connection,
+        database,
+        retention_days,
+        request_timeout,
+    )
+    .await?;
+    reconcile_retention_with_timeout(
+        client,
+        connection,
+        database,
+        retention_days,
+        request_timeout,
+    )
+    .await
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

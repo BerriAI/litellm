@@ -210,8 +210,8 @@ fn request_id(evidence: &CallEvidence) -> &str {
         .into_iter()
         .flatten()
         .find_map(|key| match key {
-            CallKey::LiteLlmRequest(id) | CallKey::ProviderResponse(id) => Some(id.as_str()),
-            CallKey::Transport => None,
+            CallKey::ProviderResponse(id) => Some(id.as_str()),
+            CallKey::LiteLlmRequest(_) | CallKey::Transport | CallKey::GatewayAttempt => None,
         })
         .unwrap_or_default()
 }

@@ -102,14 +102,8 @@ impl<'a> Resolution<'a> {
             .map(|source| self.requests(source))
             .collect();
         let transports: Vec<_> = self
-            .graph
-            .descendants(call)
+            .transports(call)
             .into_iter()
-            .filter(|descendant| {
-                self.row(*descendant)
-                    .call_keys
-                    .contains(&CallKey::Transport)
-            })
             .map(|transport| self.requests(transport))
             .collect();
         let transport_requests: Option<Vec<Requests<'a>>> = (!transports.is_empty())
@@ -133,11 +127,55 @@ impl<'a> Resolution<'a> {
         Some(
             selected
                 .into_iter()
-                .map(|request| (request.request_id.as_str(), request))
+                .map(|request| (request.identity(), request))
                 .collect::<IndexMap<_, _>>()
                 .into_values()
                 .collect(),
         )
+    }
+
+    fn transports(&self, call: usize) -> Vec<usize> {
+        let is_transport = |index: &usize| {
+            self.row(*index)
+                .call_keys
+                .iter()
+                .any(|key| matches!(key, CallKey::Transport | CallKey::GatewayAttempt))
+        };
+        let nested: Vec<usize> = self
+            .graph
+            .descendants(call)
+            .into_iter()
+            .filter(is_transport)
+            .collect();
+        let Some(parent) = self.graph.parent(call).filter(|_| nested.is_empty()) else {
+            return nested;
+        };
+        let siblings = self.graph.children(parent);
+        let lone_call = siblings
+            .iter()
+            .filter(|sibling| self.kind(**sibling) == ObservationType::Llm)
+            .count()
+            == 1;
+        if !lone_call {
+            return nested;
+        }
+        let call_row = self.row(call);
+        let call_start_ns = i128::from(call_row.start_ns);
+        let call_end_ns = call_start_ns + i128::from(call_row.duration_ns);
+        siblings
+            .into_iter()
+            .filter(|sibling| {
+                self.row(*sibling)
+                    .call_keys
+                    .contains(&CallKey::GatewayAttempt)
+            })
+            .filter(|sibling| {
+                let transport = self.row(*sibling);
+                let transport_start_ns = i128::from(transport.start_ns);
+                let transport_end_ns = transport_start_ns + i128::from(transport.duration_ns);
+                transport_start_ns >= call_start_ns && transport_end_ns <= call_end_ns
+            })
+            .collect()
     }
 
     pub(super) fn unique_tools(&self) -> Vec<usize> {
