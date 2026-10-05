@@ -3806,6 +3806,10 @@ def _parse_bedrock_tool_result_content_list(
             _append_bedrock_tool_result_image_url_block(tool_result_content_blocks, content)
         elif content["type"] == "file":
             _append_bedrock_tool_result_file_block(tool_result_content_blocks, content)
+        elif content["type"] == "tool_reference":
+            tool_result_content_blocks.append(
+                BedrockToolResultContentBlock(text=cast(str, content["tool_name"]))
+            )
     return tool_result_content_blocks
 
 
