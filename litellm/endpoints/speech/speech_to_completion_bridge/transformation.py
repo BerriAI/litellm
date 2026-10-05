@@ -149,8 +149,17 @@ class SpeechToCompletionBridgeTransformationHandler:
         return "gemini" in model.lower() and ("tts" in model.lower() or "preview-tts" in model.lower())
 
     def _gemini_tts_response_body(self, decoded_audio: bytes, response_format: str | None) -> tuple[bytes, str]:
+        is_wav: Final = decoded_audio[:4] == b"RIFF" and decoded_audio[8:12] == b"WAVE"
         if response_format == GEMINI_TTS_RAW_RESPONSE_FORMAT:
+            if is_wav:
+                import io
+                import wave
+
+                with wave.open(io.BytesIO(decoded_audio), "rb") as wav_file:
+                    return wav_file.readframes(wav_file.getnframes()), "audio/pcm"
             return decoded_audio, "audio/pcm"
+        if is_wav:
+            return decoded_audio, "audio/wav"
         return self._convert_pcm16_to_wav(decoded_audio), "audio/wav"
 
     def transform_response(
