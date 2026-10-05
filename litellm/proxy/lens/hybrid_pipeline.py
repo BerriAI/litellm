@@ -116,8 +116,11 @@ async def analyze_hybrid(
         originals: Final = tuple(part for part in workspace.parts if (part.execution_id, part.span_id) in cited)
         return await run_agent(
             stage="targeted_investigation",
-            task=FINDINGS_TASK + "\nInvestigate this candidate. You may refute, refine, "
-            "or split it into different causes when the original evidence warrants that.",
+            task=FINDINGS_TASK + "\nYour sole responsibility is the assigned candidate. Apply the preceding finding "
+            "guidance only within that candidate's scope. Refute, refine, or split its supported causes when "
+            "the original evidence warrants that. Other candidates have separate investigators; do not report "
+            "unrelated issues or positive patterns. You may read any sampled session for supporting or "
+            "contradicting evidence. Evidence access does not expand your reporting responsibility.",
             purpose="investigate",
             claim=claim,
             workspace=workspace,
