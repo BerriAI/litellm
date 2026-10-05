@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.caching import DualCache
@@ -425,7 +426,7 @@ async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_a
     import asyncio
 
     from litellm.proxy.agent_endpoints import agent_registry
-    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import invocation_target, prepare_agent_invocation
     from litellm.proxy.spend_tracking.budget_reservation import (
         reconcile_budget_reservation,
         release_budget_reservation,
@@ -458,6 +459,7 @@ async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_a
         caller.budget_counter_key if budget_owner == "agent"
         else f"spend:key:{token}" if budget_owner == "key" else "spend:team:fee-team"
     )
+    await spend_counter_cache.async_set_cache(key=counter_key, value=0.0)
 
     async def admit() -> dict[str, object] | None:
         auth: Final = UserAPIKeyAuth(
@@ -467,16 +469,37 @@ async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_a
         )
         if budget_owner == "agent" or pricing == "tokens":
             auth.billing_agent_policy = caller
-        await prepare_agent_invocation(auth, "target", None)
+        request_body: Final = {
+            "method": "message/send",
+            "model": "a2a/target",
+            "max_tokens": 2,
+            "messages": [{"role": "user", "content": "Hello"}],
+        }
+        target_name: Final = invocation_target(route, request_body)
+        assert target_name == "target"
+        await prepare_agent_invocation(auth, target_name, None)
+        assert auth.invoked_agent_id == "target"
+        assert auth.invoked_agent_policy is not None
         return await reserve_budget_for_request(
-            request_body={"method": "message/send", "model": "a2a/target", "max_tokens": 2,
-                          "messages": [{"role": "user", "content": "Hello"}]}, route=route, llm_router=None,
+            request_body=request_body, route=route, llm_router=None,
             valid_token=auth, team_object=team, user_object=None, prisma_client=None,
             user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
             fail_closed_budget_enforcement=True,
         )
 
     results: Final = await asyncio.gather(*(admit() for _ in range(8)), return_exceptions=True)
+    if budget_owner == "agent" and pricing == "tokens":
+        policy_unavailable: Final = tuple(
+            result
+            for result in results
+            if isinstance(result, HTTPException)
+            and result.status_code == 503
+            and result.detail
+            == "Budgeted token-priced agent invocations require a fixed cost_per_query before execution"
+        )
+        assert len(policy_unavailable) == 8, results
+        assert await spend_counter_cache.async_get_cache(counter_key) == pytest.approx(0.0)
+        return
     accepted: Final = tuple(result for result in results if isinstance(result, dict))
     rejected: Final = tuple(result for result in results if isinstance(result, litellm.BudgetExceededError))
     assert all(result is None or isinstance(result, (dict, litellm.BudgetExceededError)) for result in results), results

@@ -314,6 +314,21 @@ async def reserve_budget_for_request(
     if reservation_cost is None or reservation_cost <= 0:
         return None
 
+    if (
+        invocation_cost is None
+        and valid_token.invoked_agent_policy is not None
+        and any(counter.entity_type == "Agent" for counter in counters)
+    ):
+        from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
+        from litellm.types.proxy.agent_identity import AgentIdentityFailure
+
+        raise_identity_failure(
+            AgentIdentityFailure(
+                code="policy_unavailable",
+                message="Budgeted token-priced agent invocations require a fixed cost_per_query before execution",
+            )
+        )
+
     applied_entries: Final[list[dict[str, float | str]]] = []
     try:
         with _counters_batch_scope(frozenset(counter.counter_key for counter in counters)):
