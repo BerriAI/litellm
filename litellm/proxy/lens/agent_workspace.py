@@ -28,6 +28,7 @@ class CatalogEntry(Record):
     execution: Execution
     spans: tuple[tuple[str, str, str, str, int], ...]
     partial: bool
+    characters: int
 
 
 class EvidenceReply(Record):
@@ -51,6 +52,7 @@ class EvidenceWorkspace(Record):
                 execution=session.execution,
                 spans=tuple((p.span_id, p.parent_span_id, p.name, p.kind, len(p.content)) for p in session.parts),
                 partial=session.partial,
+                characters=sum(len(part.content) for part in session.parts),
             )
             for session in self.sessions
         )
@@ -65,7 +67,14 @@ class EvidenceWorkspace(Record):
         if request.execution_id is not None and not sessions:
             return EvidenceReply(request=request, error="Unknown execution_id. Use the supplied catalog.")
         if request.action == "catalog":
-            return EvidenceReply(request=request, catalog=EvidenceWorkspace(sessions=sessions).catalog)
+            catalog: Final = EvidenceWorkspace(sessions=sessions).catalog
+            return EvidenceReply(
+                request=request,
+                catalog=tuple(
+                    entry.model_copy(update=MappingProxyType({"spans": ()})) if request.execution_id is None else entry
+                    for entry in catalog
+                ),
+            )
         if request.action == "search" and not request.query:
             return EvidenceReply(request=request, error="Search requires a nonempty literal text query.")
         if request.char_end is not None and request.char_end < request.char_start:

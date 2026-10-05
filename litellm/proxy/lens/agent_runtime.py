@@ -51,8 +51,9 @@ async def run_agent(
                     "the sample; omit span_ids to read all spans in the selected scope. Optional char_start and "
                     "char_end select a zero-based character range of each returned span, with no default truncation. "
                     "Search performs a literal, "
-                    "case-insensitive text search and returns every matching original span. Catalog shows every "
-                    "sampled session and its span IDs, parent IDs, names, kinds, character lengths, and partial flag. "
+                    "case-insensitive text search and returns every matching original span. Catalog without execution_id "
+                    "shows metadata and total character sizes for every sampled session. Catalog with execution_id "
+                    "shows that session with its span IDs, parent IDs, names, kinds, character lengths, and partial flag. "
                     "An assigned session is your responsibility, not a restriction on evidence access. "
                     "All original content remains accessible; no search results or reads are capped. "
                     "You may request several tools together or return a final result. Tools and result are mutually "
@@ -66,7 +67,7 @@ async def run_agent(
                 "checks": tuple(check.model_dump() for check in claim.job.settings.analysis_checks),
                 "existing_findings": tuple(finding.model_dump(mode="json") for finding in claim.findings),
                 "catalog_fields": ("span_id", "parent_span_id", "name", "kind", "characters"),
-                "catalog": tuple(entry.model_dump() for entry in workspace.catalog),
+                "available_sessions": len(workspace.sessions),
                 "initial_evidence": tuple(part.model_dump() for part in initial_evidence),
                 "supplied": supplied,
                 "dialogue": tuple(turn.model_dump() for turn in dialogue),

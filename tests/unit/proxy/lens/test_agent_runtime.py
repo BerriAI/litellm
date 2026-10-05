@@ -1,4 +1,5 @@
 import json
+from queue import SimpleQueue
 from typing import Final
 
 import pytest
@@ -73,3 +74,44 @@ async def test_agent_reads_other_sessions_and_retains_all_prior_evidence_between
         initial_evidence=(root,),
     )
     assert result == expected
+
+
+@pytest.mark.asyncio
+async def test_initial_session_review_does_not_eagerly_embed_other_session_span_catalogs() -> None:
+    run: Final = execution("assigned")
+    other: Final = execution("other", 1000)
+    root: Final = TracePart(execution_id=run.id, span_id="root", name="coordinator", kind="agent", content="Task")
+    unrelated: Final = tuple(
+        TracePart(execution_id=other.id, span_id=str(i), name=f"subagent {i}", kind="agent", content=f"evidence {i}")
+        for i in range(1000)
+    )
+    prompts: Final = SimpleQueue[str]()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        prompts.put(request.prompt)
+        return ModelResult(content=AgentTurn[Extraction](result=Extraction()).model_dump_json(), cost=0)
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    for parts in ((unrelated[0],), unrelated):
+        workspace: EvidenceWorkspace = EvidenceWorkspace(
+            sessions=(  # rebind-ok: compare two corpus sizes
+                SessionContent(execution=run, parts=(root,), partial=False),
+                SessionContent(execution=other, parts=parts, partial=False),
+            )
+        )
+        await run_agent(
+            stage="review",
+            task="Review this session",
+            purpose="extract",
+            claim=claim,
+            workspace=workspace,
+            model=model,
+            schema=Extraction,
+            initial_evidence=(root,),
+        )
+        assert workspace.respond(EvidenceRequest(action="read", execution_id=other.id)).parts == parts
+        assert all(not row.spans for row in workspace.respond(EvidenceRequest(action="catalog")).catalog)
+        assert len(workspace.respond(EvidenceRequest(action="catalog", execution_id=other.id)).catalog[0].spans) == len(
+            parts
+        )
+    assert prompts.get_nowait() == prompts.get_nowait()
