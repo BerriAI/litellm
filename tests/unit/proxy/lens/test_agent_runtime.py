@@ -51,12 +51,12 @@ class ToolReply(Record):
 
 class CheckpointPrompt(Record):
     working_notes: str
+    initial_context_archived: bool
 
 
 class CompactedPrompt(CheckpointPrompt):
     journal_turns: int
     resume_history_from_turn: int
-    initial_context_archived: bool
 
 
 class PythonError(Record):

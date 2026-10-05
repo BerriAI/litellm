@@ -180,7 +180,8 @@ async def run_agent(
                 "To replace active context, return checkpoint with your complete replacement working notes. "
                 "This archives the current dialogue and initial material rather than carrying it into the next "
                 "prompt. Preserve reviewer coverage, unresolved causes, evidence references, counterexamples, "
-                "and next steps in your notes. Checkpoint when useful; no read, batch, or output quota applies. "
+                "existing finding IDs, statuses and feedback, and next steps in your notes. "
+                "Checkpoint when useful; no read, batch, or output quota applies. "
                 "History retrieves the full journal or an agent-chosen turn_start:turn_end range, zero-based with "
                 "exclusive end. char_start/char_end can read any serialized history reply in pieces; "
                 "turn_end=0 lists turn character sizes. Set include_initial=true to reread initial evidence and supplied "
@@ -308,7 +309,10 @@ async def run_agent(
                 (
                     task_message,
                     ModelMessage(
-                        role="user", content=json.dumps({"working_notes": response.checkpoint}, ensure_ascii=False)
+                        role="user",
+                        content=json.dumps(
+                            {"working_notes": response.checkpoint, "initial_context_archived": True}, ensure_ascii=False
+                        ),
                     ),
                     responded[-1],
                 )
