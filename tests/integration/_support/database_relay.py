@@ -182,12 +182,15 @@ class DroppedConnectionRelay:
         server_reader, server_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
 
         async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, inspect: bool) -> None:
+            tail = b""  # rebind-ok: carries the previous read's end so a trigger split across reads still matches
             try:
                 while chunk := await reader.read(65536):
-                    if inspect and self._armed.is_set() and self._trigger in chunk:
+                    window: Final = tail + chunk
+                    if inspect and self._armed.is_set() and self._trigger in window:
                         self.dropped.set()
                         client_writer.close()
                         return
+                    tail = window[-(len(self._trigger) - 1) :]
                     writer.write(chunk)
                     await writer.drain()
             except (ConnectionError, asyncio.IncompleteReadError):
