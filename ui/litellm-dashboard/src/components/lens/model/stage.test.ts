@@ -19,6 +19,7 @@ function review(id: string, reasoning = "Checked the tool output. It matched."):
     agent: "support-bot",
     name: id,
     spans: [],
+    tool_calls: [],
     reasoning,
     verdicts: [],
     cannot_assess: false,

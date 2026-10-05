@@ -1,7 +1,7 @@
 import { Braces, Hash, Tag, Type } from "lucide-react";
 
 import type { ClientIndex } from "../evaluate";
-import type { FieldSpec, QueryLanguage } from "../language";
+import { ALL_OPERATORS, EQUALITY_ONLY, type FieldSpec, type QueryLanguage } from "../language";
 
 export interface Note {
   readonly id: string;
@@ -19,7 +19,17 @@ const NOTE_FIELDS = {
 
 export type NoteField = keyof typeof NOTE_FIELDS;
 
-export const NOTE_QUERY: QueryLanguage<NoteField> = { fields: NOTE_FIELDS };
+export const NOTE_QUERY: QueryLanguage<NoteField> = { fields: NOTE_FIELDS, ops: ALL_OPERATORS };
+/** The same vocabulary over a backend that only filters by equality. */
+export const EXACT_NOTE_QUERY: QueryLanguage<NoteField> = { fields: NOTE_FIELDS, ops: EQUALITY_ONLY };
+export const NEGATION_NOTE_QUERY: QueryLanguage<NoteField> = {
+  fields: NOTE_FIELDS,
+  ops: { negation: true, wildcard: false },
+};
+export const WILDCARD_NOTE_QUERY: QueryLanguage<NoteField> = {
+  fields: NOTE_FIELDS,
+  ops: { negation: false, wildcard: true },
+};
 
 export const NOTE_INDEX: ClientIndex<Note, NoteField> = {
   read: {

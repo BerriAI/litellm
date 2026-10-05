@@ -96,6 +96,7 @@ const lens: Lens = {
       reviews: [],
       reviewed: 0,
       reading: [],
+      activities: [],
       trigger: "schedule",
       attempts: 0,
       error: "",
@@ -798,6 +799,48 @@ it("cancels the running job from the progress banner", async () => {
   renderWithProviders(<InvestigationsView />);
   await user.click(await screen.findByRole("button", { name: "Cancel" }));
   await waitFor(() => expect(proxy.post).toHaveBeenCalledWith("/lens/lens/cancel", expect.anything()));
+});
+
+it("clears the open live stage when a worker reclaims the same investigation", async () => {
+  testQueryClient.clear();
+  const reading = {
+    execution_id: executionId,
+    trace_id: "trace-42",
+    agent: "Prior worker trace",
+    started_at: "2026-10-03T16:00:00Z",
+  };
+  const running = {
+    ...lens.jobs[0],
+    status: "running" as const,
+    stage: "Reading executions",
+    attempts: 1,
+    reading: [reading],
+    findings: null,
+  };
+  proxy.get.mockImplementation(async (path) => {
+    if (path.endsWith("/reviews")) return { reviews: [], reviewed: 0 };
+    if (path === "/lens") return { lenses: [{ ...lens, jobs: [running] }], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return [running];
+    return { data: [] };
+  });
+  renderWithProviders(<InvestigationsView />);
+  fireEvent.click(await screen.findByRole("button", { name: "View run" }));
+  const drawer = within(await screen.findByRole("dialog"));
+  expect(drawer.getByText("Prior worker trace")).toBeVisible();
+
+  const reclaimed = { ...running, attempts: 2, reading: [{ ...reading, agent: "Current worker trace" }] };
+  await act(async () => {
+    testQueryClient.setQueryData(lensKeys.list("test"), {
+      lenses: [{ ...lens, jobs: [reclaimed] }],
+      workers: [],
+      tracing_enabled: true,
+    });
+  });
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: "View run" }));
+  const restarted = within(await screen.findByRole("dialog"));
+  expect(restarted.getByText("Current worker trace")).toBeVisible();
+  expect(restarted.queryByText("Prior worker trace")).not.toBeInTheDocument();
 });
 
 it("refreshes run history as soon as the list reports a job the scheduler started", async () => {
