@@ -156,7 +156,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
 
     const url = appendQuery(`${getBaseUrl()}${path}`, query);
 
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { Accept: "application/json" };
     if (rawBody === undefined) {
       headers["Content-Type"] = "application/json";
     }
