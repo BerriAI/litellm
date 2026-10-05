@@ -19,6 +19,13 @@ class OtelDestination(BaseModel):
     endpoint: str
     headers: Mapping[str, str] = Field(default_factory=dict)
     resource_attributes: Mapping[str, str] = Field(default_factory=dict)
+    resource_defaults: Mapping[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Resource attributes the backend needs on every export, filled only where the "
+            "span's own resource names none; ``resource_attributes`` override it."
+        ),
+    )
     callback_name: str | None = None
     protocol: str | None = Field(
         default=None,
