@@ -37,9 +37,11 @@ def _echo(text: str) -> None:
 
 
 def show_banner() -> None:
-    """Display the LiteLLM CLI banner. Never raises: the banner must not block startup."""
+    """Display the LiteLLM CLI banner without propagating encoding errors."""
     encoding: Final[str | None] = getattr(sys.stdout, "encoding", None)
     try:
         _echo(f"\n{banner_for_encoding(encoding)}\n")
     except UnicodeEncodeError:
-        pass
+        # A stream can reject a character its declared encoding claims to
+        # support; the banner is decorative, so startup continues without it.
+        return
