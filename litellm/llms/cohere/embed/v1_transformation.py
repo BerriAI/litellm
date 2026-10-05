@@ -2,7 +2,8 @@
 Legacy /v1/embedding transformation logic for Bedrock Cohere.
 """
 
-from typing import Any, Final
+from collections.abc import Sized
+from typing import Final, Protocol
 
 import httpx
 
@@ -14,6 +15,12 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import is_base64_encoded
+
+
+class _SupportsEncode(Protocol):
+    """Tokenizer handle: the embedding usage path only encodes text to measure its token length."""
+
+    def encode(self, text: str, /) -> Sized: ...
 
 
 class CohereEmbeddingConfig:
@@ -61,7 +68,7 @@ class CohereEmbeddingConfig:
 
         return transformed_request
 
-    def _calculate_usage(self, input: list[str], encoding: Any, meta: dict) -> Usage:
+    def _calculate_usage(self, input: list[str], encoding: _SupportsEncode, meta: dict) -> Usage:
         input_tokens = 0
 
         text_tokens: Final[int | None] = meta.get("billed_units", {}).get("input_tokens")
@@ -97,7 +104,7 @@ class CohereEmbeddingConfig:
         data: dict | CohereEmbeddingRequest,
         model_response: EmbeddingResponse,
         model: str,
-        encoding: Any,
+        encoding: _SupportsEncode,
         input: list,
     ) -> EmbeddingResponse:
         response_json: Final = response.json()
@@ -121,7 +128,7 @@ class CohereEmbeddingConfig:
         response_json: dict,
         model_response: EmbeddingResponse,
         model: str,
-        encoding: Any,
+        encoding: _SupportsEncode,
         input: list,
     ) -> EmbeddingResponse:
         """

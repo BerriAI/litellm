@@ -1,3 +1,4 @@
+import warnings
 from builtins import ExceptionGroup
 from collections.abc import Callable
 from itertools import count
@@ -5,19 +6,22 @@ from time import monotonic, sleep
 from typing import Final, Protocol
 
 from batch_client import BatchObject, FileDeleteResponse
-from capabilities import is_managed_id
+from capabilities import is_cloud_storage_id, is_managed_id
 from e2e_http import NetworkError, RateLimitedError, Result, Success, UnknownApiError
 from pydantic import BaseModel
 
 CLEANUP_DELAYS: Final = (1.0, 2.0, 4.0)
 BATCH_TERMINAL_STATUSES: Final = frozenset({"completed", "failed", "expired", "cancelled"})
 BATCH_PENDING_STATUSES: Final = frozenset({"validating", "in_progress", "finalizing", "cancelling"})
-BATCH_CANCEL_TIMEOUT_SECONDS: Final = 660.0
+BATCH_CANCEL_TIMEOUT_SECONDS: Final = 120.0
 BATCH_CANCEL_POLL_SECONDS: Final = 10.0
+FILE_IN_USE_REFUSAL: Final = "batch(es) in non-terminal state"
 
 
 class BatchCleanupClient(Protocol):
     def delete_file(self, file_id: str, *, key: str, provider: str | None = None) -> Result[FileDeleteResponse]: ...
+
+    def delete_file_as_admin(self, file_id: str, *, provider: str | None = None) -> Result[FileDeleteResponse]: ...
 
     def retrieve_batch(self, batch_id: str, *, key: str, provider: str | None = None) -> Result[BatchObject]: ...
 
@@ -49,8 +53,20 @@ def _require_cleanup_success[R: BaseModel](result: Result[R], operation: str) ->
 
 
 def cleanup_file(client: BatchCleanupClient, file_id: str, *, key: str, provider: str | None = None) -> None:
-    result: Final = cleanup_result(lambda: client.delete_file(file_id, key=key, provider=provider))
+    delete: Final[Callable[[], Result[FileDeleteResponse]]] = (
+        (lambda: client.delete_file_as_admin(file_id, provider=provider))
+        if is_cloud_storage_id(file_id)
+        else (lambda: client.delete_file(file_id, key=key, provider=provider))
+    )
+    result: Final = cleanup_result(delete)
     if isinstance(result, UnknownApiError) and result.status_code == 404:
+        return
+    if isinstance(result, UnknownApiError) and result.status_code == 400 and FILE_IN_USE_REFUSAL in result.body:
+        warnings.warn(
+            f"Left file {file_id} in place: LiteLLM refused to delete it while a batch still references it",
+            UserWarning,
+            stacklevel=2,
+        )
         return
     deleted: Final = _require_cleanup_success(result, f"Delete file {file_id}")
     assert deleted.deleted is True or (
@@ -113,9 +129,17 @@ def cleanup_batch(
         )
         if current.status == "cancelling" and not needs_terminal_state:
             return
-        assert clock() < deadline, (
-            f"Batch {batch_id} cancellation did not finish within {BATCH_CANCEL_TIMEOUT_SECONDS}s"
-        )
+        if clock() >= deadline:
+            assert current.status == "cancelling", (
+                f"Batch {batch_id} cancellation did not finish within {BATCH_CANCEL_TIMEOUT_SECONDS}s, "
+                f"last status {current.status}"
+            )
+            warnings.warn(
+                f"Left batch {batch_id} cancelling after {BATCH_CANCEL_TIMEOUT_SECONDS}s for the provider to finish",
+                UserWarning,
+                stacklevel=2,
+            )
+            return
         wait(BATCH_CANCEL_POLL_SECONDS)
 
 

@@ -24,6 +24,7 @@ export interface MemberTableColumn {
   key: string;
   render: (member: Member) => React.ReactNode;
   sortValue?: (member: Member) => MemberTableSortValue;
+  numeric?: boolean;
 }
 
 export interface MemberTableProps {
@@ -36,6 +37,8 @@ export interface MemberTableProps {
   roleTooltip?: string;
   extraColumns?: MemberTableColumn[];
   showDeleteForMember?: (member: Member) => boolean;
+  onResetSpend?: (member: Member) => void;
+  resetSpendDisabledReason?: (member: Member) => string | null;
   emptyText?: string;
 }
 
@@ -63,6 +66,19 @@ function RoleHeaderTitle({ title, tooltip }: { title: string; tooltip?: string }
   );
 }
 
+function ResetSpendAction({ disabledReason, onClick }: { disabledReason: string | null; onClick: () => void }) {
+  return (
+    <TableIconActionButton
+      variant="Reset"
+      tooltipText="Reset spend"
+      disabled={disabledReason !== null}
+      disabledTooltipText={disabledReason ?? undefined}
+      dataTestId="reset-member-spend"
+      onClick={onClick}
+    />
+  );
+}
+
 const ACTIONS_COLUMN_WIDTH = 120;
 
 interface MemberColumnDeps {
@@ -73,6 +89,8 @@ interface MemberColumnDeps {
   roleTooltip?: string;
   extraColumns: MemberTableColumn[];
   showDeleteForMember?: (member: Member) => boolean;
+  onResetSpend?: (member: Member) => void;
+  resetSpendDisabledReason?: (member: Member) => string | null;
 }
 
 const extraColumnDef = (column: MemberTableColumn): ColumnDef<Member> => {
@@ -83,6 +101,7 @@ const extraColumnDef = (column: MemberTableColumn): ColumnDef<Member> => {
       header: () => <span className="font-medium">{column.title}</span>,
       enableSorting: false,
       enableGlobalFilter: false,
+      meta: { numeric: column.numeric },
       cell: ({ row }) => column.render(row.original),
     };
   }
@@ -93,6 +112,7 @@ const extraColumnDef = (column: MemberTableColumn): ColumnDef<Member> => {
     sortDescFirst: false,
     sortUndefined: "last",
     enableGlobalFilter: false,
+    meta: { numeric: column.numeric },
     cell: ({ row }) => column.render(row.original),
   };
 };
@@ -105,6 +125,8 @@ const buildColumns = ({
   roleTooltip,
   extraColumns,
   showDeleteForMember,
+  onResetSpend,
+  resetSpendDisabledReason,
 }: MemberColumnDeps): ColumnDef<Member>[] => [
   {
     id: "user_alias",
@@ -173,6 +195,12 @@ const buildColumns = ({
             dataTestId="edit-member"
             onClick={() => onEdit(row.original)}
           />
+          {onResetSpend && (
+            <ResetSpendAction
+              disabledReason={resetSpendDisabledReason?.(row.original) ?? null}
+              onClick={() => onResetSpend(row.original)}
+            />
+          )}
           {(!showDeleteForMember || showDeleteForMember(row.original)) && (
             <TableIconActionButton
               variant="Delete"
@@ -196,6 +224,8 @@ export default function MemberTable({
   roleTooltip,
   extraColumns = [],
   showDeleteForMember,
+  onResetSpend,
+  resetSpendDisabledReason,
   emptyText,
 }: MemberTableProps) {
   const [globalFilter, setGlobalFilter] = useState("");
@@ -210,6 +240,8 @@ export default function MemberTable({
     roleTooltip,
     extraColumns,
     showDeleteForMember,
+    onResetSpend,
+    resetSpendDisabledReason,
   };
   const columns = buildColumns(columnDeps);
   const roleFilterItems = [
