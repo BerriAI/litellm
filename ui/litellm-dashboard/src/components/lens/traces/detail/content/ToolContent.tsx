@@ -61,14 +61,12 @@ export function ToolArguments({ args }: { args: unknown }) {
 export function ToolOutput({ result, failed = false }: { result: string; failed?: boolean }) {
   const { body, metadata } = toolResult(result);
   return (
-    <div className="min-w-0 space-y-3">
-      <div
-        role="group"
-        aria-label={failed ? "Failed tool result" : "Tool result"}
-        className={cn("min-w-0", failed && "text-destructive")}
-      >
-        <ToolValue node={body} label="result" />
-      </div>
+    <div
+      role="group"
+      aria-label={failed ? "Failed tool result" : "Tool result"}
+      className={cn("min-w-0 space-y-3", failed && "text-destructive")}
+    >
+      <ToolValue node={body} label="result" />
       {metadata.length > 0 && (
         <div className="border-t border-border/70 pt-1">
           <FieldTree entries={metadata} />

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -18,8 +18,10 @@ describe("ToolResultCard", () => {
     );
     expect(screen.getByText(/line 1\s+line 2/, { selector: "pre" })).toBeVisible();
     expect(screen.queryByText(/line 30/, { selector: "pre" })).not.toBeInTheDocument();
-    expect(screen.getByText("exit_code")).toBeVisible();
-    expect(screen.getByText("1", { exact: true })).toBeVisible();
+    const failedResult = screen.getByRole("group", { name: "Failed tool result" });
+    expect(failedResult).toHaveClass("text-destructive");
+    expect(within(failedResult).getByText("exit_code")).toBeVisible();
+    expect(within(failedResult).getByText("1", { exact: true })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Expand result" }));
     expect(screen.getByText(/line 30/, { selector: "pre" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Collapse result" }));
