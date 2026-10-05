@@ -25,7 +25,6 @@ export function LiveRun({
   name: string;
   queue?: QueueContext;
 }) {
-  const live = job.status === "queued" || job.status === "running";
   const reason = useQueueReason(job, queue);
   const [stripOpen, setStripOpen] = useStripOpen();
   const [drawerOpen, setDrawerOpen] = useState(false);

@@ -9,7 +9,6 @@ import {
   newestFirst,
   nowLine,
   inFlight,
-  liveRows,
   grownGroups,
   inGroup,
   share,
@@ -19,12 +18,10 @@ import {
   shortVerdict,
   stripState,
   liveJob,
-  liveStats,
   outcome,
   providerOf,
-  rateLabel,
   secondsToFinishReading,
-  tokenLabel,
+  polling,
 } from "./live";
 import type { Job, Review } from "./types";
 
@@ -273,6 +270,13 @@ describe("incremental reviews", () => {
     expect(feed.reviews[0].execution_id).toBe("r50");
     expect(feed.cursor).toBe(250);
   });
+
+  it("keeps polling a finished run until every review it reported has arrived", () => {
+    const fetched = { reviews: [], cursor: 28 };
+    expect(polling({ status: "running", reviewed: 28 }, fetched)).toBe(true);
+    expect(polling({ status: "completed", reviewed: 30 }, fetched)).toBe(true);
+    expect(polling({ status: "completed", reviewed: 30 }, { ...fetched, cursor: 30 })).toBe(false);
+  });
 });
 
 describe("time left reading", () => {
@@ -301,73 +305,6 @@ describe("short verdict", () => {
   });
 });
 
-describe("live stats", () => {
-  const job = {
-    reviewed: 30,
-    cost: 0.042,
-    created_at: "2026-10-03T16:00:00Z",
-    finished_at: null,
-    steps: [
-      {
-        at: "2026-10-03T16:00:05Z",
-        kind: "stage",
-        label: "Reading executions",
-        model: "",
-        purpose: "",
-        cost: 0,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-      },
-      {
-        at: "2026-10-03T16:00:06Z",
-        kind: "model",
-        label: "extract",
-        model: "m",
-        purpose: "extract",
-        cost: 0.01,
-        prompt_tokens: 1200,
-        completion_tokens: 300,
-      },
-      {
-        at: "2026-10-03T16:00:07Z",
-        kind: "model",
-        label: "extract",
-        model: "m",
-        purpose: "extract",
-        cost: 0.01,
-        prompt_tokens: 800,
-        completion_tokens: 200,
-      },
-    ],
-  } as unknown as Job;
-
-  it("measures rate from when reading started and sums model tokens", () => {
-    const stats = liveStats(job, Date.parse("2026-10-03T16:00:15Z"));
-    expect(stats.elapsedSeconds).toBe(10);
-    expect(stats.perSecond).toBe(3);
-    expect(stats.tokens).toBe(2500);
-    expect(stats.cost).toBe(0.042);
-  });
-
-  it("stops the clock when the job finishes", () => {
-    const finished = { ...job, finished_at: "2026-10-03T16:00:25Z" };
-    expect(liveStats(finished, Date.parse("2026-10-03T18:00:00Z")).elapsedSeconds).toBe(20);
-  });
-
-  it("has no rate before anything is reviewed", () => {
-    expect(liveStats({ ...job, reviewed: 0 }, Date.parse("2026-10-03T16:00:15Z")).perSecond).toBeNull();
-  });
-
-  it("formats rate and tokens for the footer", () => {
-    expect(rateLabel(null)).toBe("–");
-    expect(rateLabel(2.25)).toBe("2.3 traces/s");
-    expect(rateLabel(0.5)).toBe("30.0 traces/min");
-    expect(tokenLabel(950)).toBe("950 tok");
-    expect(tokenLabel(2500)).toBe("2.5k tok");
-    expect(tokenLabel(3_400_000)).toBe("3.4M tok");
-  });
-});
-
 describe("honest live list", () => {
   it("lists completed reviews newest first in the order they finished, never re-sorted by time", () => {
     const reviews = [
@@ -387,33 +324,11 @@ describe("honest live list", () => {
     expect(nowLine(job(3, 0), 1)).toBe("3 done · 1 in flight");
   });
 
-  it("keeps a trace as the same row from in flight to finished", () => {
-    const reading = (id: string) => ({
-      execution_id: id,
-      trace_id: `t-${id}`,
-      agent: "bot",
-      started_at: "2026-10-03T16:00:00Z",
-    });
-    const before = liveRows([reading("x"), reading("y")], [review("a")], 10);
-    expect(before.map((row) => [row.kind, row.key])).toEqual([
-      ["reading", "x"],
-      ["reading", "y"],
-      ["done", "a"],
-    ]);
-    const after = liveRows([reading("x"), reading("y")], [review("a"), review("y")], 10);
-    expect(after.map((row) => [row.kind, row.key])).toEqual([
-      ["reading", "x"],
-      ["done", "y"],
-      ["done", "a"],
-    ]);
-  });
-
   it("only shows in-flight traces while the job runs", () => {
     const item = { execution_id: "x", trace_id: "t", agent: "bot", started_at: "2026-10-03T16:00:00Z" };
     const job = (status: Job["status"]) => ({ status, reading: [item] }) as unknown as Job;
     expect(inFlight(job("running"))).toEqual([item]);
     expect(inFlight(job("completed"))).toEqual([]);
-    expect(inFlight({ status: "running" } as Job)).toEqual([]);
   });
 
   it("sums up a finished run from when reading started", () => {

@@ -5,9 +5,9 @@ import { useState, type ReactNode } from "react";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 
-import { conclusions, type InFlight } from "../../model/live";
+import { conclusions } from "../../model/live";
 import { releasedReviews } from "../../model/stage";
-import type { Job, Review, Settings } from "../../model/types";
+import type { InFlight, Job, Review, Settings } from "../../model/types";
 import { ConclusionsPanel } from "./ConclusionsPanel";
 import { ModelName } from "./LiveStrip";
 import { NowReading } from "./NowReading";

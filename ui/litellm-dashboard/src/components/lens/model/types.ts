@@ -35,4 +35,6 @@ export type Worker = LensList["workers"][number];
 
 export type Review = components["schemas"]["Review"];
 
+export type InFlight = components["schemas"]["InFlight"];
+
 export type ReviewVerdict = components["schemas"]["ReviewVerdict"];

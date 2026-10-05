@@ -1,5 +1,5 @@
 import { durationText } from "./format";
-import type { Job, Review, ReviewVerdict, Settings } from "./types";
+import type { InFlight, Job, Review, ReviewVerdict, Settings } from "./types";
 
 export type Outcome = "issue" | "clear" | "unknown";
 
@@ -13,15 +13,8 @@ export interface Conclusion {
   issue: boolean;
 }
 
-export interface LiveStats {
-  perSecond: number | null;
-  tokens: number;
-  cost: number;
-  elapsedSeconds: number;
-}
-
 export function liveJob(jobs: readonly Job[]): Job | undefined {
-  const active = jobs.find((job) => job.status === "queued" || job.status === "running");
+  const active = jobs.find(isActive);
   if (active) return active;
   const latest = jobs[0];
   return latest && latest.reviewed > 0 ? latest : undefined;
@@ -102,6 +95,14 @@ export function appendPage(feed: ReviewFeed, page: { reviews: readonly Review[];
   if (page.reviewed === feed.cursor && !page.reviews.length) return feed;
   const added = unseen(page.reviews, new Set(feed.reviews.map(reviewKey)));
   return { reviews: [...feed.reviews, ...added].slice(-KEPT_REVIEWS), cursor: page.reviewed };
+}
+
+export function polling(job: Pick<Job, "status" | "reviewed">, feed: ReviewFeed): boolean {
+  return isActive(job) || feed.cursor < job.reviewed;
+}
+
+export function isActive(job: Pick<Job, "status">): boolean {
+  return job.status === "queued" || job.status === "running";
 }
 
 export function unseen(reviews: readonly Review[], seen: ReadonlySet<string>): Review[] {
@@ -185,53 +186,12 @@ export function secondsToFinishReading(
   return Math.ceil(remaining / (job.reviewed / elapsed));
 }
 
-export function liveStats(job: Job, now: number): LiveStats {
-  const models = job.steps.filter((step) => step.kind === "model");
-  const end = job.finished_at ? Date.parse(job.finished_at) : now;
-  const elapsedSeconds = Math.max(0, Math.floor((end - Date.parse(readingStart(job))) / 1000));
-  return {
-    perSecond: elapsedSeconds > 0 && job.reviewed > 0 ? job.reviewed / elapsedSeconds : null,
-    tokens: models.reduce((sum, step) => sum + step.prompt_tokens + step.completion_tokens, 0),
-    cost: job.cost,
-    elapsedSeconds,
-  };
-}
-
-export function rateLabel(perSecond: number | null): string {
-  if (perSecond === null) return "–";
-  return perSecond >= 1 ? `${perSecond.toFixed(1)} traces/s` : `${(perSecond * 60).toFixed(1)} traces/min`;
-}
-
-export function tokenLabel(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M tok`;
-  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k tok` : `${tokens} tok`;
-}
-
 export function newestFirst(reviews: readonly Review[], limit: number): Review[] {
   return [...reviews].reverse().slice(0, limit);
 }
 
-export interface InFlight {
-  execution_id: string;
-  trace_id: string;
-  agent: string;
-  started_at: string;
-}
-
-export function inFlight(job: Job): readonly InFlight[] {
-  const reading = (job as Job & { reading?: readonly InFlight[] }).reading;
-  return job.status === "running" ? reading ?? [] : [];
-}
-
-export type LiveRow = { kind: "reading"; key: string; item: InFlight } | { kind: "done"; key: string; review: Review };
-
-export function liveRows(reading: readonly InFlight[], reviews: readonly Review[], limit: number): LiveRow[] {
-  const finished = new Set(reviews.map((review) => review.execution_id));
-  const open = reading.filter((item) => !finished.has(item.execution_id));
-  return [
-    ...open.map((item) => ({ kind: "reading" as const, key: item.execution_id, item })),
-    ...newestFirst(reviews, limit).map((review) => ({ kind: "done" as const, key: review.execution_id, review })),
-  ];
+export function inFlight(job: Pick<Job, "status" | "reading">): readonly InFlight[] {
+  return job.status === "running" ? job.reading : [];
 }
 
 export function nowLine(job: Pick<Job, "coverage" | "reviewed">, reading: number): string {
