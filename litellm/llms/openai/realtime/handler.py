@@ -19,6 +19,7 @@ from ....litellm_core_utils.realtime_streaming import (
     client_sent_openai_beta_realtime_header,
 )
 from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
+from ..common_utils import is_openai_backed_api_base
 from ..openai import OpenAIChatCompletion
 
 
@@ -84,18 +85,27 @@ class OpenAIRealtime(OpenAIChatCompletion):
 
     def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
         """
-        Construct the backend websocket URL with all query parameters (including 'model').
+        Construct the backend websocket URL with the client's query parameters.
+
+        `model` is left out for `intent=transcription` on OpenAI's own hosts: OpenAI
+        reads `?model=` as selecting a conversation session and rejects transcription
+        sessions with `invalid_model`. The transcription model is applied to the session
+        instead (see `force_transcription_model`), mirroring the Azure GA handler. Any
+        other `api_base` keeps `model`, since an OpenAI-compatible gateway may route on it.
         """
         from httpx import URL
 
+        drops_model: Final = query_params.get("intent") == "transcription" and is_openai_backed_api_base(api_base)
         api_base = api_base.replace("https://", "wss://")
         api_base = api_base.replace("http://", "ws://")
         url = URL(api_base)
         # Set the correct path
         url = url.copy_with(path="/v1/realtime")
-        # Include all query parameters including 'model'
-        if query_params:
-            url = url.copy_with(params=query_params)
+        upstream_params: Final = tuple(
+            (key, value) for key, value in query_params.items() if not (drops_model and key == "model")
+        )
+        if upstream_params:
+            url = url.copy_with(params=upstream_params)
         return str(url)
 
     def _make_event_normalizer(self) -> RealtimeEventNormalizer | None:

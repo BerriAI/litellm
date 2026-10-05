@@ -385,6 +385,14 @@ class Provider:
 
     async def realtime(self, websocket: WebSocket) -> None:
         scenario_id: Final = websocket.headers.get("authorization", "").removeprefix("Bearer ")
+        self.observations.put(
+            Observation(
+                websocket.url.path,
+                websocket.headers.get("authorization", ""),
+                {"query": [[key, value] for key, value in websocket.query_params.multi_items()]},
+                "WEBSOCKET",
+            )
+        )
         response: Final = self.scenario_store.get(scenario_id)
         if not isinstance(response, RealtimeResponse):
             await websocket.close(code=4404)
