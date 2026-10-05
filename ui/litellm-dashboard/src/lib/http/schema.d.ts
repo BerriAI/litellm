@@ -9427,6 +9427,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/teams/{team_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Team Members
+         * @description One page of a team's members, with each member's spend in the team and the limits on their budget row.
+         *
+         *     Readable by whoever can read `/team/info` for the team: proxy admins and admin viewers, a key issued to
+         *     the team, any member of the team, and admins of the team's organization. An unknown team is a 404.
+         *
+         *     Members come in the order they joined unless `sort` names a comma-separated list of `user_alias`,
+         *     `user_email`, `user_id`, `role`, `spend`, `total_spend`, `max_budget_in_team` or `budget_reset_at`,
+         *     each optionally prefixed with `-` for descending. `q` is a case-insensitive substring match on
+         *     `user_id` or `user_email`, and `filter[role]=admin` or `filter[role][in]=admin,user` filters by role.
+         *     `page_size` defaults to 50 and is capped at 100. `meta.total_count` counts the members matching `q`
+         *     and the filters.
+         *
+         *     `budget_source` is `custom` when the member has their own budget row, `team_default` when they follow
+         *     the team's member budget, and `none` when the team has no member budget.
+         *
+         *     Example curl:
+         *     ```
+         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/teams/team-1/members?q=acme&filter[role]=admin&page_size=25'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["list_team_members_management_v1_teams__team_id__members_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/teams/{team_id}/members/bulk_delete": {
         parameters: {
             query?: never;
@@ -33867,6 +33905,13 @@ export interface components {
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
+        /** ListResponse[TeamMemberListItem] */
+        ListResponse_TeamMemberListItem_: {
+            /** Data */
+            data: components["schemas"]["TeamMemberListItem"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
         /**
          * ListRunsResponse
          * @description Response from listing runs
@@ -45885,6 +45930,49 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * TeamMemberListItem
+         * @description One roster entry with the member's spend in the team and the budget row their membership points at.
+         *
+         *     The limits are that row's, exactly as `/team/info` returns it under `team_memberships`, so a member
+         *     with no row of their own reads null limits even when `budget_source` is `team_default`.
+         */
+        TeamMemberListItem: {
+            /** Allowed Models */
+            allowed_models: string[];
+            /** Budget Duration */
+            budget_duration: string | null;
+            /** Budget Id */
+            budget_id: string | null;
+            /** Budget Reset At */
+            budget_reset_at: string | null;
+            /**
+             * Budget Source
+             * @enum {string}
+             */
+            budget_source: "team_default" | "custom" | "none";
+            /** Max Budget In Team */
+            max_budget_in_team: number | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "admin" | "user";
+            /** Rpm Limit */
+            rpm_limit: number | null;
+            /** Spend */
+            spend: number;
+            /** Total Spend */
+            total_spend: number;
+            /** Tpm Limit */
+            tpm_limit: number | null;
+            /** User Alias */
+            user_alias: string | null;
+            /** User Email */
+            user_email: string | null;
+            /** User Id */
+            user_id: string | null;
         };
         /**
          * TeamMemberRef
@@ -62883,6 +62971,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_team_members_management_v1_teams__team_id__members_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_TeamMemberListItem_"];
                 };
             };
             /** @description Validation Error */
