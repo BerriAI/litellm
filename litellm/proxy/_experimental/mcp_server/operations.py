@@ -1125,18 +1125,20 @@ async def _get_tools_from_mcp_servers(
                 from litellm.proxy.proxy_server import proxy_logging_obj
 
                 listed_generation: Final = global_mcp_server_manager.listed_tools_generation(server.server_id)
-                tools: Final = await global_mcp_server_manager._get_tools_from_server(
-                    server=server,
-                    mcp_auth_header=server_auth_header,
-                    extra_headers=extra_headers,
-                    add_prefix=True,  # Always add server prefix
-                    raw_headers=raw_headers,
-                    client_ip=client_ip,
-                    user_api_key_auth=user_api_key_auth,
-                    oauth2_headers=oauth2_headers,
-                    proxy_logging_obj=proxy_logging_obj,
-                    catalog_auth_header=catalog_auth_header,
-                    record_listing=False,
+                tools: Final = list(
+                    await global_mcp_server_manager._get_tools_from_server(
+                        server=server,
+                        mcp_auth_header=server_auth_header,
+                        extra_headers=extra_headers,
+                        add_prefix=True,  # Always add server prefix
+                        raw_headers=raw_headers,
+                        client_ip=client_ip,
+                        user_api_key_auth=user_api_key_auth,
+                        oauth2_headers=oauth2_headers,
+                        proxy_logging_obj=proxy_logging_obj,
+                        catalog_auth_header=catalog_auth_header,
+                        record_listing=False,
+                    )
                 )
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
