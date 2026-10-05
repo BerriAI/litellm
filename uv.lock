@@ -4644,6 +4644,9 @@ utils = [
 ]
 
 [package.dev-dependencies]
+admin-mcp = [
+    { name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'" },
+]
 benchmarks = [
     { name = "a2a-sdk" },
     { name = "mcp" },
@@ -4738,6 +4741,7 @@ proxy-dev = [
     { name = "a2a-sdk" },
     { name = "azure-identity" },
     { name = "hypercorn" },
+    { name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-instrumentation-fastapi" },
@@ -4860,6 +4864,7 @@ requires-dist = [
 provides-extras = ["proxy", "cli", "extra-proxy", "utils", "caching", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
 
 [package.metadata.requires-dev]
+admin-mcp = [{ name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'", url = "https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz" }]
 benchmarks = [
     { name = "a2a-sdk", specifier = "==1.1.0" },
     { name = "mcp", specifier = ">=2.2.0,<3" },
@@ -4953,6 +4958,7 @@ proxy-dev = [
     { name = "a2a-sdk", specifier = "==1.1.0" },
     { name = "azure-identity", specifier = "==1.25.2" },
     { name = "hypercorn", specifier = "==0.17.3" },
+    { name = "litellm-admin-mcp", marker = "python_full_version >= '3.12'", url = "https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz" },
     { name = "opentelemetry-api", specifier = "==1.33.1" },
     { name = "opentelemetry-exporter-otlp", specifier = "==1.33.1" },
     { name = "opentelemetry-instrumentation-fastapi", specifier = "==0.54b1" },
@@ -4961,6 +4967,30 @@ proxy-dev = [
     { name = "prometheus-client", specifier = "==0.20.0" },
     { name = "sentry-sdk", specifier = "==2.21.0" },
 ]
+
+[[package]]
+name = "litellm-admin-mcp"
+version = "0.1.0"
+source = { url = "https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz" }
+dependencies = [
+    { name = "httpx2", marker = "python_full_version >= '3.12'" },
+    { name = "jsonschema", marker = "python_full_version >= '3.12'" },
+    { name = "mcp", marker = "python_full_version >= '3.12'" },
+    { name = "uvicorn", marker = "python_full_version >= '3.12'" },
+]
+sdist = { hash = "sha256:86b930f6706fb2da10d53d1798ee7fd14e44fb0afdef0da122cf0e6bb88fa2c3" }
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", marker = "extra == 'test'", specifier = "==3.14.3" },
+    { name = "httpx2", specifier = "==2.13.0" },
+    { name = "jsonschema", specifier = "==4.26.0" },
+    { name = "mcp", specifier = "==2.2.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = "==9.1.1" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = "==1.4.0" },
+    { name = "uvicorn", specifier = ">=0.30,<1" },
+]
+provides-extras = ["test"]
 
 [[package]]
 name = "litellm-enterprise"
