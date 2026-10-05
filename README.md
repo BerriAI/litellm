@@ -1,4 +1,6 @@
 <h1 align="center">
+
+[![Deploy to Railyard](https://app.railyard.run/deploy/badge)](https://app.railyard.run/deploy?repo=https://github.com/BerriAI/litellm)
         🚅 LiteLLM
     </h1>
     <p align="center">
