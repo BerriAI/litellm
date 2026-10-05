@@ -12,6 +12,32 @@ import httpx
 import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
 
+HOST_ENVIRONMENT_ALLOWLIST: Final = frozenset(
+    (
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TZ",
+        "VIRTUAL_ENV",
+        "LITELLM_LOCAL_MODEL_COST_MAP",
+        "TIKTOKEN_CACHE_DIR",
+    )
+)
+HOST_ENVIRONMENT_ALLOWED_PREFIXES: Final = ("PYTEST_", "PYTHON", "COV_CORE_", "COVERAGE_")
+HOST_ONLY_ENVIRONMENT: Final = frozenset(
+    name
+    for name in os.environ
+    if name not in HOST_ENVIRONMENT_ALLOWLIST and not name.startswith(HOST_ENVIRONMENT_ALLOWED_PREFIXES)
+)
+
+os.environ["PYTHON_DOTENV_DISABLED"] = "1"
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at import
@@ -156,6 +182,11 @@ def _flush_client_caches() -> None:
     _reset_aws_auth_caches()
 
 
+@pytest.fixture(autouse=True, scope="session")
+def bundled_tiktoken_cache() -> None:
+    importlib.import_module("litellm.litellm_core_utils.default_encoding")
+
+
 @pytest.fixture(scope="session")
 def isolated_aws_config_files(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     aws_dir: Final = tmp_path_factory.mktemp("aws-config")
@@ -170,6 +201,8 @@ def isolated_aws_config_files(tmp_path_factory: pytest.TempPathFactory) -> tuple
 def isolate_host_environment(isolated_aws_config_files: tuple[Path, Path]) -> Iterator[None]:
     credentials, config = isolated_aws_config_files
     with pytest.MonkeyPatch.context() as environment:
+        for name in HOST_ONLY_ENVIRONMENT:
+            environment.delenv(name, raising=False)
         environment.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
         environment.setenv("AWS_CONFIG_FILE", str(config))
         environment.setenv("AWS_EC2_METADATA_DISABLED", "true")

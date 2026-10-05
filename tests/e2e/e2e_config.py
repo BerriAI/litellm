@@ -7,6 +7,8 @@ environment so the same tests run against localhost or a deployed proxy.
 from __future__ import annotations
 
 import os
+import socket
+from dataclasses import dataclass
 import time
 import uuid
 from pathlib import Path
@@ -15,6 +17,7 @@ from typing import Final
 from dotenv import load_dotenv
 from fixture_mode import deterministic_marker, parse_fixture_mode, registration_owner
 from provider_edge import provider_edge_api_base
+from pydantic import TypeAdapter
 
 # Local runs keep provider / DataDog keys in tests/e2e/.env (see CONTRIBUTING.md).
 # Compose injects them into the proxy container, but pytest on the host does not
@@ -33,12 +36,68 @@ CONTROL_PLANE_BASE_URL = os.environ.get(
 ).rstrip("/")
 
 
+def split_replica_urls(raw: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(url.strip().rstrip("/") for url in raw.split(",") if url.strip()))
+
+
 def parse_replica_urls(raw: str, fallback: str) -> tuple[str, ...]:
-    urls: Final = tuple(dict.fromkeys(url.strip().rstrip("/") for url in raw.split(",") if url.strip()))
-    return urls or (fallback,)
+    return split_replica_urls(raw) or (fallback,)
+
+
+def parse_control_plane_replica_urls(
+    raw: str, *, control_plane_base_url: str, base_url: str, replica_urls: tuple[str, ...]
+) -> tuple[str, ...]:
+    """The replicas a management read-back polls. LITELLM_CONTROL_PLANE_REPLICA_URLS
+    names them outright; unset, they follow the two base URLs: every data-plane
+    replica when the planes share a base (a monolith serves every route from every
+    replica) and the control-plane base alone when they differ. A stack sets it when
+    LITELLM_PROXY_REPLICA_URLS names gateway pods behind a shared router base, since
+    a gateway trims the management routes at startup and answers them 404."""
+    explicit: Final = split_replica_urls(raw)
+    if explicit:
+        return explicit
+    return replica_urls if control_plane_base_url == base_url else (control_plane_base_url,)
 
 
 PROXY_REPLICA_URLS: Final = parse_replica_urls(os.environ.get("LITELLM_PROXY_REPLICA_URLS", ""), PROXY_BASE_URL)
+CONTROL_PLANE_REPLICA_URLS: Final = parse_control_plane_replica_urls(
+    os.environ.get("LITELLM_CONTROL_PLANE_REPLICA_URLS", ""),
+    control_plane_base_url=CONTROL_PLANE_BASE_URL,
+    base_url=PROXY_BASE_URL,
+    replica_urls=PROXY_REPLICA_URLS,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class StackEndpoints:
+    base_url: str
+    control_plane_base_url: str
+    replica_urls: tuple[str, ...]
+    control_replica_urls: tuple[str, ...]
+
+    def control_replica_urls_for(
+        self, *, base_url: str, control_plane_base_url: str, replica_urls: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """The control replicas a client built for these endpoints polls when its caller names none:
+        this stack's own list for this stack's endpoints, since an exported list describes one stack only,
+        and the base-URL rule for any other proxy."""
+        if (base_url, control_plane_base_url, replica_urls) == (
+            self.base_url,
+            self.control_plane_base_url,
+            self.replica_urls,
+        ):
+            return self.control_replica_urls
+        return parse_control_plane_replica_urls(
+            "", control_plane_base_url=control_plane_base_url, base_url=base_url, replica_urls=replica_urls
+        )
+
+
+ENV_STACK: Final = StackEndpoints(
+    base_url=PROXY_BASE_URL,
+    control_plane_base_url=CONTROL_PLANE_BASE_URL,
+    replica_urls=PROXY_REPLICA_URLS,
+    control_replica_urls=CONTROL_PLANE_REPLICA_URLS,
+)
 
 UI_USERNAME = os.environ.get("E2E_UI_USERNAME", "admin")
 UI_PASSWORD = os.environ.get("E2E_UI_PASSWORD", MASTER_KEY)
@@ -49,6 +108,7 @@ UI_BASE_URL = os.environ.get("E2E_UI_BASE_URL", PROXY_BASE_URL).rstrip("/")
 
 CHEAP_ANTHROPIC_MODEL = os.environ.get("E2E_CHEAP_ANTHROPIC_MODEL", "claude-haiku-4-5")
 CHEAP_OPENAI_MODEL = os.environ.get("E2E_CHEAP_OPENAI_MODEL", "gpt-5.5")
+S3_PARTITION_GRANULARITY = os.environ.get("E2E_S3_PARTITION_GRANULARITY", "day")
 
 LINEAR_MCP_URL = os.environ.get("E2E_LINEAR_MCP_URL", "https://mcp.linear.app/mcp")
 LINEAR_STORAGE_STATE = os.environ.get("E2E_LINEAR_STORAGE_STATE", "")
@@ -148,6 +208,7 @@ REDIS_CHAOS_OPT_IN_ENV = "E2E_REDIS_CHAOS"
 CLI_DETERMINISM_OPT_IN_ENV = "E2E_CLI_DETERMINISM"
 MCP_OAUTH_LIVE_OPT_IN_ENV: Final = "E2E_MCP_OAUTH_LIVE"
 PROVIDER_EDGE_HOST_OPT_IN_ENV: Final = "E2E_PROVIDER_EDGE_HOST_REACHABLE"
+OWNED_GATEWAY_OPT_IN_ENV: Final = "E2E_OWNED_GATEWAY"
 OTEL_V2_OPT_IN_ENV: Final = "E2E_OTEL_V2"
 OTEL_TLS_OPT_IN_ENV: Final = "E2E_OTEL_EXPORTER_ENDPOINT"
 SECRET_MANAGER_OPT_IN_ENV: Final = "E2E_SECRET_MANAGER"
@@ -236,6 +297,15 @@ def unique_marker() -> str:
     if parse_fixture_mode(FIXTURE_MODE_RAW) in ("record", "replay"):
         return deterministic_marker()
     return uuid.uuid4().hex[:12]
+
+
+INHERITED_ENV_PREFIXES: Final = ("REDIS_", "MICROSOFT_", "GOOGLE_", "GENERIC_", "PROXY_")
+
+
+def available_port() -> int:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return TypeAdapter(tuple[str, int]).validate_python(listener.getsockname())[1]
 
 
 def settle_propagation(written_at: float) -> None:

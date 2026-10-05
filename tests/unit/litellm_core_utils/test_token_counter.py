@@ -3,16 +3,22 @@
 import asyncio
 import base64
 import importlib
+import json
+import os
+import subprocess
+import sys
 import threading
 import time
-import traceback
+from collections.abc import Mapping
 from concurrent.futures import Future, wait
+from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock
 
 import anyio.to_thread
 import pytest
 import tiktoken
+from tokenizers import Regex, Tokenizer, models, pre_tokenizers
 
 from unittest.mock import AsyncMock, patch
 
@@ -23,6 +29,7 @@ import litellm.constants
 from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
+    _encoding_count,
     _get_exact_count_function,
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
@@ -73,15 +80,17 @@ def test_token_counter_basic():
     )
 
 
-def test_token_counter_large_repeated_text_is_fast():
-    messages = [{"role": "user", "content": [{"type": "text", "text": "A" * 1024 * 1024}]}]
+def test_token_counter_large_repeated_text_is_encoded_in_bounded_chunks():
+    text_length: Final = 1024 * 1024
+    messages: Final = [{"role": "user", "content": [{"type": "text", "text": "A" * text_length}]}]
 
-    start_time = time.perf_counter()
-    tokens = token_counter_new(model="us.anthropic.claude-sonnet-4-6", messages=messages)
-    elapsed = time.perf_counter() - start_time
+    with patch("litellm.litellm_core_utils.token_counter._encoding_count", wraps=_encoding_count) as encoding_count:
+        tokens: Final = token_counter_new(model="us.anthropic.claude-sonnet-4-6", messages=messages)
 
-    assert elapsed < 2, f"Token counting took too long: {elapsed:.2f}s"
+    encoded_lengths: Final = tuple(len(call.args[1]) for call in encoding_count.call_args_list)
     assert tokens > 0
+    assert sum(encoded_lengths) >= text_length
+    assert max(encoded_lengths) <= litellm.constants.TIKTOKEN_ENCODE_MAX_CHUNK_SIZE_CHARS
 
 
 @pytest.mark.parametrize(
@@ -433,6 +442,78 @@ def test_token_counter_with_tools(message_count_pair):
         ), f"Expected {expected_tokens} tokens, got {counted_tokens}."
 
 
+def test_token_counter_counts_gemini_function_declarations():
+    openai_tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup_weather",
+                "description": "Find current weather conditions for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string", "description": "City and region"},
+                        "units": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    gemini_tools: Final = litellm.utils.get_optional_params(
+        model="gemini-2.5-pro",
+        custom_llm_provider="gemini",
+        tools=openai_tools,
+    )["tools"]
+    camel_case_tools: Final = [{"functionDeclarations": gemini_tools[0]["function_declarations"]}]
+
+    openai_tokens: Final = token_counter_new(
+        model="gemini-2.5-pro",
+        messages=[{"role": "user", "content": "What's the weather?"}],
+        tools=openai_tools,
+    )
+    gemini_tokens: Final = token_counter_new(
+        model="gemini-2.5-pro",
+        messages=[{"role": "user", "content": "What's the weather?"}],
+        tools=gemini_tools,
+    )
+    camel_case_tokens: Final = token_counter_new(
+        model="gemini-2.5-pro",
+        messages=[{"role": "user", "content": "What's the weather?"}],
+        tools=camel_case_tools,
+    )
+
+    assert openai_tokens == gemini_tokens == camel_case_tokens
+
+
+def test_token_counter_skips_non_mapping_tools():
+    openai_tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "lookup_weather",
+            "description": "Find current weather conditions for a location",
+            "parameters": {
+                "type": "object",
+                "properties": {"location": {"type": "string", "description": "City and region"}},
+                "required": ["location"],
+            },
+        },
+    }
+    messages: Final = [{"role": "user", "content": "What's the weather?"}]
+    valid_tokens: Final = token_counter_new(
+        model="gemini-2.5-pro",
+        messages=messages,
+        tools=[openai_tool],
+    )
+    mixed_tokens: Final = token_counter_new(
+        model="gemini-2.5-pro",
+        messages=messages,
+        tools=["bad", None, openai_tool],
+    )
+
+    assert mixed_tokens == valid_tokens
+
+
 class NeedsToleranceUpdateError(Exception):
     """Custom exception to mark tests that have improved"""
 
@@ -442,35 +523,46 @@ class NeedsToleranceUpdateError(Exception):
 # test_tokenizers()
 
 
-def test_encoding_and_decoding():
-    try:
-        sample_text = "Hellö World, this is my input string!"
-        # openai encoding + decoding
-        openai_tokens = encode(model="gpt-3.5-turbo", text=sample_text)
-        openai_text = decode(model="gpt-3.5-turbo", tokens=openai_tokens)
+def test_encoding_and_decoding(tmp_path: Path):
+    sample_text = "Hellö World, this is my input string!"
 
-        assert openai_text == sample_text
+    # openai encoding + decoding
+    openai_tokens = encode(model="gpt-3.5-turbo", text=sample_text)
+    openai_text = decode(model="gpt-3.5-turbo", tokens=openai_tokens)
 
-        # claude encoding + decoding
-        claude_tokens = encode(model="claude-3-5-haiku-20241022", text=sample_text)
+    assert openai_text == sample_text
 
-        claude_text = decode(model="claude-3-5-haiku-20241022", tokens=claude_tokens)
+    # claude encoding + decoding
+    claude_tokens = encode(model="claude-3-5-haiku-20241022", text=sample_text)
 
-        assert claude_text == sample_text
+    claude_text = decode(model="claude-3-5-haiku-20241022", tokens=claude_tokens)
 
-        # cohere encoding + decoding
-        cohere_tokens = encode(model="command-nightly", text=sample_text)
-        cohere_text = decode(model="command-nightly", tokens=cohere_tokens)
+    assert claude_text == sample_text
 
-        assert cohere_text == sample_text
+    # cohere encoding + decoding
+    cohere_tokens = encode(model="command-nightly", text=sample_text)
+    cohere_text = decode(model="command-nightly", tokens=cohere_tokens)
 
-        # llama2 encoding + decoding
-        llama2_tokens = encode(model="meta-llama/Llama-2-7b-chat", text=sample_text)
-        llama2_text = decode(model="meta-llama/Llama-2-7b-chat", tokens=llama2_tokens)
+    assert cohere_text == sample_text
 
-        assert llama2_text == sample_text
-    except Exception as e:
-        pytest.fail(f"An exception occured: {e}\n{traceback.format_exc()}")
+    # llama2 encoding + decoding
+    words = sample_text.split()
+    result = _run_in_memory_hub(
+        HUB_ROUND_TRIP_SCRIPT,
+        {
+            "hf-internal-testing/llama-tokenizer": _word_level_tokenizer_json(
+                pre_tokenizers.WhitespaceSplit(),
+                vocab={"[UNK]": 0, **{word: i + 1 for i, word in enumerate(words)}},
+            )
+        },
+        sample_text,
+        tmp_path,
+    )
+
+    assert result["decoded"] == sample_text
+    assert result["requested"] == ["hf-internal-testing/llama-tokenizer"]
+    assert len(result["tokens"]) == len(words)
+    assert len(result["tokens"]) != len(encode(model="gpt-3.5-turbo", text=sample_text))
 
 
 # test_encoding_and_decoding()
@@ -1439,3 +1531,294 @@ def test_high_detail_image_token_upper_bound_covers_every_image_size(width: int,
 def test_high_detail_image_token_upper_bound_is_reached_by_the_largest_high_res_image() -> None:
     assert calculate_img_tokens(_png_data_url(2000, 768), mode="high") == high_detail_image_token_upper_bound()
     assert calculate_img_tokens(_png_data_url(1, 1), mode="high") < high_detail_image_token_upper_bound()
+
+
+HUB_SETUP_SCRIPT: Final = """
+import json
+import sys
+sys.path.insert(0, sys.argv[1])
+import httpx
+import huggingface_hub
+import litellm
+served = json.loads(sys.argv[2])
+text = sys.argv[3]
+requested = []
+def handle(request):
+    repo = request.url.path.lstrip("/").split("/resolve/")[0]
+    if repo not in served or not request.url.path.endswith("/tokenizer.json"):
+        return httpx.Response(404)
+    requested.append(repo)
+    payload = served[repo].encode()
+    headers = {"content-length": str(len(payload)), "etag": '"fixture"', "x-repo-commit": "a" * 40}
+    return httpx.Response(200, headers=headers, content=payload if request.method == "GET" else b"")
+huggingface_hub.set_client_factory(lambda: httpx.Client(transport=httpx.MockTransport(handle)))
+"""
+
+HUB_TOKENIZER_SCRIPT: Final = HUB_SETUP_SCRIPT + """
+litellm.cohere_models = {"command-r-v1"}
+litellm.anthropic_models = {"claude-2"}
+custom = litellm.create_pretrained_tokenizer("Xenova/llama-3-tokenizer")
+print(json.dumps({
+    "llama2": litellm.token_counter(model="meta-llama/Llama-2-7b-chat", text=text),
+    "llama3": litellm.token_counter(model="meta-llama/llama-3-70b-instruct", text=text),
+    "cohere": litellm.token_counter(model="command-r-v1", text=text),
+    "anthropic": litellm.token_counter(model="claude-2", text=text),
+    "custom": litellm.token_counter(custom_tokenizer=custom, text=text),
+    "requested": sorted(set(requested)),
+}))
+"""
+
+HUB_ROUND_TRIP_SCRIPT: Final = HUB_SETUP_SCRIPT + """
+tokens = litellm.encode(model="meta-llama/Llama-2-7b-chat", text=text)
+print(json.dumps({"tokens": tokens, "decoded": litellm.decode(model="meta-llama/Llama-2-7b-chat", tokens=tokens), "requested": sorted(set(requested))}))
+"""
+
+
+def _word_level_tokenizer_json(
+    pre_tokenizer: pre_tokenizers.PreTokenizer, vocab: Mapping[str, int] | None = None
+) -> str:
+    tokenizer: Final = Tokenizer(
+        models.WordLevel(vocab=dict(vocab) if vocab is not None else {"[UNK]": 0}, unk_token="[UNK]")
+    )
+    tokenizer.pre_tokenizer = pre_tokenizer
+    return tokenizer.to_str()
+
+
+def _run_in_memory_hub(script: str, served: dict[str, str], text: str, tmp_path: Path) -> dict:
+    result: Final = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            script,
+            str(Path(litellm.__file__).parent.parent),
+            json.dumps(served),
+            text,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            **os.environ,
+            "HF_HOME": str(tmp_path / "home"),
+            "HF_HUB_CACHE": str(tmp_path / "cache"),
+            "HF_ENDPOINT": "http://127.0.0.1:9",
+            "HF_HUB_OFFLINE": "0",
+            "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_tokenizer(tmp_path: Path) -> None:
+    sample: Final = "Tokenizers disagree: anthropic, tiktoken; llama-2 & llama-3!"
+    served: Final = {
+        "hf-internal-testing/llama-tokenizer": _word_level_tokenizer_json(pre_tokenizers.WhitespaceSplit()),
+        "Xenova/llama-3-tokenizer": _word_level_tokenizer_json(pre_tokenizers.Split(Regex("."), "isolated")),
+        "Xenova/c4ai-command-r-v01-tokenizer": _word_level_tokenizer_json(pre_tokenizers.Whitespace()),
+    }
+    expected: Final = {repo: len(Tokenizer.from_str(payload).encode(sample).ids) for repo, payload in served.items()}
+    anthropic_count: Final = len(Tokenizer.from_str(claude_json_str).encode(sample).ids)
+    tiktoken_count: Final = litellm.token_counter(model="gpt-3.5-turbo", text=sample)
+    assert len({*expected.values(), anthropic_count, tiktoken_count}) == len(expected) + 2
+
+    counts: Final = _run_in_memory_hub(HUB_TOKENIZER_SCRIPT, served, sample, tmp_path)
+    assert counts == {
+        "llama2": expected["hf-internal-testing/llama-tokenizer"],
+        "llama3": expected["Xenova/llama-3-tokenizer"],
+        "cohere": expected["Xenova/c4ai-command-r-v01-tokenizer"],
+        "anthropic": anthropic_count,
+        "custom": expected["Xenova/llama-3-tokenizer"],
+        "requested": sorted(served),
+    }
+
+
+def _threshold_test_messages(turns: int) -> list[dict]:
+    messages: list[dict] = [{"role": "system", "content": "You are a terse assistant. " * 20}]
+    for index in range(turns):
+        messages.append({"role": "user", "content": f"Question {index}: what is the capital of country number {index}?"})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": f"Answer {index}: the capital is city number {index}."}],
+            }
+        )
+    return messages
+
+
+_THRESHOLD_TEST_TOOLS: Final = [
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_capital",
+            "description": "Look up the capital of a country",
+            "parameters": {"type": "object", "properties": {"country": {"type": "string"}}},
+        },
+    }
+]
+
+
+def test_messages_reach_token_count_agrees_with_token_counter_at_every_threshold() -> None:
+    """The threshold check is the same arithmetic as token_counter(...) >= threshold, including the
+    tools and system-message adjustments, so the boundary values must agree exactly."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    messages = _threshold_test_messages(turns=12)
+    total = token_counter_new(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        tools=_THRESHOLD_TEST_TOOLS,
+        use_default_image_token_count=True,
+    )
+    assert total > 100
+    for threshold in (0, 1, total - 1, total, total + 1, 10 * total):
+        assert messages_reach_token_count(
+            model="claude-3-5-sonnet-20240620",
+            messages=messages,
+            threshold=threshold,
+            tools=_THRESHOLD_TEST_TOOLS,
+            use_default_image_token_count=True,
+        ) is (total >= threshold), threshold
+
+
+_SHAPE_IMAGE: Final = "data:image/png;base64," + "iVBORw0KGgo=" * 4
+
+_OPENAI_SHAPE_MESSAGES: Final = [
+    {"role": "system", "content": "You are a careful assistant. " * 20},
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe this screenshot. " * 30},
+            {"type": "image_url", "image_url": {"url": _SHAPE_IMAGE}},
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"path": "/a/b"}'}}
+        ],
+    },
+    {"role": "tool", "tool_call_id": "c1", "content": "file body line\n" * 40},
+    {"role": "assistant", "content": "Here is what the file does. " * 20},
+]
+
+_ANTHROPIC_SHAPE_MESSAGES: Final = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe this screenshot. " * 30, "cache_control": {"type": "ephemeral"}},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo=" * 4}},
+        ],
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "Let me look."},
+            {"type": "tool_use", "id": "t1", "name": "read_file", "input": {"path": "/a/b"}},
+        ],
+    },
+    {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "file body line\n" * 40}]}],
+    },
+    {"role": "assistant", "content": [{"type": "text", "text": "Here is what the file does. " * 20}]},
+]
+
+_RESPONSES_SHAPE_INPUT: Final = [
+    {
+        "type": "message",
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "Describe this screenshot. " * 30},
+            {"type": "input_image", "image_url": _SHAPE_IMAGE},
+        ],
+    },
+    {"type": "function_call", "call_id": "c1", "name": "read_file", "arguments": '{"path": "/a/b"}'},
+    {"type": "function_call_output", "call_id": "c1", "output": "file body line\n" * 40},
+]
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param(_OPENAI_SHAPE_MESSAGES, id="openai_chat_shape"),
+        pytest.param(_ANTHROPIC_SHAPE_MESSAGES, id="anthropic_messages_shape"),
+    ],
+)
+def test_messages_reach_token_count_agrees_with_token_counter_per_message_shape(messages: list[dict]) -> None:
+    """Content lists, images, tool calls, tool results and cache_control blocks in the OpenAI chat shape
+    (/v1/chat/completions) and the Anthropic shape (/v1/messages) count the same bounded as in full."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    total = token_counter_new(
+        model="claude-3-5-sonnet-20240620",
+        messages=messages,
+        tools=_THRESHOLD_TEST_TOOLS,
+        use_default_image_token_count=True,
+    )
+    assert total > 100
+    for threshold in (0, 1, total - 1, total, total + 1, 10 * total):
+        assert messages_reach_token_count(
+            model="claude-3-5-sonnet-20240620",
+            messages=messages,
+            threshold=threshold,
+            tools=_THRESHOLD_TEST_TOOLS,
+            use_default_image_token_count=True,
+        ) is (total >= threshold), threshold
+
+
+def test_messages_reach_token_count_rejects_responses_items_exactly_like_token_counter() -> None:
+    """Responses API input items are not chat messages; the full counter raises on them and the
+    bounded counter raises the same error rather than silently returning a verdict."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    with pytest.raises(ValueError, match="input_text") as full:
+        token_counter_new(model="gpt-4o", messages=_RESPONSES_SHAPE_INPUT, use_default_image_token_count=True)
+    with pytest.raises(ValueError, match="input_text") as bounded:
+        messages_reach_token_count(
+            model="gpt-4o", messages=_RESPONSES_SHAPE_INPUT, threshold=10**6, use_default_image_token_count=True
+        )
+    assert str(bounded.value) == str(full.value)
+
+
+def test_messages_reach_token_count_stops_at_the_first_message_past_the_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the prompt-cache eligibility check used to tokenize every message of a 700k-token
+    Claude Code conversation to compare against a 1024-token minimum, costing hundreds of
+    milliseconds per request before routing. Counting must stop once the threshold is crossed."""
+    import litellm.litellm_core_utils.token_counter as token_counter_module
+
+    messages = _threshold_test_messages(turns=500)
+    counted_batches: list[int] = []  # mutable-ok: recorder for the _count_messages double
+    real_count_messages = token_counter_module._count_messages
+
+    def counting(params, batch, use_default_image_token_count, default_token_count):
+        counted_batches.append(len(batch))
+        return real_count_messages(params, batch, use_default_image_token_count, default_token_count)
+
+    monkeypatch.setattr(token_counter_module, "_count_messages", counting)
+    assert token_counter_module.messages_reach_token_count(
+        model="claude-3-5-sonnet-20240620", messages=messages, threshold=1024
+    )
+    assert all(size == 1 for size in counted_batches)
+    bounded_calls: Final = len(counted_batches)
+    assert bounded_calls < len(messages) // 4, bounded_calls
+
+    assert not token_counter_module.messages_reach_token_count(
+        model="claude-3-5-sonnet-20240620", messages=messages, threshold=10**9
+    )
+    assert len(counted_batches) - bounded_calls == len(messages)
+
+
+def test_messages_reach_token_count_honours_disable_token_counter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the counter disabled token_counter reports 0, so only a non-positive threshold is reached."""
+    from litellm.litellm_core_utils.token_counter import messages_reach_token_count
+
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    messages = _threshold_test_messages(turns=3)
+    assert messages_reach_token_count(model="gpt-4o", messages=messages, threshold=0) is True
+    assert messages_reach_token_count(model="gpt-4o", messages=messages, threshold=1) is False

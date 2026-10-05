@@ -15,7 +15,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/components/liteadmin/LiteAdmin", () => ({
-  default: () => <button>LiteAdmin</button>,
+  LiteAdminFrame: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock("@/components/DashboardHeader", () => ({
@@ -23,7 +23,9 @@ vi.mock("@/components/DashboardHeader", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/components/SidebarProvider", () => ({
-  default: () => <div data-testid="sidebar" />,
+  default: ({ sidebarCollapsed }: { sidebarCollapsed: boolean }) => (
+    <div data-testid="sidebar" data-collapsed={String(sidebarCollapsed)} />
+  ),
 }));
 
 vi.mock("@/components/DebugWarningBanner", () => ({
@@ -87,30 +89,26 @@ describe("(dashboard) Layout", () => {
     vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
   });
 
-  it.each(["/ui/playground", "/ui/playground/"])(
-    "hides LiteAdmin on %s and restores it after leaving Playground",
-    async (pathname) => {
-      const dashboard = () => (
-        <AuthProvider>
-          <Layout>
-            <div data-testid="page-content" />
-          </Layout>
-        </AuthProvider>
-      );
-      const { rerender } = render(dashboard());
-      pendingUiConfig.resolve();
-      expect(await screen.findByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
+  it("collapses the sidebar on Logs for a full-screen view and expands it again after leaving", async () => {
+    const dashboard = () => (
+      <AuthProvider>
+        <Layout>
+          <div data-testid="page-content" />
+        </Layout>
+      </AuthProvider>
+    );
+    const { rerender } = render(dashboard());
+    pendingUiConfig.resolve();
+    expect(await screen.findByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
 
-      vi.mocked(usePathname).mockReturnValue(pathname);
-      rerender(dashboard());
-      expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
-      expect(screen.getByTestId("page-content")).toBeInTheDocument();
+    vi.mocked(usePathname).mockReturnValue("/ui/logs");
+    rerender(dashboard());
+    expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "true");
 
-      vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
-      rerender(dashboard());
-      expect(screen.getByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
-    },
-  );
+    vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
+    rerender(dashboard());
+    expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
+  });
 
   it("does not mount route content until getUiConfig has resolved", async () => {
     render(

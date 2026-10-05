@@ -1,12 +1,20 @@
-use std::{convert::Infallible, sync::Mutex};
+use std::{
+    ops::ControlFlow,
+    sync::{Mutex, mpsc},
+};
 
 use bytes::Bytes;
-use litellm_core::messages::route::{Messages, MessagesStreamHead};
-use litellm_host::host::{Demand, Host};
+use futures_util::{StreamExt, TryStreamExt};
+use litellm_core::messages::{
+    MessagesCallResponse,
+    route::{Messages, MessagesStreamHead},
+};
+use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::rstest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
+    task::JoinHandle,
 };
 
 use super::*;
@@ -21,6 +29,20 @@ const SSE_BODY: &str = "event: message_start\ndata: {\"type\":\"message_start\"}
 enum Seen {
     Open(Vec<(String, String)>),
     Deliver(Bytes),
+}
+
+struct TraceSink(mpsc::Sender<(String, Value)>);
+
+impl Sink for TraceSink {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        metadata.target().starts_with("litellm_core::messages")
+    }
+
+    fn emit(&self, record: &Record) {
+        self.0
+            .send((record.message.clone(), Value::Object(record.fields.clone())))
+            .unwrap();
+    }
 }
 
 /// Projects like `LocalMessagesHost`, records every stream op in the order the route
@@ -40,42 +62,73 @@ impl RecordingStreamHost {
         }
     }
 
-    fn record(&self, op: Seen) -> Demand {
+    fn record(&self, op: Seen) -> ControlFlow<()> {
         let mut seen = self.seen.lock().unwrap();
         seen.push(op);
         match seen.len() < self.detach_after {
-            true => Demand::More,
-            false => Demand::Detached,
+            true => ControlFlow::Continue(()),
+            false => ControlFlow::Break(()),
         }
     }
 }
 
-impl Host<Messages> for RecordingStreamHost {
-    async fn project(&self) -> Result<MessagesCall, Error> {
-        self.call.project().await
+impl RecordingStreamHost {
+    pub fn request(&self) -> Result<MessagesCall, Error> {
+        self.call.request()
     }
-
-    async fn custom_op(&self, op: Infallible) -> Result<(), Error> {
-        match op {}
+    pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, Self> {
+        litellm_host_native::in_process::Host {
+            services: &(),
+            interceptors: self,
+            stream: self,
+            observers: None,
+        }
     }
+}
 
-    async fn open(&self, head: MessagesStreamHead) -> Result<Demand, Error> {
+impl litellm_host_native::in_process::StreamConsumer<Messages> for RecordingStreamHost {
+    async fn open_stream(&self, head: MessagesStreamHead) -> Result<ControlFlow<()>, Error> {
         Ok(self.record(Seen::Open(head.headers)))
     }
-
-    async fn deliver(&self, chunk: Bytes) -> Result<Demand, Error> {
+    async fn send_chunk(&self, chunk: Bytes) -> Result<ControlFlow<()>, Error> {
         Ok(self.record(Seen::Deliver(chunk)))
+    }
+}
+impl litellm_host::lifecycle::CallObserver for RecordingStreamHost {
+    fn observe(&self, _: litellm_host::lifecycle::CallEvent) {}
+}
+impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protocol::Protocol>::Error>
+    for RecordingStreamHost
+{
+    async fn before_provider_request(
+        &self,
+        wire: litellm_host::interceptors::WireRequest,
+        _: litellm_host::interceptors::RequestContext,
+    ) -> Result<
+        litellm_host::interceptors::WireRequest,
+        <Messages as litellm_host::protocol::Protocol>::Error,
+    > {
+        Ok(wire)
+    }
+    async fn after_provider_response(
+        &self,
+        raw: litellm_host::interceptors::RawResponse,
+    ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
+        litellm_host::lifecycle::CallObserver::observe(
+            self,
+            litellm_host::lifecycle::CallEvent::Execution(
+                litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
+            ),
+        );
+        Ok(())
     }
 }
 
 fn streaming(call: MessagesCall, api_base: String) -> MessagesCall {
-    let mut body = call.body.clone();
-    body.insert("stream".into(), json!(true));
     MessagesCall {
         api_key: Some("sk-ant".into()),
         api_base: Some(api_base),
-        body,
-        ..call
+        ..with_fields(call, json!({"stream": true}))
     }
 }
 
@@ -87,7 +140,11 @@ fn sse_response() -> ResponseTemplate {
 }
 
 async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run(messages_machine(Arc::new(RecordingSecrets::empty())), host).await
+    litellm_host_native::in_process::run_hosted(
+        machine(Arc::new(RecordingSecrets::empty()))(host.request()?),
+        host.runtime(),
+    )
+    .await
 }
 
 #[rstest]
@@ -98,7 +155,7 @@ async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: Me
 
     let outcome = stream_through(&host).await.expect("streamed call succeeds");
 
-    assert!(matches!(outcome, MessagesOutput::Streamed));
+    assert!(matches!(outcome, MessagesOutput::StreamEnded));
     let seen = host.seen.into_inner().unwrap();
     let [Seen::Open(headers), chunks @ ..] = seen.as_slice() else {
         panic!("the stream opens before any chunk is delivered");
@@ -124,6 +181,37 @@ async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: Me
 }
 
 #[rstest]
+#[tokio::test]
+async fn debug_trace_keeps_provider_input_and_every_stream_chunk(call: MessagesCall) {
+    let upstream = upstream([sse_response()]).await;
+    let host = RecordingStreamHost::new(streaming(call, upstream.uri()), usize::MAX);
+    let (sender, receiver) = mpsc::channel();
+
+    Logger::new(TraceSink(sender))
+        .instrument(stream_through(&host))
+        .await
+        .unwrap();
+
+    let records: Vec<(String, Value)> = receiver.try_iter().collect();
+    let request = records
+        .iter()
+        .find(|(message, _)| message == "provider request")
+        .unwrap();
+    let body: Value = serde_json::from_str(request.1["body"].as_str().unwrap()).unwrap();
+    assert_eq!(body["messages"][0]["content"], "hi");
+    assert_eq!(request.1["stream"], true);
+    let chunks: String = records
+        .iter()
+        .filter(|(message, fields)| {
+            message == "stream chunk" && fields["stage"] == "provider_response"
+        })
+        .map(|(_, fields)| fields["chunk"].as_str().unwrap())
+        .collect();
+    assert_eq!(chunks, SSE_BODY);
+    assert!(!format!("{records:?}").contains("sk-ant"));
+}
+
+#[rstest]
 #[case::at_open(1)]
 #[case::after_the_first_chunk(2)]
 #[tokio::test]
@@ -135,7 +223,7 @@ async fn a_detached_caller_receives_nothing_more(call: MessagesCall, #[case] det
         .await
         .expect("a detached stream still completes");
 
-    assert!(matches!(outcome, MessagesOutput::Streamed));
+    assert!(matches!(outcome, MessagesOutput::Detached));
     assert_eq!(host.seen.into_inner().unwrap().len(), detach_after);
 }
 
@@ -145,6 +233,7 @@ async fn a_detached_caller_receives_nothing_more(call: MessagesCall, #[case] det
     status_response(429, json!({"type": "error", "error": {"type": "rate_limit_error", "message": "slow down"}})),
     r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#
 )]
+#[rstest::rstest]
 #[tokio::test]
 async fn an_upstream_error_fails_the_call_without_opening_the_stream(
     call: MessagesCall,
@@ -156,8 +245,7 @@ async fn an_upstream_error_fails_the_call_without_opening_the_stream(
 
     let error = stream_through(&host)
         .await
-        .err()
-        .expect("upstream error propagates");
+        .expect_err("upstream error propagates");
 
     assert_eq!(
         error,
@@ -195,10 +283,10 @@ async fn a_stream_that_ends_without_message_stop_is_relayed_as_is(call: Messages
 }
 
 /// Serves one SSE chunk and then holds the connection open without ever finishing.
-async fn stalling_upstream() -> String {
+async fn stalling_upstream() -> (String, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move {
+    let connection = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut request = vec![0; 4096];
         let _ = socket.read(&mut request).await;
@@ -209,15 +297,15 @@ async fn stalling_upstream() -> String {
             )
             .await
             .unwrap();
-        std::future::pending::<()>().await;
+        let _ = socket.read_to_end(&mut Vec::new()).await;
     });
-    base
+    (base, connection)
 }
 
 #[rstest]
 #[tokio::test]
 async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
-    let base = stalling_upstream().await;
+    let (base, connection) = stalling_upstream().await;
     let host = RecordingStreamHost::new(
         MessagesCall {
             timeout: Some(Duration::from_millis(300)),
@@ -229,8 +317,7 @@ async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
     let error = tokio::time::timeout(Duration::from_secs(5), stream_through(&host))
         .await
         .expect("the stalled stream gives up within the timeout")
-        .err()
-        .expect("a stalled body fails the call");
+        .expect_err("a stalled body fails the call");
 
     assert!(matches!(error, Error::Transport(_)), "{error:?}");
     let seen = host.seen.into_inner().unwrap();
@@ -239,11 +326,145 @@ async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
         "the chunk before the stall reached the caller, saw {} ops",
         seen.len()
     );
+    tokio::time::timeout(Duration::from_secs(5), connection)
+        .await
+        .expect("timing out closes the upstream connection")
+        .unwrap();
+}
+
+#[rstest]
+#[case::anthropic("anthropic")]
+#[case::azure_ai("azure_ai")]
+#[tokio::test]
+async fn the_sdk_returns_stream_headers_and_every_sse_byte(
+    call: MessagesCall,
+    #[case] provider: &str,
+) {
+    let upstream = upstream([sse_response()]).await;
+    let response = messages_route(no_secrets())
+        .execute(
+            MessagesCall {
+                custom_llm_provider: Some(provider.into()),
+                ..streaming(call, upstream.uri())
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let MessagesCallResponse::Stream { head, chunks } = response else {
+        panic!("a streaming request returns a stream");
+    };
+    for (name, value) in UPSTREAM_HEADERS {
+        assert!(head.headers.contains(&(name.into(), value.into())));
+    }
+    let delivered = chunks.try_collect::<Vec<_>>().await.unwrap().concat();
+    assert_eq!(delivered, SSE_BODY.as_bytes());
+    assert_eq!(only_request(&upstream).await.json()["stream"], true);
 }
 
 #[rstest]
 #[tokio::test]
-async fn streaming_is_refused_for_providers_that_cannot_stream(call: MessagesCall) {
+async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall) {
+    let upstream = upstream([ResponseTemplate::new(429).set_body_string("slow down")]).await;
+    let error = messages_route(no_secrets())
+        .execute(streaming(call, upstream.uri()), &(), None)
+        .await
+        .err()
+        .expect("upstream failure is returned by messages()");
+
+    assert_eq!(
+        error,
+        Error::Transport(litellm_http::transport::Error::Http {
+            status: 429,
+            body: "slow down".into(),
+        })
+    );
+}
+
+#[rstest]
+#[case::before_reading(false)]
+#[case::after_reading(true)]
+#[tokio::test]
+async fn dropping_the_sdk_stream_closes_the_unfinished_upstream(
+    call: MessagesCall,
+    #[case] read_chunk: bool,
+) {
+    let (base, connection) = stalling_upstream().await;
+    let response = tokio::time::timeout(
+        Duration::from_secs(5),
+        messages_route(no_secrets()).execute(
+            MessagesCall {
+                timeout: Some(Duration::from_secs(30)),
+                ..streaming(call, base)
+            },
+            &(),
+            None,
+        ),
+    )
+    .await
+    .expect("messages() returns before the upstream finishes")
+    .unwrap();
+
+    let MessagesCallResponse::Stream { mut chunks, .. } = response else {
+        panic!("a streaming request returns a stream");
+    };
+    if read_chunk {
+        let chunk = tokio::time::timeout(Duration::from_secs(5), chunks.next())
+            .await
+            .expect("the first chunk arrives before the upstream finishes")
+            .unwrap()
+            .unwrap();
+        assert_eq!(chunk.as_ref(), b"event: message_start\ndata: {}\n\n");
+    }
+    assert!(!connection.is_finished());
+    drop(chunks);
+    tokio::time::timeout(Duration::from_secs(5), connection)
+        .await
+        .expect("dropping the stream closes the upstream connection")
+        .unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesCall) {
+    let (base, connection) = stalling_upstream().await;
+    let response = messages_route(no_secrets())
+        .execute(
+            MessagesCall {
+                timeout: Some(Duration::from_millis(300)),
+                ..streaming(call, base)
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let MessagesCallResponse::Stream { mut chunks, .. } = response else {
+        panic!("a streaming request returns a stream");
+    };
+    assert_eq!(
+        chunks.next().await.unwrap().unwrap().as_ref(),
+        b"event: message_start\ndata: {}\n\n"
+    );
+    let error = tokio::time::timeout(Duration::from_secs(5), chunks.next())
+        .await
+        .expect("the stalled body times out")
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    assert!(chunks.next().await.is_none());
+    tokio::time::timeout(Duration::from_secs(5), connection)
+        .await
+        .expect("the failed stream closes its upstream connection")
+        .unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_host_on_anthropic_sse_is_relayed_byte_for_byte(call: MessagesCall) {
     let upstream = upstream([sse_response()]).await;
     let host = RecordingStreamHost::new(
         MessagesCall {
@@ -253,14 +474,17 @@ async fn streaming_is_refused_for_providers_that_cannot_stream(call: MessagesCal
         usize::MAX,
     );
 
-    let error = stream_through(&host)
-        .await
-        .err()
-        .expect("azure streaming is refused");
+    let outcome = stream_through(&host).await.expect("azure streams");
 
-    assert_eq!(
-        error,
-        Error::Unsupported("streaming messages for this provider")
-    );
-    assert!(received(&upstream).await.is_empty());
+    assert!(matches!(outcome, MessagesOutput::StreamEnded));
+    let seen = host.seen.into_inner().unwrap();
+    let delivered: Vec<u8> = seen
+        .iter()
+        .filter_map(|step| match step {
+            Seen::Deliver(chunk) => Some(chunk.to_vec()),
+            Seen::Open(_) => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(delivered, SSE_BODY.as_bytes());
 }

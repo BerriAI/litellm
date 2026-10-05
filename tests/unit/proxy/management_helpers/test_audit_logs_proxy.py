@@ -14,13 +14,11 @@ import time
 # this file is to test litellm/proxy
 
 import asyncio
-import logging
 
 load_dotenv()
 
 import pytest
 import litellm
-from litellm._logging import verbose_proxy_logger
 
 from litellm.proxy.proxy_server import (
     LitellmUserRoles,
@@ -35,7 +33,6 @@ from litellm.proxy.proxy_server import (
 
 from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_spend
 
-verbose_proxy_logger.setLevel(level=logging.DEBUG)
 
 from starlette.datastructures import URL
 

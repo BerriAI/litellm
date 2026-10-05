@@ -5,8 +5,8 @@ use litellm_llms::base_llm::ocr::{
 };
 use litellm_secrets::source::Secrets;
 
-use super::provider_config::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
+use crate::provider::LlmProviders;
 
 pub(crate) fn prepare_request(
     request: ResolvedOcrRequest,
@@ -16,15 +16,19 @@ pub(crate) fn prepare_request(
 ) -> PreparedOcrRequest {
     let credentials = request.credentials.clone();
     let (preferred_api_key_env, api_base_env) = match request.config.provider() {
-        OcrProvider::Mistral => (
+        LlmProviders::Mistral => (
             Some("MISTRAL_AZURE_API_KEY"),
             Some("MISTRAL_AZURE_API_BASE"),
         ),
-        OcrProvider::AzureAi => (None, Some("AZURE_AI_API_BASE")),
-        OcrProvider::AwsTextract
-        | OcrProvider::Cohere
-        | OcrProvider::Reducto
-        | OcrProvider::VertexAi => (None, None),
+        LlmProviders::AzureAi => (None, Some("AZURE_AI_API_BASE")),
+        LlmProviders::Anthropic
+        | LlmProviders::AwsTextract
+        | LlmProviders::Bedrock
+        | LlmProviders::Cohere
+        | LlmProviders::Openai
+        | LlmProviders::OpenaiLike
+        | LlmProviders::Reducto
+        | LlmProviders::VertexAi => (None, None),
     };
     let secret = |name: &str| secrets.truthy(name);
     let dynamic_api_key = credentials.dynamic_api_key.or_else(|| {
@@ -76,17 +80,18 @@ mod tests {
 
     use futures_util::future::BoxFuture;
     use litellm_core_utils::call_arguments::{CallArguments, compose_body, parse_options};
-    use litellm_host::event::WireRequest;
+    use litellm_host::interceptors::WireRequest;
     use litellm_llms::{
         base_llm::ocr::{
             error::Error,
             handler::{CallHooks, OcrClient},
-            transformation::{BaseOcrConfig, OcrResponseFormat},
+            transformation::BaseOcrConfig,
         },
         cohere::ocr::transformation::CohereParseConfig,
         mistral::ocr::transformation::MistralOcrConfig,
         vertex_ai::ocr::transformation::VertexAiOcrConfig,
     };
+    use litellm_llms_types::formats::ocr::OcrResponseFormat;
     use serde_json::{Value, json};
 
     use super::*;
@@ -96,11 +101,14 @@ mod tests {
         wire::{OcrWireRequest, decode_request},
     };
 
-    /// Stands in for a host with no hooks registered.
+    /// Stands in for a host with no interceptors registered.
     struct NoHooks;
 
     impl CallHooks<Error> for NoHooks {
-        fn before_send(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, Error>> {
+        fn before_provider_request(
+            &self,
+            wire: WireRequest,
+        ) -> BoxFuture<'_, Result<WireRequest, Error>> {
             Box::pin(async move { Ok(wire) })
         }
 
@@ -110,7 +118,10 @@ mod tests {
     }
 
     fn client() -> OcrClient {
-        OcrClient::for_test(reqwest::Client::new(), reqwest::Client::new())
+        OcrClient::for_test(
+            litellm_http::Client::plain_for_test(),
+            litellm_http::Client::no_redirect_for_test(),
+        )
     }
 
     fn request(model: &str, base: &str, document: Value, options: Value) -> LiteLLMOcrRequest {
@@ -141,6 +152,7 @@ mod tests {
         json!({"type": "image_url", "image_url": url})
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn cohere_body_keeps_native_document_fields_and_untyped_overrides() {
         let request = request(
@@ -173,6 +185,7 @@ mod tests {
         );
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn explicit_null_options_use_defaults_before_http() {
         let request = request(
@@ -196,6 +209,7 @@ mod tests {
         assert!(body.get("req_format").is_none());
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn direct_and_vertex_mistral_build_the_same_request_and_share_normalization() {
         let options = json!({
@@ -273,7 +287,7 @@ mod tests {
         pages: Option<Vec<i64>>,
     }
 
-    #[test]
+    #[rstest::rstest]
     fn parsed_provider_params_separates_known_and_extra_params() {
         let arguments: CallArguments = serde_json::from_value(json!({
             "pages": [0, 2],

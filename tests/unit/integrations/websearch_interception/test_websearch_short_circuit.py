@@ -229,7 +229,7 @@ class TestShortCircuitEntryPoint:
     @pytest.mark.asyncio
     async def test_returns_none_when_no_callbacks(self):
         """No callbacks configured → returns None"""
-        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        from litellm.llms.anthropic.pass_through.messages.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -246,7 +246,7 @@ class TestShortCircuitEntryPoint:
     @pytest.mark.asyncio
     async def test_returns_dict_when_not_streaming(self):
         """Non-streaming short-circuit → returns dict"""
-        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        from litellm.llms.anthropic.pass_through.messages.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -271,10 +271,10 @@ class TestShortCircuitEntryPoint:
     @pytest.mark.asyncio
     async def test_returns_stream_iterator_when_streaming(self):
         """Streaming short-circuit → returns FakeAnthropicMessagesStreamIterator"""
-        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+        from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
-        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        from litellm.llms.anthropic.pass_through.messages.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -313,7 +313,7 @@ class TestShortCircuitEntryPoint:
         """Non-WebSearchInterceptionLogger callbacks are ignored"""
         from unittest.mock import MagicMock
 
-        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        from litellm.llms.anthropic.pass_through.messages.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -336,10 +336,10 @@ class TestShortCircuitEntryPoint:
         loop. The short-circuit must use the ORIGINAL stream value so streaming
         callers get SSE events instead of a plain dict.
         """
-        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+        from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
-        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        from litellm.llms.anthropic.pass_through.messages.handler import (
             _try_websearch_short_circuit,
         )
 
@@ -369,7 +369,7 @@ class TestShortCircuitEntryPoint:
         still fire the short-circuit when the caller propagates the derived
         provider.
         """
-        from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        from litellm.llms.anthropic.pass_through.messages.handler import (
             _try_websearch_short_circuit,
         )
 

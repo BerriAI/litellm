@@ -19,7 +19,7 @@ async fn read_bounded(response: String, limit: usize) -> Result<bytes::Bytes, Er
         socket.write_all(response.as_bytes()).await.unwrap();
         std::future::pending::<()>().await;
     });
-    let response = reqwest::Client::new()
+    let response = litellm_http::Client::plain_for_test()
         .get(format!("http://{address}"))
         .send()
         .await

@@ -5,6 +5,8 @@ on:
     paths:
       - "litellm-rust/**"
       - "litellm/rust_bridge/**"
+      - "scripts/generate_trace_types.py"
+      - "scripts/trace_codegen/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
       - "litellm/litellm_core_utils/litellm_logging.py"
@@ -14,7 +16,6 @@ on:
       - "litellm/ocr/**"
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
-      - "tests/test_litellm/ocr/**"
       - "tests/test_litellm/conftest.py"
       - "Makefile"
       - ".cargo/**"
@@ -33,6 +34,8 @@ on:
     paths:
       - "litellm-rust/**"
       - "litellm/rust_bridge/**"
+      - "scripts/generate_trace_types.py"
+      - "scripts/trace_codegen/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
       - "litellm/litellm_core_utils/litellm_logging.py"
@@ -42,7 +45,6 @@ on:
       - "litellm/ocr/**"
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
-      - "tests/test_litellm/ocr/**"
       - "tests/test_litellm/conftest.py"
       - "Makefile"
       - ".cargo/**"
@@ -85,12 +87,13 @@ jobs:
         with:
           workspaces: litellm-rust
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked --features litellm-traces/schema,litellm-traces-clickhouse/schema -- -D warnings
 
   rust-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: litellm-rust
@@ -123,8 +126,13 @@ jobs:
         with:
           workspaces: litellm-rust
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - run: cargo nextest run --workspace --locked
+      - name: Check generated trace contracts
+        working-directory: .
+        run: uv run scripts/generate_trace_types.py --check
+
+      - run: cargo nextest run --workspace --locked --features litellm-traces/schema,litellm-traces-clickhouse/schema
 
       - run: cargo test --workspace --doc --locked
 
@@ -164,6 +172,7 @@ jobs:
         with:
           workspaces: litellm-rust
           cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - run: uv build --wheel --out-dir dist
 
