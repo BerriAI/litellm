@@ -114,7 +114,7 @@ export function MatchingActivityPreview({
         </div>
       )}
       {(status.loading || (shown && !status.error && runs.length > 0)) && (
-        <div className="max-h-[calc(100dvh-16rem)] min-h-0 overflow-auto">
+        <div className="flex max-h-[calc(100dvh-16rem)] min-h-0 flex-col">
           <PreviewTable
             traces={runs}
             isLoading={status.loading}
