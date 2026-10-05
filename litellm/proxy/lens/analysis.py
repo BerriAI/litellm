@@ -610,8 +610,23 @@ async def investigation_decision(request: ModelRequest, model: ModelCall, steps:
     return Decision(action=final.action, finding=final.finding)
 
 
+AnalyzeSample: TypeAlias = Callable[[Claim, Sample, ReadContent, ModelCall, ReportProgress], Awaitable[Result]]
+ExtractExecution: TypeAlias = Callable[[Claim, Execution, ReadContent, ModelCall], Awaitable[Examined]]
+
+
 async def analyze_sample(
     claim: Claim, sample: Sample, read: ReadContent, model: ModelCall, progress: ReportProgress
+) -> Result:
+    return await analyze_with(claim, sample, read, model, progress, _analyze_sample)
+
+
+async def analyze_with(
+    claim: Claim,
+    sample: Sample,
+    read: ReadContent,
+    model: ModelCall,
+    progress: ReportProgress,
+    analyze: AnalyzeSample,
 ) -> Result:
     originals: Final = MappingProxyType({f"r{index}": e for index, e in enumerate(sample.executions)})
     executions: Final = tuple(e.model_copy(update=MappingProxyType({"id": alias})) for alias, e in originals.items())
@@ -630,7 +645,7 @@ async def analyze_sample(
             )
         )
 
-    result: Final = await _analyze_sample(
+    result: Final = await analyze(
         claim, sample.model_copy(update=MappingProxyType({"executions": executions})), read_alias, model, progress
     )
     return result.model_copy(
@@ -661,7 +676,13 @@ async def analyze_sample(
 
 
 async def _analyze_sample(
-    claim: Claim, sample: Sample, read: ReadContent, model: ModelCall, progress: ReportProgress
+    claim: Claim,
+    sample: Sample,
+    read: ReadContent,
+    model: ModelCall,
+    progress: ReportProgress,
+    *,
+    extractor: ExtractExecution = extract,
 ) -> Result:
     base: Final = Coverage(eligible=sample.eligible, selected=len(sample.executions))
     if not sample.executions:
@@ -672,7 +693,9 @@ async def _analyze_sample(
         async with slots:
             return await model(request)
 
-    examined: Final = tuple([item async for item in examine_executions(claim, sample, read, limited_model, progress)])
+    examined: Final = tuple(
+        [item async for item in examine_executions(claim, sample, read, limited_model, progress, extractor=extractor)]
+    )
     coverage: Final = base.model_copy(
         update=MappingProxyType(
             {
@@ -849,10 +872,16 @@ async def merge_candidates(
 
 
 async def examine_executions(
-    claim: Claim, sample: Sample, read: ReadContent, model: ModelCall, progress: ReportProgress
+    claim: Claim,
+    sample: Sample,
+    read: ReadContent,
+    model: ModelCall,
+    progress: ReportProgress,
+    *,
+    extractor: ExtractExecution = extract,
 ) -> AsyncIterator[Examined]:
     async def examine(execution: Execution) -> Examined:
-        return await extract(claim, execution, read, model)
+        return await extractor(claim, execution, read, model)
 
     await progress("Reading executions", Coverage(eligible=sample.eligible, selected=len(sample.executions)))
     completed: Final = iter(range(1, len(sample.executions) + 1))
