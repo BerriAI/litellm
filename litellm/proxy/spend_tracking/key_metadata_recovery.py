@@ -172,11 +172,9 @@ async def _db_or_empty(
     warning: str,
     count: int,
 ) -> _T | None:
-    from prisma.errors import PrismaError
-
     try:
         return await load()
-    except PrismaError as e:
+    except Exception as e:
         verbose_proxy_logger.warning(warning, count, e)
         return None
 
@@ -441,6 +439,10 @@ async def _query_spend_log_metadata(
     )
 
 
+def _remember_short_lived_miss(cache: InMemoryCache, key: str) -> None:
+    cache.set_cache(key, KeyMetadataDict(), ttl=SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL)
+
+
 def _remember_spend_log_metadata(
     cache: InMemoryCache, digest: str, window: tuple[datetime, datetime], meta: KeyMetadataDict | None
 ) -> None:
@@ -452,7 +454,7 @@ def _remember_spend_log_metadata(
     if cache.get_cache(missed_before) is not None:
         cache.set_cache(key, KeyMetadataDict())
         return
-    cache.set_cache(key, KeyMetadataDict(), ttl=SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL)
+    _remember_short_lived_miss(cache, key)
     cache.set_cache(missed_before, True)
 
 
@@ -469,10 +471,13 @@ async def _spend_log_metadata_one_query_at_a_time(
         fresh: Final = (
             await _query_spend_log_metadata(prisma_client, pending, window) if pending else _EMPTY_KEY_METADATA
         )
-        found: Final = fresh if fresh is not None else _EMPTY_KEY_METADATA
+        if fresh is None:
+            for digest in pending:
+                _remember_short_lived_miss(cache, _spend_log_cache_key(digest, window))
+            return settled
         for digest in pending:
-            _remember_spend_log_metadata(cache, digest, window, found.get(digest))
-        return MappingProxyType({**settled, **found})
+            _remember_spend_log_metadata(cache, digest, window, fresh.get(digest))
+        return MappingProxyType({**settled, **fresh})
 
 
 async def recover_key_metadata_from_spend_logs(
