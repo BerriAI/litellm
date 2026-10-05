@@ -1,3 +1,7 @@
+use litellm_host::{
+    interceptors::{ExecutionFacts, ResultSource},
+    lifecycle::ExecutionEvent,
+};
 use std::sync::Arc;
 
 use futures_util::TryStreamExt;
@@ -5,7 +9,7 @@ use litellm_core::responses::{
     route::Responses,
     types::{ResponsesCall, ResponsesOutput},
 };
-use litellm_host::{call::HostedCompletion, event::CallEvent};
+use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
 use rstest::{fixture, rstest};
 use serde_json::json;
 use wiremock::ResponseTemplate;
@@ -39,8 +43,9 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
         ..call
     });
     let response = if hosted {
-        let HostedCompletion::Complete(response) = litellm_host::in_process::run_hosted(
-            responses_route(no_secrets()).machine(host.request().unwrap()),
+        let HostedCompletion::Complete(response) = litellm_host_native::in_process::run_hosted(
+            responses_route(no_secrets())
+                .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
             host.runtime(),
         )
         .await
@@ -51,7 +56,7 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
     } else {
         let call = host.request.lock().unwrap().take().unwrap();
         let ResponsesOutput::Complete(response) = responses_route(no_secrets())
-            .execute(call, &host)
+            .execute(call, &host, Some(host.events.0.sender.clone()))
             .await
             .unwrap()
         else {
@@ -69,7 +74,13 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
         &host.events.0.lock().unwrap()[..],
         [
             CallEvent::Started { .. },
-            CallEvent::Machine(_),
+            CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
+            CallEvent::Execution(ExecutionEvent::ResultReady {
+                facts: ExecutionFacts {
+                    source: ResultSource::Provider,
+                    ..
+                }
+            }),
             CallEvent::Succeeded { .. }
         ]
     ));
@@ -95,8 +106,9 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     });
     let (headers, bytes) = if hosted {
         assert_eq!(
-            litellm_host::in_process::run_hosted(
-                responses_route(no_secrets()).machine(host.request().unwrap()),
+            litellm_host_native::in_process::run_hosted(
+                responses_route(no_secrets())
+                    .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
                 host.runtime(),
             )
             .await
@@ -110,13 +122,24 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     } else {
         let call = host.request.lock().unwrap().take().unwrap();
         let ResponsesOutput::Stream { head, chunks } = responses_route(no_secrets())
-            .execute(call, &host)
+            .execute(call, &host, Some(host.events.0.sender.clone()))
             .await
             .unwrap()
         else {
             panic!()
         };
-        assert_eq!(host.events.0.lock().unwrap().len(), 1);
+        assert!(matches!(
+            &host.events.0.lock().unwrap()[..],
+            [
+                CallEvent::Started { .. },
+                CallEvent::Execution(ExecutionEvent::ResultReady {
+                    facts: ExecutionFacts {
+                        source: ResultSource::Provider,
+                        ..
+                    }
+                }),
+            ]
+        ));
         (
             head.headers,
             chunks.try_collect::<Vec<_>>().await.unwrap().concat(),
@@ -126,7 +149,16 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     assert_eq!(bytes, body.as_bytes());
     assert!(matches!(
         &host.events.0.lock().unwrap()[..],
-        [CallEvent::Started { .. }, CallEvent::Succeeded { .. }]
+        [
+            CallEvent::Started { .. },
+            CallEvent::Execution(ExecutionEvent::ResultReady {
+                facts: ExecutionFacts {
+                    source: ResultSource::Provider,
+                    ..
+                }
+            }),
+            CallEvent::Succeeded { .. }
+        ]
     ));
 }
 
@@ -147,7 +179,7 @@ async fn provider_failures_emit_failure_once(
     let call = host.request.lock().unwrap().take().unwrap();
     assert!(
         responses_route(no_secrets())
-            .execute(call, &host)
+            .execute(call, &host, Some(host.events.0.sender.clone()))
             .await
             .is_err()
     );
@@ -190,7 +222,7 @@ async fn credentials_and_endpoint_are_resolved_only_when_needed(
         ..call
     };
     responses_route(secrets.clone())
-        .execute(call, &())
+        .execute(call, &(), None)
         .await
         .unwrap();
     assert_eq!(
@@ -224,7 +256,7 @@ async fn unsupported_providers_fail_before_secrets_or_transport(
     };
     assert!(
         responses_route(secrets.clone())
-            .execute(call, &())
+            .execute(call, &(), None)
             .await
             .is_err()
     );
@@ -257,15 +289,17 @@ async fn route_tracing_covers_native_and_hosted_outcomes(
         .logger()
         .instrument(async {
             if hosted {
-                litellm_host::in_process::run_hosted(
-                    route.clone().machine(host.request().unwrap()),
+                litellm_host_native::in_process::run_hosted(
+                    route
+                        .clone()
+                        .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
                     host.runtime(),
                 )
                 .await
                 .map(|_| ())
             } else {
                 route
-                    .execute(host.request().unwrap(), &())
+                    .execute(host.request().unwrap(), &(), None)
                     .await
                     .map(|_| ())
             }
@@ -311,6 +345,7 @@ async fn stream_trace_survives_handoff_and_closes_before_the_stream_object_is_dr
                         ..call
                     },
                     &(),
+                    None,
                 )
                 .await
         })
@@ -350,6 +385,7 @@ async fn preparation_failure_is_traced_but_unpolled_builders_are_not(
                 ..call
             },
             &(),
+            None,
         ))
     });
     assert!(traces.records().is_empty());
@@ -363,6 +399,7 @@ async fn preparation_failure_is_traced_but_unpolled_builders_are_not(
                         ..self::call()
                     },
                     &(),
+                    None,
                 )
                 .await
         })

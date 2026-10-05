@@ -145,6 +145,7 @@ class SupportedGuardrailIntegrations(Enum):
     STRAIKER = "straiker"
     ALICE = "alice"
     AGENT_365 = "agent_365"
+    LLM_SHIELD_PROXY = "llm_shield_proxy"
     CONDUCT = "conduct"
 
 
@@ -782,6 +783,10 @@ class NomaGuardrailConfigModel(BaseModel):
     application_id: str | None = Field(
         default=None,
         description="Application ID for Noma Security. Defaults to 'litellm' if not provided",
+    )
+    gateway_name: str | None = Field(
+        default=None,
+        description="noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans",
     )
     monitor_mode: bool | None = Field(
         default=None,

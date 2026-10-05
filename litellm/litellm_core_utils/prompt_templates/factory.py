@@ -1729,11 +1729,16 @@ def convert_function_to_anthropic_tool_invoke(
         raise e
 
 
-def _find_server_tool_result(
+ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX: Final = "srvtoolu_"
+
+
+def find_anthropic_server_tool_result(
     tool_id: str,
     web_search_results: Sequence[object] | None,
     tool_results: Sequence[object] | None,
 ) -> dict[str, object] | None:
+    if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
+        return None
     candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
     return next(
         (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
@@ -1741,11 +1746,14 @@ def _find_server_tool_result(
     )
 
 
+_AnthropicToolInvokeItem: TypeAlias = AnthropicMessagesToolUseParam | dict[str, Any]
+
+
 def convert_to_anthropic_tool_invoke(
     tool_calls: list[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
-) -> list[AnthropicMessagesToolUseParam | dict[str, Any]]:
+) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
     {
@@ -1805,11 +1813,7 @@ def convert_to_anthropic_tool_invoke(
             context="Anthropic tool invoke",
         )
 
-        server_tool_result = (
-            _find_server_tool_result(tool_id, web_search_results, tool_results)
-            if tool_id.startswith("srvtoolu_")
-            else None
-        )
+        server_tool_result = find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
         if server_tool_result is not None:
             anthropic_tool_invoke.append(
                 {
@@ -2376,7 +2380,7 @@ def anthropic_messages_pt(
     # add role=tool support to allow function call result/error submission
     user_message_types: Final = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
-    new_messages: Final[_AnthropicMessageList] = []  # mutable-ok: accumulator behind the mutable return contract
+    new_messages: Final[_AnthropicMessageList] = []
 
     if len(messages) == 0:
         if not litellm.modify_params:
@@ -2565,9 +2569,9 @@ def anthropic_messages_pt(
 
                 # Group tool invoke results into (server_tool_use, result) pairs
                 # and separate regular tool_use blocks
-                server_tool_groups: list[list[Any]] = []
-                regular_tool_uses: list[Any] = []
-                _current_group: list[Any] = []
+                server_tool_groups: list[list[_AnthropicToolInvokeItem]] = []
+                regular_tool_uses: list[_AnthropicToolInvokeItem] = []
+                _current_group: list[_AnthropicToolInvokeItem] = []
                 for item in tool_invoke_results:
                     item_type = item.get("type", "") if isinstance(item, dict) else getattr(item, "type", "")
                     if item_type == "server_tool_use":
@@ -3826,7 +3830,7 @@ def _build_bedrock_tool_result_content_blocks(
         if tool_result_content_blocks:
             return tool_result_content_blocks, True
 
-    message_content: Final = message["content"]
+    message_content: Final = message.get("content")
     if isinstance(message_content, str):
         return [BedrockToolResultContentBlock(text=message_content)], False
     if isinstance(message_content, list):
@@ -4095,23 +4099,20 @@ def get_user_message_block_or_continue_message(
 ) -> ChatCompletionUserMessage:
     """
     Returns the user content block
-    if content block is an empty string, then return the default continue message
+    if content block is missing or an empty string, then return the default continue message
 
     Relevant Issue: https://github.com/BerriAI/litellm/issues/7169
     """
     content_block: Final = message.get("content", None)
 
-    # Handle None case
-    if content_block is None or (user_continue_message is None and litellm.modify_params is False):
+    if user_continue_message is None and litellm.modify_params is False:
         return skip_empty_text_blocks(message=message)
 
-    # Handle string case
+    if content_block is None or (isinstance(content_block, str) and not content_block.strip()):
+        return ChatCompletionUserMessage(**(user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE))
+
     if isinstance(content_block, str):
-        # check if content is empty
-        if content_block.strip():
-            return message
-        else:
-            return ChatCompletionUserMessage(**(user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE))
+        return message
 
     # Handle list case
     if isinstance(content_block, list):
@@ -4374,9 +4375,10 @@ class BedrockConverseMessagesProcessor:
                     message=messages[msg_i],
                     user_continue_message=user_continue_message,
                 )
-                if isinstance(message_block["content"], list):
+                message_content = message_block.get("content")
+                if isinstance(message_content, list):
                     _parts: list[BedrockContentBlock] = []
-                    for element in message_block["content"]:
+                    for element in message_content:
                         if isinstance(element, dict):
                             if element["type"] == "text":
                                 _part = BedrockContentBlock(text=element["text"])
@@ -4418,8 +4420,8 @@ class BedrockConverseMessagesProcessor:
                             if _cache_point_block is not None:
                                 _parts.append(_cache_point_block)
                     user_content.extend(_parts)
-                elif message_block["content"] and isinstance(message_block["content"], str):
-                    _part = BedrockContentBlock(text=messages[msg_i]["content"])
+                elif message_content and isinstance(message_content, str):
+                    _part = BedrockContentBlock(text=message_content)
                     _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                         message_block, block_type="content_block", model=model
                     )
@@ -4746,9 +4748,10 @@ def _bedrock_converse_messages_pt(
                 message=messages[msg_i],
                 user_continue_message=user_continue_message,
             )
-            if isinstance(message_block["content"], list):
+            message_content = message_block.get("content")
+            if isinstance(message_content, list):
                 _parts: list[BedrockContentBlock] = []
-                for element in message_block["content"]:
+                for element in message_content:
                     if isinstance(element, dict):
                         if element["type"] == "text":
                             _part = BedrockContentBlock(text=element["text"])
@@ -4791,8 +4794,8 @@ def _bedrock_converse_messages_pt(
                         if _cache_point_block is not None:
                             _parts.append(_cache_point_block)
                 user_content.extend(_parts)
-            elif message_block["content"] and isinstance(message_block["content"], str):
-                _part = BedrockContentBlock(text=messages[msg_i]["content"])
+            elif message_content and isinstance(message_content, str):
+                _part = BedrockContentBlock(text=message_content)
                 _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
                     message_block, block_type="content_block", model=model
                 )

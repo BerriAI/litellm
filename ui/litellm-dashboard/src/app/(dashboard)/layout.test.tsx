@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { usePathname } from "next/navigation";
 import { AuthProvider } from "@/contexts/AuthContext";
 import Layout from "./layout";
@@ -15,15 +15,22 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/components/liteadmin/LiteAdmin", () => ({
-  default: () => <button>LiteAdmin</button>,
+  LiteAdminFrame: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 vi.mock("@/components/DashboardHeader", () => ({
-  DashboardHeader: () => <div data-testid="dashboard-header" />,
+  DashboardHeader: ({ navigationTrigger }: { navigationTrigger?: React.ReactNode }) => (
+    <div data-testid="dashboard-header">{navigationTrigger}</div>
+  ),
 }));
 
 vi.mock("@/app/(dashboard)/components/SidebarProvider", () => ({
-  default: () => <div data-testid="sidebar" />,
+  default: ({ sidebarCollapsed, onToggleCollapsed }: { sidebarCollapsed: boolean; onToggleCollapsed: () => void }) => (
+    <div data-testid="sidebar" data-collapsed={String(sidebarCollapsed)}>
+      <button onClick={onToggleCollapsed}>Close navigation</button>
+      <a href="#settings">Settings</a>
+    </div>
+  ),
 }));
 
 vi.mock("@/components/DebugWarningBanner", () => ({
@@ -87,30 +94,67 @@ describe("(dashboard) Layout", () => {
     vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
   });
 
-  it.each(["/ui/playground", "/ui/playground/"])(
-    "hides LiteAdmin on %s and restores it after leaving Playground",
-    async (pathname) => {
-      const dashboard = () => (
-        <AuthProvider>
-          <Layout>
-            <div data-testid="page-content" />
-          </Layout>
-        </AuthProvider>
-      );
-      const { rerender } = render(dashboard());
-      pendingUiConfig.resolve();
-      expect(await screen.findByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
+  it("starts mobile navigation closed, opens a modal drawer and closes it after choosing a page", async () => {
+    render(
+      <AuthProvider>
+        <Layout>
+          <p>Gateway content</p>
+        </Layout>
+      </AuthProvider>,
+    );
+    pendingUiConfig.resolve();
 
-      vi.mocked(usePathname).mockReturnValue(pathname);
-      rerender(dashboard());
-      expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
-      expect(screen.getByTestId("page-content")).toBeInTheDocument();
+    const trigger = await screen.findByRole("button", { name: "Open navigation" });
+    expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
 
-      vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
-      rerender(dashboard());
-      expect(screen.getByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
-    },
-  );
+    fireEvent.click(trigger);
+    const navigation = await screen.findByRole("dialog", { name: "Navigation" });
+    expect(within(navigation).getByRole("button", { name: "Close navigation" })).toBeInTheDocument();
+    fireEvent.click(within(navigation).getByRole("link", { name: "Settings" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+  });
+
+  it("closes the mobile drawer when navigation changes outside the drawer", async () => {
+    const dashboard = () => (
+      <AuthProvider>
+        <Layout>
+          <p>Gateway content</p>
+        </Layout>
+      </AuthProvider>
+    );
+    const { rerender } = render(dashboard());
+    pendingUiConfig.resolve();
+    fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
+    expect(await screen.findByRole("dialog", { name: "Navigation" })).toBeInTheDocument();
+
+    vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
+    rerender(dashboard());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+    vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
+    rerender(dashboard());
+    expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument();
+  });
+
+  it("collapses the sidebar on Logs for a full-screen view and expands it again after leaving", async () => {
+    const dashboard = () => (
+      <AuthProvider>
+        <Layout>
+          <div data-testid="page-content" />
+        </Layout>
+      </AuthProvider>
+    );
+    const { rerender } = render(dashboard());
+    pendingUiConfig.resolve();
+    expect(await screen.findByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
+
+    vi.mocked(usePathname).mockReturnValue("/ui/logs");
+    rerender(dashboard());
+    expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "true");
+
+    vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
+    rerender(dashboard());
+    expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
+  });
 
   it("does not mount route content until getUiConfig has resolved", async () => {
     render(

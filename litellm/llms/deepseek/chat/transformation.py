@@ -129,7 +129,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         forward_images: Final = any(
             isinstance(message.get("content"), list) for message in messages
         ) and supports_vision(model=model, custom_llm_provider="deepseek")
-        transformed: Final = [  # mutable-ok: provider messages must stay JSON-array lists the base transform mutates
+        transformed: Final = [
             self._forward_or_collapse_content(message=message, forward_images=forward_images) for message in messages
         ]
 
@@ -155,7 +155,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         collapsed: Final = convert_content_list_to_str(message=message)
         if not collapsed or collapsed == content:
             return message
-        collapsed_message: Final = {**message, "content": collapsed}  # mutable-ok: wire messages are plain JSON dicts
+        collapsed_message: Final = {**message, "content": collapsed}
         return cast(AllMessageValues, collapsed_message)  # cast-ok: TypedDict spread narrows to dict
 
     def _is_vision_forwardable_content(self, message: AllMessageValues, content: Sequence[object]) -> bool:
@@ -204,8 +204,8 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         search_text: Final = extract_search_results_text(message_fields.get("search_results"))
         if not search_text:
             return message
-        forwarded_content: Final = [*content, {"type": "text", "text": search_text}]  # mutable-ok: JSON-array content
-        forwarded: Final = {  # mutable-ok: wire messages are plain JSON dicts
+        forwarded_content: Final = [*content, {"type": "text", "text": search_text}]
+        forwarded: Final = {
             **{key: value for key, value in message_fields.items() if key != "search_results"},
             "content": forwarded_content,
         }

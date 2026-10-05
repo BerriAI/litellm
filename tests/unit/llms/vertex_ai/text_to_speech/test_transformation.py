@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 import litellm
 from litellm.llms.vertex_ai.text_to_speech.transformation import (
@@ -261,9 +262,7 @@ class TestVertexAILyriaTextToSpeechConfig:
         )
 
     def test_get_complete_url_encodes_injected_predict_path_segments(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        injected: Final = (
-            "victim-project/locations/us-central1/publishers/google/models/other-model:predict?ignored="
-        )
+        injected: Final = "victim-project/locations/us-central1/publishers/google/models/other-model:predict?ignored="
         encoded: Final = (
             "victim-project%2Flocations%2Fus-central1%2Fpublishers%2Fgoogle"
             "%2Fmodels%2Fother-model%3Apredict%3Fignored%3D"
@@ -554,6 +553,33 @@ class TestVertexAILyriaTextToSpeechConfig:
         assert mock_post.call_args.kwargs["json"] == expected_body
 
 
+@pytest.mark.parametrize("endpoint_kwarg", ["api_base", "base_url"])
+def test_litellm_speech_vertex_ai_sends_request_to_the_configured_endpoint(endpoint_kwarg: str):
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {"audioContent": "SGVsbG8gV29ybGQ="}
+    with (
+        patch.object(  # test-quality-ok: litellm.speech has no seam for Vertex token minting
+            VertexAITextToSpeechConfig, "_ensure_access_token", return_value=("mock-token", "test-project")
+        ),
+        patch(  # test-quality-ok: litellm.speech has no seam for the HTTP handler
+            "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post", return_value=mock_response
+        ) as mock_post,
+    ):
+        response = litellm.speech(
+            model="vertex_ai/chirp",
+            input="Hello",
+            voice="en-US-Chirp3-HD-Charon",
+            vertex_project="test-project",
+            vertex_location="us-central1",
+            **{endpoint_kwarg: "https://tts.gateway.internal/v1/text:synthesize"},
+        )
+
+    assert mock_post.call_args.kwargs["url"] == "https://tts.gateway.internal/v1/text:synthesize"
+    assert response.content == b"Hello World"
+
+
 @patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post")
 @patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
 @patch.object(VertexAITextToSpeechConfig, "_get_token_and_url")
@@ -608,3 +634,32 @@ def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_
     assert "headers" in call_kwargs
     assert "Authorization" in call_kwargs["headers"]
     assert call_kwargs["headers"]["Authorization"] == "Bearer mock-token"
+
+
+@pytest.mark.parametrize("payload", [{}, {"audioContent": ""}, {"audioContent": None}, {"audioContent": []}])
+def test_transform_text_to_speech_response_without_audio_content_reports_it_missing(payload: dict[str, object]):
+    with pytest.raises(ValueError, match="No audioContent in Vertex AI TTS response"):
+        VertexAITextToSpeechConfig().transform_text_to_speech_response(
+            model="vertex_ai/chirp",
+            raw_response=httpx.Response(200, json=payload),
+            logging_obj=MagicMock(),
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["not", "an", "object"],
+        {"audioContent": 7},
+        {"audioContent": ["UklGRiQAAABXQVZFZm10IA=="]},
+    ],
+)
+def test_transform_text_to_speech_response_rejects_malformed_payloads_without_echoing_them(payload: object):
+    with pytest.raises(ValidationError) as exc_info:
+        VertexAITextToSpeechConfig().transform_text_to_speech_response(
+            model="vertex_ai/chirp",
+            raw_response=httpx.Response(200, json=payload),
+            logging_obj=MagicMock(),
+        )
+
+    assert "input_value" not in str(exc_info.value)

@@ -6,7 +6,7 @@ Base class for sending emails to user after creating keys or invite links
 import html
 import json
 import os
-from typing import List, Literal, Optional
+from typing import Final, List, Literal, Optional
 
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
@@ -15,6 +15,7 @@ from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     SendKeyRotatedEmailEvent,
 )
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -45,8 +46,12 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     WebhookEvent,
 )
+from litellm.repositories.table_repositories import InvitationLinkRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.integrations.slack_alerting import LITELLM_LOGO_URL
+
+_BUDGET_ALERT_CLAIMS_TARGET: Final = "budget_alert_claims"
 
 
 def _max_budget_alert_id(user_info: CallInfo) -> str:
@@ -437,6 +442,7 @@ class BaseEmailLogger(CustomLogger):
                 html_body=email_html_content,
             )
 
+    @with_service_target(_BUDGET_ALERT_CLAIMS_TARGET)
     async def budget_alerts(
         self,
         type: Literal[
@@ -606,6 +612,7 @@ class BaseEmailLogger(CustomLogger):
                             await self._release_budget_alert_claim(_cache, _cache_key)
             return
 
+    @with_service_target(_BUDGET_ALERT_CLAIMS_TARGET)
     async def _handle_multi_threshold_max_budget_alert(
         self,
         user_info: CallInfo,
@@ -691,6 +698,7 @@ class BaseEmailLogger(CustomLogger):
                 )
                 await self._release_budget_alert_claim(_cache, _cache_key)
 
+    @with_service_target(_BUDGET_ALERT_CLAIMS_TARGET)
     async def _release_budget_alert_claim(self, cache: DualCache, cache_key: str) -> None:
         try:
             await cache.async_delete_cache(key=cache_key)
@@ -838,7 +846,7 @@ class BaseEmailLogger(CustomLogger):
             )
             return None
 
-        user_row = await prisma_client.db.litellm_usertable.find_unique(
+        user_row = await UserRepository(prisma_client).table.find_unique(
             where={"user_id": user_id}
         )
 
@@ -923,7 +931,7 @@ class BaseEmailLogger(CustomLogger):
         try:
             # Try to get existing invitation
             existing_invitations = (
-                await prisma_client.db.litellm_invitationlink.find_many(
+                await InvitationLinkRepository(prisma_client).table.find_many(
                     where={"user_id": user_id},
                     order={"created_at": "desc"},
                 )
