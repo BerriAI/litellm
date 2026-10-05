@@ -535,6 +535,24 @@ async def test_budgeted_caller_reserves_unmanaged_agent_fees_before_concurrent_a
         unpriced_reservation: Final = await admit()
         assert unpriced_reservation is None
         assert await spend_counter_cache.async_get_cache(counter_key) == pytest.approx(0.0)
+        monkeypatch.setattr(litellm, "model_cost", {
+            **litellm.model_cost,
+            "a2a/target": {
+                "litellm_provider": "a2a",
+                "mode": "chat",
+                "tiered_pricing": [
+                    {
+                        "range": [0, 128000],
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                ],
+            },
+        })
+        litellm.get_model_info.cache_clear()
+        zero_rate_tier_reservation: Final = await admit()
+        assert zero_rate_tier_reservation is None
+        assert await spend_counter_cache.async_get_cache(counter_key) == pytest.approx(0.0)
         return
     accepted: Final = tuple(result for result in results if isinstance(result, dict))
     rejected: Final = tuple(result for result in results if isinstance(result, litellm.BudgetExceededError))
