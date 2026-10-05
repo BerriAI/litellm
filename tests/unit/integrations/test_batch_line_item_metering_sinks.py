@@ -144,9 +144,9 @@ class RecordingHTTP:
         return SimpleNamespace(status_code=202, text="ok", raise_for_status=lambda: None)
 
 
-async def _log_completed_batch(monkeypatch: pytest.MonkeyPatch, loggers: list) -> None:
+async def _log_completed_batch(monkeypatch: pytest.MonkeyPatch, loggers: list, flag: bool = True) -> None:
     batch_line_item_claim_cache.in_memory_cache.flush_cache()
-    monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
+    monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", flag, raising=False)
     saved_success = list(litellm._async_success_callback)
     saved_failure = list(litellm._async_failure_callback)
     litellm._async_success_callback = list(loggers)
@@ -273,16 +273,26 @@ async def test_prometheus_meters_only_the_aggregate_batch_event(monkeypatch: pyt
     from litellm.integrations.prometheus import PrometheusLogger
     from prometheus_client import REGISTRY
 
-    for collector in list(REGISTRY._collector_to_names.keys()):
+    saved_collectors = list(REGISTRY._collector_to_names.keys())
+    for collector in saved_collectors:
         REGISTRY.unregister(collector)
     logger = PrometheusLogger()
 
-    await _log_completed_batch(monkeypatch, [logger])
+    try:
+        await _log_completed_batch(monkeypatch, [logger])
+        spend_samples = []
+        for metric in REGISTRY.collect():
+            if metric.name == "litellm_spend_metric":
+                spend_samples = [sample.value for sample in metric.samples if sample.name.endswith("_total")]
+    finally:
+        for collector in list(REGISTRY._collector_to_names.keys()):
+            REGISTRY.unregister(collector)
+        for collector in saved_collectors:
+            try:
+                REGISTRY.register(collector)
+            except Exception:  # noqa: BLE001  # already re-registered by another holder
+                pass
 
-    spend_samples = []
-    for metric in REGISTRY.collect():
-        if metric.name == "litellm_spend_metric":
-            spend_samples = [sample.value for sample in metric.samples if sample.name.endswith("_total")]
     assert spend_samples, "litellm_spend_metric saw no samples at all"
     assert sum(spend_samples) == pytest.approx(AGGREGATE_COST), (
         f"Prometheus spend metric double-counted batch line items: {spend_samples}; "
@@ -348,9 +358,25 @@ async def test_otel_v1_meter_cost_skips_line_items_but_spans_stay(
     )
 
 
-@pytest.mark.asyncio
-async def test_otel_v2_meter_cost_skips_line_items(monkeypatch: pytest.MonkeyPatch) -> None:
-    pytest.importorskip("opentelemetry.sdk")
+def _reader_snapshot(reader: Any) -> dict[str, list[float]]:
+    """Every metric's datapoint values, keyed by metric name (sums for histograms)."""
+    data = reader.get_metrics_data()
+    out: dict[str, list[float]] = {}
+    if data is None:
+        return out
+    for resource_metrics in data.resource_metrics:
+        for scope_metrics in resource_metrics.scope_metrics:
+            for metric in scope_metrics.metrics:
+                for data_point in metric.data.data_points:
+                    value = getattr(data_point, "sum", None)
+                    if value is None:
+                        value = getattr(data_point, "value", None)
+                    if value is not None:
+                        out.setdefault(metric.name, []).append(value)
+    return out
+
+
+async def _run_batch_with_otel_v2(monkeypatch: pytest.MonkeyPatch, flag: bool) -> dict[str, list[float]]:
     from opentelemetry.sdk.metrics import MeterProvider
     from opentelemetry.sdk.metrics.export import InMemoryMetricReader
     from opentelemetry.sdk.trace import TracerProvider
@@ -365,11 +391,29 @@ async def test_otel_v2_meter_cost_skips_line_items(monkeypatch: pytest.MonkeyPat
         tracer_provider=TracerProvider(),
         meter_provider=MeterProvider(metric_readers=[reader]),
     )
+    await _log_completed_batch(monkeypatch, [logger], flag=flag)
+    return _reader_snapshot(reader)
 
-    await _log_completed_batch(monkeypatch, [logger])
 
-    costs = _cost_points(reader)
-    assert sum(costs) == pytest.approx(AGGREGATE_COST), (
-        f"OTel v2 gen_ai.usage.cost double-counted batch line items: {costs}; "
-        "line items must be metered only by the aggregate aretrieve_batch event"
-    )
+@pytest.mark.asyncio
+async def test_otel_v2_metrics_are_identical_with_the_flag_on_and_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pytest.importorskip("opentelemetry.sdk")
+
+    off = await _run_batch_with_otel_v2(monkeypatch, flag=False)
+    on = await _run_batch_with_otel_v2(monkeypatch, flag=True)
+
+    for name in ("gen_ai.usage.cost", "gen_ai.client.token.usage"):
+        assert on.get(name) == off.get(name), (
+            f"OTel v2 {name} changed when the line-item flag was turned on; line items "
+            "must be metered only by the aggregate aretrieve_batch event. "
+            f"off={off.get(name)} on={on.get(name)}"
+        )
+    for name, values in off.items():
+        on_counts = [len(on.get(name, [])), len(values)]
+        assert on_counts[0] == on_counts[1], (
+            f"OTel v2 {name} gained synthetic per-line samples with the flag on: "
+            f"{on_counts[0]} datapoints on vs {on_counts[1]} off"
+        )
+    assert sum(off.get("gen_ai.usage.cost", [])) == pytest.approx(AGGREGATE_COST)

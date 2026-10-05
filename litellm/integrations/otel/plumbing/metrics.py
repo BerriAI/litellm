@@ -222,22 +222,24 @@ class GenAIMetricRecorder:
         start_time: datetime,
         end_time: datetime,
     ) -> None:
+        # A batch line item is metered by the aggregate aretrieve_batch event, and
+        # its child interval (parent retrieve start -> line emission) measures
+        # retrieval and callback processing rather than the line's model call, so
+        # skip every metric for it; spans for line items are still emitted.
+        if is_batch_line_item_event(kwargs):
+            return
         common_attrs: Final = self._filter_attributes(self._bounded_attributes(kwargs))
         duration_s: Final = (end_time - start_time).total_seconds()
         usage_is_replayed: Final = is_unbilled_non_inference_call_from_params(
             kwargs.get("call_type"), kwargs.get("litellm_params"), response_obj
         )
-        # A batch line item's tokens and cost are metered by the aggregate
-        # aretrieve_batch event; per-line samples here would double-count them.
-        # Duration samples for line items are still recorded.
-        batch_line_item: Final = is_batch_line_item_event(kwargs)
 
         self._metrics.operation_duration.record(duration_s, attributes=common_attrs)
-        if not usage_is_replayed and not batch_line_item:
+        if not usage_is_replayed:
             self._record_token_usage(response_obj, common_attrs)
 
         cost: Final = kwargs.get("response_cost")
-        if cost and not batch_line_item:
+        if cost:
             self._metrics.token_cost.record(cost, attributes=common_attrs)
 
         self._record_time_to_first_token(kwargs, common_attrs)
@@ -251,6 +253,10 @@ class GenAIMetricRecorder:
         start_time: datetime,
         end_time: datetime,
     ) -> None:
+        # A batch line item's interval measures retrieval and emission, not the
+        # line's model call, so its duration would be synthetic here too.
+        if is_batch_line_item_event(kwargs):
+            return
         """Record the one metric a failed request can honestly report: the
         operation's duration, tagged with ``error.type``.
 
