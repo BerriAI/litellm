@@ -10,10 +10,25 @@ import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .analysis import AnalysisResponseError, analyze_sample, validation_details
-from .models import Claim, Coverage, ExecutionContent, ModelRequest, ModelResult, Progress, Result, Sample
+from .models import (
+    Claim,
+    Coverage,
+    ExecutionContent,
+    InFlight,
+    ModelRequest,
+    ModelResult,
+    Progress,
+    Result,
+    Review,
+    Sample,
+)
 from .release import PROTOCOL_VERSION, release_tag
 
 logger: Final = logging.getLogger("litellm.lens.worker")
+MODEL_RETRIES: Final = 4
+MODEL_RETRY_MAX_SECONDS: Final = 60.0
+SLOTS: Final = 3
+POLL_SECONDS: Final = 2.0
 
 
 class ClaimedJobIdentity(BaseModel):
@@ -35,6 +50,17 @@ class PublicModelError(BaseModel):
 class ModelErrorEnvelope(BaseModel):
     model_config = ConfigDict(extra="ignore")
     detail: PublicModelError
+
+
+def retry_delay(error: httpx.TransportError | httpx.HTTPStatusError, attempt: int) -> float:
+    backoff: Final = float(min(2**attempt, MODEL_RETRY_MAX_SECONDS))
+    if not isinstance(error, httpx.HTTPStatusError):
+        return backoff
+    requested: Final = error.response.headers.get("retry-after", "")
+    try:
+        return min(max(float(requested), backoff), MODEL_RETRY_MAX_SECONDS)
+    except ValueError:
+        return backoff
 
 
 def failure_message(error: Exception) -> str:
@@ -116,10 +142,22 @@ class LensWorker:
                 503,
                 504,
             )
-            if not retryable or attempt >= 2:
+            if not retryable or attempt >= MODEL_RETRIES:
                 raise
-            await self.sleep(2**attempt)
+            await self.sleep(retry_delay(exc, attempt))
             return await self.model_request(path, body, attempt + 1)
+
+    async def serve(self, slots: int, poll_seconds: float) -> None:
+        await asyncio.gather(*(self.slot(poll_seconds) for _ in range(slots)))
+
+    async def slot(self, poll_seconds: float) -> None:
+        while True:
+            try:
+                if await self.run_once():
+                    continue
+            except (httpx.HTTPError, ValueError) as exc:
+                logger.warning("Worker could not reach Lens (%s)", type(exc).__name__)
+            await self.sleep(poll_seconds)
 
     async def report_unreadable_claim(self, identity: ClaimIdentity) -> None:
         failure: Final = await self.client.post(
@@ -169,9 +207,16 @@ class LensWorker:
             result.raise_for_status()
             return ExecutionContent.model_validate(result.json())
 
-        async def progress(stage: str, coverage: Coverage) -> None:
+        async def progress(
+            stage: str,
+            coverage: Coverage,
+            review: Review | None = None,
+            reading: tuple[InFlight, ...] | None = None,
+            /,
+        ) -> None:
             result: Final = await self.client.post(
-                prefix + "/progress", json=Progress(stage=stage, coverage=coverage).model_dump()
+                prefix + "/progress",
+                json=Progress(stage=stage, coverage=coverage, review=review, reading=reading).model_dump(mode="json"),
             )
             result.raise_for_status()
 
@@ -222,13 +267,7 @@ async def main() -> None:
     async with httpx.AsyncClient(
         base_url=url, headers=MappingProxyType({"Authorization": f"Bearer {token}"}), timeout=180
     ) as client:
-        worker: Final = LensWorker(client)
-        while True:
-            try:
-                await worker.run_once()
-            except (httpx.HTTPError, ValueError) as exc:
-                logger.warning("Worker could not reach Lens (%s)", type(exc).__name__)
-            await asyncio.sleep(10)
+        await LensWorker(client).serve(SLOTS, POLL_SECONDS)
 
 
 if __name__ == "__main__":
