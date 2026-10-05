@@ -17,10 +17,10 @@ const DETAIL_PATH = "/auto_router/shadow_eval/{job_id}" as const;
 const ACTIVE_POLL_MS = 15_000;
 
 export const shadowEvalPollMs = (status: ShadowEvalJob["status"] | undefined): number | false =>
-  status === "running" || status === undefined ? ACTIVE_POLL_MS : false;
+  status === "running" || status === "degraded" || status === undefined ? ACTIVE_POLL_MS : false;
 
 export const shadowEvalListPollMs = (jobs: ShadowEvalJob[] | undefined): number | false =>
-  jobs?.some((job) => job.status === "running") ? ACTIVE_POLL_MS : false;
+  jobs?.some((job) => job.status === "running" || job.status === "degraded") ? ACTIVE_POLL_MS : false;
 
 const invalidateShadowEval = (queryClient: QueryClient) =>
   Promise.all([

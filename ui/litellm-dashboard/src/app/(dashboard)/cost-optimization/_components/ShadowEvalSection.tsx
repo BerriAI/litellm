@@ -81,6 +81,7 @@ const targetSpent = (target: ShadowEvalJobTarget): boolean => {
 };
 
 const targetStatus = (job: ShadowEvalJob, target: ShadowEvalJobTarget): string => {
+  if (target.failure_reason) return "failed";
   if (job.status === "completed" || (target.stopped_at == null && targetSpent(target))) return "completed";
   return target.stopped_at != null ? "stopped" : "running";
 };
@@ -109,7 +110,7 @@ const jobHeadline = (job: ShadowEvalJob): React.ReactNode =>
     </>
   );
 
-const isActive = (job: ShadowEvalJob): boolean => job.status === "running";
+const isActive = (job: ShadowEvalJob): boolean => job.status === "running" || job.status === "degraded";
 
 const endsIn = (endsAt: string | null | undefined): string | null => {
   if (!endsAt) return null;
@@ -124,6 +125,8 @@ const STATUS_STYLES: Record<string, string> = {
   running: "bg-info/10 text-info",
   completed: "bg-success/10 text-success",
   stopped: "bg-secondary text-muted-foreground",
+  failed: "bg-destructive/10 text-destructive",
+  degraded: "bg-destructive/10 text-destructive",
 };
 
 const StatusBadge: React.FC<{ status: string }> = ({ status }) => (
@@ -409,6 +412,13 @@ const JobResults: React.FC<{
           Last failure: <span className="font-mono">{job.last_error}</span>
         </p>
       )}
+      {job.targets
+        .filter((target) => target.failure_reason)
+        .map((target) => (
+          <p key={`${target.target_type}:${target.target_id}`} className="border-b px-6 py-2 text-xs text-destructive">
+            {shadowedTargetLabel(target)}: {target.failure_reason}
+          </p>
+        ))}
       <ResultsBody job={job} resultsError={resultsError} />
     </Card>
   );

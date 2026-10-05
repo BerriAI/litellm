@@ -238,6 +238,24 @@ describe("ShadowEvalSection", () => {
     authorizedRoleMock.mockReturnValue({ accessToken: "token", isViewOnly: false });
   });
 
+  it("keeps degraded jobs stoppable and explains the failed target", () => {
+    const base = job();
+    const failedTarget = {
+      ...base.targets[0],
+      stopped_at: "2026-10-01T00:00:00Z",
+      failure_reason: "Judge unavailable; repair configuration and restart",
+    };
+    const activeTarget = { ...base.targets[0], target_id: "other-key", target_alias: "other-key" };
+    const degraded = job({ status: "degraded", targets: [failedTarget, activeTarget] });
+    const hooks = mockHooks({ jobs: [degraded], detailsById: { "job-1": degraded } });
+    render(<ShadowEvalSection />);
+    expect(screen.getByText("degraded")).toBeInTheDocument();
+    expect(screen.getByText("failed")).toBeInTheDocument();
+    expect(screen.getByText(/Judge unavailable; repair configuration and restart/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Stop", exact: true }));
+    expect(hooks.stop.mutate).toHaveBeenCalledWith("job-1");
+  });
+
   it("shows a key picker load failure instead of posing as no matching keys", async () => {
     const user = userEvent.setup();
     const defaultKeysImpl = vi.mocked(useInfiniteKeys).getMockImplementation();
