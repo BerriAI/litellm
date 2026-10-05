@@ -73,6 +73,16 @@ def test_prefixed_model_reaches_zerogpu_chat_completions_without_the_prefix():
     }
 
 
+def test_transcription_is_rejected_without_calling_zerogpu():
+    requests: Final[list[httpx.Request]] = []
+    client: Final = _zerogpu_client(requests, {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
+
+    with client, pytest.raises(ValueError, match="Unmapped provider"):
+        litellm.transcription(model="zerogpu/whisper-1", file=("audio.wav", b"RIFF", "audio/wav"), client=client)
+
+    assert requests == []
+
+
 @pytest.mark.parametrize("model", ZEROGPU_MODELS)
 def test_zerogpu_completion_is_charged_at_the_cost_map_rates(model: str):
     requests: Final[list[httpx.Request]] = []
