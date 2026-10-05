@@ -174,14 +174,11 @@ function withoutForwardedAnswers(
 function agentLabels(agents: readonly Span[]): ReadonlyMap<string, string> {
   const named = agents.map((agent) => ({ agent, name: agent.name || agent.agent || "Agent" }));
   return new Map(
-    named.map(({ agent, name }) => {
-      const siblings = named.filter((candidate) => candidate.name === name);
-      const preceding = siblings.filter(
-        ({ agent: other }) =>
-          (other.start_offset_ms - agent.start_offset_ms || other.span_id.localeCompare(agent.span_id)) < 0,
-      );
-      return [agent.span_id, siblings.length > 1 ? `${name} (${preceding.length + 1})` : name];
-    }),
+    Object.values(groupBy(named, ({ name }) => JSON.stringify(name))).flatMap((group) =>
+      orderBy(group, [({ agent }) => agent.start_offset_ms, ({ agent }) => agent.span_id], ["asc", "asc"]).map(
+        ({ agent, name }, index) => [agent.span_id, group.length > 1 ? `${name} (${index + 1})` : name] as const,
+      ),
+    ),
   );
 }
 
@@ -272,3 +269,4 @@ export function buildConversation(
     }))
     .filter((item) => item.messages.length || item.toolResult !== undefined || item.showError);
 }
+import { groupBy, orderBy } from "es-toolkit";

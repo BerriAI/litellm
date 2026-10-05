@@ -20,8 +20,8 @@ const detail = (span_id: string, input: unknown, output: unknown): SpanDetail =>
 });
 
 describe("trace conversation", () => {
-  it("keeps repeated agent names distinct and stable as more steps load", () => {
-    const first = { ...root, span_id: "first", name: "reviewer", start_offset_ms: 1 };
+  it.each(["reviewer", "__proto__", "constructor"])("keeps repeated agent name %s stable as steps load", (name) => {
+    const first = { ...root, span_id: "first", name, start_offset_ms: 1 };
     const second = { ...first, span_id: "second", start_offset_ms: 2 };
     const spans = [second, first];
     const firstDetails = new Map([["first", detail("first", "Review code", "")]]);
@@ -32,11 +32,25 @@ describe("trace conversation", () => {
       true,
     );
     expect(partial.map(({ agentId, agentName }) => ({ agentId, agentName }))).toEqual([
-      { agentId: "first", agentName: "reviewer (1)" },
+      { agentId: "first", agentName: `${name} (1)` },
     ]);
     expect(complete.map(({ agentId, agentName }) => ({ agentId, agentName }))).toEqual([
-      { agentId: "first", agentName: "reviewer (1)" },
+      { agentId: "first", agentName: `${name} (1)` },
+      { agentId: "second", agentName: `${name} (2)` },
+    ]);
+  });
+
+  it("breaks equal-time agent label ties by span ID without changing event order", () => {
+    const first = { ...root, span_id: "first", name: "reviewer", start_offset_ms: 1 };
+    const second = { ...first, span_id: "second" };
+    const details = new Map([
+      ["first", detail("first", "Review code", "")],
+      ["second", detail("second", "Review tests", "")],
+    ]);
+    const items = buildConversation([second, first], details, true);
+    expect(items.map(({ agentId, agentName }) => ({ agentId, agentName }))).toEqual([
       { agentId: "second", agentName: "reviewer (2)" },
+      { agentId: "first", agentName: "reviewer (1)" },
     ]);
   });
 
