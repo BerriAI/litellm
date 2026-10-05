@@ -409,7 +409,7 @@ def test_get_hidden_params():
     assert result["additional_headers"] is None
 
     # assert all fields in StandardLoggingHiddenParams are present
-    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
+    assert all(field in result for field in StandardLoggingHiddenParams.__required_keys__)
 
     # Test with valid params
     hidden_params = {
@@ -430,7 +430,7 @@ def test_get_hidden_params():
     assert result["additional_headers"] is not None
     assert result["additional_headers"]["x_ratelimit_limit_requests"] == 2000
     # assert all fields in StandardLoggingHiddenParams are present
-    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
+    assert all(field in result for field in StandardLoggingHiddenParams.__required_keys__)
 
 
 def test_get_final_response_obj():
