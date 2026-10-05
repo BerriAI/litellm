@@ -104,18 +104,21 @@ def test_openai_sdk_moderation_inputs_reach_upstream_as_exact_model_and_input(ga
 
 def test_model_less_moderation_resolves_to_configured_moderation_model(gateway: Gateway, tmp_path: Path) -> None:
     with wire_server(_openai_peer()) as wire:
-        config: Final = yaml.safe_load(_PROXY_CONFIG.read_text())
-        config["model_list"] = [
-            {
-                "model_name": "default-moderation",
-                "litellm_params": {
-                    "model": f"openai/{_UPSTREAM_MODEL}",
-                    "api_base": f"{wire.url}/v1",
-                    "api_key": _OPENAI_KEY,
-                },
-            }
-        ]
-        config["general_settings"]["moderation_model"] = "default-moderation"
+        base: Final = yaml.safe_load(_PROXY_CONFIG.read_text())
+        config: Final = {
+            **base,
+            "model_list": [
+                {
+                    "model_name": "default-moderation",
+                    "litellm_params": {
+                        "model": f"openai/{_UPSTREAM_MODEL}",
+                        "api_base": f"{wire.url}/v1",
+                        "api_key": _OPENAI_KEY,
+                    },
+                }
+            ],
+            "general_settings": {**base["general_settings"], "moderation_model": "default-moderation"},
+        }
         path: Final = tmp_path / "moderation-default.yaml"
         path.write_text(yaml.safe_dump(config))
         with owned_proxy(gateway, tmp_path, {}, config=path) as candidate:

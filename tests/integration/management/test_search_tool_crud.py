@@ -20,8 +20,11 @@ _KEY_BY_TARGET: Final = MappingProxyType({"/original/search": _ORIGINAL_KEY, "/r
 
 
 def _config_without_periodic_reload(directory: Path) -> Path:
-    config: Final = yaml.safe_load(_PROXY_CONFIG.read_text())
-    config["general_settings"]["proxy_config_reload_interval_seconds"] = 3600
+    base: Final = yaml.safe_load(_PROXY_CONFIG.read_text())
+    config: Final = {
+        **base,
+        "general_settings": {**base["general_settings"], "proxy_config_reload_interval_seconds": 3600},
+    }
     path: Final = directory / "search-tool-crud.yaml"
     path.write_text(yaml.safe_dump(config))
     return path
