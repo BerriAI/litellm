@@ -183,9 +183,15 @@ function SelectionBracket({
   );
 }
 
-function TickAxis({ range }: { range: TimeWindow }) {
+export function timelineTicks(range: TimeWindow, width: number): number[] {
+  const labelWidth = tickFormat(range) === EDGE_FORMAT ? 140 : 80;
+  const count = Math.max(2, Math.min(TICKS, Math.floor(width / labelWidth)));
+  return Array.from({ length: count }, (_, i) => i / (count - 1));
+}
+
+function TickAxis({ range, width }: { range: TimeWindow; width: number }) {
   const format = tickFormat(range);
-  const ticks = Array.from({ length: TICKS }, (_, i) => i / (TICKS - 1));
+  const ticks = timelineTicks(range, width);
   return (
     <div className="relative mt-0.5 h-5">
       {ticks.map((t) => (
@@ -314,7 +320,7 @@ export function Timeline({ buckets, selection, onSelect }: TimelineProps) {
         )}
       </DotFieldRoot>
       <div className="mt-1">
-        <TickAxis range={range} />
+        <TickAxis range={range} width={stripWidth} />
       </div>
       {hover !== null && !drag && <BucketTooltip bucket={buckets[hover]} index={hover} bucketCount={bucketCount} />}
       {selection && (

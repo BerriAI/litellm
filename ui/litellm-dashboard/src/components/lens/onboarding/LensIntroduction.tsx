@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowRight, ArrowUpRight, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowUpRight, ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 import styles from "./LensIntroduction.module.css";
@@ -150,14 +150,11 @@ function FindingExamples({ highlighted, onHighlight }: EvidenceProps) {
   );
 }
 
-export function LensIntroduction({ onStart, onDemo }: { onStart: () => void; onDemo?: () => void }) {
+export function LensIntroduction({ onStart }: { onStart: () => void }) {
   const [highlighted, setHighlighted] = useState(false);
   const toggleEvidence = () => setHighlighted((current) => !current);
   return (
-    <section
-      aria-labelledby="lens-introduction"
-      className="rounded-2xl border bg-card p-5 sm:px-6 sm:py-5 xl:px-7 xl:py-6"
-    >
+    <section aria-labelledby="lens-introduction" className="rounded-2xl border bg-card p-4 sm:px-6 sm:py-5 xl:px-7">
       <h2 id="lens-introduction" className="text-2xl leading-tight font-semibold tracking-tight sm:text-3xl">
         The gateway that helps your agents improve
       </h2>
@@ -165,12 +162,7 @@ export function LensIntroduction({ onStart, onDemo }: { onStart: () => void; onD
         Turn recorded agent runs into findings linked to the exact steps, so you know what happened and what to change.
       </p>
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        {onDemo && (
-          <Button className="rounded-lg px-4" onClick={onDemo}>
-            Explore with sample data <ArrowRight aria-hidden="true" className="size-4" />
-          </Button>
-        )}
-        <Button variant={onDemo ? "outline" : "default"} className="rounded-lg px-4" onClick={onStart}>
+        <Button className="rounded-lg px-4" onClick={onStart}>
           Set up Lens
         </Button>
         <a
@@ -184,7 +176,7 @@ export function LensIntroduction({ onStart, onDemo }: { onStart: () => void; onD
       </div>
       <GatewayFlow />
       <div
-        className={cn(styles.examples, "mt-4 grid items-stretch gap-3 md:grid-cols-2")}
+        className={cn(styles.examples, "mt-4 grid items-stretch gap-3 @2xl:grid-cols-2")}
         data-evidence-active={highlighted}
       >
         <TraceExample highlighted={highlighted} onHighlight={toggleEvidence} />

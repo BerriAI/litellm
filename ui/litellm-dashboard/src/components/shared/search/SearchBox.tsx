@@ -246,8 +246,8 @@ function Input({ placeholder, className, ...props }: SearchBoxInputProps) {
       <div className="relative flex min-w-0 flex-1">
         <ProseMirrorDoc />
         {!text && (
-          <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center font-mono text-xs text-muted-foreground">
-            {placeholder}
+          <span className="pointer-events-none absolute inset-0 flex items-center font-mono text-xs text-muted-foreground">
+            <span className="truncate">{placeholder}</span>
           </span>
         )}
       </div>

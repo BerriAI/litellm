@@ -17,9 +17,15 @@ interface RunsToolbarProps {
 
 export function RunsToolbar({ query, onQueryChange, runs, range, children }: RunsToolbarProps) {
   return (
-    <div className="flex h-10 shrink-0 items-stretch border-b border-border bg-card">
-      <RunSearch value={query} onChange={onQueryChange} runs={runs} range={range} />
-      {children && <div className="flex shrink-0 items-stretch">{children}</div>}
+    <div className="@container/traces shrink-0 border-b border-border bg-card">
+      <div className="grid grid-cols-1 @4xl/traces:grid-cols-[minmax(0,1fr)_auto]">
+        <RunSearch value={query} onChange={onQueryChange} runs={runs} range={range} />
+        {children && (
+          <div className="flex min-h-11 min-w-0 items-stretch justify-end border-t border-border @4xl/traces:border-t-0">
+            {children}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

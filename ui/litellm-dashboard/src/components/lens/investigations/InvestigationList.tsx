@@ -262,6 +262,7 @@ export function InvestigationList({
   const tableOptions: TableOptions<InvestigationRow> = {
     data: shown.map((lens): InvestigationRow => ({ kind: "investigation", lens })),
     columns: COLUMNS,
+    defaultColumn: { size: undefined },
     getRowId: investigationRowKey,
     getSubRows: findingRows,
     initialState: { expanded: true },

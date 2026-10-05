@@ -119,7 +119,7 @@ function WorkerStep({ state }: StepProps) {
           : "The worker reviews recorded activity using a model on your gateway. You choose its analysis model and spending limit."}
       </p>
       {!state.activityReady && (
-        <p className="text-sm text-muted-foreground">Record activity in step 2 before connecting a worker.</p>
+        <p className="text-sm text-muted-foreground">Recorded activity is required before connecting a worker.</p>
       )}
       <Button onClick={state.connected ? create : connect} disabled={!state.activityReady || locked}>
         {state.connected ? "Continue to investigation" : "Connect worker"}
@@ -189,10 +189,19 @@ function stepState(complete: boolean, open: boolean): StepState {
   return open ? "current" : "upcoming";
 }
 
-export function OnboardingSteps({ state, className }: { state: LensReadiness; className?: string }) {
+export function OnboardingSteps({
+  state,
+  className,
+  includeTracing,
+}: {
+  state: LensReadiness;
+  className?: string;
+  includeTracing: boolean;
+}) {
   const id = useId();
   const listRef = useRef<HTMLOListElement>(null);
-  const [step, setStep] = useState(() => initialSetupStep(state));
+  const offset = includeTracing ? 0 : 2;
+  const [step, setStep] = useState(() => Math.max(offset, initialSetupStep(state)));
   const goTo = (index: number) => {
     setStep(index);
     listRef.current?.querySelector<HTMLButtonElement>(`[aria-controls="${id}-${index}"]`)?.focus();
@@ -203,17 +212,18 @@ export function OnboardingSteps({ state, className }: { state: LensReadiness; cl
       data-slot="onboarding-steps"
       className={cn("divide-y overflow-hidden rounded-2xl border bg-card", className)}
     >
-      {STEPS.map(({ title, description, complete, Content }, index) => {
-        const open = step === index;
+      {STEPS.slice(offset).map(({ title, description, complete, Content }, index) => {
+        const stepIndex = index + offset;
+        const open = Math.max(offset, step) === stepIndex;
         return (
           <li key={title}>
             <h3>
               <button
                 type="button"
-                id={`${id}-trigger-${index}`}
+                id={`${id}-trigger-${stepIndex}`}
                 aria-expanded={open}
-                aria-controls={`${id}-${index}`}
-                onClick={() => setStep(index)}
+                aria-controls={`${id}-${stepIndex}`}
+                onClick={() => setStep(stepIndex)}
                 className="group flex w-full items-start gap-4 p-5 text-left outline-none hover:bg-muted/30 focus-visible:bg-muted/50 sm:p-6"
               >
                 <StepIndicator index={index} state={stepState(complete(state), open)} />
@@ -235,9 +245,9 @@ export function OnboardingSteps({ state, className }: { state: LensReadiness; cl
               </button>
             </h3>
             <div
-              id={`${id}-${index}`}
+              id={`${id}-${stepIndex}`}
               role="region"
-              aria-labelledby={`${id}-trigger-${index}`}
+              aria-labelledby={`${id}-trigger-${stepIndex}`}
               hidden={!open}
               className="px-5 pb-6 sm:pr-6 sm:pb-7 sm:pl-17"
             >

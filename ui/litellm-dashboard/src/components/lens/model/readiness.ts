@@ -45,3 +45,11 @@ export function initialSetupStep(state: Readiness): number {
   if (state.activityReady) return state.connected ? 3 : 2;
   return state.tracingEnabled ? 1 : 0;
 }
+
+export function recordedActivity({ traces, activity }: Pick<ReadinessInput, "traces" | "activity">) {
+  const hasTraces = traces.recorded === true || activity?.traces === true;
+  return {
+    missingTraces: !hasTraces && (traces.disabled || traces.recorded === false),
+    hasRecordedActivity: hasTraces || activity?.requests === true,
+  };
+}

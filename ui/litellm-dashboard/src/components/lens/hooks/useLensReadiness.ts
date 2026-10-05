@@ -4,10 +4,12 @@ import { useQuery } from "@tanstack/react-query";
 import { isTracingNotEnabled, useTraceAvailability } from "@/components/lens/traces/list/useAgentTraces";
 import { useLensAccessToken, useLensApi } from "../data/LensServices";
 import { lensQueries } from "../data/queries";
-import { readiness, type Readiness, type ReadinessInput } from "../model/readiness";
+import { readiness, recordedActivity, type Readiness, type ReadinessInput } from "../model/readiness";
 import { useWorkerConnected } from "./useWorkerConnected";
 
 export interface LensReadiness extends Readiness {
+  readonly missingTraces: boolean;
+  readonly hasRecordedActivity: boolean;
   readonly loading: boolean;
   readonly checking: boolean;
   readonly error: string | undefined;
@@ -50,6 +52,7 @@ export function useLensReadiness(canInvestigate: boolean): LensReadiness {
   };
   return {
     ...state,
+    ...recordedActivity(input),
     loading: loadingTraces || loadingInvestigations,
     checking: traces.isFetching || list.isFetching || activity.isFetching,
     error: error?.message,
