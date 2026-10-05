@@ -6,11 +6,12 @@ Reference: https://cloud.google.com/text-to-speech/docs/reference/rest/v1/text/s
 """
 
 import base64
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, Union
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.exceptions import UnsupportedParamsError
@@ -44,6 +45,9 @@ else:
     HttpxBinaryResponseContent = Any
 
 _LyriaVoice: TypeAlias = str | dict | None
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_STR: Final = TypeAdapter(str, config=ConfigDict(hide_input_in_errors=True))
 
 
 class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
@@ -465,14 +469,14 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         # Parse JSON response
-        _json_response: Final = raw_response.json()
+        _json_response: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Get base64-encoded audio content
         response_content: Final = _json_response.get("audioContent")
         if not response_content:
             raise ValueError("No audioContent in Vertex AI TTS response")
 
-        binary_data: Final = base64.b64decode(response_content)
+        binary_data: Final = base64.b64decode(_STR.validate_python(response_content))
         media_type: Final = speech_media_type_from_audio_bytes(binary_data)
         response: Final = httpx.Response(
             status_code=200,

@@ -1,7 +1,7 @@
 "use client";
 
 import type { TraceSummary } from "../../types";
-import type { TimeWindow } from "../TracesTimeline";
+import type { TimeWindow } from "@/components/shared/timeline/Timeline";
 
 import { RunSearch } from "./RunSearch";
 

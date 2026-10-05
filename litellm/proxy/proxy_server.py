@@ -1604,11 +1604,6 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         if not model_info_scheduler.running:
             model_info_scheduler.start()
 
-    if scheduler is not None and prisma_client is not None:
-        from litellm.proxy.management_endpoints.roi_calculator_endpoints import register_scheduled_sync
-
-        register_scheduled_sync(scheduler)
-
     tracing_settings: Final = cast(  # cast-ok: Pydantic validates the legacy untyped settings value
         dict[str, object] | None,
         TypeAdapter(dict[str, object] | None).validate_python(general_settings.get("tracing")),

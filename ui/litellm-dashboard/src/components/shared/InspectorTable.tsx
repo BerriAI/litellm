@@ -8,6 +8,7 @@ import { ChevronRight } from "lucide-react";
 import { createContext, Fragment, useContext, useState, type ComponentProps, type ReactNode } from "react";
 
 import { Inspector } from "@/components/shared/Inspector";
+import { Skeleton } from "@/components/ui/skeleton";
 import { TableBody, TableCell, TableHead, TableHeader } from "@/components/ui/table";
 import { cn } from "@/lib/cva.config";
 
@@ -137,6 +138,37 @@ function Row<T>({ row, item, className, ...props }: RowProps<T>) {
   );
 }
 
+const SKELETON_WIDTHS = ["w-[58%]", "w-[44%]", "w-[70%]", "w-[50%]", "w-[64%]", "w-[48%]"] as const;
+
+type SkeletonRowProps = ComponentProps<"tr"> & { readonly index: number };
+
+/** One placeholder row shaped by the visible columns: `meta.renderSkeleton` wins, numeric cells right-align. */
+function SkeletonRow({ index, className, ...props }: SkeletonRowProps) {
+  const { table } = useInspectorTable();
+  return (
+    <tr aria-hidden data-slot="table-skeleton-row" className={cn("border-b border-border/60", className)} {...props}>
+      {table.getVisibleLeafColumns().map((column, position) => {
+        const meta = column.columnDef.meta;
+        return (
+          <TableCell key={column.id} className={cn("px-3 py-0", meta?.numeric && NUMERIC, meta?.className)}>
+            {meta?.renderSkeleton ? (
+              meta.renderSkeleton()
+            ) : (
+              <Skeleton
+                className={cn(
+                  "h-3",
+                  SKELETON_WIDTHS[(index + position) % SKELETON_WIDTHS.length],
+                  meta?.numeric && "ml-auto",
+                )}
+              />
+            )}
+          </TableCell>
+        );
+      })}
+    </tr>
+  );
+}
+
 interface IndentProps<T> {
   readonly row: TanStackRow<T>;
   readonly toggleLabel?: (expanded: boolean) => string;
@@ -176,4 +208,4 @@ function Indent<T>({ row, toggleLabel = (expanded) => (expanded ? "Collapse" : "
   );
 }
 
-export const InspectorTable = { Root, Grid, Header, Body, Row, Indent } as const;
+export const InspectorTable = { Root, Grid, Header, Body, Row, SkeletonRow, Indent } as const;

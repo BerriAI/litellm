@@ -2,6 +2,7 @@ import json
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
@@ -23,6 +24,8 @@ if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
 else:
     AWSPreparedRequest = Any
+
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class BedrockRerankHandler(BaseAWSLLM):
@@ -55,13 +58,13 @@ class BedrockRerankHandler(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return BedrockRerankConfig()._transform_response(response.json())
+        return BedrockRerankConfig()._transform_response(_JSON_DICT.validate_python(response.json()))
 
     def rerank(
         self,
         model: str,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         optional_params: dict,
         logging_obj: LitellmLogging,
         top_n: int | None = None,
@@ -136,7 +139,7 @@ class BedrockRerankHandler(BaseAWSLLM):
             api_key="",
         )
 
-        response_json: Final = response.json()
+        response_json: Final = _JSON_DICT.validate_python(response.json())
 
         return BedrockRerankConfig()._transform_response(response_json)
 
