@@ -4177,6 +4177,7 @@ class LlmProviders(str, Enum):
     CORTECS = "cortecs"
     SCX_AI = "scx-ai"
     PRISM = "prism"
+    TOPXAI = "topxai"
     DARKBLOOM = "darkbloom"
     META = "meta"
     SAIL = "sail"
