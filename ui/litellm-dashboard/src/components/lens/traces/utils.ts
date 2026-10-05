@@ -351,12 +351,13 @@ const parseLangchainMessage = (value: object): TraceMessage | null => {
   };
 };
 
-const parseToolCall = (call: unknown): TraceToolCall | null => {
-  if (!call || typeof call !== "object") return null;
+const parseToolCall = (call: unknown): TraceToolCall => {
+  const unknownCall = { name: "Tool call", args: call };
+  if (!call || typeof call !== "object") return unknownCall;
   const fn: unknown = Reflect.get(call, "function");
   const source = fn && typeof fn === "object" ? fn : call;
   const name: unknown = Reflect.get(source, "name");
-  if (typeof name !== "string") return null;
+  if (typeof name !== "string" || !name) return unknownCall;
   if ("args" in source) return { name, args: source.args };
   const args: unknown = Reflect.get(source, "arguments");
   return { name, args: typeof args === "string" ? parseJson(args) ?? args : args };
@@ -368,19 +369,18 @@ const parseMessage = (value: unknown): TraceMessage | null => {
   const role: unknown = Reflect.get(value, "role");
   const content: unknown = Reflect.get(value, "content") ?? Reflect.get(value, "parts");
   const rawCalls: unknown = Reflect.get(value, "tool_calls");
-  if (rawCalls != null && !Array.isArray(rawCalls)) return null;
-  const hasCalls = Array.isArray(rawCalls) && rawCalls.length > 0;
+  const callEntries = Array.isArray(rawCalls) ? rawCalls : [rawCalls];
+  const hasCalls = rawCalls != null && callEntries.length > 0;
   const emptyToolMessage = content == null && hasCalls;
   const hasContent = isMessageContent(content) || emptyToolMessage;
   if (typeof role !== "string" || !hasContent) return null;
-  const calls = Array.isArray(rawCalls) ? rawCalls.map(parseToolCall) : undefined;
-  if (calls?.some((call) => call === null)) return null;
+  const calls = callEntries.map(parseToolCall);
   const text = typeof content === "string" ? content : JSON.stringify(content ?? "");
   return {
     ...value,
     role,
     content: content == null ? "" : messageText(text),
-    ...(calls ? { tool_calls: calls as TraceToolCall[] } : {}),
+    ...(rawCalls != null ? { tool_calls: calls } : {}),
   };
 };
 
