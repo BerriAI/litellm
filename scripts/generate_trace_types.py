@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 ROOT: Final = Path(__file__).resolve().parents[1]
 TOOLING: Final = ROOT / "scripts/trace_codegen"
 GENERATED: Final = ROOT / "litellm/rust_bridge/trace/generated"
+LENS_TYPES: Final = ROOT / "litellm/proxy/lens/trace_types.py"
 SCHEMAS: Final = TypeAdapter(dict[str, dict[str, JsonValue]])
 
 
@@ -250,6 +251,7 @@ def main() -> int:
         requests: Final = generate(api, "requests", directory, config)
         python_results: Final = (
             publish(GENERATED / "types.py", types.read_text(), args.check),
+            publish(LENS_TYPES, types.read_text(), args.check),
             publish(GENERATED / "models.py", models.read_text(), args.check),
             publish(GENERATED / "requests.py", requests.read_text(), args.check),
             publish(GENERATED / "openapi.json", openapi, args.check),

@@ -22,7 +22,7 @@ ENV LITELLM_RELEASE_TAG=${LITELLM_RELEASE_TAG} \
     PYTHONDONTWRITEBYTECODE=1
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
-COPY litellm/proxy/lens/__init__.py litellm/proxy/lens/models.py litellm/proxy/lens/trace_store.py litellm/proxy/lens/analysis.py litellm/proxy/lens/worker.py litellm/proxy/lens/release.py /app/lens/
+COPY litellm/proxy/lens/__init__.py litellm/proxy/lens/models.py litellm/proxy/lens/trace_store.py litellm/proxy/lens/analysis.py litellm/proxy/lens/worker.py litellm/proxy/lens/release.py litellm/proxy/lens/trace_types.py /app/lens/
 COPY litellm/proxy/lens/prompts/ /app/lens/prompts/
 USER 65532:65532
 CMD ["python", "-m", "lens.worker"]

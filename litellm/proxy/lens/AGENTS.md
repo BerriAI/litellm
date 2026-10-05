@@ -4,3 +4,5 @@
 - Never write SQL against trace storage from this package. Storage engines stay behind the Rust store port
 - A target run is a run of the traces list, identified by its `trace_ref`, and its filter is the same `q` search the Traces tab uses
 - Lens reads traces only, never the gateway request log
+- The worker image ships only `__init__.py`, `models.py`, `trace_store.py`, `analysis.py`, `worker.py`, `release.py`, `trace_types.py` and `prompts/` (see `deploy/lens/Dockerfile`), with only `httpx` and `pydantic` installed. Those modules must never import `litellm` or any other module of this package outside that list: `litellm/__init__.py` loads the whole SDK and the native bridge, which the worker does not have
+- For trace wire types in worker modules, import `.trace_types`, the copy of `litellm/rust_bridge/trace/generated/types.py` that `scripts/generate_trace_types.py` writes. Never hand-edit it or redeclare trace types; regenerate instead. Proxy-only modules (`endpoints.py`, `sources.py`, `repository.py`, and the rest) may import `litellm` freely

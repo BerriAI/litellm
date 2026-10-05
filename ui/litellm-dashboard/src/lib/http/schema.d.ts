@@ -31993,7 +31993,7 @@ export interface components {
         Execution: {
             /** Id */
             id: string;
-            summary?: components["schemas"]["TraceSummary"] | null;
+            summary?: components["schemas"]["litellm__proxy__lens__trace_types__TraceSummary"] | null;
             /** Trace Id */
             trace_id: string;
             /** Trace Ref */
@@ -47909,7 +47909,7 @@ export interface components {
             name: components["schemas"]["TraceQueryTableName"];
         };
         /** @enum {string} */
-        TraceQueryTableName: "traces" | "spans" | "calls" | "otel_traces" | "agent_traces_by_key" | "spend_logs";
+        TraceQueryTableName: "traces" | "spans" | "calls" | "otel_traces" | "trace_rollup" | "spend_logs";
         TraceQueryWindow: {
             /** Format: uint64 */
             as_of_ms: number;
@@ -50254,6 +50254,156 @@ export interface components {
             output_cost_per_token: number | null;
         } & {
             [key: string]: unknown;
+        };
+        /** TraceSummary */
+        litellm__proxy__lens__trace_types__TraceSummary: {
+            /** Agent Count */
+            agent_count: number;
+            /** Agent Invocations */
+            agent_invocations: number;
+            /** Agent Names */
+            agent_names: string[];
+            /** Duration Ms */
+            duration_ms: number;
+            /** Error Count */
+            error_count: number;
+            /** Frameworks */
+            frameworks: string[];
+            /** Has Error */
+            has_error: boolean;
+            /** Id */
+            id: string;
+            /** Input Preview */
+            input_preview: string;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Llm Calls */
+            llm_calls: number;
+            /** Models */
+            models: string[];
+            /** Name */
+            name: string;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Resolution Limited */
+            resolution_limited: boolean;
+            /**
+             * Root Status
+             * @enum {string}
+             */
+            root_status: "ok" | "error" | "unset";
+            /** Service */
+            service: string;
+            /** Span Count */
+            span_count: number;
+            /** Spend */
+            spend: number | null;
+            /** Start Time */
+            start_time: string;
+            /** Tool Calls */
+            tool_calls: number;
+            /** Trace Id */
+            trace_id: string;
+        };
+        /** TraceSummary */
+        litellm__rust_bridge__trace__generated__requests__TraceSummary: {
+            /** Agent Count */
+            agent_count: number;
+            /** Agent Invocations */
+            agent_invocations: number;
+            /** Agent Names */
+            agent_names: string[];
+            /** Duration Ms */
+            duration_ms: number;
+            /** Error Count */
+            error_count: number;
+            /** Frameworks */
+            frameworks: string[];
+            /** Has Error */
+            has_error: boolean;
+            /** Id */
+            id: string;
+            /** Input Preview */
+            input_preview: string;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Llm Calls */
+            llm_calls: number;
+            /** Models */
+            models: string[];
+            /** Name */
+            name: string;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Resolution Limited */
+            resolution_limited: boolean;
+            /**
+             * Root Status
+             * @enum {string}
+             */
+            root_status: "ok" | "error" | "unset";
+            /** Service */
+            service: string;
+            /** Span Count */
+            span_count: number;
+            /** Spend */
+            spend: number | null;
+            /** Start Time */
+            start_time: string;
+            /** Tool Calls */
+            tool_calls: number;
+            /** Trace Id */
+            trace_id: string;
+        };
+        /** TraceSummary */
+        litellm__rust_bridge__trace__generated__types__TraceSummary: {
+            /** Agent Count */
+            agent_count: number;
+            /** Agent Invocations */
+            agent_invocations: number;
+            /** Agent Names */
+            agent_names: string[];
+            /** Duration Ms */
+            duration_ms: number;
+            /** Error Count */
+            error_count: number;
+            /** Frameworks */
+            frameworks: string[];
+            /** Has Error */
+            has_error: boolean;
+            /** Id */
+            id: string;
+            /** Input Preview */
+            input_preview: string;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Llm Calls */
+            llm_calls: number;
+            /** Models */
+            models: string[];
+            /** Name */
+            name: string;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Resolution Limited */
+            resolution_limited: boolean;
+            /**
+             * Root Status
+             * @enum {string}
+             */
+            root_status: "ok" | "error" | "unset";
+            /** Service */
+            service: string;
+            /** Span Count */
+            span_count: number;
+            /** Spend */
+            spend: number | null;
+            /** Start Time */
+            start_time: string;
+            /** Tool Calls */
+            tool_calls: number;
+            /** Trace Id */
+            trace_id: string;
         };
         /** ComputerToolParam */
         litellm__types__llms__openai__ComputerToolParam: {

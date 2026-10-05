@@ -11,5 +11,6 @@
 !litellm/proxy/lens/analysis.py
 !litellm/proxy/lens/worker.py
 !litellm/proxy/lens/release.py
+!litellm/proxy/lens/trace_types.py
 !litellm/proxy/lens/prompts/
 !litellm/proxy/lens/prompts/**

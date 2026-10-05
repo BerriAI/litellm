@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-from litellm.rust_bridge.trace.generated.types import TraceSummary
+from .trace_types import TraceSummary
 
 
 def calendar_lookback(hours: int) -> int:
