@@ -25,7 +25,7 @@ const SESSION = { accessToken: "at", userRole: "Admin", userId: "u1", isViewOnly
 const lastProps = () => panelProps.mock.calls.at(-1)?.[0] as { createScope: string };
 
 describe("AutoRoutersTabPanel", () => {
-  it("honors member auto-router opt-in when general model creation is disabled", () => {
+  it("honors the global creation prohibition even when member auto-router management is enabled", () => {
     mockUseAuthorized.mockReturnValue({ ...SESSION, userRole: "Internal User" });
     mockUseTeams.mockReturnValueOnce({
       data: [
@@ -39,7 +39,7 @@ describe("AutoRoutersTabPanel", () => {
     mockUseUISettings.mockReturnValueOnce({ data: { values: { disable_model_add_for_internal_users: true } } });
     render(<AutoRoutersTabPanel />);
 
-    expect(lastProps().createScope).toBe("team-required");
+    expect(lastProps().createScope).toBe("forbidden");
   });
 
   it("grants an unscoped create to a real proxy admin", () => {
