@@ -9820,12 +9820,16 @@ class ProviderConfigManager:
         """
         Get Search configuration for a given provider.
         """
+        if provider == SearchProviders.BRAVE:
+            from litellm.llms.brave.search.transformation import BraveSearchConfig
+
+            return BraveSearchConfig()
+
         from litellm.llms.apiserpent.search.transformation import (
             APISerpentSearchConfig,
         )
         from litellm.llms.azure.search.transformation import BingGroundingSearchConfig
         from litellm.llms.bedrock.search.transformation import AgentCoreSearchConfig
-        from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
@@ -9850,7 +9854,6 @@ class ProviderConfigManager:
             SearchProviders.TAVILY: TavilySearchConfig,
             SearchProviders.PARALLEL_AI: ParallelAISearchConfig,
             SearchProviders.EXA_AI: ExaAISearchConfig,
-            SearchProviders.BRAVE: BraveSearchConfig,
             SearchProviders.GOOGLE_PSE: GooglePSESearchConfig,
             SearchProviders.DATAFORSEO: DataForSEOSearchConfig,
             SearchProviders.FIRECRAWL: FirecrawlSearchConfig,

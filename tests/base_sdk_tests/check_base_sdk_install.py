@@ -266,8 +266,14 @@ def check_retries() -> str:
 
 
 def check_search_date_parsing() -> str:
+    from litellm.types.utils import SearchProviders
+    from litellm.utils import ProviderConfigManager
+
+    for provider in SearchProviders:
+        if provider != SearchProviders.BRAVE:
+            _require(ProviderConfigManager.get_provider_search_config(provider) is not None, f"search provider {provider} requires Brave dependencies")
     if importlib.util.find_spec("dateutil") is None:
-        _expect_extra("search", lambda: __import__("litellm.llms.brave.search.transformation"))
+        _expect_extra("search", partial(ProviderConfigManager.get_provider_search_config, SearchProviders.BRAVE))
         return "Brave search requests the search extra"
     from litellm.llms.brave.search.transformation import to_yyyy_mm_dd
 

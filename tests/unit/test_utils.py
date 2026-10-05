@@ -6558,3 +6558,34 @@ def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
 
     assert logged == [{"role": "user", "content": f"data:application/pdf;base64 ({len(payload)} chars)"}]
     assert payload not in str(logged)
+
+
+@pytest.mark.parametrize("provider", ("perplexity", "duckduckgo", "brave"))
+def test_search_provider_selection_without_brave_dependencies(provider, monkeypatch):
+    import sys
+    from litellm.types.utils import SearchProviders
+    from litellm.utils import ProviderConfigManager
+
+    monkeypatch.setitem(sys.modules, "dateutil", None)
+    for name in tuple(sys.modules):
+        if name.startswith("litellm.llms.brave.search"):
+            monkeypatch.delitem(sys.modules, name)
+    if provider == "brave":
+        with pytest.raises(ImportError, match=r"litellm\[search\]") as caught:
+            ProviderConfigManager.get_provider_search_config(SearchProviders(provider))
+        assert isinstance(caught.value.__cause__, ModuleNotFoundError)
+        assert caught.value.__cause__.name == "dateutil"
+    else:
+        config = ProviderConfigManager.get_provider_search_config(SearchProviders(provider))
+        assert config is not None
+        assert config.ui_friendly_name().lower().replace(" search", "") == provider
+
+
+def test_brave_search_configuration_with_date_parser():
+    from litellm.types.utils import SearchProviders
+    from litellm.utils import ProviderConfigManager
+
+    config = ProviderConfigManager.get_provider_search_config(SearchProviders.BRAVE)
+    assert config is not None
+    assert config.get_http_method() == "GET"
+    assert config.validate_environment(headers={}, api_key="brave-test")["X-Subscription-Token"] == "brave-test"
