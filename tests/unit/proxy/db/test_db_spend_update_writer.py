@@ -4957,6 +4957,7 @@ async def test_target_agent_counter_key_queues_spend_for_billing_and_target_agen
                 "metadata": {
                     "billing_agent_id": "billing-agent",
                     "billing_agent_counter_key": billing_counter,
+                    "target_agent_id": "target-agent",
                     "target_agent_counter_key": target_counter,
                 }
             },

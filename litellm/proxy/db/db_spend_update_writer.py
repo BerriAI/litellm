@@ -1159,7 +1159,7 @@ class DBSpendUpdateWriter:
                 target_counter: Final = spend_metadata.get("target_agent_counter_key")
                 billing_counter: Final = spend_metadata.get("billing_agent_counter_key")
                 if isinstance(target_counter, str) and target_counter != billing_counter:
-                    target_agent_id: Final = agent_spend_filter(target_counter).get("agent_id")
+                    target_agent_id: Final = spend_metadata.get("target_agent_id")
                     if isinstance(target_agent_id, str):
                         await self._update_agent_db(
                             response_cost=response_cost,
