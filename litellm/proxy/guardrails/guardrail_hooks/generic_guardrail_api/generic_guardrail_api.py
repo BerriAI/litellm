@@ -28,6 +28,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy.guardrails._content_utils import same_json_ignoring_nulls
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
@@ -192,16 +193,16 @@ def _structured_rows_to_write_back(
     returned_rows: Sequence[AllMessageValues],
 ) -> tuple[AllMessageValues, ...] | None:
     """The request model drops row keys its message types do not declare, so a
-    row the server echoes back verbatim is restored to the original row object.
+    row the server echoes back, null fields aside, is restored to the original row object.
     A server that echoes every row back unchanged has not rewritten anything
     per row, so its answer is read from texts, as it was before rows could be
     returned at all."""
     if original_rows is None or shown_rows is None or len(returned_rows) != len(original_rows):
         return tuple(returned_rows)
-    if all(returned == shown for shown, returned in zip(shown_rows, returned_rows)):
+    if all(same_json_ignoring_nulls(returned, shown) for shown, returned in zip(shown_rows, returned_rows)):
         return None
     return tuple(
-        original if returned == shown else returned
+        original if same_json_ignoring_nulls(returned, shown) else returned
         for original, shown, returned in zip(original_rows, shown_rows, returned_rows)
     )
 

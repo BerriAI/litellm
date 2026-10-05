@@ -766,11 +766,35 @@ def _echo_every_row_and_mask_texts(request_json: Mapping[str, JsonValue]) -> Map
     }
 
 
+def _without_null_values(row: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return {key: value for key, value in row.items() if value is not None}
+
+
+def _echo_every_row_without_its_nulls_and_mask_texts(request_json: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    rows_without_nulls: Final[JsonValue] = json.loads(  # pyright: ignore[reportAny]  # stdlib parse of a JSON copy
+        json.dumps(request_json["structured_messages"]), object_hook=_without_null_values
+    )
+    return {**_echo_every_row_and_mask_texts(request_json), "structured_messages": rows_without_nulls}
+
+
 def _echo_first_row_and_mask_the_rest(request_json: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     first_row, *other_rows = request_json["structured_messages"]
     return {
         "action": "GUARDRAIL_INTERVENED",
         "structured_messages": [first_row, *({**row, "content": _masked(row["content"])} for row in other_rows)],
+    }
+
+
+def _echo_first_row_without_its_nulls_and_mask_the_rest(
+    request_json: Mapping[str, JsonValue],
+) -> Mapping[str, JsonValue]:
+    first_row, *other_rows = request_json["structured_messages"]
+    return {
+        "action": "GUARDRAIL_INTERVENED",
+        "structured_messages": [
+            _without_null_values(first_row),
+            *({**row, "content": _masked(row["content"])} for row in other_rows),
+        ],
     }
 
 
@@ -897,6 +921,31 @@ class TestEchoedRowsReachingTheLLM:
         ], "an unchanged echo of every content block row must leave the rewrite to texts"
 
     @pytest.mark.asyncio
+    async def test_an_echo_that_drops_null_fields_still_applies_the_masked_texts(self) -> None:
+        guardrail: Final = _guardrail_answering(_echo_every_row_without_its_nulls_and_mask_texts)
+        tool_use_turn: Final[AllAnthropicMessageValues] = {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "calling"},
+                {"type": "tool_use", "id": "t1", "name": "f", "input": {}},
+            ],
+        }
+        tool_result_turn: Final[AllAnthropicMessageValues] = {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "r"}],
+        }
+
+        llm_bound: Final = await _llm_bound_anthropic_messages(
+            guardrail, [{"role": "user", "content": f"my ssn is {_SSN}"}, tool_use_turn, tool_result_turn]
+        )
+
+        assert llm_bound == [
+            {"role": "user", "content": "my ssn is [SSN]"},
+            tool_use_turn,
+            tool_result_turn,
+        ], "an echo without the null fields the rows were posted with must leave the rewrite to texts"
+
+    @pytest.mark.asyncio
     async def test_every_responses_input_text_row_echoed_applies_the_masked_texts(self) -> None:
         guardrail: Final = _guardrail_answering(_echo_every_row_and_mask_texts)
 
@@ -924,6 +973,24 @@ class TestEchoedRowsReachingTheLLM:
             {"role": "user", "name": "pat", "content": [{"type": "text", "text": "what is this?"}, _image_part()]},
             {"role": "user", "content": "my ssn is [SSN]"},
         ], "the echoed row must keep the caller's keys the request model drops"
+
+    @pytest.mark.asyncio
+    async def test_a_row_echoed_without_its_null_fields_is_restored_to_the_callers_row(self) -> None:
+        guardrail: Final = _guardrail_answering(_echo_first_row_without_its_nulls_and_mask_the_rest)
+        tool_call_turn: Final[AllMessageValues] = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+        }
+
+        llm_bound: Final = await _llm_bound_messages(
+            guardrail, [tool_call_turn, {"role": "tool", "tool_call_id": "c1", "content": f"ssn {_SSN}"}]
+        )
+
+        assert llm_bound == [
+            tool_call_turn,
+            {"role": "tool", "tool_call_id": "c1", "content": "ssn [SSN]"},
+        ], "a row echoed without the null fields it was posted with must stay the caller's row"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
