@@ -88,6 +88,13 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_authenticating_provider,
     is_registered_custom_provider,
 )
+from litellm.litellm_core_utils.hidden_params import (
+    HIDDEN_PARAMS_ATTR as _HIDDEN_PARAMS_ATTR,
+)
+from litellm.litellm_core_utils.hidden_params import (
+    get_hidden_params,
+    set_hidden_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.litellm_core_utils.ptu_pricing import (
@@ -153,12 +160,10 @@ from litellm.router_utils.add_retry_fallback_headers import (
     apply_response_model_id,
     complexity_router_decision_headers,
     ensure_response_additional_headers,
-    get_hidden_params,
     get_hidden_params_dict,
     prepare_response_for_header_attachment,
     replace_complexity_router_headers,
     response_total_token_count,
-    set_hidden_params,
 )
 from litellm.router_utils.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
@@ -2901,13 +2906,11 @@ class Router:
         fallback_item: object,
         prepared_fallback_hidden_params: tuple[dict[str, object], dict[str, object]],
     ) -> None:
-        if fallback_item is None:
+        if fallback_item is None or not hasattr(fallback_item, _HIDDEN_PARAMS_ATTR):
             return
 
         fallback_hidden_params, fallback_headers = prepared_fallback_hidden_params
-        item_hidden_params: Final = get_hidden_params(fallback_item)
-        if item_hidden_params is None:
-            return
+        item_hidden_params: Final = get_hidden_params_dict(fallback_item)
         item_headers = item_hidden_params.get("additional_headers")
         if not isinstance(item_headers, dict):
             item_headers = {}

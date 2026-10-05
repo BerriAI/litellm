@@ -5,6 +5,7 @@ import httpx
 
 import litellm
 from litellm import stream_chunk_builder
+from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,
@@ -17,7 +18,6 @@ from litellm.llms.cohere.common_utils import (
 )
 from litellm.llms.cohere.embed.v1_transformation import CohereEmbeddingConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
-from litellm.router_utils.add_retry_fallback_headers import get_or_create_hidden_params
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )

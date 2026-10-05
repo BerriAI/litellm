@@ -12,12 +12,12 @@ from typing import Any, Final, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid as uuid_module
+from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.llms.base_llm.files.storage_backend import BaseFileStorageBackend
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.utils import PrismaClient, ProxyLogging
-from litellm.router_utils.add_retry_fallback_headers import get_or_create_hidden_params
 from litellm.types.llms.openai import OpenAIFileObject, OpenAIFilesPurpose
 from litellm.types.utils import ExtractedFileData, SpecialEnums
 

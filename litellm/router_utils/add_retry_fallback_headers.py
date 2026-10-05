@@ -6,6 +6,13 @@ from typing import Any, Final, TypedDict, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.hidden_params import (
+    HIDDEN_PARAMS_ATTR as _HIDDEN_PARAMS_ATTR,
+)
+from litellm.litellm_core_utils.hidden_params import (
+    set_hidden_params,
+)
+
 
 class FallbackErrorInfo(TypedDict):
     message: str
@@ -14,7 +21,6 @@ class FallbackErrorInfo(TypedDict):
     code: str | None
 
 
-_HIDDEN_PARAMS_ATTR: Final = "_hidden_params"
 _EMPTY_OBJECT_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
 _ROUTING_HEADER_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _COMPLEXITY_ROUTER_HEADER_PREFIX: Final = "x-litellm-complexity-router-"
@@ -204,29 +210,6 @@ def get_hidden_params_dict(
 
     hidden_params = _normalize_hidden_params(cast(object, getattr(response, "_hidden_params", None)))
     return hidden_params
-
-
-def get_hidden_params(obj: object) -> dict[str, object] | None:
-    hidden_params: Final = (
-        obj.get(_HIDDEN_PARAMS_ATTR) if isinstance(obj, dict) else getattr(obj, _HIDDEN_PARAMS_ATTR, None)
-    )
-    return hidden_params if isinstance(hidden_params, dict) else None
-
-
-def set_hidden_params(obj: object, hidden_params: dict[str, object]) -> None:
-    if isinstance(obj, dict):
-        obj[_HIDDEN_PARAMS_ATTR] = hidden_params
-    else:
-        setattr(obj, _HIDDEN_PARAMS_ATTR, hidden_params)
-
-
-def get_or_create_hidden_params(obj: object) -> dict[str, object]:
-    hidden_params: Final = get_hidden_params(obj)
-    if hidden_params is not None:
-        return hidden_params
-    created_hidden_params: Final[dict[str, object]] = {}
-    set_hidden_params(obj, created_hidden_params)
-    return created_hidden_params
 
 
 def _write_hidden_params(response: object, hidden_params: dict[str, object]) -> None:

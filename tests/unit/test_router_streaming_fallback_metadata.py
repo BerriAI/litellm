@@ -8,6 +8,7 @@ import litellm
 from litellm.proxy.proxy_server import _should_include_fallback_errors
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.types.llms.base import HiddenParams
 
 
 def test_apply_fallback_hidden_params_copies_from_fallback_response():
@@ -80,6 +81,33 @@ def test_apply_fallback_hidden_params_updates_plain_duck_chunk():
 
     assert chunk._hidden_params["api_base"] == "https://fallback.example"
     assert chunk._hidden_params["model_id"] == "chunk-model-id"
+    assert chunk._hidden_params["additional_headers"] == {
+        "x-existing-chunk-header": "keep",
+        "x-litellm-attempted-fallbacks": 1,
+    }
+
+
+def test_apply_fallback_hidden_params_normalizes_hidden_params_on_plain_duck_chunk():
+    class PlainChunk:
+        def __init__(self) -> None:
+            self._hidden_params = HiddenParams(
+                api_base="https://original.example",
+                model_id="original-model-id",
+                additional_headers={"x-existing-chunk-header": "keep"},
+            )
+
+    chunk: Final = PlainChunk()
+    Router._apply_fallback_hidden_params_to_item(
+        fallback_item=chunk,
+        prepared_fallback_hidden_params=(
+            {"api_base": "https://fallback.example", "model_id": "fallback-model-id"},
+            {"x-litellm-attempted-fallbacks": 1},
+        ),
+    )
+
+    assert isinstance(chunk._hidden_params, dict)
+    assert chunk._hidden_params["api_base"] == "https://fallback.example"
+    assert chunk._hidden_params["model_id"] == "fallback-model-id"
     assert chunk._hidden_params["additional_headers"] == {
         "x-existing-chunk-header": "keep",
         "x-litellm-attempted-fallbacks": 1,
