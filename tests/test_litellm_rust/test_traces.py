@@ -4,13 +4,15 @@ import json
 import math
 import re
 import time
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
+from contextlib import closing
 from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
 from typing import Final
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -19,16 +21,21 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from litellm.constants import OTLP_MAX_ATTRIBUTE_VALUE_BYTES
 from litellm.rust_bridge._native import NativeTraceConfig, NativeTraceStorage
 from litellm.rust_bridge.trace.generated.models import ActivityAvailability, LensAccessParams, TraceQueryHelp
-from litellm.rust_bridge.trace.generated.types import TraceScope
+from litellm.rust_bridge.trace.generated.types import Trace, TraceScope
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig, span_rows
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
 from litellm.tracing.types import SpendLogRecord
 from scripts.seed_tracing_fixtures import (
     TRACE,
     TRACE_FIXTURES,
+    Copies,
     FixtureReplay,
+    bulk_span_rows,
+    copied_trace_id,
+    copy_clickhouse,
     fixture_capture,
     fixture_replays,
+    long_sessions,
     rebase_spend,
     response_pattern,
     spend_fixtures,
@@ -160,13 +167,18 @@ async def test_from_env_reads_with_clickhouse_url(
 @pytest.mark.asyncio
 async def test_schema_setup_uses_configured_retention(recording_server: RecordingServer) -> None:
     recording_server.expected_requests = None
+    recording_server.default_response = ResponseSpec(body=b"")
     storage: Final = _native_storage("trace_test", recording_server.base_url, 7)
     await storage.ensure_schema()
     ttl_statements: Final = tuple(
         request.raw_body for request in recording_server.requests if b"MODIFY TTL" in request.raw_body
     )
-    assert len(ttl_statements) == 3
     assert all(b"INTERVAL 7 DAY" in statement for statement in ttl_statements)
+    assert tuple(request.raw_body.strip() for request in recording_server.requests[-3:]) == (
+        b"ALTER TABLE `trace_test`.otel_traces MODIFY TTL toDateTime(Timestamp) + INTERVAL 7 DAY",
+        b"ALTER TABLE `trace_test`.agent_traces_by_key MODIFY TTL toDateTime(StartTs) + INTERVAL 7 DAY",
+        b"ALTER TABLE `trace_test`.spend_logs MODIFY TTL toDateTime(start_time) + INTERVAL 7 DAY",
+    )
 
 
 @pytest.mark.asyncio
@@ -174,7 +186,7 @@ async def test_schema_setup_uses_writer_credentials_and_rejects_failed_statement
     recording_server: RecordingServer,
 ) -> None:
     recording_server.expected_requests = 2
-    recording_server.enqueue(ResponseSpec(body=""))
+    recording_server.enqueue(ResponseSpec(body=b""))
     recording_server.enqueue(ResponseSpec(status=403, body="denied"))
     writer_url: Final = recording_server.base_url.replace("http://", "http://writer:p%40ss%2Fword%25@")
     storage: Final = _native_storage("trace_test", writer_url + "?database=wrong&readonly=1", 7)
@@ -485,19 +497,15 @@ class SeededTraceAPI:
 @pytest.fixture
 def seeded_trace_api(clickhouse_url: str) -> Iterator[SeededTraceAPI]:
     from scripts.seed_tracing_fixtures import (
-        SPEND_FIXTURE,
-        SPEND_ROWS,
         TRACE_FIXTURES,
         fixture_replays,
         rebase_spend,
     )
 
-    spends: Final = SPEND_ROWS.validate_python(
-        tuple(json.loads(line) for line in SPEND_FIXTURE.read_text().splitlines())
-    )
+    spends: Final = dict(spend_fixtures())["openai_agents_swarm"]
     pattern: Final = re.compile("|".join(re.escape(row["response_id"]) for row in spends))
     replays: Final = fixture_replays(TRACE_FIXTURES, time.time_ns() // 1_000_000, "query-api", pattern)
-    swarm: Final = next(replay for replay in replays if replay.name == "deeplite_swarm")
+    swarm: Final = next(replay for replay in replays if replay.name == "openai_agents_swarm")
     rebased: Final = rebase_spend(spends, swarm.offset_ms, swarm.namespace, pattern)
     stamped: Final[tuple[SpendLogRecord, ...]] = tuple(
         {**row, "team_id": "team-a", "api_key": "fixture-key", "user": "fixture-user"} for row in rebased
@@ -507,7 +515,7 @@ def seeded_trace_api(clickhouse_url: str) -> Iterator[SeededTraceAPI]:
 
 def _fixture_trace_api(
     clickhouse_url: str, replays: tuple[FixtureReplay, ...], stamped: tuple[SpendLogRecord, ...]
-) -> Iterator[SeededTraceAPI]:
+) -> Generator[SeededTraceAPI]:
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
@@ -537,12 +545,11 @@ def test_fixture_backed_help_examples_execute_through_query_api(seeded_trace_api
     assert {table.name for table in api.help.tables} == {"otel_traces", "spend_logs", "agent_traces_by_key"}
     assert api.help.metadata.error is None
     assert api.help.metadata.sampled_rows == len(api.spends)
-    assert any(field.path == ("synthetic_spend",) for field in api.help.metadata.fields)
+    assert any(field.path == ("fixture_capture", "name") for field in api.help.metadata.fields)
     for example in api.help.examples:
         api.query_example(example.name)
     records: Final = api.query_example("Recent spend records")
     assert {str(row["request_id"]) for row in records} == {row["request_id"] for row in api.spends}
-    assert all(bool(row["synthetic_spend"]) for row in records)
     total: Final = sum(row["spend"] or 0 for row in api.spends)
     recorded: Final = api.query_example("Recorded spend by trace")
     assert len(recorded) == 1
@@ -600,27 +607,37 @@ def test_query_correlation_requires_key_or_user_ownership_within_a_team(seeded_t
     assert all(row["request_id"] != unrelated["request_id"] for row in matches)
 
 
-@pytest.fixture(scope="module")
-def captured_trace_api() -> Iterator[SeededTraceAPI]:
+def _captured_replays(
+    namespace: str,
+) -> tuple[tuple[FixtureReplay, ...], tuple[tuple[str, tuple[SpendLogRecord, ...]], ...]]:
     captures: Final = spend_fixtures()
-    originals: Final = tuple(chain.from_iterable(rows for _, rows in captures))
-    pattern: Final = response_pattern(originals)
-    replays: Final = fixture_replays(TRACE_FIXTURES, time.time_ns() // 1_000_000, "captured-api", pattern)
+    pattern: Final = response_pattern(tuple(chain.from_iterable(rows for _, rows in captures)))
+    replays: Final = fixture_replays(TRACE_FIXTURES, time.time_ns() // 1_000_000, namespace, pattern)
     by_name: Final = MappingProxyType(dict(captures))
-    paired: Final = tuple(
-        rebase_spend(by_name[replay.name], replay.offset_ms, replay.namespace, pattern)
+    return replays, tuple(
+        (
+            replay.name,
+            tuple(
+                _stamp(row) for row in rebase_spend(by_name[replay.name], replay.offset_ms, replay.namespace, pattern)
+            ),
+        )
         for replay in replays
         if replay.name in by_name
     )
-    stamped: Final[tuple[SpendLogRecord, ...]] = tuple(
-        {**row, "team_id": "team-a", "api_key": "fixture-key", "user": "fixture-user"}
-        for row in chain.from_iterable(paired)
-    )
+
+
+def _stamp(row: SpendLogRecord) -> SpendLogRecord:
+    return {**row, "team_id": "team-a", "api_key": "fixture-key", "user": "fixture-user"}
+
+
+@pytest.fixture(scope="module")
+def captured_trace_api() -> Iterator[SeededTraceAPI]:
+    replays, paired = _captured_replays("captured-api")
     with clickhouse_service() as url:
-        yield from _fixture_trace_api(url, replays, stamped)
+        yield from _fixture_trace_api(url, replays, tuple(chain.from_iterable(rows for _, rows in paired)))
 
 
-@pytest.mark.parametrize("name", tuple(name for name, _ in spend_fixtures() if name != "deeplite_swarm"))
+@pytest.mark.parametrize("name", tuple(name for name, _ in spend_fixtures()))
 def test_captured_sdk_cost_survives_seeding_and_is_queryable(name: str, captured_trace_api: SeededTraceAPI) -> None:
     api: Final = captured_trace_api
     rows: Final = tuple(row for row in api.spends if fixture_capture("", row).name == name)
@@ -631,7 +648,7 @@ def test_captured_sdk_cost_survives_seeding_and_is_queryable(name: str, captured
     detail: Final = TRACE.validate_json(response.content)
     original: Final = span_rows((TRACE_FIXTURES / f"{name}.json").read_bytes(), "application/json")
     assert detail["summary"]["span_count"] == len(original)
-    if capture.spend_linked:
+    if capture.spend_linked and capture.spend_complete:
         assert detail["summary"]["spend"] is not None
         assert math.isclose(detail["summary"]["spend"], sum(row["spend"] or 0 for row in rows))
     else:
@@ -649,3 +666,64 @@ def test_captured_sdk_cost_survives_seeding_and_is_queryable(name: str, captured
     assert math.isclose(sum(row.spend for row in records), sum(row["spend"] or 0 for row in rows))
     assert sum(row.prompt_tokens for row in records) == sum(row["prompt_tokens"] for row in rows)
     assert sum(row.completion_tokens for row in records) == sum(row["completion_tokens"] for row in rows)
+
+
+def test_server_side_copies_keep_every_capture_linked_to_its_spend() -> None:
+    replays, paired = _captured_replays("copied-api")
+    copies: Final = Copies(
+        trace_ids=tuple(sorted(frozenset(str(span["TraceId"]) for span in bulk_span_rows(replays, Tenant("", ""))))),
+        request_ids=tuple(row["request_id"] for _, rows in paired for row in rows),
+        numbers=range(1, 3),
+        step_ms=60_000,
+        source="seed-copied-api-",
+        target="seed-copied-api-c",
+    )
+    (session,) = long_sessions(replays, paired, "seed-copied-api-", "seed-copied-api-c", (3,))
+    session_spend: Final = sum(row["spend"] or 0 for row in dict(paired)["openai_agents_swarm"])
+    session_spans: Final = len(
+        span_rows((TRACE_FIXTURES / "openai_agents_swarm.json").read_bytes(), "application/json")
+    )
+    with (
+        clickhouse_service() as url,
+        closing(_fixture_trace_api(url, replays, tuple(chain.from_iterable(rows for _, rows in paired)))) as seeded,
+    ):
+        api: Final = next(seeded)
+        assert api.client.portal is not None
+        for plan in (copies, session):
+            api.client.portal.call(_copy_clickhouse, url, plan)
+        for name, rows in paired:
+            _assert_capture(api, name, rows, fixture_capture(name, rows[0]).trace_id)
+            _assert_capture(api, name, rows, copied_trace_id(fixture_capture(name, rows[0]).trace_id, "2"))
+        trace: Final = _trace(api, copied_trace_id(session.trace_ids[0], session.session))
+        assert trace["summary"]["span_count"] == 1 + 3 * (session_spans - 1)
+        (root,) = (span for span in trace["spans"] if not span["parent_span_id"])
+        assert {span["parent_span_id"] for span in trace["spans"] if span["parent_span_id"]} <= {
+            span["span_id"] for span in trace["spans"]
+        }
+        assert root["start_offset_ms"] == min(span["start_offset_ms"] for span in trace["spans"])
+        assert root["start_offset_ms"] + root["duration_ms"] >= max(
+            span["start_offset_ms"] + span["duration_ms"] for span in trace["spans"]
+        )
+        assert trace["summary"]["spend"] == pytest.approx(3 * session_spend)
+
+
+def _trace(api: SeededTraceAPI, trace_id: str) -> Trace:
+    response: Final = api.client.get(f"/v1/traces/{trace_id}")
+    assert response.status_code == 200, response.text
+    return TRACE.validate_json(response.content)
+
+
+def _assert_capture(api: SeededTraceAPI, name: str, rows: tuple[SpendLogRecord, ...], trace_id: str) -> None:
+    capture: Final = fixture_capture(name, rows[0])
+    summary: Final = _trace(api, trace_id)["summary"]
+    assert summary["span_count"] == len(span_rows((TRACE_FIXTURES / f"{name}.json").read_bytes(), "application/json"))
+    assert summary["spend"] == (
+        pytest.approx(sum(row["spend"] or 0 for row in rows))
+        if capture.spend_linked and capture.spend_complete
+        else None
+    )
+
+
+async def _copy_clickhouse(url: str, copies: Copies) -> None:
+    async with httpx.AsyncClient(base_url=url, params={"database": "trace_test"}) as client:
+        await copy_clickhouse(client, "trace_test", copies)

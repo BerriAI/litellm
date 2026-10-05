@@ -3,6 +3,7 @@ import os
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
@@ -2964,6 +2965,32 @@ class TestPostgresStatementTimeoutOptions:
 
         assert _pg_options_with_timeouts(existing, statement_timeout, lock_timeout) == expected
 
+    @pytest.mark.parametrize(
+        "existing, idle_timeout, expected",
+        [
+            ("", 30, "-c statement_timeout=60000 -c lock_timeout=15000 -c idle_in_transaction_session_timeout=30000"),
+            ("", None, "-c statement_timeout=60000 -c lock_timeout=15000"),
+            (
+                "-c idle_in_transaction_session_timeout=5000",
+                30,
+                "-c idle_in_transaction_session_timeout=5000 -c statement_timeout=60000 -c lock_timeout=15000",
+            ),
+        ],
+        ids=["idle_set", "idle_unset", "pinned_idle_wins"],
+    )
+    def test_pg_options_with_idle_in_transaction_timeout(
+        self,
+        existing: str,
+        idle_timeout: int | None,
+        expected: str,
+    ) -> None:
+        """A transaction that opened and then stalled holds its connection and its
+        locks for as long as the client stays silent; ``idle_in_transaction_session_timeout``
+        is the only server-side bound on that, so it rides the same ``options`` string."""
+        from litellm.proxy.proxy_cli import _pg_options_with_timeouts
+
+        assert _pg_options_with_timeouts(existing, 60, 15, idle_timeout) == expected
+
     def test_timeouts_reach_the_database_url_from_general_settings(self, tmp_path):
         """The whole point of the setting: it has to land on DATABASE_URL."""
         import yaml
@@ -2976,6 +3003,7 @@ class TestPostgresStatementTimeoutOptions:
                     "general_settings": {
                         "database_statement_timeout": 60,
                         "database_lock_timeout": 15,
+                        "database_idle_in_transaction_session_timeout": 30,
                     },
                 }
             )
@@ -2986,6 +3014,7 @@ class TestPostgresStatementTimeoutOptions:
         options = urlparse.parse_qs(urlparse.urlparse(modified_url).query)["options"][0]
         assert "-c statement_timeout=60000" in options
         assert "-c lock_timeout=15000" in options
+        assert "-c idle_in_transaction_session_timeout=30000" in options
 
     def test_no_options_param_when_unset(self, tmp_path):
         """Unset must mean today's behavior, not an empty options string."""
@@ -3066,6 +3095,7 @@ def _run_server_and_capture_urls(
     database_url: str = "postgresql://t:t@localhost:5432/t",
     direct_url: str | None = None,
     read_replica_url: str | None = None,
+    extra_args: tuple[str, ...] = (),
 ) -> dict:
     loaded_config = yaml.safe_load(Path(config_path).read_text())
     mock_proxy_config = MagicMock()
@@ -3098,7 +3128,7 @@ def _run_server_and_capture_urls(
         patch("litellm.proxy.db.check_migration.check_prisma_schema_diff"),
     ):
         run_server.main(
-            ["--config", config_path, "--local", "--skip_server_startup"],
+            ["--config", config_path, "--local", "--skip_server_startup", *extra_args],
             standalone_mode=False,
         )
         return {k: os.environ[k] for k in _CAPTURED_DB_ENV_VARS if k in os.environ}
@@ -3171,6 +3201,47 @@ class TestReadReplicaConnectionParams:
         query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
         assert query["connection_limit"] == ["50"]
         assert query["pool_timeout"] == ["20"]
+
+    def test_connection_budget_line_counts_the_limits_the_final_urls_carry(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        import yaml
+
+        config_path: Final = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 3}})
+        )
+
+        _run_server_and_capture_urls(
+            str(config_path),
+            read_replica_url="postgresql://t:t@reader:5432/t?connection_limit=50",
+        )
+
+        assert (
+            "1 worker(s) x (writer connection_limit 3 + reader connection_limit 50) = up to 53 connections"
+            in capsys.readouterr().out
+        )
+
+    def test_connection_budget_line_counts_one_worker_under_hypercorn(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        import yaml
+
+        config_path: Final = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 3}})
+        )
+
+        _run_server_and_capture_urls(
+            str(config_path),
+            extra_args=("--run_hypercorn", "--num_workers", "4"),
+        )
+
+        assert "1 worker(s) x writer connection_limit 3 = up to 3 connections" in capsys.readouterr().out
 
     def test_extra_connection_params_never_carry_a_schema_override_to_the_reader(self, tmp_path):
         """database_extra_connection_params is an untyped passthrough, so it can carry a
