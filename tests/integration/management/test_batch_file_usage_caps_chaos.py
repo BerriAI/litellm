@@ -2,7 +2,7 @@ import asyncio
 import re
 import signal
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Coroutine, Iterator, Mapping
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -27,6 +27,7 @@ from integration.management._batch_file_caps import (
     MINUTE_SECONDS,
     THIS_KEY,
     UPLOADS,
+    Timed,
     assert_download_limited,
     assert_upload_limited,
     batch_file,
@@ -56,13 +57,17 @@ STORED_CAP: Final = 2
 BURST: Final = 20
 DAY_ROOM_SECONDS: Final = 180
 MINUTE_ROOM_SECONDS: Final = 30
+BURST_ROOM_SECONDS: Final = 30
 RELOAD_SECONDS: Final = "3"
+BREAKER_RECOVERY_SECONDS: Final = "2"
+RECOVERY_SECONDS: Final = 60
 STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 
 
 @dataclass(frozen=True, slots=True)
 class Chaos:
     candidate: Gateway
+    sibling: Gateway
     provider: Wire
     redis: OwnedRedis
     config: Path
@@ -83,9 +88,13 @@ def chaos(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Chaos]:
             **provider_environment(files.url),
             "REDIS_HOST": redis.host,
             "REDIS_PORT": str(redis.port),
+            "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT": BREAKER_RECOVERY_SECONDS,
         }
-        with owned_proxy(gateway, directory, environment, config=config, workers=WORKERS) as candidate:
-            yield Chaos(candidate, files, redis, config, environment, directory)
+        with (
+            owned_proxy(gateway, directory, environment, config=config, workers=WORKERS) as candidate,
+            owned_proxy(gateway, directory, environment, config=config) as sibling,
+        ):
+            yield Chaos(candidate, sibling, files, redis, config, environment, directory)
 
 
 def _key(scenario: Scenario, **limits: JsonValue) -> str:
@@ -131,29 +140,54 @@ async def _download_burst(base_url: str, key: str, file_id: str, count: int) -> 
         )
 
 
-def _assert_exact_upload_cap(gateway: Gateway, provider_wire: Wire, key: str, cap: int, day_ends: float) -> None:
+@dataclass(frozen=True, slots=True)
+class Burst:
+    subject: str
+    window_ends: float
+    answers: tuple[Timed, ...]
+
+    def statuses(self) -> list[int]:
+        return _statuses(tuple(observed.response for observed in self.answers))
+
+    def refused(self) -> tuple[Timed, ...]:
+        return tuple(observed for observed in self.answers if observed.response.status_code == 429)
+
+    def allowed_exactly(self, count: int) -> bool:
+        in_window: Final = all(observed.after < self.window_ends for observed in self.answers)
+        return in_window and self.statuses() == [200] * count + [429] * (len(self.answers) - count)
+
+
+def _timed_burst(burst: Coroutine[object, None, tuple[httpx.Response, ...]]) -> tuple[Timed, ...]:
+    before: Final = time.time()
+    responses: Final = asyncio.run(burst)
+    after: Final = time.time()
+    return tuple(Timed(response, before, after) for response in responses)
+
+
+def _uploads_after_the_sibling_used_the_cap(chaos: Chaos, scenario: Scenario) -> Burst:
+    key: Final = _key(scenario, **{UPLOADS: UPLOAD_CAP})
     mark: Final = marker()
-    accepted: Final = tuple(upload(gateway, key, batch_file(mark, 1)) for _ in range(cap))
-    assert _statuses(accepted) == [200] * cap, [response.text for response in accepted]
-    assert_upload_limited(timed(partial(upload, gateway, key, batch_file(mark, 1))), day_ends, cap, THIS_KEY, IN_KEY)
-    assert len(uploads_seen(provider_wire.drain(), mark)) == cap
+    day_ends: Final = window_end(DAY_SECONDS, BURST_ROOM_SECONDS)
+    counted: Final = tuple(upload(chaos.sibling, key, batch_file(mark, 1)) for _ in range(UPLOAD_CAP))
+    assert _statuses(counted) == [200] * UPLOAD_CAP, [response.text for response in counted]
+    return Burst(mark, day_ends, _timed_burst(_upload_burst(str(chaos.candidate.client.base_url), key, mark, BURST)))
 
 
-def _assert_exact_download_cap(gateway: Gateway, provider_wire: Wire, key: str, cap: int, minute_ends: float) -> None:
+def _downloads_after_the_sibling_used_the_cap(chaos: Chaos, scenario: Scenario) -> Burst:
+    key: Final = _key(scenario, **{DOWNLOADS: DOWNLOAD_CAP})
     file_id: Final = f"file-{marker()}"
-    served: Final = tuple(download(gateway, key, file_id) for _ in range(cap))
-    assert _statuses(served) == [200] * cap, [response.text for response in served]
-    assert {response.content for response in served} == {file_content(file_id)}
-    assert_download_limited(
-        timed(partial(download, gateway, key, file_id)), minute_ends, file_id, cap, THIS_KEY, IN_KEY
+    minute_ends: Final = window_end(MINUTE_SECONDS, BURST_ROOM_SECONDS)
+    counted: Final = tuple(download(chaos.sibling, key, file_id) for _ in range(DOWNLOAD_CAP))
+    assert _statuses(counted) == [200] * DOWNLOAD_CAP, [response.text for response in counted]
+    assert {response.content for response in counted} == {file_content(file_id)}
+    return Burst(
+        file_id, minute_ends, _timed_burst(_download_burst(str(chaos.candidate.client.base_url), key, file_id, BURST))
     )
-    assert len(downloads_seen(provider_wire.drain(), file_id)) == cap
 
 
 async def test_uploads_fall_back_to_per_process_counts_while_redis_is_down(chaos: Chaos) -> None:
     with chaos.candidate.scenario() as scenario:
         key: Final = _key(scenario, **{UPLOADS: UPLOAD_CAP})
-        fresh: Final = _key(scenario, **{UPLOADS: UPLOAD_CAP})
         mark: Final = marker()
         day_ends: Final = window_end(DAY_SECONDS, DAY_ROOM_SECONDS)
         before: Final = tuple(upload(chaos.candidate, key, batch_file(mark, 1)) for _ in range(UPLOAD_CAP - 2))
@@ -169,13 +203,20 @@ async def test_uploads_fall_back_to_per_process_counts_while_redis_is_down(chaos
         accepted: Final = len(before) + statuses.count(200)
         assert UPLOAD_CAP <= accepted <= UPLOAD_CAP * WORKERS, statuses
         assert len(uploads_seen(chaos.provider.drain(), mark)) == accepted
-        _assert_exact_upload_cap(chaos.candidate, chaos.provider, fresh, UPLOAD_CAP, day_ends)
+        shared: Final = await asyncio.to_thread(
+            eventually,
+            partial(_uploads_after_the_sibling_used_the_cap, chaos, scenario),
+            lambda burst: burst.allowed_exactly(0),
+            RECOVERY_SECONDS,
+        )
+        for refusal in shared.refused():
+            assert_upload_limited(refusal, shared.window_ends, UPLOAD_CAP, THIS_KEY, IN_KEY)
+        assert len(uploads_seen(chaos.provider.drain(), shared.subject)) == UPLOAD_CAP
 
 
 async def test_downloads_keep_answering_while_redis_hangs(chaos: Chaos) -> None:
     with chaos.candidate.scenario() as scenario:
         key: Final = _key(scenario, **{DOWNLOADS: DOWNLOAD_CAP})
-        fresh: Final = _key(scenario, **{DOWNLOADS: DOWNLOAD_CAP})
         file_id: Final = f"file-{marker()}"
         minute_ends: Final = window_end(MINUTE_SECONDS, MINUTE_ROOM_SECONDS)
         chaos.redis.signal(signal.SIGSTOP)
@@ -196,9 +237,15 @@ async def test_downloads_keep_answering_while_redis_hangs(chaos: Chaos) -> None:
         assert set(statuses) <= {200, 429}, [response.text for response in during]
         assert DOWNLOAD_CAP <= statuses.count(200) <= DOWNLOAD_CAP * WORKERS, statuses
         assert len(downloads_seen(chaos.provider.drain(), file_id)) == statuses.count(200)
-        _assert_exact_download_cap(
-            chaos.candidate, chaos.provider, fresh, DOWNLOAD_CAP, window_end(MINUTE_SECONDS, MINUTE_ROOM_SECONDS)
+        shared: Final = await asyncio.to_thread(
+            eventually,
+            partial(_downloads_after_the_sibling_used_the_cap, chaos, scenario),
+            lambda burst: burst.allowed_exactly(0),
+            RECOVERY_SECONDS,
         )
+        for refusal in shared.refused():
+            assert_download_limited(refusal, shared.window_ends, shared.subject, DOWNLOAD_CAP, THIS_KEY, IN_KEY)
+        assert len(downloads_seen(chaos.provider.drain(), shared.subject)) == DOWNLOAD_CAP
 
 
 def _held_provider(release: Event, held: SimpleQueue[str]) -> Callable[[Request], Reply]:
@@ -269,8 +316,8 @@ def test_the_daily_count_survives_a_proxy_restart(chaos: Chaos) -> None:
     with chaos.candidate.scenario() as scenario:
         key: Final = _key(scenario, **{UPLOADS: RESTART_CAP})
         mark: Final = marker()
-        day_ends: Final = window_end(DAY_SECONDS, DAY_ROOM_SECONDS)
         with owned_proxy(chaos.candidate, chaos.directory, chaos.environment, config=chaos.config) as first:
+            day_ends: Final = window_end(DAY_SECONDS, DAY_ROOM_SECONDS)
             before: Final = tuple(upload(first, key, batch_file(mark, 1)) for _ in range(RESTART_CAP - 1))
             assert _statuses(before) == [200] * (RESTART_CAP - 1), [response.text for response in before]
         with owned_proxy(chaos.candidate, chaos.directory, chaos.environment, config=chaos.config) as second:
@@ -285,21 +332,33 @@ def _plain_key(gateway: Gateway) -> str:
     return string_value(gateway.post("/key/generate", {})["key"])
 
 
-def _stored_cap(gateway: Gateway, key: str) -> list[int]:
+def _download_statuses(gateway: Gateway, key: str) -> list[int]:
     file_id: Final = f"file-{marker()}"
     responses: Final = asyncio.run(_download_burst(str(gateway.client.base_url), key, file_id, BURST))
     return _statuses(responses)
 
 
-def _sequential_cap(gateway: Gateway, key: str, count: int) -> list[int]:
+def _downloads_in_one_minute(gateway: Gateway, key: str) -> Burst:
     file_id: Final = f"file-{marker()}"
-    return [download(gateway, key, file_id).status_code for _ in range(count)]
+    minute_ends: Final = window_end(MINUTE_SECONDS, BURST_ROOM_SECONDS)
+    return Burst(file_id, minute_ends, _timed_burst(_download_burst(str(gateway.client.base_url), key, file_id, BURST)))
+
+
+def _assert_stored_cap(burst: Burst) -> None:
+    assert burst.allowed_exactly(STORED_CAP), burst.statuses()
+    for refusal in burst.refused():
+        assert_download_limited(refusal, burst.window_ends, burst.subject, STORED_CAP, THIS_KEY, IN_GENERAL_SETTINGS)
+
+
+def _stored_cap_on_every_worker(gateway: Gateway, key: str) -> Burst:
+    return eventually(
+        partial(_downloads_in_one_minute, gateway, key), lambda burst: burst.allowed_exactly(STORED_CAP), seconds=30
+    )
 
 
 def test_a_download_cap_stored_through_the_config_api_reaches_every_worker_and_survives_a_restart(
     chaos: Chaos, tmp_path: Path
 ) -> None:
-    capped: Final = [200] * STORED_CAP + [429] * (BURST - STORED_CAP)
     with scratch_database() as database_url:
         environment: Final = {
             **chaos.environment,
@@ -317,7 +376,7 @@ def test_a_download_cap_stored_through_the_config_api_reaches_every_worker_and_s
         with boot(workers=WORKERS) as candidate:
             first: Final = _plain_key(candidate)
             second: Final = _plain_key(candidate)
-            assert _stored_cap(candidate, first) == [200] * BURST
+            assert _download_statuses(candidate, first) == [200] * BURST
             assert config_entry(candidate, DOWNLOADS)["field_value"] is None
             stored: Final = candidate.request(
                 "POST",
@@ -327,30 +386,16 @@ def test_a_download_cap_stored_through_the_config_api_reaches_every_worker_and_s
             assert stored.status_code == 200, stored.text
             entry: Final = config_entry(candidate, DOWNLOADS)
             assert (entry["field_value"], entry["stored_in_db"]) == (STORED_CAP, True), entry
-            eventually(partial(_stored_cap, candidate, first), lambda statuses: statuses == capped, seconds=30)
-            assert _stored_cap(candidate, second) == capped
-            minute_ends: Final = window_end(MINUTE_SECONDS, MINUTE_ROOM_SECONDS)
-            file_id: Final = f"file-{marker()}"
-            served: Final = tuple(download(candidate, second, file_id) for _ in range(STORED_CAP))
-            assert _statuses(served) == [200] * STORED_CAP, [response.text for response in served]
-            assert_download_limited(
-                timed(partial(download, candidate, second, file_id)),
-                minute_ends,
-                file_id,
-                STORED_CAP,
-                THIS_KEY,
-                IN_GENERAL_SETTINGS,
-            )
+            _assert_stored_cap(_stored_cap_on_every_worker(candidate, first))
+            _assert_stored_cap(_stored_cap_on_every_worker(candidate, second))
         with boot() as restarted:
-            assert _sequential_cap(restarted, first, STORED_CAP + 1) == [200] * STORED_CAP + [429]
+            _assert_stored_cap(_downloads_in_one_minute(restarted, first))
             assert config_entry(restarted, DOWNLOADS)["field_value"] == STORED_CAP
             removed: Final = restarted.request(
                 "POST", "/config/field/delete", {"field_name": DOWNLOADS, "config_type": "general_settings"}
             )
             assert removed.status_code == 200, removed.text
             eventually(
-                partial(_sequential_cap, restarted, second, STORED_CAP + 1),
-                lambda statuses: statuses == [200] * (STORED_CAP + 1),
-                seconds=30,
+                partial(_download_statuses, restarted, second), lambda statuses: statuses == [200] * BURST, seconds=30
             )
             assert config_entry(restarted, DOWNLOADS)["field_value"] is None
