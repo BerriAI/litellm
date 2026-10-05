@@ -4200,7 +4200,6 @@ dependencies = [
 name = "litellm-router"
 version = "0.1.0"
 dependencies = [
- "litellm-config",
  "litellm-core",
  "rstest",
  "serde",

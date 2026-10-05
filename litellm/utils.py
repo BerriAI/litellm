@@ -1662,8 +1662,8 @@ def post_call_processing(
         raise e
 
 
-def _require_routing_execution(kwargs: Mapping[str, object]) -> None:
-    if kwargs.get("router") is not None:
+def _require_routing_execution(call_type: str, kwargs: Mapping[str, object]) -> None:
+    if call_type in ("completion", "acompletion") and kwargs.get("router") is not None:
         raise NotImplementedError("routed execution is not implemented in the API scaffold")
 
 
@@ -1675,7 +1675,7 @@ def client(original_function):
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):
-        _require_routing_execution(kwargs)
+        _require_routing_execution(original_function.__name__, kwargs)
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         call_type = original_function.__name__
@@ -1971,7 +1971,7 @@ def client(original_function):
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):
-        _require_routing_execution(kwargs)
+        _require_routing_execution(original_function.__name__, kwargs)
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time: Final = datetime.datetime.now()
         result = None

@@ -11,10 +11,8 @@ use std::{
     sync::Arc,
 };
 
-use litellm_config::Model;
-
 use call::{Call, RoutingRequest};
-use config::RouterConfig;
+use config::{DeploymentConfig, RouterConfig};
 use deployment::CatalogEntry;
 pub use deployment::Deployment;
 pub use error::Error;
@@ -29,29 +27,17 @@ pub struct Router {
     closed: bool,
 }
 
-fn catalog(model_list: &[Model]) -> Arc<[CatalogEntry]> {
-    model_list
+fn catalog(deployments: &[DeploymentConfig]) -> Arc<[CatalogEntry]> {
+    deployments
         .iter()
         .enumerate()
-        .map(|(index, model)| CatalogEntry {
-            id: model
-                .model_info
-                .get("id")
-                .and_then(|value| value.as_str())
-                .map(str::to_owned)
+        .map(|(index, config)| CatalogEntry {
+            id: config
+                .deployment_id
+                .clone()
                 .unwrap_or_else(|| format!("deployment-{index}")),
-            model_name: model.model_name.clone(),
-            deployment: Deployment {
-                model: model.litellm_params.model.clone(),
-                api_key: model
-                    .litellm_params
-                    .api_key
-                    .as_ref()
-                    .map(|value| value.expose().to_string()),
-                api_base: model.litellm_params.api_base.clone(),
-                custom_llm_provider: model.litellm_params.custom_llm_provider.clone(),
-                ..Deployment::default()
-            },
+            model_name: config.model_name.clone(),
+            deployment: config.deployment.clone(),
         })
         .collect()
 }
@@ -72,7 +58,7 @@ impl Router {
     }
 
     pub fn new(config: RouterConfig) -> Result<Self, Error> {
-        let catalog = catalog(&config.model_list);
+        let catalog = catalog(&config.deployments);
         let mut ids = HashSet::new();
         for entry in catalog.iter() {
             if !ids.insert(&entry.id) {
@@ -85,16 +71,6 @@ impl Router {
             config: Arc::new(config),
             ..Self::from_catalog(catalog)
         })
-    }
-
-    pub fn from_model_list(model_list: &[Model]) -> Self {
-        Self {
-            config: Arc::new(RouterConfig {
-                model_list: model_list.to_vec(),
-                ..RouterConfig::default()
-            }),
-            ..Self::from_catalog(catalog(model_list))
-        }
     }
 
     pub fn get(&self, model_name: &str) -> Option<&Deployment> {

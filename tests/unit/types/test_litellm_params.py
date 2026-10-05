@@ -270,7 +270,7 @@ BEDROCK_BATCH_NAMES: Final = (
     "bedrock_tags",
 )
 
-ARTIFACT_NAMES: Final = ("self", "use_client", "model_config", "rust")
+ARTIFACT_NAMES: Final = ("self", "use_client", "model_config", "rust", "router")
 
 CALLBACK_VAR_NAMES: Final = tuple(StandardCallbackDynamicParams.__annotations__)
 

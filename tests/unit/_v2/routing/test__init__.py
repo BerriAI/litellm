@@ -70,3 +70,11 @@ def test_invalid_reconfiguration_keeps_the_original_snapshot(model_list: tuple[M
         routing.reconfigure(router, config=config)
     assert routing.snapshot(router) == before
     routing.close(router)
+
+
+def test_custom_selection_reports_the_unimplemented_policy(model_list: tuple[Mapping[str, JsonValue], ...]) -> None:
+    def select(context: routing.SelectionContext) -> str:
+        return context.candidates[0].deployment_id
+
+    with pytest.raises(NotImplementedError, match="custom selection"):
+        routing.create(model_list=model_list, selector=select)
