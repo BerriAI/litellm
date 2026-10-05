@@ -16,6 +16,7 @@ from integration._support.mcp import (
     Outcome,
     PeerKind,
     _outcome_from_rpc,
+    _parse_rpc_body,
     mcp_peer,
     official_client_outcomes,
     peer_of,
@@ -165,6 +166,25 @@ def test_standard_per_server_path_scopes_the_session_to_the_named_servers(gatewa
             f"{alias_a}-multiply",
             f"{alias_a}-fail",
         }, listed.tools
+        refused_b_response: Final = _streamable_rpc(
+            gateway, first_path, key, "tools/call", {"name": f"{alias_b}-add", "arguments": {"a": 20, "b": 22}}
+        )
+        assert refused_b_response.status_code == 200, refused_b_response.text
+        assert _parse_rpc_body(refused_b_response) == {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "content": [{"text": "Error: User not allowed to call this tool.", "type": "text"}],
+                "isError": True,
+            },
+        }, refused_b_response.text
+        assert _outcome_from_rpc(refused_b_response) == Outcome(
+            status=200,
+            error="Error: User not allowed to call this tool.",
+            text="Error: User not allowed to call this tool.",
+            raw=refused_b_response.text,
+        ), refused_b_response.text
+        assert tool_calls(peer_b.drain()) == ()
         called_response: Final = _streamable_rpc(
             gateway, first_path, key, "tools/call", {"name": f"{alias_a}-add", "arguments": {"a": 20, "b": 22}}
         )
@@ -203,6 +223,29 @@ def test_standard_per_server_path_scopes_the_session_to_the_named_servers(gatewa
         combined_called: Final = _outcome_from_rpc(combined_called_response)
         assert combined_called_response.status_code == 200, combined_called_response.text
         assert combined_called.ok and combined_called.text == "42", combined_called.raw
+        refused_c_response: Final = _streamable_rpc(
+            gateway,
+            combined_path,
+            key,
+            "tools/call",
+            {"name": f"{alias_c}-add", "arguments": {"a": 20, "b": 22}},
+        )
+        assert refused_c_response.status_code == 200, refused_c_response.text
+        assert _parse_rpc_body(refused_c_response) == {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "content": [{"text": "Error: User not allowed to call this tool.", "type": "text"}],
+                "isError": True,
+            },
+        }, refused_c_response.text
+        assert _outcome_from_rpc(refused_c_response) == Outcome(
+            status=200,
+            error="Error: User not allowed to call this tool.",
+            text="Error: User not allowed to call this tool.",
+            raw=refused_c_response.text,
+        ), refused_c_response.text
+        assert tool_calls(peer_c.drain()) == ()
         assert tool_calls(peer_a.drain()) == ()
         calls_b: Final = tool_calls(peer_b.drain())
         assert len(calls_b) == 1, calls_b

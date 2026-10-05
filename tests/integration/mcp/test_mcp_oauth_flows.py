@@ -1132,7 +1132,7 @@ def test_idp_jwks_server_error_answers_temporarily_unavailable(tmp_path: Path) -
 
 
 def test_standard_pattern_discovery_names_the_per_server_issuer_and_follows_forwarded_headers(
-    gateway: Gateway, idp_rig: _IdpRig
+    gateway: Gateway, idp_rig: _IdpRig, tmp_path: Path
 ) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "rt8" + uuid.uuid4().hex[:10]
@@ -1175,6 +1175,24 @@ def test_standard_pattern_discovery_names_the_per_server_issuer_and_follows_forw
             "registration_endpoint": f"{base}/{alias}/register",
         }
         assert _response_object(authorization) == expected_authorization, authorization.text
+        shared_base: Final = "http://127.0.0.1:4000"
+        assert base == shared_base, base
+        untrusted_headers: Final = {
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "evil.example",
+        }
+        untrusted_authorization: Final = gateway.client.get(
+            f"/.well-known/oauth-authorization-server/mcp/{alias}", headers=untrusted_headers
+        )
+        assert untrusted_authorization.status_code == 200, untrusted_authorization.text
+        assert _response_object(untrusted_authorization) == expected_authorization, untrusted_authorization.text
+        assert "evil.example" not in untrusted_authorization.text, untrusted_authorization.text
+        untrusted_protected: Final = gateway.client.get(
+            f"/.well-known/oauth-protected-resource/mcp/{alias}", headers=untrusted_headers
+        )
+        assert untrusted_protected.status_code == 200, untrusted_protected.text
+        assert _response_object(untrusted_protected) == expected_protected, untrusted_protected.text
+        assert "evil.example" not in untrusted_protected.text, untrusted_protected.text
         legacy_authorization: Final = gateway.client.get(f"/.well-known/oauth-authorization-server/{alias}")
         assert legacy_authorization.status_code == 200, legacy_authorization.text
         assert _response_object(legacy_authorization) == {**expected_authorization, "issuer": f"{base}/{alias}"}, (
@@ -1206,6 +1224,58 @@ def test_standard_pattern_discovery_names_the_per_server_issuer_and_follows_forw
         metadata: Final = gateway.client.get(urljoin(base + "/", metadata_ref.group(1)))
         assert metadata.status_code == 200, metadata.text
         assert _response_object(metadata) == expected_protected, metadata.text
+    with owned_proxy(
+        gateway,
+        tmp_path / "untrusted-forwarded",
+        {},
+        config=Path(__file__).resolve().parents[1] / "proxy_config.yaml",
+        remove_environment=("PROXY_BASE_URL",),
+        workers=2,
+    ) as untrusted_gateway:
+        with mcp_peer() as peer, untrusted_gateway.scenario() as scenario:
+            alias: Final = "rt8u" + uuid.uuid4().hex[:9]
+            register_mcp(
+                scenario,
+                peer,
+                alias,
+                auth_type="oauth2",
+                oauth2_flow="authorization_code",
+                credentials={
+                    "client_id": "rt8u-client",
+                    "client_secret": "rt8u-secret",
+                    "scopes": ["tools.call"],
+                },
+            )
+            untrusted_base: Final = _base(untrusted_gateway)
+            untrusted_headers: Final = {
+                "X-Forwarded-Host": "evil.example",
+            }
+            untrusted_authorization: Final = untrusted_gateway.client.get(
+                f"/.well-known/oauth-authorization-server/mcp/{alias}", headers=untrusted_headers
+            )
+            assert untrusted_authorization.status_code == 200, untrusted_authorization.text
+            assert _response_object(untrusted_authorization) == {
+                "issuer": f"{untrusted_base}/mcp/{alias}",
+                "authorization_endpoint": f"{untrusted_base}/{alias}/authorize",
+                "token_endpoint": f"{untrusted_base}/{alias}/token",
+                "response_types_supported": ["code"],
+                "scopes_supported": ["tools.call"],
+                "grant_types_supported": ["authorization_code", "refresh_token"],
+                "code_challenge_methods_supported": ["S256"],
+                "token_endpoint_auth_methods_supported": ["client_secret_post"],
+                "registration_endpoint": f"{untrusted_base}/{alias}/register",
+            }, untrusted_authorization.text
+            assert "evil.example" not in untrusted_authorization.text, untrusted_authorization.text
+            untrusted_protected: Final = untrusted_gateway.client.get(
+                f"/.well-known/oauth-protected-resource/mcp/{alias}", headers=untrusted_headers
+            )
+            assert untrusted_protected.status_code == 200, untrusted_protected.text
+            assert _response_object(untrusted_protected) == {
+                "authorization_servers": [f"{untrusted_base}/mcp"],
+                "resource": f"{untrusted_base}/mcp/{alias}",
+                "scopes_supported": ["tools.call"],
+            }, untrusted_protected.text
+            assert "evil.example" not in untrusted_protected.text, untrusted_protected.text
     with mcp_peer() as peer, idp_rig.gateway.scenario() as scenario:
         alias: Final = "rt8f" + uuid.uuid4().hex[:9]
         register_mcp(
