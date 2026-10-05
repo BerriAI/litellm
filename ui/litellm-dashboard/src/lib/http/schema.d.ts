@@ -47039,17 +47039,6 @@ export interface components {
             /** Sql */
             sql: string;
         };
-        /** TraceQueryStatistics */
-        TraceQueryStatistics: {
-            /** Bytes Read */
-            bytes_read: number | string;
-            /** Elapsed */
-            elapsed: number;
-            /** Rows Read */
-            rows_read: number | string;
-        } & {
-            [key: string]: unknown;
-        };
         /** TraceQueryTable */
         TraceQueryTable: {
             /** Columns */
@@ -47066,13 +47055,6 @@ export interface components {
             data: {
                 [key: string]: components["schemas"]["JsonValue"];
             }[];
-            /** Meta */
-            meta: components["schemas"]["TraceQueryColumn"][];
-            /** Rows */
-            rows: number | string;
-            statistics: components["schemas"]["TraceQueryStatistics"];
-        } & {
-            [key: string]: unknown;
         };
         /** TraceSummary */
         TraceSummary: {
