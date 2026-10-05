@@ -38274,7 +38274,7 @@ export interface components {
              * Role
              * @enum {string}
              */
-            role: "user" | "assistant";
+            role: "system" | "user" | "assistant";
         };
         /** ModelParams */
         ModelParams: {

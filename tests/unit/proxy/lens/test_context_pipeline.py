@@ -489,7 +489,7 @@ async def test_candidate_investigators_overlap_browse_reviews_and_keep_original_
 
 
 @pytest.mark.asyncio
-async def test_candidate_investigator_rejects_fabricated_original_quotes() -> None:
+async def test_candidate_investigator_rejects_fabricated_original_quotes_and_allows_withdrawal() -> None:
     run: Final = execution("run")
     workspace: Final = EvidenceWorkspace(
         sessions=(
@@ -504,6 +504,11 @@ async def test_candidate_investigator_rejects_fabricated_original_quotes() -> No
 
     async def model(request: ModelRequest) -> ModelResult:
         attempts.put(request.prompt)
+        if attempts.qsize() == 2:
+            assert request.messages[-1].role == "system"
+            assert "result.findings[0].evidence[0]" in request.messages[-1].content
+            assert "Every evidence quote must exactly match" in request.messages[-1].content
+            return ModelResult(content=AgentTurn[Findings](result=Findings()).model_dump_json(), cost=0)
         return ModelResult(
             content=AgentTurn[Findings](
                 result=Findings(
@@ -529,7 +534,7 @@ async def test_candidate_investigator_rejects_fabricated_original_quotes() -> No
         model,
     )
     assert result.findings == ()
-    assert "Every evidence quote must exactly match" in result.error
+    assert result.error == ""
     assert attempts.qsize() == 2
 
 

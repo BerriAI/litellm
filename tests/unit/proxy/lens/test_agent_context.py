@@ -61,7 +61,7 @@ async def test_repeated_compaction_preserves_unread_history_and_archived_initial
         purpose="extract",
         prompt="Review the complete evidence",
         messages=(
-            ModelMessage(role="user", content="Review the complete evidence"),
+            ModelMessage(role="system", content="Review the complete evidence"),
             previous,
             *(later if later_tool_result else ()),
         ),
@@ -69,12 +69,17 @@ async def test_repeated_compaction_preserves_unread_history_and_archived_initial
 
     async def model(checkpoint_request: ModelRequest) -> ModelResult:
         assert previous in checkpoint_request.messages
+        assert checkpoint_request.messages[0].role == "system"
+        assert checkpoint_request.messages[-1].role == "system"
+        assert "working_notes" in checkpoint_request.messages[-1].content
         return ModelResult(
             content=Checkpoint(working_notes="Continue investigating the recorded behavior").model_dump_json(),
             cost=0,
         )
 
     compacted: Final = await compact_context(request, model, 11 if later_tool_result else 10, None)
+    assert compacted[0] == request.messages[0]
+    assert compacted[1].role == "user"
     continuation: Final = Continuation.model_validate_json(compacted[1].content)
     assert continuation.resume_history_from_turn == 4
     assert continuation.initial_context_archived is True

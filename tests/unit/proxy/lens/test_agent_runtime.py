@@ -23,7 +23,16 @@ from litellm.proxy.lens.agent_workspace import (
     SessionContent,
 )
 from litellm.proxy.lens.analysis import AnalysisResponseError, Extraction, Observation
-from litellm.proxy.lens.models import Claim, Evidence, ModelMessage, ModelRequest, ModelResult, Record, TracePart
+from litellm.proxy.lens.models import (
+    Claim,
+    Evidence,
+    Finding,
+    ModelMessage,
+    ModelRequest,
+    ModelResult,
+    Record,
+    TracePart,
+)
 from litellm.proxy.lens.state import queue_job
 from tests.unit.proxy.lens.test_agent_workspace import execution
 from tests.unit.proxy.lens.test_state import NOW, lens
@@ -32,6 +41,7 @@ from tests.unit.proxy.lens.test_state import NOW, lens
 class InitialPrompt(Record):
     initial_evidence: tuple[TracePart, ...]
     supplied: str
+    existing_findings: tuple[Finding, ...] = ()
 
 
 class ToolReply(Record):
@@ -47,7 +57,6 @@ class CompactedPrompt(CheckpointPrompt):
     journal_turns: int
     resume_history_from_turn: int
     initial_context_archived: bool
-    continuation: str
 
 
 class PythonError(Record):
@@ -114,7 +123,9 @@ async def test_bare_final_response_is_repaired_with_the_complete_turn_schema_and
 async def test_agent_reads_other_sessions_and_retains_all_prior_evidence_between_turns() -> None:
     first: Final = execution("first")
     other: Final = execution("other")
-    root: Final = TracePart(execution_id=first.id, span_id="a", name="root", kind="agent", content="assigned session")
+    root: Final = TracePart(
+        execution_id=first.id, span_id="a", name="root", kind="agent", content="original root sentinel"
+    )
     nested: Final = TracePart(
         execution_id=other.id, span_id="c", parent_span_id="b", name="child", kind="agent", content="failure found here"
     )
@@ -143,7 +154,9 @@ async def test_agent_reads_other_sessions_and_retains_all_prior_evidence_between
         turn: Final = next(turns)
         initial: Final = InitialPrompt.model_validate_json(request.messages[1].content)
         assert initial.initial_evidence == (root,)
-        assert request.messages[0] == ModelMessage(role="user", content=request.prompt)
+        assert request.messages[0] == ModelMessage(role="system", content=request.prompt)
+        assert all(root.content not in message.content for message in request.messages if message.role == "system")
+        assert all(nested.content not in message.content for message in request.messages if message.role == "system")
         if turn == 0:
             assert len(request.messages) == 2
             requests.put(request)

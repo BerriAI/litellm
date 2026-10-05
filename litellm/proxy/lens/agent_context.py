@@ -70,7 +70,7 @@ async def compact_context(
     activity: ActivityTracker | None,
 ) -> tuple[ModelMessage, ...]:
     instruction: Final = ModelMessage(
-        role="user",
+        role="system",
         content=json.dumps(
             {
                 "task": (
@@ -100,15 +100,6 @@ async def compact_context(
                     "resume_history_from_turn": visible_journal(prefix),
                     "initial_context_archived": len(prefix) == 1
                     or any(journal_position(message).initial_context_archived for message in prefix),
-                    "continuation": (
-                        "Context was compacted. Resume review of archived turns from resume_history_from_turn; "
-                        "their tool results may not have been read. Use working notes to avoid repeating "
-                        "completed reads. History supports turn ranges "
-                        "and char_start/char_end over the serialized reply, so even one oversized result is "
-                        "readable in pieces. history with turn_end=0 lists turn character sizes. If "
-                        "initial_context_archived is true, retrieve include_initial=true to recover the "
-                        "original assignment. All original evidence also remains available through tools."
-                    ),
                 },
                 ensure_ascii=False,
             ),

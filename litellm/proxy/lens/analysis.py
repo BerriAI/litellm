@@ -192,13 +192,11 @@ async def structured_response_with_history(
         update=MappingProxyType(
             {
                 "messages": (
-                    *request.messages,
+                    *request.conversation(),
                     ModelMessage(role="assistant", content=response.content),
-                    ModelMessage(role="user", content=correction),
+                    ModelMessage(role="system", content=correction),
                 )
             }
-            if request.messages
-            else {"prompt": request.prompt + correction}
         )
     )
     repaired: Final = await model(repair)
