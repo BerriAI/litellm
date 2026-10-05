@@ -4,24 +4,24 @@ import json
 import os
 import threading
 import time
-from urllib.parse import parse_qs, urlparse
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlparse
 
 import httpx
-import litellm
 import pytest
 from click.testing import CliRunner
 
+import litellm
 import litellm.llms.xai.oauth as xai_oauth_module
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.llms.xai.oauth import (
     XAI_OAUTH_CLIENT_ID,
     XAI_OAUTH_SCOPE,
-    XAIOAuthError,
     XAIOAuthAuthenticator,
+    XAIOAuthError,
     XAIOAuthLoginRequiredError,
 )
-from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import get_optional_params, validate_environment
