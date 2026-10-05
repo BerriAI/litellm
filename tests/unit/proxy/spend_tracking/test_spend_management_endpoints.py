@@ -3705,8 +3705,18 @@ class TestSpendLogsPayload:
 
             await _wait_for_mock_call(mock_client)
 
-            kwargs = mock_client.call_args.kwargs
-            payload: SpendLogsPayload = kwargs["payload"]
+            # A stray spend-log insert from an unrelated request (e.g. a
+            # background ROI-estimator completion leaking into this worker)
+            # can land after this test's own insert, so pick the insert for
+            # THIS request instead of assuming call_args (the last call) is
+            # ours.
+            matching_payloads = [
+                call.kwargs["payload"]
+                for call in mock_client.call_args_list
+                if call.kwargs["payload"]["request_id"] == response.id
+            ]
+            assert matching_payloads, f"no spend log insert seen for {response.id}"
+            payload: SpendLogsPayload = matching_payloads[-1]
             expected_payload = SpendLogsPayload(
                 **{
                     "request_id": "chatcmpl-34df56d5-4807-45c1-bb99-61e52586b802",
