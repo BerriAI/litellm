@@ -1,4 +1,5 @@
 import os
+import uuid
 from contextlib import ExitStack
 from hashlib import sha256
 from typing import Final
@@ -7,11 +8,26 @@ import psycopg
 import pytest
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
 from tests.integration._support.client import Gateway, eventually, object_value, team_admin_permissions
 from tests.integration._support.database import read_rows
 from tests.integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
+
+
+class ScimNameResponse(BaseModel):
+    givenName: str | None = None
+    familyName: str | None = None
+    formatted: str | None = None
+    middleName: str | None = None
+    honorificPrefix: str | None = None
+    honorificSuffix: str | None = None
+
+
+class ScimUserResponse(BaseModel):
+    id: str
+    active: bool
+    name: ScimNameResponse | None = None
 
 
 def assert_serving(gateway: Gateway, model: str, key: str, status: int, error_type: str = "auth_error") -> None:
@@ -133,6 +149,254 @@ def test_scim_deactivation_blocks_null_and_false_keys_but_preserves_other_owners
             assert_serving(gateway, model, manual, 401)
             for token in (control, service_key):
                 assert_serving(gateway, model, token, 200)
+
+
+@pytest.mark.parametrize(
+    "deactivate_operations,reactivate_operations",
+    [
+        pytest.param(
+            [{"op": "replace", "value": {"active": False}}],
+            [{"op": "replace", "value": {"active": True}}],
+            id="okta_pathless",
+        ),
+        pytest.param(
+            [{"op": "Replace", "path": "active", "value": "False"}],
+            [{"op": "Replace", "path": "active", "value": "True"}],
+            id="entra_string_boolean",
+        ),
+    ],
+)
+def test_scim_idp_deactivation_spelling_blocks_and_restores_the_users_key(
+    gateway: Gateway,
+    peer: Gateway,
+    deactivate_operations: list[dict[str, JsonValue]],
+    reactivate_operations: list[dict[str, JsonValue]],
+) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user: Final = scenario.user(user_role="internal_user")
+        key: Final = scenario.key(user_id=user, models=[model])
+        for worker in (gateway, peer):
+            assert_serving(worker, model, key, 200)
+
+        deactivated: Final = gateway.request(
+            "PATCH",
+            f"/scim/v2/Users/{user}",
+            {
+                "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+                "Operations": deactivate_operations,
+            },
+            headers={"Content-Type": "application/scim+json"},
+        )
+        assert deactivated.status_code == 200, deactivated.text
+        deactivated_user: Final = ScimUserResponse.model_validate(deactivated.json())
+        assert deactivated_user.active is False and deactivated_user.id == user, deactivated.text
+        deactivated_readback: Final = ScimUserResponse.model_validate(gateway.get(f"/scim/v2/Users/{user}"))
+        assert deactivated_readback.active is False and deactivated_readback.id == user, deactivated.text
+        user_rows: Final = read_rows(
+            'SELECT metadata FROM "LiteLLM_UserTable" WHERE user_id = %s',
+            (user,),
+        )
+        user_metadata: Final = object_value(user_rows[0]["metadata"])
+        assert user_metadata.get("scim_active") is False and "active" not in user_metadata, user_metadata
+        key_rows: Final = read_rows(
+            'SELECT blocked, metadata FROM "LiteLLM_VerificationToken" WHERE token = %s',
+            (sha256(key.encode()).hexdigest(),),
+        )
+        assert key_rows[0]["blocked"] is True, key_rows
+        assert object_value(key_rows[0]["metadata"]).get("scim_blocked") is True, key_rows
+        for worker in (gateway, peer):
+            assert_serving(worker, model, key, 401)
+
+        reactivated: Final = gateway.request(
+            "PATCH",
+            f"/scim/v2/Users/{user}",
+            {
+                "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+                "Operations": reactivate_operations,
+            },
+            headers={"Content-Type": "application/scim+json"},
+        )
+        assert reactivated.status_code == 200, reactivated.text
+        reactivated_user: Final = ScimUserResponse.model_validate(reactivated.json())
+        assert reactivated_user.active is True and reactivated_user.id == user, reactivated.text
+        reactivated_readback: Final = ScimUserResponse.model_validate(gateway.get(f"/scim/v2/Users/{user}"))
+        assert reactivated_readback.active is True and reactivated_readback.id == user, reactivated.text
+        restored_key_rows: Final = read_rows(
+            'SELECT blocked, metadata FROM "LiteLLM_VerificationToken" WHERE token = %s',
+            (sha256(key.encode()).hexdigest(),),
+        )
+        assert restored_key_rows[0]["blocked"] is False, restored_key_rows
+        assert "scim_blocked" not in object_value(restored_key_rows[0]["metadata"]), restored_key_rows
+        for worker in (gateway, peer):
+            assert_serving(worker, model, key, 200)
+
+
+def test_scim_put_without_active_keeps_a_deactivated_user_blocked(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        user: Final = scenario.user(user_role="internal_user")
+        key: Final = scenario.key(user_id=user, models=[model])
+        resource: Final[dict[str, JsonValue]] = {
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+            "userName": user,
+            "name": {"givenName": "Inactive", "familyName": "User"},
+            "emails": [{"value": f"{user}@example.com", "primary": True, "type": "work"}],
+            "active": False,
+        }
+        deactivated: Final = gateway.request(
+            "PUT",
+            f"/scim/v2/Users/{user}",
+            resource,
+            headers={"Content-Type": "application/scim+json"},
+        )
+        assert deactivated.status_code == 200, deactivated.text
+        assert ScimUserResponse.model_validate(deactivated.json()).active is False, deactivated.text
+        assert ScimUserResponse.model_validate(gateway.get(f"/scim/v2/Users/{user}")).active is False, deactivated.text
+        blocked_key_rows: Final = read_rows(
+            'SELECT blocked, metadata FROM "LiteLLM_VerificationToken" WHERE token = %s',
+            (sha256(key.encode()).hexdigest(),),
+        )
+        assert blocked_key_rows[0]["blocked"] is True, blocked_key_rows
+        assert object_value(blocked_key_rows[0]["metadata"]).get("scim_blocked") is True, blocked_key_rows
+        assert_serving(gateway, model, key, 401)
+
+        without_active: Final[dict[str, JsonValue]] = {
+            field: value for field, value in resource.items() if field != "active"
+        }
+        without_active["name"] = {"givenName": "Inactive", "familyName": "Updated"}
+        updated: Final = gateway.request(
+            "PUT",
+            f"/scim/v2/Users/{user}",
+            without_active,
+            headers={"Content-Type": "application/scim+json"},
+        )
+        assert updated.status_code == 200, updated.text
+        updated_user: Final = ScimUserResponse.model_validate(updated.json())
+        assert updated_user.active is False and updated_user.name == ScimNameResponse(
+            givenName="Inactive",
+            familyName="Updated",
+        ), updated.text
+        updated_readback: Final = ScimUserResponse.model_validate(gateway.get(f"/scim/v2/Users/{user}"))
+        assert updated_readback.active is False and updated_readback.name == ScimNameResponse(
+            givenName="Inactive",
+            familyName="Updated",
+        ), updated.text
+        still_blocked_rows: Final = read_rows(
+            'SELECT blocked, metadata FROM "LiteLLM_VerificationToken" WHERE token = %s',
+            (sha256(key.encode()).hexdigest(),),
+        )
+        assert still_blocked_rows[0]["blocked"] is True, still_blocked_rows
+        assert object_value(still_blocked_rows[0]["metadata"]).get("scim_blocked") is True, still_blocked_rows
+        assert_serving(gateway, model, key, 401)
+
+
+def _expected_scim_write_denial(route: str, user_id: str) -> dict[str, JsonValue]:
+    masked_user_id: Final = f"{user_id[:6]}{'*' * (len(user_id) - 8)}{user_id[-2:]}"
+    return {
+        "error": {
+            "message": (
+                "Authentication Error, Only proxy admin can be used to generate, delete, update info for new "
+                f"keys/users/teams. Route={route}. Your role=internal_user. Your user_id={masked_user_id}"
+            ),
+            "type": "auth_error",
+            "param": "None",
+            "code": "401",
+        }
+    }
+
+
+def _delete_user_if_present(gateway: Gateway, user_id: str) -> None:
+    if read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (user_id,)):
+        response: Final = gateway.request("POST", "/user/delete", {"user_ids": [user_id]})
+        assert response.status_code == 200 and response.json() == 1, response.text
+    assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (user_id,)) == []
+
+
+@pytest.mark.parametrize("team_admin", [False, True], ids=["internal_user", "team_admin"])
+def test_non_admin_keys_cannot_write_scim_users_or_groups(gateway: Gateway, team_admin: bool) -> None:
+    with gateway.scenario() as scenario:
+        caller: Final = scenario.user(user_role="internal_user")
+        team: Final = scenario.team(
+            members_with_roles=[{"user_id": caller, "role": "admin"}] if team_admin else []
+        )
+        key: Final = scenario.key(user_id=caller, team_id=team if team_admin else None)
+        user_before: Final = read_rows(
+            'SELECT user_role, metadata, teams FROM "LiteLLM_UserTable" WHERE user_id = %s',
+            (caller,),
+        )
+        team_before: Final = read_rows(
+            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s',
+            (team,),
+        )
+        new_user: Final = f"scim-denied-{uuid.uuid4().hex}"
+        scenario.cleanups.callback(_delete_user_if_present, gateway, new_user)
+
+        created: Final = gateway.request(
+            "POST",
+            "/scim/v2/Users",
+            {
+                "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+                "userName": new_user,
+            },
+            key=key,
+            headers={"Content-Type": "application/scim+json"},
+        )
+        assert created.status_code == 401, created.text
+        assert object_value(created.json()) == _expected_scim_write_denial("/scim/v2/Users", caller), created.text
+
+        updated_user: Final = gateway.request(
+            "PATCH",
+            f"/scim/v2/Users/{caller}",
+            {
+                "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+                "Operations": [
+                    {"op": "replace", "path": "roles", "value": [{"value": "proxy_admin"}]},
+                    {"op": "replace", "path": "active", "value": False},
+                ],
+            },
+            key=key,
+            headers={"Content-Type": "application/scim+json"},
+        )
+        assert updated_user.status_code == 401, updated_user.text
+        assert (
+            object_value(updated_user.json())
+            == _expected_scim_write_denial(f"/scim/v2/Users/{caller}", caller)
+        ), updated_user.text
+
+        updated_team: Final = gateway.request(
+            "PATCH",
+            f"/scim/v2/Groups/{team}",
+            {
+                "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+                "Operations": [{"op": "add", "path": "members", "value": [{"value": caller}]}],
+            },
+            key=key,
+            headers={"Content-Type": "application/scim+json"},
+        )
+        assert updated_team.status_code == 401, updated_team.text
+        assert (
+            object_value(updated_team.json())
+            == _expected_scim_write_denial(f"/scim/v2/Groups/{team}", caller)
+        ), updated_team.text
+        assert read_rows(
+            'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s',
+            (new_user,),
+        ) == []
+        assert (
+            read_rows(
+                'SELECT user_role, metadata, teams FROM "LiteLLM_UserTable" WHERE user_id = %s',
+                (caller,),
+            )
+            == user_before
+        )
+        assert (
+            read_rows(
+                'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s',
+                (team,),
+            )
+            == team_before
+        )
 
 
 @pytest.mark.covers("mgmt.team.member_update.demoted_role_cannot_write")
