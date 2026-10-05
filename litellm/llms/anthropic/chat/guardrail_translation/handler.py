@@ -224,6 +224,11 @@ def _write_back_message_text(message: _WritableMessage, target: MessageTextTarge
 
 
 _TOOL_USE_INPUT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_RELEASED_TOOL_USE_STOP: Final = (
+    b"event: message_delta\n"
+    b'data: {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": null}, '
+    b'"usage": {"output_tokens": 0}}\n\n'
+)
 
 
 def _rewritten_tool_use_input(arguments: str) -> Mapping[str, object] | None:
@@ -1572,6 +1577,12 @@ class AnthropicMessagesHandler(BaseTranslation):
             stream_ended=stream_ended,
             tool_calls_in_flight=bool(tool_use_fingerprints) and not stream_ended,
         )
+
+    def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
+        released_key: Final = self.get_streaming_scan_key(responses_so_far)
+        if released_key is None or not released_key.tool_calls_in_flight:
+            return tuple(responses_so_far)
+        return (*responses_so_far, _RELEASED_TOOL_USE_STOP)
 
     @classmethod
     def _streamed_tool_use_fingerprints(cls, responses_so_far: Sequence[object]) -> tuple[str, ...]:

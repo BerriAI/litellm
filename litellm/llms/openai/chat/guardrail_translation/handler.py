@@ -17,7 +17,7 @@ This pattern can be replicated for other message formats (e.g., Anthropic).
 import json
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
@@ -54,6 +54,7 @@ from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Choices,
+    Delta,
     GenericGuardrailAPIInputs,
     ModelResponse,
     ModelResponseStream,
@@ -837,6 +838,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             tool_calls_in_flight=bool(tool_call_fingerprints) and not stream_ended,
         )
 
+    def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
+        released_key: Final = self.get_streaming_scan_key(responses_so_far)
+        if released_key is None or not released_key.tool_calls_in_flight:
+            return tuple(responses_so_far)
+        terminator: Final = ModelResponseStream(
+            choices=[
+                StreamingChoices(index=index, delta=Delta(), finish_reason="tool_calls")
+                for index in _choice_indices_with_tool_calls(responses_so_far)
+            ]
+        )
+        return (*responses_so_far, terminator)
+
     @staticmethod
     def _streamed_tool_call_fingerprints(responses_so_far: Sequence[object]) -> tuple[str, ...]:
         return tuple(
@@ -1386,6 +1399,20 @@ def _streamed_delta_tool_calls(delta: object) -> tuple[object, ...]:
     function_call: Final = stream_item_field(delta, "function_call")
     legacy: Final = () if function_call is None else (function_call,)
     return stream_item_items(delta, "tool_calls") + legacy
+
+
+def _released_choices(responses_so_far: Sequence[object]) -> Iterator[object]:
+    for chunk in responses_so_far:
+        yield from _stream_chunk_choices(chunk)
+
+
+def _choice_indices_with_tool_calls(responses_so_far: Sequence[object]) -> tuple[int, ...]:
+    indices: Final = (
+        index if isinstance(index := stream_item_field(choice, "index"), int) else 0
+        for choice in _released_choices(responses_so_far)
+        if _streamed_delta_tool_calls(stream_item_field(choice, "delta"))
+    )
+    return tuple(dict.fromkeys(indices))
 
 
 def _blocked_stream_identity(

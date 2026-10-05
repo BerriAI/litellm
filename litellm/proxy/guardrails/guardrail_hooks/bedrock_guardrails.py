@@ -10,6 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
+import contextlib
 import copy
 import json
 import re
@@ -2747,14 +2748,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 UnifiedLLMGuardrails,
             )
 
-            async for streamed_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_data=request_data,
-                guardrail_to_apply=self,
-                buffer_until_moderated_default=False,
-            ):
-                yield streamed_chunk
+            async with contextlib.aclosing(
+                UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=response,
+                    request_data=request_data,
+                    guardrail_to_apply=self,
+                    buffer_until_moderated_default=False,
+                )
+            ) as guarded:
+                async for streamed_chunk in guarded:
+                    yield streamed_chunk
             return
 
         # Responses-API events are neither chat-completions chunks nor raw
