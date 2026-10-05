@@ -7,11 +7,10 @@ import { ApiError } from "@/lib/http/client";
 
 import { renderWithProviders, testQueryClient } from "../../../../../tests/test-utils";
 import traceList from "../__fixtures__/trace_list.json";
-import { LensPreviewContext } from "../../ui/LensPreviewButton";
 import AgentTracesPage from "./AgentTracesPage";
 import { filterRuns } from "./runSearch/runQuery";
 import { AgentTracesSection, type TimeControls } from "./AgentTracesSection";
-import type { TracePage, TraceSummary } from "../types";
+import type { TraceFindingCount, TracePage, TraceSummary } from "../types";
 
 vi.mock("../../../networking", () => ({
   apiClient: { get: vi.fn(), post: vi.fn() },
@@ -38,18 +37,17 @@ const runs = (traceList as TracePage).data as TraceSummary[];
 const lastUrl = (onUrlUpdate: ReturnType<typeof vi.fn>) =>
   new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? ""));
 
-const renderSection = () =>
+const renderSection = (canViewFindings = true) =>
   renderWithProviders(
-    <LensPreviewContext.Provider value={{ target: document.body, open: vi.fn() }}>
-      <AgentTracesSection
-        accessToken="sk-test"
-        isActive
-        startTime="2026-09-29T00:00"
-        endTime="2026-09-30T00:00"
-        isCustomDate={false}
-        isLiveTail={false}
-      />
-    </LensPreviewContext.Provider>,
+    <AgentTracesSection
+      accessToken="sk-test"
+      isActive
+      startTime="2026-09-29T00:00"
+      endTime="2026-09-30T00:00"
+      isCustomDate={false}
+      isLiveTail={false}
+      canViewFindings={canViewFindings}
+    />,
   );
 
 // A UTC-pinned day around the fixture runs (2026-09-30 ~06:43 UTC), so they land in the same bucket in any timezone.
@@ -91,6 +89,10 @@ describe("AgentTracesSection", () => {
     testQueryClient.clear();
     vi.mocked(agentTraceListCall).mockReset();
     vi.mocked(apiClient.get).mockResolvedValue({ data: [] });
+    vi.mocked(apiClient.post).mockImplementation(async (_path, options) => {
+      const body = options?.body as { traces: { trace_id: string; trace_ref?: string }[] };
+      return body.traces.map((trace) => ({ ...trace, finding_count: null }));
+    });
   });
 
   it("loads the next page only once the list scrolls near its end, then stops at the last page", async () => {
@@ -180,7 +182,7 @@ describe("AgentTracesSection", () => {
 
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Tracing is not enabled");
-    expect(screen.getByRole("button", { name: "Preview sample" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
     expect(card).toHaveTextContent("type: clickhouse");
     expect(card).toHaveTextContent("url: os.environ/CLICKHOUSE_URL");
     expect(screen.getByRole("button", { name: "Check setup" })).toBeEnabled();
@@ -196,7 +198,7 @@ describe("AgentTracesSection", () => {
     const card = await screen.findByTestId("tracing-setup-card");
     expect(card).toHaveTextContent("Connect your agent");
     expect(card).toHaveTextContent("Waiting for your first trace");
-    expect(screen.getByRole("button", { name: "Preview sample" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Preview sample" })).not.toBeInTheDocument();
     expect(card).not.toHaveTextContent("store: clickhouse");
   });
 
@@ -299,7 +301,7 @@ describe("AgentTracesSection", () => {
     expect(card).toHaveTextContent("url: os.environ/CLICKHOUSE_URL");
   });
 
-  it("lists every run with its input, counts and failed column", async () => {
+  it("lists uninvestigated runs without presenting tool errors as failures", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     renderSection();
 
@@ -308,9 +310,71 @@ describe("AgentTracesSection", () => {
     const lead = rows.find((row) => row.textContent?.includes("Should we store OTEL agent spans"));
     expect(lead).toBeDefined();
     const failed = rows.find((row) => row.textContent?.includes("acme-404")) as HTMLElement;
-    expect(within(failed).getByLabelText("2 errors")).toBeInTheDocument();
+    expect(within(failed).queryByLabelText("2 errors")).not.toBeInTheDocument();
+    expect(await within(failed).findByTitle("No conclusive investigation for this trace")).toHaveTextContent("-");
+    expect(screen.getByRole("columnheader", { name: "Findings" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Failed" })).not.toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Cost" })).toBeInTheDocument();
     expect(within(failed).getByText("—")).toBeInTheDocument();
+  });
+
+  it("distinguishes uninvestigated traces, completed clean investigations, and findings", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({ data: runs, next_cursor: null });
+    vi.mocked(apiClient.post).mockResolvedValue(
+      runs.map((run, index) => ({
+        trace_id: run.trace_id,
+        trace_ref: run.trace_ref ?? "",
+        finding_count: [null, 0, 3][index],
+      })),
+    );
+    renderSection();
+    expect(await screen.findByTitle("No conclusive investigation for this trace")).toHaveTextContent("-");
+    expect(await screen.findByTitle("0 findings from completed investigations")).toHaveTextContent("0");
+    expect(await screen.findByTitle("3 findings from completed investigations")).toHaveTextContent("3");
+  });
+
+  it("keeps failure labels out of the run totals above the findings table", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({
+      data: [{ ...runs[0], status: "error", error_count: 8 }],
+      next_cursor: null,
+    });
+    renderSection();
+    expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
+    expect(screen.getByText(/1 run from/)).toBeVisible();
+    expect(screen.queryByText(/failed runs|with errors/)).not.toBeInTheDocument();
+  });
+
+  it("does not present a failed findings lookup as an uninvestigated or clean trace", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({ data: runs.slice(0, 1), next_cursor: null });
+    vi.mocked(apiClient.post).mockRejectedValue(new ApiError("Unavailable", 503, {}));
+    renderSection();
+    expect(await screen.findByTitle("Could not load findings")).toHaveTextContent("Unavailable");
+    expect(screen.queryByTitle("No conclusive investigation for this trace")).not.toBeInTheDocument();
+  });
+
+  it("keeps the column picker open when findings finish loading", async () => {
+    const user = userEvent.setup();
+    const pending = Promise.withResolvers<TraceFindingCount[]>();
+    vi.mocked(agentTraceListCall).mockResolvedValue({ data: runs.slice(0, 1), next_cursor: null });
+    vi.mocked(apiClient.post).mockReturnValue(pending.promise);
+    renderSection();
+    expect(await screen.findByTestId("agent-trace-row")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    expect(await screen.findByTestId("view-option-cost")).toBeVisible();
+    await act(async () => {
+      pending.resolve([{ trace_id: runs[0].trace_id, trace_ref: runs[0].trace_ref ?? "", finding_count: 1 }]);
+    });
+    expect(await screen.findByTitle("1 findings from completed investigations")).toBeVisible();
+    expect(screen.getByTestId("view-option-cost")).toBeVisible();
+  });
+
+  it("keeps traces available without requesting investigation data for users without access", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({ data: runs, next_cursor: null });
+    vi.mocked(apiClient.post).mockClear();
+    renderSection(false);
+    expect(await screen.findAllByTestId("agent-trace-row")).toHaveLength(runs.length);
+    expect(screen.queryByRole("columnheader", { name: "Findings" })).not.toBeInTheDocument();
+    expect(apiClient.post).not.toHaveBeenCalled();
   });
 
   it("shows the spend returned for a run", async () => {
@@ -520,7 +584,9 @@ describe("AgentTracesSection", () => {
     const user = userEvent.setup();
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     const onUrlUpdate = vi.fn();
-    const failed = filterRuns(runs, "status:error");
+    const mixed = runs.map((run, index) => (index === 1 ? { ...run, status: "error" as const } : run));
+    vi.mocked(agentTraceListCall).mockResolvedValue({ data: mixed, next_cursor: null });
+    const failed = filterRuns(mixed, "status:error");
     renderWithProviders(
       <AgentTracesSection
         accessToken="sk-test"

@@ -75,7 +75,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY, is_team_admin
+from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, is_team_admin
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
@@ -2515,6 +2515,19 @@ async def add_new_model(
             )
 
         ## Auth check
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            model_creation_disabled_for_internal_users,
+            sync_ui_settings_to_general_settings,
+        )
+
+        internal_user_creation: Final = user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+        if internal_user_creation:
+            await sync_ui_settings_to_general_settings(prisma_client, require_fresh=True)
+        if internal_user_creation and model_creation_disabled_for_internal_users(general_settings):
+            raise HTTPException(
+                status_code=403,
+                detail="Model creation is disabled for internal users by disable_model_add_for_internal_users.",
+            )
         write_authorization: Final = await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=model_params,
             user_api_key_dict=user_api_key_dict,
@@ -2591,7 +2604,9 @@ async def add_new_model(
                     ),
                 )
                 reload_outcome = await proxy_config.add_deployment(
-                    prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+                    prisma_client=prisma_client,
+                    proxy_logging_obj=proxy_logging_obj,
+                    ui_settings_already_synced=internal_user_creation,
                 )
                 # don't let failed slack alert block the /model/new response
                 _alerting: Final = general_settings.get("alerting", []) or []

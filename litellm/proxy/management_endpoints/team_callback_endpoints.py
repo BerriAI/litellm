@@ -44,7 +44,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_validated_callback_metadata,
     convert_key_logging_metadata_to_callback,
 )
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN, team_access_denied
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.team_endpoints import _refresh_cached_team
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
