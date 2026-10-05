@@ -103,6 +103,25 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         ),
     )
 
+    fire_and_forget: bool | None = Field(
+        default=None,
+        description=(
+            "Observe-only mode: the guardrail call runs in the background and the request never waits for it, so "
+            "BLOCKED and GUARDRAIL_INTERVENED answers are ignored. A dispatched call is recorded as success. "
+            "A stream sends one call when it closes, with whatever reached the client. The background call uses "
+            "timeout, or 30 seconds when unset. Defaults to false."
+        ),
+    )
+
+    fire_and_forget_max_inflight: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Maximum number of fire_and_forget calls in flight at once for this guardrail, per worker. Calls beyond it "
+            "are dropped and recorded as not_run. Defaults to 100."
+        ),
+    )
+
 
 class GenericGuardrailAPIConfigModel(
     GuardrailConfigModel[GenericGuardrailAPIOptionalParams],
