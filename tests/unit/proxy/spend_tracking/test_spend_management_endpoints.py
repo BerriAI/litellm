@@ -7178,8 +7178,38 @@ async def test_ui_view_spend_logs_grouped_exclusion_reaches_page_count_and_repre
     page_rows = [
         _session_page_row("sess-1", "2026-08-29 10:00:00"),
         _session_page_row("sess-2", "2026-08-29 09:00:00"),
+        _session_page_row("sess-3", "2026-08-29 08:00:00"),
     ]
-    mock_prisma = _session_grouped_mock_prisma(page_rows, 2, [_session_representative_row("req-1", "sess-1")])
+    session_aliases = {"sess-1": "noisy", "sess-2": "quiet", "sess-3": "quiet"}
+    representatives = []
+    for request_id, session_id in (("req-1", "sess-1"), ("req-2", "sess-2"), ("req-3", "sess-3")):
+        representative = _session_representative_row(request_id, session_id)
+        representative["metadata"] = {"user_api_key_alias": session_aliases[session_id]}
+        representatives.append(representative)
+
+    async def mock_query_raw(sql_query, *params):
+        excluded_alias_match = re.search(r"user_api_key_alias' IS DISTINCT FROM \$(\d+)", sql_query)
+        excluded_alias = params[int(excluded_alias_match.group(1)) - 1] if excluded_alias_match else None
+        visible_session_ids = {session_id for session_id, alias in session_aliases.items() if alias != excluded_alias}
+        if "COUNT(*) AS total_count" in sql_query:
+            return [{"total_count": len(visible_session_ids)}]
+        if "DISTINCT ON" in sql_query:
+            requested_sessions = set(params[-2])
+            requested_api_keys = set(params[-1])
+            return [
+                representative
+                for representative in representatives
+                if representative["session_id"] in visible_session_ids
+                and representative["session_id"] in requested_sessions
+                and representative["api_key"] in requested_api_keys
+            ]
+        if "COALESCE(SUM(spend)" in sql_query:
+            return []
+        return [row for row in page_rows if row["session_key"] in visible_session_ids]
+
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=mock_query_raw)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     monkeypatch.setattr(
         "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
@@ -7203,6 +7233,7 @@ async def test_ui_view_spend_logs_grouped_exclusion_reaches_page_count_and_repre
         )
         assert response.status_code == 200, response.text
         assert response.json()["total"] == 2
+        assert [row["request_id"] for row in response.json()["data"]] == ["req-2"]
         queries = [call.args for call in mock_prisma.db.query_raw.await_args_list]
         assert len(queries) >= 3
         for sql, *params in queries[:3]:

@@ -339,6 +339,40 @@ describe("RequestLogsPanel", () => {
       });
     });
 
+    it("drops the cursor and returns to the first page when the alias changes through URL navigation", async () => {
+      const firstPage = Array.from({ length: 50 }, (_, index) => logEntry({ request_id: `req-${index}` }));
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ page }) => ({
+        data: firstPage,
+        total: 80,
+        page: page ?? 1,
+        page_size: 50,
+        total_pages: 2,
+        next_session_cursor: "2026-07-07 09:50:13|key-1|sess-1",
+        has_more: true,
+      }));
+      const tree = (searchParams: string) => (
+        <NuqsTestingAdapter searchParams={searchParams} hasMemory>
+          <QueryClientProvider client={testQueryClient}>
+            <RequestLogsPanel {...defaultProps} />
+          </QueryClientProvider>
+        </NuqsTestingAdapter>
+      );
+      const view = render(tree(""));
+
+      await waitFor(() => expect(row("req-0")).not.toBeNull());
+      fireEvent.click(screen.getByTestId("pagination-next"));
+      await waitFor(() => expect(lastCall()?.page).toBe(2));
+
+      view.rerender(tree("exclude_key_alias=noisy"));
+
+      await waitFor(() => {
+        const call = lastCall();
+        expect(call?.page).toBe(1);
+        expect(call?.params?.exclude_key_alias).toBe("noisy");
+        expect(call?.params?.session_cursor).toBeUndefined();
+      });
+    });
+
     it("ignores another next click while the next page is still fetching", async () => {
       const firstPage = Array.from({ length: 50 }, (_, index) => logEntry({ request_id: `req-${index}` }));
       const firstResponse = {

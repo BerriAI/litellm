@@ -56,6 +56,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     { key_alias: parseAsString, exclude_key_alias: parseAsString },
     { history: "push" },
   );
+  const [observedAliasParams, setObservedAliasParams] = useState({ key_alias, exclude_key_alias });
   const columnFilters = useMemo<ColumnFiltersState>(() => {
     const aliasFilters: ColumnFiltersState = [];
     if (exclude_key_alias) {
@@ -70,6 +71,13 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     columnFiltersRef.current = columnFilters;
   }, [columnFilters]);
   const [sessionCursors, setSessionCursors] = useState<Record<number, string>>({});
+  const aliasParamsChanged =
+    observedAliasParams.key_alias !== key_alias || observedAliasParams.exclude_key_alias !== exclude_key_alias;
+  const effectivePagination = useMemo(
+    () => (aliasParamsChanged ? { ...pagination, pageIndex: 0 } : pagination),
+    [aliasParamsChanged, pagination],
+  );
+  const effectiveSessionCursors = aliasParamsChanged ? {} : sessionCursors;
 
   const [timeRange, setTimeRange] = useState<LogsTimeRange>(defaultLogsTimeRange);
   const { startTime, endTime, isCustomDate } = timeRange;
@@ -124,10 +132,10 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     excludeInternalHealthChecks,
     startTime,
     endTime,
-    pagination,
+    pagination: effectivePagination,
     isCustomDate,
     sorting,
-    sessionCursors,
+    sessionCursors: effectiveSessionCursors,
   });
 
   // Follow the table's own last fetch so a live-tail refresh carries the filter
@@ -192,7 +200,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const isDrawerOpen = displayLog !== null || displaySessionId !== null;
 
   const rows: LogEntry[] = filteredLogs.data;
-  const rowsThroughThisPage = pagination.pageIndex * pagination.pageSize + rows.length;
+  const rowsThroughThisPage = effectivePagination.pageIndex * effectivePagination.pageSize + rows.length;
   const isLastPage =
     filteredLogs.has_more === false || (filteredLogs.has_more === undefined && rows.length < pagination.pageSize);
   const rowCount = isLastPage ? rowsThroughThisPage : Math.max(filteredLogs.total, rowsThroughThisPage);
@@ -241,24 +249,37 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     [setAliasParams],
   );
 
-  const resetToFirstPage = useCallback(() => {
-    setSessionCursors({});
-    setPagination((previous) => ({ ...previous, pageIndex: 0 }));
-  }, []);
+  const resetToFirstPage = useCallback(
+    (nextAliasParams?: { key_alias: string | null; exclude_key_alias: string | null }) => {
+      if (nextAliasParams) {
+        setObservedAliasParams(nextAliasParams);
+      }
+      setSessionCursors({});
+      setPagination((previous) => ({ ...previous, pageIndex: 0 }));
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!aliasParamsChanged) return;
+    // Browser history changes arrive outside the table event handlers, so local cursor state must follow the URL.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    resetToFirstPage({ key_alias, exclude_key_alias });
+  }, [aliasParamsChanged, key_alias, exclude_key_alias, resetToFirstPage]);
 
   const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>(
     (updaterOrValue) => {
-      const requested = typeof updaterOrValue === "function" ? updaterOrValue(pagination) : updaterOrValue;
+      const requested = typeof updaterOrValue === "function" ? updaterOrValue(effectivePagination) : updaterOrValue;
       if (!usesSessionCursor) {
         setPagination(requested);
         return;
       }
-      if (requested.pageSize !== pagination.pageSize) {
+      if (requested.pageSize !== effectivePagination.pageSize) {
         setSessionCursors({});
         setPagination({ ...requested, pageIndex: 0 });
         return;
       }
-      if (requested.pageIndex !== pagination.pageIndex + 1) {
+      if (requested.pageIndex !== effectivePagination.pageIndex + 1) {
         setPagination(requested);
         return;
       }
@@ -267,7 +288,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
       setSessionCursors((previous) => ({ ...previous, [requested.pageIndex]: nextCursor }));
       setPagination(requested);
     },
-    [usesSessionCursor, pagination, filteredLogs.next_session_cursor, logsQuery.isPlaceholderData],
+    [usesSessionCursor, effectivePagination, filteredLogs.next_session_cursor, logsQuery.isPlaceholderData],
   );
 
   const handleExcludeInternalHealthChecksChange = useCallback(
@@ -345,7 +366,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
         rowCount={rowCount}
         isLoading={logsQuery.isLoading}
         isRefreshing={logsQuery.isFetching}
-        pagination={pagination}
+        pagination={effectivePagination}
         onPaginationChange={handlePaginationChange}
         sorting={sorting}
         onSortingChange={handleSortingChange}
@@ -363,7 +384,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
           <LogsToolbar>
             <LogsTimeRangePicker value={timeRange} onValueChange={handleTimeRangeChange} />
             <LogsToolbarSwitch label="Live Tail" checked={isLiveTail} onCheckedChange={setIsLiveTail} />
-            {isLiveTail && pagination.pageIndex === 0 && (
+            {isLiveTail && effectivePagination.pageIndex === 0 && (
               <span role="status" className="whitespace-nowrap text-xs text-muted-foreground">
                 Refreshing every 15s
               </span>
