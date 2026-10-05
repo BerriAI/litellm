@@ -342,7 +342,9 @@ class ServiceLogging(CustomLogger):
             # than at each call site: `redis_cache` hands this hook an exception
             # from ~16 places and a new one must not be able to leak by being
             # written without the redaction.
-            from litellm.caching.redis_cache import redact_redis_error  # noqa: PLC0415
+            from litellm.caching.redis_cache import (
+                redact_redis_error,  # noqa: PLC0415  # redis_cache imports this module; a module-scope import would be circular
+            )
 
             error_message = redact_redis_error(error) if isinstance(error, Exception) else error_message
 
