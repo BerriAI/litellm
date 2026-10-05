@@ -59,6 +59,10 @@ impl PythonCache {
         let await_result = self.asynchronous && !matches!(&call, CacheCall::ResolveKey { .. });
         let (method, result) = match call {
             CacheCall::ResolveKey { reply } => {
+                if let Some(explicit) = arguments.get_item("cache_key")? {
+                    self.pending = Some(Pending::ResolveKey(reply));
+                    return self.resume(py, Ok(explicit.unbind()));
+                }
                 self.pending = Some(Pending::ResolveKey(reply));
                 ("get_cache_key", None)
             }
