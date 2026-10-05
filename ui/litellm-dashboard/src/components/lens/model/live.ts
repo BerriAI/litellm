@@ -1,6 +1,6 @@
 import { durationText } from "./format";
 import { activeJob, isActive, readingStart } from "./status";
-import type { InFlight, Job, Review, ReviewVerdict, Settings } from "./types";
+import type { Activity, InFlight, Job, Review, ReviewVerdict, Settings, ToolCount } from "./types";
 
 export type Outcome = "issue" | "clear" | "unknown";
 
@@ -48,7 +48,7 @@ export function shortVerdict(review: Pick<Review, "cannot_assess" | "verdicts">)
 export type StripState =
   | { kind: "failed"; message: string }
   | { kind: "waiting"; message: string }
-  | { kind: "reviewing" }
+  | { kind: "reviewing"; message: string }
   | { kind: "done" };
 
 export function stripState(
@@ -60,7 +60,7 @@ export function stripState(
   const stepError = job.steps.findLast((step) => step.kind === "error");
   if (stepError && !job.reviews.length) return { kind: "failed", message: stepError.label };
   if (job.status === "completed" || job.status === "cancelled") return { kind: "done" };
-  if (job.reviews.length) return { kind: "reviewing" };
+  if (job.reviews.length) return { kind: "reviewing", message: job.stage || "Reviewing traces" };
   if (job.status === "queued") return { kind: "waiting", message: queued };
   const { selected } = job.coverage;
   const using = model ? ` with ${model}` : "";
@@ -79,7 +79,7 @@ export function issueCount(job: Pick<Job, "status" | "findings" | "reviews" | "r
   const findings = job.findings?.filter((f) => f.kind === "issue").length;
   if (job.status === "completed" && findings !== undefined) return { count: findings, scope: "findings" };
   const count = job.reviews.filter((r) => outcome(r) === "issue").length;
-  if (job.reviewed > job.reviews.length) return { count, scope: `in last ${job.reviews.length} reviewed` };
+  if (job.reviewed > job.reviews.length) return { count, scope: `in ${job.reviews.length} displayed reviews` };
   return { count, scope: "" };
 }
 
@@ -175,6 +175,66 @@ export function newestFirst(reviews: readonly Review[], limit: number): Review[]
 
 export function inFlight(job: Pick<Job, "status" | "reading">): readonly InFlight[] {
   return job.status === "running" ? job.reading ?? [] : [];
+}
+
+export function activeActivities(job: Pick<Job, "status" | "activities">): readonly Activity[] {
+  return job.status === "running" ? (job.activities ?? []).filter((activity) => !activity.finished) : [];
+}
+
+const PHASE_LABELS: Record<Activity["phase"], string> = {
+  load: "Loading trace evidence",
+  review: "Reviewing trace",
+  group: "Grouping observations",
+  reconcile: "Combining candidate groups",
+  investigate: "Investigating candidate",
+};
+
+const TOOL_LABELS: Record<ToolCount["name"], string> = {
+  model: "Model",
+  read: "Read",
+  search: "Search",
+  python: "Python",
+  catalog: "Trace catalog",
+  review_catalog: "Review catalog",
+  read_reviews: "Read reviews",
+  search_reviews: "Search reviews",
+  history: "History",
+  checkpoint: "Context compaction",
+};
+
+const OPERATION_LABELS: Record<ToolCount["name"], string> = {
+  model: "Analyzing evidence",
+  read: "Reading trace content",
+  search: "Searching trace content",
+  python: "Running Python",
+  catalog: "Inspecting trace catalog",
+  review_catalog: "Inspecting review catalog",
+  read_reviews: "Reading review observations",
+  search_reviews: "Searching review observations",
+  history: "Reading prior analysis",
+  checkpoint: "Compacting context",
+};
+
+export function activityPhase(activity: Pick<Activity, "phase">): string {
+  return PHASE_LABELS[activity.phase];
+}
+
+export function activityOperation(activity: Pick<Activity, "phase" | "operations">): string {
+  const operations = activity.operations ?? [];
+  return operations.length
+    ? operations.map((operation) => OPERATION_LABELS[operation]).join(" · ")
+    : activityPhase(activity);
+}
+
+export function toolCallSummary(calls: readonly ToolCount[] = []): string {
+  return calls
+    .filter((tool) => tool.calls > 0)
+    .map((tool) => `${TOOL_LABELS[tool.name]} × ${tool.calls}`)
+    .join(" · ");
+}
+
+export function reviewScope(reviewed: number, displayed: number): string {
+  return reviewed > displayed ? `${displayed} displayed of ${reviewed} reviewed` : "";
 }
 
 export function nowLine(job: Pick<Job, "coverage" | "reviewed">, reading: number): string {

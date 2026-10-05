@@ -478,7 +478,7 @@ it("keeps demo row actions visible and opens reviewed traces without touching li
   await user.click(await screen.findByRole("button", { name: "View run" }));
   const reviews = await screen.findByRole("list", { name: "Reviewed traces" });
   expect(within(reviews).getAllByRole("button").length).toBeGreaterThan(0);
-  expect(screen.getByRole("region", { name: "Conclusions so far" })).toHaveTextContent("Repeated lookups");
+  expect(screen.getByRole("region", { name: "Preliminary observations" })).toHaveTextContent("Repeated lookups");
   expect(network).not.toHaveBeenCalled();
 });
 

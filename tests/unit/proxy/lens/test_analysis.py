@@ -8,12 +8,14 @@ import pytest
 
 from litellm.proxy.lens.analysis import Candidate, Examined, evidence_valid, extract, investigate, partition_content
 from litellm.proxy.lens.models import (
+    Activity,
     Claim,
     Coverage,
     Evidence,
     Execution,
     ExecutionContent,
     InFlight,
+    ModelMessage,
     ModelRequest,
     ModelResult,
     Review,
@@ -21,7 +23,7 @@ from litellm.proxy.lens.models import (
     TracePart,
 )
 from litellm.proxy.lens.state import queue_job
-from tests.unit.proxy.lens.test_state import NOW, issue_brief, lens, finding
+from tests.unit.proxy.lens.test_state import NOW, finding, issue_brief, lens
 
 
 @pytest.mark.asyncio
@@ -69,8 +71,14 @@ async def test_parallel_review_shares_one_model_limit_and_cleans_up(outcome: str
             exited.put(request.prompt)
 
     async def progress(
-        stage: str, coverage: Coverage, _review: Review | None = None, _reading: tuple[InFlight, ...] | None = None, /
+        stage: str | None,
+        coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
     ) -> None:
+        assert coverage is not None
         if stage == "Reading executions" and (_reading is None or _review is not None):
             counts.put(coverage.screened)
 
@@ -122,8 +130,14 @@ async def test_independent_investigations_overlap_and_report_completions() -> No
         pytest.fail("Inconclusive decisions must not fetch evidence")
 
     async def progress(
-        stage: str, coverage: Coverage, _review: Review | None = None, _reading: tuple[InFlight, ...] | None = None, /
+        stage: str | None,
+        coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
     ) -> None:
+        assert coverage is not None
         assert stage == "Checking original evidence"
         progress_counts.put(coverage.investigated)
 
@@ -453,6 +467,58 @@ async def test_invalid_model_output_has_only_one_repair_attempt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_validation_source_failure_propagates_without_a_model_repair() -> None:
+    from litellm.proxy.lens.analysis import Extraction, structured_response
+
+    calls: Final = SimpleQueue[ModelRequest]()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        calls.put(request)
+        return ModelResult(content=Extraction().model_dump_json(), cost=0)
+
+    async def validate(_result: Extraction) -> str | None:
+        raise ValueError("Evidence source is unavailable")
+
+    with pytest.raises(ValueError, match="Evidence source is unavailable"):
+        await structured_response(
+            ModelRequest(purpose="extract", prompt="Extract observations"), Extraction, model, validate
+        )
+    assert calls.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_conversation_repair_appends_raw_response_and_correction_without_changing_the_prefix() -> None:
+    from litellm.proxy.lens.analysis import Extraction, structured_response_with_history
+
+    original: Final = ModelRequest(
+        purpose="extract",
+        prompt="Stable task",
+        messages=(ModelMessage(role="user", content="Stable task"), ModelMessage(role="user", content="Evidence")),
+    )
+    malformed: Final = '{ "observations": "wrong type" }'
+    corrected: Final = '{ "observations": [], "cannot_assess": false }'
+    attempts: Final = iter((0, 1))
+    repairs: Final = SimpleQueue[ModelRequest]()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if next(attempts) == 0:
+            assert request == original
+            return ModelResult(content=malformed, cost=0)
+        assert request.prompt == original.prompt
+        assert request.messages[:-2] == original.messages
+        assert request.messages[-2] == ModelMessage(role="assistant", content=malformed)
+        assert request.messages[-1].role == "user"
+        assert "observations" in request.messages[-1].content
+        repairs.put(request)
+        return ModelResult(content=corrected, cost=0)
+
+    result, history = await structured_response_with_history(original, Extraction, model)
+    assert result == Extraction()
+    assert history == (*repairs.get_nowait().messages, ModelMessage(role="assistant", content=corrected))
+    assert next(attempts, None) is None
+
+
+@pytest.mark.asyncio
 async def test_grouping_consolidates_prior_batches_and_reports_real_progress() -> None:
     from litellm.proxy.lens.analysis import Clusters, Observation, cluster_batches
     from litellm.proxy.lens.models import Coverage
@@ -471,8 +537,14 @@ async def test_grouping_consolidates_prior_batches_and_reports_real_progress() -
     stages: Final = iter((0, 1))
 
     async def progress(
-        stage: str, coverage: Coverage, _review: Review | None = None, _reading: tuple[InFlight, ...] | None = None, /
+        stage: str | None,
+        coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
     ) -> None:
+        assert coverage is not None
         assert stage == "Grouping observations"
         assert coverage.grouping_batches == 2
         assert coverage.grouped_batches == next(stages)
@@ -567,8 +639,14 @@ async def test_thousands_of_matching_runs_keep_all_members_without_a_growing_mod
         )
 
     async def progress(
-        _stage: str, coverage: Coverage, _review: Review | None = None, _reading: tuple[InFlight, ...] | None = None, /
+        _stage: str | None,
+        coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
     ) -> None:
+        assert coverage is not None
         counts.put(coverage.grouped_batches)
 
     batches: Final = observation_batches(observations)
@@ -643,7 +721,12 @@ async def test_review_keeps_original_ids_in_per_run_assessments() -> None:
         return ModelResult(content='{"observations":[],"cannot_assess":false}', cost=0)
 
     async def progress(
-        _stage: str, _coverage: Coverage, _review: Review | None = None, _reading: tuple[InFlight, ...] | None = None, /
+        _stage: str | None,
+        _coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
     ) -> None:
         pass
 
@@ -904,7 +987,12 @@ async def test_final_registry_reconciles_patterns_split_across_pages() -> None:
         return ModelResult(content=Clusters(candidates=grouped).model_dump_json(), cost=0)
 
     async def progress(
-        _stage: str, _coverage: Coverage, _review: Review | None = None, _reading: tuple[InFlight, ...] | None = None, /
+        _stage: str | None,
+        _coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
     ) -> None:
         return None
 
@@ -933,7 +1021,12 @@ async def test_distinct_patterns_are_consolidated_in_batches_without_losing_runs
         return ModelResult(content=json.dumps({"candidates": payload["candidates"]}), cost=0)
 
     async def progress(
-        _stage: str, _coverage: Coverage, _review: Review | None = None, _reading: tuple[InFlight, ...] | None = None, /
+        _stage: str | None,
+        _coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
     ) -> None:
         pass
 
@@ -967,8 +1060,14 @@ async def test_invalid_candidate_response_preserves_other_findings_and_reports_i
         return ModelResult(content=json.dumps({"action": "submit", "finding": finding("run").model_dump()}), cost=0)
 
     async def progress(
-        _stage: str, coverage: Coverage, _review: Review | None = None, _reading: tuple[InFlight, ...] | None = None, /
+        _stage: str | None,
+        coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
     ) -> None:
+        assert coverage is not None
         counts.put(coverage.inconclusive)
 
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
@@ -1305,7 +1404,12 @@ async def test_each_screened_run_reports_a_review_with_the_models_reasoning() ->
         )
 
     async def progress(
-        _stage: str, _coverage: Coverage, review: Review | None = None, _reading: tuple[InFlight, ...] | None = None, /
+        _stage: str | None,
+        _coverage: Coverage | None,
+        review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
     ) -> None:
         if review is not None:
             reviews.put(review)
@@ -1342,7 +1446,12 @@ async def test_a_run_is_reported_in_flight_under_its_original_id_until_its_revie
         return ModelResult(content='{"observations":[]}', cost=0)
 
     async def progress(
-        stage: str, _coverage: Coverage, review: Review | None = None, reading: tuple[InFlight, ...] | None = None, /
+        stage: str | None,
+        _coverage: Coverage | None,
+        review: Review | None = None,
+        reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
     ) -> None:
         if stage == "Reading executions":
             reports.put(

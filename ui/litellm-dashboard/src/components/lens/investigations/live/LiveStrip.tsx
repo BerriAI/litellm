@@ -67,7 +67,8 @@ function RecentLine({ review, now, onOpen }: { review: Review; now: number; onOp
 function issueLabel({ count, scope }: IssueCount): string {
   const noun = count === 1 ? "issue" : "issues";
   if (scope === "findings") return `${count} ${noun} found`;
-  return scope ? `${count} ${noun} ${scope}` : `${count} ${noun}`;
+  const flagged = `${count} ${count === 1 ? "trace" : "traces"} flagged`;
+  return scope ? `${flagged} ${scope}` : flagged;
 }
 
 export function LiveStrip({
@@ -132,6 +133,11 @@ export function LiveStrip({
           <div role="status" className="flex flex-col gap-0.5 py-0.5" onClick={(event) => event.stopPropagation()}>
             {waiting ?? state.message}
           </div>
+        )}
+        {state.kind === "reviewing" && (
+          <p role="status" className="py-0.5">
+            {state.message}
+          </p>
         )}
         {recent.length > 0 && state.kind !== "waiting" && (
           <ol aria-label="Recently reviewed traces" className="flex flex-col">

@@ -71,7 +71,15 @@ export function InvestigationDetail({
             onCancel={readOnly ? undefined : onCancelRun}
           />
         )}
-        {live && <LiveRunLoader key={live.id} lensId={lens.id} job={live} name={lens.settings.name} queue={queue} />}
+        {live && (
+          <LiveRunLoader
+            key={`${live.id}:${live.attempts}`}
+            lensId={lens.id}
+            job={live}
+            name={lens.settings.name}
+            queue={queue}
+          />
+        )}
         {job?.error && <InvestigationFailure job={job} connected={connected} />}
         <Tabs value={section} onValueChange={setSection} key={lens.id}>
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b">

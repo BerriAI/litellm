@@ -7,10 +7,10 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 
 import { conclusions } from "../../model/live";
 import { releasedReviews } from "../../model/stage";
-import type { InFlight, Job, Review, Settings } from "../../model/types";
+import type { Activity, InFlight, Job, Review, Settings } from "../../model/types";
 import { ConclusionsPanel } from "./ConclusionsPanel";
 import { ModelName } from "./LiveStrip";
-import { NowReading } from "./NowReading";
+import { ActiveWork, NowReading } from "./NowReading";
 import { TraceList } from "./TraceList";
 import { useStage } from "./useStage";
 
@@ -26,6 +26,8 @@ const PANE_TITLE = "text-xs font-semibold text-foreground";
 function Stage({
   reviews,
   reading,
+  activities,
+  stageName,
   running,
   slots,
   model,
@@ -35,6 +37,8 @@ function Stage({
 }: {
   reviews: readonly Review[];
   reading: readonly InFlight[];
+  activities: readonly Activity[];
+  stageName: string;
   running: boolean;
   slots: number;
   model: string;
@@ -42,12 +46,22 @@ function Stage({
   checks: Settings["checks"];
   children: (listed: readonly Review[], groups: ReturnType<typeof conclusions>, nowReading: ReactNode) => ReactNode;
 }) {
-  const { stage, now, charMs } = useStage(reviews, reading, running, slots);
-  const listed = releasedReviews(reviews, stage);
-  const nowReading = running && (
-    <NowReading model={model} counter={counter} lanes={stage.lanes} now={now} charMs={charMs} />
-  );
-  return <>{children(listed, conclusions(listed, checks), nowReading)}</>;
+  const legacyReading = running && !activities.length && stageName === "Reading executions";
+  const { stage, now, charMs } = useStage(reviews, reading, legacyReading, slots);
+  const listed = legacyReading ? releasedReviews(reviews, stage) : reviews;
+  function currentWork() {
+    if (!running) return null;
+    if (activities.length) return <ActiveWork model={model} activities={activities} />;
+    if (legacyReading) {
+      return <NowReading model={model} counter={counter} lanes={stage.lanes} now={now} charMs={charMs} />;
+    }
+    return (
+      <p role="status" className="mb-3 px-2 text-xs text-muted-foreground">
+        {stageName || "Starting"}
+      </p>
+    );
+  }
+  return <>{children(listed, conclusions(listed, checks), currentWork())}</>;
 }
 
 export function LiveDrawer({
@@ -56,9 +70,11 @@ export function LiveDrawer({
   name,
   model,
   status,
+  stageName,
   reviewed,
   reviews,
   reading,
+  activities,
   counter,
   done,
   slots,
@@ -71,9 +87,11 @@ export function LiveDrawer({
   name: string;
   model: string;
   status: Job["status"];
+  stageName: string;
   reviewed: number;
   reviews: readonly Review[];
   reading: readonly InFlight[];
+  activities: readonly Activity[];
   counter: string;
   done: string | null;
   slots: number;
@@ -98,6 +116,8 @@ export function LiveDrawer({
           <Stage
             reviews={reviews}
             reading={reading}
+            activities={activities}
+            stageName={stageName}
             running={running}
             slots={slots}
             model={model}
@@ -120,7 +140,7 @@ export function LiveDrawer({
                           <ModelName model={model} />
                         </>
                       )}
-                      {reviewed > reviews.length && reviews.length ? ` · showing latest ${reviews.length}` : ""}
+                      {reviewed > reviews.length && reviews.length ? ` · ${reviews.length} displayed` : ""}
                     </span>
                   </div>
                   {nowReading}
@@ -136,10 +156,14 @@ export function LiveDrawer({
                   )}
                 </section>
                 <section
-                  aria-label="Conclusions so far"
+                  aria-label="Preliminary observations"
                   className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 py-4"
                 >
-                  <h2 className={PANE_TITLE}>Conclusions so far</h2>
+                  <h2 className={PANE_TITLE}>Preliminary observations</h2>
+                  <p className="text-xs leading-relaxed text-muted-foreground">
+                    First-pass trace observations, grouped by check. Final findings are shown in Findings after the
+                    investigation finishes.
+                  </p>
                   <ConclusionsPanel
                     groups={groups}
                     total={listed.length}

@@ -6,28 +6,51 @@ from queue import SimpleQueue
 from typing import Final
 
 import httpx
+from lens.agent_runtime import PythonAgentTurn
+from lens.agent_workspace import PythonRequest
+from lens.analysis import Extraction
 from lens.models import (
     Claim,
-    LensSettings,
     Execution,
     ExecutionContent,
     Job,
+    LensSettings,
+    ModelRequest,
     ModelResult,
     Result,
     Sample,
     TracePart,
 )
 from lens.worker import LensWorker
+from pydantic import BaseModel, ConfigDict
+
+
+class ToolReply(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    tool_results: tuple[str, ...]
+
+
+class PythonOutput(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    stdout: str
+    stderr: str
+    error: str
+    output_complete: bool
+
+
+class PythonReply(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    output: PythonOutput
 
 
 async def main() -> None:
     now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
     claims: Final = iter(("full", "healthy"))
     saved: Final = SimpleQueue[Result]()
-    pages: Final = SimpleQueue[str]()
+    failures: Final = SimpleQueue[str]()
     settings: Final = LensSettings(name="Storage recovery", model="unused", context="Finish the task", concurrency=1)
     execution: Final = Execution(
-        id="run", source="traces", trace_id="trace", team_id="", name="Task", start_time="", span_count=10000
+        id="run", source="traces", trace_id="trace", team_id="", name="Task", start_time="", span_count=1
     )
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -42,28 +65,47 @@ async def main() -> None:
         if path.endswith("/sample"):
             return httpx.Response(200, json=Sample(executions=(execution,), eligible=1).model_dump())
         if path.endswith("/content"):
-            healthy: Final = "/healthy/" in path
-            cursor: Final = request.url.params.get("cursor", "")
-            pages.put(cursor)
-            assert pages.qsize() < 100, "The deliberately small temporary mount must fill"
             content: Final = ExecutionContent(
                 execution=execution,
-                parts=tuple(
-                    TracePart(
-                        execution_id="run",
-                        span_id=f"{cursor}-{i}",
-                        name="tool",
-                        kind="tool",
-                        content="Finished" if healthy else "x" * 8000,
-                    )
-                    for i in range(1 if healthy else 40)
-                ),
-                next_cursor=None if healthy else str(pages.qsize()),
+                parts=(TracePart(execution_id="run", span_id="span", name="tool", kind="tool", content="Finished"),),
             )
             return httpx.Response(200, json=content.model_dump())
         if path.endswith("/model"):
-            assert "/healthy/" in path, "Storage failure must occur before spending on analysis"
-            return httpx.Response(200, json=ModelResult(content='{"observations":[]}', cost=0).model_dump())
+            body: Final = ModelRequest.model_validate_json(request.content)
+            full: Final = "/full/" in path
+            if len(body.messages) == 2:
+                code: Final = 'open("large", "wb").write(b"x" * 1048576)' if full else 'print("recovered")'
+                return httpx.Response(
+                    200,
+                    json=ModelResult(
+                        content=PythonAgentTurn[Extraction](
+                            tools=(PythonRequest(action="python", code=code),)
+                        ).model_dump_json(),
+                        cost=0,
+                    ).model_dump(),
+                )
+            output: Final = PythonReply.model_validate_json(
+                ToolReply.model_validate_json(body.messages[-1].content).tool_results[0]
+            ).output
+            if full:
+                assert output.error and not output.output_complete and "No space left on device" in output.stderr, (
+                    output
+                )
+                failures.put(output.stderr)
+            else:
+                assert not output.error and output.output_complete and output.stdout == "recovered\n", output
+            return httpx.Response(
+                200,
+                json=ModelResult(
+                    content=PythonAgentTurn[Extraction](
+                        result=Extraction(
+                            cannot_assess=full,
+                            reasoning="Python temporary storage was full" if full else "Analysis recovered",
+                        )
+                    ).model_dump_json(),
+                    cost=0,
+                ).model_dump(),
+            )
         if path.endswith("/result"):
             saved.put(Result.model_validate_json(request.content))
             return httpx.Response(200, json=True)
@@ -74,14 +116,15 @@ async def main() -> None:
         worker: Final = LensWorker(client)
         assert await worker.run_once()
         failed: Final = saved.get_nowait()
-        assert failed.error.startswith("Worker temporary storage failed.")
-        assert not failed.findings
-        assert not tuple(Path("/tmp").glob("lens-trace-*")), "Failed scan left temporary files behind"
+        assert failures.qsize() == 1 and failed.coverage.unassessable == 1 and not failed.findings
+        assert not tuple(Path("/tmp").glob("lens-python-*")), "Failed computation left temporary files behind"
         assert await worker.run_once()
         recovered: Final = saved.get_nowait()
-        assert recovered.error == "" and recovered.coverage.screened == 1
-        assert not tuple(Path("/tmp").glob("lens-trace-*"))
-    logging.info("Storage-full scan failed clearly; temporary files cleaned; next scan completed")
+        assert recovered.error == "" and recovered.coverage.screened == 1 and recovered.coverage.unassessable == 0
+        assert not tuple(Path("/tmp").glob("lens-python-*"))
+    logging.warning(
+        "Default worker reported Python storage exhaustion, cleaned scratch, and completed its next investigation"
+    )
 
 
 if __name__ == "__main__":

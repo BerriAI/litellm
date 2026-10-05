@@ -3,7 +3,7 @@ from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from typing import Final
 
-PROTOCOL_VERSION: Final = 4
+PROTOCOL_VERSION: Final = 5
 
 
 def release_tag() -> str:

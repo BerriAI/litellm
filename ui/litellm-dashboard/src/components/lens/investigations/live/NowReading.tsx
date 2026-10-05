@@ -2,8 +2,17 @@
 
 import { cn } from "@/lib/cva.config";
 
-import { durationLabel, outcome, shortVerdict } from "../../model/live";
+import {
+  activityOperation,
+  activityPhase,
+  durationLabel,
+  outcome,
+  shortVerdict,
+  toolCallSummary,
+} from "../../model/live";
 import { laneText, typedChars, type Lane } from "../../model/stage";
+import type { Activity } from "../../model/types";
+import { useNow } from "@/hooks/useNow";
 import { ModelName } from "./LiveStrip";
 
 const RED = "text-destructive";
@@ -89,6 +98,48 @@ export function NowReading({
           <div className="h-full w-2/5 rounded-full bg-foreground/30 motion-safe:animate-lens-shimmer" />
         </div>
       )}
+    </section>
+  );
+}
+
+export function ActiveWork({ model, activities }: { model: string; activities: readonly Activity[] }) {
+  const now = useNow(500);
+  return (
+    <section
+      aria-label="Current work"
+      className="mb-3 flex flex-col gap-2 rounded-xl bg-muted p-2.5 ring-1 ring-border"
+    >
+      <header className="flex items-center justify-between gap-3 px-0.5">
+        <ModelName model={model} size="md" />
+        <span className="text-xs tabular-nums text-muted-foreground">{activities.length} active</span>
+      </header>
+      <ol aria-label="Active analysis tasks" className="flex flex-col gap-1.5">
+        {activities.map((activity) => {
+          const tools = toolCallSummary(activity.tool_calls);
+          return (
+            <li
+              key={activity.id}
+              className="flex flex-col gap-1 rounded-lg bg-background/70 px-2.5 py-2 text-xs ring-1 ring-border/60"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <span className="font-medium text-foreground">{activity.label || activityPhase(activity)}</span>
+                <span className="shrink-0 tabular-nums text-muted-foreground">
+                  {durationLabel(Math.max(0, now - Date.parse(activity.started_at)))}
+                </span>
+              </div>
+              <p className="text-muted-foreground">
+                {activityPhase(activity)}
+                {activity.execution_ids.length > 0 &&
+                  ` · ${activity.execution_ids.length} ${activity.execution_ids.length === 1 ? "trace" : "traces"}`}
+              </p>
+              <p role="status" className="text-foreground">
+                {activityOperation(activity)}
+              </p>
+              {tools && <p className="text-muted-foreground">Tool calls: {tools}</p>}
+            </li>
+          );
+        })}
+      </ol>
     </section>
   );
 }

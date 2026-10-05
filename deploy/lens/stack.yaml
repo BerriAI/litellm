@@ -40,6 +40,7 @@ services:
     environment:
       LITELLM_URL: http://litellm:4000
       LENS_WORKER_TOKEN: ${LENS_WORKER_TOKEN:-}
+      LENS_PYTHON_CONCURRENCY: ${LENS_PYTHON_CONCURRENCY:-2}
     depends_on: [litellm]
     networks: [proxy]
     restart: unless-stopped

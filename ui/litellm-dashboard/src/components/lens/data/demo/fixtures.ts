@@ -304,12 +304,14 @@ export function createLensDemoData(now = Date.now()) {
             snapshot.find((finding) => finding.occurrences.includes(execution.id))?.description ??
             "The recorded response is consistent with the available information and follows the review criteria.",
           spans: [],
+          tool_calls: [],
           verdicts: snapshot
             .filter((finding) => finding.occurrences.includes(execution.id))
             .map((finding) => ({ check_id: finding.check_id, kind: finding.kind, summary: finding.title })),
         })),
         reviewed: sample.length,
         reading: [],
+        activities: [],
         trigger: "schedule" as const,
         error: "",
         cost: sample.length * 0.012,
