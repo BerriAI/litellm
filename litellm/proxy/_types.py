@@ -2727,6 +2727,9 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    model_offerings_path: str | None = Field(
+        None, description="Path to the authoritative external offering file, reloaded without restarting the proxy"
+    )
     completion_model: str | None = Field(None, description="proxy level default model for all chat completion calls")
     max_in_flight_requests_per_worker: int | None = Field(
         None, gt=0, description="maximum concurrent requests handled by each worker"

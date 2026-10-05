@@ -193,3 +193,35 @@ async def test_normalizes_supplier_metadata_without_inventing_input_limit(provid
             cache=InMemoryCache(),
         )
         assert result == expected
+
+
+async def test_full_inventory_preserves_model_kind_without_fabricating_embedding_output_cap() -> None:
+    from litellm.llms.openai_like.model_info import get_openai_compatible_model_inventory
+    from litellm.types.proxy.model_inventory import SupplierModelInventory
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "embedding", "type": "embedding", "context_window": 4096, "max_tokens": 4096},
+                        {"id": "language", "type": "language", "max_tokens": 1024},
+                    ]
+                },
+            )
+        )
+    ) as client:
+        handler.client = client
+        result: Final = await get_openai_compatible_model_inventory(
+            api_base="https://supplier.test/v1",
+            provider="vercel_ai_gateway",
+            headers={},
+            client=handler,
+            cache=InMemoryCache(),
+        )
+        assert isinstance(result, SupplierModelInventory)
+        assert result.models["embedding"] == {"mode": "embedding", "context_window": 4096}
+        assert result.models["language"] == {"mode": "chat", "max_output_tokens": 1024}

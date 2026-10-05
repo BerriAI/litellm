@@ -5,11 +5,11 @@ from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias
 
 import httpx
-from pydantic import BaseModel, BeforeValidator, ConfigDict
+from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError
 
-from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.proxy.model_inventory import SupplierInventoryUnavailable, SupplierModelInventory
 from litellm.types.proxy.model_metadata import GatewayModelMetadata
 from litellm.utils import _add_path_to_api_base  # pyright: ignore[reportPrivateUsage]  # shared provider URL helper
 
@@ -55,6 +55,8 @@ class _ReasoningOption(BaseModel):
 
 class _ModelCard(GatewayModelMetadata):
     id: str
+    type: str | None = None
+    mode: str | None = None
     max_model_len: _TokenLimit = None
     context_length: _TokenLimit = None
     max_tokens: _TokenLimit = None
@@ -81,7 +83,7 @@ class _ModelCard(GatewayModelMetadata):
             max_input_tokens=self.max_input_tokens,
             max_output_tokens=(
                 self.max_output_tokens
-                or (self.max_tokens if provider == "vercel_ai_gateway" else None)
+                or (self.max_tokens if provider == "vercel_ai_gateway" and self.type in (None, "language") else None)
                 or (
                     self.top_provider.max_completion_tokens
                     if provider == "openrouter" and self.top_provider is not None
@@ -127,13 +129,27 @@ class _ModelCard(GatewayModelMetadata):
                 else None
             ),
         )
-        return MappingProxyType(metadata.model_dump(mode="json", exclude_none=True))
+        mode: Final = (
+            self.mode
+            if self.mode in ("chat", "completion", "embedding")
+            else (
+                "embedding"
+                if provider == "vercel_ai_gateway" and self.type == "embedding"
+                else "chat"
+                if provider == "vercel_ai_gateway" and self.type == "language"
+                else None
+            )
+        )
+        return MappingProxyType(
+            {**metadata.model_dump(mode="json", exclude_none=True), **({"mode": mode} if mode is not None else {})}
+        )
 
 
 class _ModelList(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    data: tuple[_ModelCard, ...] = ()
+    data: tuple[_ModelCard, ...]
+    error: object | None = None
 
 
 async def get_openai_compatible_model_info(
@@ -145,13 +161,31 @@ async def get_openai_compatible_model_info(
     client: AsyncHTTPHandler,
     cache: InMemoryCache,
 ) -> Mapping[str, object]:
+    inventory: Final = await get_openai_compatible_model_inventory(
+        api_base=api_base, provider=provider, headers=headers, client=client, cache=cache
+    )
+    return (
+        inventory.models.get(model, _EMPTY_LIMITS) if isinstance(inventory, SupplierModelInventory) else _EMPTY_LIMITS
+    )
+
+
+async def get_openai_compatible_model_inventory(
+    *,
+    api_base: str,
+    provider: str = "openai",
+    headers: Mapping[str, str],
+    client: AsyncHTTPHandler,
+    cache: InMemoryCache,
+    force_refresh: bool = False,
+) -> SupplierModelInventory | SupplierInventoryUnavailable:
     url: Final = _add_path_to_api_base(api_base, "/v1/models")
     cache_key: Final = (
-        "upstream_model_info:" + hashlib.sha256(json.dumps((url, sorted(headers.items()))).encode()).hexdigest()
+        "upstream_model_info:"
+        + hashlib.sha256(json.dumps((provider, url, sorted(headers.items()))).encode()).hexdigest()
     )
     cached: Final[object] = cache.get_cache(cache_key)
-    if isinstance(cached, _ModelList):
-        return next((card.token_limits(provider) for card in cached.data if card.id == model), _EMPTY_LIMITS)
+    if not force_refresh and isinstance(cached, (SupplierModelInventory, SupplierInventoryUnavailable)):
+        return cached
 
     try:
         response: Final = await client.get(
@@ -163,10 +197,26 @@ async def get_openai_compatible_model_info(
         )
         response.raise_for_status()
         models: Final = _ModelList.model_validate_json(response.content)
-    except Exception:  # noqa: BLE001  # optional upstream metadata must not interrupt proxy refresh
-        verbose_logger.debug("Could not discover upstream model token limits")
-        cache.set_cache(cache_key, _ModelList(), ttl=60)
-        return _EMPTY_LIMITS
+        ids: Final = tuple(card.id for card in models.data)
+        if models.error is not None or any(not model_id for model_id in ids) or len(frozenset(ids)) != len(ids):
+            unavailable: Final = SupplierInventoryUnavailable("malformed")
+            cache.set_cache(cache_key, unavailable, ttl=60)
+            return unavailable
+    except httpx.HTTPStatusError:
+        http_failure: Final = SupplierInventoryUnavailable("http")
+        cache.set_cache(cache_key, http_failure, ttl=60)
+        return http_failure
+    except ValidationError:
+        malformed: Final = SupplierInventoryUnavailable("malformed")
+        cache.set_cache(cache_key, malformed, ttl=60)
+        return malformed
+    except Exception:  # noqa: BLE001  # optional upstream discovery must not interrupt proxy refresh
+        transport: Final = SupplierInventoryUnavailable("transport")
+        cache.set_cache(cache_key, transport, ttl=60)
+        return transport
 
-    cache.set_cache(cache_key, models, ttl=MODEL_INFO_REFRESH_SECONDS)
-    return next((card.token_limits(provider) for card in models.data if card.id == model), _EMPTY_LIMITS)
+    inventory: Final = SupplierModelInventory(
+        MappingProxyType({card.id: card.token_limits(provider) for card in models.data})
+    )
+    cache.set_cache(cache_key, inventory, ttl=MODEL_INFO_REFRESH_SECONDS)
+    return inventory

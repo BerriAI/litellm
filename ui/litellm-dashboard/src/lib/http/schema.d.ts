@@ -30046,6 +30046,11 @@ export interface components {
              */
             model_list_healthy_only?: boolean | null;
             /**
+             * Model Offerings Path
+             * @description Path to the authoritative external offering file, reloaded without restarting the proxy
+             */
+            model_offerings_path?: string | null;
+            /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
              */

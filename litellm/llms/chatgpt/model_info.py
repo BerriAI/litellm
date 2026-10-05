@@ -6,12 +6,12 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
-from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
+from litellm.types.proxy.model_inventory import SupplierInventoryUnavailable, SupplierModelInventory
 from litellm.types.proxy.model_metadata import GatewayModelMetadata
 
 from .authenticator import Authenticator
@@ -105,7 +105,8 @@ class _ChatGPTModel(GatewayModelMetadata):
 class _ChatGPTCatalog(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    models: tuple[_ChatGPTModel, ...] = ()
+    models: tuple[_ChatGPTModel, ...]
+    error: object | None = None
 
 
 async def get_chatgpt_model_info(
@@ -116,11 +117,36 @@ async def get_chatgpt_model_info(
     api_base: str | None = None,
     authenticator: Authenticator | None = None,
 ) -> Mapping[str, object]:
+    inventory: Final = await get_chatgpt_model_inventory(
+        client=client, cache=cache, api_base=api_base, authenticator=authenticator
+    )
+    return (
+        inventory.models.get(model, _EMPTY_METADATA)
+        if isinstance(inventory, SupplierModelInventory)
+        else _EMPTY_METADATA
+    )
+
+
+async def get_chatgpt_model_inventory(
+    *,
+    client: AsyncHTTPHandler,
+    cache: InMemoryCache,
+    api_base: str | None = None,
+    authenticator: Authenticator | None = None,
+    force_refresh: bool = False,
+) -> SupplierModelInventory | SupplierInventoryUnavailable:
     auth: Final = authenticator if authenticator is not None else Authenticator()
     try:
-        token: Final = await asyncio.to_thread(auth.get_access_token, allow_device_login=False)
         account: Final = await asyncio.to_thread(auth.get_account_id)
         url: Final = f"{(api_base or auth.get_api_base()).rstrip('/')}/models?client_version={_CATALOG_CLIENT_VERSION}"
+        credential_scope: Final = hashlib.sha256(json.dumps((url, account)).encode()).hexdigest() if account else None
+    except Exception:  # noqa: BLE001  # malformed native auth is unavailable, never an authoritative empty inventory
+        return SupplierInventoryUnavailable("authentication")
+    try:
+        token: Final = await asyncio.to_thread(auth.get_access_token, allow_device_login=False)
+    except Exception:  # noqa: BLE001  # unavailable existing OAuth must never initiate a device login
+        return SupplierInventoryUnavailable("authentication", credential_scope)
+    try:
         headers: Final = {
             **get_chatgpt_default_headers(token, account),
             "accept": "application/json",
@@ -129,8 +155,8 @@ async def get_chatgpt_model_info(
             "chatgpt_model_info:" + hashlib.sha256(json.dumps((url, sorted(headers.items()))).encode()).hexdigest()
         )
         cached: Final[object] = cache.get_cache(cache_key)
-        if isinstance(cached, _ChatGPTCatalog):
-            return next((card.metadata() for card in cached.models if card.slug == model), _EMPTY_METADATA)
+        if not force_refresh and isinstance(cached, SupplierModelInventory):
+            return cached
         response: Final = await client.get(
             url=url,
             headers=headers,
@@ -140,8 +166,17 @@ async def get_chatgpt_model_info(
         )
         response.raise_for_status()
         catalog: Final = _ChatGPTCatalog.model_validate_json(response.content)
-        cache.set_cache(cache_key, catalog, ttl=MODEL_INFO_REFRESH_SECONDS)
-        return next((card.metadata() for card in catalog.models if card.slug == model), _EMPTY_METADATA)
+        ids: Final = tuple(card.slug for card in catalog.models)
+        if catalog.error is not None or any(not model_id for model_id in ids) or len(frozenset(ids)) != len(ids):
+            return SupplierInventoryUnavailable("malformed", credential_scope)
+        inventory: Final = SupplierModelInventory(
+            MappingProxyType({card.slug: card.metadata() for card in catalog.models}), credential_scope
+        )
+        cache.set_cache(cache_key, inventory, ttl=MODEL_INFO_REFRESH_SECONDS)
+        return inventory
+    except httpx.HTTPStatusError:
+        return SupplierInventoryUnavailable("http", credential_scope)
+    except ValidationError:
+        return SupplierInventoryUnavailable("malformed", credential_scope)
     except Exception:  # noqa: BLE001  # optional metadata discovery must not interrupt proxy startup
-        verbose_logger.debug("Could not discover the active ChatGPT account model metadata")
-        return _EMPTY_METADATA
+        return SupplierInventoryUnavailable("transport", credential_scope)

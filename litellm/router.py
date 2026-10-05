@@ -1031,6 +1031,7 @@ class Router:
         self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
 
         # Initialize model_group_alias early since it's used in set_model_list
+        self.model_metadata_authoritative = False
         self.model_group_alias: dict[str, str | RouterModelGroupAliasItem] = (
             model_group_alias or {}
         )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
@@ -9663,6 +9664,25 @@ class Router:
         # Deferred: build the AdaptiveRouter strategy now that all underlying
         # deployments have been registered.
         self._finalize_adaptive_router_if_configured()
+
+    def snapshot_with_model_list(
+        self, model_list: Sequence[Mapping[str, object]], *, metadata_authoritative: bool = False
+    ) -> "Router":
+        snapshot: Final = copy.copy(self)
+        snapshot.model_metadata_authoritative = metadata_authoritative
+        snapshot.pattern_router = PatternMatchRouter()
+        snapshot.provider_default_deployment_ids = []
+        snapshot._zero_cost_cache = {}
+        snapshot._discovered_model_info_cache = InMemoryCache(
+            max_size_in_memory=max(len(model_list), 1), default_ttl=2 * MODEL_INFO_REFRESH_SECONDS
+        )
+        snapshot.cached_deployment_model_info = lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)(
+            snapshot.get_deployment_model_info
+        )
+        snapshot.set_model_list([dict(model) for model in model_list])
+        snapshot.healthy_deployments = snapshot.get_model_list() or []
+        _live_routers.add(snapshot)
+        return snapshot
 
     def _add_deployment(self, deployment: Deployment) -> Deployment:
         import os

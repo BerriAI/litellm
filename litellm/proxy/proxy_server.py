@@ -1587,11 +1587,47 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
+    import pathlib
+
+    from litellm.proxy.model_offerings import ModelOfferingsManager
+    from litellm.proxy.offering_router import OfferingAccessGuard
+
+    offerings_path: Final = TypeAdapter(str | None).validate_python(
+        cast(object, general_settings.get("model_offerings_path")),  # cast-ok: validate untyped config
+        strict=True,
+    )
+    offerings_client: Final = AsyncHTTPHandler() if offerings_path is not None else None
+    offerings_manager: Final = (
+        ModelOfferingsManager(
+            path=pathlib.Path(str(offerings_path)),
+            template=llm_router or Router(model_list=[]),
+            client=offerings_client,
+        )
+        if offerings_client is not None
+        else None
+    )
+    if offerings_manager is not None and offerings_client is not None:
+        if llm_model_list or (llm_router is not None and llm_router.get_model_ids()) or store_model_in_db:
+            await offerings_client.close()
+            raise ValueError("External offering mode requires an empty model_list and store_model_in_db disabled")
+        if not await offerings_manager.reload(initial=True):
+            await offerings_client.close()
+            raise ValueError("Initial external offering configuration is invalid")
+        llm_router = offerings_manager.router
+    offerings_guard: Final = OfferingAccessGuard(offerings_manager.router) if offerings_manager is not None else None
+    if offerings_guard is not None:
+        litellm.logging_callback_manager.add_litellm_callback(offerings_guard)
+    offerings_task: Final = asyncio.create_task(offerings_manager.run()) if offerings_manager is not None else None
+
     model_info_refresh_disabled: Final = (
         "disable_model_info_refresh" in general_settings and general_settings["disable_model_info_refresh"] is True
     )
     model_info_scheduler: Final = (
-        None if model_info_refresh_disabled else scheduler if scheduler is not None else AsyncIOScheduler()
+        None
+        if model_info_refresh_disabled or offerings_manager is not None
+        else scheduler
+        if scheduler is not None
+        else AsyncIOScheduler()
     )
     if model_info_scheduler is not None:
         await ProxyStartupEvent.refresh_model_info()
@@ -1636,6 +1672,14 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
         GracefulShutdownManager.start_shutdown()
         await GracefulShutdownManager.wait_for_drain()
+
+        if offerings_task is not None:
+            offerings_task.cancel()
+            await asyncio.gather(offerings_task, return_exceptions=True)
+        if offerings_guard is not None:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(offerings_guard, require_self=True)
+        if offerings_client is not None:
+            await offerings_client.close()
 
         # Shutdown event - close shared aiohttp session
         if shared_aiohttp_session is not None:
@@ -2517,6 +2561,9 @@ app.add_middleware(
 app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
 app.add_middleware(RedisRequestBatchMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
+from litellm.proxy.offering_router import OfferingSnapshotMiddleware
+
+app.add_middleware(OfferingSnapshotMiddleware, router_getter=lambda: llm_router)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
 
@@ -14706,7 +14753,10 @@ def _enrich_model_info_with_litellm_data(
         },
     }
     gateway_metadata: Final = resolve_gateway_model_metadata(
-        MappingProxyType({**litellm_model_info, **discovered_model_info}), model_info
+        MappingProxyType({})
+        if llm_router is not None and getattr(llm_router, "model_metadata_authoritative", False) is True
+        else MappingProxyType({**litellm_model_info, **discovered_model_info}),
+        model_info,
     )
     published_model: Final = {
         **model,

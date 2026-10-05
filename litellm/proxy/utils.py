@@ -8888,9 +8888,14 @@ def create_model_info_response(
     deployment_models: Final[tuple[str | None, ...]] = (
         listing_info.cost_map_keys if listing_info is not None and listing_info.cost_map_keys else (None,)
     )
-    listed_info: Final = _safe_get_model_info(lookup_model, get_model_info)
+    authoritative_metadata: Final = (
+        llm_router is not None and getattr(llm_router, "model_metadata_authoritative", False) is True
+    )
+    listed_info: Final = None if authoritative_metadata else _safe_get_model_info(lookup_model, get_model_info)
     candidate_sets: Final = tuple(
-        _resolve_listing_model_info(
+        ()
+        if authoritative_metadata
+        else _resolve_listing_model_info(
             deployment_model=deployment_model,
             listed_model=lookup_model,
             listed_info=listed_info,
