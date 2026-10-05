@@ -353,13 +353,13 @@ def test_azure_gpt_6_bridged_no_cache_function_requests_each_reach_provider_and_
             seconds=70,
         )
         by_response_id: Final = {
-            base64.b64decode(string_value(row["request_id"]).removeprefix("resp_"))
-            .decode()
-            .rsplit("response_id:", 1)[1]: row
+            (decoded := base64.b64decode(string_value(row["request_id"]).removeprefix("resp_")).decode())
+            .rsplit("response_id:", 1)[1]: (decoded, row)
             for row in rows
         }
         for response_id in response_ids:
-            row: Final = by_response_id[response_id]
+            decoded, row = by_response_id[response_id]
+            assert decoded.startswith("litellm:custom_llm_provider:azure;model_id:"), rows
             assert (
                 string_value(row["status"]),
                 string_value(row["cache_hit"]),
