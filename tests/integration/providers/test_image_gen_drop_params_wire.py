@@ -2,6 +2,7 @@ import json
 from typing import Final
 
 import openai
+import pytest
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -51,7 +52,26 @@ def test_image_generation_additional_drop_params_reaches_provider_body(gateway: 
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/images/generations")]
 
 
-def test_gpt_image_generation_forwards_every_sdk_field_once_with_integer_n(gateway: Gateway) -> None:
+def _openai_client(gateway: Gateway, model: str, alias: str) -> openai.OpenAI:
+    base: Final = str(gateway.client.base_url)
+    match alias:
+        case "v1":
+            return openai.OpenAI(base_url=f"{base}/v1", api_key=gateway.key, max_retries=0)
+        case "unversioned":
+            return openai.OpenAI(base_url=base, api_key=gateway.key, max_retries=0)
+        case "azure_deployment":
+            return openai.AzureOpenAI(
+                azure_endpoint=base,
+                azure_deployment=model,
+                api_version="2025-04-01-preview",
+                api_key=gateway.key,
+                max_retries=0,
+            )
+    raise AssertionError(alias)
+
+
+@pytest.mark.parametrize("alias", ("v1", "unversioned", "azure_deployment"))
+def test_gpt_image_generation_forwards_every_sdk_field_once_with_integer_n(gateway: Gateway, alias: str) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/images/generations"
@@ -91,11 +111,7 @@ def test_gpt_image_generation_forwards_every_sdk_field_once_with_integer_n(gatew
             api_base=wire.url,
             api_key="synthetic-openai-key",
         )
-        client: Final = openai.OpenAI(
-            base_url=str(gateway.client.base_url) + "/v1",
-            api_key=gateway.key,
-            max_retries=0,
-        )
+        client: Final = _openai_client(gateway, model, alias)
         result: Final = client.images.generate(
             model=model,
             prompt=_PROMPT,

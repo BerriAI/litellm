@@ -102,9 +102,10 @@ def _edit(
     gateway: Gateway,
     fields: Mapping[str, str],
     files: Sequence[tuple[str, tuple[str, bytes, str]]],
+    path: str = "/v1/images/edits",
 ) -> httpx.Response:
     return gateway.client.post(
-        "/v1/images/edits",
+        path,
         data=dict(fields),
         files=list(files),
         headers={"Authorization": f"Bearer {gateway.key}"},
@@ -138,7 +139,14 @@ def test_openai_compatible_image_edit_forwards_seed_form_field_to_backend(gatewa
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/images/edits")]
 
 
-def test_image_edit_bracketed_image_field_reaches_openai_as_one_file_part(gateway: Gateway) -> None:
+@pytest.mark.parametrize(
+    "path_template",
+    ("/v1/images/edits", "/images/edits", "/openai/deployments/{model}/images/edits"),
+    ids=("v1", "unversioned", "azure_deployment"),
+)
+def test_image_edit_bracketed_image_field_reaches_openai_as_one_file_part(
+    gateway: Gateway, path_template: str
+) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/images/edits"
@@ -157,6 +165,7 @@ def test_image_edit_bracketed_image_field_reaches_openai_as_one_file_part(gatewa
             gateway,
             {"model": model, "prompt": _PROMPT, "seed": "42"},
             (("image[]", ("red_circle.png", _PNG_BYTES, "image/png")),),
+            path_template.format(model=model),
         )
         assert response.status_code == 200, response.text
         payload: Final = _ImageResponse.model_validate_json(response.content)
@@ -220,6 +229,39 @@ def test_image_edit_bracketed_mask_reaches_openai_as_mask_file_part(gateway: Gat
             (
                 ("image[]", ("red_circle.png", _PNG_BYTES, "image/png")),
                 ("mask[]", ("mask.png", _MASK_PNG, "image/png")),
+            ),
+        )
+        assert response.status_code == 200, response.text
+        payload: Final = _ImageResponse.model_validate_json(response.content)
+        assert [image.b64_json for image in payload.data] == [_EDITED_IMAGE_B64], response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/images/edits")]
+
+
+def test_image_edit_repeated_bracketed_mask_parts_reach_openai_as_first_mask_only(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/images/edits"
+        assert request.headers["authorization"] == "Bearer synthetic-openai-key"
+        assert request.headers["content-type"].startswith("multipart/form-data; boundary=")
+        parts: Final = _multipart_parts(request)
+        assert _text_parts(parts) == (("model", "gpt-image-1"), ("prompt", _PROMPT))
+        assert _file_parts(parts) == (
+            _FilePart("image[]", "image.png", "image/png", _PNG_BYTES),
+            _FilePart("mask", "mask.png", "image/png", _MASK_PNG),
+        )
+        return Reply(body=json.dumps({"created": 1700000000, "data": [{"b64_json": _EDITED_IMAGE_B64}]}).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/gpt-image-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        response: Final = _edit(
+            gateway,
+            {"model": model, "prompt": _PROMPT},
+            (
+                ("image[]", ("red_circle.png", _PNG_BYTES, "image/png")),
+                ("mask[]", ("first-mask.png", _MASK_PNG, "image/png")),
+                ("mask[]", ("second-mask.png", _SECOND_PNG, "image/png")),
             ),
         )
         assert response.status_code == 200, response.text
