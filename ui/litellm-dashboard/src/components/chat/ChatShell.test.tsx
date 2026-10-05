@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
+import { renderWithProviders as render } from "@/../tests/test-utils";
 import ChatShell from "./ChatShell";
 
 const { mockPush, mockUsePathname, mockUseChatShell } = vi.hoisted(() => ({

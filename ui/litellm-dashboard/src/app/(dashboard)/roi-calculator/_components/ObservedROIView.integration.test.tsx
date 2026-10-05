@@ -1,9 +1,12 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render as renderWithoutNuqs, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NuqsAdapter } from "nuqs/adapters/react";
 import ObservedROIView from "./ObservedROIView";
 import { createObservedDemo } from "./observedDemo";
 import type { ObservedSettings, ObservedSnapshot, ObservedStatus } from "./observedData";
+
+const render = (ui: Parameters<typeof renderWithoutNuqs>[0]) => renderWithoutNuqs(ui, { wrapper: NuqsAdapter });
 
 const settings: ObservedSettings = {
   source_provider: "gitlab",
@@ -151,7 +154,7 @@ describe("observed ROI dashboard", () => {
     expect(screen.getByRole("tab", { name: "Engineers 3", selected: true })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Connections" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Link accounts" })).not.toBeInTheDocument();
-    expect(window.location.search).toBe("?demo=1");
+    await waitFor(() => expect(window.location.search).toBe("?demo=1"));
     await user.click(screen.getByRole("button", { name: "View Alex Rivera's merged changes" }));
     expect(await screen.findByRole("dialog", { name: "Alex Rivera" })).toHaveTextContent("alex-demo@example.com");
     expect(screen.getByRole("heading", { name: "Merged changes" })).toBeInTheDocument();
@@ -172,7 +175,7 @@ describe("observed ROI dashboard", () => {
     await user.click(screen.getByRole("button", { name: "Exit demo" }));
     expect(screen.getByRole("heading", { name: "Connect your repositories" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Connect GitHub or GitLab" })).toBeEnabled();
-    expect(window.location.search).toBe("");
+    await waitFor(() => expect(window.location.search).toBe(""));
     expect(requests.mock.calls.every(([, init]) => init.method === "GET")).toBe(true);
   });
 
@@ -192,12 +195,12 @@ describe("observed ROI dashboard", () => {
     await user.click(screen.getByRole("button", { name: "Preview sample report" }));
     expect(screen.queryByRole("button", { name: "Cancel sync" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "2 repositories" })).toBeInTheDocument();
-    expect(window.location.search).toBe("?from=review&demo=1");
+    await waitFor(() => expect(window.location.search).toBe("?from=review&demo=1"));
     await user.click(screen.getByRole("button", { name: "Exit demo" }));
     expect(screen.getByRole("button", { name: "Cancel sync" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "1 repository" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Merge requests", selected: true })).toBeInTheDocument();
-    expect(window.location.search).toBe("?from=review");
+    await waitFor(() => expect(window.location.search).toBe("?from=review"));
     expect(window.location.hash).toBe("#report");
     expect(requests.mock.calls.every(([, init]) => init.method === "GET")).toBe(true);
   });
@@ -217,7 +220,7 @@ describe("observed ROI dashboard", () => {
     await user.click(screen.getByRole("button", { name: "Exit demo" }));
     expect(screen.queryByText("Alex Rivera")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Connect your repositories" })).not.toBeInTheDocument();
-    expect(window.location.search).toBe("");
+    await waitFor(() => expect(window.location.search).toBe(""));
     if (state === "failed") expect(await screen.findByRole("alert")).toHaveTextContent("Live data unavailable");
   });
 
@@ -367,7 +370,7 @@ describe("observed ROI dashboard", () => {
         .queryAllByRole("alert")
         .map((alert) => alert.textContent),
     ).toEqual(alerts);
-    expect(window.location.search).toBe("");
+    await waitFor(() => expect(window.location.search).toBe(""));
     fireEvent.change(within(dialog).getByLabelText("Repositories"), { target: { value: "org/changed" } });
     await user.click(within(dialog).getByRole("button", { name: "Save and sync" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("Provider unavailable");

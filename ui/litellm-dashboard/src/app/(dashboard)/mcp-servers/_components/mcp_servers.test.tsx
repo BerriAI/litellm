@@ -1,8 +1,10 @@
 import React from "react";
-import { render, waitFor, screen, act, within } from "@testing-library/react";
+import { render as renderWithoutNuqs, waitFor, screen, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { NuqsAdapter } from "nuqs/adapters/react";
+import { renderWithProviders as render } from "@/../tests/test-utils";
 import MCPServers, { compareServers, type SortKey } from "./mcp_servers";
 import type { MCPServer } from "@/components/mcp_tools/types";
 import * as networking from "@/components/networking";
@@ -17,6 +19,16 @@ vi.mock("@/components/networking", () => ({
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
   updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   deleteConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
+  modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
+  getMCPUserEnvVars: vi.fn((_accessToken: string, serverId: string) =>
+    Promise.resolve({
+      server_id: serverId,
+      required: [{ name: "API_KEY", description: "API key", is_set: false }],
+      missing_count: 1,
+    }),
+  ),
+  storeMCPUserEnvVars: vi.fn(),
+  clearMCPUserEnvVars: vi.fn(),
   listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
   fetchMCPGatewaySessions: vi.fn(),
   terminateMCPGatewaySessions: vi.fn(),
@@ -140,6 +152,11 @@ describe("MCPServers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     stubUiConfig({});
+    window.history.replaceState(null, "", "/");
+  });
+
+  afterEach(() => {
+    window.history.replaceState(null, "", "/");
   });
 
   it("should render the MCPServers component with title", async () => {
@@ -160,6 +177,41 @@ describe("MCPServers", () => {
 
     // Verify the title is rendered
     expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+  });
+
+  it("opens the user env vars modal from a deep link and removes only that query parameter", async () => {
+    const server: MCPServer = {
+      server_id: "deep-link-server",
+      server_name: "Deep Link Server",
+      alias: "deep-link-server",
+      url: "https://example.com/mcp",
+      created_at: "",
+      updated_at: "",
+      created_by: "user",
+      updated_by: "user",
+    };
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([server]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([{ server_id: server.server_id, status: "healthy" }]);
+    vi.mocked(networking.listMCPUserEnvVarStatus).mockResolvedValue([
+      {
+        server_id: server.server_id,
+        server_name: server.server_name,
+        required: [{ name: "API_KEY", description: "API key", is_set: false }],
+        missing_count: 1,
+      },
+    ]);
+    window.history.replaceState(null, "", "/?fill_env_vars=deep-link-server&other=1");
+    renderWithoutNuqs(
+      <NuqsAdapter>
+        <QueryClientProvider client={createQueryClient()}>
+          <MCPServers {...defaultProps} />
+        </QueryClientProvider>
+      </NuqsAdapter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Set your credentials" })).toBeVisible();
+    expect(within(screen.getByRole("dialog")).getByText("Deep Link Server")).toBeVisible();
+    await waitFor(() => expect(window.location.search).toBe("?other=1"));
   });
 
   it.each(["Admin", "Internal User"])("links a %s to their MCP connections page", async (userRole) => {
