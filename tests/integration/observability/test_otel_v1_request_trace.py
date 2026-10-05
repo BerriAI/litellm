@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway, eventually, gateway_from_environment
+from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from integration._support.otlp_sink import Span, SpanSinks, recorded_spans
 from integration._support.process import owned_proxy
 from pydantic import JsonValue
@@ -52,6 +52,14 @@ def test_default_otel_logger_keeps_spend_flush_outside_the_request_trace(
             trace: sorted(names) for trace, names in traces.items()
         }
         request_trace: Final = next(trace for trace, names in traces.items() if expected <= names)
+        key_info: Final = eventually(
+            lambda: candidate.request("GET", "/key/info", key=key, params={"key": key}),
+            lambda response: response.status_code == 200
+            and float(str(object_value(response.json()["info"])["spend"])) > 0,
+            seconds=60,
+        )
+        assert key_info.status_code == 200, key_info.text
+        assert float(str(object_value(key_info.json()["info"])["spend"])) > 0
         request_spans: Final = tuple(
             span for span in recorded_spans(audit_sinks.operator, start)[1] if span["trace_id"] == request_trace
         )
