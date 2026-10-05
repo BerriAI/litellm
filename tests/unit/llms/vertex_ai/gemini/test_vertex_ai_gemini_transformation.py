@@ -1,4 +1,6 @@
 import base64
+from collections.abc import Sequence
+from itertools import chain
 from pathlib import Path
 from typing import Final
 
@@ -17,7 +19,7 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     _get_highest_media_resolution,
     _extract_max_media_resolution_from_messages,
 )
-from litellm.types.llms.vertex_ai import BlobType
+from litellm.types.llms.vertex_ai import BlobType, ContentType, PartType
 from litellm.types.utils import Message
 
 
@@ -2774,8 +2776,8 @@ def test_convert_tool_response_with_url_image(monkeypatch: pytest.MonkeyPatch) -
 CLAUDE_THINKING_SIGNATURE: Final = "EqQBCkYIBxgCKkCfQ2x0b3VkZS1zaWduYXR1cmUtbm90LW1pbnRlZC1ieS1nZW1pbmkSDJ3lXf5sD+QVqpFQmRoM"
 
 
-def _parts_of(contents: list) -> list:
-    return [part for content in contents for part in content["parts"]]
+def _parts_of(contents: Sequence[ContentType]) -> list[PartType]:
+    return list(chain.from_iterable(content["parts"] for content in contents))
 
 
 def test_thinking_block_signature_is_not_forwarded_to_gemini() -> None:
