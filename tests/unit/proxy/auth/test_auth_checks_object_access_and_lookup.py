@@ -8909,6 +8909,7 @@ async def _common_checks_for_customer_model(
     model: str,
     customer_models: list[str],
     request_overrides: Mapping[str, object] | None = None,
+    team_model_aliases: dict[str, str] | None = None,
 ) -> bool:
     from litellm.proxy.auth.auth_checks import common_checks
 
@@ -8926,7 +8927,7 @@ async def _common_checks_for_customer_model(
         route="/chat/completions",
         llm_router=None,
         proxy_logging_obj=MagicMock(),
-        valid_token=UserAPIKeyAuth(token="test-token"),
+        valid_token=UserAPIKeyAuth(token="test-token", team_model_aliases=team_model_aliases),
         request=MagicMock(spec=Request),
         skip_budget_checks=True,
     )
@@ -8960,6 +8961,24 @@ async def test_common_checks_denies_request_fallback_outside_customer_allowlist(
 @pytest.mark.asyncio
 async def test_common_checks_allows_model_with_empty_customer_allowlist() -> None:
     assert await _common_checks_for_customer_model(model="B", customer_models=[]) is True
+
+
+@pytest.mark.asyncio
+async def test_common_checks_matches_team_alias_target_against_customer_allowlist() -> None:
+    team_model_aliases: Final = {"fast": "m1", "slow": "gpt-4o"}
+
+    assert (
+        await _common_checks_for_customer_model(
+            model="fast", customer_models=["m1"], team_model_aliases=team_model_aliases
+        )
+        is True
+    )
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
+        await _common_checks_for_customer_model(
+            model="slow", customer_models=["m1"], team_model_aliases=team_model_aliases
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.customer_model_access_denied
 
 
 @pytest.mark.parametrize(

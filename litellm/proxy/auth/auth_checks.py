@@ -1071,7 +1071,9 @@ async def common_checks(
         if not isinstance(managed_models, (list, tuple)) or not managed_models:
             raise HTTPException(403, "This agent has no model grants")
         _can_object_call_model(
-            model=_resolve_team_alias(_model, valid_token.team_model_aliases, valid_token.team_id, llm_router),
+            model=_resolve_team_alias(
+                _model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router
+            ),
             llm_router=llm_router,
             models=list(managed_models),
             team_id=valid_token.team_id,
@@ -1106,14 +1108,14 @@ async def common_checks(
                     model=_model,
                     end_user_object=end_user_object,
                     llm_router=llm_router,
-                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                    valid_token=valid_token,
                 )
             for fallback_model in request_fallback_model_names(_typed_request_body(request_body)):
                 can_customer_access_model(
                     model=fallback_model,
                     end_user_object=end_user_object,
                     llm_router=llm_router,
-                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                    valid_token=valid_token,
                 )
 
     # 1.1 - 2.2 - 3.0.2 - 3.0.3: Project checks (blocked, model access, budget)
@@ -4585,7 +4587,7 @@ def _can_object_call_model(
 
 def _resolve_team_alias(
     model: str | list[str],
-    team_model_aliases: dict[str, str] | None,
+    team_model_aliases: Mapping[str, str] | None,
     team_id: str | None,
     llm_router: Router | None,
 ) -> str | list[str]:
@@ -4597,7 +4599,7 @@ def _resolve_team_alias(
 
 
 def _live_team_alias_target(
-    model: str, team_model_aliases: dict[str, str], team_id: str | None, llm_router: Router | None
+    model: str, team_model_aliases: Mapping[str, str], team_id: str | None, llm_router: Router | None
 ) -> str:
     target: Final = team_model_aliases.get(model)
     if target is None:
@@ -4631,7 +4633,9 @@ async def _check_agent_access_group_model_access(
         if unmanaged is not None
         else ()
     )
-    dispatched: Final = _resolve_team_alias(model, valid_token.team_model_aliases, valid_token.team_id, llm_router)
+    dispatched: Final = _resolve_team_alias(
+        model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router
+    )
     for ceiling in ceilings:
         if not ceiling.models:
             raise ModelAccessDeniedProxyException(
@@ -4727,6 +4731,10 @@ def _model_in_team_aliases(model: str, team_model_aliases: dict[str, str] | None
 
 def key_model_aliases_for_auth_check(valid_token: UserAPIKeyAuth | None) -> Mapping[str, str] | None:
     return alias_map(valid_token.aliases) if valid_token is not None and valid_token.aliases else None
+
+
+def team_model_aliases_for_auth_check(valid_token: UserAPIKeyAuth) -> Mapping[str, str] | None:
+    return alias_map(valid_token.team_model_aliases) if valid_token.team_model_aliases else None
 
 
 def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> list[str]:
@@ -5181,7 +5189,7 @@ async def can_key_call_resolved_model(
                 model=model,
                 end_user_object=end_user_object,
                 llm_router=llm_router,
-                key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                valid_token=valid_token,
             )
 
 
@@ -5355,13 +5363,18 @@ def can_customer_access_model(
     model: str | list[str],
     end_user_object: LiteLLM_EndUserTable,
     llm_router: Router | None,
-    key_model_aliases: Mapping[str, str] | None = None,
+    valid_token: UserAPIKeyAuth | None,
 ) -> Literal[True]:
+    team_alias_target: Final = (
+        _resolve_team_alias(model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router)
+        if valid_token is not None
+        else model
+    )
     return _can_object_call_model(
-        model=model,
+        model=team_alias_target,
         llm_router=llm_router,
         models=end_user_object.models,
-        key_model_aliases=key_model_aliases,
+        key_model_aliases=key_model_aliases_for_auth_check(valid_token),
         object_type="customer",
     )
 
