@@ -264,9 +264,13 @@ def test_container_list_returns_only_the_callers_containers_across_upstream_page
         f"cntr_{name}_{run}" for name in ("a1", "a2", "a3", "b1", "b2", "orphan")
     )
     created_ids: Final = (own_first, own_second, own_third, foreign_first, foreign_second)
-    first_page: Final = (own_first, foreign_first, ownerless, own_second)
+    first_page: Final = (own_first, foreign_first, own_second, ownerless)
     second_page: Final = (own_third, foreign_second)
-    pages: Final = {None: (first_page, True), own_second: (second_page, False)}
+    pages: Final = {
+        None: (first_page, True),
+        ownerless: (second_page, False),
+        own_second: ((ownerless, *second_page), False),
+    }
     provider_key: Final = f"container-key-{uuid.uuid4().hex}"
     with wire_server(_listing_upstream(created_ids, pages)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=f"{wire.url}/v1", api_key=provider_key)
@@ -289,7 +293,7 @@ def test_container_list_returns_only_the_callers_containers_across_upstream_page
         auth: Final = f"Bearer {provider_key}"
         assert _requests(wire) == [
             ("GET", "/v1/containers?limit=100&order=desc", auth),
-            ("GET", f"/v1/containers?after={own_second}&limit=100&order=desc", auth),
+            ("GET", f"/v1/containers?after={ownerless}&limit=100&order=desc", auth),
         ]
 
         second: Final = gateway.client.get(
