@@ -110,6 +110,15 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     return "choices" in cached_result
 
 
+def _is_completion_without_choices(result: object) -> bool:
+    if isinstance(result, (ModelResponse, TextCompletionResponse)):
+        return len(result.choices) == 0
+    if isinstance(result, dict):
+        choices: Final = result.get("choices")
+        return isinstance(choices, list) and len(choices) == 0
+    return False
+
+
 def _stream_replay_requested(kwargs: Mapping[str, object]) -> bool:
     if kwargs.get("stream", False) is True:
         return True
@@ -397,6 +406,9 @@ class LLMCachingHandler:
             print_verbose("Checking Sync Cache")
             with response_cache_phase("get"):
                 cached_result = litellm.cache.get_cache(**new_kwargs)
+            if _is_completion_without_choices(cached_result):
+                verbose_logger.debug("LiteLLM Cache: cached completion has no choices, treating it as a miss")
+                return CachingHandlerResponse(cached_result=None)
             if cached_result is not None:
                 if "detail" in cached_result:
                     # implies an error occurred
@@ -835,6 +847,9 @@ class LLMCachingHandler:
                         cache_key=self.preset_cache_key,
                         **request_kwargs,
                     )
+        if _is_completion_without_choices(cached_result):
+            verbose_logger.debug("LiteLLM Cache: cached completion has no choices, treating it as a miss")
+            return None
         return cached_result
 
     def _convert_cached_result_to_model_response(
@@ -1062,6 +1077,9 @@ class LLMCachingHandler:
 
         if litellm.cache is None:
             return
+        if _is_completion_without_choices(result):
+            verbose_logger.debug("LiteLLM Cache: not caching a completion with no choices")
+            return
         cache: Final = litellm.cache
 
         new_kwargs: Final = kwargs.copy()
@@ -1112,6 +1130,11 @@ class LLMCachingHandler:
         """
         Sync internal method to add the result to the cache
         """
+        if litellm.cache is None:
+            return
+        if _is_completion_without_choices(result):
+            verbose_logger.debug("LiteLLM Cache: not caching a completion with no choices")
+            return
 
         new_kwargs: Final = kwargs.copy()
         new_kwargs.update(
@@ -1120,8 +1143,6 @@ class LLMCachingHandler:
                 args,
             )
         )
-        if litellm.cache is None:
-            return
 
         if self._should_store_result_in_cache(original_function=self.original_function, kwargs=new_kwargs):
             with response_cache_phase("set"):
