@@ -5369,10 +5369,13 @@ def can_customer_access_model(
     team_id: Final = valid_token.team_id if valid_token is not None else None
     key_model_aliases: Final = key_model_aliases_for_auth_check(valid_token)
     for name in (model,) if isinstance(model, str) else model:
-        if name in (end_user_object.models or ()) and name in (team_model_aliases or ()):
+        team_target: Final = (
+            _live_team_alias_target(name, team_model_aliases, team_id, llm_router) if team_model_aliases else name
+        )
+        if team_target != name and name in (end_user_object.models or ()):
             continue
         _can_object_call_model(
-            model=_resolve_team_alias(name, team_model_aliases, team_id, llm_router),
+            model=team_target,
             llm_router=llm_router,
             models=end_user_object.models,
             key_model_aliases=key_model_aliases,
