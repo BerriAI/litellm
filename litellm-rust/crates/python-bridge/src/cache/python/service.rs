@@ -36,7 +36,11 @@ fn to_python(value: Value) -> Result<Value, Error> {
                 litellm_framing::sse::split_raw_blocks(Bytes::from(text))
                     .map(|block| String::from_utf8(block.to_vec()).map_err(|_| Error::InvalidEntry))
                     .collect();
-            Ok(serde_json::json!({ STREAM_EVENTS_KEY: events? }))
+            let response = serde_json::Map::from_iter([(
+                STREAM_EVENTS_KEY.to_owned(),
+                Value::Array(events?.into_iter().map(Value::String).collect()),
+            )]);
+            Ok(Value::Object(response))
         }
     }
 }
