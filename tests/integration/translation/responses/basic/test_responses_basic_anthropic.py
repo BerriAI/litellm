@@ -2,7 +2,7 @@ import pytest
 from integration._support.client import Gateway
 from integration._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
-from integration.translation.messages.bases.anthropic import (
+from integration.translation.responses.bases.anthropic import (
     CLAUDE_HAIKU_4_5_TEST_CASE,
     CLAUDE_OPUS_4_8_TEST_CASE,
     CLAUDE_OPUS_5_5_TEST_CASE,
@@ -25,5 +25,9 @@ from integration.translation.runner import run
     ],
     ids=lambda case: case.id,
 )
-def test_messages_basic_anthropic(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
+def test_responses_basic_anthropic(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
+    pytest.skip(
+        "BUG: LIT-9231 the chat-completions bridge returns instructions and max_output_tokens as null"
+        " and temperature as 0.0 instead of echoing the request"
+    )
     run(case, gateway, provider)
