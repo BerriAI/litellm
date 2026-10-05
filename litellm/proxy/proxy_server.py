@@ -9150,11 +9150,9 @@ class ProxyConfig:
         await initialize_pass_through_endpoints_in_db()
 
     def decrypt_credentials(self, credential: dict | BaseModel) -> CredentialItem:
-        if isinstance(credential, dict):
-            credential_object = CredentialItem(**credential)
-        elif isinstance(credential, BaseModel):
-            credential_object = CredentialItem(**credential.model_dump())
-
+        credential_object: Final = CredentialItem(
+            **(credential if isinstance(credential, dict) else credential.model_dump())
+        )
         credential_object.credential_values = dict(decrypted_values(credential_object.credential_values))
         return credential_object
 
