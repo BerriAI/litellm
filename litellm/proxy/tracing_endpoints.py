@@ -56,7 +56,7 @@ router = APIRouter(tags=["agent tracing"])
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
 
 
-def current_time_ms() -> int:
+async def current_time_ms() -> int:
     return int(time.time() * 1000)
 
 
