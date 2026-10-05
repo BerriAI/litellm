@@ -266,7 +266,7 @@ def test_legacy_prompt_separates_instructions_from_nested_untrusted_evidence() -
     ),
 )
 def test_malformed_legacy_json_cannot_promote_evidence_to_system(prompt: str) -> None:
-    with pytest.raises(ValueError) as error:
+    with pytest.raises(ValueError, match="Malformed legacy Lens prompt") as error:
         request_messages(ModelRequest(purpose="extract", prompt=prompt))
     assert str(error.value) == "Malformed legacy Lens prompt; send structured messages."
 

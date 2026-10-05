@@ -259,8 +259,8 @@ async def run_agent(
             continue
         just_compacted = False
         if response.result is not None:
-            validation: Final = validate(response.result)
-            invalid: Final = await validation if isawaitable(validation) else validation
+            validation: str | None | Awaitable[str | None] = validate(response.result)
+            invalid: str | None = await validation if isawaitable(validation) else validation
             if not invalid:
                 return response.result
             journal = (

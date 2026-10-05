@@ -427,7 +427,9 @@ class ModelRequest(Record):
             if self.prompt.lstrip().startswith(("{", "[")):
                 raise ValueError("Malformed legacy Lens prompt; send structured messages.") from None
             return (ModelMessage(role="system", content=self.prompt), ModelMessage(role="user", content="{}"))
-        instruction_fields: Final = frozenset(("task", "navigation", "context", "checks", "questions", "response_schema"))
+        instruction_fields: Final = frozenset(
+            ("task", "navigation", "context", "checks", "questions", "response_schema")
+        )
         instructions: Final = {key: value for key, value in payload.items() if key in instruction_fields}
         evidence: Final = {key: value for key, value in payload.items() if key not in instruction_fields}
         return (
