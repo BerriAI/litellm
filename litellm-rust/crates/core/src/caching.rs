@@ -341,7 +341,7 @@ fn now() -> Duration {
 
 fn successful_stream(text: &str, terminal: &str) -> bool {
     let mut pending = BytesMut::from(text.as_bytes());
-    let mut codec = litellm_framing::sse::SseCodec::default();
+    let mut codec = litellm_framer::sse::SseCodec::default();
     let mut complete = false;
     loop {
         let event = match codec.decode(&mut pending) {
