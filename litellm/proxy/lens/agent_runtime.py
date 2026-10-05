@@ -119,6 +119,9 @@ async def run_agent(
                 "task": task,
                 "tool_instructions": (
                     "Tools remain available throughout the task. Read retrieves complete original spans or sessions. "
+                    "When initial_evidence is present, it already contains the complete stored original content of "
+                    "those spans, identical to what read returns. Rereading them does not recover content that was "
+                    "absent from the source recording, including material never retrieved by the recorded agent. "
                     "Omit execution_id for the whole sample; omit span_ids for all spans in the selected scope. "
                     "Optional char_start and char_end select a zero-based character range without default truncation. "
                     "Search performs literal case-insensitive search and returns every matching original span. "

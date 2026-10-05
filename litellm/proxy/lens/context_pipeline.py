@@ -20,12 +20,10 @@ from .analysis import (
     ReadContent,
     ReportProgress,
     analyze_with,
-    candidate_size,
     concurrent_results,
     examine_executions,
     merge_candidates,
     observation_batches,
-    partition_items,
     validation_details,
 )
 from .models import (
@@ -93,20 +91,9 @@ async def parallel_cluster_batches(
 
 
 async def reconcile_candidates(candidates: tuple[Candidate, ...], model: ModelCall) -> Clusters:
-    registry: tuple[Candidate, ...] = ()  # rebind-ok: reconcile each batch with every earlier matching candidate
     ordered: Final = tuple(sorted(candidates, key=lambda candidate: (candidate.check_id, candidate.kind)))
-    for incoming in partition_items(ordered, candidate_size, 8000):
-        kinds = frozenset((candidate.check_id, candidate.kind) for candidate in incoming)
-        matching = tuple(candidate for candidate in registry if (candidate.check_id, candidate.kind) in kinds)
-        unrelated = tuple(candidate for candidate in registry if (candidate.check_id, candidate.kind) not in kinds)
-        carried: tuple[Candidate, ...] = incoming
-        retained: tuple[Candidate, ...] = ()
-        for prior in partition_items(matching, candidate_size, 16000) or ((),):
-            continued, settled = await merge_candidates((*prior, *carried), len(prior), model)
-            carried = continued
-            retained = (*retained, *settled)
-        registry = (*unrelated, *retained, *carried)
-    return Clusters(candidates=registry)
+    merged, preserved = await merge_candidates(ordered, 0, model)
+    return Clusters(candidates=(*preserved, *merged))
 
 
 async def investigate_context_candidate(
@@ -124,9 +111,11 @@ async def investigate_context_candidate(
             + "\nInvestigate the supplied candidate against original evidence, including counterexamples. "
             "Reviewer records contain the initial observations and exact evidence references. Use read_reviews "
             "for the candidate's sessions and search_reviews to compare other sessions when useful. You can "
-            "inspect every sampled session and its nested agents. Preserve distinct supported causes if the "
-            "candidate conflates them. Return every supported finding for this candidate, or an empty findings "
-            "list if the evidence does not support it.",
+            "inspect every sampled session and its nested agents. Finalize findings about the supplied "
+            "candidate's check and underlying cause or causes. Use unrelated successes as context or "
+            "counterevidence rather than additional success findings; other candidates have their own "
+            "investigators. Preserve distinct supported causes if the candidate conflates them. Return every "
+            "supported finding for this assignment, or an empty findings list if the evidence does not support it.",
             purpose="investigate",
             claim=claim,
             workspace=workspace,

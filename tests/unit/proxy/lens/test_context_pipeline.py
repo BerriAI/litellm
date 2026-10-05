@@ -10,7 +10,11 @@ from litellm.proxy.lens.agent_review import Findings
 from litellm.proxy.lens.agent_runtime import AgentTurn, DialogueTurn
 from litellm.proxy.lens.agent_workspace import EvidenceReply, EvidenceRequest, EvidenceWorkspace, SessionContent
 from litellm.proxy.lens.analysis import Candidate, Clusters, Extraction, Observation
-from litellm.proxy.lens.context_pipeline import investigate_context_candidate, parallel_cluster_batches
+from litellm.proxy.lens.context_pipeline import (
+    investigate_context_candidate,
+    parallel_cluster_batches,
+    reconcile_candidates,
+)
 from litellm.proxy.lens.models import (
     Claim,
     Coverage,
@@ -46,6 +50,41 @@ class AssignedSession(BaseModel):
 
 async def ignore_progress(_stage: str, _coverage: Coverage) -> None:
     return None
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_compares_large_candidate_set_once_without_losing_omitted_references() -> None:
+    candidates: Final = tuple(
+        Candidate(
+            check_id="retries",
+            title=f"Candidate {index}",
+            hypothesis=f"Cause {index}: " + "Complete supporting detail. " * 40,
+            execution_ids=(f"run-{index}",),
+        )
+        for index in range(128)
+    )
+    calls: Final = SimpleQueue[str]()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        calls.put(request.prompt)
+        payload: Final = GroupPrompt.model_validate_json(request.prompt)
+        assert payload.candidates == tuple(
+            candidate.model_copy(update=MappingProxyType({"execution_ids": (f"p{index}",)}))
+            for index, candidate in enumerate(candidates)
+        )
+        return ModelResult(
+            content=Clusters(
+                candidates=(candidates[0].model_copy(update=MappingProxyType({"execution_ids": ("p0", "p1")})),)
+            ).model_dump_json(),
+            cost=0,
+        )
+
+    result: Final = await reconcile_candidates(candidates, model)
+    assert calls.qsize() == 1
+    assert result.candidates == (
+        candidates[0].model_copy(update=MappingProxyType({"execution_ids": ("run-0", "run-1")})),
+        *candidates[2:],
+    )
 
 
 @pytest.mark.asyncio
