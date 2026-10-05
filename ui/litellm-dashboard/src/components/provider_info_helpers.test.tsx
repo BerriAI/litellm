@@ -245,7 +245,7 @@ describe("provider_info_helpers", () => {
     });
 
     it("should return a topxai model placeholder for TOPXAI provider", () => {
-      expect(getPlaceholder(Providers.TOPXAI)).toBe("topxai/claude-sonnet-5");
+      expect(getPlaceholder(Providers.TOPXAI)).toBe("topxai/claude-sonnet-5-5");
     });
 
     it("should return claude-3-opus placeholder for Anthropic provider", () => {

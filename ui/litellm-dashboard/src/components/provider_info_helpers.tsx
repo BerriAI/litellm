@@ -462,7 +462,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.SCX_AI]: "scx-ai/GLM-5.2",
   [Providers.Snowflake]: "snowflake/mistral-7b",
   [Providers.Tencent]: "tencent/deepseek-v4-pro",
-  [Providers.TOPXAI]: "topxai/claude-sonnet-5",
+  [Providers.TOPXAI]: "topxai/claude-sonnet-5-5",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",
   [Providers.Voyage]: "voyage/",
