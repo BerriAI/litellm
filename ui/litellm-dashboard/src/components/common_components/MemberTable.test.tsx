@@ -218,6 +218,21 @@ describe("MemberTable actions", () => {
     expect(onEdit).not.toHaveBeenCalled();
   });
 
+  it("does not open edit from a click on a disabled reset spend control", async () => {
+    const user = userEvent.setup();
+    const { onEdit, onResetSpend } = renderTable({
+      onResetSpend: vi.fn(),
+      resetSpendDisabledReason: () => "No current cycle spend to reset",
+    });
+    const resetButton = within(screen.getByRole("row", { name: /amy@example\.com/ })).getByTestId("reset-member-spend");
+    expect(resetButton).toHaveAttribute("aria-disabled", "true");
+
+    await user.click(resetButton.parentElement!);
+
+    expect(onEdit).not.toHaveBeenCalled();
+    expect(onResetSpend).not.toHaveBeenCalled();
+  });
+
   it("hides delete for members the caller excludes", () => {
     renderTable({ showDeleteForMember: (member) => member.role !== "admin" });
 

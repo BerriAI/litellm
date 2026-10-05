@@ -200,7 +200,7 @@ const buildColumns = ({
     meta: { pinned: "right" },
     cell: ({ row }) =>
       canEdit ? (
-        <span className="inline-flex items-center gap-2">
+        <span className="inline-flex items-center gap-2" data-row-click-exempt>
           {onResetSpend && (
             <ResetSpendAction
               disabledReason={resetSpendDisabledReason?.(row.original) ?? null}
