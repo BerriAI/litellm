@@ -658,6 +658,7 @@ class McpServerCreateBody(BaseModel):
     auth_type: str | None = None
     oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
     per_server_oauth_discovery: bool | None = None
+    issuer: str | None = None
     authorization_url: str | None = None
     token_url: str | None = None
     registration_url: str | None = None
