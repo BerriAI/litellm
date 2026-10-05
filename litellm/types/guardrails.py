@@ -668,16 +668,17 @@ BedrockStreamingStrategy = Literal["aggregate", "sync", "async"]
 class BedrockGuardrailStreamingParams(BaseModel):
     streaming_strategy: BedrockStreamingStrategy | None = Field(
         default=None,
-        description="How a streamed response is checked. aggregate (default when unset) holds every chunk, "
-        "runs one ApplyGuardrail call, then releases the response or a block. sync holds each window of "
-        "streaming_sampling_rate chunks, waits for ApplyGuardrail, then releases that window. async sends "
-        "chunks immediately and runs one ApplyGuardrail call after the stream. When set, this wins over "
-        "the individual streaming flags.",
+        description="How a streamed response is checked. sync (default when unset) holds each window of "
+        "streaming_sampling_rate chunks, waits for ApplyGuardrail, then releases that window. aggregate "
+        "holds every chunk, runs one ApplyGuardrail call, then releases the response or a block. async "
+        "sends chunks immediately and runs one ApplyGuardrail call after the stream. When set, this wins "
+        "over the individual streaming flags.",
     )
     streaming_buffer_until_moderated: bool = Field(
         default=True,
-        description="If True (default), withhold every streamed chunk until the end-of-stream "
-        "ApplyGuardrail scan passes, so no flagged content reaches the client before a block. "
+        description="If True (default), withhold streamed chunks until an ApplyGuardrail scan that covers "
+        "them passes, so no flagged content reaches the client before a block. The default sync "
+        "window scans every streaming_sampling_rate chunks and then releases that window. "
         "If False, chunks stream through unbuffered, so flagged content can reach the client "
         "before the scan finishes; a flagged scan still ends the stream, with a block message "
         "when disable_exception_on_block is true and an in-stream error frame otherwise.",
@@ -699,9 +700,10 @@ class BedrockGuardrailStreamingParams(BaseModel):
         "stream with a block message (disable_exception_on_block=true) or an error frame.",
     )
     streaming_buffer_release_on_scan: bool = Field(
-        default=False,
+        default=True,
         description="When buffering, scan the accumulated response every streaming_sampling_rate chunks "
         "and release the withheld chunks once the scan passes, instead of holding everything to end of stream. "
+        "Default True, which is the sync window. Set False to hold the whole stream for one scan. "
         "Flagged content is never released. Ignored when streaming_end_of_stream_only is true.",
     )
 

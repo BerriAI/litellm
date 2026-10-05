@@ -15,7 +15,7 @@ import json
 import re
 import sys
 import time
-from collections.abc import AsyncGenerator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
 from types import MappingProxyType
@@ -221,6 +221,12 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
 
 
 _RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+
+
+async def _prepend_stream_chunk(first: object, rest: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+    yield first
+    async for item in rest:
+        yield item
 
 
 def _is_responses_api_route(request_route: str | None) -> bool:
@@ -2760,25 +2766,35 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
-        Process streaming response chunks.
+        Process streaming response chunks with a post_call OUTPUT scan.
 
-        Collect content from the stream and run the bedrock OUTPUT scan
-        (post_call only validates the response).
+        The default holds each window of chunks, waits for ApplyGuardrail, then
+        releases that window. aggregate still holds the whole stream for one scan.
+        Raw SSE frames stay on that full-stream scan, which is what can assemble them.
         """
         if self._streams_incrementally():
-            from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
-                UnifiedLLMGuardrails,
-            )
+            response_iterator: Final = response.__aiter__()
+            try:
+                first_chunk: Final = await response_iterator.__anext__()
+            except StopAsyncIteration:
+                return
+            continued: Final = _prepend_stream_chunk(first_chunk, response_iterator)
+            if isinstance(first_chunk, (bytes, str)):
+                response = continued  # rebind-ok: raw SSE must fall through to the assembler
+            else:
+                from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+                    UnifiedLLMGuardrails,
+                )
 
-            async for streamed_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_data=request_data,
-                guardrail_to_apply=self,
-                buffer_until_moderated_default=False,
-            ):
-                yield streamed_chunk
-            return
+                async for streamed_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=continued,
+                    request_data=request_data,
+                    guardrail_to_apply=self,
+                    buffer_until_moderated_default=False,
+                ):
+                    yield streamed_chunk
+                return
 
         # Responses-API events are neither chat-completions chunks nor raw
         # Anthropic SSE, so the assembly below cannot scan them; the unified
