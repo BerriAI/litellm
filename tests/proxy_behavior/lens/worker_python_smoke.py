@@ -145,6 +145,13 @@ async def resources() -> None:
         limits=PythonLimits(scratch_entries=16),
     )
     assert "scratch storage" in entries.error, entries
+    fast_entries: Final = await run(
+        "import pathlib\nfor i in range(128): pathlib.Path(str(i)).touch()",
+        limits=PythonLimits(scratch_entries=16),
+    )
+    assert "scratch storage" in fast_entries.error, fast_entries
+    hidden: Final = await run("import ctypes,time\nassert ctypes.CDLL(None).prctl(4,0,0,0,0) == 0\ntime.sleep(1)")
+    assert "could not be inspected" in hidden.error and not hidden.output_complete, hidden
     for retained in ("files.append(f)", "maps.append(mmap.mmap(f.fileno(), 1, trackfd=False))\n    f.close()"):
         scratch: Final = await run(
             "import mmap,os,time\nfiles=[]\nmaps=[]\nfor i in range(4):\n"
@@ -216,6 +223,8 @@ async def cancellation_and_pool() -> None:
     fresh: Final = await run('print("data" in globals(), "f" in globals())')
     succeeded(fresh)
     assert fresh.stdout == "True False\n"
+    startups: Final = await asyncio.gather(*(run("print(1)") for _ in range(32)))
+    assert all(reply.stdout == "1\n" and not reply.error for reply in startups), startups
     assert not tuple(Path("/tmp").glob("lens-python-*"))
     print("PASS worker-wide pool, queued/running cancellation, reaping, cleanup and concurrent workspace isolation")
 

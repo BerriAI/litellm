@@ -112,7 +112,7 @@ async def _feed(process: asyncio.subprocess.Process, code: str, data: str) -> No
         process.stdin.close()
 
 
-async def _read(stream: asyncio.StreamReader | None, limit: int) -> bytes:
+async def _read(stream: asyncio.StreamReader | None, limit: int, ready: asyncio.Event | None = None) -> bytes:
     assert stream is not None
     chunks: tuple[bytes, ...] = ()  # rebind-ok: collect bounded pipe output until EOF
     size = 0  # rebind-ok: count streamed bytes before retaining another chunk
@@ -121,6 +121,8 @@ async def _read(stream: asyncio.StreamReader | None, limit: int) -> bytes:
         if size > limit:
             raise ExecutionLimit(f"Python output exceeded {limit} bytes on one stream; output was not delivered.")
         chunks = (*chunks, chunk)
+        if ready is not None and not ready.is_set() and b"".join(chunks).startswith(_READY):
+            ready.set()
     return b"".join(chunks)
 
 
@@ -172,26 +174,37 @@ def _scratch_usage(directory: str, pid: int, limits: PythonLimits) -> None:
 
 
 def _mapped_scratch(directory: str, pid: int) -> Iterator[tuple[int, int]]:
+    prefix: Final = directory.replace("\n", "\\012") + os.sep
     try:
         mappings: Final = Path(f"/proc/{pid}/maps").read_text().splitlines()
     except FileNotFoundError:
         return
     for mapping in mappings:
-        if len(fields := mapping.split(maxsplit=5)) < 5 or fields[4] == "0":
+        if len(fields := mapping.split(maxsplit=5)) < 6 or fields[4] == "0":
             continue
-        try:
-            if os.readlink(f"/proc/{pid}/map_files/{fields[0]}").startswith(directory + os.sep):
-                major, minor = fields[3].split(":")
-                yield os.makedev(int(major, 16), int(minor, 16)), int(fields[4])
-        except FileNotFoundError:
-            continue
+        if fields[5].startswith(prefix):
+            major, minor = fields[3].split(":")
+            yield os.makedev(int(major, 16), int(minor, 16)), int(fields[4])
 
 
-async def _monitor(process: asyncio.subprocess.Process, directory: str, limits: PythonLimits) -> None:
-    while process.returncode is None:
+async def _monitor(
+    process: asyncio.subprocess.Process, directory: str, limits: PythonLimits, ready: asyncio.Event
+) -> None:
+    while not ready.is_set():
+        if process.returncode is not None:
+            return
+        await asyncio.sleep(0.005)
+    try:
+        while process.returncode is None:
+            _scratch_usage(directory, process.pid, limits)
+            await asyncio.sleep(0.05)
         _scratch_usage(directory, process.pid, limits)
-        await asyncio.sleep(0.05)
-    _scratch_usage(directory, process.pid, limits)
+    except (PermissionError, ProcessLookupError):
+        try:
+            await asyncio.wait_for(process.wait(), timeout=0.05)
+        except TimeoutError as error:
+            raise ExecutionLimit("Python scratch storage could not be inspected; execution stopped.") from error
+        _scratch_usage(directory, process.pid, limits)
 
 
 async def _discard(stream: asyncio.StreamReader | None) -> None:
@@ -286,18 +299,20 @@ async def execute_python(code: str, data: str, *, limits: PythonLimits = _DEFAUL
 
 async def _execute(code: str, data: str, limits: PythonLimits) -> str:
     started: Final = monotonic()
-    with TemporaryDirectory(prefix="lens-python-") as directory:
+    with TemporaryDirectory(prefix="lens-python-") as temporary:
+        directory: Final = str(Path(temporary).resolve())
         try:
             command: Final = _command(directory, limits)
             process: Final = await _start(command, directory)
         except (OSError, ValueError) as error:
             return _result(started, error=f"Python confinement unavailable: {error}")
+        ready: Final = asyncio.Event()
         pending: Final = (
             asyncio.create_task(_feed(process, code, data)),
             asyncio.create_task(_read(process.stdout, limits.output_bytes)),
-            asyncio.create_task(_read(process.stderr, limits.output_bytes + len(_READY))),
+            asyncio.create_task(_read(process.stderr, limits.output_bytes + len(_READY), ready)),
             asyncio.create_task(process.wait()),
-            asyncio.create_task(_monitor(process, directory, limits)),
+            asyncio.create_task(_monitor(process, directory, limits, ready)),
         )
         try:
             _, stdout, stderr, exit_code, _ = await asyncio.wait_for(
