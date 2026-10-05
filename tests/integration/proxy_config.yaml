@@ -29,6 +29,21 @@ model_list:
       model: anthropic/claude-sonnet-4-6
       api_base: http://127.0.0.1:8191
       api_key: synthetic-anthropic-key
+  - model_name: gemini/gemini-3.5-flash
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-gemini-key
+  - model_name: gemini/gemini-3.8-flash
+    litellm_params:
+      model: gemini/gemini-3.8-flash
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-gemini-key
+  - model_name: gemini/gemini-3.1-pro-preview
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-gemini-key
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   database_url: os.environ/DATABASE_URL
