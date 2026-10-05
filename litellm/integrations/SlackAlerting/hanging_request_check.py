@@ -85,6 +85,9 @@ class AlertingHangingRequestCheck:
         )
         return
 
+    def remove_request(self, request_id: str) -> None:
+        self.hanging_request_cache.delete_cache(key=request_id)
+
     @with_service_target(_REQUEST_STATUS_TARGET)
     async def send_alerts_for_hanging_requests(self):
         """
@@ -94,17 +97,19 @@ class AlertingHangingRequestCheck:
 
         #########################################################
         # Find all requests that have been hanging for more than the alerting threshold
-        # Get the last 50 oldest items in the cache and check if they have completed
+        # Check the entire bounded cache so the first batch cannot starve later requests
         #########################################################
         # check if request_id is in internal usage cache
         if proxy_logging_obj.internal_usage_cache is None:
             return
 
         hanging_requests: Final = await self.hanging_request_cache.async_get_oldest_n_keys(
-            n=MAX_OLDEST_HANGING_REQUESTS_TO_CHECK,
+            n=len(self.hanging_request_cache.ttl_dict),
         )
 
-        for request_id in hanging_requests:
+        for index, request_id in enumerate(hanging_requests, start=1):
+            if index % MAX_OLDEST_HANGING_REQUESTS_TO_CHECK == 0:
+                await asyncio.sleep(0)
             hanging_request_data: HangingRequestData | None = await self.hanging_request_cache.async_get_cache(
                 key=request_id,
             )
