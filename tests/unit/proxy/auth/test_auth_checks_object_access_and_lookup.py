@@ -8882,6 +8882,7 @@ async def _common_checks_for_customer_model(
     customer_models: list[str],
     request_overrides: Mapping[str, object] | None = None,
     team_model_aliases: dict[str, str] | None = None,
+    key_model_aliases: dict[str, str] | None = None,
 ) -> bool:
     from litellm.proxy.auth.auth_checks import common_checks
 
@@ -8899,7 +8900,9 @@ async def _common_checks_for_customer_model(
         route="/chat/completions",
         llm_router=None,
         proxy_logging_obj=MagicMock(),
-        valid_token=UserAPIKeyAuth(token="test-token", team_model_aliases=team_model_aliases),
+        valid_token=UserAPIKeyAuth(
+            token="test-token", team_model_aliases=team_model_aliases, aliases=key_model_aliases or {}
+        ),
         request=MagicMock(spec=Request),
         skip_budget_checks=True,
     )
@@ -8956,6 +8959,32 @@ async def test_common_checks_matches_team_alias_target_against_customer_allowlis
         await _common_checks_for_customer_model(
             model="m1", customer_models=["fast"], team_model_aliases=team_model_aliases
         )
+
+
+@pytest.mark.asyncio
+async def test_common_checks_prefers_team_alias_over_same_named_key_alias_for_customer() -> None:
+    team_model_aliases: Final = {"fast": "m1"}
+    key_model_aliases: Final = {"fast": "m2"}
+
+    for customer_models in (["fast"], ["m1"]):
+        assert (
+            await _common_checks_for_customer_model(
+                model="fast",
+                customer_models=customer_models,
+                team_model_aliases=team_model_aliases,
+                key_model_aliases=key_model_aliases,
+            )
+            is True
+        )
+    with pytest.raises(ModelAccessDeniedProxyException) as exc_info:
+        await _common_checks_for_customer_model(
+            model="fast",
+            customer_models=["m2"],
+            team_model_aliases=team_model_aliases,
+            key_model_aliases=key_model_aliases,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.customer_model_access_denied
 
 
 @pytest.mark.parametrize(
