@@ -1,5 +1,7 @@
 """Utils for accessing credentials."""
 
+from collections.abc import Sequence
+from types import MappingProxyType
 from typing import Final
 
 import litellm
@@ -22,17 +24,14 @@ class CredentialAccessor:
         return {} if credential is None else credential.credential_values.copy()
 
     @staticmethod
-    def upsert_credentials(credentials: list[CredentialItem]):
-        """Add a credential to the list of credentials."""
-
-        credential_names: Final = [cred.credential_name for cred in litellm.credential_list]
+    def upsert_credentials(credentials: Sequence[CredentialItem]) -> None:
+        """Add credentials to the list, replacing the first existing entry with the same name in place."""
+        first_index_by_name: Final = MappingProxyType(
+            {cred.credential_name: i for i, cred in reversed(tuple(enumerate(litellm.credential_list)))}
+        )
 
         for credential in credentials:
-            if credential.credential_name in credential_names:
-                # Find and replace the existing credential in the list
-                for i, existing_cred in enumerate(litellm.credential_list):
-                    if existing_cred.credential_name == credential.credential_name:
-                        litellm.credential_list[i] = credential
-                        break
+            if credential.credential_name in first_index_by_name:
+                litellm.credential_list[first_index_by_name[credential.credential_name]] = credential
             else:
                 litellm.credential_list.append(credential)
