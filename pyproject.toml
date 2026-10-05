@@ -34,6 +34,7 @@ dependencies = [
     "pydantic-settings>=2.14.1,<3.0",
     "jsonschema>=4.0.0,<5.0",
     "boto3>=1.43.1,<2.0",
+    "typing-extensions>=4.13.0,<5.0",
 ]
 
 [project.urls]
@@ -254,6 +255,7 @@ proxy-dev = [
     "a2a-sdk==1.1.0",
 ]
 ci = [
+    "psutil==7.2.2",
     # These are lazily imported at call sites; keep them out of core deps to
     # avoid bloating the base SDK install (google-generativeai pulls grpcio +
     # protobuf, Pillow is a compiled C extension).
@@ -314,7 +316,8 @@ include = [
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/model_insights_tasks.json",
-    "litellm/proxy/client/cli/commands/codex_base_instructions.md",
+    "litellm/proxy/common_utils/codex_base_instructions.md",
+    "litellm/proxy/common_utils/codex_bundled_models_0.159.3.json",
     "litellm/proxy/lens/prompts/*.md",
 ]
 exclude = [

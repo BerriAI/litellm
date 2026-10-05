@@ -12,6 +12,7 @@ from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly
 
 import litellm
@@ -41,6 +42,7 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
+    reject_server_owned_wif_params,
 )
 from litellm.proxy.auth.model_checks import get_key_models
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -58,6 +60,7 @@ from litellm.proxy.health_check import (
     deployments_targeted_by_name,
     health_check_filter_kwargs_from_general_settings,
     perform_health_check,
+    resolve_health_check_mode,
     run_with_timeout,
 )
 from litellm.proxy.middleware.admission_control_middleware import (
@@ -173,6 +176,24 @@ def _config_base_for_health_check(
     return {key: value for key, value in config_params.items() if key not in _CONFIG_CONNECTION_FIELDS}
 
 
+def _model_info_for_mode_resolution(
+    model_info: Mapping[str, object], stored_params: Mapping[str, object], request_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    stored_model: Final = stored_params.get("model")
+    if stored_model is None or request_params.get("model") in (None, stored_model):
+        return model_info
+    return {key: value for key, value in model_info.items() if key != "mode"}
+
+
+def _string_mode_or_bad_request(params_mode: object) -> str | None:
+    if params_mode is None or isinstance(params_mode, str):
+        return params_mode
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={"error": f"litellm_params.mode must be a string, got {type(params_mode).__name__}"},
+    )
+
+
 def get_callback_identifier(callback):
     """
     Get the callback identifier string, handling both strings and objects.
@@ -203,6 +224,7 @@ def get_callback_identifier(callback):
 
 
 router: Final = APIRouter()
+_OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 services = (
     Literal[
         "slack_budget_alerts",
@@ -935,9 +957,9 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 
 def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     """
-    Return a copy of the /health response with provider routing fields
-    (``ADMIN_ONLY_HEALTH_DISPLAY_PARAMS``) removed from each healthy/unhealthy
-    endpoint entry. Used to hide those fields from non-admin callers while
+    Return a copy of the /health response with the admin-only fields (provider routing plus the
+    workload identity federation params naming the identity a deployment mints as) removed from
+    each healthy/unhealthy endpoint entry. Used to hide those fields from non-admin callers while
     still showing them which deployments they own and whether each one is
     healthy. Proxy admins receive the unmodified result.
     """
@@ -2033,11 +2055,16 @@ async def test_model_connection(
         "rerank",
         "realtime",
         "responses",
+        "anthropic_messages",
         "ocr",
     ]
     | None = fastapi.Body(
         None,
-        description="The mode to test the model with. If not provided, auto-detected from model capabilities.",
+        description=(
+            "The mode to test the model with. If not provided, resolved the way /health does: the deployment's "
+            "model_info.mode (only while the request tests the deployment's own model), then the mode the "
+            "provider requires for that model, then the model cost map."
+        ),
     ),
     litellm_params: dict = fastapi.Body(
         None,
@@ -2177,6 +2204,7 @@ async def test_model_connection(
                     "Could not find model %s in router: %s. Proceeding with request params only.", model_name, e
                 )
 
+        reject_server_owned_wif_params(request_litellm_params)
         # Merge: config params (from proxy config) as base, request params override
         litellm_params = {
             **_config_base_for_health_check(
@@ -2188,8 +2216,13 @@ async def test_model_connection(
         }
 
         resolved_model_info: Final = loaded_model_info if loaded_model_info is not None else model_info
+        probe_model_info: Final = _model_info_for_mode_resolution(
+            _OBJECT_MAPPING.validate_python(resolved_model_info or {}),
+            stored_params=_OBJECT_MAPPING.validate_python(config_litellm_params),
+            request_params=_OBJECT_MAPPING.validate_python(request_litellm_params),
+        )
         litellm_params = _update_litellm_params_for_health_check(
-            model_info=resolved_model_info or {},
+            model_info=dict(probe_model_info),
             litellm_params=litellm_params,
         )
 
@@ -2197,19 +2230,28 @@ async def test_model_connection(
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=Deployment(
                 model_name="test_model",
-                litellm_params=LiteLLM_Params(**litellm_params),
+                litellm_params=LiteLLM_Params.model_validate(litellm_params),
                 model_info=resolved_model_info,
             ),
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            # The probe is a write of the caller's own params onto the stored deployment, so the
+            # caller's params are the incoming side: a probe that redirects a federated
+            # deployment's api_base is an admin's action, an unmodified probe of it is not.
+            incoming_params=request_litellm_params,
         )
-        mode = mode or litellm_params.pop("mode", None)
+        raw_params_mode: Final[object] = litellm_params.pop("mode", None)
+        probe_mode: Final = (
+            mode
+            or _string_mode_or_bad_request(raw_params_mode)
+            or resolve_health_check_mode(probe_model_info, _OBJECT_MAPPING.validate_python(litellm_params))
+        )
 
         result: Final = await run_with_timeout(
             litellm.ahealth_check(
                 model_params=litellm_params,
-                mode=mode,
+                mode=probe_mode,
                 prompt="test from litellm",
                 input=["test from litellm"],
             ),
@@ -2224,7 +2266,7 @@ async def test_model_connection(
             "result": cleaned_result,
         }
 
-    except HTTPException as e:
+    except (HTTPException, ProxyException) as e:
         raise e
     except Exception as e:
         verbose_proxy_logger.debug("litellm.proxy.health_endpoints.test_model_connection(): Exception occurred - %s", e)

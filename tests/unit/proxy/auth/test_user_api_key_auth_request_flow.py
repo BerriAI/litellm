@@ -7321,15 +7321,10 @@ async def test_expired_cli_session_token_is_rejected(monkeypatch):
     on the shared validation path, not only for DB-backed keys."""
     monkeypatch.delenv("EXPERIMENTAL_UI_LOGIN", raising=False)
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-cli-test")
-    monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "-1")
 
-    import importlib
-
-    from litellm import constants
     from litellm.proxy.auth import auth_checks
 
-    importlib.reload(constants)
-    importlib.reload(auth_checks)
+    monkeypatch.setattr(auth_checks, "CLI_JWT_EXPIRATION_HOURS", -1)
 
     user_info = LiteLLM_UserTable(
         user_id="cli-admin",
@@ -7346,22 +7341,17 @@ async def test_expired_cli_session_token_is_rejected(monkeypatch):
     mock_request.headers = {"authorization": f"Bearer {cli_token}"}
     mock_request.query_params = {}
 
-    try:
-        with (
-            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
-            patch("litellm.proxy.proxy_server.prisma_client", None),
-        ):
-            with pytest.raises(ProxyException) as exc_info:
-                await user_api_key_auth(
-                    request=mock_request,
-                    api_key=f"Bearer {cli_token}",
-                )
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await user_api_key_auth(
+                request=mock_request,
+                api_key=f"Bearer {cli_token}",
+            )
 
-        assert exc_info.value.type == ProxyErrorTypes.expired_key
-    finally:
-        monkeypatch.delenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", raising=False)
-        importlib.reload(constants)
-        importlib.reload(auth_checks)
+    assert exc_info.value.type == ProxyErrorTypes.expired_key
 
 
 @pytest.mark.asyncio
