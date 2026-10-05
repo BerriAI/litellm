@@ -929,3 +929,77 @@ async def test_async_with_still_executes():
         sandbox_globals,
     )
     assert await sandbox_globals["f"](_ACtx((5, 6))) == 11
+
+
+def test_async_for_gets_the_same_guards_as_for():
+    """`async for` is the async spelling of `for`; it must not enforce less."""
+    sync_plain = _guard_names("def f(x):\n    for a in x:\n        pass\n")
+    async_plain = _guard_names("async def f(x):\n    async for a in x:\n        pass\n")
+    sync_unpack = _guard_names("def f(x):\n    for a, b in x:\n        pass\n")
+    async_unpack = _guard_names("async def f(x):\n    async for a, b in x:\n        pass\n")
+
+    # Preconditions: the sync forms are guarded at all.
+    assert "_getiter_" in sync_plain
+    assert "_iter_unpack_sequence_" in sync_unpack
+
+    # The async forms are guarded by the async-capable twins, under their own
+    # names — `budgeted_iter` and `_iter_unpack_sequence_` are plain generators
+    # that `async for` cannot consume.
+    assert "_agetiter_" in async_plain
+    assert "_aiter_unpack_sequence_" in async_unpack
+
+    # And neither async form is left with no wrapper at all.
+    assert async_plain & {"_agetiter_", "_aiter_unpack_sequence_"}
+    assert async_unpack & {"_agetiter_", "_aiter_unpack_sequence_"}
+
+
+async def _arange(*values):
+    for v in values:
+        yield v
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "arg", "expected"),
+    [
+        (
+            "async def f(it):\n    total = 0\n    async for a in it:\n        total += a\n    return total\n",
+            (1, 2, 3),
+            6,
+        ),
+        (
+            "async def f(it):\n    total = 0\n    async for a, b in it:\n        total += a * b\n    return total\n",
+            ((1, 2), (3, 4)),
+            14,
+        ),
+    ],
+)
+async def test_async_for_still_executes(source, arg, expected):
+    """Guarding `async for` must not break it, in either target shape."""
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
+        build_sandbox_globals,
+        compile_sandboxed,
+    )
+
+    sandbox_globals = build_sandbox_globals()
+    exec(compile_sandboxed(source), sandbox_globals)  # noqa: S102
+    assert await sandbox_globals["f"](_arange(*arg)) == expected
+
+
+@pytest.mark.asyncio
+async def test_async_for_unpacking_still_rejects_a_non_sequence():
+    """The unpack guard is what makes the element shape an error, not a crash."""
+    from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
+        build_sandbox_globals,
+        compile_sandboxed,
+    )
+
+    sandbox_globals = build_sandbox_globals()
+    exec(  # noqa: S102
+        compile_sandboxed(
+            "async def f(it):\n    async for a, b in it:\n        pass\n"
+        ),
+        sandbox_globals,
+    )
+    with pytest.raises(TypeError):
+        await sandbox_globals["f"](_arange(1, 2))
