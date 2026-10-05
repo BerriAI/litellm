@@ -5,7 +5,14 @@ from typing import Final
 import pytest
 
 from litellm.proxy.lens.agent_runtime import AgentTurn, PythonAgentTurn, run_agent
-from litellm.proxy.lens.agent_workspace import EvidenceRequest, EvidenceWorkspace, PythonRequest, SessionContent
+from litellm.proxy.lens.agent_workspace import (
+    EvidenceReply,
+    EvidenceRequest,
+    EvidenceWorkspace,
+    PythonRequest,
+    SearchMatch,
+    SessionContent,
+)
 from litellm.proxy.lens.analysis import Extraction, Observation
 from litellm.proxy.lens.models import Claim, Evidence, ModelRequest, ModelResult, TracePart
 from litellm.proxy.lens.state import queue_job
@@ -49,12 +56,25 @@ async def test_agent_reads_other_sessions_and_retains_all_prior_evidence_between
                 ).model_dump_json(),
                 cost=0,
             )
-        previous: Final = json.loads(payload["dialogue"][0]["tool_results"][0])
-        assert previous["parts"] == [nested.model_dump()]
+        previous: Final = EvidenceReply.model_validate_json(payload["dialogue"][0]["tool_results"][0])
+        assert previous.parts == ()
+        assert previous.matches == (
+            SearchMatch(
+                execution_id=other.id,
+                span_id="c",
+                parent_span_id="b",
+                name="child",
+                kind="agent",
+                char_start=0,
+                char_end=7,
+                characters=len(nested.content),
+            ),
+        )
         if turn == 1:
+            hit: Final = previous.matches[0]
             return ModelResult(
                 content=AgentTurn[Extraction](
-                    tools=(EvidenceRequest(action="read", execution_id=other.id),)
+                    tools=(EvidenceRequest(action="read", execution_id=hit.execution_id, span_ids=(hit.span_id,)),)
                 ).model_dump_json(),
                 cost=0,
             )

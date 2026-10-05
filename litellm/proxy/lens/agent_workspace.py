@@ -1,3 +1,4 @@
+import re
 from contextlib import aclosing
 from itertools import chain
 from types import MappingProxyType
@@ -59,6 +60,17 @@ class ReviewIndex(Record):
     characters: int
 
 
+class SearchMatch(Record):
+    execution_id: str
+    span_id: str
+    parent_span_id: str
+    name: str
+    kind: str
+    char_start: int
+    char_end: int
+    characters: int
+
+
 class EvidenceReply(Record):
     request: EvidenceRequest
     catalog: tuple[CatalogEntry, ...] = ()
@@ -66,6 +78,25 @@ class EvidenceReply(Record):
     error: str = ""
     review_catalog: tuple[ReviewIndex, ...] = ()
     reviews: tuple[ReviewRecord, ...] = ()
+    matches: tuple[SearchMatch, ...] = ()
+
+
+def search_matches(part: TracePart, pattern: re.Pattern[str], request: EvidenceRequest) -> tuple[SearchMatch, ...]:
+    return tuple(
+        SearchMatch(
+            execution_id=part.execution_id,
+            span_id=part.span_id,
+            parent_span_id=part.parent_span_id,
+            name=part.name,
+            kind=part.kind,
+            char_start=match.start(),
+            char_end=match.end(),
+            characters=len(part.content),
+        )
+        for match in pattern.finditer(
+            part.content, request.char_start, request.char_end if request.char_end is not None else len(part.content)
+        )
+    )
 
 
 class EvidenceWorkspace(Record):
@@ -181,12 +212,15 @@ class EvidenceWorkspace(Record):
             return EvidenceReply(request=request, error="Search requires a nonempty literal text query.")
         parts: Final = tuple(chain.from_iterable(session.parts for session in sessions))
         selected: Final = tuple(p for p in parts if not request.span_ids or p.span_id in request.span_ids)
-        matches: Final = (
-            tuple(p for p in selected if request.query.casefold() in p.content.casefold())
-            if request.action == "search"
-            else selected
-        )
         missing: Final = frozenset(request.span_ids) - frozenset(p.span_id for p in selected)
+        error: Final = "Unknown span IDs: " + ", ".join(sorted(missing)) if missing else ""
+        if request.action == "search":
+            pattern: Final = re.compile(re.escape(request.query), re.IGNORECASE)
+            return EvidenceReply(
+                request=request,
+                matches=tuple(chain.from_iterable(search_matches(part, pattern, request) for part in selected)),
+                error=error,
+            )
         return EvidenceReply(
             request=request,
             parts=tuple(
@@ -199,9 +233,9 @@ class EvidenceWorkspace(Record):
                         }
                     )
                 )
-                for part in matches
+                for part in selected
             ),
-            error="Unknown span IDs: " + ", ".join(sorted(missing)) if missing else "",
+            error=error,
         )
 
 

@@ -9,6 +9,7 @@ from litellm.proxy.lens.agent_workspace import (
     PythonData,
     PythonRequest,
     ReviewRecord,
+    SearchMatch,
     SessionContent,
     load_workspace,
 )
@@ -57,7 +58,121 @@ async def test_original_content_is_reassembled_across_character_and_span_pages()
     assert workspace.parts == (root, child, last)
     assert workspace.valid(Evidence(execution_id=run.id, span_id="a", quote="split boundary"))
     assert workspace.respond(EvidenceRequest(action="read", execution_id=run.id, span_ids=("c",))).parts == (last,)
-    assert workspace.respond(EvidenceRequest(action="search", query="SUBAGENT")).parts == (child,)
+    assert workspace.respond(EvidenceRequest(action="search", query="SUBAGENT")).matches == (
+        SearchMatch(
+            execution_id=run.id,
+            span_id="b",
+            parent_span_id="a",
+            name="child",
+            kind="agent",
+            char_start=0,
+            char_end=8,
+            characters=len(child.content),
+        ),
+    )
+
+
+def test_search_returns_literal_unicode_match_offsets_within_the_requested_scope() -> None:
+    content: Final = "🧪 ÉrRoR[1].* before éRrOr[1].* after ÉRROR[1].*"
+    part: Final = TracePart(
+        execution_id="one", span_id="child", parent_span_id="root", name="nested tool", kind="tool", content=content
+    )
+    unrelated: Final = part.model_copy(update=MappingProxyType({"span_id": "unrelated"}))
+    other_session: Final = part.model_copy(update=MappingProxyType({"execution_id": "two"}))
+    workspace: Final = EvidenceWorkspace(
+        sessions=(
+            SessionContent(execution=execution("one", 2), parts=(part, unrelated), partial=False),
+            SessionContent(execution=execution("two"), parts=(other_session,), partial=False),
+        )
+    )
+    reply: Final = workspace.respond(
+        EvidenceRequest(
+            action="search",
+            execution_id="one",
+            span_ids=("child",),
+            query="érRoR[1].*",
+            char_start=content.index("before"),
+            char_end=content.index(" after"),
+        )
+    )
+    assert reply.parts == ()
+    assert reply.matches == (
+        SearchMatch(
+            execution_id="one",
+            span_id="child",
+            parent_span_id="root",
+            name="nested tool",
+            kind="tool",
+            char_start=content.index("éRrOr"),
+            char_end=content.index(" after"),
+            characters=len(content),
+        ),
+    )
+    hit: Final = reply.matches[0]
+    retrieved: Final = workspace.respond(
+        EvidenceRequest(
+            action="read",
+            execution_id=hit.execution_id,
+            span_ids=(hit.span_id,),
+            char_start=hit.char_start,
+            char_end=hit.char_end,
+        )
+    )
+    assert retrieved.parts[0].content == "éRrOr[1].*"
+    assert workspace.valid(
+        Evidence(execution_id=hit.execution_id, span_id=hit.span_id, quote=retrieved.parts[0].content)
+    )
+    assert (
+        workspace.respond(
+            EvidenceRequest(
+                action="search",
+                execution_id="one",
+                span_ids=("child",),
+                query="érRoR[1].*",
+                char_start=hit.char_start,
+                char_end=hit.char_end - 1,
+            )
+        ).matches
+        == ()
+    )
+
+
+def test_search_retains_every_late_match_without_returning_the_large_span() -> None:
+    content: Final = "unrelated content " * 10000 + "needle " * 300
+    part: Final = TracePart(
+        execution_id="run", span_id="span", parent_span_id="parent", name="result", kind="tool", content=content
+    )
+    workspace: Final = EvidenceWorkspace(
+        sessions=(
+            SessionContent(
+                execution=execution("run"),
+                parts=(part,),
+                partial=False,
+            ),
+        )
+    )
+    reply: Final = workspace.respond(EvidenceRequest(action="search", query="NEEDLE"))
+    assert reply.parts == ()
+    assert tuple((hit.char_start, hit.char_end) for hit in reply.matches) == tuple(
+        (offset, offset + len("needle")) for offset in range(content.index("needle"), len(content), len("needle "))
+    )
+    assert all(hit.characters == len(content) and hit.parent_span_id == "parent" for hit in reply.matches)
+    assert len(reply.model_dump_json()) < len(content)
+
+
+def test_search_uses_nonoverlapping_literal_occurrences() -> None:
+    part: Final = TracePart(execution_id="run", span_id="span", name="tool", kind="tool", content="aaaaa")
+    workspace: Final = EvidenceWorkspace(
+        sessions=(
+            SessionContent(
+                execution=execution("run"),
+                parts=(part,),
+                partial=False,
+            ),
+        )
+    )
+    reply: Final = workspace.respond(EvidenceRequest(action="search", query="AA"))
+    assert tuple((hit.char_start, hit.char_end) for hit in reply.matches) == ((0, 2), (2, 4))
 
 
 @pytest.mark.asyncio
