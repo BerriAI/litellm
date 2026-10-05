@@ -115,7 +115,7 @@ def _deployment_filter(rows: list[_GroupedModel]) -> list[dict[str, str]]:
 
 
 def _daily_metric(row: _GroupedDaily) -> ModelInsightDailyMetric:
-    return ModelInsightDailyMetric(date=row.date, **_metric(row).model_dump())
+    return ModelInsightDailyMetric.model_validate({**_metric(row).model_dump(), "date": row.date})
 
 
 def _daily_total(row: _GroupedDate) -> ModelInsightDailyTotal:
@@ -146,12 +146,14 @@ def _summarize_tasks(rows: list[_GroupedTask], metric: ModelInsightsMetric) -> l
     }
     grand: Final = sum(totals.values())
     return [
-        ModelInsightTaskSummary(
-            **(catalog.get(task) or _UNCATEGORIZED_TASK).model_copy(update={"task_type": task}).model_dump(),
-            value=value,
-            share=value / grand * 100 if grand else 0.0,
-            leader=leaders[task].model_group,
-            provider=leaders[task].custom_llm_provider,
+        ModelInsightTaskSummary.model_validate(
+            {
+                **(catalog.get(task) or _UNCATEGORIZED_TASK).model_copy(update={"task_type": task}).model_dump(),
+                "value": value,
+                "share": value / grand * 100 if grand else 0.0,
+                "leader": leaders[task].model_group,
+                "provider": leaders[task].custom_llm_provider,
+            }
         )
         for task, value in sorted(totals.items(), key=lambda item: item[1], reverse=True)
     ]

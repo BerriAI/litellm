@@ -44,6 +44,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 try:
@@ -53,12 +54,14 @@ except ImportError:
     UniqueViolationError = Exception
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
+    MCP_SERVERS_TARGET,
     McpServerPayloadLike,
     build_env_var_setup_url,
     collect_env_var_references,
@@ -137,6 +140,7 @@ if MCP_AVAILABLE:
         def validate_tool_name(name: str) -> _ToolNameValidationResult:
             return _ToolNameValidationResult()
 
+    from litellm.proxy._experimental.mcp_server.contracts import TargetCatalog
     from litellm.proxy._experimental.mcp_server.db import (
         McpIdentifierConflict,
         approve_mcp_server,
@@ -153,13 +157,16 @@ if MCP_AVAILABLE:
         get_user_env_vars,
         get_user_env_vars_bulk,
         get_user_oauth_credential,
+        is_resubmitted_oauth_client,
         list_server_user_credentials,
         list_user_oauth_credentials,
         mcp_oauth_token_identity,
         merge_user_env_vars,
+        oauth_credentials_for_upstream_edit,
         purge_user_oauth_credentials_for_server,
         reject_mcp_server,
         set_mcp_server_pinned_tools,
+        stale_mcp_auth_fields,
         store_user_credential,
         store_user_oauth_credential,
         update_mcp_server,
@@ -178,12 +185,14 @@ if MCP_AVAILABLE:
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.server_resolution import (
+        MCPServerTargetCatalog,
         authorize_mcp_server,
         resolve_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         admitted_user_context,
         build_effective_auth_contexts,
+        granted_toolset_ids,
         is_ui_session_credential,
     )
     from litellm.proxy._types import (
@@ -236,7 +245,9 @@ if MCP_AVAILABLE:
         MCPCredentials,
         MCPGatewaySessionsResponse,
         MCPGatewaySessionsTerminateResponse,
+        MCPUpstreamProtocol,
         normalize_upstream_header_name,
+        validate_mcp_protocol_transport,
     )
     from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
 
@@ -489,6 +500,7 @@ if MCP_AVAILABLE:
         )
         return server
 
+    @with_service_target(MCP_SERVERS_TARGET)
     async def _cache_temporary_mcp_server_in_redis(server: MCPServer, ttl_seconds: int) -> None:
         """
         Best-effort write-through to Redis so temporary MCP OAuth sessions are
@@ -521,6 +533,9 @@ if MCP_AVAILABLE:
         except Exception as e:
             verbose_proxy_logger.debug("Failed to write temporary MCP server to Redis cache: %s", e)
 
+    _CACHED_VALUE: Final = TypeAdapter(object)
+
+    @with_service_target(MCP_SERVERS_TARGET)
     async def _get_temporary_mcp_server_from_redis(
         server_id: str,
     ) -> MCPServer | None:
@@ -537,8 +552,8 @@ if MCP_AVAILABLE:
             return None
 
         try:
-            cached_server: Final = await cache_backend.async_get_cache(
-                key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}"
+            cached_server: Final = _CACHED_VALUE.validate_python(
+                await cache_backend.async_get_cache(key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}")
             )
         except Exception as e:
             verbose_proxy_logger.debug("Failed reading temporary MCP server from Redis cache: %s", e)
@@ -860,6 +875,9 @@ if MCP_AVAILABLE:
         ("authentication_token", "auth_value"),
         ("client_id", "client_id"),
         ("client_secret", "client_secret"),
+        ("token_endpoint_auth_method", "token_endpoint_auth_method"),
+        ("dcr_issuer", "dcr_issuer"),
+        ("dcr_server_url", "dcr_server_url"),
         ("scopes", "scopes"),
         ("aws_access_key_id", "aws_access_key_id"),
         ("aws_secret_access_key", "aws_secret_access_key"),
@@ -880,30 +898,73 @@ if MCP_AVAILABLE:
             value for key, value in as_dict.items() if key not in MCP_ADMIN_CONFIG_CREDENTIAL_KEYS and key != "scopes"
         )
 
+    def _oauth_session_changes_upstream(
+        payload: NewMCPServerRequest, existing: MCPServer | LiteLLM_MCPServerTable
+    ) -> bool:
+        return existing.auth_type == MCPAuth.oauth2 and (
+            payload.url != existing.url
+            or ("issuer" in payload.model_fields_set and (payload.issuer or None) != existing.issuer)
+            or (payload.auth_type is not None and payload.auth_type != existing.auth_type)
+        )
+
     def _inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
     ) -> NewMCPServerRequest:
-        if not payload.server_id or _has_non_admin_config_credentials(payload.credentials):
+        if not payload.server_id:
             return payload
 
         existing_server: Final = global_mcp_server_manager.get_mcp_server_by_id(payload.server_id)
         if existing_server is None:
             return payload
-
-        inherited_credentials: dict[str, object] = {
+        upstream_changed: Final = _oauth_session_changes_upstream(payload, existing_server)
+        issuer_changed: Final = (
+            "issuer" in payload.model_fields_set and (payload.issuer or None) != existing_server.issuer
+        )
+        cleared: Final = (
+            stale_mcp_auth_fields(
+                payload.model_dump(exclude_unset=True),
+                lambda field: (
+                    getattr(existing_server, f"configured_{field}", None) or getattr(existing_server, field, None)
+                ),
+            )
+            if upstream_changed
+            else {}
+        )
+        resolved_payload: Final = (
+            payload.model_copy(update={**cleared, "oauth2_flow": payload.oauth2_flow}) if upstream_changed else payload
+        )
+        supplied: Final = dict(resolved_payload.credentials or {})
+        existing_credentials: Final[dict[str, object]] = {
             credential_key: value
             for server_attr, credential_key in _INHERITED_CREDENTIAL_FIELDS
             if (value := getattr(existing_server, server_attr, None))
         }
+        resubmitted_client: Final = is_resubmitted_oauth_client(supplied, existing_credentials)
+        if _has_non_admin_config_credentials(resolved_payload.credentials) and not (
+            upstream_changed and resubmitted_client
+        ):
+            return resolved_payload
+
+        bound_credentials: Final = (
+            oauth_credentials_for_upstream_edit(
+                {**existing_credentials, **supplied},
+                existing_server.issuer,
+                existing_server.url,
+                issuer_changed=issuer_changed
+                or (resolved_payload.auth_type or existing_server.auth_type) != existing_server.auth_type,
+            )
+            if upstream_changed
+            else existing_credentials
+        )
         # The gate above guarantees anything still supplied is admin config, which the admin just
         # typed, so it wins over the stored value.
-        inherited_credentials = {**inherited_credentials, **dict(payload.credentials or {})}
+        inherited_credentials: Final = bound_credentials if upstream_changed else {**bound_credentials, **supplied}
 
         if not inherited_credentials:
-            return payload
+            return resolved_payload.model_copy(update={"credentials": {}}) if upstream_changed else resolved_payload
 
         try:
-            return payload.model_copy(update={"credentials": inherited_credentials})
+            return resolved_payload.model_copy(update={"credentials": inherited_credentials})
         except AttributeError:
             pass
 
@@ -927,15 +988,20 @@ if MCP_AVAILABLE:
         supplied: Final = payload.server_id
         if not supplied:
             return str(uuid.uuid4())
-        if global_mcp_server_manager.get_mcp_server_by_id(supplied) is not None:
-            return supplied
+        registered: Final = global_mcp_server_manager.get_mcp_server_by_id(supplied)
+        if registered is not None:
+            return str(uuid.uuid4()) if _oauth_session_changes_upstream(payload, registered) else supplied
         prisma_client: Final = _get_prisma_client_or_none()
         if prisma_client is None:
             return supplied
         # A draft is another session's row, not a saved server, so re-supplying an id this
         # endpoint previously handed back must not let a later session adopt its configuration.
         existing: Final = await get_mcp_server(prisma_client, supplied)
-        if existing is None or existing.approval_status == MCPApprovalStatus.draft:
+        if (
+            existing is None
+            or existing.approval_status == MCPApprovalStatus.draft
+            or _oauth_session_changes_upstream(payload, existing)
+        ):
             return str(uuid.uuid4())
         return supplied
 
@@ -1008,6 +1074,7 @@ if MCP_AVAILABLE:
             mcp_auth_header=None,
             mcp_servers=None,
             mcp_server_auth_headers=None,
+            record_listing=True,
         )
         tools: Final = listing.tools
         dumped_tools: Final = [tool.model_dump(by_alias=True) for tool in tools]
@@ -2184,18 +2251,16 @@ if MCP_AVAILABLE:
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
         client_ip: Final = IPAddressUtils.get_mcp_client_ip(request) if request is not None else None
-        resolved: Final = await resolve_mcp_server(
-            server_id,
+        catalog: Final[TargetCatalog] = MCPServerTargetCatalog(
             manager=global_mcp_server_manager,
             temp_lookup=get_cached_temporary_mcp_server,
             id_client_ip=None,
             name_client_ip=client_ip,
             match_name=True,
         )
-        authorized: Final = await authorize_mcp_server(
-            resolved,
+        authorized: Final = await catalog.resolve(
+            server_id,
             user_api_key_dict,
-            manager=global_mcp_server_manager,
             is_admin_view=_user_has_admin_view(user_api_key_dict),
             not_found_detail={"error": f"MCP server {server_id} not found"},
             forbidden_detail={"error": f"Access denied to MCP server {server_id}"},
@@ -2738,15 +2803,13 @@ if MCP_AVAILABLE:
         404, so server ids can't be enumerated), using the same allowed-server
         resolution the MCP gateway enforces on tool calls.
         """
-        resolved: Final = await resolve_mcp_server(
-            server_id,
+        catalog: Final[TargetCatalog] = MCPServerTargetCatalog(
             manager=global_mcp_server_manager,
             db_lookup=lambda sid: get_mcp_server(prisma_client, sid),
         )
-        authorized: Final = await authorize_mcp_server(
-            resolved,
+        authorized: Final = await catalog.resolve(
+            server_id,
             user_api_key_dict,
-            manager=global_mcp_server_manager,
             is_admin_view=_user_has_admin_view(user_api_key_dict),
             not_found_detail={"error": f"MCP Server {server_id} not found"},
             forbidden_detail={
@@ -2937,6 +3000,32 @@ if MCP_AVAILABLE:
                 statuses.append(status_obj)
         return statuses
 
+    def _validate_mcp_protocol_update(
+        payload: UpdateMCPServerRequest,
+        fields_set: set[str],
+        stored: LiteLLM_MCPServerTable | None,
+        read_failed: bool,
+    ) -> None:
+        if not {"transport", "mcp_info"}.intersection(fields_set):
+            return
+        if read_failed:
+            raise HTTPException(
+                status_code=503, detail="Cannot validate MCP configuration while stored state is unavailable"
+            )
+        if stored is None:
+            return
+        effective_transport: Final = payload.transport if "transport" in fields_set else stored.transport
+        effective_info: Final = payload.mcp_info if "mcp_info" in fields_set else stored.mcp_info
+        try:
+            validate_mcp_protocol_transport(
+                TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
+                    (effective_info or {}).get("protocol_version", "auto")
+                ),
+                effective_transport,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     @router.put(
         "/server",
         description="Allows deleting mcp serves in the db",
@@ -2985,9 +3074,9 @@ if MCP_AVAILABLE:
                 },
             )
 
-        # Snapshot the pre-update identity so we can detect a mint-relevant change below. The read is
-        # advisory (it only feeds the stale-token purge decision), so a failure skips the purge with a
-        # warning instead of failing the edit, whose primary job is the update itself.
+        # Snapshot stored configuration for protocol validation and mint-relevant changes below.
+        # Protocol or transport edits require this read; other edits may continue on read failure
+        # while skipping the best-effort stale-token purge.
         try:
             old_server_record = await get_mcp_server(prisma_client, payload.server_id)
             old_server_record_read_failed = False
@@ -2999,6 +3088,8 @@ if MCP_AVAILABLE:
             )
             old_server_record = None
             old_server_record_read_failed = True
+
+        _validate_mcp_protocol_update(payload, payload_fields_set, old_server_record, old_server_record_read_failed)
 
         if payload.per_server_oauth_discovery and (old_server_record is not None or old_server_record_read_failed):
             relay_eligible: Final = old_server_record is not None and is_per_server_oauth_discovery_eligible(
@@ -3332,18 +3423,15 @@ if MCP_AVAILABLE:
     ):
         """Return toolsets the calling key is allowed to access."""
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-        is_admin: Final = _user_has_admin_view(user_api_key_dict)
-        op: Final = user_api_key_dict.object_permission
-        # mcp_toolsets=None or [] both mean "not restricted by toolsets".
-        # For admins: either value → no restriction → return all.
-        # For non-admins: either value → no toolsets explicitly granted → return nothing.
-        # (An admin whose DB row has mcp_toolsets=[] should still see all toolsets.)
-        raw_toolsets: Final = getattr(op, "mcp_toolsets", None) if op else None
-        if not raw_toolsets:
-            if is_admin:
+        if _user_has_admin_view(user_api_key_dict):
+            op: Final = user_api_key_dict.object_permission
+            if op is None or not op.mcp_toolsets:
                 return await list_mcp_toolsets(prisma_client)
+            return await list_mcp_toolsets(prisma_client, toolset_ids=op.mcp_toolsets)
+        granted: Final = await granted_toolset_ids(user_api_key_dict)
+        if not granted:
             return []
-        return await list_mcp_toolsets(prisma_client, toolset_ids=raw_toolsets)
+        return await list_mcp_toolsets(prisma_client, toolset_ids=sorted(granted))
 
     @router.get(
         "/toolset/{toolset_id}",
@@ -3355,15 +3443,13 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-        # Non-admin keys may only fetch toolsets they've been explicitly granted.
-        if not _user_has_admin_view(user_api_key_dict):
-            op: Final = user_api_key_dict.object_permission
-            granted: Final = getattr(op, "mcp_toolsets", None) if op else None
-            if granted is None or toolset_id not in granted:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": "API key does not have access to this toolset."},
-                )
+        if not _user_has_admin_view(user_api_key_dict) and toolset_id not in await granted_toolset_ids(
+            user_api_key_dict
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "API key does not have access to this toolset."},
+            )
         toolset: Final = await get_mcp_toolset(prisma_client, toolset_id)
         if toolset is None:
             raise HTTPException(

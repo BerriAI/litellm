@@ -1652,7 +1652,8 @@ async def delete_file(
 def _as_file_list_page(response: object) -> object:
     if not isinstance(response, list):
         return response
-    return FileListPage(**build_list_page(_LISTED_FILES_ADAPTER.validate_python(response)))
+    page: Final = build_list_page(_LISTED_FILES_ADAPTER.validate_python(response))
+    return FileListPage.model_validate(page)
 
 
 @router.get(

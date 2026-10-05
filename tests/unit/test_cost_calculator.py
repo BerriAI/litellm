@@ -1,5 +1,6 @@
 import datetime
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
@@ -3298,7 +3299,7 @@ def test_completion_cost_per_second_deployment_bills_the_call_duration(
     assert cost == pytest.approx(0.02 * expected_seconds)
 
 
-@pytest.mark.parametrize("mode", ["audio_transcription", "audio_speech", "video_generation", "realtime"])
+@pytest.mark.parametrize("mode", ["audio_speech", "video_generation", "realtime"])
 def test_cost_per_token_leaves_media_second_rates_to_their_dedicated_paths(monkeypatch, mode: str):
     """
     A media-mode entry's per-second rates price audio or video seconds, which the dedicated
@@ -3313,6 +3314,29 @@ def test_cost_per_token_leaves_media_second_rates_to_their_dedicated_paths(monke
     )
 
     assert cost_per_token(model=model, custom_llm_provider="openai", response_time_ms=2000.0) == (0.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    ("audio_seconds", "expected_cost"),
+    [(0.0, (0.04, 0.0)), (60.0, (1.2, 0.0))],
+    ids=["no_audio_length_bills_request_time", "audio_length_bills_audio_seconds"],
+)
+def test_cost_per_token_bills_transcription_second_rates(
+    monkeypatch: pytest.MonkeyPatch, audio_seconds: float, expected_cost: tuple[float, float]
+) -> None:
+    model: Final = "test-transcription-per-second"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_second": 0.02, "litellm_provider": "deepgram", "mode": "audio_transcription"},
+    )
+
+    assert cost_per_token(
+        model=model,
+        custom_llm_provider="deepgram",
+        response_time_ms=2000.0,
+        audio_transcription_file_duration=audio_seconds,
+    ) == pytest.approx(expected_cost)
 
 
 def test_completion_cost_video_status_poll_bills_nothing_on_a_per_second_video_model(monkeypatch):
@@ -3862,6 +3886,35 @@ def test_completion_cost_mantle_native_messages_prices_unversioned_claude_from_t
             model=model,
             custom_llm_provider="bedrock_mantle",
         ) == pytest.approx(expected), model
+
+
+@pytest.mark.parametrize("model", ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5"])
+def test_completion_cost_region_without_its_own_row_prices_mantle_claude_from_the_mantle_row(
+    _local_model_cost_map, model: str
+):
+    """The proxy resolves a Mantle region for every call. A region with no
+    bedrock_mantle/<region>/<model> row must fall back to the model's own bedrock_mantle/ row, not to the
+    bare Bedrock row that the bedrock provider family also matches."""
+
+    response = litellm.ModelResponse(
+        id="msg_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model=model,
+        usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+    )
+    mantle: Final[Mapping[str, float]] = litellm.model_cost[f"bedrock_mantle/{model}"]
+    bedrock: Final[Mapping[str, float]] = litellm.model_cost[model]
+    expected: Final = 100 * mantle["input_cost_per_token"] + 10 * mantle["output_cost_per_token"]
+    assert expected != 100 * bedrock["input_cost_per_token"] + 10 * bedrock["output_cost_per_token"]
+
+    for deployment in (model, f"bedrock_mantle/{model}", f"bedrock_mantle/us-east-1/{model}"):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model=deployment,
+            custom_llm_provider="bedrock_mantle",
+            region_name="us-east-1",
+        ) == pytest.approx(expected), deployment
+    assert litellm.get_model_info(f"bedrock_mantle/us-east-1/{model}", "bedrock_mantle")["key"] == f"bedrock_mantle/{model}"
 
 
 @pytest.mark.parametrize("model", ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5"])

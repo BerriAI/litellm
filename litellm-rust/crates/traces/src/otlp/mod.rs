@@ -3,10 +3,12 @@ mod limits;
 mod span;
 mod wire;
 
+pub use limits::DecodeLimits;
+
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-use crate::{DecodeError, Shared};
+use crate::{Error, NormalizedSpan, Shared};
 
 #[derive(Serialize)]
 pub struct DecodedEvent {
@@ -31,12 +33,19 @@ pub struct DecodedSpan {
     pub status_code: String,
     pub status_message: String,
     pub events: Vec<DecodedEvent>,
+    pub normalized: NormalizedSpan,
+    pub consumed_attributes: Box<[&'static str]>,
 }
 
-pub fn decode_otlp(
+pub fn decode_otlp(body: &[u8], content_type: Option<&str>) -> Result<Vec<DecodedSpan>, Error> {
+    decode_otlp_with_limits(body, content_type, DecodeLimits::from_env()?)
+}
+
+pub fn decode_otlp_with_limits(
     body: &[u8],
     content_type: Option<&str>,
-) -> Result<Vec<DecodedSpan>, DecodeError> {
-    let request = wire::decode(body, content_type)?;
-    span::flatten(request)
+    limits: DecodeLimits,
+) -> Result<Vec<DecodedSpan>, Error> {
+    let request = wire::decode(body, content_type, &limits)?;
+    span::flatten(request, limits)
 }

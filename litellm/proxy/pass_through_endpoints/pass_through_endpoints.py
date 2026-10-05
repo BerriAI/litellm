@@ -26,7 +26,9 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
+from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.routing import BaseRoute, Route
 from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
 from websockets.exceptions import (
@@ -64,7 +66,9 @@ from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.oss_decision import validate_oss_request
 from litellm.passthrough import BasePassthroughUtils
+from litellm.proxy._lazy_features import lazy_owned_routes
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
@@ -74,7 +78,11 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import request_dispatched_to_pass_through_endpoint
+from litellm.proxy.auth.auth_utils import (
+    get_model_from_request,
+    get_request_route,
+    request_dispatched_to_pass_through_endpoint,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
@@ -100,6 +108,8 @@ from litellm.proxy.common_utils.sse_keepalive import (
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
+    _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
+    _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import normalize_route_for_root_path
@@ -379,7 +389,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     @staticmethod
     def get_endpoint_type(url: str, custom_llm_provider: str | None = None) -> EndpointType:
         parsed_url: Final = urlparse(url)
-        if custom_llm_provider == "typesafe" and parsed_url.path.removesuffix("/").endswith("/v1/systemone"):
+        if custom_llm_provider in ("typesafe", "laya", "bespoke") and parsed_url.path.removesuffix("/").endswith(
+            "/v1/systemone"
+        ):
             return EndpointType.DECISIONS
         if (
             ("generateContent") in url
@@ -585,7 +597,18 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         """
         Filter out litellm params from the request body
         """
+        from litellm.proxy.proxy_server import llm_router
+
         _parsed_body = _parsed_body or {}
+        managed_model: Final = get_model_from_request(
+            request_data=_parsed_body,
+            route=get_request_route(request),
+            request_headers=request.headers,
+            request_query_params=request.query_params,
+            llm_router=llm_router,
+            request=request,
+            team_id=user_api_key_dict.team_id,
+        )
 
         litellm_keys_in_body: Final = MappingProxyType(
             {k: _parsed_body.pop(k) for k in types_utils.all_litellm_params if k in _parsed_body}
@@ -600,11 +623,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
 
         litellm_metadata: Final = litellm_keys_in_body.get("litellm_metadata")
         metadata: Final = litellm_keys_in_body.get("metadata")
-        if litellm_metadata:
-            _metadata.update(litellm_metadata)
-        if metadata:
-            _metadata.update(metadata)
+        for client_metadata in (litellm_metadata, metadata):
+            if isinstance(client_metadata, dict):
+                _metadata.update({k: v for k, v in client_metadata.items() if not k.startswith("user_api_key_")})
 
+        _metadata = _apply_key_team_project_controls(user_api_key_dict=user_api_key_dict, metadata=_metadata)
         _metadata = _update_metadata_with_tags_in_header(
             request=request,
             metadata=_metadata,
@@ -631,10 +654,19 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         # would attribute it to a budget the operator scoped to a LiteLLM model that
         # merely shares the name.
         if not request_dispatched_to_pass_through_endpoint(request):
+            _metadata["model_group"] = managed_model if isinstance(managed_model, str) else None
             _metadata["user_api_key_model_max_budget"] = user_api_key_dict.model_max_budget
             _metadata["user_api_key_team_model_max_budget"] = user_api_key_dict.team_model_max_budget
             _metadata["user_api_key_user_model_max_budget"] = user_api_key_dict.user_model_max_budget
             _metadata["user_api_key_end_user_model_max_budget"] = user_api_key_dict.end_user_model_max_budget
+        else:
+            for field in (
+                "user_api_key_model_max_budget",
+                "user_api_key_team_model_max_budget",
+                "user_api_key_user_model_max_budget",
+                "user_api_key_end_user_model_max_budget",
+            ):
+                _metadata.pop(field, None)
         _metadata.update(
             LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict=user_api_key_dict)
         )
@@ -1131,6 +1163,15 @@ async def pass_through_request(
             _parsed_body,
         )
 
+        if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
+            pricing_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
+            _strip_client_pricing_overrides(pricing_body)
+            _parsed_body = pricing_body
+        if custom_llm_provider in ("laya", "bespoke"):
+            decision_request: Final = TypeAdapter(Mapping[str, object]).validate_python(_parsed_body)
+            checkpoint: Final = validate_oss_request(custom_llm_provider, decision_request)
+            _parsed_body["model"] = f"{custom_llm_provider}/{checkpoint}"
+
         ### COLLECT GUARDRAILS FOR PASSTHROUGH ENDPOINT ###
         # Passthrough endpoints are opt-in only for guardrails
         # When enabled, collect guardrails from org/team/key levels + passthrough-specific
@@ -1186,6 +1227,19 @@ async def pass_through_request(
             call_type="pass_through_endpoint",
             endpoint_type=endpoint_type,
         )
+        if custom_llm_provider in ("laya", "bespoke"):
+            hook_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
+            hook_model: Final = hook_body.get("model")
+            decision_body: Final = MappingProxyType(
+                {
+                    **hook_body,
+                    "model": hook_model.removeprefix(f"{custom_llm_provider}/")
+                    if isinstance(hook_model, str)
+                    else hook_model,
+                }
+            )
+            _ = validate_oss_request(custom_llm_provider, decision_body)
+            _parsed_body = TypeAdapter(dict[str, object]).validate_python(decision_body)
         resolved_timeout: Final = resolve_pass_through_request_timeout(timeout)
         async_client_obj: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.PassThroughEndpoint,
@@ -1886,6 +1940,20 @@ async def pass_through_request(
             )
 
 
+def _apply_key_team_project_controls(
+    user_api_key_dict: UserAPIKeyAuth, metadata: dict[str, object]
+) -> dict[str, object]:
+    data: Final = LiteLLMProxyRequestSetup.add_key_level_controls(
+        key_metadata=user_api_key_dict.metadata,
+        data={"metadata": metadata},
+        _metadata_variable_name="metadata",
+    )
+    return LiteLLMProxyRequestSetup.add_team_and_project_level_controls(
+        user_api_key_dict=user_api_key_dict,
+        metadata=data["metadata"],
+    )
+
+
 def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
     """
     If tags are in the request headers, add them to the metadata
@@ -1906,9 +1974,10 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
 
     # Only add tags key if there are tags to add
     if tags_to_add:
-        if "tags" not in metadata:
-            metadata["tags"] = []
-        metadata["tags"].extend(tags_to_add)
+        metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=metadata.get("tags"),
+            tags_to_add=tags_to_add,
+        )
 
     return metadata
 
@@ -2389,7 +2458,9 @@ async def websocket_passthrough_request(
     # with the existing _init_kwargs_for_pass_through_endpoint function
     class DummyRequest:
         def __init__(self, url: str, method: str = "WEBSOCKET", headers: dict | None = None):
-            self.url = url
+            self.url = httpx.URL(url)
+            self.scope = websocket.scope
+            self.query_params = websocket.query_params
             self.method = method
             self.headers = headers or {}
 
@@ -2873,35 +2944,34 @@ def _extract_model_from_vertex_ai_setup(setup_response: Mapping[str, object]) ->
     return None
 
 
+def _placed_ahead(routes: Sequence[BaseRoute], moving: BaseRoute, before: BaseRoute) -> tuple[BaseRoute, ...]:
+    kept: Final = tuple(route for route in routes if route is not moving)
+    at: Final = next(index for index, route in enumerate(kept) if route is before)
+    return (*kept[:at], moving, *kept[at:])
+
+
 class SafeRouteAdder:
     """
     Wrapper class for adding routes to FastAPI app.
-    Only adds routes if they don't already exist on the app.
+    Only adds routes if they don't already exist on the app. A route a lazy feature registered
+    does not count: a route added at its path goes ahead of it, the precedence a config
+    pass-through at /v1/decisions gets in lazy mode, where the feature has not loaded yet.
     """
 
     @staticmethod
+    def _colliding_routes(app: FastAPI, path: str, methods: Sequence[str]) -> tuple[Route, ...]:
+        wanted: Final = frozenset(methods)
+        return tuple(
+            route
+            for route in app.routes
+            if isinstance(route, Route) and route.path == path and not wanted.isdisjoint(route.methods or ())
+        )
+
+    @staticmethod
     def _is_path_registered(app: FastAPI, path: str, methods: list[str]) -> bool:
-        """
-        Check if a path with any of the specified methods is already registered on the app.
-
-        Args:
-            app: The FastAPI application instance
-            path: The path to check (e.g., "/v1/chat/completions")
-            methods: List of HTTP methods to check (e.g., ["GET", "POST"])
-
-        Returns:
-            True if the path is already registered with any of the methods, False otherwise
-        """
-        for route in app.routes:
-            # Use getattr to safely access route attributes
-            route_path = getattr(route, "path", None)
-            route_methods = getattr(route, "methods", None)
-
-            if route_path == path and route_methods is not None:
-                # Check if any of the methods overlap
-                if any(method in route_methods for method in methods):
-                    return True
-        return False
+        """True when a route the app itself defines already serves the path with one of the methods."""
+        lazy_owned: Final = lazy_owned_routes(app)
+        return any(id(route) not in lazy_owned for route in SafeRouteAdder._colliding_routes(app, path, methods))
 
     @staticmethod
     def add_api_route_if_not_exists(
@@ -2932,12 +3002,17 @@ class SafeRouteAdder:
             )
             return False
 
+        shadowed: Final = SafeRouteAdder._colliding_routes(app, path, methods)
         app.add_api_route(
             path=path,
             endpoint=endpoint,
             methods=methods,
             dependencies=dependencies,
         )
+        if shadowed:
+            app.router.routes[:] = _placed_ahead(  # rebind-ok: the app owns its route table
+                app.router.routes, app.router.routes[-1], shadowed[0]
+            )
         verbose_proxy_logger.debug(
             "Successfully added route: %s with methods %s",
             path,

@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm.proxy.utils as utils_mod
+from litellm._internal_context import current_service_target
 from litellm.proxy.utils import (
     _config_cache_key,
     _ConfigRow,
@@ -265,3 +266,31 @@ async def test_prefetch_config_params_swallows_db_error_without_caching(
     prisma.db.litellm_config.find_many = AsyncMock(side_effect=RuntimeError("boom"))
     await prefetch_config_params(prisma, ["a", "b"])
     assert _swap_config_cache._store == {}
+
+
+@pytest.mark.asyncio
+async def test_config_param_cache_calls_declare_the_config_params_key_family(
+    _swap_config_cache: Any,
+) -> None:
+    """The config cache read and the miss write-back both run inside
+    ``service_target("config_params")`` so their Redis spans read
+    ``redis.get config_params`` / ``redis.set config_params``."""
+    seen: list[tuple[str, Any]] = []
+
+    async def _get(*_args: Any, **_kwargs: Any) -> None:
+        seen.append(("get", current_service_target()))
+
+    async def _set(*_args: Any, **_kwargs: Any) -> None:
+        seen.append(("set", current_service_target()))
+
+    _swap_config_cache.async_get_cache = AsyncMock(side_effect=_get)
+    _swap_config_cache.async_set_cache = AsyncMock(side_effect=_set)
+    prisma = MagicMock()
+    prisma.get_generic_data = AsyncMock(
+        return_value=SimpleNamespace(param_name="p1", param_value={"x": 1})
+    )
+
+    await get_config_param(prisma, "p1")
+
+    assert seen == [("get", "config_params"), ("set", "config_params")]
+    assert current_service_target() is None

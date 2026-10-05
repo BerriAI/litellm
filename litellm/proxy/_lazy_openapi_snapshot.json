@@ -3432,6 +3432,53 @@
           "title": "BreakdownMetrics",
           "type": "object"
         },
+        "DailyActivityKeyPageResponse": {
+          "properties": {
+            "api_keys": {
+              "items": {
+                "$ref": "#/components/schemas/KeySpendActivityRow"
+              },
+              "title": "Api Keys",
+              "type": "array"
+            },
+            "limit": {
+              "title": "Limit",
+              "type": "integer"
+            },
+            "offset": {
+              "title": "Offset",
+              "type": "integer"
+            },
+            "total_api_keys": {
+              "title": "Total Api Keys",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "api_keys",
+            "total_api_keys",
+            "offset",
+            "limit"
+          ],
+          "title": "DailyActivityKeyPageResponse",
+          "type": "object"
+        },
+        "DailyActivityKeySearchResponse": {
+          "properties": {
+            "api_keys": {
+              "items": {
+                "$ref": "#/components/schemas/KeyActivityRow"
+              },
+              "title": "Api Keys",
+              "type": "array"
+            }
+          },
+          "required": [
+            "api_keys"
+          ],
+          "title": "DailyActivityKeySearchResponse",
+          "type": "object"
+        },
         "DailySpendData": {
           "properties": {
             "breakdown": {
@@ -3455,6 +3502,33 @@
         },
         "DailySpendMetadata": {
           "properties": {
+            "api_key_limit": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
+              "title": "Api Key Limit"
+            },
+            "entity_total_api_keys": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distinct API keys per entity over the requested range, set when the entity breakdown is included. When an entity's count exceeds api_key_limit, its api_key_breakdown lists only its keys among the top api_key_limit keys overall.",
+              "title": "Entity Total Api Keys"
+            },
             "has_more": {
               "default": false,
               "title": "Has More",
@@ -3464,6 +3538,18 @@
               "default": 1,
               "title": "Page",
               "type": "integer"
+            },
+            "total_api_keys": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.",
+              "title": "Total Api Keys"
             },
             "total_api_requests": {
               "default": 0,
@@ -3614,6 +3700,16 @@
           "title": "EntraIdentityConfig",
           "type": "object"
         },
+        "ExportType": {
+          "enum": [
+            "daily",
+            "daily_with_keys",
+            "daily_with_models",
+            "daily_with_users"
+          ],
+          "title": "ExportType",
+          "type": "string"
+        },
         "HTTPAuthSecurityScheme": {
           "description": "Defines a security scheme using HTTP authentication.",
           "properties": {
@@ -3667,6 +3763,27 @@
             }
           },
           "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "KeyActivityRow": {
+          "properties": {
+            "api_key": {
+              "title": "Api Key",
+              "type": "string"
+            },
+            "metadata": {
+              "$ref": "#/components/schemas/KeyMetadata"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/SpendMetrics"
+            }
+          },
+          "required": [
+            "api_key",
+            "metrics",
+            "metadata"
+          ],
+          "title": "KeyActivityRow",
           "type": "object"
         },
         "KeyMetadata": {
@@ -3745,6 +3862,78 @@
             "metrics"
           ],
           "title": "KeyMetricWithMetadata",
+          "type": "object"
+        },
+        "KeySpendActivityRow": {
+          "properties": {
+            "api_key": {
+              "title": "Api Key",
+              "type": "string"
+            },
+            "metadata": {
+              "$ref": "#/components/schemas/KeyMetadata"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/KeySpendMetrics"
+            }
+          },
+          "required": [
+            "api_key",
+            "metrics",
+            "metadata"
+          ],
+          "title": "KeySpendActivityRow",
+          "type": "object"
+        },
+        "KeySpendMetrics": {
+          "properties": {
+            "api_requests": {
+              "default": 0,
+              "title": "Api Requests",
+              "type": "integer"
+            },
+            "cache_creation_input_tokens": {
+              "default": 0,
+              "title": "Cache Creation Input Tokens",
+              "type": "integer"
+            },
+            "cache_read_input_tokens": {
+              "default": 0,
+              "title": "Cache Read Input Tokens",
+              "type": "integer"
+            },
+            "completion_tokens": {
+              "default": 0,
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "failed_requests": {
+              "default": 0,
+              "title": "Failed Requests",
+              "type": "integer"
+            },
+            "prompt_tokens": {
+              "default": 0,
+              "title": "Prompt Tokens",
+              "type": "integer"
+            },
+            "spend": {
+              "default": 0.0,
+              "title": "Spend",
+              "type": "number"
+            },
+            "successful_requests": {
+              "default": 0,
+              "title": "Successful Requests",
+              "type": "integer"
+            },
+            "total_tokens": {
+              "default": 0,
+              "title": "Total Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "KeySpendMetrics",
           "type": "object"
         },
         "MakeAgentsPublicRequest": {
@@ -3833,6 +4022,32 @@
             "metrics"
           ],
           "title": "MetricWithMetadata",
+          "type": "object"
+        },
+        "ModelTopKeysResponse": {
+          "properties": {
+            "api_keys": {
+              "items": {
+                "$ref": "#/components/schemas/KeySpendActivityRow"
+              },
+              "title": "Api Keys",
+              "type": "array"
+            },
+            "by_model_group": {
+              "title": "By Model Group",
+              "type": "boolean"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            }
+          },
+          "required": [
+            "model",
+            "by_model_group",
+            "api_keys"
+          ],
+          "title": "ModelTopKeysResponse",
           "type": "object"
         },
         "MutualTLSSecurityScheme": {
@@ -4431,6 +4646,876 @@
             }
           ],
           "summary": "Get Agent Daily Activity",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated": {
+        "get": {
+          "operationId": "get_agent_daily_activity_aggregated_agent_daily_activity_aggregated_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "api_key_limit",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "maximum": 1000,
+                "minimum": 1,
+                "title": "Api Key Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SpendAnalyticsPaginatedResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Aggregated",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated/keys": {
+        "get": {
+          "operationId": "get_agent_daily_activity_aggregated_keys_agent_daily_activity_aggregated_keys_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 50,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/DailyActivityKeyPageResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Aggregated Keys",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated/model_top_keys": {
+        "get": {
+          "operationId": "get_agent_daily_activity_model_top_keys_agent_daily_activity_aggregated_model_top_keys_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "model_group",
+              "required": true,
+              "schema": {
+                "minLength": 1,
+                "title": "Model Group",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "by_model_group",
+              "required": false,
+              "schema": {
+                "default": true,
+                "title": "By Model Group",
+                "type": "boolean"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 5,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ModelTopKeysResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Model Top Keys",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated/search": {
+        "get": {
+          "operationId": "get_agent_daily_activity_aggregated_search_agent_daily_activity_aggregated_search_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "search",
+              "required": true,
+              "schema": {
+                "minLength": 1,
+                "title": "Search",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/DailyActivityKeySearchResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Aggregated Search",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/export": {
+        "get": {
+          "operationId": "get_agent_daily_activity_export_agent_daily_activity_export_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "export_type",
+              "required": false,
+              "schema": {
+                "$ref": "#/components/schemas/ExportType",
+                "default": "daily"
+              }
+            },
+            {
+              "in": "query",
+              "name": "format",
+              "required": false,
+              "schema": {
+                "default": "csv",
+                "enum": [
+                  "csv",
+                  "json"
+                ],
+                "title": "Format",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "text/csv": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Streamed daily activity export"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Export",
           "tags": [
             "agents"
           ]
@@ -8402,6 +9487,61 @@
           "summary": "Test Hashicorp Vault Connection",
           "tags": [
             "config_overrides"
+          ]
+        }
+      }
+    }
+  },
+  "decisions": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {
+      "/decisions": {
+        "post": {
+          "operationId": "decisions_decisions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Decisions",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
+      "/v1/decisions": {
+        "post": {
+          "operationId": "decisions_v1_decisions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Decisions",
+          "tags": [
+            "decisions"
           ]
         }
       }
@@ -25233,6 +26373,30 @@
           ]
         }
       },
+      "/bespoke/v1/systemone": {
+        "post": {
+          "operationId": "bespoke_proxy_route_bespoke_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Bespoke Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/cohere/{endpoint}": {
         "delete": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/cohere)",
@@ -26671,6 +27835,30 @@
             }
           ],
           "summary": "Gigachat Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
+      "/laya/v1/systemone": {
+        "post": {
+          "operationId": "laya_proxy_route_laya_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Laya Proxy Route",
           "tags": [
             "llm_passthrough"
           ]
@@ -30119,6 +31307,28 @@
               ],
               "title": "Client Secret"
             },
+            "dcr_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Issuer"
+            },
+            "dcr_server_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Server Url"
+            },
             "id_jag_resource": {
               "anyOf": [
                 {
@@ -32835,6 +34045,28 @@
               ],
               "title": "Client Secret"
             },
+            "dcr_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Issuer"
+            },
+            "dcr_server_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Server Url"
+            },
             "id_jag_resource": {
               "anyOf": [
                 {
@@ -33697,6 +34929,10 @@
         "WorkerCreated": {
           "additionalProperties": false,
           "properties": {
+            "image": {
+              "title": "Image",
+              "type": "string"
+            },
             "token": {
               "title": "Token",
               "type": "string"
@@ -33706,6 +34942,7 @@
             }
           },
           "required": [
+            "image",
             "worker",
             "token"
           ],
@@ -33721,7 +34958,6 @@
             },
             "name": {
               "default": "Lens worker",
-              "maxLength": 100,
               "minLength": 1,
               "title": "Name",
               "type": "string"
@@ -34504,7 +35740,7 @@
       },
       "/callback": {
         "get": {
-          "description": "OAuth 2.0 authorization response handler for MCP loopback clients.\n\nAccepts either:\n\n- A successful authorization response (``code`` + ``state``), which is\n  forwarded back to the validated client ``redirect_uri`` with the\n  original (un-wrapped) ``state``.\n- An error response (``error``[+``error_description``/``error_uri``]), per\n  RFC 6749 \u00a74.1.2.1. When ``state`` is present and decodes to a trusted\n  ``redirect_uri``, the error params are propagated back to the client so\n  its OAuth library can surface them. Otherwise we render an HTML error\n  page so the user is not left on an opaque 422 / blank screen.",
+          "description": "OAuth 2.0 authorization response handler for MCP loopback clients.\n\nAccepts either:\n\n- A successful authorization response (``code`` + ``state``), which is\n  forwarded back to the validated client ``redirect_uri`` with the\n  original (un-wrapped) ``state``, once the RFC 9207 ``iss`` (when the\n  authorization server sent one) matches the issuer /authorize sealed\n  into the state.\n- An error response (``error``[+``error_description``/``error_uri``]), per\n  RFC 6749 \u00a74.1.2.1. When ``state`` is present and decodes to a trusted\n  ``redirect_uri``, the error params are propagated back to the client so\n  its OAuth library can surface them. Otherwise we render an HTML error\n  page so the user is not left on an opaque 422 / blank screen.",
           "operationId": "callback_callback_get",
           "parameters": [
             {
@@ -34537,6 +35773,22 @@
                   }
                 ],
                 "title": "State"
+              }
+            },
+            {
+              "in": "query",
+              "name": "iss",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Iss"
               }
             },
             {
@@ -36293,6 +37545,28 @@
                 }
               ],
               "title": "Client Secret"
+            },
+            "dcr_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Issuer"
+            },
+            "dcr_server_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Server Url"
             },
             "id_jag_resource": {
               "anyOf": [
@@ -40287,6 +41561,28 @@
                 }
               ],
               "title": "Client Secret"
+            },
+            "dcr_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Issuer"
+            },
+            "dcr_server_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Server Url"
             },
             "id_jag_resource": {
               "anyOf": [
@@ -47806,1327 +49102,6 @@
           "summary": "Create Realtime Transcription Session",
           "tags": [
             "realtime"
-          ]
-        }
-      }
-    }
-  },
-  "roi_calculator": {
-    "components": {
-      "schemas": {
-        "HTTPValidationError": {
-          "properties": {
-            "detail": {
-              "items": {
-                "$ref": "#/components/schemas/ValidationError"
-              },
-              "title": "Detail",
-              "type": "array"
-            }
-          },
-          "title": "HTTPValidationError",
-          "type": "object"
-        },
-        "ROIEstimateResponse": {
-          "properties": {
-            "cached": {
-              "default": false,
-              "title": "Cached",
-              "type": "boolean"
-            },
-            "effort_basis": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Effort Basis"
-            },
-            "evidence_source": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Evidence Source"
-            },
-            "hours": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Hours"
-            },
-            "model": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Model"
-            },
-            "reasoning": {
-              "title": "Reasoning",
-              "type": "string"
-            },
-            "status": {
-              "enum": [
-                "estimated",
-                "needs_review",
-                "error"
-              ],
-              "title": "Status",
-              "type": "string"
-            }
-          },
-          "required": [
-            "status",
-            "hours",
-            "reasoning"
-          ],
-          "title": "ROIEstimateResponse",
-          "type": "object"
-        },
-        "ROIIdentityMapResponse": {
-          "properties": {
-            "identity_map": {
-              "additionalProperties": {
-                "type": "string"
-              },
-              "title": "Identity Map",
-              "type": "object"
-            },
-            "report": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/ROISummaryResponse"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "required": [
-            "report",
-            "identity_map"
-          ],
-          "title": "ROIIdentityMapResponse",
-          "type": "object"
-        },
-        "ROIIdentityMapUpdate": {
-          "properties": {
-            "email": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Email"
-            },
-            "github_login": {
-              "title": "Github Login",
-              "type": "string"
-            }
-          },
-          "required": [
-            "github_login",
-            "email"
-          ],
-          "title": "ROIIdentityMapUpdate",
-          "type": "object"
-        },
-        "ROIMetricsResponse": {
-          "properties": {
-            "cohort_people": {
-              "title": "Cohort People",
-              "type": "integer"
-            },
-            "cost_per_hour": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cost Per Hour"
-            },
-            "estimated_prs": {
-              "title": "Estimated Prs",
-              "type": "integer"
-            },
-            "excluded_spend": {
-              "title": "Excluded Spend",
-              "type": "number"
-            },
-            "hours_per_dollar": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Hours Per Dollar"
-            },
-            "matched_prs": {
-              "title": "Matched Prs",
-              "type": "integer"
-            },
-            "matched_spend": {
-              "title": "Matched Spend",
-              "type": "number"
-            },
-            "merged_prs": {
-              "title": "Merged Prs",
-              "type": "integer"
-            },
-            "output_hours": {
-              "title": "Output Hours",
-              "type": "number"
-            },
-            "pending_prs": {
-              "title": "Pending Prs",
-              "type": "integer"
-            },
-            "people_with_prs": {
-              "title": "People With Prs",
-              "type": "integer"
-            },
-            "total_output_hours": {
-              "title": "Total Output Hours",
-              "type": "number"
-            },
-            "total_spend": {
-              "title": "Total Spend",
-              "type": "number"
-            }
-          },
-          "required": [
-            "matched_spend",
-            "output_hours",
-            "total_spend",
-            "total_output_hours",
-            "excluded_spend",
-            "cost_per_hour",
-            "hours_per_dollar",
-            "merged_prs",
-            "estimated_prs",
-            "matched_prs",
-            "cohort_people",
-            "people_with_prs",
-            "pending_prs"
-          ],
-          "title": "ROIMetricsResponse",
-          "type": "object"
-        },
-        "ROIPersonResponse": {
-          "properties": {
-            "cost_per_hour": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cost Per Hour"
-            },
-            "eligible": {
-              "title": "Eligible",
-              "type": "boolean"
-            },
-            "email": {
-              "title": "Email",
-              "type": "string"
-            },
-            "estimated_prs": {
-              "title": "Estimated Prs",
-              "type": "integer"
-            },
-            "hours": {
-              "title": "Hours",
-              "type": "number"
-            },
-            "id": {
-              "title": "Id",
-              "type": "string"
-            },
-            "logins": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Logins",
-              "type": "array"
-            },
-            "match_methods": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Match Methods",
-              "type": "array"
-            },
-            "pending_prs": {
-              "title": "Pending Prs",
-              "type": "integer"
-            },
-            "prs": {
-              "title": "Prs",
-              "type": "integer"
-            },
-            "spend": {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Spend"
-            }
-          },
-          "required": [
-            "id",
-            "email",
-            "logins",
-            "spend",
-            "hours",
-            "prs",
-            "estimated_prs",
-            "pending_prs",
-            "match_methods",
-            "eligible",
-            "cost_per_hour"
-          ],
-          "title": "ROIPersonResponse",
-          "type": "object"
-        },
-        "ROIPullResponse": {
-          "properties": {
-            "additions": {
-              "title": "Additions",
-              "type": "integer"
-            },
-            "cache_key": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Cache Key"
-            },
-            "changed_files": {
-              "title": "Changed Files",
-              "type": "integer"
-            },
-            "commit_count": {
-              "title": "Commit Count",
-              "type": "integer"
-            },
-            "deletions": {
-              "title": "Deletions",
-              "type": "integer"
-            },
-            "email": {
-              "title": "Email",
-              "type": "string"
-            },
-            "emails": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Emails",
-              "type": "array"
-            },
-            "estimate": {
-              "$ref": "#/components/schemas/ROIEstimateResponse"
-            },
-            "head_sha": {
-              "title": "Head Sha",
-              "type": "string"
-            },
-            "incomplete_metadata": {
-              "title": "Incomplete Metadata",
-              "type": "boolean"
-            },
-            "login": {
-              "title": "Login",
-              "type": "string"
-            },
-            "match_method": {
-              "title": "Match Method",
-              "type": "string"
-            },
-            "matched": {
-              "title": "Matched",
-              "type": "boolean"
-            },
-            "merged_at": {
-              "title": "Merged At",
-              "type": "string"
-            },
-            "number": {
-              "title": "Number",
-              "type": "integer"
-            },
-            "profile_email": {
-              "title": "Profile Email",
-              "type": "string"
-            },
-            "repo": {
-              "title": "Repo",
-              "type": "string"
-            },
-            "title": {
-              "title": "Title",
-              "type": "string"
-            },
-            "url": {
-              "title": "Url",
-              "type": "string"
-            }
-          },
-          "required": [
-            "repo",
-            "number",
-            "title",
-            "url",
-            "login",
-            "emails",
-            "profile_email",
-            "merged_at",
-            "head_sha",
-            "additions",
-            "deletions",
-            "changed_files",
-            "commit_count",
-            "incomplete_metadata",
-            "estimate",
-            "email",
-            "match_method",
-            "matched"
-          ],
-          "title": "ROIPullResponse",
-          "type": "object"
-        },
-        "ROIReportResponse": {
-          "properties": {
-            "report": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/ROISummaryResponse"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "required": [
-            "report"
-          ],
-          "title": "ROIReportResponse",
-          "type": "object"
-        },
-        "ROIRepositoriesResponse": {
-          "properties": {
-            "has_more": {
-              "title": "Has More",
-              "type": "boolean"
-            },
-            "page": {
-              "title": "Page",
-              "type": "integer"
-            },
-            "repositories": {
-              "items": {
-                "$ref": "#/components/schemas/ROIRepository"
-              },
-              "title": "Repositories",
-              "type": "array"
-            }
-          },
-          "required": [
-            "repositories",
-            "page",
-            "has_more"
-          ],
-          "title": "ROIRepositoriesResponse",
-          "type": "object"
-        },
-        "ROIRepository": {
-          "properties": {
-            "archived": {
-              "title": "Archived",
-              "type": "boolean"
-            },
-            "name": {
-              "title": "Name",
-              "type": "string"
-            },
-            "visibility": {
-              "title": "Visibility",
-              "type": "string"
-            }
-          },
-          "required": [
-            "name",
-            "visibility",
-            "archived"
-          ],
-          "title": "ROIRepository",
-          "type": "object"
-        },
-        "ROISettingsResponse": {
-          "properties": {
-            "available_models": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Available Models",
-              "type": "array"
-            },
-            "backfill_days": {
-              "title": "Backfill Days",
-              "type": "integer"
-            },
-            "default_prompt": {
-              "title": "Default Prompt",
-              "type": "string"
-            },
-            "estimator_model": {
-              "title": "Estimator Model",
-              "type": "string"
-            },
-            "estimator_prompt": {
-              "title": "Estimator Prompt",
-              "type": "string"
-            },
-            "github_api_url": {
-              "title": "Github Api Url",
-              "type": "string"
-            },
-            "has_estimator_key": {
-              "title": "Has Estimator Key",
-              "type": "boolean"
-            },
-            "has_github_token": {
-              "title": "Has Github Token",
-              "type": "boolean"
-            },
-            "identity_map": {
-              "additionalProperties": {
-                "type": "string"
-              },
-              "title": "Identity Map",
-              "type": "object"
-            },
-            "ready": {
-              "title": "Ready",
-              "type": "boolean"
-            },
-            "repos": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Repos",
-              "type": "array"
-            },
-            "update_interval_minutes": {
-              "title": "Update Interval Minutes",
-              "type": "number"
-            }
-          },
-          "required": [
-            "github_api_url",
-            "repos",
-            "estimator_model",
-            "estimator_prompt",
-            "backfill_days",
-            "update_interval_minutes",
-            "has_estimator_key",
-            "identity_map",
-            "has_github_token",
-            "default_prompt",
-            "available_models",
-            "ready"
-          ],
-          "title": "ROISettingsResponse",
-          "type": "object"
-        },
-        "ROISettingsUpdate": {
-          "additionalProperties": false,
-          "properties": {
-            "backfill_days": {
-              "anyOf": [
-                {
-                  "maximum": 3650.0,
-                  "minimum": 1.0,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Backfill Days"
-            },
-            "estimator_key": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Estimator Key"
-            },
-            "estimator_model": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Estimator Model"
-            },
-            "estimator_prompt": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Estimator Prompt"
-            },
-            "github_api_url": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Github Api Url"
-            },
-            "github_token": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Github Token"
-            },
-            "repos": {
-              "anyOf": [
-                {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Repos"
-            },
-            "update_interval_minutes": {
-              "anyOf": [
-                {
-                  "maximum": 43200.0,
-                  "minimum": 0.0,
-                  "type": "number"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Update Interval Minutes"
-            }
-          },
-          "title": "ROISettingsUpdate",
-          "type": "object"
-        },
-        "ROISummaryResponse": {
-          "properties": {
-            "effort_basis": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Effort Basis"
-            },
-            "end": {
-              "title": "End",
-              "type": "string"
-            },
-            "estimator_model": {
-              "title": "Estimator Model",
-              "type": "string"
-            },
-            "estimator_prompt": {
-              "title": "Estimator Prompt",
-              "type": "string"
-            },
-            "id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Id"
-            },
-            "metrics": {
-              "$ref": "#/components/schemas/ROIMetricsResponse"
-            },
-            "mode": {
-              "title": "Mode",
-              "type": "string"
-            },
-            "people": {
-              "items": {
-                "$ref": "#/components/schemas/ROIPersonResponse"
-              },
-              "title": "People",
-              "type": "array"
-            },
-            "pulls": {
-              "items": {
-                "$ref": "#/components/schemas/ROIPullResponse"
-              },
-              "title": "Pulls",
-              "type": "array"
-            },
-            "repos": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Repos",
-              "type": "array"
-            },
-            "start": {
-              "title": "Start",
-              "type": "string"
-            },
-            "synced_at": {
-              "title": "Synced At",
-              "type": "string"
-            },
-            "trend": {
-              "items": {
-                "$ref": "#/components/schemas/ROITrendResponse"
-              },
-              "title": "Trend",
-              "type": "array"
-            },
-            "warnings": {
-              "items": {
-                "type": "string"
-              },
-              "title": "Warnings",
-              "type": "array"
-            }
-          },
-          "required": [
-            "id",
-            "mode",
-            "start",
-            "end",
-            "synced_at",
-            "repos",
-            "estimator_model",
-            "estimator_prompt",
-            "warnings",
-            "effort_basis",
-            "metrics",
-            "people",
-            "pulls",
-            "trend"
-          ],
-          "title": "ROISummaryResponse",
-          "type": "object"
-        },
-        "ROISyncStatus": {
-          "properties": {
-            "done": {
-              "title": "Done",
-              "type": "integer"
-            },
-            "elapsed_seconds": {
-              "default": 0,
-              "title": "Elapsed Seconds",
-              "type": "integer"
-            },
-            "error": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Error"
-            },
-            "estimated": {
-              "title": "Estimated",
-              "type": "integer"
-            },
-            "finished_at": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Finished At"
-            },
-            "needs_attention": {
-              "title": "Needs Attention",
-              "type": "integer"
-            },
-            "next_update": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Next Update"
-            },
-            "phase": {
-              "enum": [
-                "idle",
-                "spend",
-                "repositories",
-                "estimates",
-                "complete",
-                "cancelled",
-                "error"
-              ],
-              "title": "Phase",
-              "type": "string"
-            },
-            "remaining_seconds": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Remaining Seconds"
-            },
-            "reused": {
-              "title": "Reused",
-              "type": "integer"
-            },
-            "running": {
-              "title": "Running",
-              "type": "boolean"
-            },
-            "stage": {
-              "title": "Stage",
-              "type": "string"
-            },
-            "started_at": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Started At"
-            },
-            "total": {
-              "title": "Total",
-              "type": "integer"
-            }
-          },
-          "required": [
-            "running",
-            "phase",
-            "stage",
-            "done",
-            "total",
-            "estimated",
-            "reused",
-            "needs_attention",
-            "error"
-          ],
-          "title": "ROISyncStatus",
-          "type": "object"
-        },
-        "ROITrendResponse": {
-          "properties": {
-            "date": {
-              "title": "Date",
-              "type": "string"
-            },
-            "hours": {
-              "title": "Hours",
-              "type": "number"
-            },
-            "prs": {
-              "title": "Prs",
-              "type": "integer"
-            },
-            "spend": {
-              "title": "Spend",
-              "type": "number"
-            }
-          },
-          "required": [
-            "date",
-            "spend",
-            "hours",
-            "prs"
-          ],
-          "title": "ROITrendResponse",
-          "type": "object"
-        },
-        "ValidationError": {
-          "properties": {
-            "ctx": {
-              "title": "Context",
-              "type": "object"
-            },
-            "input": {
-              "title": "Input"
-            },
-            "loc": {
-              "items": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "integer"
-                  }
-                ]
-              },
-              "title": "Location",
-              "type": "array"
-            },
-            "msg": {
-              "title": "Message",
-              "type": "string"
-            },
-            "type": {
-              "title": "Error Type",
-              "type": "string"
-            }
-          },
-          "required": [
-            "loc",
-            "msg",
-            "type"
-          ],
-          "title": "ValidationError",
-          "type": "object"
-        }
-      }
-    },
-    "paths": {
-      "/roi-calculator/connections/test": {
-        "post": {
-          "operationId": "test_roi_calculator_connections_roi_calculator_connections_test_post",
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISettingsResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Test Roi Calculator Connections",
-          "tags": [
-            "roi_calculator"
-          ]
-        }
-      },
-      "/roi-calculator/identity-map": {
-        "put": {
-          "operationId": "update_roi_calculator_identity_map_roi_calculator_identity_map_put",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ROIIdentityMapUpdate"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROIIdentityMapResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Update Roi Calculator Identity Map",
-          "tags": [
-            "roi_calculator"
-          ]
-        }
-      },
-      "/roi-calculator/report": {
-        "get": {
-          "operationId": "get_roi_calculator_report_roi_calculator_report_get",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "mode",
-              "required": false,
-              "schema": {
-                "default": "live",
-                "enum": [
-                  "live",
-                  "demo"
-                ],
-                "title": "Mode",
-                "type": "string"
-              }
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROIReportResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Get Roi Calculator Report",
-          "tags": [
-            "roi_calculator"
-          ]
-        }
-      },
-      "/roi-calculator/repositories": {
-        "get": {
-          "operationId": "get_roi_calculator_repositories_roi_calculator_repositories_get",
-          "parameters": [
-            {
-              "in": "query",
-              "name": "query",
-              "required": false,
-              "schema": {
-                "default": "",
-                "maxLength": 200,
-                "title": "Query",
-                "type": "string"
-              }
-            },
-            {
-              "in": "query",
-              "name": "page",
-              "required": false,
-              "schema": {
-                "default": 1,
-                "maximum": 1000,
-                "minimum": 1,
-                "title": "Page",
-                "type": "integer"
-              }
-            }
-          ],
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROIRepositoriesResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Get Roi Calculator Repositories",
-          "tags": [
-            "roi_calculator"
-          ]
-        }
-      },
-      "/roi-calculator/settings": {
-        "get": {
-          "operationId": "get_roi_calculator_settings_roi_calculator_settings_get",
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISettingsResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Get Roi Calculator Settings",
-          "tags": [
-            "roi_calculator"
-          ]
-        },
-        "put": {
-          "operationId": "update_roi_calculator_settings_roi_calculator_settings_put",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ROISettingsUpdate"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISettingsResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Update Roi Calculator Settings",
-          "tags": [
-            "roi_calculator"
-          ]
-        }
-      },
-      "/roi-calculator/setup/reset": {
-        "post": {
-          "operationId": "reset_roi_calculator_setup_roi_calculator_setup_reset_post",
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISettingsResponse"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Reset Roi Calculator Setup",
-          "tags": [
-            "roi_calculator"
-          ]
-        }
-      },
-      "/roi-calculator/sync": {
-        "delete": {
-          "operationId": "cancel_roi_calculator_sync_roi_calculator_sync_delete",
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISyncStatus"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Cancel Roi Calculator Sync",
-          "tags": [
-            "roi_calculator"
-          ]
-        },
-        "get": {
-          "operationId": "get_roi_calculator_sync_status_roi_calculator_sync_get",
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISyncStatus"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Get Roi Calculator Sync Status",
-          "tags": [
-            "roi_calculator"
-          ]
-        },
-        "post": {
-          "operationId": "start_roi_calculator_sync_roi_calculator_sync_post",
-          "responses": {
-            "202": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/ROISyncStatus"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Start Roi Calculator Sync",
-          "tags": [
-            "roi_calculator"
           ]
         }
       }

@@ -16,6 +16,96 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
 client = TestClient(app)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config_value,stored_value,expected", [
+    (None, None, False), (None, False, False), (None, True, True),
+    (False, True, False), (True, False, True), ("false", True, False), ("true", False, True),
+])
+@pytest.mark.parametrize("encoded", [False, True])
+@pytest.mark.parametrize("require_fresh", [False, True])
+async def test_model_creation_policy_uses_refreshed_settings_with_config_precedence(
+    config_value: bool | str | None, stored_value: bool | None, expected: bool, encoded: bool,
+    require_fresh: bool,
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+    from litellm.proxy import proxy_server
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+        model_creation_disabled_for_internal_users, sync_ui_settings_to_general_settings,
+    )
+
+    setting: Final = "disable_model_add_for_internal_users"
+    stored: Final = {} if stored_value is None else {setting: stored_value}
+    prisma: Final = MagicMock()
+    connection: Final = prisma.writer_db if require_fresh else prisma.db
+    unused_connection: Final = prisma.db if require_fresh else prisma.writer_db
+    connection.litellm_uisettings.find_unique = AsyncMock(return_value=SimpleNamespace(
+        ui_settings=json.dumps(stored) if encoded else stored,
+    ))
+    proxy_server.proxy_config.settings.load_yaml({} if config_value is None else {setting: config_value})
+    await sync_ui_settings_to_general_settings(prisma, require_fresh=require_fresh)
+
+    assert model_creation_disabled_for_internal_users(proxy_server.general_settings) is expected
+    assert model_creation_disabled_for_internal_users(proxy_server.general_settings) is expected
+    connection.litellm_uisettings.find_unique.assert_awaited_once_with(where={"id": "ui_settings"})
+    unused_connection.litellm_uisettings.find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_creation_policy_refresh_retains_last_value_on_failure_and_clears_deleted_flag() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+    from litellm.proxy import proxy_server
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+        model_creation_disabled_for_internal_users, sync_ui_settings_to_general_settings,
+    )
+
+    prisma: Final = MagicMock()
+    prisma.db.litellm_uisettings.find_unique = AsyncMock(side_effect=[
+        SimpleNamespace(ui_settings={"disable_model_add_for_internal_users": True}),
+        RuntimeError("database unavailable"),
+        SimpleNamespace(ui_settings={"disable_model_add_for_internal_users": False}),
+        SimpleNamespace(ui_settings={"disable_model_add_for_internal_users": True}),
+        None,
+    ])
+    for expected in (True, True, False, True, False):
+        await sync_ui_settings_to_general_settings(prisma)
+        assert model_creation_disabled_for_internal_users(proxy_server.general_settings) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disabled", [True, False])
+async def test_model_creation_policy_patch_applies_after_successful_persistence(
+    monkeypatch: pytest.MonkeyPatch, disabled: bool,
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+        apply_runtime_general_settings_flags, model_creation_disabled_for_internal_users, update_ui_settings,
+    )
+
+    setting: Final = "disable_model_add_for_internal_users"
+    apply_runtime_general_settings_flags({setting: not disabled})
+    prisma: Final = MagicMock()
+    prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=SimpleNamespace(ui_settings={setting: not disabled}))
+    prisma.db.litellm_uisettings.upsert = AsyncMock(side_effect=[RuntimeError("write failed"), None])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(RuntimeError, match="write failed"):
+        await update_ui_settings({setting: disabled}, actor)
+    assert model_creation_disabled_for_internal_users(proxy_server.general_settings) is not disabled
+
+    await update_ui_settings({setting: disabled}, actor)
+    assert model_creation_disabled_for_internal_users(proxy_server.general_settings) is disabled
+    assert json.loads(prisma.db.litellm_uisettings.upsert.await_args.kwargs["data"]["update"]["ui_settings"]) == {
+        setting: disabled,
+    }
+
+
 @pytest.fixture
 def mock_proxy_config(monkeypatch):
     """Mock the proxy_config to avoid actual file operations during tests"""
@@ -4075,4 +4165,3 @@ class TestSyncUiSettingsToGeneralSettings:
 
         assert general_settings["forward_client_headers_to_llm_api"] is False
         assert general_settings.source("forward_client_headers_to_llm_api") == "config"
-
