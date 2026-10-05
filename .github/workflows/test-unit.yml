@@ -36,6 +36,8 @@ concurrency:
 jobs:
   rust-bridge:
     name: Build the Rust bridge
+    outputs:
+      artifact: ${{ steps.rust-bridge-artifact.outputs.name }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -114,9 +116,19 @@ jobs:
           path: rust-bridge-dist
           key: ${{ steps.rust-bridge-key.outputs.key }}
 
+      - name: Expose the Rust bridge artifact
+        id: rust-bridge-artifact
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 1
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: echo "name=rust-bridge-${RUN_ID}-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
   unit:
     name: ${{ matrix.shard }}
     needs: rust-bridge
+    if: ${{ !cancelled() }}
     permissions:
       contents: read
       id-token: write
@@ -477,7 +489,7 @@ jobs:
             job-timeout-minutes: 60
     uses: ./.github/workflows/_test-unit-base.yml
     with:
-      rust-bridge-artifact: rust-bridge-${{ github.run_id }}-${{ github.run_attempt }}
+      rust-bridge-artifact: ${{ needs.rust-bridge.outputs.artifact }}
       test-path: ${{ matrix.test-path }}
       workers: ${{ matrix.workers }}
       reruns: ${{ matrix.reruns }}
