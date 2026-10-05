@@ -1,28 +1,26 @@
 import { getProxyBaseUrl } from "@/components/networking";
 import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 
-import { isNegatedOp, valueMatcher } from "@/components/shared/search/language";
+import { isNegatedOp } from "@/components/shared/search/language";
 import type { SearchFilter, SearchQuery } from "@/components/shared/search/searchQuery";
 import { NEWEST, type RunOrder, type RunSortKey } from "../runOrder";
 import type { RunField } from "./runQuery";
 
-const RUN_ROWS = `SELECT TraceId AS trace_id, any(RootName) AS name, any(RootInput) AS input, sum(ErrorCount) AS errors,
-       groupUniqArrayArray(AgentNames) AS agents, groupUniqArrayArray(Models) AS models,
-       sum(SpanCount) AS steps, dateDiff('millisecond', min(StartTs), max(EndTs)) AS duration_ms
-FROM agent_traces_by_key
-GROUP BY TraceId`;
+const RUN_ROWS = `SELECT id, trace_id, name, input_preview, root_status, has_error,
+       agent_names, models, span_count, error_count, start_time, duration_ms
+FROM traces`;
 
 const ORDER_COLUMNS: Record<RunSortKey, string> = {
-  start_ms: "min(StartTs)",
+  start_ms: "start_time",
   duration_ms: "duration_ms",
-  span_count: "steps",
-  error_count: "errors",
+  span_count: "span_count",
+  error_count: "error_count",
 };
 
 /** The list's order with the same tie-break the server pages by. */
 const orderBy = (order: RunOrder): string => {
   const direction = order.descending ? "DESC" : "ASC";
-  return `ORDER BY ${ORDER_COLUMNS[order.key]} ${direction}, trace_id ${direction}`;
+  return `ORDER BY ${ORDER_COLUMNS[order.key]} ${direction}, id ${direction}`;
 };
 
 const sqlString = (value: string): string => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
@@ -35,25 +33,18 @@ const likePattern = (value: string): string => likeLiteral(value).replaceAll("*"
 const matches = (column: string, pattern: string): string => `${column} ILIKE ${sqlString(pattern)}`;
 const anyMatches = (column: string, pattern: string): string => `arrayExists(x -> ${matches("x", pattern)}, ${column})`;
 
-const STATUS_PREDICATES = { error: "errors > 0", ok: "errors = 0" } as const;
-
-/** Status has two values, so a glob over it resolves statically to one, both or neither predicate. */
-function statusPredicate(value: string): string {
-  const hits = (["error", "ok"] as const).filter(valueMatcher(value)).map((status) => STATUS_PREDICATES[status]);
-  if (hits.length === 2) return "true";
-  return hits[0] ?? "false";
-}
-
 const FIELD_PREDICATES: Record<RunField, (value: string) => string> = {
   name: (value) => matches("name", likePattern(value)),
-  agent: (value) => anyMatches("agents", likePattern(value)),
-  status: statusPredicate,
+  agent: (value) => anyMatches("agent_names", likePattern(value)),
+  root_status: (value) => matches("root_status", likePattern(value)),
+  has_error: (value) => `has_error = ${value.toLowerCase()}`,
+  service: (value) => matches("service", likePattern(value)),
   model: (value) => anyMatches("models", likePattern(value)),
-  input: (value) => matches("input", likePattern(value)),
+  input: (value) => matches("input_preview", likePattern(value)),
   trace_id: (value) => matches("trace_id", likePattern(value)),
 };
 
-const FREE_TEXT_COLUMNS = ["trace_id", "input", "name"] as const;
+const FREE_TEXT_COLUMNS = ["trace_id", "input_preview", "name"] as const;
 
 const textPredicate = (term: string): string => {
   const contains = `%${likeLiteral(term)}%`;
@@ -67,18 +58,41 @@ function filterPredicate(filter: SearchFilter<RunField>): string {
 
 const timeBound = (range: TimeWindow | undefined): string =>
   range
-    ? `min(StartTs) >= fromUnixTimestamp64Milli(${range.startMs}) AND min(StartTs) < fromUnixTimestamp64Milli(${range.endMs})`
-    : "min(StartTs) >= now() - INTERVAL 1 DAY";
+    ? `start_time >= fromUnixTimestamp64Milli(${range.startMs}) AND start_time < fromUnixTimestamp64Milli(${range.endMs})`
+    : "start_time >= now() - INTERVAL 1 DAY";
 
 export const runPredicates = (query: SearchQuery<RunField>): string[] => [
   ...query.text.map(textPredicate),
   ...query.filters.map(filterPredicate),
 ];
 
-/** The runs list as a trace query: one row per trace from the per-key rollup, filtered and ordered like the list. */
-export function runQuerySql(query: SearchQuery<RunField>, range?: TimeWindow, order: RunOrder = NEWEST): string {
-  const having = [timeBound(range), ...runPredicates(query)].join("\n   AND ");
-  return `${RUN_ROWS}\nHAVING ${having}\n${orderBy(order)}\nLIMIT 100`;
+export type RunSQL =
+  | { readonly kind: "sql"; readonly sql: string }
+  | { readonly kind: "unsupported"; readonly reason: string };
+
+const unsupported = (query: SearchQuery<RunField>): string | undefined => {
+  if (query.text.some((term) => term.includes(":")))
+    return "Use the traces API for attribute or unsupported field filters";
+  if (
+    query.filters.some(
+      (filter) => filter.field === "root_status" && !["ok", "error", "unset"].includes(filter.value.toLowerCase()),
+    )
+  )
+    return "Choose root_status:ok, root_status:error, or root_status:unset";
+  if (
+    query.filters.some(
+      (filter) => filter.field === "has_error" && !["true", "false"].includes(filter.value.toLowerCase()),
+    )
+  )
+    return "Choose has_error:true or has_error:false";
+  return undefined;
+};
+
+export function runQuerySql(query: SearchQuery<RunField>, range?: TimeWindow, order: RunOrder = NEWEST): RunSQL {
+  const reason = unsupported(query);
+  if (reason) return { kind: "unsupported", reason };
+  const where = [timeBound(range), ...runPredicates(query)].join("\n   AND ");
+  return { kind: "sql", sql: `${RUN_ROWS}\nWHERE ${where}\n${orderBy(order)}\nLIMIT 100` };
 }
 
 /** Runs `sql` through the trace query API; the quoted heredoc keeps the SQL's own quotes intact. */
@@ -92,5 +106,7 @@ export const traceQueryCommand = (sql: string): string =>
 
 export const runQueryCommand =
   (range?: TimeWindow, order: RunOrder = NEWEST) =>
-  (query: SearchQuery<RunField>): string =>
-    traceQueryCommand(runQuerySql(query, range, order));
+  (query: SearchQuery<RunField>): string => {
+    const result = runQuerySql(query, range, order);
+    return result.kind === "sql" ? traceQueryCommand(result.sql) : result.reason;
+  };

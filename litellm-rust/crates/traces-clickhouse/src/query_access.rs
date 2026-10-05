@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use strum::IntoEnumIterator;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use super::{Connection, Error, TraceTable};
+use super::{Connection, Error, QueryTable, TraceTable};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -141,7 +141,7 @@ impl QueryReaders {
             )
             .await?;
         }
-        for table in TraceTable::iter() {
+        for table in QueryTable::iter() {
             self.execute(
                 client,
                 format!("GRANT SELECT ON `{database}`.{table} TO {user}"),

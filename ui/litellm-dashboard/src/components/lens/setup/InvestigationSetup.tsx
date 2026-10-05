@@ -230,12 +230,7 @@ function SetupEditor({
           <MatchingActivityPreview {...activity.preview} className="min-w-0 lg:max-h-full" />
           <Inspector.Panel label="Run details" testId="run-panel">
             {(run: TraceRef) => (
-              <TraceEvidence
-                traceId={run.traceId}
-                traceRef={run.traceRef}
-                initialSpanId={null}
-                onBack={() => setTrace(null)}
-              />
+              <TraceEvidence traceId={run.traceId} initialSpanId={null} onBack={() => setTrace(null)} />
             )}
           </Inspector.Panel>
         </Inspector.Root>

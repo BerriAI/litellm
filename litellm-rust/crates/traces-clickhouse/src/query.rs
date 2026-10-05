@@ -5,6 +5,7 @@ use futures_util::{
     stream::{self, TryStreamExt},
 };
 use litellm_http::Client;
+use litellm_traces::api::{SqlParameter, TraceSQLColumn};
 use litellm_traces::query::guide::{Example, QueryGuide, Section};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
@@ -14,7 +15,7 @@ use super::{
     Connection, Error, NORMALIZED_FIELD_DEFINITIONS, NormalizedFieldDefinition, Parameter,
     query_access::READER_LIMITS,
 };
-use crate::TraceTable;
+use crate::QueryTable;
 
 mod guide;
 pub mod named;
@@ -23,7 +24,7 @@ mod number;
 const SAMPLE_ROWS: usize = 200;
 const MAX_FIELDS: usize = 200;
 const MAX_DEPTH: usize = 16;
-const METADATA_SQL: &str = "SELECT metadata FROM spend_logs FINAL \
+const METADATA_SQL: &str = "SELECT metadata FROM calls \
     WHERE start_time >= now() - INTERVAL 7 DAY AND length(metadata) <= 8192 \
     LIMIT 201";
 const METADATA_SCOPE: &str = "Up to 200 unordered rows from the last 7 days, excluding metadata larger than 8192 bytes; up to 200 paths and 16 levels. Missing paths may exist outside this sample. Array indexes are 1-based and describe sampled positions, not a fixed schema";
@@ -96,22 +97,12 @@ struct MetadataField {
     expression: String,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
-#[cfg_attr(feature = "schema", schemars(rename = "TraceQueryColumn"))]
-struct ColumnSchema {
-    name: String,
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(flatten)]
-    details: BTreeMap<String, Value>,
-}
-
 #[macro_rules_attribute::apply(response_type)]
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryTable"))]
 struct TableSchema {
-    name: TraceTable,
-    columns: Vec<ColumnSchema>,
+    name: QueryTable,
+    columns: Vec<TraceSQLColumn>,
 }
 
 trait Unobserved {
@@ -197,7 +188,7 @@ impl Unobserved for MetadataSample {
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryMetadata"))]
 struct MetadataCatalog {
-    table: TraceTable,
+    table: QueryTable,
     column: &'static str,
     #[serde(flatten)]
     discovery: Discovery<MetadataSample>,
@@ -234,7 +225,7 @@ impl Unobserved for AttributeSample {
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryAttributes"))]
 struct AttributeCatalog {
-    table: TraceTable,
+    table: QueryTable,
     column: &'static str,
     #[serde(flatten)]
     discovery: Discovery<AttributeSample>,
@@ -246,7 +237,7 @@ struct AttributeCatalog {
 #[cfg_attr(feature = "schema", schemars(deny_unknown_fields))]
 #[cfg_attr(feature = "schema", schemars(rename = "TraceQueryNormalizedField"))]
 struct NormalizedField {
-    table: TraceTable,
+    table: QueryTable,
     name: &'static str,
     column: &'static str,
     #[serde(rename = "type")]
@@ -257,7 +248,7 @@ struct NormalizedField {
 impl From<&NormalizedFieldDefinition> for NormalizedField {
     fn from(field: &NormalizedFieldDefinition) -> Self {
         Self {
-            table: TraceTable::OtelTraces,
+            table: QueryTable::OtelTraces,
             name: field.name,
             column: field.clickhouse_column,
             kind: field.clickhouse_type,
@@ -277,10 +268,10 @@ struct Relationship {
 }
 
 const RELATIONSHIPS: [Relationship; 1] = [Relationship {
-    left: "otel_traces.LiteLLMRequestId",
-    right: "spend_logs.response_id",
-    additional_predicates: "otel_traces.TeamId = spend_logs.team_id AND ((otel_traces.UserId != '' AND otel_traces.UserId = spend_logs.user) OR (otel_traces.ApiKeyHash != '' AND otel_traces.ApiKeyHash = spend_logs.api_key))",
-    meaning: "LiteLLMRequestId contains the first normalized request or provider response ID. This relationship matches response IDs only; CallKeys retains all typed identifiers. Cached requests can share response_id; joins may return multiple spend rows",
+    left: "spans.request_id",
+    right: "calls.response_id",
+    additional_predicates: "spans.team_id = calls.team_id AND ((spans.user_id != '' AND spans.user_id = calls.user_id) OR (spans.api_key_hash != '' AND spans.api_key_hash = calls.api_key_hash))",
+    meaning: "request_id contains the first normalized request or provider response ID. This relationship matches response IDs only; call_keys retains all typed identifiers. Cached requests can share response_id; joins may return multiple calls",
 }];
 
 #[macro_rules_attribute::apply(response_type)]
@@ -319,6 +310,30 @@ pub async fn query_sql(
     sql: &str,
 ) -> Result<String, Error> {
     execute_read(client, connection, sql, &BTreeMap::new()).await
+}
+
+pub async fn query_sql_with_params(
+    client: &Client,
+    connection: &Connection,
+    sql: &str,
+    params: &BTreeMap<String, SqlParameter>,
+) -> Result<String, Error> {
+    let parameters = params
+        .iter()
+        .map(|(name, value)| {
+            let parameter = match value {
+                SqlParameter::String(value) => Parameter::Text(value.clone()),
+                SqlParameter::Integer(value) => Parameter::Integer(*value),
+                SqlParameter::Unsigned(value) => Parameter::Unsigned(*value),
+                SqlParameter::Number(value) => Parameter::Float(*value),
+                SqlParameter::Boolean(value) => Parameter::Boolean(*value),
+                SqlParameter::Null => Parameter::Null,
+                SqlParameter::Strings(value) => Parameter::Strings(value.clone()),
+            };
+            (name.clone(), parameter)
+        })
+        .collect();
+    execute_read(client, connection, sql, &parameters).await
 }
 
 async fn rows<T: serde::de::DeserializeOwned>(
@@ -415,11 +430,11 @@ fn metadata_sample(sample: &[MetadataRow]) -> MetadataSample {
 }
 
 pub async fn query_help(client: &Client, connection: &Connection) -> Result<QueryHelp, Error> {
-    let tables = stream::iter(TraceTable::iter())
+    let tables = stream::iter(QueryTable::iter())
         .then(|table| async move {
             Ok::<_, Error>(TableSchema {
                 name: table,
-                columns: rows::<ColumnSchema>(
+                columns: rows::<TraceSQLColumn>(
                     client,
                     connection,
                     &format!("DESCRIBE TABLE {table}"),
@@ -430,7 +445,7 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Quer
         .try_collect::<Vec<_>>()
         .await?;
     let metadata = MetadataCatalog {
-        table: TraceTable::SpendLogs,
+        table: QueryTable::Calls,
         column: "metadata",
         discovery: match rows::<MetadataRow>(client, connection, METADATA_SQL).await {
             Ok(sample) => Discovery::Observed(metadata_sample(&sample)),
@@ -439,11 +454,11 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Quer
         sample_sql: METADATA_SQL,
         scope: METADATA_SCOPE,
     };
-    let attributes = stream::iter(["SpanAttributes", "ResourceAttributes"])
+    let attributes = stream::iter(["span_attributes", "resource_attributes"])
         .then(|column| async move {
             let sql = format!(
                 "SELECT DISTINCT arrayJoin(mapKeys({column})) AS key FROM \
-             (SELECT {column} FROM otel_traces WHERE Timestamp >= now() - INTERVAL 7 DAY \
+             (SELECT {column} FROM spans WHERE start_time >= now() - INTERVAL 7 DAY \
              LIMIT 200) ORDER BY key LIMIT 201"
             );
             let discovery = match rows::<AttributeRow>(client, connection, &sql).await {
@@ -462,7 +477,7 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Quer
                 Err(error) => Discovery::Unavailable(error.to_string()),
             };
             AttributeCatalog {
-                table: TraceTable::OtelTraces,
+                table: QueryTable::Spans,
                 column,
                 discovery,
                 discovery_sql: sql,
@@ -484,6 +499,7 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Quer
         "Normalized span fields",
         "Observed LLM call metadata",
         "Observed span and resource attributes",
+        "Native SQL parameters",
     ]
     .into_iter()
     .zip(&bodies)
@@ -500,7 +516,7 @@ pub async fn query_help(client: &Client, connection: &Connection) -> Result<Quer
     .map_err(|_| Error::InvalidResponse)?;
     Ok(QueryHelp {
         dialect: "ClickHouse SQL",
-        access: "Request-log visibility enforced by ClickHouse row policies; proxy admins see all rows, users see their own rows and permitted teams",
+        access: "ClickHouse row policies enforce user and permitted-team visibility. Logical traces summarize visible canonical spans; curated user-only reads require full trace ownership. Team and admin start time, duration, span count and error count agree with curated reads",
         response: "ClickHouse JSON envelope: meta, data, rows, statistics; 64-bit integers may be strings",
         examples,
         gotchas,
@@ -534,7 +550,7 @@ mod tests {
             Discovery::Observed(MetadataSample::unobserved())
         };
         let catalog = MetadataCatalog {
-            table: TraceTable::SpendLogs,
+            table: QueryTable::Calls,
             column: "metadata",
             discovery,
             sample_sql: METADATA_SQL,

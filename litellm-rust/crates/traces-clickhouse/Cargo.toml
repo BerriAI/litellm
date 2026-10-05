@@ -41,3 +41,8 @@ wiremock.workspace = true
 name = "export-traces-clickhouse-schema"
 path = "src/bin/export_schema.rs"
 required-features = ["schema"]
+
+[[bin]]
+name = "export-traces-openapi"
+path = "src/bin/export_openapi.rs"
+required-features = ["schema"]

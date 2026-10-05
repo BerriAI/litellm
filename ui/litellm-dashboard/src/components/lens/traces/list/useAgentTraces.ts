@@ -1,4 +1,4 @@
-import { useTracesApi } from "../api";
+import { type RunSelection, useTracesApi } from "../api";
 import { keepPreviousData, useInfiniteQuery, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { useMemo } from "react";
 
@@ -14,12 +14,8 @@ import {
 import type { TracePage, TraceSummary } from "../types";
 import type { RunOrder } from "./runOrder";
 
-interface LoadedTracePage extends TracePage {
-  window: TimeWindow;
-}
-
 interface PagePosition {
-  readonly window: TimeWindow;
+  readonly window: TracePage["window"];
   readonly cursor: string;
 }
 
@@ -56,6 +52,7 @@ interface UseAgentTracesOptions {
 
 export interface AgentTracesResult {
   traces: TraceSummary[];
+  resolvedWindow: TracePage["window"] | null;
   isLoading: boolean;
   isFetching: boolean;
   /** Rows belong to the previous order, search or window while this one loads. */
@@ -82,14 +79,16 @@ export function useAgentTraces({
 }: UseAgentTracesOptions): AgentTracesResult {
   const traces = useTracesApi(accessToken);
   const isLiveTail = isLive(range);
-  const fetchPage = async (pageParam: unknown): Promise<LoadedTracePage> => {
+  const fetchPage = async (pageParam: unknown): Promise<TracePage> => {
     const position = pageParam as PagePosition | null;
-    const window = position?.window ?? zoom ?? timeWindow(range, Date.now());
-    const selection = { window, q };
+    const window = position
+      ? { startMs: position.window.start_ms, endMs: position.window.end_ms }
+      : zoom ?? timeWindow(range, Date.now());
+    const selection: RunSelection = { window, q, ...(position ? { asOfMs: position.window.as_of_ms } : {}) };
     const page = { cursor: position?.cursor ?? null };
-    return { ...(await traces.list({ selection, order, page })), window };
+    return traces.list({ selection, order, page });
   };
-  const queryOptions: Parameters<typeof useInfiniteQuery<LoadedTracePage, Error>>[0] = {
+  const queryOptions: Parameters<typeof useInfiniteQuery<TracePage, Error>>[0] = {
     queryKey: ["agentTraces", traces.scope, range.hours, range.anchorMs, q, zoom, order.key, order.descending],
     placeholderData: keepPreviousData,
     queryFn: ({ pageParam }) => fetchPage(pageParam),
@@ -104,13 +103,14 @@ export function useAgentTraces({
     refetchOnReconnect: (q) => !requiresUserAction(q.state.error),
     refetchIntervalInBackground: false,
   };
-  const query = useInfiniteQuery<LoadedTracePage, Error>(queryOptions);
+  const query = useInfiniteQuery<TracePage, Error>(queryOptions);
 
   const loaded = useMemo(() => query.data?.pages.flatMap((page) => page.data) ?? [], [query.data]);
   const notEnabled = isTracingNotEnabled(query.error);
 
   return {
     traces: loaded,
+    resolvedWindow: query.isPlaceholderData ? null : query.data?.pages[0]?.window ?? null,
     isLoading: query.isLoading,
     isFetching: query.isFetching,
     isPlaceholder: query.isPlaceholderData,

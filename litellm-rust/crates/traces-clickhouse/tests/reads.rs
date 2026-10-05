@@ -616,7 +616,15 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
             },
         )
         .await?;
-    assert_eq!(cached.data, before.data);
+    let cached_run = cached
+        .data
+        .iter()
+        .find(|item| item.trace_ref == run.trace_ref)
+        .ok_or("missing cached run")?;
+    assert!(!cached_run.resolution_limited);
+    assert_eq!(cached_run.name, run.name);
+    assert_eq!(cached_run.span_count, run.span_count + 1);
+    assert!(cached_run.duration_ms > run.duration_ms);
     let (reader, store) = make_reader(client, connection);
     let after = reader
         .list_traces(
@@ -637,7 +645,8 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
         .find(|item| item.trace_ref == run.trace_ref)
         .ok_or("missing run")?;
     assert!(limited.resolution_limited);
-    assert_eq!(limited.span_count, 4);
+    assert_eq!(limited.span_count, cached_run.span_count);
+    assert_eq!(limited.duration_ms, cached_run.duration_ms);
     assert!(
         after
             .data

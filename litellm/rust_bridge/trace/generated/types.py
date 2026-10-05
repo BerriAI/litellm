@@ -23,7 +23,17 @@ class OwnedQueryScope(typing_extensions.TypedDict):
 QueryScope: TypeAlias = AllQueryScope | OwnedQueryScope
 
 
-RunField: TypeAlias = Literal["name", "agent", "status", "model", "input", "trace_id", "service", "team"]
+RunField: TypeAlias = Literal[
+    "name",
+    "agent",
+    "root_status",
+    "has_error",
+    "model",
+    "input",
+    "trace_id",
+    "service",
+    "team",
+]
 
 
 RunSortKey: TypeAlias = Literal["start_ms", "duration_ms", "span_count", "error_count", "trace_ref"]
@@ -34,26 +44,22 @@ class RunOrder(typing_extensions.TypedDict):
     descending: ReadOnly[bool]
 
 
+class TraceQueryWindow(typing_extensions.TypedDict):
+    start_ms: ReadOnly[Annotated[int, Field(ge=-9223372036854775808, le=9223372036854775807)]]
+    end_ms: ReadOnly[Annotated[int, Field(ge=-9223372036854775808, le=9223372036854775807)]]
+    as_of_ms: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+
+
 class RunValues(typing_extensions.TypedDict):
+    window: ReadOnly[TraceQueryWindow]
     values: ReadOnly[tuple[str, ...]]
 
 
-class UIText(typing_extensions.TypedDict):
-    text: ReadOnly[str]
-    kind: ReadOnly[Literal["text"]]
-
-
-ChatRole: TypeAlias = Literal["system", "user", "assistant", "tool"]
-
-
-class UIToolCall(typing_extensions.TypedDict):
-    name: ReadOnly[str]
-    arguments: ReadOnly[str]
-
-
-class UIField(typing_extensions.TypedDict):
-    key: ReadOnly[str]
-    value: ReadOnly[str]
+class SpanDetail(typing_extensions.TypedDict):
+    span_id: ReadOnly[str]
+    input: ReadOnly[str]
+    output: ReadOnly[str]
+    attributes: ReadOnly[Mapping[str, str]]
 
 
 class SpanErrorPage(typing_extensions.TypedDict):
@@ -105,30 +111,19 @@ class AgentRuns(typing_extensions.TypedDict):
     runs: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
 
 
-class UIFields(typing_extensions.TypedDict):
-    fields: ReadOnly[tuple[UIField, ...]]
-    kind: ReadOnly[Literal["fields"]]
-
-
-class UIMessage(typing_extensions.TypedDict):
-    role: ReadOnly[ChatRole]
-    content: ReadOnly[str]
-    name: ReadOnly[NotRequired[str | None]]
-    tool_calls: ReadOnly[NotRequired[tuple[UIToolCall, ...]]]
-
-
 class TraceSummary(typing_extensions.TypedDict):
-    resolution_limited: ReadOnly[NotRequired[bool]]
+    resolution_limited: ReadOnly[bool]
     trace_id: ReadOnly[str]
-    trace_ref: ReadOnly[NotRequired[str]]
+    id: ReadOnly[str]
     name: ReadOnly[str]
     service: ReadOnly[str]
-    agent_names: ReadOnly[NotRequired[tuple[str, ...]]]
-    frameworks: ReadOnly[NotRequired[tuple[str, ...]]]
+    agent_names: ReadOnly[tuple[str, ...]]
+    frameworks: ReadOnly[tuple[str, ...]]
     input_preview: ReadOnly[str]
     start_time: ReadOnly[str]
     duration_ms: ReadOnly[float]
-    status: ReadOnly[SpanStatus]
+    root_status: ReadOnly[SpanStatus]
+    has_error: ReadOnly[bool]
     span_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
     agent_count: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
     agent_invocations: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
@@ -177,29 +172,14 @@ class HistogramBucket(typing_extensions.TypedDict):
 
 
 class TraceHistogram(typing_extensions.TypedDict):
+    window: ReadOnly[TraceQueryWindow]
     buckets: ReadOnly[tuple[HistogramBucket, ...]]
 
 
 class TracePage(typing_extensions.TypedDict):
+    window: ReadOnly[TraceQueryWindow]
     data: ReadOnly[tuple[TraceSummary, ...]]
     next_cursor: ReadOnly[str | None]
-
-
-class UIMessages(typing_extensions.TypedDict):
-    messages: ReadOnly[tuple[UIMessage, ...]]
-    kind: ReadOnly[Literal["messages"]]
-
-
-UIContent: TypeAlias = UIMessages | UIFields | UIText
-
-
-class SpanDetail(typing_extensions.TypedDict):
-    span_id: ReadOnly[str]
-    input_ui: ReadOnly[UIContent]
-    output_ui: ReadOnly[UIContent]
-    input: ReadOnly[str]
-    output: ReadOnly[str]
-    attributes: ReadOnly[Mapping[str, str]]
 
 
 TraceWireTypes: TypeAlias = (

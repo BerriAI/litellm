@@ -5,7 +5,7 @@ FROM (
               toUInt32(intDiv((runs.start_ms - {start_ms:Int64} + 1) * {buckets:UInt32} - 1, {end_ms:Int64} - {start_ms:Int64}))) AS bucket,
            toUInt8({by_failed:UInt8} = 1 AND runs.error_count > 0) AS failed,
            value
-    FROM owned_spans AS spans
+    FROM canonical_spans AS spans
     INNER JOIN runs ON spans.TeamId = runs.team_id AND spans.ApiKeyHash = runs.api_key_hash
                    AND spans.TraceId = runs.trace_id
     ARRAY JOIN if({attribute_key:String} = '',

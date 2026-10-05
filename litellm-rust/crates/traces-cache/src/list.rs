@@ -8,7 +8,7 @@ use litellm_traces::{
 use crate::{
     ReadError, SnapshotKey, TraceReader, TraceStore,
     cache::{Freshness, ListedRun},
-    reader::{map_store_error, now_ms, spans},
+    reader::{map_store_error, now_ms, settle, spans},
     spend::{spend, spend_window, spend_within},
     store::StoreError,
 };
@@ -27,6 +27,7 @@ fn cache_key<E>(
     source: &str,
     access: &QueryScope,
     row: &RunRow,
+    as_of_ms: u64,
 ) -> Result<SnapshotKey, ReadError<E>> {
     Ok(SnapshotKey::run(
         source,
@@ -36,6 +37,7 @@ fn cache_key<E>(
             &row.api_key_hash,
             &row.trace_id,
             &row.trace_ref,
+            as_of_ms,
         ),
     )?)
 }
@@ -50,6 +52,8 @@ fn summary(row: &RunRow, listed: Option<&ListedRun>) -> TraceSummary {
         duration_ms: row.duration_ns as f64 / 1_000_000.0,
         span_count: row.span_count,
         error_count: row.error_count,
+        has_error: row.error_count > 0,
+        status: row.status,
         ..summary
     }
 }
@@ -61,11 +65,12 @@ pub(super) async fn list_summaries<S: TraceStore>(
     store: &S,
     access: &QueryScope,
     runs: &[RunRow],
+    as_of_ms: u64,
 ) -> Result<Vec<TraceSummary>, ReadError<S::Error>> {
     let mut keys = Vec::with_capacity(runs.len());
     let mut listed = Vec::with_capacity(runs.len());
     for row in runs {
-        let key = cache_key(store.source(), access, row)?;
+        let key = cache_key(store.source(), access, row, as_of_ms)?;
         listed.push(reader.lists.runs.get(&key).await);
         keys.push(key);
     }
@@ -74,7 +79,7 @@ pub(super) async fn list_summaries<S: TraceStore>(
         .zip(&listed)
         .filter_map(|(row, listed)| listed.is_none().then_some(row))
         .collect();
-    let mut resolved = resolve_runs(reader, store, access, &misses)
+    let mut resolved = resolve_runs(reader, store, access, &misses, as_of_ms)
         .await?
         .into_iter();
     let mut summaries = Vec::with_capacity(runs.len());
@@ -101,6 +106,7 @@ async fn resolve_runs<S: TraceStore>(
     store: &S,
     access: &QueryScope,
     runs: &[&RunRow],
+    snapshot_ms: u64,
 ) -> Result<Vec<Option<ListedRun>>, ReadError<S::Error>> {
     let (Some(start_ms), Some(end_ms)) = (
         runs.iter().map(|row| row.start_ms).min(),
@@ -119,24 +125,23 @@ async fn resolve_runs<S: TraceStore>(
         trace_refs: runs.iter().map(|row| row.trace_ref.clone()).collect(),
         window: start_ms..end_ms.saturating_add(1),
     };
-    let snapshot_ms = now_ms();
     let spans = match spans(store, access, selection, snapshot_ms).await {
         Ok(spans) => spans,
         Err(StoreError::TooLarge) => {
             let mut resolved = Vec::with_capacity(runs.len());
             for row in runs {
-                resolved.push(resolve_run(reader, store, access, row).await?);
+                resolved.push(resolve_run(reader, store, access, row, snapshot_ms).await?);
             }
             return Ok(resolved);
         }
         Err(error) => return Err(map_store_error(error)),
     };
-    let Some(spend_rows) = spend(store, access, &spans).await else {
+    let Some(spend_rows) = spend(store, access, &spans, snapshot_ms).await else {
         // The batch's combined spend read failed; a run's own narrower window may still
         // resolve, so fall back per run instead of leaving every run in the batch costless.
         let mut resolved = Vec::with_capacity(runs.len());
         for row in runs {
-            resolved.push(resolve_run(reader, store, access, row).await?);
+            resolved.push(resolve_run(reader, store, access, row, snapshot_ms).await?);
         }
         return Ok(resolved);
     };
@@ -148,7 +153,7 @@ async fn resolve_runs<S: TraceStore>(
                 &right.api_key_hash,
                 &right.trace_id,
             ))
-            .then(left.start_ns.cmp(&right.start_ns))
+            .then((left.start_ns, &left.span_id).cmp(&(right.start_ns, &right.span_id)))
     });
     let by_run: HashMap<_, &[SpanRow]> = spans
         .chunk_by(|left, right| {
@@ -174,7 +179,7 @@ async fn resolve_runs<S: TraceStore>(
             resolve_trace(&row.trace_id, &row.trace_ref, spans, spend).map(|trace| {
                 ListedRun::Resolved(
                     Box::new(trace.summary),
-                    Freshness::of(spans, true, snapshot_ms),
+                    Freshness::of(spans, true, now_ms()),
                 )
             })
         })
@@ -186,11 +191,13 @@ async fn resolve_run<S: TraceStore>(
     store: &S,
     access: &QueryScope,
     row: &RunRow,
+    as_of_ms: u64,
 ) -> Result<Option<ListedRun>, ReadError<S::Error>> {
-    match reader
-        .current(store, access, &row.trace_id, &row.trace_ref)
-        .await
-    {
+    match settle(
+        reader
+            .pinned(store, access, &row.trace_id, &row.trace_ref, as_of_ms)
+            .await,
+    ) {
         Ok(snapshot) => Ok(snapshot.map(|snapshot| {
             ListedRun::Resolved(
                 Box::new(snapshot.trace().summary.clone()),

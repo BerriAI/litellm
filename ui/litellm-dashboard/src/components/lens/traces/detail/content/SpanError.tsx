@@ -59,7 +59,7 @@ export function StoredDiagnostic({ accessToken, traceId, traceRef, span }: Diagn
   const [cursor, setCursor] = useState<string | null>(null);
   const queryOptions: UseQueryOptions<SpanErrorPage, Error> = {
     queryKey: ["agentTraceSpanError", traceId, traceRef, span.span_id, accessToken, cursor],
-    queryFn: () => traces.spanError(traceId, span.span_id, { traceRef, cursor }),
+    queryFn: () => traces.spanError(traceRef ?? traceId, span.span_id, { cursor }),
     enabled: opened,
     staleTime: Infinity,
     gcTime: 0,

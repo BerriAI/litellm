@@ -6,12 +6,13 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "dep:utoipa"]
 
 [dependencies]
 askama.workspace = true
 macro_rules_attribute.workspace = true
 schemars = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true }
 indexmap = { version = "2", features = ["serde"] }
 litellm-llms-types.workspace = true
 opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "trace", "with-serde"] }
@@ -26,6 +27,7 @@ time.workspace = true
 base64.workspace = true
 criterion.workspace = true
 rstest.workspace = true
+jsonschema = { version = "0.55.1", default-features = false }
 
 [[bench]]
 name = "resource-fanout"

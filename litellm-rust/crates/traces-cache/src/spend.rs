@@ -33,6 +33,7 @@ pub(super) async fn spend<S: TraceStore>(
     store: &S,
     access: &QueryScope,
     rows: &[SpanRow],
+    as_of_ms: u64,
 ) -> Option<Vec<CallRow>> {
     let lookup = SpendLookup::new(rows);
     let Some(window) = spend_window(rows) else {
@@ -43,6 +44,7 @@ pub(super) async fn spend<S: TraceStore>(
     }
     let calls = read_all(|after, limit| {
         let query = CallQuery {
+            as_of_ms,
             window: window.clone(),
             response_ids: lookup.response_ids.clone(),
             request_ids: lookup.request_ids.clone(),

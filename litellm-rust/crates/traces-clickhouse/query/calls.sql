@@ -9,7 +9,8 @@ FROM (
               extract(tryBase64Decode(substring(response_id, 6)), 'response_id:([^;]+)'),
               '') AS upstream_response_id
     FROM owned_calls
-    WHERE start_time >= fromUnixTimestamp64Milli({start_ms:Int64})
+    WHERE EngineReceivedMs <= {as_of_ms:UInt64}
+      AND start_time >= fromUnixTimestamp64Milli({start_ms:Int64})
       AND start_time < fromUnixTimestamp64Milli({end_ms:Int64})
 )
 WHERE response_id IN {response_ids:Array(String)}

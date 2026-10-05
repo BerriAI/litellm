@@ -73,7 +73,10 @@ function makeTrace(scene: Scenario, index: number, now: number) {
       span_count: toolCount + 2,
       spend: model.spend,
       start_time: iso(now - (index + 1) * 35 * 60_000),
-      status: scene.failed ? "error" : "ok",
+      root_status: base.status,
+      has_error: Boolean(scene.failed),
+      id: demoRef(traceId),
+      resolution_limited: false,
       tool_calls: toolCount,
       trace_id: traceId,
     },
@@ -251,7 +254,7 @@ export function createLensDemoData(now = Date.now()) {
         id: executionId(trace.summary.trace_id),
         trace_id: trace.summary.trace_id,
         trace_ref: demoRef(trace.summary.trace_id),
-        summary: { ...trace.summary, trace_ref: demoRef(trace.summary.trace_id) },
+        summary: trace.summary,
       }));
     const relevant = findings.filter((f) => f.check_id === definition.check);
     const jobs: Job[] = [0, 1].map((day) => {

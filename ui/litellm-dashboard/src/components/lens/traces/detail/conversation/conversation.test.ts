@@ -45,27 +45,23 @@ describe("trace conversation", () => {
     });
   });
 
-  it("uses normalized message content and structured tool arguments from the gateway", () => {
+  it("renders raw message content and structured tool arguments", () => {
     const model = { ...root, span_id: "model", parent_span_id: "root", type: "llm" } as Span;
-    const normalized: SpanDetail = {
+    const raw: SpanDetail = {
       span_id: "model",
-      input: "unparsed input",
-      output: "unparsed output",
+      input: JSON.stringify([user]),
+      output: JSON.stringify({
+        role: "assistant",
+        content: "Checking",
+        tool_calls: [{ function: { name: "lookup", arguments: '{"order":42}' } }],
+      }),
       attributes: {},
-      input_ui: { kind: "messages", messages: [{ role: "user", content: user.content }] },
-      output_ui: {
-        kind: "messages",
-        messages: [
-          { role: "assistant", content: "Checking", tool_calls: [{ name: "lookup", arguments: '{"order":42}' }] },
-        ],
-      },
     };
     const details = new Map([
       ["root", detail("root", [], [])],
-      ["model", normalized],
+      ["model", raw],
     ]);
-    const items = buildConversation([root, model], details, true);
-    expect(items[0].messages).toEqual([
+    expect(buildConversation([root, model], details, true)[0].messages).toEqual([
       user,
       { role: "assistant", content: "Checking", tool_calls: [{ name: "lookup", args: { order: 42 } }] },
     ]);
@@ -105,16 +101,7 @@ describe("trace conversation", () => {
     const tool = { ...model, span_id: "tool", name: "lookup", type: "tool", start_offset_ms: 2 } as Span;
     const args = { order: 42, active: true, filters: { tags: ["paid"] }, empty: null, label: "42", text: "true" };
     const typedCall = { ...call, tool_calls: [{ name: "lookup", args }] };
-    const toolDetail: SpanDetail = {
-      ...detail("tool", args, "Shipped"),
-      input_ui: {
-        kind: "fields",
-        fields: Object.entries(args).map(([key, value]) => ({
-          key,
-          value: typeof value === "string" ? value : JSON.stringify(value),
-        })),
-      },
-    };
+    const toolDetail = detail("tool", args, "Shipped");
     const details = new Map([
       ["root", detail("root", [user], [])],
       ["model", detail("model", [user], [typedCall])],

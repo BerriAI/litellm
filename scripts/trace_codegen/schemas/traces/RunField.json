@@ -3,7 +3,8 @@
   "enum": [
     "name",
     "agent",
-    "status",
+    "root_status",
+    "has_error",
     "model",
     "input",
     "trace_id",

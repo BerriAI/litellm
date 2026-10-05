@@ -176,6 +176,155 @@ async fn documented_failed_spans_filters_status_after_selecting_the_canonical_co
     Ok(())
 }
 
+#[rstest]
+#[case::admin(QueryScope::All)]
+#[case::team(QueryScope::Owned { user_id: String::new(), team_ids: vec!["team-a".into()] })]
+#[tokio::test]
+async fn logical_trace_core_metrics_agree_with_curated_metrics_after_duplicate_exports(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    fixture_clock: TestResult<u64>,
+    #[case] scope: QueryScope,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let start_ns = fixture_clock? * 1_000_000_000 + 900_000;
+    let rows = [
+        (
+            "key-a",
+            "root",
+            "",
+            start_ns,
+            900_000,
+            "STATUS_CODE_OK",
+            1,
+            12,
+        ),
+        (
+            "key-a",
+            "root",
+            "",
+            start_ns,
+            9_000_000,
+            "STATUS_CODE_ERROR",
+            2,
+            999,
+        ),
+        (
+            "key-a",
+            "child",
+            "root",
+            start_ns + 1_200_000,
+            700_000,
+            "STATUS_CODE_ERROR",
+            1,
+            3,
+        ),
+        (
+            "key-a",
+            "child",
+            "root",
+            start_ns + 1_200_000,
+            100_000,
+            "STATUS_CODE_OK",
+            2,
+            999,
+        ),
+        (
+            "key-alt",
+            "root",
+            "",
+            start_ns,
+            7_000_000,
+            "STATUS_CODE_OK",
+            1,
+            5,
+        ),
+    ]
+    .map(
+        |(key, span, parent, timestamp, duration, status, received, tokens)| {
+            BTreeMap::from([
+                ("TeamId".into(), json!("team-a")),
+                ("ApiKeyHash".into(), json!(key)),
+                ("TraceId".into(), json!("duplicates")),
+                ("SpanId".into(), json!(span)),
+                ("ParentSpanId".into(), json!(parent)),
+                ("SpanName".into(), json!(span)),
+                (
+                    "ObservationType".into(),
+                    json!(if parent.is_empty() { "agent" } else { "llm" }),
+                ),
+                (
+                    "InputPreview".into(),
+                    json!(if parent.is_empty() { "" } else { "child input" }),
+                ),
+                ("Timestamp".into(), json!(timestamp)),
+                ("Duration".into(), json!(duration)),
+                ("StatusCode".into(), json!(status)),
+                ("EngineReceivedMs".into(), json!(received)),
+                ("InputTokens".into(), json!(tokens)),
+            ])
+        },
+    );
+    let writer = litellm_traces_clickhouse::Connection::writer(&fixture.database.url)?;
+    let encoded = litellm_traces_clickhouse::encode_rows(rows.to_vec())?;
+    fixture
+        .database
+        .client
+        .post(writer.url().clone())
+        .body(format!(
+            "INSERT INTO {}.otel_traces FORMAT JSONEachRow\n{encoded}",
+            fixtures::DATABASE
+        ))
+        .send()
+        .await?
+        .error_for_status()?;
+    let connection = fixture
+        .readers
+        .connection(&fixture.database.client, &scope, "fixture-secret")
+        .await?;
+    let logical: QueryResult = serde_json::from_str(&query_sql(
+        &fixture.database.client, &connection,
+        "SELECT id, api_key_hash, span_count, error_count, duration_ns, duration_ms, span_input_tokens, input_preview, root_status, has_error, agent_span_count, agent_label_count, llm_span_count, tool_span_count FROM traces ORDER BY id",
+    ).await?)?;
+    assert_eq!(logical.data.len(), 2);
+    let primary = logical
+        .data
+        .iter()
+        .find(|row| row["api_key_hash"] == "key-a")
+        .ok_or("missing primary trace")?;
+    assert_eq!(primary["span_count"], 2);
+    assert_eq!(primary["error_count"], 1);
+    assert_eq!(primary["duration_ns"], 1_900_000);
+    assert_eq!(primary["duration_ms"], 1.9);
+    assert_eq!(primary["span_input_tokens"], 15);
+    assert_eq!(primary["agent_span_count"], 1);
+    assert_eq!(primary["agent_label_count"], 1);
+    assert_eq!(primary["llm_span_count"], 1);
+    assert_eq!(primary["tool_span_count"], 0);
+    assert_eq!(primary["input_preview"], "child input");
+    assert_eq!(primary["root_status"], "ok");
+    assert_eq!(primary["has_error"], true);
+    let alternate = logical
+        .data
+        .iter()
+        .find(|row| row["api_key_hash"] == "key-alt")
+        .ok_or("missing alternate trace")?;
+    assert_eq!(alternate["span_count"], 1);
+    let store = ClickHouseTraces::new(fixture.database.client.clone(), connection);
+    let curated = store.runs(&scope, &newest(10, None)).await?;
+    for row in curated {
+        let sql_row = logical
+            .data
+            .iter()
+            .find(|value| value["id"] == row.trace_ref)
+            .ok_or("missing logical trace")?;
+        assert_eq!(sql_row["span_count"], row.span_count);
+        assert_eq!(sql_row["error_count"], row.error_count);
+        assert_eq!(sql_row["duration_ns"], row.duration_ns);
+        assert_eq!(sql_row["input_preview"], row.input_preview);
+    }
+    Ok(())
+}
+
 #[fixture]
 fn fixture_clock() -> TestResult<u64> {
     let spans = litellm_traces::decode_otlp(

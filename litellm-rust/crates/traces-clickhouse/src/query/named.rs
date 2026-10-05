@@ -79,9 +79,11 @@ impl From<&RunSearch> for SearchColumns {
     }
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Serialize)]
 struct RunsFilter {
     trace_id: String,
+    trace_ref: String,
+    as_of_ms: u64,
     start_ms: i64,
     end_ms: i64,
     #[serde(flatten)]
@@ -89,10 +91,26 @@ struct RunsFilter {
     trace_refs: Vec<String>,
 }
 
+impl Default for RunsFilter {
+    fn default() -> Self {
+        Self {
+            trace_id: String::new(),
+            trace_ref: String::new(),
+            as_of_ms: u64::MAX,
+            start_ms: 0,
+            end_ms: 0,
+            search: SearchColumns::default(),
+            trace_refs: Vec::new(),
+        }
+    }
+}
+
 impl From<&RunFilter> for RunsFilter {
     fn from(filter: &RunFilter) -> Self {
         Self {
             trace_id: String::new(),
+            trace_ref: String::new(),
+            as_of_ms: filter.as_of_ms,
             start_ms: filter.start_ms,
             end_ms: filter.end_ms,
             search: (&filter.search).into(),
@@ -105,6 +123,10 @@ impl From<&RunSelection> for RunsFilter {
     fn from(selection: &RunSelection) -> Self {
         match selection {
             RunSelection::Matching(filter) => filter.into(),
+            RunSelection::TraceRef(trace_ref) => Self {
+                trace_ref: trace_ref.clone(),
+                ..Self::default()
+            },
             RunSelection::TraceId(trace_id) => Self {
                 trace_id: trace_id.clone(),
                 ..Self::default()
@@ -189,6 +211,8 @@ pub(crate) struct RunRowWire(#[serde(with = "RunRowEncoding")] pub RunRow);
 macro_rules! over_matching_runs {
     ($($tail:expr),+ $(,)?) => {
         owned!(
+            ",\n",
+            include_str!("../../query/canonical_spans.sql"),
             ",\nruns AS (\n",
             include_str!("../../query/matching_runs.sql"),
             ")",
@@ -521,6 +545,7 @@ impl Query for SpanTexts {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct CallsParams {
+    as_of_ms: u64,
     #[serde(flatten)]
     access: AccessParams,
     start_ms: i64,
@@ -540,6 +565,7 @@ impl CallsParams {
         let after = query.after.clone().unwrap_or_default();
         Self {
             access: access.into(),
+            as_of_ms: query.as_of_ms,
             start_ms: query.window.start,
             end_ms: query.window.end,
             response_ids: query.response_ids.clone(),

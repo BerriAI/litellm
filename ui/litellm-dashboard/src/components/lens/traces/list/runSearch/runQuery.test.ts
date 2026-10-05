@@ -15,15 +15,18 @@ describe("filterRuns", () => {
     expect(ids("gpt-5")).toEqual([]);
   });
 
-  it("splits runs by status, judged by recorded errors", () => {
-    expect(ids("status:error")).toEqual(["bbb222"]);
-    expect(ids("-status:error")).toEqual(["aaa111", "ccc333"]);
-    expect(ids("status:OK")).toEqual(["aaa111", "ccc333"]);
+  it("filters recorded errors separately from root status", () => {
+    expect(ids("has_error:true")).toEqual(["bbb222"]);
+    expect(ids("-has_error:true")).toEqual(["aaa111", "ccc333"]);
+    expect(ids("has_error:FALSE")).toEqual(["aaa111", "ccc333"]);
+    expect(ids("root_status:ok has_error:true")).toEqual(["bbb222"]);
+    expect(ids("root_status:error")).toEqual([]);
   });
 
-  it("reads agents from the trace, falling back to the service, and models from the run", () => {
+  it("reads agent labels, service and models independently", () => {
     expect(ids("agent:triage")).toEqual(["aaa111"]);
-    expect(ids("agent:cron")).toEqual(["ccc333"]);
+    expect(ids("agent:cron")).toEqual([]);
+    expect(ids("service:cron")).toEqual(["ccc333"]);
     expect(ids("model:gpt-5")).toEqual(["aaa111"]);
     expect(ids("name:support")).toEqual(["aaa111"]);
   });
@@ -34,14 +37,14 @@ describe("filterRuns", () => {
   });
 
   it("combines field clauses with free text", () => {
-    expect(ids("agent:*e* -status:error refund")).toEqual(["aaa111"]);
+    expect(ids("agent:*e* -has_error:true refund")).toEqual(["aaa111"]);
   });
 });
 
 describe("RUN_INDEX values", () => {
   it("lists the loaded agents and statuses for autocomplete", () => {
-    expect(fieldValues(RUN_INDEX, runs, "agent")).toEqual(["billing-agent", "cron", "researcher", "triage"]);
-    expect(fieldValues(RUN_INDEX, runs, "status")).toEqual(["error", "ok"]);
+    expect(fieldValues(RUN_INDEX, runs, "agent")).toEqual(["billing-agent", "researcher", "triage"]);
+    expect(fieldValues(RUN_INDEX, runs, "root_status")).toEqual(["ok"]);
     expect(fieldValues(RUN_INDEX, [run({ models: [] })], "model")).toEqual([]);
   });
 });

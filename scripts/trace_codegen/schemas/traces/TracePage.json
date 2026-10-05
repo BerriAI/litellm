@@ -8,6 +8,35 @@
       ],
       "type": "string"
     },
+    "TraceQueryWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of_ms": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "end_ms": {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        },
+        "start_ms": {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start_ms",
+        "end_ms",
+        "as_of_ms"
+      ],
+      "type": "object"
+    },
     "TraceSummary": {
       "properties": {
         "agent_count": {
@@ -26,8 +55,7 @@
           "items": {
             "type": "string"
           },
-          "type": "array",
-          "x-python-optional": true
+          "type": "array"
         },
         "duration_ms": {
           "format": "double",
@@ -43,8 +71,13 @@
           "items": {
             "type": "string"
           },
-          "type": "array",
-          "x-python-optional": true
+          "type": "array"
+        },
+        "has_error": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
         },
         "input_preview": {
           "type": "string"
@@ -77,8 +110,10 @@
           "type": "integer"
         },
         "resolution_limited": {
-          "type": "boolean",
-          "x-python-optional": true
+          "type": "boolean"
+        },
+        "root_status": {
+          "$ref": "#/$defs/SpanStatus"
         },
         "service": {
           "type": "string"
@@ -99,9 +134,6 @@
         "start_time": {
           "type": "string"
         },
-        "status": {
-          "$ref": "#/$defs/SpanStatus"
-        },
         "tool_calls": {
           "format": "uint64",
           "maximum": 18446744073709551615,
@@ -110,16 +142,12 @@
         },
         "trace_id": {
           "type": "string"
-        },
-        "trace_ref": {
-          "type": "string",
-          "x-python-optional": true
         }
       },
       "required": [
         "resolution_limited",
         "trace_id",
-        "trace_ref",
+        "id",
         "name",
         "service",
         "agent_names",
@@ -127,7 +155,8 @@
         "input_preview",
         "start_time",
         "duration_ms",
-        "status",
+        "root_status",
+        "has_error",
         "span_count",
         "agent_count",
         "agent_invocations",
@@ -155,9 +184,13 @@
         "string",
         "null"
       ]
+    },
+    "window": {
+      "$ref": "#/$defs/TraceQueryWindow"
     }
   },
   "required": [
+    "window",
     "data",
     "next_cursor"
   ],

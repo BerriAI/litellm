@@ -77,7 +77,7 @@ export const formatCost = (cost: number): string => {
 };
 
 const firstLine = (text: string): string => text.split("\n")[0] ?? text;
-const runKey = (run: TraceSummary): string => run.trace_ref || run.trace_id;
+const runKey = (run: TraceSummary): string => run.id;
 
 const PREFETCH_MARGIN = "0px 0px 480px 0px";
 const PLACEHOLDER_ROWS = [0, 1, 2];

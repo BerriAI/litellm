@@ -10,7 +10,6 @@ use litellm_traces::{
         CountBy, CountValue, RunCountQuery, RunOrder, RunQuery, RunSelection, SpanPart, SpanQuery,
         SpanRow, SpanSelection, SpanText, SpanTextQuery, TextRange,
     },
-    to_ui_content,
 };
 
 use crate::{
@@ -50,7 +49,7 @@ impl<E> From<crate::Error> for Miss<E> {
     }
 }
 
-fn settle<T, E>(result: Result<T, Arc<Miss<E>>>) -> Result<Option<T>, ReadError<E>> {
+pub(super) fn settle<T, E>(result: Result<T, Arc<Miss<E>>>) -> Result<Option<T>, ReadError<E>> {
     match result {
         Ok(value) => Ok(Some(value)),
         Err(miss) => match &*miss {
@@ -87,12 +86,7 @@ impl TraceReader {
             return Err(ReadError::InvalidParameters);
         }
         let query_scope = SnapshotKey::run_page_scope(store.source(), access, filter)?;
-        let after = run_position(
-            page.cursor.as_deref(),
-            order,
-            &query_scope,
-            (filter.start_ms, filter.end_ms),
-        )?;
+        let after = run_position(page.cursor.as_deref(), order, &query_scope, filter.window())?;
         let scope = SnapshotKey::scope(store.source(), access)?;
         let accepted = self.lists.limits.get(&scope).await.unwrap_or(u32::MAX);
         let mut page_size = page.limit.min(500).min(accepted);
@@ -119,18 +113,23 @@ impl TraceReader {
                 order,
                 last,
                 &query_scope,
-                (filter.start_ms, filter.end_ms),
+                filter.window(),
             ))
             .encode()
         });
         let data = {
             let mut summaries = Vec::with_capacity(rows.len());
             for batch in run_batches(&rows) {
-                summaries.extend(list_summaries(self, store, access, batch).await?);
+                summaries
+                    .extend(list_summaries(self, store, access, batch, filter.as_of_ms).await?);
             }
             summaries
         };
-        Ok(TracePage { data, next_cursor })
+        Ok(TracePage {
+            data,
+            next_cursor,
+            window: filter.window(),
+        })
     }
 
     pub async fn histogram<S: TraceStore>(
@@ -157,7 +156,7 @@ impl TraceReader {
             .run_counts(access, &query)
             .await
             .map_err(map_store_error)?;
-        Ok(histogram(&rows, filter.start_ms, filter.end_ms, buckets))
+        Ok(histogram(&rows, filter.window(), buckets))
     }
 
     pub async fn values<S: TraceStore>(
@@ -186,6 +185,7 @@ impl TraceReader {
             .await
             .map_err(map_store_error)?;
         Ok(RunValues {
+            window: filter.window(),
             values: rows.into_iter().map(|row| row.value).collect(),
         })
     }
@@ -245,6 +245,76 @@ impl TraceReader {
             .map_err(map_store_error)
     }
 
+    pub async fn get_trace_metadata<S: TraceStore>(
+        &self,
+        store: &S,
+        access: &QueryScope,
+        id: &str,
+    ) -> Result<Option<litellm_traces::api::TraceMetadata>, ReadError<S::Error>> {
+        let Some(row) = run_by_id(store, access, id).await? else {
+            return Ok(None);
+        };
+        Ok(self
+            .current(store, access, &row.trace_id, id)
+            .await?
+            .map(|snapshot| {
+                let trace = snapshot.trace();
+                litellm_traces::api::TraceMetadata {
+                    summary: trace.summary.clone(),
+                    agents: trace.agents.clone(),
+                }
+            }))
+    }
+
+    pub async fn get_trace_spans<S: TraceStore>(
+        &self,
+        store: &S,
+        access: &QueryScope,
+        id: &str,
+        cursor: Option<&str>,
+        page_size: u32,
+    ) -> Result<Option<litellm_traces::api::TraceSpansPage>, ReadError<S::Error>> {
+        let Some(row) = run_by_id(store, access, id).await? else {
+            return Ok(None);
+        };
+        Ok(self
+            .get_trace_page(store, access, &row.trace_id, id, cursor, page_size)
+            .await?
+            .map(|trace| litellm_traces::api::TraceSpansPage {
+                data: trace.spans,
+                next_cursor: trace.next_cursor,
+            }))
+    }
+
+    pub async fn get_span_by_id<S: TraceStore>(
+        &self,
+        store: &S,
+        access: &QueryScope,
+        id: &str,
+        span_id: &str,
+    ) -> Result<Option<SpanDetail>, ReadError<S::Error>> {
+        let Some(row) = run_by_id(store, access, id).await? else {
+            return Ok(None);
+        };
+        self.get_span(store, access, &row.trace_id, span_id, id)
+            .await
+    }
+
+    pub async fn get_span_error_by_id<S: TraceStore>(
+        &self,
+        store: &S,
+        access: &QueryScope,
+        id: &str,
+        span_id: &str,
+        cursor: Option<&str>,
+    ) -> Result<Option<SpanErrorPage>, ReadError<S::Error>> {
+        let Some(row) = run_by_id(store, access, id).await? else {
+            return Ok(None);
+        };
+        self.get_span_error(store, access, &row.trace_id, span_id, id, cursor)
+            .await
+    }
+
     pub async fn get_trace<S: TraceStore>(
         &self,
         store: &S,
@@ -283,13 +353,17 @@ impl TraceReader {
             let position = SpanPosition {
                 trace_ref,
                 snapshot_ms: snapshot.snapshot_ms(),
+                page_size,
                 offset: 0,
                 version: snapshot.version().to_owned(),
             };
             return page(&snapshot, &position, page_size, self.response_bytes).map(Some);
         };
         let position = span_position(cursor)?;
-        if position.trace_ref != trace_ref || position.snapshot_ms == 0 {
+        if position.trace_ref != trace_ref
+            || position.snapshot_ms == 0
+            || position.page_size != page_size
+        {
             return Err(ReadError::InvalidCursor("span"));
         }
         let Some(snapshot) = settle(
@@ -325,7 +399,7 @@ impl TraceReader {
         )
     }
 
-    async fn pinned<S: TraceStore>(
+    pub(super) async fn pinned<S: TraceStore>(
         &self,
         store: &S,
         access: &QueryScope,
@@ -344,7 +418,7 @@ impl TraceReader {
                 let rows = spans(store, access, selection, snapshot_ms)
                     .await
                     .map_err(|error| Miss::Read(map_store_error(error)))?;
-                let spend_rows = spend(store, access, &rows).await;
+                let spend_rows = spend(store, access, &rows, snapshot_ms).await;
                 let freshness = Freshness::of(&rows, spend_rows.is_some(), snapshot_ms);
                 resolve_trace(
                     trace_id,
@@ -392,8 +466,6 @@ impl TraceReader {
             output
         };
         Ok(Some(SpanDetail {
-            input_ui: to_ui_content(&input.text),
-            output_ui: to_ui_content(&output),
             span_id: span_id.to_owned(),
             input: input.text,
             output,
@@ -552,8 +624,36 @@ pub(super) async fn spans<S: TraceStore>(
         async move { store.spans(access, &query).await }
     })
     .await?;
-    rows.sort_by_key(|row| row.start_ns);
+    rows.sort_by(|left, right| {
+        (left.start_ns, &left.span_id).cmp(&(right.start_ns, &right.span_id))
+    });
     Ok(rows)
+}
+
+async fn run_by_id<S: TraceStore>(
+    store: &S,
+    access: &QueryScope,
+    id: &str,
+) -> Result<Option<litellm_traces::store::RunRow>, ReadError<S::Error>> {
+    if id.len() != 64
+        || !id
+            .bytes()
+            .all(|ch| ch.is_ascii_digit() || (b'A'..=b'F').contains(&ch))
+    {
+        return Err(ReadError::InvalidParameters);
+    }
+    let query = RunQuery {
+        selection: RunSelection::TraceRef(id.to_owned()),
+        order: RunOrder::BY_REFERENCE,
+        after: None,
+        limit: 1,
+    };
+    Ok(store
+        .runs(access, &query)
+        .await
+        .map_err(map_store_error)?
+        .into_iter()
+        .find(|row| row.trace_ref == id))
 }
 
 async fn reference<S: TraceStore>(
@@ -595,6 +695,7 @@ fn page<E>(
                 Cursor::Span(SpanPosition {
                     trace_ref: position.trace_ref.clone(),
                     snapshot_ms: position.snapshot_ms,
+                    page_size: position.page_size,
                     offset: end,
                     version: snapshot.version().to_owned(),
                 })

@@ -33,7 +33,7 @@ export function GroupPane({
   const tokens = row.members.reduce((sum, m) => sum + m.input_tokens + m.output_tokens, 0);
   const firstFailure = row.members.find((m) => m.status === "error" && m.error);
   const sample = (firstFailure ?? row.members[0]).span_id;
-  const handoff = useTracesApi(accessToken).handoff(trace.summary.trace_id, sample, trace.summary.trace_ref);
+  const handoff = useTracesApi(accessToken).handoff(trace.summary.id, sample);
   return (
     <aside className="flex h-full min-w-0 flex-col bg-background text-sm text-foreground" aria-label="Group details">
       <PaneHeader

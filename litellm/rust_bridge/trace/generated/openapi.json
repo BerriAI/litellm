@@ -1,0 +1,3024 @@
+{
+  "components": {
+    "schemas": {
+      "AgentNode": {
+        "description": "One distinct agent in a trace: 200 invocations of `researcher` are one node.",
+        "properties": {
+          "duration_ms": {
+            "format": "double",
+            "type": "number"
+          },
+          "invocations": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "llm_calls": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spend": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "tool_calls": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "parent_agent",
+          "invocations",
+          "llm_calls",
+          "tool_calls",
+          "duration_ms",
+          "spend"
+        ],
+        "type": "object"
+      },
+      "AgentRuns": {
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "runs": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agent",
+          "runs"
+        ],
+        "type": "object"
+      },
+      "HistogramBucket": {
+        "properties": {
+          "agents": {
+            "description": "Runs that did not fail, by their alphabetically first agent label, or service when unlabelled.",
+            "items": {
+              "$ref": "#/components/schemas/AgentRuns"
+            },
+            "type": "array"
+          },
+          "end_ms": {
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "failed": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start_ms": {
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "total": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms",
+          "total",
+          "failed",
+          "agents"
+        ],
+        "type": "object"
+      },
+      "MapValueType": {
+        "enum": [
+          "String"
+        ],
+        "type": "string"
+      },
+      "MetadataValueType": {
+        "enum": [
+          "array",
+          "boolean",
+          "integer",
+          "null",
+          "number",
+          "object",
+          "string"
+        ],
+        "type": "string"
+      },
+      "PathPart": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "format": "uint",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        ]
+      },
+      "RunField": {
+        "enum": [
+          "name",
+          "agent",
+          "root_status",
+          "has_error",
+          "model",
+          "input",
+          "trace_id",
+          "service",
+          "team"
+        ],
+        "title": "RunField",
+        "type": "string"
+      },
+      "RunValues": {
+        "description": "Distinct values of one run field, most common first.",
+        "properties": {
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "window": {
+            "$ref": "#/components/schemas/TraceQueryWindow"
+          }
+        },
+        "required": [
+          "window",
+          "values"
+        ],
+        "title": "RunValues",
+        "type": "object"
+      },
+      "Span": {
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "format": "double",
+            "type": "number"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_truncated": {
+            "type": "boolean"
+          },
+          "framework": {
+            "type": "string"
+          },
+          "input_preview": {
+            "type": "string"
+          },
+          "input_tokens": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "litellm_request_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "output_tokens": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "parent_span_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "span_id": {
+            "type": "string"
+          },
+          "spend": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "start_offset_ms": {
+            "format": "double",
+            "type": "number"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SpanStatus"
+          },
+          "type": {
+            "$ref": "#/components/schemas/SpanType"
+          }
+        },
+        "required": [
+          "span_id",
+          "parent_span_id",
+          "name",
+          "type",
+          "agent",
+          "framework",
+          "start_offset_ms",
+          "duration_ms",
+          "status",
+          "error",
+          "error_truncated",
+          "input_preview",
+          "model",
+          "input_tokens",
+          "output_tokens",
+          "litellm_request_id",
+          "spend"
+        ],
+        "type": "object"
+      },
+      "SpanDetail": {
+        "properties": {
+          "attributes": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "input": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          },
+          "span_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "span_id",
+          "input",
+          "output",
+          "attributes"
+        ],
+        "title": "SpanDetail",
+        "type": "object"
+      },
+      "SpanErrorPage": {
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "span_id": {
+            "type": "string"
+          },
+          "total_chars": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "span_id",
+          "message",
+          "total_chars",
+          "next_cursor"
+        ],
+        "title": "SpanErrorPage",
+        "type": "object"
+      },
+      "SpanStatus": {
+        "enum": [
+          "ok",
+          "error",
+          "unset"
+        ],
+        "type": "string"
+      },
+      "SpanType": {
+        "enum": [
+          "agent",
+          "llm",
+          "tool",
+          "chain",
+          "framework",
+          "retriever",
+          "embedding",
+          "reranker",
+          "guardrail",
+          "evaluator",
+          "prompt",
+          "decision"
+        ],
+        "type": "string"
+      },
+      "SqlParameter": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "format": "double",
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "TraceErrorPageRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "maxLength": 512,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "TraceErrorPageRequest",
+        "type": "object"
+      },
+      "TraceHistogram": {
+        "description": "Matching runs per equal-width slice of the window.",
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/HistogramBucket"
+            },
+            "type": "array"
+          },
+          "window": {
+            "$ref": "#/components/schemas/TraceQueryWindow"
+          }
+        },
+        "required": [
+          "window",
+          "buckets"
+        ],
+        "title": "TraceHistogram",
+        "type": "object"
+      },
+      "TraceHistogramRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "buckets": {
+            "default": 60,
+            "format": "uint16",
+            "maximum": 240,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "end_ms": {
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "q": {
+            "default": "",
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "start_ms": {
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "TraceHistogramRequest",
+        "type": "object"
+      },
+      "TraceInvalidParam": {
+        "additionalProperties": false,
+        "properties": {
+          "location": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "location",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "TraceListRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cursor": {
+            "maxLength": 512,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "end_ms": {
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "page_size": {
+            "default": 50,
+            "format": "uint16",
+            "maximum": 500,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "q": {
+            "default": "",
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "sort_by": {
+            "$ref": "#/components/schemas/TraceSortField"
+          },
+          "sort_dir": {
+            "$ref": "#/components/schemas/TraceSortDirection"
+          },
+          "start_ms": {
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "TraceListRequest",
+        "type": "object"
+      },
+      "TraceMetadata": {
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AgentNode"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/TraceSummary"
+          }
+        },
+        "required": [
+          "summary",
+          "agents"
+        ],
+        "title": "TraceMetadata",
+        "type": "object"
+      },
+      "TraceNoQueryRequest": {
+        "additionalProperties": false,
+        "title": "TraceNoQueryRequest",
+        "type": "object"
+      },
+      "TracePage": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/TraceSummary"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "window": {
+            "$ref": "#/components/schemas/TraceQueryWindow"
+          }
+        },
+        "required": [
+          "window",
+          "data",
+          "next_cursor"
+        ],
+        "title": "TracePage",
+        "type": "object"
+      },
+      "TraceProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/TraceProblemCode"
+          },
+          "database_code": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "errors": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/TraceInvalidParam"
+            },
+            "type": "array"
+          },
+          "status": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code"
+        ],
+        "title": "TraceProblem",
+        "type": "object"
+      },
+      "TraceProblemCode": {
+        "enum": [
+          "invalid_request",
+          "unauthorized",
+          "forbidden",
+          "not_found",
+          "trace_changed",
+          "too_large",
+          "unavailable",
+          "query_rejected",
+          "query_limit_exceeded",
+          "query_unavailable",
+          "internal_error"
+        ],
+        "type": "string"
+      },
+      "TraceQueryAttributeField": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/MapValueType"
+          }
+        },
+        "required": [
+          "key",
+          "type",
+          "expression"
+        ],
+        "type": "object"
+      },
+      "TraceQueryAttributes": {
+        "additionalProperties": false,
+        "properties": {
+          "column": {
+            "type": "string"
+          },
+          "discovery_sql": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/TraceQueryAttributeField"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "table": {
+            "$ref": "#/components/schemas/TraceQueryTableName"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table",
+          "column",
+          "fields",
+          "truncated",
+          "discovery_sql",
+          "scope"
+        ],
+        "type": "object"
+      },
+      "TraceQueryExample": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "sql": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "sql"
+        ],
+        "type": "object"
+      },
+      "TraceQueryHelp": {
+        "additionalProperties": false,
+        "properties": {
+          "access": {
+            "type": "string"
+          },
+          "attributes": {
+            "items": {
+              "$ref": "#/components/schemas/TraceQueryAttributes"
+            },
+            "type": "array"
+          },
+          "dialect": {
+            "type": "string"
+          },
+          "examples": {
+            "items": {
+              "$ref": "#/components/schemas/TraceQueryExample"
+            },
+            "type": "array"
+          },
+          "gotchas": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "guide": {
+            "type": "string"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/TraceQueryMetadata"
+          },
+          "normalized_fields": {
+            "items": {
+              "$ref": "#/components/schemas/TraceQueryNormalizedField"
+            },
+            "type": "array"
+          },
+          "relationships": {
+            "items": {
+              "$ref": "#/components/schemas/TraceQueryRelationship"
+            },
+            "type": "array"
+          },
+          "response": {
+            "type": "string"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/TraceQueryTable"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "dialect",
+          "access",
+          "response",
+          "tables",
+          "normalized_fields",
+          "metadata",
+          "attributes",
+          "relationships",
+          "examples",
+          "gotchas",
+          "guide"
+        ],
+        "title": "TraceQueryHelp",
+        "type": "object"
+      },
+      "TraceQueryMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "column": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/TraceQueryMetadataField"
+            },
+            "type": "array"
+          },
+          "invalid_json_rows": {
+            "format": "uint",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sample_sql": {
+            "type": "string"
+          },
+          "sampled_rows": {
+            "format": "uint",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "table": {
+            "$ref": "#/components/schemas/TraceQueryTableName"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "table",
+          "column",
+          "fields",
+          "sampled_rows",
+          "invalid_json_rows",
+          "truncated",
+          "sample_sql",
+          "scope"
+        ],
+        "type": "object"
+      },
+      "TraceQueryMetadataField": {
+        "additionalProperties": false,
+        "properties": {
+          "expression": {
+            "type": "string"
+          },
+          "path": {
+            "items": {
+              "$ref": "#/components/schemas/PathPart"
+            },
+            "type": "array"
+          },
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/MetadataValueType"
+            },
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "path",
+          "types",
+          "expression"
+        ],
+        "type": "object"
+      },
+      "TraceQueryNormalizedField": {
+        "additionalProperties": false,
+        "properties": {
+          "column": {
+            "type": "string"
+          },
+          "meaning": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "table": {
+            "$ref": "#/components/schemas/TraceQueryTableName"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "name",
+          "column",
+          "type",
+          "meaning"
+        ],
+        "type": "object"
+      },
+      "TraceQueryRelationship": {
+        "additionalProperties": false,
+        "properties": {
+          "additional_predicates": {
+            "type": "string"
+          },
+          "left": {
+            "type": "string"
+          },
+          "meaning": {
+            "type": "string"
+          },
+          "right": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "left",
+          "right",
+          "additional_predicates",
+          "meaning"
+        ],
+        "type": "object"
+      },
+      "TraceQueryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "params": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SqlParameter"
+            },
+            "default": {},
+            "type": "object"
+          },
+          "sql": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "title": "TraceQueryRequest",
+        "type": "object"
+      },
+      "TraceQueryStatistics": {
+        "additionalProperties": true,
+        "properties": {
+          "bytes_read": {
+            "$ref": "#/components/schemas/UnsignedCount"
+          },
+          "elapsed": {
+            "format": "double",
+            "type": "number"
+          },
+          "rows_read": {
+            "$ref": "#/components/schemas/UnsignedCount"
+          }
+        },
+        "required": [
+          "elapsed",
+          "rows_read",
+          "bytes_read"
+        ],
+        "type": "object"
+      },
+      "TraceQueryTable": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/TraceSQLColumn"
+            },
+            "type": "array"
+          },
+          "name": {
+            "$ref": "#/components/schemas/TraceQueryTableName"
+          }
+        },
+        "required": [
+          "name",
+          "columns"
+        ],
+        "type": "object"
+      },
+      "TraceQueryTableName": {
+        "enum": [
+          "traces",
+          "spans",
+          "calls",
+          "otel_traces",
+          "agent_traces_by_key",
+          "spend_logs"
+        ],
+        "type": "string"
+      },
+      "TraceQueryWindow": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "end_ms": {
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          },
+          "start_ms": {
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_ms",
+          "end_ms",
+          "as_of_ms"
+        ],
+        "type": "object"
+      },
+      "TraceSQLColumn": {
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "type"
+        ],
+        "type": "object"
+      },
+      "TraceSQLResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "data": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "x-python-normalized": {
+              "type": "tuple[Mapping[str, JsonValue], ...]"
+            }
+          },
+          "meta": {
+            "items": {
+              "$ref": "#/components/schemas/TraceSQLColumn"
+            },
+            "type": "array"
+          },
+          "rows": {
+            "$ref": "#/components/schemas/UnsignedCount"
+          },
+          "statistics": {
+            "$ref": "#/components/schemas/TraceQueryStatistics"
+          }
+        },
+        "required": [
+          "meta",
+          "data",
+          "rows",
+          "statistics"
+        ],
+        "title": "TraceSQLResponse",
+        "type": "object"
+      },
+      "TraceSortDirection": {
+        "enum": [
+          "asc",
+          "desc"
+        ],
+        "type": "string"
+      },
+      "TraceSortField": {
+        "enum": [
+          "start_ms",
+          "duration_ms",
+          "span_count",
+          "error_count"
+        ],
+        "type": "string"
+      },
+      "TraceSpanPageRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "maxLength": 512,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "page_size": {
+            "default": 100,
+            "format": "uint16",
+            "maximum": 500,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "title": "TraceSpanPageRequest",
+        "type": "object"
+      },
+      "TraceSpansPage": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Span"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "title": "TraceSpansPage",
+        "type": "object"
+      },
+      "TraceSummary": {
+        "properties": {
+          "agent_count": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "agent_invocations": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "agent_names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "duration_ms": {
+            "format": "double",
+            "type": "number"
+          },
+          "error_count": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "frameworks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "has_error": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "input_preview": {
+            "type": "string"
+          },
+          "input_tokens": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "llm_calls": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "output_tokens": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "resolution_limited": {
+            "type": "boolean"
+          },
+          "root_status": {
+            "$ref": "#/components/schemas/SpanStatus"
+          },
+          "service": {
+            "type": "string"
+          },
+          "span_count": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "spend": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "start_time": {
+            "type": "string"
+          },
+          "tool_calls": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "trace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resolution_limited",
+          "trace_id",
+          "id",
+          "name",
+          "service",
+          "agent_names",
+          "frameworks",
+          "input_preview",
+          "start_time",
+          "duration_ms",
+          "root_status",
+          "has_error",
+          "span_count",
+          "agent_count",
+          "agent_invocations",
+          "llm_calls",
+          "tool_calls",
+          "error_count",
+          "input_tokens",
+          "output_tokens",
+          "models",
+          "spend"
+        ],
+        "type": "object"
+      },
+      "TraceValuesRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "as_of_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "contains": {
+            "default": "",
+            "maxLength": 200,
+            "type": "string"
+          },
+          "end_ms": {
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": 20,
+            "format": "uint16",
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "q": {
+            "default": "",
+            "maxLength": 1000,
+            "type": "string"
+          },
+          "start_ms": {
+            "format": "int64",
+            "maximum": 9223372036854775807,
+            "minimum": -9223372036854775808,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "TraceValuesRequest",
+        "type": "object"
+      },
+      "UnsignedCount": {
+        "anyOf": [
+          {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      }
+    },
+    "securitySchemes": {
+      "TraceBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "LiteLLM Trace API",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/traces": {
+      "get": {
+        "description": "Search trace summaries. All clauses in q must match. Free text searches trace_id, name and input preview as case-insensitive substrings. key:value clauses match whole values, with * as a wildcard; double quotes group spaces or literal colons. Prefix keyed clauses with - to exclude matches. Unknown keys, missing values and malformed quoting return invalid_request. name describes the physical root; input searches its preview, falling back to the first nonempty agent or LLM preview; agent, model and attr.<key> match any span. root_status describes the root, has_error means any failed span. The default window is the last 24 hours. First-page ingestion timestamp cutoff is retained by the cursor. This excludes later-stamped exports, not delayed commits stamped before the cutoff, and is not a database transaction snapshot. Repeat q and sorting on continuation; omitted bounds reuse the cursor window. Sort ties use the canonical id in the same direction. The server may return fewer than page_size items to respect response limits. Continue until next_cursor is null. Span-derived metrics use the cutoff; spend enrichment is best effort",
+        "operationId": "trace_list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "as_of_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "start_ms",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "maximum": 9223372036854775807,
+              "minimum": -9223372036854775808,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "end_ms",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "maximum": 9223372036854775807,
+              "minimum": -9223372036854775808,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 1000,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 512,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "format": "uint16",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_by",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TraceSortField"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_dir",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/TraceSortDirection"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TracePage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "501": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          }
+        },
+        "security": [
+          {
+            "TraceBearer": []
+          }
+        ],
+        "tags": [
+          "agent tracing"
+        ]
+      },
+      "post": {
+        "description": "Export OTLP traces as JSON or protobuf, optionally gzip compressed. The OTLP protocol defines payloads and responses: https://opentelemetry.io/docs/specs/otlp/. Ownership is derived from authentication, never payload attributes",
+        "operationId": "trace_ingest",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            },
+            "application/x-protobuf": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "application/x-protobuf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OTLP protocol response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "application/x-protobuf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OTLP protocol response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "application/x-protobuf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OTLP protocol response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "application/x-protobuf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OTLP protocol response"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "application/x-protobuf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OTLP protocol response"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "application/x-protobuf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OTLP protocol response"
+          },
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "application/x-protobuf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OTLP protocol response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              },
+              "application/x-protobuf": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OTLP protocol response"
+          }
+        },
+        "security": [
+          {
+            "TraceBearer": []
+          }
+        ],
+        "tags": [
+          "agent tracing"
+        ]
+      }
+    },
+    "/v1/traces/histogram": {
+      "get": {
+        "description": "Count matching traces in equal-width [start_ms,end_ms) buckets. Reuse the list window and as_of_ms for matching span-derived membership. failed counts traces with any failed span. Agent groups count successful traces under their alphabetically first agent name, or service when no agent name exists",
+        "operationId": "trace_histogram",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "start_ms",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "maximum": 9223372036854775807,
+              "minimum": -9223372036854775808,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "end_ms",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "maximum": 9223372036854775807,
+              "minimum": -9223372036854775808,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "as_of_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 1000,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "buckets",
+            "required": false,
+            "schema": {
+              "default": 60,
+              "format": "uint16",
+              "maximum": 240,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceHistogram"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "501": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          }
+        },
+        "security": [
+          {
+            "TraceBearer": []
+          }
+        ],
+        "tags": [
+          "agent tracing"
+        ]
+      }
+    },
+    "/v1/traces/query": {
+      "post": {
+        "description": "Execute read-only ClickHouse SQL under authenticated row policies and fixed resource limits. Bind params with native {name:Type} placeholders. Results are always ClickHouse JSON; 64-bit integers may be strings. SQL callers control ORDER BY, LIMIT and keyset continuation. Exceeding a resource limit fails instead of returning partial success",
+        "operationId": "trace_query",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TraceQueryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceSQLResponse"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "501": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          }
+        },
+        "security": [
+          {
+            "TraceBearer": []
+          }
+        ],
+        "tags": [
+          "agent tracing"
+        ]
+      }
+    },
+    "/v1/traces/query/help": {
+      "get": {
+        "description": "Discover current SQL schema, logical views, scoped examples and resource limits",
+        "operationId": "trace_query_help",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceQueryHelp"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "501": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          }
+        },
+        "security": [
+          {
+            "TraceBearer": []
+          }
+        ],
+        "tags": [
+          "agent tracing"
+        ]
+      }
+    },
+    "/v1/traces/values/{field}": {
+      "get": {
+        "description": "Return the most common distinct values among matching traces. contains is case-insensitive. limit is a top-K suggestion limit, not a pagination size. Reuse list window and as_of_ms for matching membership",
+        "operationId": "trace_values",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "field",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/RunField"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start_ms",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "maximum": 9223372036854775807,
+              "minimum": -9223372036854775808,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "end_ms",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "maximum": 9223372036854775807,
+              "minimum": -9223372036854775808,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "as_of_ms",
+            "required": false,
+            "schema": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 1000,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "contains",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "format": "uint16",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunValues"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "501": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          }
+        },
+        "security": [
+          {
+            "TraceBearer": []
+          }
+        ],
+        "tags": [
+          "agent tracing"
+        ]
+      }
+    },
+    "/v1/traces/{id}": {
+      "get": {
+        "description": "Read summary and agent metadata by canonical id. trace_id is the original OTLP id, which can repeat across ownership scopes. Spans are read through the separate spans collection",
+        "operationId": "trace_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceMetadata"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "501": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          }
+        },
+        "security": [
+          {
+            "TraceBearer": []
+          }
+        ],
+        "tags": [
+          "agent tracing"
+        ]
+      }
+    },
+    "/v1/traces/{id}/spans": {
+      "get": {
+        "description": "Read a bounded page of canonical spans. The cursor pins the graph version. Continue with the same page_size; a changed graph or expired reconstruction returns trace_changed and the traversal must restart",
+        "operationId": "trace_spans",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 512,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "format": "uint16",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceSpansPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "501": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          }
+        },
+        "security": [
+          {
+            "TraceBearer": []
+          }
+        ],
+        "tags": [
+          "agent tracing"
+        ]
+      }
+    },
+    "/v1/traces/{id}/spans/{span_id}": {
+      "get": {
+        "description": "Read raw input, output and attributes for one span. UI rendering is performed by the client",
+        "operationId": "trace_span",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "span_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpanDetail"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "501": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          }
+        },
+        "security": [
+          {
+            "TraceBearer": []
+          }
+        ],
+        "tags": [
+          "agent tracing"
+        ]
+      }
+    },
+    "/v1/traces/{id}/spans/{span_id}/error": {
+      "get": {
+        "description": "Read bounded diagnostic text pages. Cursor validation detects content changes and requires restarting the traversal",
+        "operationId": "trace_error",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "span_id",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 512,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpanErrorPage"
+                }
+              }
+            },
+            "description": "Success"
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "413": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "501": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceProblem"
+                }
+              }
+            },
+            "description": "Trace API problem"
+          }
+        },
+        "security": [
+          {
+            "TraceBearer": []
+          }
+        ],
+        "tags": [
+          "agent tracing"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "TraceBearer": []
+    }
+  ]
+}

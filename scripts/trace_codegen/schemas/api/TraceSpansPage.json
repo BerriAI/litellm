@@ -1,0 +1,149 @@
+{
+  "$defs": {
+    "Span": {
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "format": "double",
+          "type": "number"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_truncated": {
+          "type": "boolean"
+        },
+        "framework": {
+          "type": "string"
+        },
+        "input_preview": {
+          "type": "string"
+        },
+        "input_tokens": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "litellm_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "output_tokens": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parent_span_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "span_id": {
+          "type": "string"
+        },
+        "spend": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "start_offset_ms": {
+          "format": "double",
+          "type": "number"
+        },
+        "status": {
+          "$ref": "#/$defs/SpanStatus"
+        },
+        "type": {
+          "$ref": "#/$defs/SpanType"
+        }
+      },
+      "required": [
+        "span_id",
+        "parent_span_id",
+        "name",
+        "type",
+        "agent",
+        "framework",
+        "start_offset_ms",
+        "duration_ms",
+        "status",
+        "error",
+        "error_truncated",
+        "input_preview",
+        "model",
+        "input_tokens",
+        "output_tokens",
+        "litellm_request_id",
+        "spend"
+      ],
+      "type": "object"
+    },
+    "SpanStatus": {
+      "enum": [
+        "ok",
+        "error",
+        "unset"
+      ],
+      "type": "string"
+    },
+    "SpanType": {
+      "enum": [
+        "agent",
+        "llm",
+        "tool",
+        "chain",
+        "framework",
+        "retriever",
+        "embedding",
+        "reranker",
+        "guardrail",
+        "evaluator",
+        "prompt",
+        "decision"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "data": {
+      "items": {
+        "$ref": "#/$defs/Span"
+      },
+      "type": "array"
+    },
+    "next_cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "data",
+    "next_cursor"
+  ],
+  "title": "TraceSpansPage",
+  "type": "object"
+}

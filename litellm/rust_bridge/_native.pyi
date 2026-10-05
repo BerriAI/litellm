@@ -11,6 +11,7 @@ from litellm.rust_bridge.embeddings.entrypoints import LiteLLMEmbeddingRequest
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
 from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
+from litellm.rust_bridge.trace.generated.requests import SqlParameter
 from litellm.rust_bridge.trace.generated.types import QueryScope, RunOrder
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -52,9 +53,16 @@ class NativeTraceStorage:
         limit: int,
         order: RunOrder,
         trace_refs: Sequence[str] = (),
+        as_of_ms: int | None = None,
     ) -> Future[JsonValue]: ...
     def count_traces(
-        self, scope: QueryScope, start_ms: int, end_ms: int, q: str, trace_refs: Sequence[str] = ()
+        self,
+        scope: QueryScope,
+        start_ms: int | None,
+        end_ms: int | None,
+        q: str,
+        trace_refs: Sequence[str] = (),
+        as_of_ms: int | None = None,
     ) -> Future[JsonValue]: ...
     def span_text(
         self,
@@ -69,10 +77,24 @@ class NativeTraceStorage:
         contains: str | None = None,
     ) -> Future[JsonValue]: ...
     def trace_histogram(
-        self, scope: QueryScope, start_ms: int, end_ms: int, q: str, buckets: int
+        self,
+        scope: QueryScope,
+        start_ms: int | None,
+        end_ms: int | None,
+        q: str,
+        buckets: int,
+        as_of_ms: int | None = None,
     ) -> Future[JsonValue]: ...
     def run_values(
-        self, scope: QueryScope, start_ms: int, end_ms: int, q: str, field: str, contains: str, limit: int
+        self,
+        scope: QueryScope,
+        start_ms: int | None,
+        end_ms: int | None,
+        q: str,
+        field: str,
+        contains: str,
+        limit: int,
+        as_of_ms: int | None = None,
     ) -> Future[JsonValue]: ...
     def get_trace(
         self, trace_id: str, scope: QueryScope, trace_ref: str, cursor: str | None = None, page_size: int | None = None
@@ -81,7 +103,15 @@ class NativeTraceStorage:
     def get_span_error(
         self, trace_id: str, span_id: str, scope: QueryScope, trace_ref: str, cursor: str | None
     ) -> Future[JsonValue]: ...
-    def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Future[str]: ...
+    def get_trace_metadata(self, scope: QueryScope, id: str) -> Future[JsonValue]: ...
+    def get_trace_spans(self, scope: QueryScope, id: str, cursor: str | None, page_size: int) -> Future[JsonValue]: ...
+    def get_span_by_id(self, scope: QueryScope, id: str, span_id: str) -> Future[JsonValue]: ...
+    def get_span_error_by_id(
+        self, scope: QueryScope, id: str, span_id: str, cursor: str | None = None
+    ) -> Future[JsonValue]: ...
+    def query_sql(
+        self, sql: str, scope: QueryScope, secret: str, params: Mapping[str, SqlParameter]
+    ) -> Future[str]: ...
     def query_help(self, scope: QueryScope, secret: str) -> Future[JsonValue]: ...
 
 @final

@@ -25,6 +25,8 @@ pub enum Parameter {
     Integer(i64),
     Unsigned(u64),
     Float(f64),
+    Boolean(bool),
+    Null,
     Strings(Vec<String>),
 }
 
@@ -35,6 +37,8 @@ impl Parameter {
             Self::Integer(value) => value.to_string(),
             Self::Unsigned(value) => value.to_string(),
             Self::Float(value) => value.to_string(),
+            Self::Boolean(value) => u8::from(*value).to_string(),
+            Self::Null => "\\N".to_owned(),
             Self::Strings(values) => format!(
                 "[{}]",
                 values

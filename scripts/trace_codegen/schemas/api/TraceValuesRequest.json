@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "as_of_ms": {
+      "default": null,
+      "format": "uint64",
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "contains": {
+      "default": "",
+      "maxLength": 200,
+      "type": "string"
+    },
+    "end_ms": {
+      "default": null,
+      "format": "int64",
+      "maximum": 9223372036854775807,
+      "minimum": -9223372036854775808,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "limit": {
+      "default": 20,
+      "format": "uint16",
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "q": {
+      "default": "",
+      "maxLength": 1000,
+      "type": "string"
+    },
+    "start_ms": {
+      "default": null,
+      "format": "int64",
+      "maximum": 9223372036854775807,
+      "minimum": -9223372036854775808,
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "TraceValuesRequest",
+  "type": "object"
+}

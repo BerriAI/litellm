@@ -10,6 +10,7 @@ use crate::{Error, NormalizedFieldDefinition, query_access::ReaderLimits};
     "normalized_fields",
     "metadata",
     "attributes",
+    "parameters",
     "recent_spans_name",
     "recent_spans_sql",
     "custom_metadata_name",
@@ -57,12 +58,13 @@ pub(super) struct QueryGuide<'a> {
 }
 
 impl QueryGuide<'_> {
-    pub fn sections(&self) -> Result<[String; 4], Error> {
+    pub fn sections(&self) -> Result<[String; 5], Error> {
         Ok([
             render(&self.as_live_schema())?,
             render(&self.as_normalized_fields())?,
             render(&self.as_metadata())?,
             render(&self.as_attributes())?,
+            render(&self.as_parameters())?,
         ])
     }
 

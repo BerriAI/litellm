@@ -45,7 +45,7 @@ impl SnapshotKey {
     pub(crate) fn run(
         source: &str,
         access: &QueryScope,
-        run: (&str, &str, &str, &str),
+        run: (&str, &str, &str, &str, u64),
     ) -> Result<Self, Error> {
         Self::digest(&("run", source, access, run))
     }
@@ -55,7 +55,7 @@ impl SnapshotKey {
         access: &QueryScope,
         filter: &RunFilter,
     ) -> Result<String, Error> {
-        Self::digest(&("run_page_v1", source, access, filter)).map(|key| key.0)
+        Self::digest(&("run_page_v2", source, access, filter)).map(|key| key.0)
     }
 
     pub(crate) fn scope(source: &str, access: &QueryScope) -> Result<Self, Error> {

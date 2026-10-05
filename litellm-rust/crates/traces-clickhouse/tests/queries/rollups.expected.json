@@ -1,87 +1,94 @@
 {
   "admin": [
     {
+      "id": "62AB4F77353031F31CA3F7DBDCDB9384D00A2C2D683F8E318DD52CEDC8F50F12",
       "team": "team-a",
       "api_key": "key-a",
       "trace_id": "01010101010101010101010101010101",
       "name": "review",
       "spans": 3,
-      "llm_calls": 1,
+      "llm_span_count": 1,
       "errors": 1,
-      "input_tokens": 12,
-      "output_tokens": 6
+      "span_input_tokens": 12,
+      "span_output_tokens": 6
     },
     {
+      "id": "191720068A91A381A3C4764EF56D734B47B21ECFF199F0CDECEC265D7FCC0F10",
       "team": "team-a",
       "api_key": "key-alt",
       "trace_id": "01010101010101010101010101010101",
       "name": "alternate",
       "spans": 1,
-      "llm_calls": 0,
+      "llm_span_count": 0,
       "errors": 0,
-      "input_tokens": 0,
-      "output_tokens": 0
+      "span_input_tokens": 0,
+      "span_output_tokens": 0
     },
     {
+      "id": "9C868E6B1426BCC5379F5D413F185B57ADBC324A0C58C93311784730A2D3FE12",
       "team": "team-b",
       "api_key": "key-b",
       "trace_id": "01010101010101010101010101010101",
       "name": "other-team",
       "spans": 1,
-      "llm_calls": 0,
+      "llm_span_count": 0,
       "errors": 0,
-      "input_tokens": 0,
-      "output_tokens": 0
+      "span_input_tokens": 0,
+      "span_output_tokens": 0
     }
   ],
   "team": [
     {
+      "id": "62AB4F77353031F31CA3F7DBDCDB9384D00A2C2D683F8E318DD52CEDC8F50F12",
       "team": "team-a",
       "api_key": "key-a",
       "trace_id": "01010101010101010101010101010101",
       "name": "review",
       "spans": 3,
-      "llm_calls": 1,
+      "llm_span_count": 1,
       "errors": 1,
-      "input_tokens": 12,
-      "output_tokens": 6
+      "span_input_tokens": 12,
+      "span_output_tokens": 6
     },
     {
+      "id": "191720068A91A381A3C4764EF56D734B47B21ECFF199F0CDECEC265D7FCC0F10",
       "team": "team-a",
       "api_key": "key-alt",
       "trace_id": "01010101010101010101010101010101",
       "name": "alternate",
       "spans": 1,
-      "llm_calls": 0,
+      "llm_span_count": 0,
       "errors": 0,
-      "input_tokens": 0,
-      "output_tokens": 0
+      "span_input_tokens": 0,
+      "span_output_tokens": 0
     }
   ],
   "key": [
     {
+      "id": "62AB4F77353031F31CA3F7DBDCDB9384D00A2C2D683F8E318DD52CEDC8F50F12",
       "team": "team-a",
       "api_key": "key-a",
       "trace_id": "01010101010101010101010101010101",
       "name": "review",
       "spans": 3,
-      "llm_calls": 1,
+      "llm_span_count": 1,
       "errors": 1,
-      "input_tokens": 12,
-      "output_tokens": 6
+      "span_input_tokens": 12,
+      "span_output_tokens": 6
     }
   ],
   "other_team": [
     {
+      "id": "9C868E6B1426BCC5379F5D413F185B57ADBC324A0C58C93311784730A2D3FE12",
       "team": "team-b",
       "api_key": "key-b",
       "trace_id": "01010101010101010101010101010101",
       "name": "other-team",
       "spans": 1,
-      "llm_calls": 0,
+      "llm_span_count": 0,
       "errors": 0,
-      "input_tokens": 0,
-      "output_tokens": 0
+      "span_input_tokens": 0,
+      "span_output_tokens": 0
     }
   ]
 }

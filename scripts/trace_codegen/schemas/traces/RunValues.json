@@ -1,4 +1,35 @@
 {
+  "$defs": {
+    "TraceQueryWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of_ms": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "end_ms": {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        },
+        "start_ms": {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "start_ms",
+        "end_ms",
+        "as_of_ms"
+      ],
+      "type": "object"
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "Distinct values of one run field, most common first.",
   "properties": {
@@ -7,9 +38,13 @@
         "type": "string"
       },
       "type": "array"
+    },
+    "window": {
+      "$ref": "#/$defs/TraceQueryWindow"
     }
   },
   "required": [
+    "window",
     "values"
   ],
   "title": "RunValues",

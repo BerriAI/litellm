@@ -304,6 +304,17 @@ describe("payload helpers", () => {
     expect(parseMessages('[{"role":"user","content":42}]')).toBeNull();
   });
 
+  it("renders raw OpenAI tool calls with structured arguments and absent text", () => {
+    const raw = {
+      role: "assistant",
+      content: null,
+      tool_calls: [{ type: "function", function: { name: "lookup", arguments: '{"order":42}' } }],
+    };
+    expect(parseMessages(JSON.stringify(raw))).toEqual([
+      { role: "assistant", content: "", tool_calls: [{ name: "lookup", args: { order: 42 } }] },
+    ]);
+  });
+
   it("reads LangChain's serialized messages with their roles, names and tool calls", () => {
     const dumped = [
       { type: "human", data: { content: "What is an agent trace?", name: null } },

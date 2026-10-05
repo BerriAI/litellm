@@ -78,6 +78,7 @@ describe("Lens demo data", () => {
       expect(trace.summary.span_count).toBe(trace.spans.length);
       expect(trace.summary.agent_names).toContain(trace.agents[0].name);
       expect(trace.summary.error_count).toBe(trace.spans.filter((span) => span.status === "error").length);
+      expect(trace.summary.has_error).toBe(trace.summary.error_count > 0);
       for (const span of trace.spans) {
         expect(span.start_offset_ms + span.duration_ms).toBeLessThanOrEqual(trace.summary.duration_ms);
       }
@@ -90,7 +91,8 @@ describe("Lens demo data", () => {
     expect(run.trace.spans).toHaveLength(362);
     expect(ids.size).toBe(362);
     expect(run.trace.summary.error_count).toBe(3);
-    expect(run.trace.summary.status).toBe("ok");
+    expect(run.trace.summary.root_status).toBe("ok");
+    expect(run.trace.summary.has_error).toBe(true);
     for (const span of run.trace.spans) {
       if (span.parent_span_id) expect(ids.has(span.parent_span_id)).toBe(true);
       expect(run.details.find((detail) => detail.span_id === span.span_id)).toBeDefined();

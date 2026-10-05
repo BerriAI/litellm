@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import * as Networking from "./networking";
 import { uiHref } from "@/utils/uiHref";
+import researchJson from "./lens/traces/__fixtures__/research_trace.json";
+import type { Trace, TraceMetadata, TraceSpansPage } from "./lens/traces/types";
 
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
@@ -869,5 +871,42 @@ describe("schema-bound dashboard responses", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(page))));
     const result = await Networking.userListCall("explicit-token");
     expect(result.users[0]).toEqual(user);
+  });
+});
+
+describe("trace metadata and span pages", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("reads canonical metadata separately and follows the span cursor with the same page size", async () => {
+    const trace = researchJson as Trace;
+    const id = "run/one";
+    const metadata: TraceMetadata = { summary: { ...trace.summary, id }, agents: trace.agents };
+    const fetchSpy = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(input instanceof Request ? input.url : String(input), "http://proxy.test");
+      if (!url.pathname.endsWith("/spans")) return new Response(JSON.stringify(metadata));
+      const page: TraceSpansPage = url.searchParams.get("cursor")
+        ? { data: trace.spans.slice(1), next_cursor: null }
+        : { data: trace.spans.slice(0, 1), next_cursor: "next-page" };
+      return new Response(JSON.stringify(page));
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    const first = await Networking.agentTraceCall("token", id);
+    const second = await Networking.agentTraceCall("token", id, first.next_cursor);
+    expect(first.summary.id).toBe(id);
+    expect([...first.spans, ...second.spans]).toEqual(trace.spans);
+    expect(first.spans_complete).toBe(false);
+    expect(second.spans_complete).toBe(true);
+    const urls = fetchSpy.mock.calls.map(
+      ([input]) => new URL(input instanceof Request ? input.url : String(input), "http://proxy.test"),
+    );
+    expect(urls.map((url) => url.pathname)).toEqual([
+      expect.stringMatching(/\/v1\/traces\/run%2Fone$/),
+      expect.stringMatching(/\/v1\/traces\/run%2Fone\/spans$/),
+      expect.stringMatching(/\/v1\/traces\/run%2Fone$/),
+      expect.stringMatching(/\/v1\/traces\/run%2Fone\/spans$/),
+    ]);
+    const pages = urls.filter((url) => url.pathname.endsWith("/spans"));
+    expect(pages.map((url) => url.searchParams.get("cursor"))).toEqual([null, "next-page"]);
+    expect(pages.map((url) => url.searchParams.get("page_size"))).toEqual(["200", "200"]);
   });
 });

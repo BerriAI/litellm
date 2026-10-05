@@ -55,6 +55,7 @@ export function demoHistogram(runs: readonly TraceSummary[], range: TimeWindow, 
     agent: traceAgentNames(run)[0] ?? run.service,
   }));
   return {
+    window: { start_ms: range.startMs, end_ms: range.endMs, as_of_ms: range.endMs },
     buckets: Array.from({ length: buckets }, (_, index) => {
       const hits = placed.filter((run) => run.index === index);
       const agents = [...new Set(hits.filter((run) => !run.failed).map((run) => run.agent))].sort();
@@ -73,7 +74,7 @@ export function demoHistogram(runs: readonly TraceSummary[], range: TimeWindow, 
 }
 
 function demoTracesApi(data: LensDemoData): TracesApi {
-  const run = (traceId: string) => data.runs.find(({ trace }) => trace.summary.trace_id === traceId);
+  const run = (traceId: string) => data.runs.find(({ trace }) => trace.summary.id === traceId);
   const summaries = data.runs.map((item) => item.trace.summary);
   const matching = (range: TimeWindow, q: string) =>
     filterRuns(
@@ -91,6 +92,7 @@ function demoTracesApi(data: LensDemoData): TracesApi {
     list: async ({ selection, order }) => ({
       data: orderRuns(matching(selection.window, selection.q), order),
       next_cursor: null,
+      window: { start_ms: selection.window.startMs, end_ms: selection.window.endMs, as_of_ms: selection.window.endMs },
     }),
     histogram: async ({ window, q }, buckets) => demoHistogram(matching(window, q), window, buckets),
     values: async (field, contains, range) => {

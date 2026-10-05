@@ -29,10 +29,8 @@ const KIND_BY_STATUS: Readonly<Record<number, TraceReadFailureKind>> = {
 };
 
 const failureCode = (body: unknown): string | undefined => {
-  if (typeof body !== "object" || body === null || !("detail" in body)) return undefined;
-  const detail = body.detail;
-  if (typeof detail !== "object" || detail === null || !("code" in detail)) return undefined;
-  return typeof detail.code === "string" ? detail.code : undefined;
+  if (typeof body !== "object" || body === null || !("code" in body)) return undefined;
+  return typeof body.code === "string" ? body.code : undefined;
 };
 
 export function classifyTraceReadFailure(error: unknown): TraceReadFailure {

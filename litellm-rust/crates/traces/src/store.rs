@@ -11,6 +11,7 @@ pub enum RunSelection {
     Matching(RunFilter),
     /// Every run with this trace id, whenever it happened.
     TraceId(String),
+    TraceRef(String),
 }
 
 /// The last row of a page in its order: the row's sort value and its reference.
@@ -328,6 +329,7 @@ pub struct SpanText {
 /// is listed, oldest first by `(team_id, start_ms, request_id)`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CallQuery {
+    pub as_of_ms: u64,
     pub window: Range<i64>,
     /// Also matches the upstream id a managed `resp_` id wraps.
     pub response_ids: Vec<String>,

@@ -8,7 +8,7 @@ import { AgentTracesTable, type RunPicks } from "../traces/list/AgentTracesTable
 import type { TraceSummary } from "../traces/types";
 import type { MatchingPreview, PreviewSelection } from "./useMatchingActivity";
 
-const executionOf = (run: TraceSummary) => `${run.trace_ref}:${run.trace_id}`;
+const executionOf = (run: TraceSummary) => `${run.id}:${run.trace_id}`;
 
 const runPicks = (ids: PreviewSelection["ids"], toggle: PreviewSelection["toggle"]): RunPicks => ({
   isPicked: (run) => ids.includes(executionOf(run)),

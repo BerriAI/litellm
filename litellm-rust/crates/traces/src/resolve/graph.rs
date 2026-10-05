@@ -41,11 +41,6 @@ impl<'a> Graph<'a> {
         self.by_id.get(row.parent_span_id.as_str()).copied()
     }
 
-    pub(super) fn is_root(&self, index: usize) -> bool {
-        let parent = &self.rows[index].parent_span_id;
-        parent.is_empty() || !self.by_id.contains_key(parent.as_str())
-    }
-
     pub(super) fn children(&self, index: usize) -> Vec<usize> {
         self.children
             .get(self.id(index))
@@ -137,8 +132,8 @@ mod tests {
             .map(|index| graph.id(index))
             .collect();
         assert_eq!(descendants, ["leaf", "middle", "sibling"].into());
-        assert!(graph.is_root(3));
-        assert!(!graph.is_root(0));
+        assert!(graph.parent(3).is_none());
+        assert!(graph.parent(0).is_some());
     }
 
     #[rstest]

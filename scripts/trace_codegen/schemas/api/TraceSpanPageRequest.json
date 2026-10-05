@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "cursor": {
+      "default": null,
+      "maxLength": 512,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "page_size": {
+      "default": 100,
+      "format": "uint16",
+      "maximum": 500,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "title": "TraceSpanPageRequest",
+  "type": "object"
+}

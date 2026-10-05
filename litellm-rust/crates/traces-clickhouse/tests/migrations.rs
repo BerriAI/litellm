@@ -165,6 +165,7 @@ async fn schema_supports_span_rollups_and_spend_joins(
         .calls(
             &team,
             &CallQuery {
+                as_of_ms: u64::MAX,
                 window: timestamp / 1_000_000 - 1000..timestamp / 1_000_000 + 1000,
                 response_ids: vec!["response-1".into()],
                 request_ids: Vec::new(),
@@ -819,7 +820,8 @@ async fn reused_trace_ids_stay_separate_runs_through_filters_and_span_text(
                     end_ms: window.end,
                     search: litellm_traces::search::RunSearch::parse(
                         "service:review attr.swarm:release",
-                    ),
+                    )
+                    .unwrap(),
                     ..Default::default()
                 }),
                 after: None,
@@ -843,6 +845,26 @@ async fn reused_trace_ids_stay_separate_runs_through_filters_and_span_text(
     let own = store.runs(&owned("one", &[]), &by_trace_id).await?;
     assert_eq!(own.len(), 1);
     let reader = TraceReader::new(usize::MAX);
+    for run in &filtered {
+        let metadata = reader
+            .get_trace_metadata(&store, &QueryScope::All, &run.trace_ref)
+            .await?
+            .unwrap();
+        assert_eq!(metadata.summary.trace_ref, run.trace_ref);
+        assert_eq!(metadata.summary.input_preview, run.input_preview);
+        let spans = reader
+            .get_trace_spans(&store, &QueryScope::All, &run.trace_ref, None, 10)
+            .await?
+            .unwrap();
+        assert_eq!(spans.data.len(), 1);
+        assert_eq!(spans.data[0].input_preview, run.input_preview);
+    }
+    assert!(
+        reader
+            .get_trace_metadata(&store, &owned("two", &[]), &own[0].trace_ref)
+            .await?
+            .is_none()
+    );
     let read = |trace_ref: String, contains: &'static str| {
         let reader = &reader;
         let store = &store;
@@ -1045,7 +1067,14 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
     let writer = Connection::writer(&database.url)?;
     ensure_schema(&database.client, &writer, "trace_test", 7).await?;
     execute_write(&database, "CREATE USER help_reader").await?;
-    for table in ["otel_traces", "agent_traces_by_key", "spend_logs"] {
+    for table in [
+        "traces",
+        "spans",
+        "calls",
+        "otel_traces",
+        "agent_traces_by_key",
+        "spend_logs",
+    ] {
         execute_write(
             &database,
             &format!("GRANT SELECT ON trace_test.{table} TO help_reader"),
@@ -1125,7 +1154,14 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
     );
     let guide = help["guide"].as_str().ok_or("missing rendered guide")?;
     assert!(guide.starts_with("Trace SQL query guide"));
-    for table in ["otel_traces", "agent_traces_by_key", "spend_logs"] {
+    for table in [
+        "traces",
+        "spans",
+        "calls",
+        "otel_traces",
+        "agent_traces_by_key",
+        "spend_logs",
+    ] {
         let described = read_json(&database, &format!("DESCRIBE TABLE {table}")).await?;
         let schema = help["tables"]
             .as_array()
@@ -1168,8 +1204,13 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         !populated
     );
     let tables = help["tables"].as_array().ok_or("missing tables")?;
-    assert_eq!(tables.len(), 3);
-    let columns = tables[0]["columns"].as_array().ok_or("missing columns")?;
+    assert_eq!(tables.len(), 6);
+    let columns = tables
+        .iter()
+        .find(|table| table["name"] == "otel_traces")
+        .ok_or("missing raw span table")?["columns"]
+        .as_array()
+        .ok_or("missing columns")?;
     for field in NORMALIZED_FIELD_DEFINITIONS {
         assert!(
             columns
@@ -1222,8 +1263,8 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         assert!(guide.contains("CustomColumn: String"));
         assert!(!guide.contains("private-metadata-value"));
         assert!(guide.contains("JSONExtractRaw(metadata, '<custom>&{{key}}', 'nested.key')"));
-        assert!(guide.contains("SpanAttributes['custom.tag']"));
-        assert!(guide.contains("ResourceAttributes['custom.resource']"));
+        assert!(guide.contains("span_attributes['custom.tag']"));
+        assert!(guide.contains("resource_attributes['custom.resource']"));
         assert_eq!(help["attributes"][0]["fields"][0]["key"], "custom.tag");
         assert_eq!(help["attributes"][1]["fields"][0]["key"], "custom.resource");
         for field in fields {
@@ -1285,7 +1326,7 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
             "{sql}"
         );
         if populated && example["name"] == "Traces correlated with LLM call metadata" {
-            assert_eq!(values["data"][0]["TraceId"], "trace-1");
+            assert_eq!(values["data"][0]["trace_id"], "trace-1");
             assert_eq!(values["data"][0]["spend"], 0.25);
         }
     }
@@ -1310,7 +1351,14 @@ async fn query_help_preserves_schema_and_guide_when_discovery_hits_reader_limits
         "CREATE USER help_reader SETTINGS max_rows_to_read = 1",
     )
     .await?;
-    for table in ["otel_traces", "agent_traces_by_key", "spend_logs"] {
+    for table in [
+        "traces",
+        "spans",
+        "calls",
+        "otel_traces",
+        "agent_traces_by_key",
+        "spend_logs",
+    ] {
         execute_write(
             &database,
             &format!("GRANT SELECT ON trace_test.{table} TO help_reader"),
@@ -1336,7 +1384,7 @@ async fn query_help_preserves_schema_and_guide_when_discovery_hits_reader_limits
     let help = serde_json::to_value(
         litellm_traces_clickhouse::query_help(&database.client, &reader).await?,
     )?;
-    assert_eq!(help["tables"].as_array().ok_or("tables")?.len(), 3);
+    assert_eq!(help["tables"].as_array().ok_or("tables")?.len(), 6);
     assert!(!help["examples"].as_array().ok_or("examples")?.is_empty());
     assert_eq!(
         help["normalized_fields"]
@@ -1495,6 +1543,7 @@ async fn trusted_and_sql_readers_share_request_log_visibility(
         .calls(
             &owned(user, &teams),
             &CallQuery {
+                as_of_ms: u64::MAX,
                 window: timestamp / 1_000_000 - 1..timestamp / 1_000_000 + 1,
                 response_ids: vec!["shared-response".into()],
                 request_ids: Vec::new(),
@@ -1577,7 +1626,7 @@ async fn rollup_cost_completeness_preserves_missing_ids_and_fails_closed_for_his
     )
     .await?;
     let listed = listed["data"].as_array().ok_or("missing runs")?;
-    assert_eq!(listed.len(), 4);
+    assert_eq!(listed.len(), 3);
     let owner = list_runs(&database, &reader, &owned("owner", &[]), window, None, 10).await?;
     let owner: std::collections::BTreeSet<_> = owner["data"]
         .as_array()

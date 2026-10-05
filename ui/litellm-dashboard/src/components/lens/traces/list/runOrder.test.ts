@@ -10,7 +10,7 @@ const run = (overrides: Partial<TraceSummary>): TraceSummary => ({ ...template, 
 const RUN_OVERRIDES: readonly Partial<TraceSummary>[] = [
   {
     trace_id: "a",
-    trace_ref: "ref-a",
+    id: "ref-a",
     start_time: "2026-09-30T06:00:00Z",
     duration_ms: 500,
     span_count: 3,
@@ -18,7 +18,7 @@ const RUN_OVERRIDES: readonly Partial<TraceSummary>[] = [
   },
   {
     trace_id: "b",
-    trace_ref: "ref-b",
+    id: "ref-b",
     start_time: "2026-09-30T07:00:00Z",
     duration_ms: 500,
     span_count: 9,
@@ -26,7 +26,7 @@ const RUN_OVERRIDES: readonly Partial<TraceSummary>[] = [
   },
   {
     trace_id: "c",
-    trace_ref: "ref-c",
+    id: "ref-c",
     start_time: "2026-09-30T05:00:00Z",
     duration_ms: 50,
     span_count: 1,

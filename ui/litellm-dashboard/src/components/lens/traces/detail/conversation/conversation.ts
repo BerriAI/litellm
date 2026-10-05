@@ -1,6 +1,5 @@
-import type { Span, SpanDetail, TraceMessage, TraceToolCall, UIContent } from "../../types";
+import type { Span, SpanDetail, TraceMessage, TraceToolCall } from "../../types";
 import { isFrameworkSpan, parseJson, parseMessages, prettyPayload } from "../../utils";
-import { toTraceMessage } from "../content/payload";
 
 export const CONVERSATION_PAGE_SIZE = 20;
 
@@ -14,19 +13,10 @@ export function conversationSteps(spans: readonly Span[]): Span[] {
     .sort((a, b) => a.start_offset_ms - b.start_offset_ms);
 }
 
-function contentText(value: string, content?: UIContent): string {
-  if (content?.kind === "text") return content.text;
-  if (content?.kind === "fields")
-    return JSON.stringify(Object.fromEntries(content.fields.map((field) => [field.key, field.value])), null, 2);
-  if (content?.kind === "messages") return content.messages.map((message) => message.content).join("\n");
-  return prettyPayload(value);
-}
-
-function messages(value: string, content: UIContent | undefined, role: string): TraceMessage[] {
-  if (content?.kind === "messages") return content.messages.map(toTraceMessage);
-  const parsed = !content ? parseMessages(value) : null;
+function messages(value: string, role: string): TraceMessage[] {
+  const parsed = parseMessages(value);
   if (parsed) return parsed;
-  const text = contentText(value, content);
+  const text = prettyPayload(value);
   return text ? [{ role, content: text }] : [];
 }
 
@@ -78,11 +68,7 @@ function toolItem(
   pending: TraceToolCall[],
   items: ConversationItem[],
 ): ConversationItem {
-  const args =
-    parseJson(detail.input) ??
-    (detail.input_ui?.kind === "fields"
-      ? Object.fromEntries(detail.input_ui.fields.map((field) => [field.key, field.value]))
-      : detail.input);
+  const args = parseJson(detail.input) ?? detail.input;
   const call = { name: span.name, args };
   const match = pending.findIndex(
     (candidate) =>
@@ -97,7 +83,7 @@ function toolItem(
           message.tool_calls = message.tool_calls.filter((call) => call !== matched);
       }
   }
-  const result = contentText(detail.output, detail.output_ui);
+  const result = prettyPayload(detail.output);
   return { id: span.span_id, span, messages: [], toolCall: call, toolResult: result };
 }
 
@@ -196,7 +182,7 @@ export function buildConversation(
     const key = branch(span);
     const history = histories.get(key) ?? [];
     if (event.output) {
-      const output = messages(detail.output, detail.output_ui, "assistant");
+      const output = messages(detail.output, "assistant");
       const fresh = withoutForwardedAnswers(
         span.span_id,
         newConversationMessages(history, output),
@@ -215,8 +201,8 @@ export function buildConversation(
       histories.set(key, [...history, { role: "tool", name: span.name, content: item.toolResult ?? "" }]);
       continue;
     }
-    const input = messages(detail.input, detail.input_ui, "user");
-    const output = messages(detail.output, detail.output_ui, "assistant");
+    const input = messages(detail.input, "user");
+    const output = messages(detail.output, "assistant");
     const fresh = newConversationMessages(history, input);
     if (span.type === "agent" || span.parent_span_id === null) {
       histories.set(key, input);

@@ -59,19 +59,9 @@ describe("fieldNode", () => {
 });
 
 describe("payloadView", () => {
-  it("renders standard fields as a tree with JSON values unfolded", () => {
-    const view = payloadView(
-      "raw",
-      {
-        kind: "fields",
-        fields: [
-          { key: "start_event", value: "AgentWorkflowStartEvent()" },
-          { key: "tags", value: '{"run_id": "r1"}' },
-        ],
-      },
-      false,
-    );
-    expect(view).toEqual({
+  it("renders JSON fields as a tree with nested values unfolded", () => {
+    const raw = JSON.stringify({ start_event: "AgentWorkflowStartEvent()", tags: { run_id: "r1" } });
+    expect(payloadView(raw, false)).toEqual({
       kind: "fields",
       entries: [
         ["start_event", { kind: "text", text: "AgentWorkflowStartEvent()", format: "code" }],
@@ -80,57 +70,42 @@ describe("payloadView", () => {
     });
   });
 
-  it("reads standard text by its format and falls back to the raw text for empty fields", () => {
-    expect(payloadView("", { kind: "text", text: "An **answer**" }, false)).toEqual({
-      kind: "text",
-      text: "An **answer**",
-      format: "markdown",
-    });
-    expect(payloadView("raw text", { kind: "fields", fields: [] }, false)).toEqual({
-      kind: "text",
-      text: "raw text",
-      format: "plain",
-    });
+  it("reads raw text by its format", () => {
+    expect(payloadView("An **answer**", false)).toEqual({ kind: "text", text: "An **answer**", format: "markdown" });
+    expect(payloadView("raw text", false)).toEqual({ kind: "text", text: "raw text", format: "plain" });
   });
 
-  it("shows a tool's output as its result whatever shape the store sent", () => {
-    expect(payloadView("raw", { kind: "messages", messages: [{ role: "tool", content: "denied" }] }, true)).toEqual({
+  it("shows a tool's output as its result", () => {
+    expect(payloadView(JSON.stringify([{ role: "tool", content: "denied" }]), true)).toEqual({
       kind: "tool-result",
       text: "denied",
     });
-    expect(payloadView("raw", { kind: "text", text: "42" }, true)).toEqual({ kind: "tool-result", text: "42" });
-    expect(payloadView('{"a": 1}', { kind: "fields", fields: [{ key: "a", value: "1" }] }, true)).toEqual({
-      kind: "tool-result",
-      text: '{"a": 1}',
-    });
-    expect(payloadView("plain output", undefined, true)).toEqual({ kind: "tool-result", text: "plain output" });
+    expect(payloadView("42", true)).toEqual({ kind: "tool-result", text: "42" });
+    expect(payloadView('{"a":1}', true)).toEqual({ kind: "tool-result", text: '{"a":1}' });
   });
 
   it("keeps a tool's message with calls as a conversation", () => {
-    const view = payloadView(
-      "raw",
-      {
-        kind: "messages",
-        messages: [{ role: "assistant", content: "", tool_calls: [{ name: "f", arguments: '{"x": 1}' }] }],
-      },
-      true,
-    );
-    expect(view).toEqual({
+    const raw = JSON.stringify({
+      role: "assistant",
+      content: "",
+      tool_calls: [{ function: { name: "f", arguments: '{"x":1}' } }],
+    });
+    expect(payloadView(raw, true)).toEqual({
       kind: "messages",
       messages: [{ role: "assistant", content: "", tool_calls: [{ name: "f", args: { x: 1 } }] }],
     });
   });
 
-  it("classifies raw payloads: messages, objects, lists and text", () => {
-    expect(payloadView('[{"role":"user","content":"hi"}]', undefined, false)).toEqual({
+  it("classifies raw messages, objects, lists and code", () => {
+    expect(payloadView('[{"role":"user","content":"hi"}]', false)).toEqual({
       kind: "messages",
       messages: [{ role: "user", content: "hi" }],
     });
-    expect(payloadView('{"file": "/tmp/x"}', undefined, false)).toEqual({
+    expect(payloadView('{"file":"/tmp/x"}', false)).toEqual({
       kind: "fields",
       entries: [["file", { kind: "text", text: "/tmp/x", format: "plain" }]],
     });
-    expect(payloadView("[1, 2]", undefined, false)).toEqual({
+    expect(payloadView("[1,2]", false)).toEqual({
       kind: "fields",
       entries: [
         [
@@ -145,8 +120,8 @@ describe("payloadView", () => {
         ],
       ],
     });
-    expect(payloadView("{}", undefined, false)).toEqual({ kind: "text", text: "{}", format: "plain" });
-    expect(payloadView("StopEvent(result=1)", undefined, false)).toEqual({
+    expect(payloadView("{}", false)).toEqual({ kind: "text", text: "{}", format: "plain" });
+    expect(payloadView("StopEvent(result=1)", false)).toEqual({
       kind: "text",
       text: "StopEvent(result=1)",
       format: "code",

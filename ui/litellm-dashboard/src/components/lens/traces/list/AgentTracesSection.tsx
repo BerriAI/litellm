@@ -1,7 +1,6 @@
 "use client";
 
 import { ArrowLeft, ScanSearch } from "lucide-react";
-import moment from "moment";
 import { type ComponentProps, useMemo, useState } from "react";
 
 import { RunsToolbar } from "./runSearch/RunsToolbar";
@@ -106,11 +105,16 @@ export function AgentTracesSection({
     if (setup.disabledDetail == null) void history.refetch();
   };
 
-  // A live range ends "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
-  const minuteEndMs = moment().endOf("minute").valueOf();
-  const window = useMemo(() => timeWindow(range, minuteEndMs), [range, minuteEndMs]);
-  const histogram = useTraceHistogram(accessToken, { window, q: query }, isActive);
-  const shownRange = zoom ?? window;
+  const [initialTime] = useState(Date.now);
+  const cutoff = traces.resolvedWindow?.as_of_ms;
+  const overviewWindow = useMemo(() => timeWindow(range, cutoff ?? initialTime), [range, cutoff, initialTime]);
+  const resolvedWindow = traces.resolvedWindow
+    ? { startMs: traces.resolvedWindow.start_ms, endMs: traces.resolvedWindow.end_ms }
+    : null;
+  const window = zoom ? overviewWindow : resolvedWindow ?? overviewWindow;
+  const histogramSelection = { window, q: query, asOfMs: cutoff };
+  const histogram = useTraceHistogram(accessToken, histogramSelection, isActive && traces.resolvedWindow !== null);
+  const shownRange = resolvedWindow ?? zoom ?? window;
   const runs = traces.traces;
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
 
@@ -158,7 +162,6 @@ export function AgentTracesSection({
           {(shown: TraceRef) => (
             <RunView
               traceId={shown.traceId}
-              traceRef={shown.traceRef}
               selection={selection}
               accessToken={accessToken}
               onBack={() => openRun(null)}
@@ -189,7 +192,7 @@ export function AgentTracesSection({
         </RunsToolbar>
         <Timeline
           buckets={histogram.buckets}
-          loading={histogram.isLoading}
+          loading={traces.isLoading || traces.isPlaceholder || histogram.isLoading}
           range={window}
           selection={zoom}
           onSelect={setZoom}

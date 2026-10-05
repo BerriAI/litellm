@@ -10,6 +10,7 @@ macro_rules_attribute::attribute_alias! {
         #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
 }
 
+pub mod api;
 mod error;
 mod normalize;
 mod otlp;
@@ -27,7 +28,7 @@ mod ui;
 mod view;
 pub mod wire;
 
-pub use error::{Error, InvalidCallKey, InvalidScope};
+pub use error::{Error, InvalidCallKey, InvalidQuery, InvalidScope};
 pub use normalize::{
     AgentMetadata, AgentType, CallEvidence, CallEvidenceKind, CallKey, Integration, NormalizedSpan,
     ObservationType,

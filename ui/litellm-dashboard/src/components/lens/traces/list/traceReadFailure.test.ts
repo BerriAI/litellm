@@ -10,8 +10,10 @@ import {
   traceReadRetryDelay,
 } from "./traceReadFailure";
 
-const failure = (status: number, code?: string, retryAfterMs: number | null = null) =>
-  new ApiError("boom", status, { detail: code ? { code, message: "boom" } : "boom" }, retryAfterMs);
+const failure = (status: number, code?: string, retryAfterMs: number | null = null) => {
+  const body = { type: "about:blank", title: "Request failed", status, detail: "boom", ...(code ? { code } : {}) };
+  return new ApiError("boom", status, body, retryAfterMs);
+};
 
 describe("classifyTraceReadFailure", () => {
   it.each([

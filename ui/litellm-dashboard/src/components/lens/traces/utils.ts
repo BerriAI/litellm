@@ -9,8 +9,7 @@ import type { Span, TraceMessage, TraceSummary, TraceToolCall } from "./types";
 /*  Formatting                                                         */
 /* ------------------------------------------------------------------ */
 
-export const traceAgentNames = (trace: TraceSummary): readonly string[] =>
-  trace.agent_names ?? (trace.service ? [trace.service] : []);
+export const traceAgentNames = (trace: TraceSummary): readonly string[] => trace.agent_names;
 
 export const fmtMs = (ms: number): string => {
   if (ms >= 60_000) return `${(ms / 60_000).toFixed(1)}m`;
@@ -348,13 +347,33 @@ const parseLangchainMessage = (value: object): TraceMessage | null => {
   };
 };
 
+const parseToolCall = (value: unknown): TraceToolCall | null => {
+  if (typeof value !== "object" || value === null) return null;
+  const nested: unknown = Reflect.get(value, "function");
+  const call = typeof nested === "object" && nested !== null ? nested : value;
+  const name: unknown = Reflect.get(call, "name");
+  if (typeof name !== "string") return null;
+  const args: unknown = Reflect.get(call, "args") ?? Reflect.get(call, "arguments");
+  return { name, args: typeof args === "string" ? parseJson(args) ?? args : args ?? {} };
+};
+
 const parseMessage = (value: unknown): TraceMessage | null => {
   if (typeof value !== "object" || value === null) return null;
   if (!("role" in value) && "data" in value) return parseLangchainMessage(value);
   const role: unknown = Reflect.get(value, "role");
-  const content: unknown = Reflect.get(value, "content") ?? Reflect.get(value, "parts");
+  const rawCalls: unknown = Reflect.get(value, "tool_calls");
+  const calls = Array.isArray(rawCalls)
+    ? rawCalls.map(parseToolCall).filter((call): call is TraceToolCall => call !== null)
+    : [];
+  const rawContent: unknown = Reflect.get(value, "content") ?? Reflect.get(value, "parts");
+  const content = rawContent == null && calls.length > 0 ? "" : rawContent;
   if (typeof role !== "string" || (typeof content !== "string" && !Array.isArray(content))) return null;
-  return { ...value, role, content: messageText(typeof content === "string" ? content : JSON.stringify(content)) };
+  return {
+    ...value,
+    role,
+    content: messageText(typeof content === "string" ? content : JSON.stringify(content)),
+    ...(calls.length > 0 ? { tool_calls: calls } : {}),
+  };
 };
 
 /** An llm span's input (array of messages) or output (one message); null when it isn't one. */

@@ -30,7 +30,7 @@ const compareText = (left: string, right: string): number => {
   return left < right ? -1 : 1;
 };
 
-const reference = (run: TraceSummary): string => run.trace_ref || run.trace_id;
+const reference = (run: TraceSummary): string => run.id;
 
 /** Runs in `order`, as the server pages them: by the key, then by trace reference the same way. */
 export function orderRuns(runs: readonly TraceSummary[], order: RunOrder): TraceSummary[] {

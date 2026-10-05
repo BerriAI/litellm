@@ -3,7 +3,7 @@
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 
 import { useTracesApi } from "../../api";
-import type { Span, SpanDetail, UIContent } from "../../types";
+import type { Span, SpanDetail } from "../../types";
 import { parseMessages, prettyPayload } from "../../utils";
 import { Payload, TextBody } from "./PayloadBody";
 import { payloadView } from "./payload";
@@ -18,31 +18,28 @@ export function useSpanDetail(accessToken: string, traceId: string, spanId: stri
   const traces = useTracesApi(accessToken);
   const queryOptions: UseQueryOptions<SpanDetail, Error> = {
     queryKey: ["agentTraceSpan", traceId, traceRef, spanId, accessToken],
-    queryFn: () => traces.span(traceId, spanId as string, traceRef),
+    queryFn: () => traces.span(traceRef ?? traceId, spanId as string),
     enabled: spanId !== null,
     staleTime: Infinity,
   };
   return useQuery(queryOptions);
 }
 
-const messageCount = (raw: string, content: UIContent | undefined): number | undefined =>
-  content?.kind === "messages" ? content.messages.length : parseMessages(raw)?.length;
+const messageCount = (raw: string): number | undefined => parseMessages(raw)?.length;
 
 function PayloadSection({
   title,
   raw,
-  content,
   span,
   role,
 }: {
   title: string;
   raw: string;
-  content: UIContent | undefined;
   span: Span;
   role: "input" | "output";
 }) {
-  const view = payloadView(raw, content, span.type === "tool" && role === "output");
-  const count = role === "input" ? messageCount(raw, content) : undefined;
+  const view = payloadView(raw, span.type === "tool" && role === "output");
+  const count = role === "input" ? messageCount(raw) : undefined;
   return (
     <Section
       key={`${span.span_id}:${count}`}
@@ -91,12 +88,8 @@ export function ContentTab({ accessToken, traceId, traceRef, span }: ContentTabP
       )}
       {detailQuery.isLoading && <div className={STATUS_TEXT}>Loading span…</div>}
       {detailQuery.isError && <div className={STATUS_TEXT}>Could not load span: {detailQuery.error.message}</div>}
-      {detail?.input ? (
-        <PayloadSection title="Input" raw={detail.input} content={detail.input_ui} span={span} role="input" />
-      ) : null}
-      {detail?.output ? (
-        <PayloadSection title="Output" raw={detail.output} content={detail.output_ui} span={span} role="output" />
-      ) : null}
+      {detail?.input ? <PayloadSection title="Input" raw={detail.input} span={span} role="input" /> : null}
+      {detail?.output ? <PayloadSection title="Output" raw={detail.output} span={span} role="output" /> : null}
       {empty && span.status !== "error" && (
         <div className="py-12 text-center text-sm text-muted-foreground">No content recorded for this span.</div>
       )}

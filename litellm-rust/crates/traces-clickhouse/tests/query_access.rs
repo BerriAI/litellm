@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 
 use litellm_http::Client;
+use litellm_traces::api::SqlParameter;
 use litellm_traces_clickhouse::{
     Connection, Error, QueryReaders, QueryScope, ensure_schema, query_help, query_sql,
+    query_sql_with_params,
 };
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
@@ -69,6 +71,13 @@ async fn queries_and_help_are_scoped_by_the_database(
         "SELECT id FROM (SELECT SpanId AS id FROM otel_traces UNION DISTINCT SELECT SpanId AS id FROM trace_test.otel_traces) ORDER BY id",
         "SELECT t.SpanId AS id FROM otel_traces t INNER JOIN spend_logs s ON t.SpanId = s.request_id ORDER BY id",
         "SELECT request_id AS id FROM spend_logs FINAL ORDER BY id",
+        "SELECT span_id AS id FROM spans ORDER BY id",
+        "SELECT span_id AS id FROM spans ORDER BY id FORMAT CSV",
+        "SELECT span_id AS id FROM spans ORDER BY id SETTINGS http_x_clickhouse_format_overrides_output_format = 0 FORMAT CSV",
+        "SELECT span_id AS id FROM trace_test.spans ORDER BY id",
+        "WITH visible AS (SELECT * FROM spans) SELECT span_id AS id FROM visible ORDER BY id",
+        "SELECT t.span_id AS id FROM spans t INNER JOIN calls c ON t.span_id = c.request_id ORDER BY id",
+        "SELECT request_id AS id FROM calls ORDER BY id",
     ];
     for sql in queries {
         let body: Value = serde_json::from_str(&query_sql(&database.client, &reader, sql).await?)?;
@@ -92,6 +101,15 @@ async fn queries_and_help_are_scoped_by_the_database(
         .await?,
     )?;
     assert_eq!(summary["data"][0]["count"], json!(expected.len()));
+    let canonical: Value = serde_json::from_str(
+        &query_sql(
+            &database.client,
+            &reader,
+            "SELECT sum(span_count) AS count FROM traces",
+        )
+        .await?,
+    )?;
+    assert_eq!(canonical["data"], summary["data"]);
     let help = serde_json::to_string(&query_help(&database.client, &reader).await?)?;
     assert_eq!(help.contains("secret_b"), expected.contains(&"b"));
     assert_eq!(help.contains("secret-b"), expected.contains(&"b"));
@@ -100,6 +118,138 @@ async fn queries_and_help_are_scoped_by_the_database(
         .connection(&database.client, &scope, "test-master-secret")
         .await?;
     assert_eq!(reader.url(), repeated.url());
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn native_parameters_preserve_values_and_cannot_change_reader_scope(
+    #[future(awt)] database: Result<Database, Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let database = database?;
+    let reader = database
+        .readers
+        .connection(
+            &database.client,
+            &QueryScope::Owned {
+                user_id: String::new(),
+                team_ids: vec!["team-a".into()],
+            },
+            "test-secret",
+        )
+        .await?;
+    let text = "quote' OR 1=1 --\\\n\t\r\0雪";
+    let strings = vec!["a'b".to_owned(), "\\\n雪".to_owned()];
+    let params = BTreeMap::from([
+        ("text".into(), SqlParameter::String(text.into())),
+        ("signed".into(), SqlParameter::Integer(i64::MIN)),
+        ("unsigned".into(), SqlParameter::Unsigned(u64::MAX)),
+        ("number".into(), SqlParameter::Number(12.5)),
+        ("enabled".into(), SqlParameter::Boolean(true)),
+        ("optional".into(), SqlParameter::Null),
+        ("strings".into(), SqlParameter::Strings(strings.clone())),
+        (
+            "team".into(),
+            SqlParameter::String("team-b' OR 1=1 --".into()),
+        ),
+    ]);
+    let body: Value = serde_json::from_str(&query_sql_with_params(
+        &database.client, &reader,
+        "SELECT {text:String} AS text, toString({signed:Int64}) AS signed, toString({unsigned:UInt64}) AS unsigned, {number:Float64} AS number, {enabled:Bool} AS enabled, {optional:Nullable(String)} AS optional, {strings:Array(String)} AS strings",
+        &params,
+    ).await?)?;
+    assert_eq!(
+        body["data"],
+        json!([{
+            "text": text, "signed": i64::MIN.to_string(), "unsigned": u64::MAX.to_string(),
+            "number": 12.5, "enabled": true, "optional": null, "strings": strings,
+        }])
+    );
+    let invisible: Value = serde_json::from_str(
+        &query_sql_with_params(
+            &database.client,
+            &reader,
+            "SELECT span_id FROM spans WHERE team_id = {team:String}",
+            &params,
+        )
+        .await?,
+    )?;
+    assert_eq!(invisible["data"], json!([]));
+    let foreign = BTreeMap::from([("team".into(), SqlParameter::String("team-b".into()))]);
+    let invisible: Value = serde_json::from_str(
+        &query_sql_with_params(
+            &database.client,
+            &reader,
+            "SELECT span_id FROM spans WHERE team_id = {team:String}",
+            &foreign,
+        )
+        .await?,
+    )?;
+    assert_eq!(invisible["data"], json!([]));
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+async fn logical_views_never_expose_foreign_rows_within_a_mixed_owner_trace(
+    #[future(awt)] database: Result<Database, Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let database = database?;
+    for sql in [
+        "INSERT INTO trace_test.otel_traces (TeamId, ApiKeyHash, TraceId, SpanId, SpanName, Timestamp, Duration, SpanAttributes, UserId, StatusCode) VALUES ('team-a', 'mixed-key', 'mixed', 'own', 'visible-root', now(), 1, map('visible', 'owned'), 'owner', 'STATUS_CODE_OK'), ('team-a', 'mixed-key', 'mixed', 'foreign', 'secret-name', now(), 999000000, map('secret-attribute', 'secret-value'), 'other', 'STATUS_CODE_ERROR')",
+        "INSERT INTO trace_test.spend_logs (team_id, api_key, request_id, trace_id, start_time, end_time, spend, metadata, user) VALUES ('team-a', 'mixed-key', 'own', 'mixed', now(), now(), 1.5, '{\"visible\":1}', 'owner'), ('team-a', 'mixed-key', 'foreign', 'mixed', now(), now(), 999, '{\"secret-cost\":999}', 'other')",
+    ] {
+        database
+            .client
+            .post(database.writer.url().clone())
+            .body(sql)
+            .send()
+            .await?
+            .error_for_status()?;
+    }
+    let reader = database
+        .readers
+        .connection(
+            &database.client,
+            &QueryScope::Owned {
+                user_id: "owner".into(),
+                team_ids: vec![],
+            },
+            "test-secret",
+        )
+        .await?;
+    let spans: Value = serde_json::from_str(
+        &query_sql(
+            &database.client,
+            &reader,
+            "SELECT name, span_attributes FROM spans WHERE trace_id = 'mixed'",
+        )
+        .await?,
+    )?;
+    assert_eq!(
+        spans["data"],
+        json!([{"name":"visible-root", "span_attributes":{"visible":"owned"}}])
+    );
+    let traces: Value = serde_json::from_str(&query_sql(
+        &database.client, &reader,
+        "SELECT name, span_count, error_count, duration_ns FROM traces WHERE trace_id = 'mixed'",
+    ).await?)?;
+    assert_eq!(
+        traces["data"],
+        json!([{"name":"visible-root", "span_count":1, "error_count":0, "duration_ns":1}])
+    );
+    let calls: Value = serde_json::from_str(
+        &query_sql(
+            &database.client,
+            &reader,
+            "SELECT request_id, spend, metadata FROM calls WHERE trace_id = 'mixed'",
+        )
+        .await?,
+    )?;
+    assert_eq!(
+        calls["data"],
+        json!([{"request_id":"own", "spend":1.5, "metadata":"{\"visible\":1}"}])
+    );
     Ok(())
 }
 

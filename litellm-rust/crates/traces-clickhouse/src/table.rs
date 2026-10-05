@@ -10,3 +10,17 @@ pub enum TraceTable {
     AgentTracesByKey,
     SpendLogs,
 }
+
+#[macro_rules_attribute::apply(response_type)]
+#[cfg_attr(feature = "schema", schemars(rename = "TraceQueryTableName"))]
+#[derive(Clone, Copy, Debug, strum::Display, strum::EnumIter)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum QueryTable {
+    Traces,
+    Spans,
+    Calls,
+    OtelTraces,
+    AgentTracesByKey,
+    SpendLogs,
+}

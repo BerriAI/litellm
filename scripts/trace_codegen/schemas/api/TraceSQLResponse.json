@@ -1,0 +1,88 @@
+{
+  "$defs": {
+    "TraceQueryStatistics": {
+      "additionalProperties": true,
+      "properties": {
+        "bytes_read": {
+          "$ref": "#/$defs/UnsignedCount"
+        },
+        "elapsed": {
+          "format": "double",
+          "type": "number"
+        },
+        "rows_read": {
+          "$ref": "#/$defs/UnsignedCount"
+        }
+      },
+      "required": [
+        "elapsed",
+        "rows_read",
+        "bytes_read"
+      ],
+      "type": "object"
+    },
+    "TraceSQLColumn": {
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "UnsignedCount": {
+      "anyOf": [
+        {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "data": {
+      "items": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "type": "array",
+      "x-python-normalized": {
+        "type": "tuple[Mapping[str, JsonValue], ...]"
+      }
+    },
+    "meta": {
+      "items": {
+        "$ref": "#/$defs/TraceSQLColumn"
+      },
+      "type": "array"
+    },
+    "rows": {
+      "$ref": "#/$defs/UnsignedCount"
+    },
+    "statistics": {
+      "$ref": "#/$defs/TraceQueryStatistics"
+    }
+  },
+  "required": [
+    "meta",
+    "data",
+    "rows",
+    "statistics"
+  ],
+  "title": "TraceSQLResponse",
+  "type": "object"
+}

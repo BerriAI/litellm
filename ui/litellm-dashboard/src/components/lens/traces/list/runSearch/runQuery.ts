@@ -1,7 +1,7 @@
 import { Bot, Box, Braces, CircleDashed, Hash, SquareChevronRight } from "lucide-react";
 
-import type { TraceSummary } from "../../types";
-import { previewText, traceAgentNames } from "../../utils";
+import type { RunField as TraceRunField, TraceSummary } from "../../types";
+import { traceAgentNames } from "../../utils";
 
 import { type ClientIndex, filterItems } from "@/components/shared/search/evaluate";
 import { ALL_OPERATORS, type FieldSpec, type QueryLanguage } from "@/components/shared/search/language";
@@ -9,11 +9,13 @@ import { ALL_OPERATORS, type FieldSpec, type QueryLanguage } from "@/components/
 const RUN_FIELDS = {
   name: { group: "Run attributes", icon: SquareChevronRight, suggestValues: true },
   agent: { group: "Run attributes", icon: Bot, suggestValues: true },
-  status: { group: "Run attributes", icon: CircleDashed, suggestValues: true },
+  root_status: { group: "Run attributes", icon: CircleDashed, suggestValues: true },
+  has_error: { group: "Run attributes", icon: CircleDashed, suggestValues: true },
+  service: { group: "Run attributes", icon: Box, suggestValues: true },
   model: { group: "Run attributes", icon: Box, suggestValues: true },
   input: { group: "Content", icon: Braces, suggestValues: false },
   trace_id: { group: "Identity", icon: Hash, suggestValues: false },
-} as const satisfies Record<string, FieldSpec>;
+} as const satisfies Partial<Record<TraceRunField, FieldSpec>>;
 
 export type RunField = keyof typeof RUN_FIELDS;
 
@@ -24,12 +26,14 @@ export const RUN_INDEX: ClientIndex<TraceSummary, RunField> = {
   read: {
     name: (run) => [run.name],
     agent: traceAgentNames,
-    status: (run) => [run.error_count > 0 ? "error" : "ok"],
+    root_status: (run) => [run.root_status],
+    has_error: (run) => [String(run.has_error)],
+    service: (run) => [run.service],
     model: (run) => run.models,
-    input: (run) => [previewText(run.input_preview)],
+    input: (run) => [run.input_preview],
     trace_id: (run) => [run.trace_id],
   },
-  freeText: (run) => [run.trace_id, previewText(run.input_preview), run.name],
+  freeText: (run) => [run.trace_id, run.input_preview, run.name],
 };
 
 export const filterRuns = (runs: TraceSummary[], query: string): TraceSummary[] =>

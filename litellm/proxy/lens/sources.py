@@ -91,7 +91,7 @@ def lens_access(scope: Scope) -> QueryScope:
 
 
 def execution_of(run: TraceSummary) -> Execution:
-    trace_ref: Final = run.get("trace_ref", "")
+    trace_ref: Final = run["id"]
     return Execution(
         id=execution_id(trace_ref, run["trace_id"]), trace_id=run["trace_id"], trace_ref=trace_ref, summary=run
     )
@@ -198,7 +198,7 @@ class SourceReader:
                         span_ids,
                         part,
                         access,
-                        max_chars=max_chars if not tail else budget - budget // 3,
+                        max_chars=max_chars if not tail or max_chars else budget - budget // 3,
                         tail=tail,
                     ),
                 )
@@ -315,7 +315,37 @@ class SourceReader:
             )
             for part, _, _ in PARTS
         ]
-        return any(text["contains"] for text in chain.from_iterable(found))
+        if any(text["contains"] for text in chain.from_iterable(found)):
+            return True
+        if len(evidence.quote) > BUDGET:
+            return False
+        trace: Final = await self.storage.get_trace(execution.trace_id, access, execution.trace_ref)
+        if trace is None:
+            return False
+        span: Final = next((span for span in trace["spans"] if span["span_id"] == evidence.span_id), None)
+        if span is None:
+            return False
+        heads: Final = await self._texts(access, execution, (evidence.span_id,), BUDGET)
+        pieces: Final = _pieces(span, heads)
+        tails: Final = await self._texts(
+            access, execution, (evidence.span_id,) if _total(pieces) > BUDGET else (), BUDGET, tail=True
+        )
+        if evidence.quote in _excerpt(span, pieces, tails):
+            return True
+        if _total(pieces) <= BUDGET:
+            return False
+        prefixes: Final = tuple(label + (text["text"] if text else "") for _, label, text in pieces)
+        endings: Final = tuple(
+            (label if text is None or text["total_chars"] <= BUDGET else "")
+            + (tail["text"] if (tail := tails.get((evidence.span_id, part))) else "")
+            for part, label, text in pieces
+        )
+        boundaries: Final = tuple(end + prefix for end, prefix in zip(endings, prefixes[1:]))
+        middle: Final = pieces[1][2]
+        joined: Final = (
+            endings[0] + prefixes[1] + prefixes[2] if middle is None or middle["total_chars"] <= BUDGET else ""
+        )
+        return evidence.quote in joined or any(evidence.quote in boundary for boundary in boundaries)
 
 
 def _excerpt(span: Span, pieces: tuple[tuple[SpanPart, str, SpanText | None], ...], tails: Texts) -> str:
@@ -332,4 +362,4 @@ def _shortened(text: SpanText | None, budget: int, tail: SpanText | None) -> str
         return ""
     if text["total_chars"] <= budget:
         return text["text"]
-    return text["text"][: budget // 3] + OMITTED + (tail["text"] if tail else "")
+    return text["text"][: budget // 3] + OMITTED + (tail["text"][-(budget - budget // 3) :] if tail else "")

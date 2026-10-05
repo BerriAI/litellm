@@ -1,4 +1,5 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE};
+use litellm_traces::api::TraceQueryWindow;
 use litellm_traces::store::{RunCursor, RunOrder, RunRow, SpanPart};
 use serde::{Deserialize, Serialize};
 
@@ -45,7 +46,7 @@ impl Cursor {
 pub(super) struct RunPosition {
     order: RunOrder,
     query_scope: String,
-    window: (i64, i64),
+    window: TraceQueryWindow,
     value: i64,
     trace_ref: String,
 }
@@ -55,7 +56,7 @@ impl RunPosition {
         order: RunOrder,
         row: &RunRow,
         query_scope: &str,
-        window: (i64, i64),
+        window: TraceQueryWindow,
     ) -> Self {
         let RunCursor { value, trace_ref } = order.cursor(row);
         Self {
@@ -73,6 +74,7 @@ impl RunPosition {
 pub(super) struct SpanPosition {
     pub(super) trace_ref: String,
     pub(super) snapshot_ms: u64,
+    pub(super) page_size: u32,
     pub(super) offset: usize,
     pub(super) version: String,
 }
@@ -89,7 +91,7 @@ pub(super) fn run_position<E>(
     cursor: Option<&str>,
     order: RunOrder,
     query_scope: &str,
-    window: (i64, i64),
+    window: TraceQueryWindow,
 ) -> Result<Option<RunCursor>, ReadError<E>> {
     let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) else {
         return Ok(None);
@@ -113,15 +115,17 @@ pub(super) fn run_position<E>(
 pub fn resolve_run_window<E>(
     start_ms: Option<i64>,
     end_ms: Option<i64>,
+    as_of_ms: Option<u64>,
     cursor: Option<&str>,
-    default_window: (i64, i64),
-) -> Result<(i64, i64), ReadError<E>> {
+    default: TraceQueryWindow,
+) -> Result<TraceQueryWindow, ReadError<E>> {
     let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) else {
-        let window = (
-            start_ms.unwrap_or(default_window.0),
-            end_ms.unwrap_or(default_window.1),
-        );
-        return if window.0 < window.1 {
+        let window = TraceQueryWindow {
+            start_ms: start_ms.unwrap_or(default.start_ms),
+            end_ms: end_ms.unwrap_or(default.end_ms),
+            as_of_ms: as_of_ms.unwrap_or(default.as_of_ms),
+        };
+        return if window.start_ms < window.end_ms && window.as_of_ms <= default.as_of_ms {
             Ok(window)
         } else {
             Err(ReadError::InvalidParameters)
@@ -130,13 +134,16 @@ pub fn resolve_run_window<E>(
     let Cursor::Run(position) = Cursor::decode(cursor, "trace")? else {
         return Err(ReadError::InvalidCursor("trace"));
     };
-    if position.window.0 >= position.window.1
-        || start_ms.is_some_and(|start| start != position.window.0)
-        || end_ms.is_some_and(|end| end != position.window.1)
+    let window = position.window;
+    if window.start_ms >= window.end_ms
+        || window.as_of_ms > default.as_of_ms
+        || start_ms.is_some_and(|start| start != window.start_ms)
+        || end_ms.is_some_and(|end| end != window.end_ms)
+        || as_of_ms.is_some_and(|cutoff| cutoff != window.as_of_ms)
     {
         return Err(ReadError::InvalidCursor("trace"));
     }
-    Ok(position.window)
+    Ok(window)
 }
 
 pub(super) fn span_position<E>(cursor: &str) -> Result<SpanPosition, ReadError<E>> {
@@ -174,7 +181,14 @@ mod tests {
 
     use super::*;
 
-    const WINDOW: (i64, i64) = (10, 100);
+    const WINDOW: TraceQueryWindow = window(10, 100, 150);
+    const fn window(start_ms: i64, end_ms: i64, as_of_ms: u64) -> TraceQueryWindow {
+        TraceQueryWindow {
+            start_ms,
+            end_ms,
+            as_of_ms,
+        }
+    }
 
     fn run(order: RunOrder, value: i64, trace_ref: &str) -> String {
         Cursor::Run(RunPosition {
@@ -200,6 +214,7 @@ mod tests {
         Cursor::Span(SpanPosition {
             trace_ref: "ref".into(),
             snapshot_ms: 1,
+            page_size: 2,
             offset: 2,
             version: "A".repeat(64),
         })
@@ -237,11 +252,12 @@ mod tests {
     #[case::order(BY_ERRORS, "query", WINDOW)]
     #[case::direction(RunOrder { descending: false, ..RunOrder::NEWEST }, "query", WINDOW)]
     #[case::scope(RunOrder::NEWEST, "other-query", WINDOW)]
-    #[case::window(RunOrder::NEWEST, "query", (11, 100))]
+    #[case::window(RunOrder::NEWEST, "query", window(11, 100, 150))]
+    #[case::cutoff(RunOrder::NEWEST, "query", window(10, 100, 151))]
     fn run_cursor_rejects_a_changed_query(
         #[case] order: RunOrder,
         #[case] scope: &str,
-        #[case] window: (i64, i64),
+        #[case] window: TraceQueryWindow,
     ) {
         assert!(matches!(
             run_position::<std::io::Error>(
@@ -290,38 +306,91 @@ mod tests {
         #[case] expected: (i64, i64),
     ) {
         assert_eq!(
-            resolve_run_window::<std::io::Error>(start, end, None, (0, 50)).unwrap(),
+            {
+                let resolved = resolve_run_window::<std::io::Error>(
+                    start,
+                    end,
+                    None,
+                    None,
+                    window(0, 50, 150),
+                )
+                .unwrap();
+                assert_eq!(resolved.as_of_ms, 150);
+                (resolved.start_ms, resolved.end_ms)
+            },
             expected
         );
     }
 
     #[rstest]
     #[case::omitted(None, None)]
-    #[case::start(Some(WINDOW.0), None)]
-    #[case::end(None, Some(WINDOW.1))]
-    #[case::explicit(Some(WINDOW.0), Some(WINDOW.1))]
+    #[case::start(Some(WINDOW.start_ms), None)]
+    #[case::end(None, Some(WINDOW.end_ms))]
+    #[case::explicit(Some(WINDOW.start_ms), Some(WINDOW.end_ms))]
     fn cursor_keeps_its_window_when_the_default_clock_advances(
         #[case] start: Option<i64>,
         #[case] end: Option<i64>,
     ) {
         let cursor = run(RunOrder::NEWEST, 1, "ref");
         assert_eq!(
-            resolve_run_window::<std::io::Error>(start, end, Some(&cursor), (200, 300)).unwrap(),
+            resolve_run_window::<std::io::Error>(
+                start,
+                end,
+                None,
+                Some(&cursor),
+                window(200, 300, 350)
+            )
+            .unwrap(),
             WINDOW
         );
     }
 
     #[rstest]
-    #[case::start(Some(WINDOW.0 + 1), None)]
-    #[case::end(None, Some(WINDOW.1 + 1))]
+    #[case::start(Some(WINDOW.start_ms + 1), None)]
+    #[case::end(None, Some(WINDOW.end_ms + 1))]
     fn cursor_rejects_explicit_window_changes(
         #[case] start: Option<i64>,
         #[case] end: Option<i64>,
     ) {
         let cursor = run(RunOrder::NEWEST, 1, "ref");
         assert!(matches!(
-            resolve_run_window::<std::io::Error>(start, end, Some(&cursor), (200, 300)),
+            resolve_run_window::<std::io::Error>(
+                start,
+                end,
+                None,
+                Some(&cursor),
+                window(200, 300, 350)
+            ),
             Err(ReadError::InvalidCursor("trace"))
+        ));
+    }
+
+    #[rstest]
+    fn cursor_rejects_a_changed_ingestion_cutoff() {
+        let cursor = run(RunOrder::NEWEST, 1, "ref");
+        assert!(matches!(
+            resolve_run_window::<std::io::Error>(
+                None,
+                None,
+                Some(WINDOW.as_of_ms + 1),
+                Some(&cursor),
+                window(200, 300, 350)
+            ),
+            Err(ReadError::InvalidCursor("trace"))
+        ));
+    }
+
+    #[rstest]
+    fn first_page_rejects_a_future_ingestion_cutoff() {
+        assert!(matches!(
+            resolve_run_window::<std::io::Error>(
+                None,
+                None,
+                Some(WINDOW.as_of_ms + 1),
+                None,
+                WINDOW
+            ),
+            Err(ReadError::InvalidParameters)
         ));
     }
 

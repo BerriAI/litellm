@@ -40,9 +40,9 @@ export function SpanPane({
   onSpanTabChange,
   onClose,
 }: SpanTabProps & { trace: Trace; span: Span; accessToken: string; onClose: () => void }) {
-  const { trace_id: traceId, trace_ref: traceRef, start_time: startTime } = trace.summary;
-  const handoff = useTracesApi(accessToken).handoff(traceId, span.span_id, traceRef);
-  const detailQuery = useSpanDetail(accessToken, traceId, tab === "attributes" ? span.span_id : null, traceRef);
+  const { id: traceId, start_time: startTime } = trace.summary;
+  const handoff = useTracesApi(accessToken).handoff(traceId, span.span_id);
+  const detailQuery = useSpanDetail(accessToken, traceId, tab === "attributes" ? span.span_id : null);
   return (
     <aside className="flex h-full min-w-0 flex-col bg-background text-sm text-foreground" aria-label="Span details">
       <PaneHeader
@@ -66,7 +66,7 @@ export function SpanPane({
           </TabsList>
         </div>
         <TabsContent value="content" className="min-h-0 overflow-auto">
-          <ContentTab accessToken={accessToken} traceId={traceId} traceRef={traceRef} span={span} />
+          <ContentTab accessToken={accessToken} traceId={traceId} span={span} />
         </TabsContent>
         <TabsContent value="request" className="min-h-0 overflow-auto">
           <RequestTab span={span} accessToken={accessToken} traceStartMs={Date.parse(startTime)} />

@@ -39,9 +39,9 @@ export function useTraceHistogram(
   enabled: boolean,
 ): TraceHistogramResult {
   const traces = useTracesApi(accessToken);
-  const { window, q } = selection;
+  const { window, q, asOfMs } = selection;
   const histogramOptions = {
-    queryKey: ["agentTraceHistogram", traces.scope, window.startMs, window.endMs, q],
+    queryKey: ["agentTraceHistogram", traces.scope, window.startMs, window.endMs, q, asOfMs],
     queryFn: () => traces.histogram(selection, BUCKETS),
     enabled,
     placeholderData: keepPreviousData,

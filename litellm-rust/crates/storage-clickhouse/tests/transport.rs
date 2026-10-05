@@ -38,6 +38,8 @@ struct QueryParams {
     signed: i64,
     unsigned: u64,
     float: f64,
+    boolean: bool,
+    nullable: Option<String>,
     text: String,
     strings: Vec<String>,
 }
@@ -79,6 +81,8 @@ async fn typed_fetch_encodes_parameters_and_validates_rows(
         .and(query_param("param_signed", i64::MIN.to_string()))
         .and(query_param("param_unsigned", u64::MAX.to_string()))
         .and(query_param("param_float", "12.5"))
+        .and(query_param("param_boolean", "1"))
+        .and(query_param("param_nullable", "\\N"))
         .and(query_param("param_text", "line\\nbreak"))
         .and(query_param("param_strings", "['a\\'b','雪']"))
         .and(query_param("readonly", "1"))
@@ -93,6 +97,8 @@ async fn typed_fetch_encodes_parameters_and_validates_rows(
         signed: i64::MIN,
         unsigned: u64::MAX,
         float: 12.5,
+        boolean: true,
+        nullable: None,
         text: "line\nbreak".into(),
         strings: vec!["a'b".into(), "雪".into()],
     };

@@ -342,7 +342,7 @@ fn window(start_ms: i64, end_ms: i64, q: &str) -> RunFilter {
     RunFilter {
         start_ms,
         end_ms,
-        search: RunSearch::parse(q),
+        search: RunSearch::parse(q).unwrap(),
         ..Default::default()
     }
 }
@@ -459,6 +459,33 @@ async fn pages_reuse_one_trace_snapshot_and_concatenate_in_order() {
         .collect();
     assert_eq!(ids, ["span-0", "span-1", "span-2", "span-3", "span-4"]);
     assert!(third.next_cursor.is_none());
+    assert_eq!(store.calls(Operation::TraceSpans), 1);
+}
+
+#[rstest]
+#[case::smaller(1)]
+#[case::larger(3)]
+#[tokio::test]
+async fn span_cursors_reject_changed_page_sizes(#[case] page_size: u32) {
+    let store = FakeStore::with_spans("ref", (0..5).map(span).collect());
+    let reader = TraceReader::new(usize::MAX);
+    let access = access();
+    let first = reader
+        .get_trace_page(&store, &access, "trace", "ref", None, 2)
+        .await
+        .unwrap()
+        .unwrap();
+    let result = reader
+        .get_trace_page(
+            &store,
+            &access,
+            "trace",
+            "ref",
+            first.next_cursor.as_deref(),
+            page_size,
+        )
+        .await;
+    assert!(matches!(result, Err(ReadError::InvalidCursor("span"))));
     assert_eq!(store.calls(Operation::TraceSpans), 1);
 }
 
@@ -1068,7 +1095,7 @@ async fn values_narrow_by_the_search_and_the_needle() {
             runs: 1,
         },
     ];
-    let filter = window(0, 10, "-status:error");
+    let filter = window(0, 10, "-has_error:true");
     let values = TraceReader::new(usize::MAX)
         .values(&store, &access(), &filter, RunField::Agent, "re_", 20)
         .await
@@ -1197,6 +1224,8 @@ async fn cached_run_keeps_all_canonical_metrics_current_for_every_sort(#[case] k
         duration_ms: changed.duration_ns as f64 / 1_000_000.0,
         span_count: changed.span_count,
         error_count: changed.error_count,
+        has_error: changed.error_count > 0,
+        status: changed.status,
         ..first.data[0].clone()
     };
     assert_eq!(expected.spend, Some(1.5));

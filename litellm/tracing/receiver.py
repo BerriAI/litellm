@@ -19,6 +19,7 @@ from threading import BoundedSemaphore
 from typing import Final
 
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE, OTLP_MAX_BODY_BYTES, OTLP_MAX_CONCURRENT_INGESTS
+from litellm.rust_bridge.trace.generated.requests import TraceMetadata, TraceSpansPage
 from litellm.rust_bridge.trace.generated.types import (
     QueryScope,
     RunField,
@@ -114,18 +115,34 @@ class TraceReceiver:
         q: str = "",
         cursor: str | None = None,
         order: RunOrder = NEWEST,
+        page_size: int = AGENT_TRACING_LIST_PAGE_SIZE,
+        as_of_ms: int | None = None,
     ) -> TracePage:
-        return await self.storage.list_traces(scope, start_ms, end_ms, q, cursor, AGENT_TRACING_LIST_PAGE_SIZE, order)
+        return await self.storage.list_traces(scope, start_ms, end_ms, q, cursor, page_size, order, as_of_ms=as_of_ms)
 
     async def trace_histogram(
-        self, scope: QueryScope, start_ms: int, end_ms: int, q: str, buckets: int
+        self,
+        scope: QueryScope,
+        start_ms: int | None,
+        end_ms: int | None,
+        q: str,
+        buckets: int,
+        as_of_ms: int | None = None,
     ) -> TraceHistogram:
-        return await self.storage.trace_histogram(scope, start_ms, end_ms, q, buckets)
+        return await self.storage.trace_histogram(scope, start_ms, end_ms, q, buckets, as_of_ms)
 
     async def run_values(
-        self, scope: QueryScope, start_ms: int, end_ms: int, q: str, field: RunField, contains: str, limit: int
+        self,
+        scope: QueryScope,
+        start_ms: int | None,
+        end_ms: int | None,
+        q: str,
+        field: RunField,
+        contains: str,
+        limit: int,
+        as_of_ms: int | None = None,
     ) -> RunValues:
-        return await self.storage.run_values(scope, start_ms, end_ms, q, field, contains, limit)
+        return await self.storage.run_values(scope, start_ms, end_ms, q, field, contains, limit, as_of_ms)
 
     async def get_trace(
         self,
@@ -144,6 +161,22 @@ class TraceReceiver:
         self, trace_id: str, span_id: str, scope: QueryScope, trace_ref: str = "", cursor: str | None = None
     ) -> SpanErrorPage | None:
         return await self.storage.get_span_error(trace_id, span_id, scope, trace_ref, cursor)
+
+    async def get_trace_metadata(self, scope: QueryScope, id: str) -> TraceMetadata | None:
+        return await self.storage.get_trace_metadata(scope, id)
+
+    async def get_trace_spans(
+        self, scope: QueryScope, id: str, cursor: str | None, page_size: int
+    ) -> TraceSpansPage | None:
+        return await self.storage.get_trace_spans(scope, id, cursor, page_size)
+
+    async def get_span_by_id(self, scope: QueryScope, id: str, span_id: str) -> SpanDetail | None:
+        return await self.storage.get_span_by_id(scope, id, span_id)
+
+    async def get_span_error_by_id(
+        self, scope: QueryScope, id: str, span_id: str, cursor: str | None
+    ) -> SpanErrorPage | None:
+        return await self.storage.get_span_error_by_id(scope, id, span_id, cursor)
 
 
 async def _read_body(chunks: AsyncIterable[bytes]) -> bytes:

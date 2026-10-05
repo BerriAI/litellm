@@ -1,0 +1,83 @@
+{
+  "$defs": {
+    "TraceInvalidParam": {
+      "additionalProperties": false,
+      "properties": {
+        "location": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "location",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "TraceProblemCode": {
+      "enum": [
+        "invalid_request",
+        "unauthorized",
+        "forbidden",
+        "not_found",
+        "trace_changed",
+        "too_large",
+        "unavailable",
+        "query_rejected",
+        "query_limit_exceeded",
+        "query_unavailable",
+        "internal_error"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "code": {
+      "$ref": "#/$defs/TraceProblemCode"
+    },
+    "database_code": {
+      "format": "uint32",
+      "maximum": 4294967295,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "detail": {
+      "type": "string"
+    },
+    "errors": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/TraceInvalidParam"
+      },
+      "type": "array"
+    },
+    "status": {
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "title": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "type",
+    "title",
+    "status",
+    "detail",
+    "code"
+  ],
+  "title": "TraceProblem",
+  "type": "object"
+}

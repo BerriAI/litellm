@@ -1328,3 +1328,27 @@ fn gateway_lookup_respects_legacy_fallback_and_ownership(
         expected
     );
 }
+
+#[rstest]
+#[case::physical_roots(true)]
+#[case::missing_physical_root(false)]
+fn summary_root_is_deterministic_and_distinguishes_child_errors(#[case] physical_roots: bool) {
+    let parent = if physical_roots { "" } else { "missing" };
+    let rows = [
+        SpanRow {
+            status: SpanStatus::Error,
+            ..row("z-root", parent, "later-root", "agent", "later")
+        },
+        row("a-root", parent, "canonical-root", "agent", "canonical"),
+        SpanRow {
+            status: SpanStatus::Error,
+            ..at(row("orphan", "missing", "orphan", "llm", ""), -1, 1)
+        },
+    ];
+    let expected = if physical_roots { &rows[1] } else { &rows[2] };
+    let trace = resolve_trace("trace", "ref", &rows, &[]).unwrap();
+    assert_eq!(trace.summary.name, expected.name);
+    assert_eq!(trace.summary.input_preview, expected.input_preview);
+    assert_eq!(trace.summary.status, expected.status);
+    assert!(trace.summary.has_error);
+}

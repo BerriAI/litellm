@@ -1857,7 +1857,7 @@ def get_openapi_schema():
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
-    app.openapi_schema = openapi_schema
+    app.openapi_schema = dict(tracing_endpoints.merge_trace_openapi(openapi_schema))
     return app.openapi_schema
 
 

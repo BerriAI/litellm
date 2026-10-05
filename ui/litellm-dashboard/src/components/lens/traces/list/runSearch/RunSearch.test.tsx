@@ -12,7 +12,7 @@ describe("RunSearch", () => {
   it("offers the run fields, then the agents seen in the loaded runs", async () => {
     const user = userEvent.setup();
     render(<RunSearch value="" onChange={vi.fn()} runs={runs} />);
-    expect(screen.getByText("Search runs, or filter like agent:researcher status:error")).toBeVisible();
+    expect(screen.getByText("Search runs, or filter like agent:researcher has_error:true")).toBeVisible();
     await user.click(box());
     expect(
       within(listbox())
@@ -24,9 +24,17 @@ describe("RunSearch", () => {
       within(listbox())
         .getAllByRole("option")
         .map((o) => o.textContent),
-    ).toEqual(["billing-agent", "cron", "researcher", "triage"]);
+    ).toEqual(["billing-agent", "researcher", "triage"]);
     await user.click(within(listbox()).getByRole("option", { name: "researcher" }));
     expect(box()).toHaveTextContent(/^agent:researcher $/, { normalizeWhitespace: false });
+  });
+
+  it("explains that attribute filters cannot be copied as SQL", async () => {
+    const user = userEvent.setup();
+    render(<RunSearch value="attr.tenant:demo" onChange={vi.fn()} runs={runs} />);
+    await user.click(box());
+    expect(screen.getByRole("note")).toHaveTextContent("Use the traces API for attribute or unsupported field filters");
+    expect(screen.queryByRole("button", { name: "Copy as curl" })).not.toBeInTheDocument();
   });
 
   it("copies the filtered list as a trace query bounded to the shown range", async () => {
@@ -40,7 +48,7 @@ describe("RunSearch", () => {
     expect(command).toContain('/v1/traces/query"');
     expect(command).toContain("fromUnixTimestamp64Milli(1700000000000)");
     expect(command).toContain("fromUnixTimestamp64Milli(1700003600000)");
-    expect(command).toContain("arrayExists(x -> x ILIKE 'res', agents)");
+    expect(command).toContain("arrayExists(x -> x ILIKE 'res', agent_names)");
     expect(screen.getByRole("button", { name: "Copied" })).toBeVisible();
     expect(box()).toHaveAttribute("aria-expanded", "true");
   });

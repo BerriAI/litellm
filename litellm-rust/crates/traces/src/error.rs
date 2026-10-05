@@ -17,3 +17,7 @@ pub struct InvalidScope;
 #[derive(Debug, thiserror::Error)]
 #[error("invalid trace call key")]
 pub struct InvalidCallKey;
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid trace search query")]
+pub struct InvalidQuery;

@@ -30,11 +30,9 @@ def test_dictionary_validation_keeps_required_nullable_and_optional_fields_disti
             "input": "",
             "output": "",
             "attributes": {"key": "value"},
-            "input_ui": {"kind": "messages", "messages": [{"role": "user", "content": "hello"}]},
-            "output_ui": {"kind": "text", "text": "answer"},
         }
     )
-    assert result["input_ui"] == {"kind": "messages", "messages": ({"role": "user", "content": "hello"},)}
+    assert (result["input"], result["output"]) == ("", "")
     assert result["attributes"] == {"key": "value"}
     assert (
         TypeAdapter(SpanErrorPage).validate_python(

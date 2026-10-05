@@ -60,7 +60,7 @@ export function RunView(props: RunViewProps) {
   const traceId = useDeferredValue(props.traceId);
   const traceRef = useDeferredValue(props.traceRef);
   const switching = traceId !== props.traceId || traceRef !== props.traceRef;
-  const shownKey = traceKey({ traceId, traceRef });
+  const shownKey = traceKey({ traceId: traceRef ?? traceId });
   return (
     <QueryErrorResetBoundary>
       {({ reset }) => (
@@ -94,7 +94,7 @@ function LoadedRun({
   const queryKey = ["agentTrace", traceId, traceRef, accessToken];
   const traceQueryOptions = {
     queryKey,
-    queryFn: ({ pageParam }: { pageParam: string | null }) => traces.trace(traceId, traceRef, pageParam),
+    queryFn: ({ pageParam }: { pageParam: string | null }) => traces.trace(traceRef ?? traceId, pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (lastPage: Trace) => lastPage.next_cursor ?? undefined,
     staleTime: 30_000,
@@ -131,12 +131,7 @@ function LoadedRun({
       inert={switching}
       data-testid="run-view"
     >
-      <RunHeader
-        trace={trace}
-        handoff={traces.handoff(trace.summary.trace_id, null, trace.summary.trace_ref)}
-        onBack={onBack}
-        embedded={embedded}
-      />
+      <RunHeader trace={trace} handoff={traces.handoff(trace.summary.id)} onBack={onBack} embedded={embedded} />
       {(traceQuery.hasNextPage || failure) && (
         <PagingBanner
           loaded={trace.spans.length}

@@ -1,10 +1,19 @@
 {% block live_schema -%}
+Use traces for canonical trace metrics, spans for one earliest copy of each span, and calls for replacement-deduplicated spend records
+traces.id is the canonical trace ID used by the curated API; join spans with traces.id = spans.trace_ref
+otel_traces, agent_traces_by_key and spend_logs are physical diagnostic tables. Repeated exports can inflate raw span and rollup counts
 {% for table in tables -%}
 {{ table.name }}
 {% for column in table.columns -%}
 {{ column.name }}: {{ column.kind }}
 {% endfor %}
 {% endfor -%}
+{%- endblock %}
+
+{% block parameters -%}
+Pass values in the optional params object using ClickHouse typed placeholders. The engine binds values without rewriting SQL
+{"sql":"SELECT id, name, duration_ms FROM traces WHERE start_time >= fromUnixTimestamp64Milli({start_ms:Int64}) AND has({teams:Array(String)}, team_id) ORDER BY start_time DESC, id LIMIT {limit:UInt32}","params":{"start_ms":0,"teams":["example-team"],"limit":50}}
+Values support strings, integers, numbers, booleans, null and string arrays. Match each placeholder type to its value, for example {enabled:Bool} or {optional:Nullable(String)}
 {%- endblock %}
 
 {% block normalized_fields -%}
@@ -152,8 +161,9 @@ Filter calls by nested metadata
 {%- endblock %}
 
 {% block time_window -%}
-Always bound Timestamp or start_time and use LIMIT; add TeamId/ApiKeyHash or team_id/api_key filters when investigating one tenant
+Always bound start_time and use LIMIT; add team_id/api_key_hash filters when investigating one tenant
 Raw SQL returns one bounded response without a cursor. Callers own ORDER BY, LIMIT and keyset predicates for pagination
+SQL views are live relations; separate queries do not freeze membership or span versions
 {%- endblock %}
 
 {% block reader_limits -%}
@@ -161,7 +171,7 @@ The reader enforces {{ limits.result_rows }} result rows, {{ limits.result_mib()
 {%- endblock %}
 
 {% block reader_profile -%}
-LiteLLM provisions SELECT-only readers from the configured ClickHouse connection and enforces request-log visibility through row policies. Callers see their own user rows and permitted teams. Provisioning requires CREATE USER, ALTER USER, CREATE ROW POLICY, and GRANT SELECT permissions
+LiteLLM provisions SELECT-only readers and INVOKER views using ClickHouse row policies. Callers see their own user rows and permitted teams. SQL traces summarize visible spans, while curated user-only reads require full trace ownership. Provisioning requires CREATE USER, ALTER USER, CREATE ROW POLICY, and GRANT SELECT permissions
 {%- endblock %}
 
 {% block output_format -%}
@@ -173,7 +183,7 @@ metadata is a JSON-encoded String; use JSONHas before typed extraction to distin
 {%- endblock %}
 
 {% block map_values -%}
-SpanAttributes and ResourceAttributes are Map(String, String); missing map keys return an empty string, so use mapContains for existence checks
+spans.span_attributes and spans.resource_attributes are Map(String, String); missing map keys return an empty string, so use mapContains for existence checks
 {%- endblock %}
 
 {% block literal_keys -%}
@@ -181,7 +191,7 @@ Use the discovered path components as separate JSONExtract arguments; a dot insi
 {%- endblock %}
 
 {% block time_units -%}
-Duration is nanoseconds; Timestamp has nanosecond precision, spend start_time has millisecond precision
+spans.duration_ns and traces.duration_ns are nanoseconds; duration_ms preserves fractional milliseconds. Span and trace start_time has nanosecond precision, call start_time has millisecond precision
 {%- endblock %}
 
 {% block missing_spend -%}
@@ -193,13 +203,14 @@ Recorded spend by trace totals only requests whose spend_logs.trace_id is popula
 {%- endblock %}
 
 {% block spend_totals -%}
-Use spend_logs FINAL to collapse replacement rows before totals. Shared response IDs and multiple spans can multiply costs in joins; require one spend match per response ID and ownership before aggregating. Missing IDs or costs leave totals unknown
+calls collapses spend replacement rows before totals. Shared response IDs and multiple spans can multiply costs in joins; require one call match per response ID and ownership before aggregating. Missing IDs or costs leave totals unknown
 {%- endblock %}
 
 {% block trace_rollups -%}
-agent_traces_by_key uses SimpleAggregateFunction columns; group by TeamId, ApiKeyHash and TraceId, using min(StartTs), max(EndTs), sum(SpanCount) and groupUniqArrayArray(Models). Do not use Merge combinators
-Rollup counts and raw span reads can include repeated exports. Curated trace metrics select one copy per TeamId, ApiKeyHash, TraceId and SpanId, ordered by Timestamp, EngineReceivedMs, StatusMessage, Duration and StatusCode, before filtering status or aggregating
-AgentNames contains searchable agent labels, including SpanName for unnamed agents. AgentIdentities contains distinct labels from agent spans, and Frameworks contains observed framework names
+traces and spans select one copy per team_id, api_key_hash, trace_id and span_id, ordered by source Timestamp, EngineReceivedMs, StatusMessage, Duration and StatusCode, before filtering status or aggregating
+traces.root_status is the earliest physical root's status, or the earliest span's status when no root exists. has_error reports any canonical span error
+agent_span_count, llm_span_count and tool_span_count count normalized span types; agent_label_count counts distinct agent_names. span_input_tokens and span_output_tokens sum canonical span tokens. Curated trace summaries resolve graph wrappers and active calls, so their enriched invocation and token totals can differ
+The diagnostic agent_traces_by_key table uses SimpleAggregateFunction columns and counts repeated exports. Group by TeamId, ApiKeyHash and TraceId; do not use Merge combinators
 {%- endblock %}
 
 {% block sampling -%}

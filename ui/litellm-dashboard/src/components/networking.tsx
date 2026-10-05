@@ -118,7 +118,7 @@ import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
 import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
 import type { RunListRequest } from "./lens/traces/api";
-import type { SpanDetail, SpanErrorPage, Trace, TracePage } from "./lens/traces/types";
+import type { SpanDetail, SpanErrorPage, Trace, TraceMetadata, TracePage, TraceSpansPage } from "./lens/traces/types";
 import {
   createApiClient,
   deriveErrorMessage,
@@ -1965,6 +1965,7 @@ export const agentTraceListCall = async (
   const query = {
     start_ms: selection.window.startMs,
     end_ms: selection.window.endMs,
+    as_of_ms: selection.asOfMs,
     q: selection.q || undefined,
     sort_by: order.key,
     sort_dir: order.descending ? "desc" : "asc",
@@ -1976,38 +1977,34 @@ export const agentTraceListCall = async (
 export const sendOtlpTraceCall = async (accessToken: string, exportRequest: object): Promise<void> =>
   apiClient.post(`/v1/traces`, { accessToken, body: exportRequest });
 
-export const agentTraceCall = async (
-  accessToken: string,
-  traceId: string,
-  traceRef?: string,
-  cursor?: string | null,
-): Promise<Trace> =>
-  apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
-    accessToken,
-    query: { trace_ref: traceRef || undefined, cursor: cursor ?? undefined, page_size: 200 },
-  });
+export const agentTraceCall = async (accessToken: string, id: string, cursor?: string | null): Promise<Trace> => {
+  const path = `/v1/traces/${encodeURIComponent(id)}`;
+  const options = { accessToken };
+  const pageOptions = { accessToken, query: { cursor: cursor ?? undefined, page_size: 200 } };
+  const [metadata, page] = await Promise.all([
+    apiClient.get<TraceMetadata>(path, options),
+    apiClient.get<TraceSpansPage>(`${path}/spans`, pageOptions),
+  ]);
+  return { ...metadata, spans: page.data, next_cursor: page.next_cursor, spans_complete: page.next_cursor === null };
+};
 
-export const agentTraceSpanCall = async (
-  accessToken: string,
-  traceId: string,
-  spanId: string,
-  traceRef?: string,
-): Promise<SpanDetail> =>
-  apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
+export const agentTraceSpanCall = async (accessToken: string, id: string, spanId: string): Promise<SpanDetail> =>
+  apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(id)}/spans/${encodeURIComponent(spanId)}`, {
     accessToken,
-    query: { trace_ref: traceRef || undefined },
   });
 
 export const agentTraceSpanErrorCall = async (
   accessToken: string,
-  traceId: string,
+  id: string,
   spanId: string,
-  options: { traceRef?: string; cursor?: string | null },
-): Promise<SpanErrorPage> =>
-  apiClient.get<SpanErrorPage>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}/error`, {
-    accessToken,
-    query: { trace_ref: options.traceRef || undefined, cursor: options.cursor || undefined },
-  });
+  options: { cursor?: string | null },
+): Promise<SpanErrorPage> => {
+  const requestOptions = { accessToken, query: { cursor: options.cursor || undefined } };
+  return apiClient.get<SpanErrorPage>(
+    `/v1/traces/${encodeURIComponent(id)}/spans/${encodeURIComponent(spanId)}/error`,
+    requestOptions,
+  );
+};
 
 export const adminSpendLogsCall = async (accessToken: string) => {
   try {

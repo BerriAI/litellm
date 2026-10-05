@@ -70,7 +70,13 @@ const trace: Trace = {
     input_preview: '[{"role": "user", "content": "Customer acme-404 says billing is wrong."}]',
     start_time: "2026-09-30T06:43:52.928000+00:00",
     duration_ms: 1310,
-    status: "ok",
+    id: "t1",
+    root_status: "ok",
+    has_error: true,
+    agent_names: [],
+    frameworks: [],
+    resolution_limited: false,
+    spend: null,
     span_count: 3,
     agent_count: 1,
     agent_invocations: 1,
@@ -80,7 +86,7 @@ const trace: Trace = {
     input_tokens: 659,
     output_tokens: 60,
     models: ["claude-sonnet-4-5"],
-  } as Trace["summary"],
+  },
   agents: [],
   spans: [root, llm, failedTool],
 };
@@ -112,70 +118,48 @@ const details: Record<string, SpanDetail> = {
 
 const standardDetail: SpanDetail = {
   span_id: "llm1",
-  input: "raw input left unparsed",
-  output: "raw output left unparsed",
-  input_ui: { kind: "fields", fields: [{ key: "ticket_id", value: "T-981" }] },
-  output_ui: {
-    kind: "messages",
-    messages: [
-      {
-        role: "assistant",
-        content: "Refund approved for T-981.",
-        name: null,
-        tool_calls: [{ name: "issue_refund", arguments: '{"amount_usd": 40}' }],
-      },
-    ],
-  },
+  input: JSON.stringify({ ticket_id: "T-981" }),
+  output: JSON.stringify({
+    role: "assistant",
+    content: "Refund approved for T-981.",
+    tool_calls: [{ function: { name: "issue_refund", arguments: '{"amount_usd": 40}' } }],
+  }),
   attributes: {},
 };
 
 const textDetail: SpanDetail = {
   span_id: "llm1",
   input: "",
-  output: '{"answer": "all done"}',
-  output_ui: { kind: "text", text: "all done" },
+  output: "all done",
   attributes: {},
 };
 
 const workflowDetail: SpanDetail = {
   span_id: "root",
-  input: '{"init_state": {"config": {"timeout": null}}}',
-  input_ui: {
-    kind: "fields",
-    fields: [
-      { key: "init_state", value: '{"config": {"timeout": null, "workers": 4}}' },
-      { key: "start_event", value: "AgentWorkflowStartEvent()" },
-    ],
-  },
-  output: "StopEvent(result='done')",
-  output_ui: { kind: "text", text: "An **agent trace** records each step" },
+  input: JSON.stringify({
+    init_state: { config: { timeout: null, workers: 4 } },
+    start_event: "AgentWorkflowStartEvent()",
+  }),
+  output: "An **agent trace** records each step",
   attributes: {},
 };
 
 const langchainDetail: SpanDetail = {
   span_id: "root",
   input: "",
-  output: '{"messages": []}',
-  output_ui: {
-    kind: "fields",
-    fields: [
-      {
-        key: "messages",
-        value: JSON.stringify([
-          { type: "human", data: { content: "What is an agent trace?" } },
-          { type: "ai", data: { content: "A record of every step an agent took." } },
-        ]),
-      },
+  output: JSON.stringify({
+    messages: [
+      { type: "human", data: { content: "What is an agent trace?" } },
+      { type: "ai", data: { content: "A record of every step an agent took." } },
     ],
-  },
+  }),
   attributes: {},
 };
 
 const failedToolMessageDetail: SpanDetail = {
   span_id: "tool1",
   input: '{"customer_id":"acme-404"}',
-  output: "raw tool output",
-  output_ui: { kind: "messages", messages: [{ role: "tool", content: "permission denied: /etc/shadow" }] },
+  output: JSON.stringify([{ role: "tool", content: "permission denied: /etc/shadow" }]),
   attributes: {},
 };
 
@@ -210,7 +194,7 @@ describe("DetailPane", () => {
     expect(screen.getByRole("tab", { name: "Attributes" })).toBeInTheDocument();
     expect(await screen.findByText("Customer acme-404 says billing is wrong.")).toBeVisible();
     expect(screen.getAllByText("get_customer_plan").length).toBeGreaterThan(0);
-    expect(vi.mocked(agentTraceSpanCall)).toHaveBeenCalledWith("sk-test", "t1", "llm1", undefined);
+    expect(vi.mocked(agentTraceSpanCall)).toHaveBeenCalledWith("sk-test", "t1", "llm1");
   });
 
   it("keeps the output visible when a step contains a long input conversation", async () => {
@@ -222,7 +206,6 @@ describe("DetailPane", () => {
     vi.mocked(agentTraceSpanCall).mockResolvedValue({
       ...details.root,
       input: JSON.stringify(messages),
-      input_ui: { kind: "messages", messages },
     });
     renderPane(spanRow(root));
     const input = await screen.findByRole("button", { name: "Input 120 messages" });
@@ -285,14 +268,14 @@ describe("DetailPane", () => {
     expect(pane).toHaveTextContent("TimeoutError('slow')");
   });
 
-  it("'Copy step' copies a curl for just this span as Markdown", async () => {
+  it("'Copy step' copies a curl for just this span", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     renderPane(spanRow(llm));
     await user.click(screen.getByRole("button", { name: "Copy step" }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
-    expect(writeText.mock.calls[0][0]).toContain("http://proxy.test/v1/traces/t1?format=md&span_id=llm1");
+    expect(writeText.mock.calls[0][0]).toContain("http://proxy.test/v1/traces/t1/spans/llm1");
   });
 
   it("renders the assistant tool call as a card and expands a long argument on click", async () => {
@@ -326,19 +309,17 @@ describe("DetailPane", () => {
     expect(within(output).getAllByText("get_customer_plan", { ignore: "[inert] *" })).not.toHaveLength(0);
   });
 
-  it("renders the standard input_ui / output_ui instead of re-parsing the raw payload", async () => {
+  it("renders fields and assistant tool calls from the raw payload", async () => {
     vi.mocked(agentTraceSpanCall).mockResolvedValue(standardDetail);
     renderPane(spanRow(llm));
     const input = await screen.findByRole("region", { name: /^Input/ });
     expect(input).toHaveTextContent("ticket_id");
     expect(input).toHaveTextContent("T-981");
-    expect(input).not.toHaveTextContent("raw input left unparsed");
     const output = screen.getByRole("region", { name: "Output" });
     expect(output).toHaveTextContent("Assistant");
     expect(output).toHaveTextContent("Refund approved for T-981.");
     expect(output).toHaveTextContent("issue_refund");
     expect(output).toHaveTextContent("amount_usd");
-    expect(output).not.toHaveTextContent("raw output left unparsed");
   });
 
   it("keeps the failed-tool styling when a tool's output arrives as a single message", async () => {
@@ -350,7 +331,7 @@ describe("DetailPane", () => {
     expect(output).not.toHaveTextContent("Assistant");
   });
 
-  it("shows a text output_ui as its plain text", async () => {
+  it("shows plain text output", async () => {
     vi.mocked(agentTraceSpanCall).mockResolvedValue(textDetail);
     renderPane(spanRow(llm));
     const output = await screen.findByRole("region", { name: "Output" });
@@ -358,7 +339,7 @@ describe("DetailPane", () => {
     expect(output).not.toHaveTextContent("answer");
   });
 
-  it("unfolds JSON-encoded field values into a nested tree and shows the raw payload on request", async () => {
+  it("unfolds JSON fields into a nested tree and shows the raw payload on request", async () => {
     const user = userEvent.setup();
     vi.mocked(agentTraceSpanCall).mockResolvedValue(workflowDetail);
     renderPane(spanRow(root));
@@ -373,7 +354,7 @@ describe("DetailPane", () => {
     const output = screen.getByRole("region", { name: "Output" });
     expect(within(output).getByText("agent trace", { selector: "strong" })).toBeVisible();
     await user.click(within(output).getByRole("radio", { name: "Raw" }));
-    expect(within(output).getByText("StopEvent(result='done')", { selector: "pre" })).toBeVisible();
+    expect(within(output).getByText("An **agent trace** records each step", { selector: "pre" })).toBeVisible();
     expect(within(output).queryByText("agent trace", { selector: "strong" })).not.toBeInTheDocument();
     expect(within(input).getByText("AgentWorkflowStartEvent()")).toBeVisible();
   });

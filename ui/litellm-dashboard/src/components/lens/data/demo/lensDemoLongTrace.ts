@@ -82,6 +82,7 @@ export function withReleaseCases(run: { trace: Trace; details: SpanDetail[] }) {
     llm_calls: models.length,
     tool_calls: caseCount,
     error_count: failedCases.size,
+    has_error: failedCases.size > 0,
     input_tokens: models.reduce((sum, span) => sum + span.input_tokens, 0),
     output_tokens: models.reduce((sum, span) => sum + span.output_tokens, 0),
     spend: models.reduce((sum, span) => sum + (span.spend ?? 0), 0),

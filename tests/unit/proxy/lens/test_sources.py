@@ -32,14 +32,16 @@ REF: Final = "A" * 64
 
 def summary(trace_ref: str, trace_id: str = "trace", span_count: int = 1) -> TraceSummary:
     return TraceSummary(
+        resolution_limited=False,
         trace_id=trace_id,
-        trace_ref=trace_ref,
+        id=trace_ref,
         name="run",
         service="svc",
         input_preview="",
         start_time="2026-01-01T00:00:00Z",
         duration_ms=1.0,
-        status="ok",
+        root_status="ok",
+        has_error=False,
         span_count=span_count,
         agent_count=0,
         agent_invocations=0,
@@ -49,6 +51,8 @@ def summary(trace_ref: str, trace_id: str = "trace", span_count: int = 1) -> Tra
         input_tokens=0,
         output_tokens=0,
         models=(),
+        agent_names=(),
+        frameworks=(),
         spend=None,
     )
 
@@ -86,7 +90,7 @@ class FakeStorage:
     listed: list[tuple[QueryScope, str, str | None, int, RunOrder, tuple[str, ...]]] = field(default_factory=list)
 
     def _matching(self, q: str, trace_refs: Sequence[str]) -> list[TraceSummary]:
-        return [run for run in self.runs if (not trace_refs or run.get("trace_ref") in trace_refs) and q in run["name"]]
+        return [run for run in self.runs if (not trace_refs or run["id"] in trace_refs) and q in run["name"]]
 
     async def list_traces(
         self,
@@ -100,11 +104,12 @@ class FakeStorage:
         trace_refs: Sequence[str] = (),
     ) -> TracePage:
         self.listed.append((scope, q, cursor, limit, order, tuple(trace_refs)))
-        ordered: Final = sorted(self._matching(q, trace_refs), key=lambda run: run.get("trace_ref", ""))
-        after: Final = [run for run in ordered if cursor is None or run.get("trace_ref", "") > cursor][:limit]
+        ordered: Final = sorted(self._matching(q, trace_refs), key=lambda run: run["id"])
+        after: Final = [run for run in ordered if cursor is None or run["id"] > cursor][:limit]
         return TracePage(
+            window={"start_ms": start_ms, "end_ms": end_ms, "as_of_ms": max(end_ms, 0)},
             data=tuple(after),
-            next_cursor=after[-1].get("trace_ref") if len(after) == limit else None,
+            next_cursor=after[-1]["id"] if len(after) == limit else None,
         )
 
     async def count_traces(
@@ -277,12 +282,49 @@ async def test_content_pages_forty_spans_at_a_time_in_trace_order() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("quote", "found"), (("time", True), ("boom", True), ("absent", False)))
-async def test_evidence_must_appear_in_the_span_input_output_or_error(quote: str, found: bool) -> None:
-    storage: Final = FakeStorage(texts={("span", "output"): "timeout", ("span", "error"): "boom"})
+@pytest.mark.parametrize(
+    ("quote", "found", "input_text"),
+    (
+        ("time", True, "hello"),
+        ("boom", True, "hello"),
+        ("Input: hello", True, "hello"),
+        ("Status: error boom", True, "hello"),
+        ("hello\nOutput: timeout", True, "hello"),
+        ("timeout\nStatus: error boom", True, "hello"),
+        ("Status: ok boom", False, "hello"),
+        ("Input: absent", False, "hello"),
+        ("absent", False, "hello"),
+        ("x" * 1500 + "hello\nOutput: timeout\nStatus: error boom", True, "x" * (2 * BUDGET) + "hello"),
+        ("x" * 1500 + "hello\nOutput: timeout\nStatus: ok boom", False, "x" * (2 * BUDGET) + "hello"),
+    ),
+    ids=(
+        "raw_output",
+        "raw_error",
+        "input_label",
+        "error_status",
+        "input_output_boundary",
+        "output_status_boundary",
+        "wrong_status",
+        "missing_input",
+        "missing_quote",
+        "long_boundary",
+        "wrong_long_status",
+    ),
+)
+async def test_evidence_must_appear_in_the_span_input_output_or_error(quote: str, found: bool, input_text: str) -> None:
+    storage: Final = FakeStorage(
+        spans=(span("span", status="error"),),
+        texts={("span", "input"): input_text, ("span", "output"): "timeout", ("span", "error"): "boom"},
+    )
     execution: Final = Execution(id=execution_id(REF, "trace"), trace_id="trace", trace_ref=REF)
     evidence: Final = Evidence(execution_id=execution.id, span_id="span", quote=quote)
-    assert await SourceReader(storage).verify_evidence(Scope(all_teams=True), execution, evidence) is found
+    reader: Final = SourceReader(storage)
+    if found:
+        shown: Final = await reader.content(
+            Scope(all_teams=True), execution, offset=max(len(input_text) - BUDGET // 2, 0)
+        )
+        assert quote in shown.parts[0].content
+    assert await reader.verify_evidence(Scope(all_teams=True), execution, evidence) is found
 
 
 @pytest.mark.parametrize(

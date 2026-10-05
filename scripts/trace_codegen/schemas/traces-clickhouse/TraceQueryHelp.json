@@ -77,7 +77,7 @@
           "type": "string"
         },
         "table": {
-          "$ref": "#/$defs/TraceTableName"
+          "$ref": "#/$defs/TraceQueryTableName"
         },
         "truncated": {
           "type": "boolean"
@@ -90,22 +90,6 @@
         "truncated",
         "discovery_sql",
         "scope"
-      ],
-      "type": "object"
-    },
-    "TraceQueryColumn": {
-      "additionalProperties": true,
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "type": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "type"
       ],
       "type": "object"
     },
@@ -162,7 +146,7 @@
           "type": "string"
         },
         "table": {
-          "$ref": "#/$defs/TraceTableName"
+          "$ref": "#/$defs/TraceQueryTableName"
         },
         "truncated": {
           "type": "boolean"
@@ -220,7 +204,7 @@
           "type": "string"
         },
         "table": {
-          "$ref": "#/$defs/TraceTableName"
+          "$ref": "#/$defs/TraceQueryTableName"
         },
         "type": {
           "type": "string"
@@ -264,12 +248,12 @@
       "properties": {
         "columns": {
           "items": {
-            "$ref": "#/$defs/TraceQueryColumn"
+            "$ref": "#/$defs/TraceSQLColumn"
           },
           "type": "array"
         },
         "name": {
-          "$ref": "#/$defs/TraceTableName"
+          "$ref": "#/$defs/TraceQueryTableName"
         }
       },
       "required": [
@@ -278,13 +262,32 @@
       ],
       "type": "object"
     },
-    "TraceTableName": {
+    "TraceQueryTableName": {
       "enum": [
+        "traces",
+        "spans",
+        "calls",
         "otel_traces",
         "agent_traces_by_key",
         "spend_logs"
       ],
       "type": "string"
+    },
+    "TraceSQLColumn": {
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "type": "object"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

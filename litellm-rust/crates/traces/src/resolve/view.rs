@@ -138,7 +138,7 @@ pub fn resolve_trace(
     rows: &[SpanRow],
     spend: &[SpendRow],
 ) -> Option<Trace> {
-    let first = rows.first()?;
+    let first = rows.iter().min_by_key(|row| (row.start_ns, &row.span_id))?;
     let resolution = Resolution::new(rows, spend);
     let trace_start_ns = rows.iter().map(|row| row.start_ns).min()?;
     let trace_end_ns = rows
@@ -148,9 +148,17 @@ pub fn resolve_trace(
     let spans: Vec<Span> = (0..rows.len())
         .map(|index| span(&resolution, index, trace_start_ns))
         .collect();
-    let root = (0..rows.len())
-        .find(|index| resolution.graph.is_root(*index))
-        .unwrap_or_default();
+    let root = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.parent_span_id.is_empty())
+        .min_by_key(|(_, row)| (row.start_ns, &row.span_id))
+        .or_else(|| {
+            rows.iter()
+                .enumerate()
+                .min_by_key(|(_, row)| (row.start_ns, &row.span_id))
+        })
+        .map(|(index, _)| index)?;
     let agents = agents(&resolution);
     let calls = &resolution.model_calls;
     let counted: Vec<&SpanRow> = if calls.is_empty() {
@@ -158,16 +166,14 @@ pub fn resolve_trace(
     } else {
         calls.iter().map(|call| &rows[*call]).collect()
     };
-    let first_input = spans
+    let first_input = rows
         .iter()
-        .zip(rows)
-        .enumerate()
-        .filter(|(_, (span, _))| {
-            !span.input_preview.is_empty()
-                && matches!(span.kind, ObservationType::Agent | ObservationType::Llm)
+        .filter(|row| {
+            !row.input_preview.is_empty()
+                && matches!(row.kind, ObservationType::Agent | ObservationType::Llm)
         })
-        .min_by_key(|(index, (_, row))| (row.start_ns, *index))
-        .map(|(_, (span, _))| span.input_preview.clone())
+        .min_by_key(|row| (row.start_ns, &row.span_id))
+        .map(|row| row.input_preview.clone())
         .unwrap_or_default();
     let summary = TraceSummary {
         resolution_limited: false,
@@ -185,7 +191,8 @@ pub fn resolve_trace(
         input_preview: optional(&spans[root].input_preview).unwrap_or(first_input),
         start_time: iso_time(trace_start_ns.div_euclid(1_000_000)),
         duration_ms: (trace_end_ns - i128::from(trace_start_ns)) as f64 / NANOS_PER_MS,
-        status: spans[root].status,
+        status: rows[root].status,
+        has_error: spans.iter().any(|span| span.status == SpanStatus::Error),
         span_count: spans.len() as u64,
         agent_count: agents.len() as u64,
         agent_invocations: agents.iter().map(|agent| agent.invocations).sum(),
@@ -226,6 +233,7 @@ pub fn listed_summary(row: &RunRow) -> TraceSummary {
         start_time: iso_time(row.start_ms),
         duration_ms: row.duration_ns as f64 / NANOS_PER_MS,
         status: row.status,
+        has_error: row.error_count > 0,
         span_count: row.span_count,
         agent_count: row.agent_count,
         agent_invocations: if row.agent_invocations == 0 {

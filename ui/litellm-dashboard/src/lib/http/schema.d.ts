@@ -22605,11 +22605,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Agent Traces */
-        get: operations["list_agent_traces_v1_traces_get"];
+        /** @description Search trace summaries. All clauses in q must match. Free text searches trace_id, name and input preview as case-insensitive substrings. key:value clauses match whole values, with * as a wildcard; double quotes group spaces or literal colons. Prefix keyed clauses with - to exclude matches. Unknown keys, missing values and malformed quoting return invalid_request. name describes the physical root; input searches its preview, falling back to the first nonempty agent or LLM preview; agent, model and attr.<key> match any span. root_status describes the root, has_error means any failed span. The default window is the last 24 hours. First-page ingestion timestamp cutoff is retained by the cursor. This excludes later-stamped exports, not delayed commits stamped before the cutoff, and is not a database transaction snapshot. Repeat q and sorting on continuation; omitted bounds reuse the cursor window. Sort ties use the canonical id in the same direction. The server may return fewer than page_size items to respect response limits. Continue until next_cursor is null. Span-derived metrics use the cutoff; spend enrichment is best effort */
+        get: operations["trace_list"];
         put?: never;
-        /** Ingest Otlp Traces */
-        post: operations["ingest_otlp_traces_v1_traces_post"];
+        /** @description Export OTLP traces as JSON or protobuf, optionally gzip compressed. The OTLP protocol defines payloads and responses: https://opentelemetry.io/docs/specs/otlp/. Ownership is derived from authentication, never payload attributes */
+        post: operations["trace_ingest"];
         delete?: never;
         options?: never;
         head?: never;
@@ -22623,8 +22623,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Agent Trace Histogram */
-        get: operations["agent_trace_histogram_v1_traces_histogram_get"];
+        /** @description Count matching traces in equal-width [start_ms,end_ms) buckets. Reuse the list window and as_of_ms for matching span-derived membership. failed counts traces with any failed span. Agent groups count successful traces under their alphabetically first agent name, or service when no agent name exists */
+        get: operations["trace_histogram"];
         put?: never;
         post?: never;
         delete?: never;
@@ -22642,8 +22642,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Query Agent Traces */
-        post: operations["query_agent_traces_v1_traces_query_post"];
+        /** @description Execute read-only ClickHouse SQL under authenticated row policies and fixed resource limits. Bind params with native {name:Type} placeholders. Results are always ClickHouse JSON; 64-bit integers may be strings. SQL callers control ORDER BY, LIMIT and keyset continuation. Exceeding a resource limit fails instead of returning partial success */
+        post: operations["trace_query"];
         delete?: never;
         options?: never;
         head?: never;
@@ -22657,8 +22657,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Help Agent Trace Queries */
-        get: operations["help_agent_trace_queries_v1_traces_query_help_get"];
+        /** @description Discover current SQL schema, logical views, scoped examples and resource limits */
+        get: operations["trace_query_help"];
         put?: never;
         post?: never;
         delete?: never;
@@ -22674,8 +22674,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Agent Trace Values */
-        get: operations["agent_trace_values_v1_traces_values__field__get"];
+        /** @description Return the most common distinct values among matching traces. contains is case-insensitive. limit is a top-K suggestion limit, not a pagination size. Reuse list window and as_of_ms for matching membership */
+        get: operations["trace_values"];
         put?: never;
         post?: never;
         delete?: never;
@@ -22684,15 +22684,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/traces/{trace_id}": {
+    "/v1/traces/{id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Agent Trace */
-        get: operations["get_agent_trace_v1_traces__trace_id__get"];
+        /** @description Read summary and agent metadata by canonical id. trace_id is the original OTLP id, which can repeat across ownership scopes. Spans are read through the separate spans collection */
+        get: operations["trace_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -22701,15 +22701,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/traces/{trace_id}/spans/{span_id}": {
+    "/v1/traces/{id}/spans": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Agent Trace Span */
-        get: operations["get_agent_trace_span_v1_traces__trace_id__spans__span_id__get"];
+        /** @description Read a bounded page of canonical spans. The cursor pins the graph version. Continue with the same page_size; a changed graph or expired reconstruction returns trace_changed and the traversal must restart */
+        get: operations["trace_spans"];
         put?: never;
         post?: never;
         delete?: never;
@@ -22718,15 +22718,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/traces/{trace_id}/spans/{span_id}/error": {
+    "/v1/traces/{id}/spans/{span_id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Agent Trace Span Error */
-        get: operations["get_agent_trace_span_error_v1_traces__trace_id__spans__span_id__error_get"];
+        /** @description Read raw input, output and attributes for one span. UI rendering is performed by the client */
+        get: operations["trace_span"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/traces/{id}/spans/{span_id}/error": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Read bounded diagnostic text pages. Cursor validation detects content changes and requires restarting the traversal */
+        get: operations["trace_error"];
         put?: never;
         post?: never;
         delete?: never;
@@ -25945,21 +25962,19 @@ export interface components {
             /** Updated By */
             updated_by: string;
         };
-        /** AgentNode */
+        /** @description One distinct agent in a trace: 200 invocations of `researcher` are one node. */
         AgentNode: {
-            /** Duration Ms */
+            /** Format: double */
             duration_ms: number;
-            /** Invocations */
+            /** Format: uint64 */
             invocations: number;
-            /** Llm Calls */
+            /** Format: uint64 */
             llm_calls: number;
-            /** Name */
             name: string;
-            /** Parent Agent */
             parent_agent: string | null;
-            /** Spend */
+            /** Format: double */
             spend: number | null;
-            /** Tool Calls */
+            /** Format: uint64 */
             tool_calls: number;
         };
         /** AgentObjectPermission */
@@ -26061,11 +26076,9 @@ export interface components {
             /** Updated By */
             updated_by?: string | null;
         };
-        /** AgentRuns */
         AgentRuns: {
-            /** Agent */
             agent: string;
-            /** Runs */
+            /** Format: uint64 */
             runs: number;
         };
         /**
@@ -33125,17 +33138,16 @@ export interface components {
              */
             vault_token?: string | null;
         };
-        /** HistogramBucket */
         HistogramBucket: {
-            /** Agents */
+            /** @description Runs that did not fail, by their alphabetically first agent label, or service when unlabelled. */
             agents: components["schemas"]["AgentRuns"][];
-            /** End Ms */
+            /** Format: int64 */
             end_ms: number;
-            /** Failed */
+            /** Format: uint64 */
             failed: number;
-            /** Start Ms */
+            /** Format: int64 */
             start_ms: number;
-            /** Total */
+            /** Format: uint64 */
             total: number;
         };
         /** Hyperparameters */
@@ -37787,6 +37799,8 @@ export interface components {
             /** Last Authenticated At */
             last_authenticated_at?: string | null;
         };
+        /** @enum {string} */
+        MapValueType: "String";
         /**
          * Mcp
          * @description Give the model access to additional tools via remote Model Context Protocol
@@ -38081,6 +38095,8 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** @enum {string} */
+        MetadataValueType: "array" | "boolean" | "integer" | "null" | "number" | "object" | "string";
         /** MetricWithMetadata */
         MetricWithMetadata: {
             /** Api Key Breakdown */
@@ -40547,6 +40563,7 @@ export interface components {
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
+        PathPart: string | number;
         /**
          * PendingSafetyCheck
          * @description A pending safety check for the computer call.
@@ -44869,6 +44886,11 @@ export interface components {
             /** Run Id */
             run_id: string;
         };
+        /**
+         * RunField
+         * @enum {string}
+         */
+        RunField: "name" | "agent" | "root_status" | "has_error" | "model" | "input" | "trace_id" | "service" | "team";
         /** RunRequest */
         RunRequest: {
             /** Agent Name */
@@ -44881,10 +44903,13 @@ export interface components {
             /** Start */
             start?: string | null;
         };
-        /** RunValues */
+        /**
+         * RunValues
+         * @description Distinct values of one run field, most common first.
+         */
         RunValues: {
-            /** Values */
             values: string[];
+            window: components["schemas"]["TraceQueryWindow"];
         };
         /** SCIMEnterpriseUser */
         SCIMEnterpriseUser: {
@@ -45811,77 +45836,51 @@ export interface components {
             /** Version */
             version?: string;
         };
-        /** Span */
         Span: {
-            /** Agent */
             agent: string;
-            /** Duration Ms */
+            /** Format: double */
             duration_ms: number;
-            /** Error */
             error: string | null;
-            /** Error Truncated */
             error_truncated: boolean;
-            /** Framework */
             framework: string;
-            /** Input Preview */
             input_preview: string;
-            /** Input Tokens */
+            /** Format: uint32 */
             input_tokens: number;
-            /** Litellm Request Id */
             litellm_request_id: string | null;
-            /** Model */
             model: string | null;
-            /** Name */
             name: string;
-            /** Output Tokens */
+            /** Format: uint32 */
             output_tokens: number;
-            /** Parent Span Id */
             parent_span_id: string | null;
-            /** Span Id */
             span_id: string;
-            /** Spend */
+            /** Format: double */
             spend: number | null;
-            /** Start Offset Ms */
+            /** Format: double */
             start_offset_ms: number;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "ok" | "error" | "unset";
-            /**
-             * Type
-             * @enum {string}
-             */
-            type: "agent" | "llm" | "tool" | "chain" | "framework" | "retriever" | "embedding" | "reranker" | "guardrail" | "evaluator" | "prompt" | "decision";
+            status: components["schemas"]["SpanStatus"];
+            type: components["schemas"]["SpanType"];
         };
         /** SpanDetail */
         SpanDetail: {
-            /** Attributes */
             attributes: {
                 [key: string]: string;
             };
-            /** Input */
             input: string;
-            /** Input Ui */
-            input_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
-            /** Output */
             output: string;
-            /** Output Ui */
-            output_ui: components["schemas"]["UIMessages"] | components["schemas"]["UIFields"] | components["schemas"]["UIText"];
-            /** Span Id */
             span_id: string;
         };
         /** SpanErrorPage */
         SpanErrorPage: {
-            /** Message */
             message: string;
-            /** Next Cursor */
             next_cursor: string | null;
-            /** Span Id */
             span_id: string;
-            /** Total Chars */
+            /** Format: uint64 */
             total_chars: number;
         };
+        /** @enum {string} */
+        SpanStatus: "ok" | "error" | "unset";
+        /** @enum {string} */
+        SpanType: "agent" | "llm" | "tool" | "chain" | "framework" | "retriever" | "embedding" | "reranker" | "guardrail" | "evaluator" | "prompt" | "decision";
         /** SpendAnalyticsPaginatedResponse */
         SpendAnalyticsPaginatedResponse: {
             metadata?: components["schemas"]["DailySpendMetadata"];
@@ -46016,6 +46015,7 @@ export interface components {
              */
             total_tokens: number;
         };
+        SqlParameter: string | number | boolean | null | string[];
         /** StandardLoggingHeuristicV2Forecast */
         StandardLoggingHeuristicV2Forecast: {
             /** Predicted Tier */
@@ -47723,27 +47723,69 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** Trace */
-        Trace: {
-            /** Agents */
+        /** TraceErrorPageRequest */
+        TraceErrorPageRequest: {
+            cursor?: string | null;
+        };
+        /**
+         * TraceHistogram
+         * @description Matching runs per equal-width slice of the window.
+         */
+        TraceHistogram: {
+            buckets: components["schemas"]["HistogramBucket"][];
+            window: components["schemas"]["TraceQueryWindow"];
+        };
+        /** TraceHistogramRequest */
+        TraceHistogramRequest: {
+            /** Format: uint64 */
+            as_of_ms?: number | null;
+            /**
+             * Format: uint16
+             * @default 60
+             */
+            buckets: number;
+            /** Format: int64 */
+            end_ms?: number | null;
+            /** @default  */
+            q: string;
+            /** Format: int64 */
+            start_ms?: number | null;
+        };
+        TraceInvalidParam: {
+            location: string;
+            reason: string;
+        };
+        /** TraceListRequest */
+        TraceListRequest: {
+            /** Format: uint64 */
+            as_of_ms?: number | null;
+            cursor?: string | null;
+            /** Format: int64 */
+            end_ms?: number | null;
+            /**
+             * Format: uint16
+             * @default 50
+             */
+            page_size: number;
+            /** @default  */
+            q: string;
+            sort_by?: components["schemas"]["TraceSortField"];
+            sort_dir?: components["schemas"]["TraceSortDirection"];
+            /** Format: int64 */
+            start_ms?: number | null;
+        };
+        /** TraceMetadata */
+        TraceMetadata: {
             agents: components["schemas"]["AgentNode"][];
-            /** Next Cursor */
-            next_cursor?: string | null;
-            /** Spans */
-            spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
         };
-        /** TraceHistogram */
-        TraceHistogram: {
-            /** Buckets */
-            buckets: components["schemas"]["HistogramBucket"][];
-        };
+        /** TraceNoQueryRequest */
+        TraceNoQueryRequest: Record<string, never>;
         /** TracePage */
         TracePage: {
-            /** Data */
             data: components["schemas"]["TraceSummary"][];
-            /** Next Cursor */
             next_cursor: string | null;
+            window: components["schemas"]["TraceQueryWindow"];
         };
         /** TracePart */
         TracePart: {
@@ -47768,225 +47810,200 @@ export interface components {
              */
             truncated: boolean;
         };
-        /** TraceQueryAttributeField */
-        TraceQueryAttributeField: {
-            /** Expression */
-            expression: string;
-            /** Key */
-            key: string;
-            /**
-             * Type
-             * @constant
-             */
-            type: "String";
+        /** TraceProblem */
+        TraceProblem: {
+            code: components["schemas"]["TraceProblemCode"];
+            /** Format: uint32 */
+            database_code?: number | null;
+            detail: string;
+            /** @default [] */
+            errors: components["schemas"]["TraceInvalidParam"][];
+            /** Format: uint16 */
+            status: number;
+            title: string;
+            type: string;
         };
-        /** TraceQueryAttributes */
+        /** @enum {string} */
+        TraceProblemCode: "invalid_request" | "unauthorized" | "forbidden" | "not_found" | "trace_changed" | "too_large" | "unavailable" | "query_rejected" | "query_limit_exceeded" | "query_unavailable" | "internal_error";
+        TraceQueryAttributeField: {
+            expression: string;
+            key: string;
+            type: components["schemas"]["MapValueType"];
+        };
         TraceQueryAttributes: {
-            /** Column */
             column: string;
-            /** Discovery Sql */
             discovery_sql: string;
-            /** Error */
             error?: string | null;
-            /** Fields */
             fields: components["schemas"]["TraceQueryAttributeField"][];
-            /** Scope */
             scope: string;
-            /**
-             * Table
-             * @enum {string}
-             */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
-            /** Truncated */
+            table: components["schemas"]["TraceQueryTableName"];
             truncated: boolean;
         };
-        /** TraceQueryColumn */
-        TraceQueryColumn: {
-            /** Name */
-            name: string;
-            /** Type */
-            type: string;
-        } & {
-            [key: string]: unknown;
-        };
-        /** TraceQueryExample */
         TraceQueryExample: {
-            /** Name */
             name: string;
-            /** Sql */
             sql: string;
         };
         /** TraceQueryHelp */
         TraceQueryHelp: {
-            /** Access */
             access: string;
-            /** Attributes */
             attributes: components["schemas"]["TraceQueryAttributes"][];
-            /** Dialect */
             dialect: string;
-            /** Examples */
             examples: components["schemas"]["TraceQueryExample"][];
-            /** Gotchas */
             gotchas: string[];
-            /** Guide */
             guide: string;
             metadata: components["schemas"]["TraceQueryMetadata"];
-            /** Normalized Fields */
             normalized_fields: components["schemas"]["TraceQueryNormalizedField"][];
-            /** Relationships */
             relationships: components["schemas"]["TraceQueryRelationship"][];
-            /** Response */
             response: string;
-            /** Tables */
             tables: components["schemas"]["TraceQueryTable"][];
         };
-        /** TraceQueryMetadata */
         TraceQueryMetadata: {
-            /** Column */
             column: string;
-            /** Error */
             error?: string | null;
-            /** Fields */
             fields: components["schemas"]["TraceQueryMetadataField"][];
-            /** Invalid Json Rows */
+            /** Format: uint */
             invalid_json_rows: number;
-            /** Sample Sql */
             sample_sql: string;
-            /** Sampled Rows */
+            /** Format: uint */
             sampled_rows: number;
-            /** Scope */
             scope: string;
-            /**
-             * Table
-             * @enum {string}
-             */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
-            /** Truncated */
+            table: components["schemas"]["TraceQueryTableName"];
             truncated: boolean;
         };
-        /** TraceQueryMetadataField */
         TraceQueryMetadataField: {
-            /** Expression */
             expression: string;
-            /** Path */
-            path: (string | number)[];
-            /** Types */
-            types: ("array" | "boolean" | "integer" | "null" | "number" | "object" | "string")[];
+            path: components["schemas"]["PathPart"][];
+            types: components["schemas"]["MetadataValueType"][];
         };
-        /** TraceQueryNormalizedField */
         TraceQueryNormalizedField: {
-            /** Column */
             column: string;
-            /** Meaning */
             meaning: string;
-            /** Name */
             name: string;
-            /**
-             * Table
-             * @enum {string}
-             */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
-            /** Type */
+            table: components["schemas"]["TraceQueryTableName"];
             type: string;
         };
-        /** TraceQueryRelationship */
         TraceQueryRelationship: {
-            /** Additional Predicates */
             additional_predicates: string;
-            /** Left */
             left: string;
-            /** Meaning */
             meaning: string;
-            /** Right */
             right: string;
         };
         /** TraceQueryRequest */
         TraceQueryRequest: {
-            /** Sql */
+            /** @default {} */
+            params: {
+                [key: string]: components["schemas"]["SqlParameter"];
+            };
             sql: string;
         };
-        /** TraceQueryStatistics */
         TraceQueryStatistics: {
-            /** Bytes Read */
-            bytes_read: number | string;
-            /** Elapsed */
+            bytes_read: components["schemas"]["UnsignedCount"];
+            /** Format: double */
             elapsed: number;
-            /** Rows Read */
-            rows_read: number | string;
+            rows_read: components["schemas"]["UnsignedCount"];
         } & {
             [key: string]: unknown;
         };
-        /** TraceQueryTable */
         TraceQueryTable: {
-            /** Columns */
-            columns: components["schemas"]["TraceQueryColumn"][];
-            /**
-             * Name
-             * @enum {string}
-             */
-            name: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            columns: components["schemas"]["TraceSQLColumn"][];
+            name: components["schemas"]["TraceQueryTableName"];
+        };
+        /** @enum {string} */
+        TraceQueryTableName: "traces" | "spans" | "calls" | "otel_traces" | "agent_traces_by_key" | "spend_logs";
+        TraceQueryWindow: {
+            /** Format: uint64 */
+            as_of_ms: number;
+            /** Format: int64 */
+            end_ms: number;
+            /** Format: int64 */
+            start_ms: number;
+        };
+        TraceSQLColumn: {
+            name: string;
+            type: string;
+        } & {
+            [key: string]: unknown;
         };
         /** TraceSQLResponse */
         TraceSQLResponse: {
-            /** Data */
             data: {
-                [key: string]: components["schemas"]["JsonValue"];
+                [key: string]: unknown;
             }[];
-            /** Meta */
-            meta: components["schemas"]["TraceQueryColumn"][];
-            /** Rows */
-            rows: number | string;
+            meta: components["schemas"]["TraceSQLColumn"][];
+            rows: components["schemas"]["UnsignedCount"];
             statistics: components["schemas"]["TraceQueryStatistics"];
         } & {
             [key: string]: unknown;
         };
-        /** TraceSummary */
-        TraceSummary: {
-            /** Agent Count */
-            agent_count: number;
-            /** Agent Invocations */
-            agent_invocations: number;
-            /** Agent Names */
-            agent_names?: string[];
-            /** Duration Ms */
-            duration_ms: number;
-            /** Error Count */
-            error_count: number;
-            /** Frameworks */
-            frameworks?: string[];
-            /** Input Preview */
-            input_preview: string;
-            /** Input Tokens */
-            input_tokens: number;
-            /** Llm Calls */
-            llm_calls: number;
-            /** Models */
-            models: string[];
-            /** Name */
-            name: string;
-            /** Output Tokens */
-            output_tokens: number;
-            /** Resolution Limited */
-            resolution_limited?: boolean;
-            /** Service */
-            service: string;
-            /** Span Count */
-            span_count: number;
-            /** Spend */
-            spend: number | null;
-            /** Start Time */
-            start_time: string;
+        /** @enum {string} */
+        TraceSortDirection: "asc" | "desc";
+        /** @enum {string} */
+        TraceSortField: "start_ms" | "duration_ms" | "span_count" | "error_count";
+        /** TraceSpanPageRequest */
+        TraceSpanPageRequest: {
+            cursor?: string | null;
             /**
-             * Status
-             * @enum {string}
+             * Format: uint16
+             * @default 100
              */
-            status: "ok" | "error" | "unset";
-            /** Tool Calls */
+            page_size: number;
+        };
+        /** TraceSpansPage */
+        TraceSpansPage: {
+            data: components["schemas"]["Span"][];
+            next_cursor: string | null;
+        };
+        TraceSummary: {
+            /** Format: uint64 */
+            agent_count: number;
+            /** Format: uint64 */
+            agent_invocations: number;
+            agent_names: string[];
+            /** Format: double */
+            duration_ms: number;
+            /** Format: uint64 */
+            error_count: number;
+            frameworks: string[];
+            has_error: boolean;
+            id: string;
+            input_preview: string;
+            /** Format: uint64 */
+            input_tokens: number;
+            /** Format: uint64 */
+            llm_calls: number;
+            models: string[];
+            name: string;
+            /** Format: uint64 */
+            output_tokens: number;
+            resolution_limited: boolean;
+            root_status: components["schemas"]["SpanStatus"];
+            service: string;
+            /** Format: uint64 */
+            span_count: number;
+            /** Format: double */
+            spend: number | null;
+            start_time: string;
+            /** Format: uint64 */
             tool_calls: number;
-            /** Trace Id */
             trace_id: string;
-            /** Trace Ref */
-            trace_ref?: string;
+        };
+        /** TraceValuesRequest */
+        TraceValuesRequest: {
+            /** Format: uint64 */
+            as_of_ms?: number | null;
+            /** @default  */
+            contains: string;
+            /** Format: int64 */
+            end_ms?: number | null;
+            /**
+             * Format: uint16
+             * @default 20
+             */
+            limit: number;
+            /** @default  */
+            q: string;
+            /** Format: int64 */
+            start_ms?: number | null;
         };
         /** TrainedTierArtifact */
         TrainedTierArtifact: {
@@ -48062,47 +48079,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** UIField */
-        UIField: {
-            /** Key */
-            key: string;
-            /** Value */
-            value: string;
-        };
-        /** UIFields */
-        UIFields: {
-            /** Fields */
-            fields: components["schemas"]["UIField"][];
-            /**
-             * Kind
-             * @constant
-             */
-            kind: "fields";
-        };
-        /** UIMessage */
-        UIMessage: {
-            /** Content */
-            content: string;
-            /** Name */
-            name?: string | null;
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "system" | "user" | "assistant" | "tool";
-            /** Tool Calls */
-            tool_calls?: components["schemas"]["UIToolCall"][];
-        };
-        /** UIMessages */
-        UIMessages: {
-            /**
-             * Kind
-             * @constant
-             */
-            kind: "messages";
-            /** Messages */
-            messages: components["schemas"]["UIMessage"][];
-        };
         /**
          * UISettingsResponse
          * @description Response model for UI settings
@@ -48120,16 +48096,6 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
-        };
-        /** UIText */
-        UIText: {
-            /**
-             * Kind
-             * @constant
-             */
-            kind: "text";
-            /** Text */
-            text: string;
         };
         /**
          * UIThemeConfig
@@ -48165,13 +48131,6 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
-        };
-        /** UIToolCall */
-        UIToolCall: {
-            /** Arguments */
-            arguments: string;
-            /** Name */
-            name: string;
         };
         /** UiDiscoveryEndpoints */
         UiDiscoveryEndpoints: {
@@ -48214,6 +48173,7 @@ export interface components {
              */
             blocked_users: string[];
         };
+        UnsignedCount: number | string;
         /** UpdateCredentialItem */
         UpdateCredentialItem: {
             /** Credential Info */
@@ -81302,18 +81262,17 @@ export interface operations {
             };
         };
     };
-    list_agent_traces_v1_traces_get: {
+    trace_list: {
         parameters: {
             query?: {
-                /** @description Window start, unix ms. Default: 24h ago */
+                as_of_ms?: number | null;
                 start_ms?: number | null;
-                /** @description Window end, unix ms. Default: now */
                 end_ms?: number | null;
-                /** @description Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. Keys: name, agent, status, model, input, trace_id, service, team and attr.<key>. `*` globs and a leading `-` negates */
                 q?: string;
                 cursor?: string | null;
-                sort_by?: "start_ms" | "duration_ms" | "span_count" | "error_count";
-                sort_dir?: "asc" | "desc";
+                page_size?: number;
+                sort_by?: components["schemas"]["TraceSortField"];
+                sort_dir?: components["schemas"]["TraceSortDirection"];
             };
             header?: never;
             path?: never;
@@ -81321,7 +81280,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description Success */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -81330,47 +81289,202 @@ export interface operations {
                     "application/json": components["schemas"]["TracePage"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Trace API problem */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
                 };
             };
         };
     };
-    ingest_otlp_traces_v1_traces_post: {
+    trace_ingest: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+                "application/x-protobuf": string;
+            };
+        };
         responses: {
-            /** @description Successful Response */
+            /** @description OTLP protocol response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": Record<string, never>;
+                    "application/x-protobuf": string;
+                };
+            };
+            /** @description OTLP protocol response */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                    "application/x-protobuf": string;
+                };
+            };
+            /** @description OTLP protocol response */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                    "application/x-protobuf": string;
+                };
+            };
+            /** @description OTLP protocol response */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                    "application/x-protobuf": string;
+                };
+            };
+            /** @description OTLP protocol response */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                    "application/x-protobuf": string;
+                };
+            };
+            /** @description OTLP protocol response */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                    "application/x-protobuf": string;
+                };
+            };
+            /** @description OTLP protocol response */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                    "application/x-protobuf": string;
+                };
+            };
+            /** @description OTLP protocol response */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                    "application/x-protobuf": string;
                 };
             };
         };
     };
-    agent_trace_histogram_v1_traces_histogram_get: {
+    trace_histogram: {
         parameters: {
             query?: {
-                /** @description Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. Keys: name, agent, status, model, input, trace_id, service, team and attr.<key>. `*` globs and a leading `-` negates */
+                start_ms?: number | null;
+                end_ms?: number | null;
+                as_of_ms?: number | null;
                 q?: string;
                 buckets?: number;
-                /** @description Window start, unix ms. Default: 24h ago */
-                start_ms?: number | null;
-                /** @description Window end, unix ms. Default: now */
-                end_ms?: number | null;
             };
             header?: never;
             path?: never;
@@ -81378,7 +81492,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description Success */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -81387,18 +81501,99 @@ export interface operations {
                     "application/json": components["schemas"]["TraceHistogram"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Trace API problem */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
                 };
             };
         };
     };
-    query_agent_traces_v1_traces_query_post: {
+    trace_query: {
         parameters: {
             query?: never;
             header?: never;
@@ -81411,7 +81606,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
+            /** @description Success */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -81420,18 +81615,99 @@ export interface operations {
                     "application/json": components["schemas"]["TraceSQLResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Trace API problem */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
                 };
             };
         };
     };
-    help_agent_trace_queries_v1_traces_query_help_get: {
+    trace_query_help: {
         parameters: {
             query?: never;
             header?: never;
@@ -81440,7 +81716,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description Success */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -81449,29 +81725,117 @@ export interface operations {
                     "application/json": components["schemas"]["TraceQueryHelp"];
                 };
             };
+            /** @description Trace API problem */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
         };
     };
-    agent_trace_values_v1_traces_values__field__get: {
+    trace_values: {
         parameters: {
             query?: {
-                /** @description Free text and key:value filters, e.g. `agent:research* -status:ok "book a flight"`. Keys: name, agent, status, model, input, trace_id, service, team and attr.<key>. `*` globs and a leading `-` negates */
+                start_ms?: number | null;
+                end_ms?: number | null;
+                as_of_ms?: number | null;
                 q?: string;
                 contains?: string;
                 limit?: number;
-                /** @description Window start, unix ms. Default: 24h ago */
-                start_ms?: number | null;
-                /** @description Window end, unix ms. Default: now */
-                end_ms?: number | null;
             };
             header?: never;
             path: {
-                field: "name" | "agent" | "status" | "model" | "input" | "trace_id" | "service" | "team";
+                field: components["schemas"]["RunField"];
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description Success */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -81480,67 +81844,338 @@ export interface operations {
                     "application/json": components["schemas"]["RunValues"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Trace API problem */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
                 };
             };
         };
     };
-    get_agent_trace_v1_traces__trace_id__get: {
+    trace_get: {
         parameters: {
-            query?: {
-                trace_ref?: string;
-                cursor?: string | null;
-                page_size?: number | null;
-            };
+            query?: never;
             header?: never;
             path: {
-                trace_id: string;
+                id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description Success */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Trace"];
+                    "application/json": components["schemas"]["TraceMetadata"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Trace API problem */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
                 };
             };
         };
     };
-    get_agent_trace_span_v1_traces__trace_id__spans__span_id__get: {
+    trace_spans: {
         parameters: {
             query?: {
-                trace_ref?: string;
+                cursor?: string | null;
+                page_size?: number;
             };
             header?: never;
             path: {
-                trace_id: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceSpansPage"];
+                };
+            };
+            /** @description Trace API problem */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+        };
+    };
+    trace_span: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
                 span_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description Success */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -81549,33 +82184,113 @@ export interface operations {
                     "application/json": components["schemas"]["SpanDetail"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Trace API problem */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
                 };
             };
         };
     };
-    get_agent_trace_span_error_v1_traces__trace_id__spans__span_id__error_get: {
+    trace_error: {
         parameters: {
             query?: {
-                trace_ref?: string;
                 cursor?: string | null;
             };
             header?: never;
             path: {
-                trace_id: string;
+                id: string;
                 span_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description Success */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -81584,13 +82299,94 @@ export interface operations {
                     "application/json": components["schemas"]["SpanErrorPage"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Trace API problem */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
+                };
+            };
+            /** @description Trace API problem */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["TraceProblem"];
                 };
             };
         };

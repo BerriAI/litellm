@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ui::UiContent;
+use crate::api::TraceQueryWindow;
 
 #[macro_rules_attribute::apply(wire_type)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,21 +55,20 @@ pub struct AgentNode {
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct TraceSummary {
-    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
     pub resolution_limited: bool,
     pub trace_id: String,
-    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    #[serde(rename = "id")]
     pub trace_ref: String,
     pub name: String,
     pub service: String,
-    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
     pub agent_names: Vec<String>,
-    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
     pub frameworks: Vec<String>,
     pub input_preview: String,
     pub start_time: String,
     pub duration_ms: f64,
+    #[serde(rename = "root_status")]
     pub status: SpanStatus,
+    pub has_error: bool,
     pub span_count: u64,
     pub agent_count: u64,
     pub agent_invocations: u64,
@@ -95,6 +94,7 @@ pub struct Trace {
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Debug, PartialEq)]
 pub struct TracePage {
+    pub window: TraceQueryWindow,
     pub data: Vec<TraceSummary>,
     pub next_cursor: Option<String>,
 }
@@ -103,8 +103,6 @@ pub struct TracePage {
 #[derive(Debug, PartialEq)]
 pub struct SpanDetail {
     pub span_id: String,
-    pub input_ui: UiContent,
-    pub output_ui: UiContent,
     pub input: String,
     pub output: String,
     pub attributes: BTreeMap<String, String>,

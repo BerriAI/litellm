@@ -13,11 +13,10 @@ export type SpanTab = (typeof SPAN_TABS)[number];
 
 export interface TraceRef {
   traceId: string;
-  traceRef?: string;
 }
 
-export const traceRefOf = (run: TraceSummary): TraceRef => ({ traceId: run.trace_id, traceRef: run.trace_ref });
-export const traceKey = (ref: TraceRef): string => ref.traceRef || ref.traceId;
+export const traceRefOf = (run: TraceSummary): TraceRef => ({ traceId: run.id });
+export const traceKey = (ref: TraceRef): string => ref.traceId;
 
 /** Which step, view and detail section of an open run are showing. Owned by the URL in the drawer, locally in sheets. */
 export interface RunSelection {
@@ -35,7 +34,6 @@ export interface RunSelection {
 
 export const OPEN_TRACE_PARSERS = {
   trace: parseAsString,
-  trace_ref: parseAsString,
   span: parseAsString,
   view: parseAsStringLiteral(TRACE_VIEWS).withDefault("steps"),
   span_tab: parseAsStringLiteral(SPAN_TABS).withDefault("content"),
@@ -76,7 +74,7 @@ export function useOpenTraceRouting(): OpenTraceRouting {
   const [params, setParams] = useQueryStates(OPEN_TRACE_PARSERS, { history: "push" });
   const openTrace = useCallback(
     (ref: TraceRef | null) => {
-      const run = { trace: ref?.traceId ?? null, trace_ref: ref?.traceRef || null };
+      const run = { trace: ref?.traceId ?? null };
       void setParams(ref === null ? { ...FRESH_RUN, ...run, fullscreen: null } : { ...FRESH_RUN, ...run });
     },
     [setParams],
@@ -103,7 +101,7 @@ export function useOpenTraceRouting(): OpenTraceRouting {
     [setParams],
   );
   return {
-    trace: params.trace === null ? null : { traceId: params.trace, traceRef: params.trace_ref ?? undefined },
+    trace: params.trace === null ? null : { traceId: params.trace },
     openTrace,
     selection: {
       spanId: params.span,

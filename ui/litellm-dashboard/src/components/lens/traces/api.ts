@@ -11,12 +11,13 @@ import {
 } from "../../networking";
 import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 import type { RunOrder } from "./list/runOrder";
-import type { RunField, SpanDetail, SpanErrorPage, Trace, TraceHistogram, TracePage } from "./types";
+import type { RunField, RunValues, SpanDetail, SpanErrorPage, Trace, TraceHistogram, TracePage } from "./types";
 
 /** Which runs: the window and the `q` search the server applies before counting or paging. */
 export interface RunSelection {
   readonly window: TimeWindow;
   readonly q: string;
+  readonly asOfMs?: number;
 }
 
 /** Where in the ordered sequence a page starts; `null` is the first page. */
@@ -41,43 +42,39 @@ export interface TracesApi {
   readonly scope: string;
   /** False for a fixed snapshot: nothing new arrives, so live tail and tracing setup don't apply. */
   readonly live: boolean;
-  handoff(traceId: string, spanId?: string | null, traceRef?: string): TraceHandoff;
+  handoff(id: string, spanId?: string | null): TraceHandoff;
   list(request: RunListRequest): Promise<TracePage>;
   histogram(selection: RunSelection, buckets: number): Promise<TraceHistogram>;
   values(field: RunField, contains: string, range: TimeWindow): Promise<readonly string[]>;
   anyRecorded(): Promise<boolean>;
-  trace(traceId: string, traceRef?: string, cursor?: string | null): Promise<Trace>;
-  span(traceId: string, spanId: string, traceRef?: string): Promise<SpanDetail>;
-  spanError(
-    traceId: string,
-    spanId: string,
-    options: { readonly traceRef?: string; readonly cursor?: string | null },
-  ): Promise<SpanErrorPage>;
+  trace(id: string, cursor?: string | null): Promise<Trace>;
+  span(id: string, spanId: string): Promise<SpanDetail>;
+  spanError(traceId: string, spanId: string, options: { readonly cursor?: string | null }): Promise<SpanErrorPage>;
 }
 
-/** A one-liner Claude Code / Codex can run to read the trace. */
-export const agentHandoffText = (traceId: string, spanId?: string | null, traceRef?: string): string => {
-  const url = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${traceId}?format=md${spanId ? `&span_id=${spanId}` : ""}${traceRef ? `&trace_ref=${traceRef}` : ""}`;
-  const what = spanId ? "this step of a LiteLLM agent trace" : "this LiteLLM agent trace";
-  return `Read ${what} and explain what happened and why it failed:\ncurl -s -H "Authorization: Bearer $LITELLM_API_KEY" "${url}"`;
+export const agentHandoffText = (id: string, spanId?: string | null): string => {
+  const base = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${encodeURIComponent(id)}`;
+  const urls = spanId ? [`${base}/spans/${encodeURIComponent(spanId)}`] : [base, `${base}/spans`];
+  const commands = urls.map((url) => `curl -s -H "Authorization: Bearer $LITELLM_API_KEY" "${url}"`).join("\n");
+  return `Read this LiteLLM agent trace and explain what happened. Follow next_cursor on the spans endpoint to load remaining steps:\n${commands}`;
 };
 
 export function liveTracesApi(accessToken: string): TracesApi {
   return {
     scope: accessToken,
     live: true,
-    handoff: (traceId, spanId, traceRef) => ({
-      text: agentHandoffText(traceId, spanId, traceRef),
+    handoff: (traceId, spanId) => ({
+      text: agentHandoffText(traceId, spanId),
       copied: "Command copied",
     }),
     list: (request) => agentTraceListCall(accessToken, request),
-    histogram: ({ window, q }, buckets) =>
+    histogram: ({ window, q, asOfMs }, buckets) =>
       apiClient.get<TraceHistogram>("/v1/traces/histogram", {
         accessToken,
-        query: { start_ms: window.startMs, end_ms: window.endMs, q: q || undefined, buckets },
+        query: { start_ms: window.startMs, end_ms: window.endMs, as_of_ms: asOfMs, q: q || undefined, buckets },
       }),
     values: async (field, contains, range) => {
-      const found = await apiClient.get<{ values: string[] }>(`/v1/traces/values/${field}`, {
+      const found = await apiClient.get<RunValues>(`/v1/traces/values/${field}`, {
         accessToken,
         query: { start_ms: range.startMs, end_ms: range.endMs, contains: contains || undefined },
       });
@@ -87,8 +84,8 @@ export function liveTracesApi(accessToken: string): TracesApi {
       const page = await apiClient.get<TracePage>("/v1/traces", { accessToken, query: { start_ms: 0 } });
       return page.data.length > 0;
     },
-    trace: (traceId, traceRef, cursor) => agentTraceCall(accessToken, traceId, traceRef, cursor),
-    span: (traceId, spanId, traceRef) => agentTraceSpanCall(accessToken, traceId, spanId, traceRef),
+    trace: (id, cursor) => agentTraceCall(accessToken, id, cursor),
+    span: (id, spanId) => agentTraceSpanCall(accessToken, id, spanId),
     spanError: (traceId, spanId, options) => agentTraceSpanErrorCall(accessToken, traceId, spanId, options),
   };
 }

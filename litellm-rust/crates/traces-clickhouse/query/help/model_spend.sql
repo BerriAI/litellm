@@ -7,9 +7,9 @@ FROM (
         team_id, model, count() AS requests,
         countIf(isNull(spend) OR NOT isFinite(spend)) AS unknown_cost_requests,
         sum(spend) AS recorded_spend,
-        sum(prompt_tokens) AS input_tokens,
-        sum(completion_tokens) AS output_tokens
-    FROM spend_logs FINAL
+        sum(c.input_tokens) AS input_tokens,
+        sum(c.output_tokens) AS output_tokens
+    FROM calls AS c
     WHERE start_time >= now() - INTERVAL 1 DAY
     GROUP BY team_id, model
 )

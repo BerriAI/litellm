@@ -6,10 +6,10 @@ from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
-TraceTableName: TypeAlias = Literal["otel_traces", "agent_traces_by_key", "spend_logs"]
+TraceQueryTableName: TypeAlias = Literal["traces", "spans", "calls", "otel_traces", "agent_traces_by_key", "spend_logs"]
 
 
-class TraceQueryColumn(BaseModel):
+class TraceSQLColumn(BaseModel):
     model_config = ConfigDict(
         extra="allow",
         frozen=True,
@@ -25,7 +25,7 @@ class TraceQueryNormalizedField(BaseModel):
         frozen=True,
     )
 
-    table: TraceTableName
+    table: TraceQueryTableName
     name: str
     column: str
     type: str
@@ -71,8 +71,8 @@ class TraceQueryTable(BaseModel):
         frozen=True,
     )
 
-    name: TraceTableName
-    columns: tuple[TraceQueryColumn, ...]
+    name: TraceQueryTableName
+    columns: tuple[TraceSQLColumn, ...]
 
 
 class TraceQueryMetadataField(BaseModel):
@@ -103,7 +103,7 @@ class TraceQueryMetadata(BaseModel):
         frozen=True,
     )
 
-    table: TraceTableName
+    table: TraceQueryTableName
     column: str
     fields: tuple[TraceQueryMetadataField, ...]
     sampled_rows: int = Field(..., ge=0, le=18446744073709551615)
@@ -120,7 +120,7 @@ class TraceQueryAttributes(BaseModel):
         frozen=True,
     )
 
-    table: TraceTableName
+    table: TraceQueryTableName
     column: str
     fields: tuple[TraceQueryAttributeField, ...]
     truncated: bool

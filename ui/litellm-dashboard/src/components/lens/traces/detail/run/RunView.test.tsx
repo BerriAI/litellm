@@ -257,7 +257,7 @@ describe("RunView", () => {
     expect(screen.getAllByRole("treeitem")).toHaveLength(2);
     expect(screen.getByRole("banner")).toHaveTextContent(before ?? "");
     expect(screen.queryByRole("button", { name: "Load more steps" })).not.toBeInTheDocument();
-    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, "next-page", "next-page"]);
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[2])).toEqual([null, "next-page", "next-page"]);
   });
 
   it("refreshes a failed later page from one new snapshot", async () => {
@@ -303,7 +303,7 @@ describe("RunView", () => {
     await user.click(screen.getByRole("button", { name: "Load more steps" }));
     expect(await screen.findByText("fresh-tool")).toBeVisible();
     expect(screen.getAllByRole("treeitem")).toHaveLength(2);
-    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[2])).toEqual([
       null,
       "old-second",
       "old-third",
@@ -338,7 +338,7 @@ describe("RunView", () => {
     expect(await screen.findByText("later-page-tool")).toBeVisible();
     expect(screen.getAllByRole("treeitem")).toHaveLength(2);
     expect(screen.queryByRole("button", { name: "Refresh trace" })).not.toBeInTheDocument();
-    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, "next-page", "next-page"]);
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[2])).toEqual([null, "next-page", "next-page"]);
   });
 
   it("offers no retry for a page that is too large, only a refresh", async () => {
@@ -455,7 +455,7 @@ describe("RunView", () => {
   });
 
   it("distinguishes a completed run with recovered step errors from a failed run", async () => {
-    renderRun({ ...research, summary: { ...research.summary, status: "ok", error_count: 2 } });
+    renderRun({ ...research, summary: { ...research.summary, root_status: "ok", has_error: true, error_count: 2 } });
     const header = await screen.findByRole("banner");
     expect(header).toHaveTextContent("Completed");
     expect(header).toHaveTextContent("Step errors 2");
@@ -491,9 +491,9 @@ describe("RunView", () => {
     renderRun(research);
 
     await user.click(await screen.findByRole("button", { name: /copy for agent/i }));
-    expect(copyToClipboard).toHaveBeenCalledWith(agentHandoffText(research.summary.trace_id), "Command copied");
-    expect(agentHandoffText("t1")).toContain('"http://proxy.test/v1/traces/t1?format=md"');
-    expect(agentHandoffText("t1", "s1")).toContain("&span_id=s1");
+    expect(copyToClipboard).toHaveBeenCalledWith(agentHandoffText(research.summary.id), "Command copied");
+    expect(agentHandoffText("t1")).toContain('"http://proxy.test/v1/traces/t1"');
+    expect(agentHandoffText("t1", "s1")).toContain("/t1/spans/s1");
   });
 });
 

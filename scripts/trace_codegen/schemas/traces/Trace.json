@@ -195,8 +195,7 @@
           "items": {
             "type": "string"
           },
-          "type": "array",
-          "x-python-optional": true
+          "type": "array"
         },
         "duration_ms": {
           "format": "double",
@@ -212,8 +211,13 @@
           "items": {
             "type": "string"
           },
-          "type": "array",
-          "x-python-optional": true
+          "type": "array"
+        },
+        "has_error": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
         },
         "input_preview": {
           "type": "string"
@@ -246,8 +250,10 @@
           "type": "integer"
         },
         "resolution_limited": {
-          "type": "boolean",
-          "x-python-optional": true
+          "type": "boolean"
+        },
+        "root_status": {
+          "$ref": "#/$defs/SpanStatus"
         },
         "service": {
           "type": "string"
@@ -268,9 +274,6 @@
         "start_time": {
           "type": "string"
         },
-        "status": {
-          "$ref": "#/$defs/SpanStatus"
-        },
         "tool_calls": {
           "format": "uint64",
           "maximum": 18446744073709551615,
@@ -279,16 +282,12 @@
         },
         "trace_id": {
           "type": "string"
-        },
-        "trace_ref": {
-          "type": "string",
-          "x-python-optional": true
         }
       },
       "required": [
         "resolution_limited",
         "trace_id",
-        "trace_ref",
+        "id",
         "name",
         "service",
         "agent_names",
@@ -296,7 +295,8 @@
         "input_preview",
         "start_time",
         "duration_ms",
-        "status",
+        "root_status",
+        "has_error",
         "span_count",
         "agent_count",
         "agent_invocations",

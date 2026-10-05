@@ -21,6 +21,8 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 from litellm.constants import AGENT_TRACING_LIST_PAGE_SIZE, OTLP_MAX_ATTRIBUTE_VALUE_BYTES
 from litellm.rust_bridge._native import NativeTraceConfig, NativeTraceStorage
 from litellm.rust_bridge.trace.generated.models import TraceQueryHelp
+from litellm.rust_bridge.trace.generated.requests import Span as SpanModel
+from litellm.rust_bridge.trace.generated.requests import TraceMetadata, TraceSpansPage
 from litellm.rust_bridge.trace.generated.types import AllQueryScope, Trace, TracePage
 from litellm.rust_bridge.trace.storage import ClickHouseStorage, TraceStorageConfig, span_rows
 from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
@@ -148,7 +150,9 @@ async def test_from_env_reads_with_clickhouse_url(
     monkeypatch.delenv("CLICKHOUSE_READER_URL", raising=False)
     scope: Final = AllQueryScope(kind="all")
     page: Final = await TraceReceiver.from_env().list_traces(scope, 0, 1)
-    assert page == {"data": (), "next_cursor": None}
+    assert page["data"] == ()
+    assert page["next_cursor"] is None
+    assert (page["window"]["start_ms"], page["window"]["end_ms"]) == (0, 1)
     assert len(recording_server.requests) == 1
 
 
@@ -216,9 +220,12 @@ def test_trace_pages_keep_the_effective_window_through_the_http_native_boundary(
         second: Final = client.get("/v1/traces", params={**params, "cursor": cursor})
         assert second.status_code == 200, second.text
         second_body: Final = _TRACE_PAGE.validate_python(second.json())
-        refs: Final = tuple(row["trace_ref"] for row in (*first_body["data"], *second_body["data"]))
+        refs: Final = tuple(row["id"] for row in (*first_body["data"], *second_body["data"]))
         assert refs == tuple(row["trace_ref"] for row in reversed(rows))
         assert second_body["next_cursor"] is None
+        assert second_body["window"] == first_body["window"]
+        assert second_body["data"][0]["root_status"] == "ok"
+        assert not second_body["data"][0]["has_error"]
         run_parameters: Final = tuple(
             parse_qs(urlsplit(request.path).query)
             for request in recording_server.requests
@@ -229,11 +236,17 @@ def test_trace_pages_keep_the_effective_window_through_the_http_native_boundary(
             first_parameters["param_start_ms"],
             first_parameters["param_end_ms"],
         )
+        assert run_parameters[1]["param_as_of_ms"] == first_parameters["param_as_of_ms"]
         sent: Final = len(recording_server.requests)
         changed: Final = client.get(
             "/v1/traces", params={"cursor": cursor, "end_ms": int(first_parameters["param_end_ms"][0]) + 1}
         )
         assert changed.status_code == 400, changed.text
+        assert len(recording_server.requests) == sent
+        changed_cutoff: Final = client.get(
+            "/v1/traces", params={"cursor": cursor, "as_of_ms": first_body["window"]["as_of_ms"] - 1}
+        )
+        assert changed_cutoff.status_code == 400, changed_cutoff.text
         assert len(recording_server.requests) == sent
 
 
@@ -385,9 +398,9 @@ def test_trace_sql_endpoint_enforces_ownership_and_preserves_clickhouse_envelope
         "rows": 1,
         "statistics": {"elapsed": 0.01, "rows_read": 1, "bytes_read": 1},
     }
-    recording_server.expected_requests = 12 if expected_status == 200 else 0
+    recording_server.expected_requests = 15 if expected_status == 200 else 0
     if expected_status == 200:
-        for _ in range(11):
+        for _ in range(14):
             recording_server.enqueue(ResponseSpec(body=""))
         recording_server.enqueue(ResponseSpec(body=envelope))
     storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
@@ -405,7 +418,8 @@ def test_trace_sql_endpoint_enforces_ownership_and_preserves_clickhouse_envelope
         result: Final = client.post("/v1/traces/query", json={"sql": "SELECT 42 AS answer"})
         assert result.status_code == expected_status, result.text
         if expected_status == 403:
-            assert result.json() == {"detail": "Not allowed to view logs"}
+            assert result.json()["detail"] == "Not allowed to view logs"
+            assert result.json()["code"] == "forbidden"
             return
         assert result.json() == envelope
         assert recording_server.requests[-1].raw_body == b"SELECT 42 AS answer"
@@ -424,11 +438,14 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
 
-    recording_server.expected_requests = 17
-    for _ in range(11):
+    recording_server.expected_requests = 23
+    for _ in range(14):
         recording_server.enqueue(ResponseSpec(body=""))
     for response in (
         {"data": [{"name": "Model", "type": "String"}]},
+        {"data": []},
+        {"data": []},
+        {"data": []},
         {"data": []},
         {"data": []},
     ):
@@ -463,8 +480,8 @@ def test_trace_help_endpoint_runs_native_schema_and_metadata_discovery(
             "types": ["string"],
             "expression": "JSONExtractRaw(metadata, 'custom', 'label')",
         }
-    assert body["attributes"][0]["fields"][0]["expression"] == "SpanAttributes['custom.span']"
-    assert body["attributes"][1]["fields"][0]["expression"] == "ResourceAttributes['custom.resource']"
+    assert body["attributes"][0]["fields"][0]["expression"] == "span_attributes['custom.span']"
+    assert body["attributes"][1]["fields"][0]["expression"] == "resource_attributes['custom.resource']"
 
 
 @pytest.mark.parametrize(
@@ -494,8 +511,8 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.tracing_endpoints import provide_receiver, provide_trace_query_secret, router
 
-    recording_server.expected_requests = 13
-    for _ in range(11):
+    recording_server.expected_requests = 16
+    for _ in range(14):
         recording_server.enqueue(ResponseSpec(body=""))
     recording_server.enqueue(ResponseSpec(status=clickhouse_status, body=body))
     envelope: Final = {
@@ -514,13 +531,13 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
     with TestClient(app) as client:
         failed: Final = client.post("/v1/traces/query", json={"sql": "SELEC 42"})
         assert failed.status_code == expected_status, failed.text
-        assert failed.json()["detail"]["database_code"] == database_code
+        assert failed.json().get("database_code") == database_code
         assert (
-            failed.json()["detail"]["code"]
+            failed.json()["code"]
             == {400: "query_rejected", 422: "query_limit_exceeded", 503: "query_unavailable"}[expected_status]
         )
         if database_code is not None:
-            assert failed.json()["detail"]["message"] == body.decode()
+            assert failed.json()["detail"] == body.decode()
         recovered: Final = client.post("/v1/traces/query", json={"sql": "SELECT 42 AS answer"})
         assert recovered.status_code == 200, recovered.text
         assert recovered.json() == envelope
@@ -609,7 +626,7 @@ def _fixture_trace_api(
 
 def test_fixture_backed_help_examples_execute_through_query_api(seeded_trace_api: SeededTraceAPI) -> None:
     api: Final = seeded_trace_api
-    assert {table.name for table in api.help.tables} == {"otel_traces", "spend_logs", "agent_traces_by_key"}
+    assert {"traces", "spans", "calls"} <= {table.name for table in api.help.tables}
     assert api.help.metadata.error is None
     assert api.help.metadata.sampled_rows == len(api.spends)
     assert any(field.path == ("fixture_capture", "name") for field in api.help.metadata.fields)
@@ -623,15 +640,13 @@ def test_fixture_backed_help_examples_execute_through_query_api(seeded_trace_api
     assert recorded[0]["trace_id"] == api.spends[0]["trace_id"]
     assert int(str(recorded[0]["requests"])) == len(api.spends)
     assert math.isclose(float(str(recorded[0]["recorded_spend"])), total)
-    detail: Final = api.client.get(f"/v1/traces/{api.spends[0]['trace_id']}")
-    assert detail.status_code == 200, detail.text
-    assert math.isclose(TRACE.validate_json(detail.content)["summary"]["spend"] or 0, total)
+    detail: Final = _trace(api, api.spends[0]["trace_id"])
+    assert math.isclose(detail["summary"]["spend"] or 0, total)
     unmatched: Final = api.query_example("LLM spans without a direct spend match")
     assert unmatched
-    assert all(row["TraceId"] != api.spends[0]["trace_id"] for row in unmatched)
-    unpriced: Final = api.client.get(f"/v1/traces/{unmatched[0]['TraceId']}")
-    assert unpriced.status_code == 200, unpriced.text
-    assert unpriced.json()["summary"]["spend"] is None
+    assert all(row["trace_id"] != api.spends[0]["trace_id"] for row in unmatched)
+    unpriced: Final = _trace(api, str(unmatched[0]["trace_id"]))
+    assert unpriced["summary"]["spend"] is None
 
 
 @pytest.mark.parametrize("spend", (None, 0.0, 0.125), ids=("unknown", "free", "paid"))
@@ -710,9 +725,7 @@ def test_captured_sdk_cost_survives_seeding_and_is_queryable(name: str, captured
     rows: Final = tuple(row for row in api.spends if fixture_capture("", row).name == name)
     assert rows
     capture: Final = fixture_capture(name, rows[0])
-    response: Final = api.client.get(f"/v1/traces/{capture.trace_id}")
-    assert response.status_code == 200, response.text
-    detail: Final = TRACE.validate_json(response.content)
+    detail: Final = _trace(api, capture.trace_id)
     original: Final = span_rows((TRACE_FIXTURES / f"{name}.json").read_bytes(), "application/json")
     assert detail["summary"]["span_count"] == len(original)
     if capture.spend_linked and capture.spend_complete:
@@ -775,9 +788,44 @@ def test_server_side_copies_keep_every_capture_linked_to_its_spend() -> None:
 
 
 def _trace(api: SeededTraceAPI, trace_id: str) -> Trace:
-    response: Final = api.client.get(f"/v1/traces/{trace_id}")
+    listed: Final = api.client.get(
+        "/v1/traces",
+        params={
+            "q": f"trace_id:{trace_id}",
+            "start_ms": 0,
+            "end_ms": time.time_ns() // 1_000_000 + 86_400_000,
+            "page_size": 2,
+        },
+    )
+    assert listed.status_code == 200, listed.text
+    page: Final = _TRACE_PAGE.validate_json(listed.content)
+    (summary,) = page["data"]
+    assert summary["trace_id"] == trace_id
+    response: Final = api.client.get(f"/v1/traces/{summary['id']}")
     assert response.status_code == 200, response.text
-    return TRACE.validate_json(response.content)
+    metadata: Final = TraceMetadata.model_validate_json(response.content)
+    first: Final = _span_page(api, summary["id"], None)
+    spans: Final = tuple(_trace_spans(api, summary["id"], first))
+    return TRACE.validate_python(
+        {
+            **metadata.model_dump(mode="json"),
+            "spans": tuple(span.model_dump(mode="json") for span in spans),
+            "next_cursor": None,
+        }
+    )
+
+
+def _span_page(api: SeededTraceAPI, id: str, cursor: str | None) -> TraceSpansPage:
+    params: Final = {"page_size": 200} if cursor is None else {"page_size": 200, "cursor": cursor}
+    response: Final = api.client.get(f"/v1/traces/{id}/spans", params=params)
+    assert response.status_code == 200, response.text
+    return TraceSpansPage.model_validate_json(response.content)
+
+
+def _trace_spans(api: SeededTraceAPI, id: str, page: TraceSpansPage) -> Iterator[SpanModel]:
+    yield from page.data
+    if page.next_cursor is not None:
+        yield from _trace_spans(api, id, _span_page(api, id, page.next_cursor))
 
 
 def _assert_capture(api: SeededTraceAPI, name: str, rows: tuple[SpendLogRecord, ...], trace_id: str) -> None:

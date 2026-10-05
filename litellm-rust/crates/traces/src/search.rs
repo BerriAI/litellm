@@ -20,7 +20,8 @@ use crate::store::RunCount;
 pub enum RunField {
     Name,
     Agent,
-    Status,
+    RootStatus,
+    HasError,
     Model,
     Input,
     TraceId,
@@ -48,13 +49,36 @@ impl SearchKey {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RunFilter {
     pub start_ms: i64,
     pub end_ms: i64,
+    pub as_of_ms: u64,
     pub search: RunSearch,
     /// When not empty, only these runs can match.
     pub trace_refs: Vec<String>,
+}
+
+impl RunFilter {
+    pub fn window(&self) -> crate::api::TraceQueryWindow {
+        crate::api::TraceQueryWindow {
+            start_ms: self.start_ms,
+            end_ms: self.end_ms,
+            as_of_ms: self.as_of_ms,
+        }
+    }
+}
+
+impl Default for RunFilter {
+    fn default() -> Self {
+        Self {
+            start_ms: 0,
+            end_ms: 0,
+            as_of_ms: u64::MAX,
+            search: RunSearch::default(),
+            trace_refs: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -74,57 +98,41 @@ pub struct RunSearch {
 }
 
 impl RunSearch {
-    /// Mirrors the dashboard's search box: `key:value` filters on known keys, `-key:value` negates,
-    /// `*` globs, double quotes keep spaces, and anything else is a free-text term.
-    /// A key typed without a value yet narrows nothing.
-    pub fn parse(q: &str) -> Self {
-        let (text, filters): (Vec<_>, Vec<_>) = tokens(q)
-            .map(clause)
-            .filter(|clause| !clause.value().is_empty())
+    pub fn parse(q: &str) -> Result<Self, crate::error::InvalidQuery> {
+        if q.chars().count() > 1000 {
+            return Err(crate::error::InvalidQuery);
+        }
+        let clauses = tokens(q)
+            .map(|token| token.and_then(clause))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (text, filters): (Vec<_>, Vec<_>) = clauses
+            .into_iter()
             .partition(|clause| matches!(clause, Clause::Text(_)));
-        Self {
+        Ok(Self {
             text: text
                 .into_iter()
-                .map(|clause| clause.value().to_owned())
+                .filter_map(|clause| match clause {
+                    Clause::Text(text) => Some(text),
+                    _ => None,
+                })
                 .collect(),
             filters: filters
                 .into_iter()
                 .filter_map(|clause| match clause {
-                    Clause::Field {
-                        key,
-                        exclude,
-                        value,
-                    } => Some(FieldFilter {
-                        key,
-                        pattern: value,
-                        exclude,
-                    }),
-                    Clause::Text(_) => None,
+                    Clause::Field(filter) => Some(filter),
+                    _ => None,
                 })
                 .collect(),
-        }
+        })
     }
 }
 
 enum Clause {
     Text(String),
-    Field {
-        key: SearchKey,
-        exclude: bool,
-        value: String,
-    },
+    Field(FieldFilter),
 }
 
-impl Clause {
-    fn value(&self) -> &str {
-        match self {
-            Self::Text(value) | Self::Field { value, .. } => value,
-        }
-    }
-}
-
-/// Whitespace-separated tokens; a double-quoted stretch keeps its spaces, and an unclosed quote runs to the end.
-fn tokens(q: &str) -> impl Iterator<Item = &str> {
+fn tokens(q: &str) -> impl Iterator<Item = Result<&str, crate::error::InvalidQuery>> {
     let mut rest = q;
     std::iter::from_fn(move || {
         rest = rest.trim_start();
@@ -134,42 +142,63 @@ fn tokens(q: &str) -> impl Iterator<Item = &str> {
         let mut quoted = false;
         let end = rest
             .char_indices()
-            .find(|&(_, char)| {
-                if char == '"' {
+            .find(|&(_, ch)| {
+                if ch == '"' {
                     quoted = !quoted;
                 }
-                !quoted && char.is_whitespace()
+                !quoted && ch.is_whitespace()
             })
             .map_or(rest.len(), |(index, _)| index);
         let (token, tail) = rest.split_at(end);
         rest = tail;
-        Some(token)
+        Some(if quoted {
+            Err(crate::error::InvalidQuery)
+        } else {
+            Ok(token)
+        })
     })
 }
 
-fn unquote(raw: &str) -> String {
-    raw.strip_prefix('"')
-        .map(|inner| inner.strip_suffix('"').unwrap_or(inner))
-        .filter(|inner| !inner.contains('"'))
-        .unwrap_or(raw)
-        .to_owned()
+fn value(raw: &str) -> Result<String, crate::error::InvalidQuery> {
+    let value = if raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2 {
+        &raw[1..raw.len() - 1]
+    } else {
+        raw
+    };
+    if value.is_empty() || value.contains('"') {
+        return Err(crate::error::InvalidQuery);
+    }
+    Ok(value.to_owned())
 }
 
-fn clause(raw: &str) -> Clause {
+fn clause(raw: &str) -> Result<Clause, crate::error::InvalidQuery> {
+    if raw.starts_with('"') {
+        return value(raw).map(Clause::Text);
+    }
     let (exclude, body) = raw
         .strip_prefix('-')
         .map_or((false, raw), |body| (true, body));
-    let field = body
-        .split_once(':')
-        .and_then(|(key, value)| SearchKey::parse(key).map(|key| (key, value)));
-    match field {
-        Some((key, value)) => Clause::Field {
-            key,
-            exclude,
-            value: unquote(value),
+    let Some((key, raw_value)) = body.split_once(':') else {
+        return value(raw).map(Clause::Text);
+    };
+    let key = SearchKey::parse(key).ok_or(crate::error::InvalidQuery)?;
+    let pattern = value(raw_value)?;
+    let pattern = match key {
+        SearchKey::Field(RunField::RootStatus) => match pattern.to_ascii_lowercase().as_str() {
+            "ok" | "error" | "unset" => pattern.to_ascii_lowercase(),
+            _ => return Err(crate::error::InvalidQuery),
         },
-        None => Clause::Text(unquote(raw)),
-    }
+        SearchKey::Field(RunField::HasError) => match pattern.to_ascii_lowercase().as_str() {
+            "true" | "false" => pattern.to_ascii_lowercase(),
+            _ => return Err(crate::error::InvalidQuery),
+        },
+        _ => pattern,
+    };
+    Ok(Clause::Field(FieldFilter {
+        key,
+        pattern,
+        exclude,
+    }))
 }
 
 pub const MAX_HISTOGRAM_BUCKETS: u32 = 240;
@@ -179,6 +208,7 @@ pub const MAX_RUN_VALUES: u32 = 100;
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct TraceHistogram {
+    pub window: crate::api::TraceQueryWindow,
     pub buckets: Vec<HistogramBucket>,
 }
 
@@ -204,14 +234,23 @@ pub struct AgentRuns {
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunValues {
+    pub window: crate::api::TraceQueryWindow,
     pub values: Vec<String>,
 }
 
 /// Bucket `i` covers `[start + span * i / buckets, start + span * (i + 1) / buckets)`.
-pub fn histogram(rows: &[RunCount], start_ms: i64, end_ms: i64, buckets: u32) -> TraceHistogram {
-    let span = i128::from(end_ms - start_ms);
-    let edge = |index: u32| start_ms + (span * i128::from(index) / i128::from(buckets)) as i64;
+pub fn histogram(
+    rows: &[RunCount],
+    window: crate::api::TraceQueryWindow,
+    buckets: u32,
+) -> TraceHistogram {
+    let start_ms = window.start_ms;
+    let end_ms = window.end_ms;
+    let start = i128::from(start_ms);
+    let span = i128::from(end_ms) - start;
+    let edge = |index: u32| (start + span * i128::from(index) / i128::from(buckets)) as i64;
     TraceHistogram {
+        window,
         buckets: (0..buckets)
             .map(|index| {
                 let hits = rows.iter().filter(|row| row.bucket == index);

@@ -27,11 +27,11 @@ export function TraceConversation({
   const [limit, setLimit] = useState(CONVERSATION_PAGE_SIZE);
   const steps = conversationSteps(trace.spans);
   const visible = steps.slice(0, limit);
-  const { trace_id: traceId, trace_ref: traceRef } = trace.summary;
+  const { id: traceId } = trace.summary;
   const queries = useQueries({
     queries: visible.map((span) => ({
-      queryKey: ["agentTraceSpan", traceId, traceRef, span.span_id, accessToken],
-      queryFn: (): Promise<SpanDetail> => traces.span(traceId, span.span_id, traceRef),
+      queryKey: ["agentTraceSpan", traceId, span.span_id, accessToken],
+      queryFn: (): Promise<SpanDetail> => traces.span(traceId, span.span_id),
       staleTime: Infinity,
       retry: false,
     })),

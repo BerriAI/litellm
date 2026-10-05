@@ -80,7 +80,7 @@ interface RunHeaderProps {
 /** Run identity, view switch and totals in two tight rows. */
 export function RunHeader({ trace, handoff, onBack, embedded }: RunHeaderProps) {
   const { summary } = trace;
-  const failed = summary.status === "error";
+  const failed = summary.root_status === "error";
   return (
     <header className="flex shrink-0 flex-col gap-2 border-b bg-background px-4 pt-3 pb-2.5">
       <div className="flex min-w-0 items-center gap-2">

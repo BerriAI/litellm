@@ -7,6 +7,7 @@ use std::{
 use litellm_http::ClientVariant;
 use litellm_traces::{
     QueryScope, Tenant,
+    api::TraceQueryWindow,
     search::{RunField, RunFilter, RunSearch},
     store::{RunOrder, SpanPart, TextRange},
 };
@@ -98,13 +99,38 @@ fn map_read_error(error: ReadError<Error>) -> PyErr {
     }
 }
 
-fn run_filter(start_ms: i64, end_ms: i64, q: &str, trace_refs: Vec<String>) -> RunFilter {
-    RunFilter {
+fn run_window(
+    start_ms: Option<i64>,
+    end_ms: Option<i64>,
+    as_of_ms: Option<u64>,
+    cursor: Option<&str>,
+) -> PyResult<TraceQueryWindow> {
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    resolve_run_window(
         start_ms,
         end_ms,
-        search: RunSearch::parse(q),
+        as_of_ms,
+        cursor,
+        TraceQueryWindow {
+            start_ms: now_ms as i64 - 86_400_000,
+            end_ms: now_ms as i64,
+            as_of_ms: now_ms.saturating_sub(1),
+        },
+    )
+    .map_err(map_read_error)
+}
+
+fn run_filter(window: TraceQueryWindow, q: &str, trace_refs: Vec<String>) -> PyResult<RunFilter> {
+    Ok(RunFilter {
+        start_ms: window.start_ms,
+        end_ms: window.end_ms,
+        as_of_ms: window.as_of_ms,
+        search: RunSearch::parse(q).map_err(|error| PyValueError::new_err(error.to_string()))?,
         trace_refs,
-    }
+    })
 }
 
 fn parsed<T: std::str::FromStr>(kind: &str, value: &str) -> PyResult<T> {
@@ -278,7 +304,7 @@ impl NativeTraceStorage {
         )
     }
 
-    #[pyo3(signature = (scope, start_ms, end_ms, q, cursor, limit, order, trace_refs=Vec::new()))]
+    #[pyo3(signature = (scope, start_ms, end_ms, q, cursor, limit, order, trace_refs=Vec::new(), as_of_ms=None))]
     #[expect(
         clippy::too_many_arguments,
         reason = "one parameter per Python argument"
@@ -294,19 +320,10 @@ impl NativeTraceStorage {
         limit: u32,
         #[pyo3(from_py_with = litellm_host_python::from_py_argument)] order: RunOrder,
         trace_refs: Vec<String>,
+        as_of_ms: Option<u64>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-        let window = resolve_run_window(
-            start_ms,
-            end_ms,
-            cursor.as_deref(),
-            (now_ms - 86_400_000, now_ms),
-        )
-        .map_err(map_read_error)?;
-        let filter = run_filter(window.0, window.1, q, trace_refs);
+        let window = run_window(start_ms, end_ms, as_of_ms, cursor.as_deref())?;
+        let filter = run_filter(window, q, trace_refs)?;
         let page = PageRequest { cursor, limit };
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
@@ -323,17 +340,23 @@ impl NativeTraceStorage {
         )
     }
 
-    #[pyo3(signature = (scope, start_ms, end_ms, q, trace_refs=Vec::new()))]
+    #[pyo3(signature = (scope, start_ms, end_ms, q, trace_refs=Vec::new(), as_of_ms=None))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one parameter per Python argument"
+    )]
     fn count_traces<'py>(
         &self,
         py: Python<'py>,
         #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
-        start_ms: i64,
-        end_ms: i64,
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
         q: &str,
         trace_refs: Vec<String>,
+        as_of_ms: Option<u64>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let filter = run_filter(start_ms, end_ms, q, trace_refs);
+        let window = run_window(start_ms, end_ms, as_of_ms, None)?;
+        let filter = run_filter(window, q, trace_refs)?;
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
         let reader = Arc::clone(&self.reader);
@@ -389,16 +412,23 @@ impl NativeTraceStorage {
         )
     }
 
+    #[pyo3(signature = (scope, start_ms, end_ms, q, buckets, as_of_ms=None))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one parameter per Python argument"
+    )]
     fn trace_histogram<'py>(
         &self,
         py: Python<'py>,
         #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
-        start_ms: i64,
-        end_ms: i64,
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
         q: &str,
         buckets: u32,
+        as_of_ms: Option<u64>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let filter = run_filter(start_ms, end_ms, q, Vec::new());
+        let window = run_window(start_ms, end_ms, as_of_ms, None)?;
+        let filter = run_filter(window, q, Vec::new())?;
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
         let reader = Arc::clone(&self.reader);
@@ -416,21 +446,24 @@ impl NativeTraceStorage {
         clippy::too_many_arguments,
         reason = "one parameter per Python argument"
     )]
+    #[pyo3(signature = (scope, start_ms, end_ms, q, field, contains, limit, as_of_ms=None))]
     fn run_values<'py>(
         &self,
         py: Python<'py>,
         #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
-        start_ms: i64,
-        end_ms: i64,
+        start_ms: Option<i64>,
+        end_ms: Option<i64>,
         q: &str,
         field: &str,
         contains: &str,
         limit: u32,
+        as_of_ms: Option<u64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let field = field
             .parse::<RunField>()
             .map_err(|_| PyValueError::new_err(format!("unknown run field {field}")))?;
-        let filter = run_filter(start_ms, end_ms, q, Vec::new());
+        let window = run_window(start_ms, end_ms, as_of_ms, None)?;
+        let filter = run_filter(window, q, Vec::new())?;
         let contains = contains.to_owned();
         let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
         let connection = self.config.storage().reader().clone();
@@ -542,12 +575,103 @@ impl NativeTraceStorage {
         )
     }
 
+    fn get_trace_metadata<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
+        id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().reader().clone();
+        let reader = Arc::clone(&self.reader);
+        crate::execution::run_async(
+            py,
+            async move {
+                let store = ClickHouseTraces::new(client, connection);
+                reader.get_trace_metadata(&store, &scope, &id).await
+            },
+            map_read_error,
+        )
+    }
+
+    #[pyo3(signature = (scope, id, cursor, page_size))]
+    fn get_trace_spans<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
+        id: String,
+        cursor: Option<String>,
+        page_size: u32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().reader().clone();
+        let reader = Arc::clone(&self.reader);
+        crate::execution::run_async(
+            py,
+            async move {
+                let store = ClickHouseTraces::new(client, connection);
+                reader
+                    .get_trace_spans(&store, &scope, &id, cursor.as_deref(), page_size)
+                    .await
+            },
+            map_read_error,
+        )
+    }
+
+    fn get_span_by_id<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
+        id: String,
+        span_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().reader().clone();
+        let reader = Arc::clone(&self.reader);
+        crate::execution::run_async(
+            py,
+            async move {
+                let store = ClickHouseTraces::new(client, connection);
+                reader.get_span_by_id(&store, &scope, &id, &span_id).await
+            },
+            map_read_error,
+        )
+    }
+
+    #[pyo3(signature = (scope, id, span_id, cursor=None))]
+    fn get_span_error_by_id<'py>(
+        &self,
+        py: Python<'py>,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
+        id: String,
+        span_id: String,
+        cursor: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let client = crate::http::host_client(py, ClientVariant::NoRedirect)?;
+        let connection = self.config.storage().reader().clone();
+        let reader = Arc::clone(&self.reader);
+        crate::execution::run_async(
+            py,
+            async move {
+                let store = ClickHouseTraces::new(client, connection);
+                reader
+                    .get_span_error_by_id(&store, &scope, &id, &span_id, cursor.as_deref())
+                    .await
+            },
+            map_read_error,
+        )
+    }
+
     fn query_sql<'py>(
         &self,
         py: Python<'py>,
         sql: String,
         #[pyo3(from_py_with = litellm_host_python::from_py_argument)] scope: QueryScope,
         secret: String,
+        #[pyo3(from_py_with = litellm_host_python::from_py_argument)] params: BTreeMap<
+            String,
+            litellm_traces::api::SqlParameter,
+        >,
     ) -> PyResult<Bound<'py, PyAny>> {
         if sql.trim().is_empty() {
             return Err(map_error(
@@ -561,7 +685,13 @@ impl NativeTraceStorage {
             async move {
                 let _permit = readers.acquire()?;
                 let connection = readers.connection(&client, &scope, &secret).await?;
-                litellm_traces_clickhouse::query_sql(&client, &connection, &sql).await
+                litellm_traces_clickhouse::query_sql_with_params(
+                    &client,
+                    &connection,
+                    &sql,
+                    &params,
+                )
+                .await
             },
             map_sql_error,
         )

@@ -1,4 +1,4 @@
-import type { TraceMessage, UIContent, UIMessage } from "../../types";
+import type { TraceMessage } from "../../types";
 import { parseJson, parseMessages } from "../../utils";
 
 export type TextFormat = "markdown" | "code" | "plain";
@@ -51,40 +51,18 @@ export function fieldNode(value: unknown): FieldNode {
 export const fieldEntries = (pairs: readonly (readonly [string, string])[]): readonly FieldEntry[] =>
   pairs.map(([key, value]): FieldEntry => [key, fieldNode(value)]);
 
-export const toTraceMessage = (message: UIMessage): TraceMessage => ({
-  ...message,
-  tool_calls: message.tool_calls?.map((call) => ({
-    name: call.name,
-    args: parseJson(call.arguments) ?? call.arguments,
-  })),
-});
-
-const singleText = (messages: readonly UIMessage[]): string | null =>
-  messages.length === 1 && !messages[0].tool_calls?.length ? messages[0].content : null;
-
 function textView(text: string): PayloadView {
   return { kind: "text", text, format: textFormat(text) };
 }
 
-function standardView(content: UIContent, raw: string, toolOutput: boolean): PayloadView {
-  switch (content.kind) {
-    case "messages": {
-      const toolText = toolOutput ? singleText(content.messages) : null;
-      if (toolText !== null) return { kind: "tool-result", text: toolText };
-      return { kind: "messages", messages: content.messages.map(toTraceMessage) };
-    }
-    case "fields":
-      if (toolOutput) return { kind: "tool-result", text: raw };
-      if (content.fields.length === 0) return textView(raw);
-      return { kind: "fields", entries: fieldEntries(content.fields.map((field) => [field.key, field.value])) };
-    case "text":
-      return toolOutput ? { kind: "tool-result", text: content.text } : textView(content.text);
-  }
-}
-
 function rawView(raw: string, toolOutput: boolean): PayloadView {
   const messages = parseMessages(raw);
-  if (messages) return { kind: "messages", messages };
+  if (messages) {
+    if (toolOutput && messages.length === 1 && !messages[0].tool_calls?.length) {
+      return { kind: "tool-result", text: messages[0].content };
+    }
+    return { kind: "messages", messages };
+  }
   if (toolOutput) return { kind: "tool-result", text: raw };
   const node = fieldNode(raw);
   if (node.kind === "object" && node.entries.length > 0) return { kind: "fields", entries: node.entries };
@@ -92,7 +70,6 @@ function rawView(raw: string, toolOutput: boolean): PayloadView {
   return textView(raw);
 }
 
-/** How a span's input or output reads best: the standard UI shape when the store sent one, else the raw payload. */
-export function payloadView(raw: string, content: UIContent | undefined, toolOutput: boolean): PayloadView {
-  return content ? standardView(content, raw, toolOutput) : rawView(raw, toolOutput);
+export function payloadView(raw: string, toolOutput: boolean): PayloadView {
+  return rawView(raw, toolOutput);
 }
