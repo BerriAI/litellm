@@ -2,7 +2,7 @@
 CRUD ENDPOINTS FOR GUARDRAILS
 """
 
-import concurrent.futures
+import asyncio
 import inspect
 import json
 import os
@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union,
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -21,12 +21,25 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.path_utils import safe_join
+from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
+from litellm.proxy.common_utils.path_utils import is_within, safe_join
+from litellm.proxy.guardrails.content_filter_data import CATEGORIES_DIR, DATA_ROOTS, category_dirs, find_category_file
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.bounded_execution import (
+    ExecutionTimeoutError,
+    await_with_timeout,
+    call_off_loop_with_timeout,
+)
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeCompilationError
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
     build_sandbox_globals,
     compile_sandboxed,
 )
-from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
+from litellm.proxy.guardrails.guardrail_registry import (
+    GuardrailRegistry,
+    contains_encrypted_marker,
+    decrypt_guardrail_litellm_params,
+    encrypt_guardrail_litellm_params,
+)
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.repositories.prisma_protocols import TableActions
@@ -37,6 +50,7 @@ from litellm.types.guardrails import (
     ApplyGuardrailResponse,
     BaseLitellmParams,
     BedrockGuardrailConfigModel,
+    BedrockGuardrailStreamingParams,
     Guardrail,
     GuardrailEventHooks,
     GuardrailInfoResponse,
@@ -71,6 +85,16 @@ GUARDRAIL_REGISTRY: Final = GuardrailRegistry()
 
 def _as_str_object_mapping(mapping: Mapping[str, object]) -> Mapping[str, object]:
     return mapping
+
+
+def _reject_encrypted_litellm_params(litellm_params: object) -> None:
+    """Raise 400 if a client-supplied litellm_params value carries the encrypted-value prefix."""
+    params: Final = litellm_params.model_dump() if isinstance(litellm_params, BaseModel) else litellm_params
+    if contains_encrypted_marker(params):
+        raise HTTPException(
+            status_code=400,
+            detail=f"litellm_params values must not start with {CALLBACK_VAR_ENCRYPTED_PREFIX!r}",
+        )
 
 
 def _guardrails_table(prisma_client: "PrismaClient") -> "TableActions[LiteLLM_GuardrailsTable]":
@@ -389,6 +413,8 @@ async def create_guardrail(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
+    _reject_encrypted_litellm_params(request.guardrail.get("litellm_params"))
+
     try:
         result = await GUARDRAIL_REGISTRY.add_guardrail_to_db(guardrail=request.guardrail, prisma_client=prisma_client)
 
@@ -400,7 +426,7 @@ async def create_guardrail(
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully initialized guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
-        except (ValueError, TypeError) as init_error:
+        except (ValueError, TypeError, CustomCodeCompilationError) as init_error:
             # Configuration error — roll back the DB write so the guardrail isn't orphaned
             if prisma_client is not None:
                 try:
@@ -420,6 +446,8 @@ async def create_guardrail(
             )
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error adding guardrail to db: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -496,6 +524,8 @@ async def update_guardrail(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    _reject_encrypted_litellm_params(request.guardrail.get("litellm_params"))
 
     try:
         # Check if guardrail exists
@@ -721,6 +751,7 @@ async def register_guardrail(
             )
 
     params: Final = request.get_litellm_params_dict()
+    _reject_encrypted_litellm_params(params)
     if params.get("guardrail") != GENERIC_GUARDRAIL_API:
         raise HTTPException(
             status_code=400,
@@ -764,7 +795,7 @@ async def register_guardrail(
         raise HTTPException(status_code=500, detail=str(e))
 
     now: Final = datetime.now(timezone.utc)
-    litellm_params_str: Final = safe_dumps(params)
+    litellm_params_str: Final = safe_dumps(encrypt_guardrail_litellm_params(params))
     guardrail_info: Final = dict(request.guardrail_info or {})
     guardrail_info["submitted_by_user_id"] = user_api_key_dict.user_id
     guardrail_info["submitted_by_email"] = user_api_key_dict.user_email
@@ -838,7 +869,7 @@ def _row_to_submission_item(row: "LiteLLM_GuardrailsTable") -> GuardrailSubmissi
 
     guardrail_info: Final = _parse_json_field(row.guardrail_info) or {}
     team_guardrail: Final = row.team_id is not None
-    raw_params: Final = _parse_json_field(row.litellm_params) or {}
+    raw_params: Final = decrypt_guardrail_litellm_params(_parse_json_field(row.litellm_params) or {})
     masked_params: Final = _get_masked_values(raw_params, unmasked_length=4, number_of_asterisks=4)
     return GuardrailSubmissionItem(
         guardrail_id=row.guardrail_id,
@@ -1017,13 +1048,21 @@ async def approve_guardrail_submission(
                 detail=f"Guardrail is not pending review (status={row.status})",
             )
 
+        litellm_params: Final = _parse_json_field(row.litellm_params)
+        decrypted_params: Final = decrypt_guardrail_litellm_params(litellm_params or {})
+        if contains_encrypted_marker(decrypted_params):
+            raise HTTPException(
+                status_code=409,
+                detail="Guardrail litellm_params do not decrypt with the current key. "
+                "Restart the proxy if the master key was rotated, then approve again.",
+            )
+
         now: Final = datetime.now(timezone.utc)
         await _guardrails_table(prisma_client).update(
             where={"guardrail_id": guardrail_id},
             data={"status": "active", "reviewed_at": now, "updated_at": now},
         )
 
-        litellm_params: Final = _parse_json_field(row.litellm_params)
         guardrail_info: Final = _parse_json_field(row.guardrail_info)
         if not litellm_params:
             raise HTTPException(
@@ -1033,7 +1072,7 @@ async def approve_guardrail_submission(
         guardrail_dict: Final = {
             "guardrail_id": row.guardrail_id,
             "guardrail_name": row.guardrail_name,
-            "litellm_params": litellm_params,
+            "litellm_params": decrypted_params,
             "guardrail_info": guardrail_info or {},
             "team_id": row.team_id,
         }
@@ -1180,6 +1219,8 @@ async def patch_guardrail(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
+    _reject_encrypted_litellm_params(request.litellm_params)
+
     try:
         # Check if guardrail exists and get current data
         existing_guardrail: Final = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
@@ -1202,7 +1243,13 @@ async def patch_guardrail(
             litellm_params_dict: Final = litellm_params.model_dump(exclude_unset=True)
             litellm_params_dict.update(requested_litellm_params)
             merged_litellm_params: Final = _as_str_object_mapping(litellm_params_dict)
-            litellm_params = LitellmParams(**merged_litellm_params)
+            try:
+                litellm_params = LitellmParams(**merged_litellm_params)
+            except ValidationError as validation_error:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid guardrail configuration, update rejected: {validation_error}",
+                ) from validation_error
 
         # Update guardrail_info if provided
         guardrail_info: Final = (
@@ -1250,7 +1297,7 @@ async def patch_guardrail(
                     litellm_params=LitellmParams(**existing_litellm_params),
                     guardrail_info=existing_guardrail.get(
                         "guardrail_info",
-                        {},  # mutable-ok: Guardrail's own constructor takes a plain dict
+                        {},
                     ),
                 ),
                 prisma_client=prisma_client,
@@ -1425,12 +1472,16 @@ async def get_guardrail_ui_settings():
     )
 
 
+def content_filter_data_roots() -> tuple[str, ...]:
+    return DATA_ROOTS
+
+
 @router.get(
     "/guardrails/ui/category_yaml/{category_name}",
     tags=["Guardrails"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_category_yaml(category_name: str):
+async def get_category_yaml(category_name: str, roots: tuple[str, ...] = Depends(content_filter_data_roots)):
     """
     Get the YAML or JSON content for a specific content filter category.
 
@@ -1440,35 +1491,20 @@ async def get_category_yaml(category_name: str):
     Returns:
         The raw YAML or JSON content of the category file with file type indicator
     """
-    # Get the categories directory path
-    categories_dir: Final = os.path.join(
-        os.path.dirname(__file__),
-        "guardrail_hooks",
-        "litellm_content_filter",
-        "categories",
-    )
-
-    # Try to find the file with either .yaml or .json extension
     try:
-        yaml_path: Final = safe_join(categories_dir, f"{category_name}.yaml")
-        json_path: Final = safe_join(categories_dir, f"{category_name}.json")
+        safe_join(CATEGORIES_DIR, f"{category_name}.yaml")
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid category name")
 
-    category_file_path = None
-    file_type = None
-
-    if os.path.exists(yaml_path):
-        category_file_path = yaml_path
-        file_type = "yaml"
-    elif os.path.exists(json_path):
-        category_file_path = json_path
-        file_type = "json"
-    else:
+    category_file_path: Final = find_category_file(category_name, roots)
+    if category_file_path is None:
         raise HTTPException(
             status_code=404,
             detail=f"Category file not found: {category_name} (tried .yaml and .json)",
         )
+    if not any(is_within(category_file_path, category_dir) for category_dir in category_dirs(roots)):
+        raise HTTPException(status_code=400, detail="Invalid category name")
+    file_type: Final = "yaml" if category_file_path.endswith(".yaml") else "json"
 
     try:
         # Read and return the raw content
@@ -1953,7 +1989,10 @@ async def get_provider_specific_params():
     ```
     """
     # Get fields from the models
-    bedrock_fields: Final = _get_fields_from_model(BedrockGuardrailConfigModel)
+    bedrock_fields: Final = {
+        **_get_fields_from_model(BedrockGuardrailConfigModel),
+        **_get_fields_from_model(BedrockGuardrailStreamingParams),
+    }
     presidio_fields: Final = _get_fields_from_model(PresidioPresidioConfigModelUserInterface)
     lakera_v2_fields: Final = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields: Final = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
@@ -2114,15 +2153,20 @@ async def test_custom_code_guardrail(
     try:
         exec_globals: Final = build_sandbox_globals()
 
-        try:
+        def load_module() -> None:
             compiled: Final[CodeType] = compile_sandboxed(request.custom_code)
             exec(compiled, exec_globals)  # noqa: S102
+
+        try:
+            await call_off_loop_with_timeout(load_module, EXECUTION_TIMEOUT_SECONDS, label="test:load")
         except SyntaxError as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
                 error=f"Syntax error in custom code: {e}",
                 error_type="compilation",
             )
+        except ExecutionTimeoutError:
+            return _execution_timeout_response(EXECUTION_TIMEOUT_SECONDS)
         except Exception as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2168,16 +2212,9 @@ async def test_custom_code_guardrail(
             return apply_fn(test_inputs, safe_request_data, request.input_type)
 
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future: Final = executor.submit(execute_guardrail)
-                try:
-                    result: Final = future.result(timeout=EXECUTION_TIMEOUT_SECONDS)
-                except concurrent.futures.TimeoutError:
-                    return TestCustomCodeGuardrailResponse(
-                        success=False,
-                        error=f"Execution timeout: code took longer than {EXECUTION_TIMEOUT_SECONDS} seconds",
-                        error_type="execution",
-                    )
+            result: Final = await _run_test_guardrail(execute_guardrail, EXECUTION_TIMEOUT_SECONDS)
+        except ExecutionTimeoutError:
+            return _execution_timeout_response(EXECUTION_TIMEOUT_SECONDS)
         except Exception as e:
             return TestCustomCodeGuardrailResponse(
                 success=False,
@@ -2207,6 +2244,23 @@ async def test_custom_code_guardrail(
             error=f"Unexpected error: {e}",
             error_type="execution",
         )
+
+
+def _execution_timeout_response(timeout: float) -> TestCustomCodeGuardrailResponse:
+    return TestCustomCodeGuardrailResponse(
+        success=False,
+        error=f"Execution timeout: code took longer than {timeout:g} seconds",
+        error_type="execution",
+    )
+
+
+async def _run_test_guardrail(execute_guardrail: Callable[[], object], timeout: float) -> object:
+    deadline: Final = asyncio.get_running_loop().time() + timeout
+    raw_result: Final = await call_off_loop_with_timeout(execute_guardrail, timeout, label="test")
+    if not inspect.iscoroutine(raw_result):
+        return raw_result
+    remaining: Final = max(deadline - asyncio.get_running_loop().time(), 0.0)
+    return await await_with_timeout(raw_result, remaining, label="test")
 
 
 def _resolve_guardrail_input_type(active_guardrail: CustomGuardrail, input_type: str) -> Literal["request", "response"]:

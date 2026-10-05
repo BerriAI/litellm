@@ -10,6 +10,7 @@ from typing import Final
 
 import litellm
 from litellm import ModelResponse, Router
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import RateLimitType
@@ -37,6 +38,7 @@ class DynamicRateLimiterCache:
         self.ttl = 60  # 1 min ttl
         self.time_fn = time_fn
 
+    @with_service_target("rate_limits")
     async def async_get_cache(self, model: str) -> int | None:
         dt: Final = self.time_fn()
         current_minute: Final = dt.strftime("%H-%M")
@@ -47,6 +49,7 @@ class DynamicRateLimiterCache:
             response = len(_response)
         return response
 
+    @with_service_target("rate_limits")
     async def async_set_cache_sadd(self, model: str, value: list):
         """
         Add value to set.
@@ -82,6 +85,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
     def update_variables(self, llm_router: Router):
         self.llm_router = llm_router
 
+    @with_service_target("rate_limits")
     async def check_available_usage(
         self, model: str, priority: str | None = None
     ) -> tuple[int | None, int | None, int | None, int | None, int | None]:
@@ -179,6 +183,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             )
             return None, None, None, None, None
 
+    @with_service_target("rate_limits")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -234,6 +239,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 )
         return None
 
+    @with_service_target("rate_limits")
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response):
         try:
             if isinstance(response, ModelResponse):
