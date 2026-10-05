@@ -4,6 +4,7 @@ import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import moment from "moment";
+import { parseAsString, useQueryStates } from "nuqs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { DEFAULT_PAGE_SIZE_OPTIONS } from "@/components/shared/DataTable";
@@ -17,6 +18,7 @@ import type { LogEntry } from "../types";
 import {
   DEFAULT_LOGS_SORTING,
   formatLogsWindow,
+  getFilterValue,
   getLogsWindowEndBound,
   LOG_FILTER_IDS,
   type PaginatedResponse,
@@ -49,7 +51,19 @@ interface RequestLogsPanelProps {
 export default function RequestLogsPanel({ accessToken, token, userRole, userID, isActive }: RequestLogsPanelProps) {
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_LOGS_SORTING);
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [localFilters, setLocalFilters] = useState<ColumnFiltersState>([]);
+  const [{ key_alias, exclude_key_alias }, setAliasParams] = useQueryStates(
+    { key_alias: parseAsString, exclude_key_alias: parseAsString },
+    { history: "push" },
+  );
+  const columnFilters = useMemo<ColumnFiltersState>(
+    () => [
+      ...localFilters,
+      ...(key_alias ? [{ id: LOG_FILTER_IDS.KEY_ALIAS, value: key_alias }] : []),
+      ...(exclude_key_alias ? [{ id: LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS, value: exclude_key_alias }] : []),
+    ],
+    [localFilters, key_alias, exclude_key_alias],
+  );
   const [sessionCursors, setSessionCursors] = useState<Record<number, string>>({});
 
   const [timeRange, setTimeRange] = useState<LogsTimeRange>(defaultLogsTimeRange);
@@ -179,7 +193,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   const rowCount = isLastPage ? rowsThroughThisPage : Math.max(filteredLogs.total, rowsThroughThisPage);
 
   const handleSearchChange = useCallback((value: string) => {
-    setColumnFilters((previous) => {
+    setLocalFilters((previous) => {
       const others = previous.filter((filter) => filter.id !== LOG_FILTER_IDS.SEARCH);
       return value === "" ? others : [...others, { id: LOG_FILTER_IDS.SEARCH, value }];
     });
@@ -193,11 +207,23 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
 
-  const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
-    setColumnFilters(updaterOrValue);
-    setSessionCursors({});
-    setPagination((previous) => ({ ...previous, pageIndex: 0 }));
-  }, []);
+  const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>(
+    (updaterOrValue) => {
+      const next = typeof updaterOrValue === "function" ? updaterOrValue(columnFilters) : updaterOrValue;
+      setLocalFilters(
+        next.filter(
+          (filter) => filter.id !== LOG_FILTER_IDS.KEY_ALIAS && filter.id !== LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS,
+        ),
+      );
+      void setAliasParams({
+        key_alias: getFilterValue(next, LOG_FILTER_IDS.KEY_ALIAS) ?? null,
+        exclude_key_alias: getFilterValue(next, LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS) ?? null,
+      });
+      setSessionCursors({});
+      setPagination((previous) => ({ ...previous, pageIndex: 0 }));
+    },
+    [columnFilters, setAliasParams],
+  );
 
   const resetToFirstPage = useCallback(() => {
     setSessionCursors({});
@@ -245,10 +271,11 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
   );
 
   const handleResetFilters = useCallback(() => {
-    setColumnFilters([]);
+    setLocalFilters([]);
+    void setAliasParams({ key_alias: null, exclude_key_alias: null });
     setTimeRange(defaultLogsTimeRange());
     resetToFirstPage();
-  }, [resetToFirstPage]);
+  }, [resetToFirstPage, setAliasParams]);
 
   const handleRowClick = useCallback(
     (log: LogEntry) => {

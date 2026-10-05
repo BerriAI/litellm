@@ -2548,6 +2548,10 @@ async def ui_view_spend_logs(
     ),
     model_group: str | None = fastapi.Query(default=None, description="Filter logs by model group"),
     key_alias: str | None = fastapi.Query(default=None, description="Filter logs by key alias"),
+    exclude_key_alias: str | None = fastapi.Query(
+        default=None,
+        description="Exclude logs whose key alias exactly matches this value; logs without an alias remain included",
+    ),
     end_user: str | None = fastapi.Query(default=None, description="Filter logs by end user"),
     error_code: str | None = fastapi.Query(default=None, description="Filter logs by error code (e.g., '404', '500')"),
     error_message: str | None = fastapi.Query(
@@ -2907,6 +2911,10 @@ async def ui_view_spend_logs(
         if key_alias is not None:
             sql_conditions.append(f"metadata->>'user_api_key_alias' LIKE ${p}")
             sql_params.append(f"%{key_alias}%")
+            p += 1
+        if exclude_key_alias is not None:
+            sql_conditions.append(f"metadata->>'user_api_key_alias' IS DISTINCT FROM ${p}")
+            sql_params.append(exclude_key_alias)
             p += 1
         if error_code is not None:
             sql_conditions.append(f"metadata->'error_information'->>'error_code' = ${p}")

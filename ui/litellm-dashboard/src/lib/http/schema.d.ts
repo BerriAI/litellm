@@ -72108,6 +72108,8 @@ export interface operations {
                 model_group?: string | null;
                 /** @description Filter logs by key alias */
                 key_alias?: string | null;
+                /** @description Exclude logs whose key alias exactly matches this value; logs without an alias remain included */
+                exclude_key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;
                 /** @description Filter logs by error code (e.g., '404', '500') */
@@ -72230,6 +72232,8 @@ export interface operations {
                 model_group?: string | null;
                 /** @description Filter logs by key alias */
                 key_alias?: string | null;
+                /** @description Exclude logs whose key alias exactly matches this value; logs without an alias remain included */
+                exclude_key_alias?: string | null;
                 /** @description Filter logs by end user */
                 end_user?: string | null;
                 /** @description Filter logs by error code (e.g., '404', '500') */
