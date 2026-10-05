@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Final
 
 import pytest
-from anthropic.types import RawContentBlockDeltaEvent, RawMessageDeltaEvent, TextBlock, TextDelta
+from anthropic.types import RawContentBlockDeltaEvent, RawMessageDeltaEvent, TextBlock, TextDelta, ToolParam
 from e2e_config import unique_marker
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
@@ -13,8 +13,37 @@ from structured_output import SENTIMENT_OUTPUT_FORMAT, SENTIMENT_PROMPT, assert_
 
 pytestmark = pytest.mark.e2e
 
+CONVERSE_OPENAI_BACKEND: Final = "bedrock/converse/us.openai.gpt-6.1-sol"
 CONVERSE_CLAUDE_BACKEND: Final = "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 NOVA_BACKEND: Final = "bedrock/us.amazon.nova-2-lite-v1:0"
+
+TOOL_SEARCH: Final[ToolParam] = {
+    "name": "ToolSearch",
+    "description": "Find available tools by query.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"q": {"type": "string"}},
+        "required": ["q"],
+    },
+}
+WEB_FETCH: Final[ToolParam] = {
+    "name": "WebFetch",
+    "description": "Fetch a web page.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"url": {"type": "string"}, "prompt": {"type": "string"}},
+        "required": ["url", "prompt"],
+    },
+}
+WEB_SEARCH: Final[ToolParam] = {
+    "name": "WebSearch",
+    "description": "Search the web.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    },
+}
 
 
 def _register(proxy: ProxyClient, resources: ResourceManager, backend: str) -> str:
@@ -33,6 +62,43 @@ def _register(proxy: ProxyClient, resources: ResourceManager, backend: str) -> s
 
 
 class TestBedrockMessages:
+    def test_converse_tool_result_of_only_tool_references_is_accepted(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = _register(proxy, resources, CONVERSE_OPENAI_BACKEND)
+        client = sdk.anthropic(resources.key()).with_options(timeout=180)
+
+        message = client.messages.create(
+            model=model,
+            max_tokens=64,
+            tools=[TOOL_SEARCH, WEB_FETCH, WEB_SEARCH],
+            messages=[
+                {"role": "user", "content": "find web tools"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "toolu_1", "name": "ToolSearch", "input": {"q": "web"}}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": [
+                                {"type": "tool_reference", "tool_name": "WebFetch"},
+                                {"type": "tool_reference", "tool_name": "WebSearch"},
+                            ],
+                        },
+                        {"type": "text", "text": "reply ok"},
+                    ],
+                },
+            ],  # pyright: ignore[reportArgumentType]  # Anthropic SDK types omit tool_reference blocks
+            extra_body=NO_PROXY_CACHE,
+        )
+
+        assert message.stop_reason is not None, f"Bedrock Converse returned no stop_reason: {message!r}"
+        assert message.content, f"Bedrock Converse returned no content blocks: {message!r}"
+
     def test_converse_output_format_returns_schema_json_text(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
