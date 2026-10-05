@@ -20,7 +20,6 @@ import {
   liveJob,
   outcome,
   providerOf,
-  secondsToFinishReading,
   polling,
 } from "./live";
 import type { Job, Review } from "./types";
@@ -279,24 +278,6 @@ describe("incremental reviews", () => {
   });
 });
 
-describe("time left reading", () => {
-  const started = {
-    created_at: "2026-10-03T16:00:00Z",
-    steps: [{ kind: "stage", label: "Reading executions", at: "2026-10-03T16:00:20Z" }] as Job["steps"],
-    coverage: { selected: 328 } as Job["coverage"],
-  };
-  const now = Date.parse("2026-10-03T16:01:00Z");
-
-  it("projects the remaining traces at the rate since reading started", () => {
-    expect(secondsToFinishReading({ ...started, reviewed: 80 }, now)).toBe(124);
-  });
-
-  it("has no estimate before the first review or once every trace is read", () => {
-    expect(secondsToFinishReading({ ...started, reviewed: 0 }, now)).toBeNull();
-    expect(secondsToFinishReading({ ...started, reviewed: 328 }, now)).toBeNull();
-  });
-});
-
 describe("short verdict", () => {
   it("prefers the issue, otherwise says no issues or not enough evidence", () => {
     expect(shortVerdict(review("a", { verdicts: [pattern("p"), issue("i", "made it up")] }))).toBe("made it up");
@@ -329,6 +310,7 @@ describe("honest live list", () => {
     const job = (status: Job["status"]) => ({ status, reading: [item] }) as unknown as Job;
     expect(inFlight(job("running"))).toEqual([item]);
     expect(inFlight(job("completed"))).toEqual([]);
+    expect(inFlight({ status: "running" } as Job)).toEqual([]);
   });
 
   it("sums up a finished run from when reading started", () => {

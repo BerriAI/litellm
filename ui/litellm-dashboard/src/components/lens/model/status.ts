@@ -1,4 +1,3 @@
-import { secondsToFinishReading } from "./live";
 import { formatActivityTimestamp } from "@/utils/activityTimestamp";
 import type { Job, Lens, LensList } from "./types";
 
@@ -6,19 +5,18 @@ export function workerConnected(worker: LensList["workers"][number], now = Date.
   return !worker.revoked && !!worker.analysis_key_id && now - Date.parse(worker.last_seen) < 120000;
 }
 
-export function activeJob(jobs: readonly Job[]): Job | undefined {
-  return jobs.find((job) => job.status === "queued" || job.status === "running");
+export function readingStart(job: Pick<Job, "steps" | "created_at">): string {
+  return job.steps.find((step) => step.kind === "stage" && step.label === "Reading executions")?.at ?? job.created_at;
 }
 
-export function hasActiveJob(jobs: readonly Job[]): boolean {
-  return activeJob(jobs) !== undefined;
-}
-
-/** One observer polls `/lens`: fast while work is in flight or a worker is being connected, slow otherwise. */
-export function listPollInterval(list: LensList | undefined, settingsOpen: boolean, now: number): number {
-  const running = list?.lenses.some((lens) => hasActiveJob(lens.jobs)) ?? false;
-  const connected = list?.workers.some((worker) => workerConnected(worker, now)) ?? false;
-  return running || (settingsOpen && !connected) ? 2000 : 10000;
+export function secondsToFinishReading(
+  job: Pick<Job, "steps" | "created_at" | "reviewed" | "coverage">,
+  now: number,
+): number | null {
+  const remaining = job.coverage.selected - job.reviewed;
+  const elapsed = (now - Date.parse(readingStart(job))) / 1000;
+  if (remaining <= 0 || job.reviewed <= 0 || elapsed <= 0) return null;
+  return Math.ceil(remaining / (job.reviewed / elapsed));
 }
 
 const PICKUP_GRACE_SECONDS = 6;
@@ -101,6 +99,25 @@ export function queueReasonText(reason: QueueReason): string {
 export function workerTaskText(task: WorkerTask): string {
   const progress = task.selected ? ` · ${task.reviewed} of ${task.selected} traces` : "";
   return `${task.name} · ${task.stage || "starting"}${progress}`;
+}
+
+export function isActive(job: Pick<Job, "status">): boolean {
+  return job.status === "queued" || job.status === "running";
+}
+
+export function activeJob(jobs: readonly Job[]): Job | undefined {
+  return jobs.find(isActive);
+}
+
+export function hasActiveJob(jobs: readonly Job[]): boolean {
+  return activeJob(jobs) !== undefined;
+}
+
+/** One observer polls `/lens`: fast while work is in flight or a worker is being connected, slow otherwise. */
+export function listPollInterval(list: LensList | undefined, settingsOpen: boolean, now: number): number {
+  const running = list?.lenses.some((lens) => hasActiveJob(lens.jobs)) ?? false;
+  const connected = list?.workers.some((worker) => workerConnected(worker, now)) ?? false;
+  return running || (settingsOpen && !connected) ? 2000 : 10000;
 }
 
 export function lensStatus(lens: Lens, connected: boolean): string {

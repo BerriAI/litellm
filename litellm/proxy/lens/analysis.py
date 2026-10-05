@@ -962,8 +962,9 @@ async def examine_executions(
     async with aclosing(concurrent_results(sample.executions, examine, claim.job.settings.concurrency)) as results:
         async for item, review in results:
             screened += 1
-            done: Final = item.execution.id
-            await report(lambda current: tuple(r for r in current if r.execution_id != done), review)
+            await report(
+                lambda current, done=item.execution.id: tuple(r for r in current if r.execution_id != done), review
+            )
             yield item
 
 

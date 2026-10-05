@@ -7,7 +7,6 @@ import type {
   ActivitySelection,
   AnalysisModelInfo,
   Job,
-  Review,
   Lens,
   LensList,
   RunWindow,
@@ -36,10 +35,7 @@ export type Key = z.infer<typeof keySchema>;
 export type KeyPage = z.infer<typeof keyPageSchema>;
 export type KeyInfo = z.infer<typeof keyInfoSchema>["info"];
 
-export interface ReviewPage {
-  readonly reviews: readonly Review[];
-  readonly reviewed: number;
-}
+export type ReviewPage = components["schemas"]["ReviewPage"];
 
 export interface AnalysisKeyRequest {
   readonly model: string;
