@@ -110,3 +110,39 @@ def test_cohere_rerank_selects_v1_or_v2_from_client_fields_and_sends_exact_body(
             results=(_RerankResult(index=0, relevance_score=0.91), _RerankResult(index=1, relevance_score=0.03))
         ), response.text
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", expected_route)]
+
+
+OBJECT_DOCUMENTS: Final = ({"text": DOCUMENTS[0]}, {"text": DOCUMENTS[1]})
+
+
+@pytest.mark.parametrize(
+    ("client_fields", "expected_route"),
+    [
+        pytest.param({}, "/v2/rerank", id="v2"),
+        pytest.param({"max_chunks_per_doc": 3, "return_documents": False}, "/v1/rerank", id="v1-sdk-fields"),
+    ],
+)
+def test_cohere_v1_sdk_object_documents_reach_cohere_unchanged_on_both_api_versions(
+    gateway: Gateway, client_fields: dict[str, object], expected_route: str
+) -> None:
+    expected_body: Final = {
+        "model": "rerank-v3.5",
+        "query": QUERY,
+        "top_n": 1,
+        "documents": list(OBJECT_DOCUMENTS),
+        **client_fields,
+    }
+    with wire_server(_cohere_peer(expected_body, expected_route)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="cohere/rerank-v3.5", api_key=COHERE_KEY, api_base=wire.url, model_info={"mode": "rerank"}
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/rerank",
+            {"model": model, "query": QUERY, "documents": list(OBJECT_DOCUMENTS), "top_n": 1, **client_fields},
+        )
+        assert response.status_code == 200, response.text
+        assert _RerankResponse.model_validate_json(response.content) == _RerankResponse(
+            results=(_RerankResult(index=0, relevance_score=0.91), _RerankResult(index=1, relevance_score=0.03))
+        ), response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", expected_route)]

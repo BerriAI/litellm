@@ -132,9 +132,8 @@ def test_search_tool_create_update_delete_is_read_back_and_applied_without_resta
         missing: Final = candidate.request("GET", f"/search_tools/{identity}")
         assert missing.status_code == 404, missing.text
         refused: Final = candidate.request("POST", f"/v1/search/{name}", {"query": _QUERY})
-        assert refused.json()["error"]["message"] == f"Search tool '{name}' not found in router.search_tools", (
-            refused.text
-        )
+        refusal: Final = (refused.status_code >= 400, refused.json().get("error", {}).get("message"))
+        assert refusal == (True, f"Search tool '{name}' not found in router.search_tools"), refused.text
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/original/search"),
             ("POST", "/rotated/search"),

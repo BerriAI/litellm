@@ -41,24 +41,19 @@ def _data_url(media_type: str, content: bytes) -> str:
     return f"data:{media_type};base64,{base64.b64encode(content).decode()}"
 
 
+def _expected_body(upstream_model: str, document: dict[str, str]) -> dict[str, object]:
+    return {"model": upstream_model, "document": document, "pages": [0, 1], "include_image_base64": True}
+
+
 def _expected_bodies(upstream_model: str) -> tuple[dict[str, object], ...]:
-    return (
-        {
-            "model": upstream_model,
-            "document": {"type": "document_url", "document_url": _data_url("application/pdf", _PDF_BYTES)},
-            "pages": [0, 1],
-            "include_image_base64": True,
-        },
-        {
-            "model": upstream_model,
-            "document": {"type": "image_url", "image_url": _data_url("image/png", _PNG_BYTES)},
-            "pages": [0, 1],
-            "include_image_base64": True,
-        },
+    pdf: Final = _expected_body(
+        upstream_model, {"type": "document_url", "document_url": _data_url("application/pdf", _PDF_BYTES)}
     )
+    png: Final = _expected_body(upstream_model, {"type": "image_url", "image_url": _data_url("image/png", _PNG_BYTES)})
+    return (pdf, png, pdf, pdf)
 
 
-def test_multipart_pdf_and_png_uploads_reach_mistral_as_typed_data_url_documents(gateway: Gateway) -> None:
+def test_multipart_uploads_reach_mistral_as_data_urls_typed_by_the_client_content_type(gateway: Gateway) -> None:
     def respond(request: Request) -> Reply:
         assert (request.method, request.target) == ("POST", "/v1/ocr"), request.target
         assert request.headers["authorization"] == f"Bearer {_MISTRAL_KEY}", request.headers
@@ -84,7 +79,12 @@ def test_multipart_pdf_and_png_uploads_reach_mistral_as_typed_data_url_documents
             model_info={"mode": "ocr"},
         )
         fields: Final = {"model": model, "pages": "[0,1]", "include_image_base64": "true"}
-        uploads: Final = (("doc.pdf", _PDF_BYTES, "application/pdf"), ("scan.png", _PNG_BYTES, "image/png"))
+        uploads: Final = (
+            ("doc.pdf", _PDF_BYTES, "application/pdf"),
+            ("scan.png", _PNG_BYTES, "image/png"),
+            ("blob", _PDF_BYTES, "application/pdf"),
+            ("upload.bin", _PDF_BYTES, "application/pdf"),
+        )
         for upload in uploads:
             response = gateway.request_multipart("/v1/ocr", fields, {"file": upload})
             assert response.status_code == 200, response.text
@@ -93,5 +93,5 @@ def test_multipart_pdf_and_png_uploads_reach_mistral_as_typed_data_url_documents
                 response.text
             )
         received: Final = wire.drain()
-    assert [(request.method, request.target) for request in received] == [("POST", "/v1/ocr")] * 2
+    assert [(request.method, request.target) for request in received] == [("POST", "/v1/ocr")] * len(uploads)
     assert tuple(json.loads(request.body) for request in received) == _expected_bodies("mistral-ocr-latest")
