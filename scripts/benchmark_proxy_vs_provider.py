@@ -9,7 +9,7 @@ USAGE EXAMPLES:
    # Set required environment variables
    export LITELLM_PROXY_URL='http://localhost:4000/chat/completions'
    export PROVIDER_URL='https://api.openai.com/v1/chat/completions'
-   export LITELLM_PROXY_API_KEY='sk-1234'
+   export LITELLM_API_KEY="$LITELLM_MASTER_KEY"
    export PROVIDER_API_KEY='sk-openai-key'
    
    # Run from scripts directory
@@ -45,7 +45,7 @@ REQUIRED ENVIRONMENT VARIABLES:
   - PROVIDER_URL: Full URL to direct provider chat completions endpoint
 
 OPTIONAL ENVIRONMENT VARIABLES:
-  - LITELLM_PROXY_API_KEY: API key for LiteLLM proxy (if auth required)
+  - LITELLM_API_KEY: API key for LiteLLM proxy (if auth required)
   - PROVIDER_API_KEY: API key for direct provider (if auth required)
 
 OUTPUT:
@@ -530,14 +530,14 @@ async def main():
 Environment Variables (required):
   LITELLM_PROXY_URL    - URL of the LiteLLM proxy endpoint (e.g., http://localhost:4000/chat/completions)
   PROVIDER_URL         - URL of the direct provider endpoint (e.g., https://api.openai.com/v1/chat/completions)
-  LITELLM_PROXY_API_KEY - API key for LiteLLM proxy (optional, but may be required)
+  LITELLM_API_KEY       - API key for LiteLLM proxy (optional, but may be required)
   PROVIDER_API_KEY     - API key for direct provider (optional, but may be required)
 
 Examples:
   # 1. Basic usage (recommended - sequential execution)
   export LITELLM_PROXY_URL='http://localhost:4000/chat/completions'
   export PROVIDER_URL='https://api.openai.com/v1/chat/completions'
-  export LITELLM_PROXY_API_KEY='sk-1234'
+  export LITELLM_API_KEY="$LITELLM_MASTER_KEY"
   export PROVIDER_API_KEY='sk-openai-key'
   python scripts/benchmark_proxy_vs_provider.py
   
@@ -604,7 +604,7 @@ Examples:
     # Configuration from environment variables
     LITELLM_PROXY_URL = os.getenv("LITELLM_PROXY_URL")
     PROVIDER_URL = os.getenv("PROVIDER_URL")
-    LITELLM_PROXY_API_KEY = os.getenv("LITELLM_PROXY_API_KEY", "")
+    LITELLM_API_KEY = os.getenv("LITELLM_API_KEY", "")
     PROVIDER_API_KEY = os.getenv("PROVIDER_API_KEY", "")
 
     # Validate required environment variables
@@ -626,11 +626,11 @@ Examples:
     proxy_headers = {
         "Content-Type": "application/json",
     }
-    if LITELLM_PROXY_API_KEY:
-        proxy_headers["Authorization"] = f"Bearer {LITELLM_PROXY_API_KEY}"
+    if LITELLM_API_KEY:
+        proxy_headers["Authorization"] = f"Bearer {LITELLM_API_KEY}"
     else:
         print(
-            "Warning: LITELLM_PROXY_API_KEY not set, requests may fail if authentication is required"
+            "Warning: LITELLM_API_KEY not set, requests may fail if authentication is required"
         )
 
     # Headers for direct provider
@@ -666,7 +666,7 @@ Examples:
     print(f"  Proxy URL:    {LITELLM_PROXY_URL}")
     print(f"  Provider URL: {PROVIDER_URL}")
     print(
-        f"  Proxy API Key: {'Set' if LITELLM_PROXY_API_KEY else 'Not set (may cause auth errors)'}"
+        f"  Proxy API Key: {'Set' if LITELLM_API_KEY else 'Not set (may cause auth errors)'}"
     )
     print(
         f"  Provider API Key: {'Set' if PROVIDER_API_KEY else 'Not set (may cause auth errors)'}"
