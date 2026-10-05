@@ -5658,8 +5658,6 @@ def completion(
             messages = function_call_prompt(messages=messages, functions=functions_unsupported_model)
 
         # For logging - save the values of the litellm-specific params passed in
-        # kwargs is untyped, so reading the flag straight into the call makes it an
-        # Any argument; the annotation keeps it off the unknown-argument budget.
         strict_stream_completion: bool | None = kwargs.get("strict_stream_completion", None)
         requested_litellm_params: Final = get_litellm_params(
             acompletion=acompletion,

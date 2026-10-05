@@ -230,9 +230,6 @@ class CustomStreamWrapper:
             dict(**self.logging_obj.model_call_details.get("litellm_params", {}))
         )
         self.merge_reasoning_content_in_choices: bool = litellm_params.merge_reasoning_content_in_choices or False
-        # GenericLiteLLMParams allows extra fields, so the flag arrives without being
-        # declared on it. The annotation is what keeps this off the unknown-argument
-        # budget; declaring the field would change the proxy OpenAPI spec.
         request_strict: Final[bool | None] = getattr(litellm_params, "strict_stream_completion", None)
         self.strict_stream_completion: bool = (
             bool(litellm.strict_stream_completion) if request_strict is None else bool(request_strict)
@@ -1726,10 +1723,6 @@ class CustomStreamWrapper:
 
     @received_finish_reason.setter
     def received_finish_reason(self, value: str | None) -> None:
-        # A provider assigning this at all is the provider saying the stream
-        # ended, even when the reason it gives is empty. Recording that here
-        # rather than beside each of the dozen assignments keeps the two from
-        # drifting apart.
         self._received_finish_reason = value
         if value is not None:
             self.stream_reported_finished = True
