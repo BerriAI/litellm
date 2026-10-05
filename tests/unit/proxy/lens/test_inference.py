@@ -143,7 +143,7 @@ def test_unknown_model_capacity_requires_explicit_operator_metadata() -> None:
     assert output_tokens(configured) == 32000
 
 
-def test_context_preflight_uses_whole_conversation_and_smallest_deployment() -> None:
+def test_context_preflight_only_rejects_when_every_deployment_is_too_small() -> None:
     from litellm.proxy.lens.inference import ModelCapacity
 
     params: Final = DeploymentParams(model="openai/lens-configured-context", max_tokens=400)
@@ -161,8 +161,12 @@ def test_context_preflight_uses_whole_conversation_and_smallest_deployment() -> 
     large: Final = Deployment(litellm_params=params, model_info=ModelCapacity(max_input_tokens=10000))
     assert not exceeds_context((small, large), short)
     assert not exceeds_context((large,), long)
-    assert exceeds_context((large, small), long)
-    assert not exceeds_context((Deployment(litellm_params=params),), long)
+    assert not exceeds_context((large, small), long)
+    assert not exceeds_context((small, large), long)
+    assert exceeds_context((small,), long)
+    unknown: Final = Deployment(litellm_params=params)
+    assert not exceeds_context((unknown,), long)
+    assert not exceeds_context((small, unknown), long)
 
 
 def test_provider_context_failure_recognizes_typed_overflow_without_reclassifying_other_errors() -> None:

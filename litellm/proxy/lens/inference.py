@@ -122,10 +122,9 @@ def catalog_capacity(model: str) -> ModelCapacity:
 
 
 def request_messages(body: ModelRequest | str) -> tuple[AllMessageValues, ...]:
-    if isinstance(body, str):
-        return ({"role": "system", "content": _SYSTEM}, {"role": "user", "content": body})
-    if not body.messages:
-        return request_messages(body.prompt)
+    if isinstance(body, str) or not body.messages:
+        prompt: Final = body if isinstance(body, str) else body.prompt
+        return ({"role": "system", "content": _SYSTEM}, {"role": "user", "content": prompt})
     conversation: Final[tuple[AllMessageValues, ...]] = tuple(
         {"role": "user", "content": message.content}
         if message.role == "user"
@@ -145,7 +144,7 @@ def cache_injection_points(body: ModelRequest) -> tuple[CacheControlMessageInjec
 
 
 def exceeds_context(deployments: tuple[Deployment, ...], body: ModelRequest) -> bool:
-    return any(deployment_exceeds_context(deployment, body) for deployment in deployments)
+    return all(deployment_exceeds_context(deployment, body) for deployment in deployments)
 
 
 def deployment_exceeds_context(deployment: Deployment, body: ModelRequest) -> bool:
