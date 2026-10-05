@@ -31,6 +31,8 @@ const job: Job = {
   steps: [],
   reviews: [],
   reviewed: 0,
+  reading: [],
+  activities: [],
   trigger: "schedule",
   coverage,
   attempts: 0,

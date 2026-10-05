@@ -664,8 +664,7 @@ def merge_results(lens: Lens, result: Result, revision: int, now: datetime) -> L
 
 @router.post("/worker/{lens_id}/{job_id}/heartbeat", response_model=bool)
 async def heartbeat(lens_id: str, job_id: str, worker: WorkerAuth) -> bool:
-    _, job = await assigned(lens_id, job_id, worker)
-    return await progress(lens_id, job_id, Progress(stage=job.stage, coverage=job.coverage), worker)
+    return await progress(lens_id, job_id, Progress(), worker)
 
 
 async def claim_candidate(candidate: Lens, worker: Worker, now: datetime) -> Claim | None:
