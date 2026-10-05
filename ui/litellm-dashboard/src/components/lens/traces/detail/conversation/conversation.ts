@@ -172,17 +172,16 @@ function withoutForwardedAnswers(
 }
 
 function agentLabels(agents: readonly Span[]): ReadonlyMap<string, string> {
-  const groups = new Map<string, Span[]>();
-  for (const agent of agents) {
-    const name = agent.name || agent.agent || "Agent";
-    groups.set(name, [...(groups.get(name) ?? []), agent]);
-  }
+  const named = agents.map((agent) => ({ agent, name: agent.name || agent.agent || "Agent" }));
   return new Map(
-    [...groups].flatMap(([name, group]) =>
-      group
-        .sort((a, b) => a.start_offset_ms - b.start_offset_ms || a.span_id.localeCompare(b.span_id))
-        .map((agent, index) => [agent.span_id, group.length > 1 ? `${name} (${index + 1})` : name] as const),
-    ),
+    named.map(({ agent, name }) => {
+      const siblings = named.filter((candidate) => candidate.name === name);
+      const preceding = siblings.filter(
+        ({ agent: other }) =>
+          (other.start_offset_ms - agent.start_offset_ms || other.span_id.localeCompare(agent.span_id)) < 0,
+      );
+      return [agent.span_id, siblings.length > 1 ? `${name} (${preceding.length + 1})` : name];
+    }),
   );
 }
 
