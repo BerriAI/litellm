@@ -575,12 +575,7 @@ def _head_strips() -> bool:
     return os.environ.get("INTEGRATION_LEG", "head") == "head"
 
 
-def _owned_config(
-    wire: Wire,
-    directory: Path,
-    *,
-    names: Iterable[str] = tuple(_NAMES),
-) -> Path:
+def _owned_config(wire: Wire, directory: Path, *, names: Iterable[str] = tuple(_NAMES)) -> Path:
     base: Final = _JSON.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     config: Final[dict[str, JsonValue]] = {
         **base,
