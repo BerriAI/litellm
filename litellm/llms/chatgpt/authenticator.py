@@ -9,7 +9,9 @@ import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.asyncify import can_block_current_thread
+from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 from .common_utils import (
@@ -40,6 +42,14 @@ _JSON_OBJECT_ADAPTER: Final = TypeAdapter(JsonObject)
 
 def _optional_str(value: JsonValue | None) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _token_refresh_timeout() -> httpx.Timeout:
+    configured: Final = get_configured_request_timeout()
+    seconds: Final = (
+        TOKEN_REFRESH_TIMEOUT_SECONDS if configured is None else min(configured, TOKEN_REFRESH_TIMEOUT_SECONDS)
+    )
+    return httpx.Timeout(seconds, connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS)
 
 
 class Authenticator:
@@ -323,7 +333,7 @@ class Authenticator:
                     "refresh_token": refresh_token,
                     "scope": "openid profile email",
                 },
-                timeout=TOKEN_REFRESH_TIMEOUT_SECONDS,
+                timeout=_token_refresh_timeout(),
             )
             resp.raise_for_status()
             data: Final = _JSON_OBJECT_ADAPTER.validate_python(resp.json())

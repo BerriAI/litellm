@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
+import litellm
+from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS, HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.llms.chatgpt.authenticator import (
     TOKEN_REFRESH_TIMEOUT_SECONDS,
     Authenticator,
@@ -59,7 +61,17 @@ class TestChatGPTAuthenticator:
             token = authenticator.get_access_token()
             assert token == "token-new"
 
-    def test_refresh_tokens_uses_bounded_timeout(self, authenticator):
+    @pytest.mark.parametrize(
+        ("request_timeout", "expected_read"),
+        [
+            (DEFAULT_REQUEST_TIMEOUT_SECONDS, TOKEN_REFRESH_TIMEOUT_SECONDS),
+            (TOKEN_REFRESH_TIMEOUT_SECONDS * 4.0, TOKEN_REFRESH_TIMEOUT_SECONDS),
+            (TOKEN_REFRESH_TIMEOUT_SECONDS / 3.0, TOKEN_REFRESH_TIMEOUT_SECONDS / 3.0),
+        ],
+    )
+    def test_refresh_tokens_uses_bounded_timeout(self, authenticator, monkeypatch, request_timeout, expected_read):
+        monkeypatch.setattr(litellm, "request_timeout", request_timeout)
+        monkeypatch.setattr(litellm, "request_timeout_explicitly_set", False)
         client = MagicMock()
         response = MagicMock()
         response.json.return_value = {
@@ -74,7 +86,9 @@ class TestChatGPTAuthenticator:
             refreshed = authenticator._refresh_tokens("refresh-123")
 
         assert refreshed["access_token"] == "token-new"
-        assert client.post.call_args.kwargs["timeout"] == TOKEN_REFRESH_TIMEOUT_SECONDS
+        timeout = client.post.call_args.kwargs["timeout"]
+        assert timeout.read == expected_read
+        assert timeout.connect == HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 
     @pytest.mark.asyncio
     async def test_get_access_token_refuses_device_code_login_in_event_loop(self, authenticator):
