@@ -133,6 +133,7 @@ def wire_server(
 
     class OwnedHTTPServer(ThreadingHTTPServer):
         daemon_threads = False
+        request_queue_size = 128
 
         def server_bind(self) -> None:
             super().server_bind()

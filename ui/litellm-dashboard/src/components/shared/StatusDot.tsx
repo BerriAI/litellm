@@ -5,6 +5,7 @@ import { cn } from "@/lib/cva.config";
 const colors = {
   ok: "fill-emerald-500 text-emerald-500",
   warn: "fill-amber-500 text-amber-500",
+  error: "fill-red-500 text-red-500",
   off: "fill-slate-400 text-slate-400",
 };
 

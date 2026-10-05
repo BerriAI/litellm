@@ -23,6 +23,7 @@ from mcp.types import Tool
 import litellm
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedToolsCaller
 from litellm.proxy._experimental.mcp_server.tool_search import (
     AGENT_SEARCH_TOOL_NAME,
     MCP_TOOL_CALL_TOOL_NAME,
@@ -32,12 +33,14 @@ from litellm.proxy._experimental.mcp_server.tool_search import (
     ToolSearchResult,
     coerce_top_k,
     get_virtual_tool_definitions,
+    handle_mcp_tool_search,
     search_mcp_tools,
     search_tools,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.semantic_text_index import EmbeddingFailed, SemanticTextIndex, Vector
-from litellm.types.mcp import MCPToolSearchSettings
+from litellm.types.mcp import MCPToolSearchSettings, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 def _make_tools(specs: list[tuple[str, str]]) -> tuple[Tool, ...]:
@@ -1353,3 +1356,33 @@ async def test_handle_mcp_tool_call_scoped_denial_names_the_binding_agent() -> N
     assert exc_info.value.status_code == 403
     assert "MCP server 'github'" in exc_info.value.detail["error"]
     assert "agent 'agent-123'" in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_search_leaves_the_listed_tools_slot_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The search lists the whole catalog but serves only its hits, so the listing must not fill the
+    caller's listed-tools slot: a later call to a tool the search never returned is not a listed tool."""
+    monkeypatch.setattr(litellm, "mcp_tool_search", None)
+    manager = mcp_operations.global_mcp_server_manager
+    server = MCPServer(server_id="search-slot", name="search-slot", transport=MCPTransport.http, url="http://slot")
+    user = UserAPIKeyAuth(api_key="sk-search-slot", user_id="searcher")
+    upstream = [
+        Tool(name="echo", description="Echo text back", inputSchema={"type": "object"}),
+        Tool(name="delete_note", description="Delete a note", inputSchema={"type": "object"}),
+    ]
+    with (
+        patch.dict(manager.tool_name_to_mcp_server_name_mapping),
+        patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
+        patch.object(manager, "_create_mcp_client", AsyncMock(return_value=object())),
+        patch.object(manager, "_fetch_tools_with_timeout", AsyncMock(return_value=upstream)),
+    ):
+        try:
+            result = await handle_mcp_tool_search(query="echo", top_k=1, user_api_key_dict=user)
+            caller = ListedToolsCaller(user_api_key_auth=user)
+            listed = [manager.get_listed_tool(server, tool.name, caller) for tool in upstream]
+        finally:
+            manager._drop_listed_tools(server.server_id)
+
+    assert result.is_error is False
+    assert [hit["name"] for hit in json.loads(result.content[0].text)] == ["search-slot-echo"]
+    assert listed == [None, None]

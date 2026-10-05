@@ -16,12 +16,6 @@ pub enum Error {
     InvalidResponse,
     #[error("ClickHouse insert exceeds the encoded size limit")]
     InsertTooLarge,
-    #[error("Trace exceeds the interactive read budget; use a filtered trace query")]
-    ReadTooLarge,
-    #[error("ClickHouse schema setup failed with HTTP status {0}")]
-    SchemaFailed(u16),
-    #[error("ClickHouse schema setup transport failed")]
-    SchemaTransport,
     #[error("trace SQL queries require a configured proxy master key")]
     MissingSecret,
     #[error("invalid trace query scope")]
@@ -34,12 +28,6 @@ pub enum Error {
     ProvisionFailed(u16),
     #[error("ClickHouse reader provisioning transport failed")]
     ProvisionTransport,
-    #[error("Invalid {0} cursor")]
-    InvalidCursor(&'static str),
-    #[error("Multiple traces have this ID; provide trace_ref")]
-    AmbiguousTrace,
-    #[error("Trace changed while paging; refresh the trace to continue")]
-    TraceChanged,
     #[error(transparent)]
     Decode(#[from] litellm_traces::Error),
     #[error("trace ingestion task failed")]
@@ -47,14 +35,7 @@ pub enum Error {
     #[error(transparent)]
     Storage(#[from] litellm_storage_clickhouse::Error),
     #[error(transparent)]
+    Migration(#[from] sqlx::migrate::MigrateError),
+    #[error(transparent)]
     Cached(#[from] std::sync::Arc<Error>),
-}
-
-impl From<litellm_traces_cache::Error> for Error {
-    fn from(error: litellm_traces_cache::Error) -> Self {
-        match error {
-            litellm_traces_cache::Error::Serialization(_) => Self::InvalidResponse,
-            litellm_traces_cache::Error::ReadTooLarge => Self::ReadTooLarge,
-        }
-    }
 }
