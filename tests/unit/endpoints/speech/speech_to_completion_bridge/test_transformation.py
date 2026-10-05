@@ -11,14 +11,27 @@ from litellm.endpoints.speech.speech_to_completion_bridge.transformation import 
 )
 from litellm.types.utils import ChatCompletionAudioResponse, Choices, Message, ModelResponse
 
-GEMINI_TTS_MODEL: Final = "gemini-3.1-flash-tts-preview"
+GEMINI_TTS_MODEL: Final = "gemini-3.8-flash-tts"
 PCM_BYTES: Final = b"\x01\x02\x03\x04" * 6
+WAV_BYTES: Final = (
+    b"RIFF"
+    + (36 + len(PCM_BYTES)).to_bytes(4, "little")
+    + b"WAVEfmt "
+    + (16).to_bytes(4, "little")
+    + (1).to_bytes(2, "little")
+    + (1).to_bytes(2, "little")
+    + (24000).to_bytes(4, "little")
+    + (48000).to_bytes(4, "little")
+    + (2).to_bytes(2, "little")
+    + (16).to_bytes(2, "little")
+    + b"data"
+    + len(PCM_BYTES).to_bytes(4, "little")
+    + PCM_BYTES
+)
 
 
 def _model_response(model: str, pcm: bytes) -> ModelResponse:
-    audio: Final = ChatCompletionAudioResponse(
-        data=base64.b64encode(pcm).decode(), expires_at=0, transcript="hello"
-    )
+    audio: Final = ChatCompletionAudioResponse(data=base64.b64encode(pcm).decode(), expires_at=0, transcript="hello")
     return ModelResponse(model=model, choices=[Choices(message=Message(content=None, audio=audio))])
 
 
@@ -93,6 +106,16 @@ def test_gemini_tts_pcm_response_returns_raw_pcm_bytes() -> None:
     assert response.response.headers["content-type"] == "audio/pcm"
 
 
+def test_gemini_tts_pcm_response_strips_existing_wav_header() -> None:
+    response: Final = SpeechToCompletionBridgeTransformationHandler().transform_response(
+        model_response=_model_response(GEMINI_TTS_MODEL, WAV_BYTES),
+        response_format="pcm",
+    )
+
+    assert response.response.content == PCM_BYTES
+    assert response.response.headers["content-type"] == "audio/pcm"
+
+
 @pytest.mark.parametrize("response_format", ["wav", None])
 def test_gemini_tts_wav_and_default_responses_wrap_pcm_in_wav(response_format: str | None) -> None:
     response: Final = SpeechToCompletionBridgeTransformationHandler().transform_response(
@@ -104,6 +127,19 @@ def test_gemini_tts_wav_and_default_responses_wrap_pcm_in_wav(response_format: s
     assert body[:4] == b"RIFF"
     assert body[8:12] == b"WAVE"
     assert body[44:] == PCM_BYTES
+    assert response.response.headers["content-type"] == "audio/wav"
+
+
+@pytest.mark.parametrize("response_format", ["wav", None])
+def test_gemini_tts_wav_and_default_responses_keep_existing_wav(
+    response_format: str | None,
+) -> None:
+    response: Final = SpeechToCompletionBridgeTransformationHandler().transform_response(
+        model_response=_model_response(GEMINI_TTS_MODEL, WAV_BYTES),
+        response_format=response_format,
+    )
+
+    assert response.response.content == WAV_BYTES
     assert response.response.headers["content-type"] == "audio/wav"
 
 
