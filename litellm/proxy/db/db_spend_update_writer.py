@@ -105,6 +105,15 @@ RESPONSES_SESSION_CALL_TYPES: Final = frozenset({CallTypes.responses.value, Call
 _SPEND_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
+def _log_agent_spend_update_results(results: Sequence[BaseException | None]) -> None:
+    for result in results:
+        if isinstance(result, BaseException):
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: agent spend update failed: %s",
+                "".join(traceback.format_exception(result)),
+            )
+
+
 def _org_member_transaction_key(org_id: str, user_id: str) -> str:
     return f"organization_id::{quote(org_id, safe='')}::user_id::{quote(user_id, safe='')}"
 
@@ -1157,18 +1166,22 @@ class DBSpendUpdateWriter:
         try:
             spend_metadata: Final = _SPEND_METADATA_ADAPTER.validate_json(metadata_json)
             billing_counter: Final = spend_metadata.get("billing_agent_counter_key")
-            await self._update_agent_db(
-                response_cost=response_cost,
-                agent_id=_agent_id_for_spend,
-                prisma_client=prisma_client,
-                counter_key=billing_counter if isinstance(billing_counter, str) else None,
+            results: Final = await asyncio.gather(
+                self._update_agent_db(
+                    response_cost=response_cost,
+                    agent_id=_agent_id_for_spend,
+                    prisma_client=prisma_client,
+                    counter_key=billing_counter if isinstance(billing_counter, str) else None,
+                ),
+                self._update_target_agent_db(
+                    response_cost=response_cost,
+                    spend_metadata=spend_metadata,
+                    billing_counter=billing_counter,
+                    prisma_client=prisma_client,
+                ),
+                return_exceptions=True,
             )
-            await self._update_target_agent_db(
-                response_cost=response_cost,
-                spend_metadata=spend_metadata,
-                billing_counter=billing_counter,
-                prisma_client=prisma_client,
-            )
+            _log_agent_spend_update_results(results)
         except Exception:
             verbose_proxy_logger.debug(
                 "_batch_database_updates: _update_agent_db failed: %s",

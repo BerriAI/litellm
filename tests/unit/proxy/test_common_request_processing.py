@@ -4300,6 +4300,7 @@ class TestStreamCloseOnDisconnect:
         reservation = object()
         user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
         user_api_key_dict.budget_reservation = reservation
+        user_api_key_dict.agent_invocation_cost = None
         gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
             response=MagicMock(),
             user_api_key_dict=user_api_key_dict,

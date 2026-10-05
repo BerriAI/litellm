@@ -71,10 +71,10 @@ async def test_daily_spend_tracking_with_disabled_spend_logs():
         }
 
         # Call the method
+        previous_tasks: Final = asyncio.all_tasks()
         await db_writer.update_database(**test_data)
-
-        # Let the single batched task run
-        await asyncio.sleep(0)
+        batch_tasks: Final = tuple(task for task in asyncio.all_tasks() if task not in previous_tasks)
+        await asyncio.gather(*batch_tasks)
 
         # Verify that _insert_spend_log_to_db was NOT called (since disable_spend_logs is True)
         db_writer._insert_spend_log_to_db.assert_not_called()
@@ -109,6 +109,7 @@ async def test_update_database_attributes_router_rejected_failure_to_model_group
         patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
         patch("litellm.proxy.proxy_server.llm_router", llm_router),  # test-quality-ok: get_llm_router reads this proxy_server module global at call time; no injection seam
     ):
+        previous_tasks: Final = asyncio.all_tasks()
         await db_writer.update_database(
             token="test-token",
             user_id="test-user",
@@ -126,7 +127,8 @@ async def test_update_database_attributes_router_rejected_failure_to_model_group
             end_time=datetime.now(timezone.utc),
             response_cost=0.0,
         )
-        await asyncio.sleep(0)
+        batch_tasks: Final = tuple(task for task in asyncio.all_tasks() if task not in previous_tasks)
+        await asyncio.gather(*batch_tasks)
 
     payload: Final = db_writer.add_spend_log_transaction_to_daily_user_transaction.call_args[1]["payload"]
     assert payload["model_group"] == "openai-outage"
@@ -2238,6 +2240,7 @@ async def test_daily_agent_receives_deepcopied_payload():
             return_value=fake_payload,
         ),
     ):
+        previous_tasks: Final = asyncio.all_tasks()
         await db_writer.update_database(
             token="test-token",
             user_id="test-user",
@@ -2251,8 +2254,8 @@ async def test_daily_agent_receives_deepcopied_payload():
             response_cost=0.1,
         )
 
-        # Let the single batched task run
-        await asyncio.sleep(0)
+        batch_tasks: Final = tuple(task for task in asyncio.all_tasks() if task not in previous_tasks)
+        await asyncio.gather(*batch_tasks)
 
     # The agent handler should have been called
     assert len(captured_agent_payloads) == 1
@@ -2730,6 +2733,7 @@ async def test_update_database_does_not_deepcopy_on_request_path():
             counting_deepcopy,
         ),
     ):
+        previous_tasks: Final = asyncio.all_tasks()
         await db_writer.update_database(
             token="test-token",
             user_id="test-user",
@@ -2751,8 +2755,8 @@ async def test_update_database_does_not_deepcopy_on_request_path():
         assert captured_spend_log["model_at_call"] == "gpt-4"
         assert fake_payload["spend"] == 0.1
 
-        # Now let the batch background task run; the deepcopy happens here.
-        await asyncio.sleep(0)
+        batch_tasks: Final = tuple(task for task in asyncio.all_tasks() if task not in previous_tasks)
+        await asyncio.gather(*batch_tasks)
 
     assert len(deepcopy_calls) >= 1
     assert len(captured_batch_payloads) == 1
@@ -4985,6 +4989,45 @@ async def test_target_agent_counter_key_queues_spend_for_billing_and_target_agen
         billing_counter: 0.4,
         target_counter: 0.4,
     }
+
+
+@pytest.mark.asyncio
+async def test_target_agent_counter_key_queues_spend_when_billing_counter_mismatches_agent() -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    now: Final = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    billing_counter: Final = "spend:agent:other-billing-agent"
+    target_counter: Final = "spend:agent:target-agent"
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "demo-model",
+            "litellm_params": {
+                "metadata": {
+                    "billing_agent_id": "billing-agent",
+                    "billing_agent_counter_key": billing_counter,
+                    "target_agent_id": "target-agent",
+                    "target_agent_counter_key": target_counter,
+                }
+            },
+        },
+        response_obj={},
+        start_time=now,
+        end_time=now,
+    )
+    writer: Final = DBSpendUpdateWriter()
+    await writer._batch_database_updates(
+        response_cost=0.4,
+        user_id=None,
+        hashed_token=None,
+        team_id=None,
+        org_id=None,
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload=payload,
+    )
+    transactions: Final = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["agent_list_transactions"] == {target_counter: 0.4}
 
 
 @pytest.mark.asyncio

@@ -274,7 +274,10 @@ async def test_handle_budget_for_entity_updates_only_cleared_or_supplied_fields(
     budget_update: Final = AsyncMock()
     prisma_client: Final = cast(
         PrismaClient,
-        SimpleNamespace(db=SimpleNamespace(litellm_budgettable=SimpleNamespace(update=budget_update))),
+        SimpleNamespace(
+            db=SimpleNamespace(litellm_budgettable=SimpleNamespace(update=budget_update)),
+            writer_db=SimpleNamespace(litellm_agentstable=SimpleNamespace(find_first=AsyncMock(return_value=None))),
+        ),
     )
 
     with (
