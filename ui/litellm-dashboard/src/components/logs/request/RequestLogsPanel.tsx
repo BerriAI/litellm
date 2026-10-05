@@ -5,7 +5,7 @@ import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import moment from "moment";
 import { parseAsString, useQueryStates } from "nuqs";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { DEFAULT_PAGE_SIZE_OPTIONS } from "@/components/shared/DataTable";
 import { Button } from "@/components/ui/button";
@@ -56,14 +56,19 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     { key_alias: parseAsString, exclude_key_alias: parseAsString },
     { history: "push" },
   );
-  const columnFilters = useMemo<ColumnFiltersState>(
-    () => [
-      ...localFilters,
-      ...(key_alias ? [{ id: LOG_FILTER_IDS.KEY_ALIAS, value: key_alias }] : []),
-      ...(exclude_key_alias ? [{ id: LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS, value: exclude_key_alias }] : []),
-    ],
-    [localFilters, key_alias, exclude_key_alias],
-  );
+  const columnFilters = useMemo<ColumnFiltersState>(() => {
+    const aliasFilters: ColumnFiltersState = [];
+    if (exclude_key_alias) {
+      aliasFilters.push({ id: LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS, value: exclude_key_alias });
+    } else if (key_alias) {
+      aliasFilters.push({ id: LOG_FILTER_IDS.KEY_ALIAS, value: key_alias });
+    }
+    return [...localFilters, ...aliasFilters];
+  }, [localFilters, key_alias, exclude_key_alias]);
+  const columnFiltersRef = useRef<ColumnFiltersState>(columnFilters);
+  useEffect(() => {
+    columnFiltersRef.current = columnFilters;
+  }, [columnFilters]);
   const [sessionCursors, setSessionCursors] = useState<Record<number, string>>({});
 
   const [timeRange, setTimeRange] = useState<LogsTimeRange>(defaultLogsTimeRange);
@@ -209,20 +214,31 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>(
     (updaterOrValue) => {
-      const next = typeof updaterOrValue === "function" ? updaterOrValue(columnFilters) : updaterOrValue;
+      const next = typeof updaterOrValue === "function" ? updaterOrValue(columnFiltersRef.current) : updaterOrValue;
+      const nextKeyAlias = getFilterValue(next, LOG_FILTER_IDS.KEY_ALIAS);
+      const nextExcludeKeyAlias = getFilterValue(next, LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS);
+      const normalizedNext = next.filter(
+        (filter) => filter.id !== LOG_FILTER_IDS.KEY_ALIAS && filter.id !== LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS,
+      );
+      if (nextExcludeKeyAlias !== undefined) {
+        normalizedNext.push({ id: LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS, value: nextExcludeKeyAlias });
+      } else if (nextKeyAlias !== undefined) {
+        normalizedNext.push({ id: LOG_FILTER_IDS.KEY_ALIAS, value: nextKeyAlias });
+      }
+      columnFiltersRef.current = normalizedNext;
       setLocalFilters(
-        next.filter(
+        normalizedNext.filter(
           (filter) => filter.id !== LOG_FILTER_IDS.KEY_ALIAS && filter.id !== LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS,
         ),
       );
       void setAliasParams({
-        key_alias: getFilterValue(next, LOG_FILTER_IDS.KEY_ALIAS) ?? null,
-        exclude_key_alias: getFilterValue(next, LOG_FILTER_IDS.EXCLUDE_KEY_ALIAS) ?? null,
+        key_alias: nextExcludeKeyAlias === undefined ? nextKeyAlias ?? null : null,
+        exclude_key_alias: nextExcludeKeyAlias ?? null,
       });
       setSessionCursors({});
       setPagination((previous) => ({ ...previous, pageIndex: 0 }));
     },
-    [columnFilters, setAliasParams],
+    [setAliasParams],
   );
 
   const resetToFirstPage = useCallback(() => {

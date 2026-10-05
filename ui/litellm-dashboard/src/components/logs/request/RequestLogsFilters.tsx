@@ -29,6 +29,7 @@ const KEY_ALIAS_OPERATORS = [
   { value: "is", label: "is" },
   { value: "is not", label: "is not" },
 ] as const;
+type KeyAliasOperator = (typeof KEY_ALIAS_OPERATORS)[number]["value"];
 
 const STATUS_FILTER_ITEMS = [
   { value: ALL_VALUE, label: "All Statuses" },
@@ -107,14 +108,14 @@ function KeyAliasFilterField({
   teamId: string;
 }) {
   const [search, setSearch] = useState("");
-  const [operator, setOperator] = useState<"is" | "is not">("is");
-  const selectedOperator = (): "is" | "is not" => {
-    if (excludeValue !== "") return "is not";
-    if (value !== "") return "is";
-    return operator;
-  };
-  const activeOperator = selectedOperator();
-  const handleOperatorChange = (next: "is" | "is not" | null) => {
+  const [operator, setOperator] = useState<KeyAliasOperator>("is");
+  let activeOperator: KeyAliasOperator = operator;
+  if (excludeValue !== "") {
+    activeOperator = "is not";
+  } else if (value !== "") {
+    activeOperator = "is";
+  }
+  const handleOperatorChange = (next: KeyAliasOperator | null) => {
     if (next === null || next === activeOperator) return;
     const selectedAlias = value || excludeValue || undefined;
     setOperator(next);

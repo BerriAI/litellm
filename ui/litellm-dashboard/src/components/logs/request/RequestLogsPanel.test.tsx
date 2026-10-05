@@ -526,6 +526,15 @@ describe("RequestLogsPanel", () => {
       await waitFor(() => expect(lastCall()?.params?.exclude_key_alias).toBeUndefined());
     });
 
+    it("treats conflicting Key Alias URL parameters as one mutually exclusive filter", async () => {
+      renderPanel("key_alias=quiet&exclude_key_alias=noisy");
+
+      await waitFor(() => expect(lastCall()?.params?.exclude_key_alias).toBe("noisy"));
+      expect(lastCall()?.params?.key_alias).toBeUndefined();
+      expect(screen.getByTestId("filter-chip-exclude_key_alias")).toHaveTextContent("noisy");
+      expect(screen.queryByTestId("filter-chip-key_alias")).not.toBeInTheDocument();
+    });
+
     it("keeps an excluded Key Alias on the next page", async () => {
       vi.mocked(uiSpendLogsCall).mockResolvedValue({
         data: Array.from({ length: 25 }, (_, index) => logEntry({ request_id: `req-${index}` })),

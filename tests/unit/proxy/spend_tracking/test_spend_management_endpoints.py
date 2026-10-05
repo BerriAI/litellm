@@ -3623,7 +3623,9 @@ async def test_ui_view_spend_logs_excludes_exact_key_alias_before_pagination(cli
 
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.prisma_client",
-        make_ui_spend_logs_mock_prisma(logs, filter_by_alias, query_observer=lambda sql, params: queries.append(sql)),
+        make_ui_spend_logs_mock_prisma(
+            logs, filter_by_alias, query_observer=lambda sql, params: queries.append((sql, params))
+        ),
     )
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
@@ -3651,7 +3653,12 @@ async def test_ui_view_spend_logs_excludes_exact_key_alias_before_pagination(cli
             ["req1", "req2"],
             ["req3"],
         ]
-        assert all("user_api_key_alias' IS DISTINCT FROM" in query for query in queries if "WHERE" in query)
+        for sql, params in queries:
+            if "WHERE" not in sql:
+                continue
+            alias_placeholder = re.search(r"user_api_key_alias' IS DISTINCT FROM \$(\d+)", sql)
+            assert alias_placeholder is not None
+            assert params[int(alias_placeholder.group(1)) - 1] == "noisy"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -7199,8 +7206,9 @@ async def test_ui_view_spend_logs_grouped_exclusion_reaches_page_count_and_repre
         queries = [call.args for call in mock_prisma.db.query_raw.await_args_list]
         assert len(queries) >= 3
         for sql, *params in queries[:3]:
-            assert "metadata->>'user_api_key_alias' IS DISTINCT FROM $3" in sql
-            assert params[2] == "noisy"
+            alias_placeholder = re.search(r"user_api_key_alias' IS DISTINCT FROM \$(\d+)", sql)
+            assert alias_placeholder is not None
+            assert params[int(alias_placeholder.group(1)) - 1] == "noisy"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

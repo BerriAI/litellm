@@ -2912,7 +2912,7 @@ async def ui_view_spend_logs(
             sql_conditions.append(f"metadata->>'user_api_key_alias' LIKE ${p}")
             sql_params.append(f"%{key_alias}%")
             p += 1
-        if exclude_key_alias is not None:
+        if exclude_key_alias:
             sql_conditions.append(f"metadata->>'user_api_key_alias' IS DISTINCT FROM ${p}")
             sql_params.append(exclude_key_alias)
             p += 1
