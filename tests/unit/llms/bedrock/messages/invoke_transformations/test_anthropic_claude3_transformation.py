@@ -3234,6 +3234,94 @@ def test_bedrock_messages_json_tool_response_is_text():
     assert response["content"][1] == {"type": "text", "text": '{"zebra_count": 3}'}
 
 
+def test_bedrock_messages_transform_response_promotes_json_tool_to_text():
+    raw_response = httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "us.anthropic.claude-sonnet-5",
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "t1",
+                    "name": BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME,
+                    "input": {"zebra_count": 3},
+                }
+            ],
+        },
+    )
+
+    response = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_response(
+        model="us.anthropic.claude-sonnet-5",
+        raw_response=raw_response,
+        logging_obj=Mock(),
+    )
+
+    assert response["stop_reason"] == "end_turn"
+    assert response["content"] == [{"type": "text", "text": '{"zebra_count": 3}'}]
+
+
+def test_bedrock_messages_json_tool_promotion_keeps_model_blocks_and_stop_reason():
+    """Non-dict blocks pass through untouched, and a non-``tool_use`` stop reason
+    (e.g. ``max_tokens``) is preserved rather than rewritten to ``end_turn``."""
+    from litellm.llms.bedrock.common_utils import promote_bedrock_json_tool_response
+    from litellm.types.llms.anthropic import AnthropicResponseContentBlockText
+
+    text_block = AnthropicResponseContentBlockText(type="text", text="preface")
+
+    response = promote_bedrock_json_tool_response(
+        {
+            "stop_reason": "max_tokens",
+            "content": [
+                text_block,
+                {
+                    "type": "tool_use",
+                    "id": "t1",
+                    "name": BEDROCK_MESSAGES_RESPONSE_FORMAT_TOOL_NAME,
+                    "input": '{"zebra_count": 3}',
+                },
+            ],
+        }
+    )
+
+    assert response["stop_reason"] == "max_tokens"
+    assert response["content"] == [text_block, {"type": "text", "text": '{"zebra_count": 3}'}]
+
+
+def test_bedrock_messages_json_tool_promotion_ignores_response_without_content():
+    from litellm.llms.bedrock.common_utils import promote_bedrock_json_tool_response
+
+    response = {"stop_reason": "end_turn"}
+
+    assert promote_bedrock_json_tool_response(response) == response
+
+
+def test_bedrock_messages_malformed_tools_fall_back_to_inline_schema(local_model_cost_map):
+    """Tools that are not tool objects cannot safely carry the synthetic tool, so the
+    schema falls back to the inline-text path instead of forcing ``tool_choice``."""
+    from litellm.llms.bedrock.common_utils import apply_bedrock_invoke_structured_output
+
+    schema = {"type": "object", "properties": {"zebra_count": {"type": "integer"}}}
+    request_body = {
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        "tools": ["not-a-tool"],
+        "output_config": {"format": {"type": "json_schema", "schema": schema}},
+    }
+
+    apply_bedrock_invoke_structured_output(
+        model="us.anthropic.claude-sonnet-5",
+        request_body=request_body,
+        prefer_tool_fallback=True,
+    )
+
+    assert "tool_choice" not in request_body
+    assert request_body["tools"] == ["not-a-tool"]
+    assert json.loads(request_body["messages"][-1]["content"][-1]["text"]) == schema
+
+
 def test_bedrock_messages_caller_defined_json_tool_call_is_not_rewritten():
     """A caller's own ``json_tool_call`` tool is not the synthetic one: its tool_use
     blocks must reach the client untouched so the client can execute the call."""
