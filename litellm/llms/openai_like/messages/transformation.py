@@ -37,8 +37,8 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         headers: dict[str, str],
         model: str,
         messages: list[Any],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, Any],
+        litellm_params: dict[str, Any],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict[str, str], str | None]:
@@ -102,8 +102,8 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, Any],
+        litellm_params: dict[str, Any],
         stream: bool | None = None,
     ) -> str:
         if not api_base:
@@ -147,8 +147,8 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         headers: dict[str, str],
         model: str,
         messages: list[Any],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, Any],
+        litellm_params: dict[str, Any],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict[str, str], str | None]:
@@ -167,8 +167,8 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, Any],
+        litellm_params: dict[str, Any],
         stream: bool | None = None,
     ) -> str:
         return super().get_complete_url(
