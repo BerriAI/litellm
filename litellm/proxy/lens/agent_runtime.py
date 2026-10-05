@@ -6,7 +6,7 @@ from .agent_workspace import EvidenceRequest, EvidenceWorkspace
 from .analysis import ModelCall, structured_response
 from .models import Claim, ModelRequest, Record, TracePart
 
-ResponseT = TypeVar("ResponseT", bound=Record)
+ResponseT: Final = TypeVar("ResponseT", bound=Record)
 
 
 class AgentTurn(Record, Generic[ResponseT]):
@@ -41,7 +41,7 @@ async def run_agent(
         return validate(turn.result) if turn.result is not None else None
 
     while True:
-        prompt: str = json.dumps(  # rebind-ok: each turn includes the complete updated dialogue
+        prompt: str = json.dumps(
             {
                 "stage": stage,
                 "task": task,
@@ -75,7 +75,7 @@ async def run_agent(
             },
             ensure_ascii=False,
         )
-        response: AgentTurn[ResponseT] = await structured_response(  # rebind-ok: advance the model dialogue
+        response: AgentTurn[ResponseT] = await structured_response(
             ModelRequest(purpose=purpose, prompt=prompt), response_schema, model, valid_turn
         )
         if response.result is not None:

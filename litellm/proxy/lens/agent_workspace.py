@@ -111,8 +111,8 @@ async def complete_page(execution: Execution, cursor: str, read: ReadContent) ->
     offset = 8001  # rebind-ok: source pages use one-based character offsets
     pending = frozenset(p.span_id for p in initial.parts if p.truncated)  # rebind-ok: track unfinished source spans
     while pending:
-        page: ExecutionContent = await read(execution.id, cursor, offset)  # rebind-ok: fetch the next source chunk
-        received: tuple[TracePart, ...] = tuple(  # rebind-ok: select the current unfinished spans
+        page: ExecutionContent = await read(execution.id, cursor, offset)
+        received: tuple[TracePart, ...] = tuple(
             p for p in page.parts if p.span_id in pending and p.content
         )
         if frozenset(p.span_id for p in received) != pending:
@@ -137,7 +137,7 @@ async def load_session(execution: Execution, read: ReadContent) -> SessionConten
     pages: tuple[ExecutionContent, ...] = ()  # rebind-ok: preserve source pages without discarding content
     seen: frozenset[str] = frozenset(("",))  # rebind-ok: detect a broken source cursor without imposing a read quota
     while True:
-        page: ExecutionContent = await complete_page(execution, cursor, read)  # rebind-ok: advance source pages
+        page: ExecutionContent = await complete_page(execution, cursor, read)
         pages = (*pages, page)
         if page.next_cursor is None:
             return SessionContent(
