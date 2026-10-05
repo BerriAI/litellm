@@ -194,9 +194,9 @@ def test_a2a_send_and_stream_bill_cost_per_query_to_the_agent_the_key_and_daily_
         days: Final = _Activity.model_validate_json(activity.content).results
         assert [(day.date, day.metrics) for day in days] == [
             (day, _ActivityMetrics(spend=0.25 * count, api_requests=count, successful_requests=count))
-            for day, count in requests_per_day.items()
+            for day, count in sorted(requests_per_day.items(), reverse=True)
         ], activity.text
         assert [
             result["breakdown"]["models"][f"a2a_agent/{marker}"]["api_key_breakdown"][digest]["metrics"]["spend"]
             for result in activity.json()["results"]
-        ] == [0.25 * count for count in requests_per_day.values()], activity.text
+        ] == [0.25 * count for _, count in sorted(requests_per_day.items(), reverse=True)], activity.text
