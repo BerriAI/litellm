@@ -3141,7 +3141,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "topxai/claude-sonnet-5"
+    "default_model_placeholder": "topxai/claude-sonnet-5-5"
   },
   {
     "provider": "Snowflake",
