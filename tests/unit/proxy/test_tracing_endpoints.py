@@ -5,12 +5,15 @@ Tests for the agent tracing endpoints (litellm/proxy/tracing_endpoints.py).
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from types import ModuleType
-from typing import Final, Literal
-from unittest.mock import AsyncMock, MagicMock
+from typing import Final, Literal, TypedDict
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from httpx import Response
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 from litellm.constants import TRACE_READ_RETRY_AFTER_SECONDS
 from litellm.proxy import tracing_endpoints
@@ -97,6 +100,29 @@ SPAN_DETAIL_RESPONSE: Final = {
     "output_ui": {"kind": "text", "text": ""},
     "attributes": {},
 }
+SPAN_ERROR_RESPONSE: Final = {
+    "span_id": "s1",
+    "message": "span error",
+    "total_chars": 10,
+    "next_cursor": None,
+}
+NOW_MS: Final = 1_800_000_000_000
+
+
+class RequestValidationError(TypedDict):
+    type: ReadOnly[str]
+    loc: ReadOnly[list[str | int]]
+
+
+def _validation_errors(response: Response) -> tuple[RequestValidationError, ...]:
+    return tuple(TypeAdapter(list[RequestValidationError]).validate_python(response.json()["detail"]))
+
+
+def _assert_validation_error(response: Response, error_type: str, location: tuple[str | int, ...]) -> None:
+    assert response.status_code == 422, response.text
+    assert any(
+        error["type"] == error_type and tuple(error["loc"]) == location for error in _validation_errors(response)
+    )
 
 
 @pytest.mark.parametrize(
@@ -262,6 +288,43 @@ def test_list_traces_defaults_to_last_24h(client, receiver):
     assert kwargs["cursor"] is None
 
 
+@pytest.mark.parametrize(
+    ("params", "expected_start_ms", "expected_end_ms"),
+    (
+        ({}, NOW_MS - tracing_endpoints.MS_PER_DAY, NOW_MS),
+        ({"start_ms": 123}, 123, NOW_MS),
+        ({"end_ms": -7}, NOW_MS - tracing_endpoints.MS_PER_DAY, -7),
+    ),
+)
+def test_list_traces_resolves_default_bounds_from_injected_clock(
+    client: TestClient,
+    receiver: MagicMock,
+    params: Mapping[str, int],
+    expected_start_ms: int,
+    expected_end_ms: int,
+) -> None:
+    client.app.dependency_overrides[tracing_endpoints.current_time_ms] = lambda: NOW_MS
+    response: Final = client.get("/v1/traces", params=params)
+    assert response.status_code == 200, response.text
+    receiver.list_traces.assert_awaited_once_with(
+        scope={"all_teams": 0, "user_id": "user", "team_ids": ()},
+        start_ms=expected_start_ms,
+        end_ms=expected_end_ms,
+        cursor=None,
+    )
+
+
+def test_list_traces_forwards_large_and_negative_bounds_unchanged(client: TestClient, receiver: MagicMock) -> None:
+    response: Final = client.get("/v1/traces", params={"start_ms": 2**63, "end_ms": -1, "cursor": "next"})
+    assert response.status_code == 200, response.text
+    receiver.list_traces.assert_awaited_once_with(
+        scope={"all_teams": 0, "user_id": "user", "team_ids": ()},
+        start_ms=2**63,
+        end_ms=-1,
+        cursor="next",
+    )
+
+
 def test_get_trace_404_and_200(client, receiver):
     assert client.get("/v1/traces/missing").status_code == 404
     receiver.get_trace.return_value = TRACE_RESPONSE
@@ -286,6 +349,125 @@ def test_trace_detail_passes_scoped_reference(client, receiver, suffix, cursor, 
     assert client.get(f"/v1/traces/t1?trace_ref=run-one{suffix}").status_code == 200
     receiver.get_trace.assert_awaited_with(
         "t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one", cursor, page_size
+    )
+
+
+@pytest.mark.parametrize("page_size", (1, 500))
+def test_trace_detail_accepts_page_size_bounds(client: TestClient, receiver: MagicMock, page_size: int) -> None:
+    receiver.get_trace.return_value = TRACE_RESPONSE
+    response: Final = client.get("/v1/traces/t1", params={"trace_ref": "run-one", "page_size": page_size})
+    assert response.status_code == 200, response.text
+    receiver.get_trace.assert_awaited_once_with(
+        "t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one", None, page_size
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "error_type"),
+    (("0", "greater_than_equal"), ("501", "less_than_equal"), ("abc", "int_parsing")),
+)
+def test_trace_detail_reports_page_size_validation(
+    client: TestClient, receiver: MagicMock, value: str, error_type: str
+) -> None:
+    response: Final = client.get("/v1/traces/t1", params={"page_size": value})
+    _assert_validation_error(response, error_type, ("query", "page_size"))
+    receiver.get_trace.assert_not_awaited()
+
+
+def test_trace_read_routes_accept_and_forward_512_character_cursors(
+    client: TestClient, receiver: MagicMock
+) -> None:
+    cursor: Final = "x" * 512
+    receiver.get_trace.return_value = TRACE_RESPONSE
+    receiver.get_span_error = AsyncMock(return_value=SPAN_ERROR_RESPONSE)
+    client.app.dependency_overrides[tracing_endpoints.current_time_ms] = lambda: NOW_MS
+
+    list_response: Final = client.get("/v1/traces", params={"cursor": cursor})
+    detail_response: Final = client.get("/v1/traces/t1", params={"trace_ref": "run-one", "cursor": cursor})
+    error_response: Final = client.get(
+        "/v1/traces/t1/spans/s1/error", params={"trace_ref": "run-one", "cursor": cursor}
+    )
+
+    assert list_response.status_code == 200, list_response.text
+    assert detail_response.status_code == 200, detail_response.text
+    assert error_response.status_code == 200, error_response.text
+    receiver.list_traces.assert_awaited_once_with(
+        scope={"all_teams": 0, "user_id": "user", "team_ids": ()},
+        start_ms=NOW_MS - tracing_endpoints.MS_PER_DAY,
+        end_ms=NOW_MS,
+        cursor=cursor,
+    )
+    receiver.get_trace.assert_awaited_once_with(
+        "t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one", cursor, None
+    )
+    receiver.get_span_error.assert_awaited_once_with(
+        "t1", "s1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one", cursor
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    ("/v1/traces", "/v1/traces/t1", "/v1/traces/t1/spans/s1/error"),
+)
+def test_trace_read_routes_reject_513_character_cursors(
+    client: TestClient, receiver: MagicMock, path: str
+) -> None:
+    response: Final = client.get(path, params={"cursor": "x" * 513})
+    _assert_validation_error(response, "string_too_long", ("query", "cursor"))
+
+
+def test_trace_read_routes_ignore_unknown_query_parameters(client: TestClient, receiver: MagicMock) -> None:
+    receiver.get_trace.return_value = TRACE_RESPONSE
+    receiver.get_span.return_value = SPAN_DETAIL_RESPONSE
+    receiver.get_span_error = AsyncMock(return_value=SPAN_ERROR_RESPONSE)
+
+    list_params: Final = {"start_ms": 1, "end_ms": 2, "cursor": "list-cursor"}
+    list_response: Final = client.get("/v1/traces", params=list_params)
+    list_unknown_response: Final = client.get("/v1/traces", params={**list_params, "foo": "bar"})
+    detail_params: Final = {"trace_ref": "run-one", "cursor": "detail-cursor", "page_size": 10}
+    detail_response: Final = client.get("/v1/traces/t1", params=detail_params)
+    detail_unknown_response: Final = client.get("/v1/traces/t1", params={**detail_params, "foo": "bar"})
+    span_response: Final = client.get("/v1/traces/t1/spans/s1", params={"trace_ref": "run-one"})
+    span_unknown_response: Final = client.get(
+        "/v1/traces/t1/spans/s1", params={"trace_ref": "run-one", "foo": "bar"}
+    )
+    error_params: Final = {"trace_ref": "run-one", "cursor": "error-cursor"}
+    error_response: Final = client.get("/v1/traces/t1/spans/s1/error", params=error_params)
+    error_unknown_response: Final = client.get(
+        "/v1/traces/t1/spans/s1/error", params={**error_params, "foo": "bar"}
+    )
+
+    assert list_response.status_code == 200, list_response.text
+    assert list_unknown_response.status_code == 200, list_unknown_response.text
+    assert detail_response.status_code == 200, detail_response.text
+    assert detail_unknown_response.status_code == 200, detail_unknown_response.text
+    assert span_response.status_code == 200, span_response.text
+    assert span_unknown_response.status_code == 200, span_unknown_response.text
+    assert error_response.status_code == 200, error_response.text
+    assert error_unknown_response.status_code == 200, error_unknown_response.text
+    receiver.list_traces.assert_has_awaits(
+        (
+            call(scope={"all_teams": 0, "user_id": "user", "team_ids": ()}, start_ms=1, end_ms=2, cursor="list-cursor"),
+            call(scope={"all_teams": 0, "user_id": "user", "team_ids": ()}, start_ms=1, end_ms=2, cursor="list-cursor"),
+        )
+    )
+    receiver.get_trace.assert_has_awaits(
+        (
+            call("t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one", "detail-cursor", 10),
+            call("t1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one", "detail-cursor", 10),
+        )
+    )
+    receiver.get_span.assert_has_awaits(
+        (
+            call("t1", "s1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one"),
+            call("t1", "s1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one"),
+        )
+    )
+    receiver.get_span_error.assert_has_awaits(
+        (
+            call("t1", "s1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one", "error-cursor"),
+            call("t1", "s1", {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one", "error-cursor"),
+        )
     )
 
 
@@ -606,6 +788,8 @@ def test_sql_and_help_use_authenticated_scope(
     result: Final = client.post("/v1/traces/query", json={"sql": "SELECT * FROM otel_traces"})
     assert result.status_code == 200, result.text
     assert result.json() == SQL_ENVELOPE
+    assert type(result.json()["data"][0]["value"]) is str
+    assert type(result.json()["statistics"]["elapsed"]) is float
     receiver.storage.query_sql.assert_awaited_once_with("SELECT * FROM otel_traces", expected_scope, "test-secret")
     help_result: Final = client.get("/v1/traces/query/help")
     assert help_result.status_code == 200, help_result.text
@@ -614,6 +798,29 @@ def test_sql_and_help_use_authenticated_scope(
     forged: Final = client.post("/v1/traces/query", json={"sql": "SELECT 1", "scope": {"kind": "all"}})
     assert forged.status_code == 422, forged.text
     assert receiver.storage.query_sql.await_count == 1
+
+
+@pytest.mark.parametrize(
+    ("body", "error_type", "location"),
+    (
+        (b"{}", "missing", ("body", "sql")),
+        (b'{"sql": null}', "string_type", ("body", "sql")),
+        (b'{"sql": 1}', "string_type", ("body", "sql")),
+        (b'{"sql": "SELECT 1", "extra": true}', "extra_forbidden", ("body", "extra")),
+        (b"{", "json_invalid", ("body", 1)),
+        (b"[]", "model_attributes_type", ("body",)),
+    ),
+)
+def test_sql_query_rejects_invalid_request_bodies(
+    client: TestClient, receiver: MagicMock, body: bytes, error_type: str, location: tuple[str | int, ...]
+) -> None:
+    client.app.dependency_overrides[tracing_endpoints.provide_trace_query_secret] = lambda: "test-secret"
+    receiver.storage.query_sql = AsyncMock()
+    response: Final = client.post(
+        "/v1/traces/query", content=body, headers={"content-type": "application/json"}
+    )
+    _assert_validation_error(response, error_type, location)
+    receiver.storage.query_sql.assert_not_awaited()
 
 
 @pytest.mark.parametrize("auth", (UserAPIKeyAuth(), UserAPIKeyAuth(team_id="a", project_id="p")))
