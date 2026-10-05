@@ -8,11 +8,13 @@ use serde_json::{Value, json};
 #[rstest]
 fn sql_response_serializes_only_data() {
     let response = TraceSQLResponse {
-        data: vec![serde_json::from_value(json!({
-            "answer": 42,
-            "nested": {"items": [true, null, "9007199254740993"]}
-        }))
-        .unwrap()],
+        data: vec![
+            serde_json::from_value(json!({
+                "answer": 42,
+                "nested": {"items": [true, null, "9007199254740993"]}
+            }))
+            .unwrap(),
+        ],
     };
 
     assert_eq!(
@@ -29,8 +31,16 @@ fn sql_response_schema_requires_data_and_leaves_rows_open() {
     assert_eq!(schema["additionalProperties"], false);
     assert_eq!(schema["required"], json!(["data"]));
     assert_eq!(schema["properties"].as_object().unwrap().len(), 1);
-    assert!(schema["properties"].as_object().unwrap().contains_key("data"));
+    assert!(
+        schema["properties"]
+            .as_object()
+            .unwrap()
+            .contains_key("data")
+    );
     assert_eq!(schema["properties"]["data"]["type"], "array");
     assert_eq!(schema["properties"]["data"]["items"]["type"], "object");
-    assert_ne!(schema["properties"]["data"]["items"]["additionalProperties"], false);
+    assert_ne!(
+        schema["properties"]["data"]["items"]["additionalProperties"],
+        false
+    );
 }
