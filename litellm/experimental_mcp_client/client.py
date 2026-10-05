@@ -36,6 +36,7 @@ from mcp.types import (
     METHOD_NOT_FOUND,
     REQUEST_TIMEOUT,
     ClientCapabilities,
+    DiscoverResult,
     ElicitationCapability,
     FormElicitationCapability,
     GetPromptRequestParams,
@@ -84,6 +85,7 @@ from litellm.types.mcp import (
     MCPUpstreamProtocol,
     credential_redirect_hook,
     has_header,
+    validate_mcp_protocol_transport,
     without_header,
 )
 
@@ -401,7 +403,10 @@ class MCPClient:
         logging_callback: Callable | None = None,
         protocol_version: MCPUpstreamProtocol = "auto",
     ):
-        self.protocol_version: MCPUpstreamProtocol = TypeAdapter(MCPUpstreamProtocol).validate_python(protocol_version)
+        self.protocol_version: MCPUpstreamProtocol = TypeAdapter[MCPUpstreamProtocol](
+            MCPUpstreamProtocol
+        ).validate_python(protocol_version)
+        validate_mcp_protocol_transport(self.protocol_version, transport_type)
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
         self.auth_type: MCPAuthType = auth_type
@@ -540,6 +545,17 @@ class MCPClient:
 
         return safe_env
 
+    async def _prepare_session(self, session: ClientSession) -> InitializeResult | DiscoverResult:
+        if self.protocol_version != "2026-07-28":
+            return await self._initialize_session(session)
+        discovery: Final = DiscoverResult.model_validate(await session.send_discover(self.protocol_version))
+        if self.protocol_version not in discovery.supported_versions:
+            raise MCPError(code=-32022, message="Upstream did not accept the configured MCP protocol version")
+        session.adopt(discovery)
+        if session.protocol_version != self.protocol_version:
+            raise MCPError(code=-32022, message="Upstream selected an unsupported MCP protocol version")
+        return discovery
+
     async def _initialize_session(self, session: ClientSession) -> InitializeResult:
         if self.protocol_version == "auto":
             automatic: Final = await session.initialize()
@@ -623,7 +639,7 @@ class MCPClient:
                     )
                     session: Final = await session_ctx.__aenter__()
                     try:
-                        init_result: Final = await self._initialize_session(session)
+                        init_result: Final = await self._prepare_session(session)
                         instructions: Final = getattr(init_result, "instructions", None)
                         self._last_initialize_instructions = (
                             instructions.strip() or None if isinstance(instructions, str) else None
@@ -911,6 +927,12 @@ class MCPClient:
 
         async def _call_tool_operation(session: ClientSession):
             verbose_logger.debug("MCP client sending tool call to session")
+            if self.protocol_version == "2026-07-28":
+                tools: Final = await list_tools_with_pagination(
+                    session, listing_deadline=max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
+                )
+                if not any(tool.name == call_tool_request_params.name for tool in tools):
+                    raise MCPError(code=-32603, message="Tool schema is unavailable from the bounded upstream catalog")
             return await session.call_tool(
                 name=call_tool_request_params.name,
                 arguments=call_tool_request_params.arguments,
@@ -1136,7 +1158,7 @@ class MCPClient:
         async def _list_resource_templates_operation(session: ClientSession) -> ListResourceTemplatesResult:
             capabilities: Final = session.server_capabilities
             if capabilities is not None and capabilities.resources is None:
-                return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
+                return ListResourceTemplatesResult(resource_templates=[])
             try:
                 return ListResourceTemplatesResult(
                     resource_templates=await self._list_optional_pages(
@@ -1150,7 +1172,7 @@ class MCPClient:
                 verbose_logger.debug(
                     "MCP client list_resource_templates is unsupported by %s: %s", self.server_url or "stdio", error
                 )
-                return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
+                return ListResourceTemplatesResult(resource_templates=[])
 
         try:
             result: Final = await self.run_with_session(_list_resource_templates_operation)

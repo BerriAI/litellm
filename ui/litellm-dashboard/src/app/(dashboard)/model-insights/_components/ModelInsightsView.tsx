@@ -1,5 +1,6 @@
 "use client";
 
+import { Page } from "@/components/shared/Page";
 import React from "react";
 import { Bar, BarChart, CartesianGrid, Treemap, XAxis, YAxis } from "recharts";
 import { ArrowDownRight, ArrowUpRight, BarChart3, Layers, Minus } from "lucide-react";
@@ -7,7 +8,7 @@ import { ArrowDownRight, ArrowUpRight, BarChart3, Layers, Minus } from "lucide-r
 import { apiClient } from "@/components/networking";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
@@ -15,8 +16,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  buildWeeklySeries,
+  buildBucketTotals,
+  buildSeries,
   formatMetric,
+  Granularity,
   Metric,
   ModelInsightsResponse,
   ModelInsightTasksResponse,
@@ -46,6 +49,8 @@ const CATEGORY_COLORS: Record<string, string> = {
   Data: "#3b82f6",
 };
 const SCALES = ["linear", "log"] as const;
+const GRANULARITIES = ["day", "week"] as const;
+const GRANULARITY_LABELS: Record<Granularity, string> = { day: "Daily", week: "Weekly" };
 const METRIC_LABELS: Record<Metric, string> = { requests: "requests", spend: "spend", tokens: "tokens" };
 const RANKING_ROWS = 5;
 
@@ -112,6 +117,7 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
   const [loaded, setLoaded] = React.useState<{ metric: Metric; response: ModelInsightsResponse } | null>(null);
   const [metric, setMetric] = React.useState<Metric>("tokens");
   const [scale, setScale] = React.useState<Scale>("linear");
+  const [granularity, setGranularity] = React.useState<Granularity>("day");
   const [taskMetric, setTaskMetric] = React.useState<Metric>("spend");
   const [taskData, setTaskData] = React.useState<ModelInsightTasksResponse | null>(null);
   const [taskError, setTaskError] = React.useState<string | null>(null);
@@ -159,8 +165,12 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
   const range = React.useMemo(() => ({ start: data?.start_date ?? "", end: data?.end_date ?? "" }), [data]);
   const models = React.useMemo(() => (data ? modelOrder(data.daily, shown) : []), [data, shown]);
   const series = React.useMemo(
-    () => (data ? buildWeeklySeries(data.daily, models, shown, range) : []),
-    [data, models, shown, range],
+    () => (data ? buildSeries(data.daily, models, shown, { ...range, granularity }) : []),
+    [data, models, shown, range, granularity],
+  );
+  const bucketTotals = React.useMemo(
+    () => (data ? buildBucketTotals(data.daily_totals, shown, { ...range, granularity }) : new Map<string, number>()),
+    [data, shown, range, granularity],
   );
   const ranking = React.useMemo(
     () => (data ? rankModels(data.top_models, data.daily, shown, range) : []),
@@ -201,18 +211,24 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
   ) satisfies ChartConfig;
 
   return (
-    <main className="w-full space-y-6 p-8">
-      <PageHeader
-        icon={<BarChart3 />}
-        title="Model Leaderboard"
-        subtitle={`See which models your gateway used from ${data.start_date} through ${data.end_date}`}
-      />
+    <Page>
+      <PageHeader>
+        <PageHeaderTitle>
+          <BarChart3 />
+          Model Leaderboard
+        </PageHeaderTitle>
+        <PageHeaderDescription>
+          See which models your gateway used from {data.start_date} through {data.end_date}
+        </PageHeaderDescription>
+      </PageHeader>
 
       <Card aria-busy={isStale} className={isStale ? "opacity-60 transition-opacity" : "transition-opacity"}>
         <CardHeader className="flex-row items-start justify-between space-y-0">
           <div>
             <CardTitle>Top models</CardTitle>
-            <CardDescription>Weekly {METRIC_LABELS[shown]} across your gateway</CardDescription>
+            <CardDescription>
+              {GRANULARITY_LABELS[granularity]} {METRIC_LABELS[shown]} across your gateway
+            </CardDescription>
           </div>
           <div className="flex items-center gap-3">
             <Tabs value={metric} onValueChange={(value) => setMetric(value as Metric)}>
@@ -220,6 +236,15 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
                 {(["requests", "spend", "tokens"] as const).map((value) => (
                   <TabsTrigger key={value} value={value} className="capitalize">
                     {value}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+            <Tabs value={granularity} onValueChange={(value) => setGranularity(value as Granularity)}>
+              <TabsList aria-label="Bucket size">
+                {GRANULARITIES.map((value) => (
+                  <TabsTrigger key={value} value={value}>
+                    {GRANULARITY_LABELS[value]}
                   </TabsTrigger>
                 ))}
               </TabsList>
@@ -237,7 +262,7 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
         </CardHeader>
         <CardContent>
           <ChartContainer config={chartConfig} className="h-[380px] w-full aspect-auto">
-            <BarChart data={series} margin={{ left: 8, right: 8 }} barCategoryGap={2}>
+            <BarChart data={series} margin={{ left: 8, right: 8 }} barCategoryGap="15%" maxBarSize={64}>
               <CartesianGrid vertical={false} />
               <XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={48} />
               <YAxis
@@ -248,7 +273,15 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
                 axisLine={false}
                 tickFormatter={(value) => formatMetric(Number(value), shown)}
               />
-              <ChartTooltip content={<ChartTooltipContent />} />
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    labelFormatter={(label) =>
+                      `${label} · Gateway total ${formatMetric(bucketTotals.get(String(label)) ?? 0, shown)}`
+                    }
+                  />
+                }
+              />
               {models.map((model, index) => (
                 <Bar
                   key={model}
@@ -347,6 +380,6 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
           </p>
         </CardContent>
       </Card>
-    </main>
+    </Page>
   );
 }

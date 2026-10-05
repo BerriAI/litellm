@@ -55,6 +55,11 @@ from litellm.types.llms.base import (
     LiteLLMPydanticObjectBase,
 )
 from litellm.types.mcp import MCPServerCostInfo
+from litellm.types.workload_identity import (
+    ANTHROPIC_WIF_KWARGS_KEYS,
+    OPENAI_WIF_KWARGS_KEYS,
+    WIF_SECRET_BEARING_KEYS,
+)
 
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
 from . import litellm_params as _litellm_params
@@ -211,6 +216,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"] | None]
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
     bedrock_converse_supports_strict_tools: bool | None
+    supports_regex_lookaround: ReadOnly[bool | None]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -467,6 +473,8 @@ class CallTypes(str, Enum):
     arerank = "arerank"
     search = "search"
     asearch = "asearch"
+    decisions = "decisions"
+    adecisions = "adecisions"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
@@ -653,6 +661,8 @@ CallTypesLiteral = Literal[
     "arerank",
     "search",
     "asearch",
+    "decisions",
+    "adecisions",
     "_arealtime",
     "_aresponses_websocket",
     "create_batch",
@@ -762,6 +772,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # Search
     "/search": [CallTypes.asearch, CallTypes.search],
     "/v1/search": [CallTypes.asearch, CallTypes.search],
+    "/decisions": [CallTypes.adecisions, CallTypes.decisions],
+    "/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
     # Batches
     "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
     "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
@@ -1539,9 +1551,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
             function_call = FunctionCall(**function_call)
 
         if tool_calls is not None and isinstance(tool_calls, (list, tuple)):
-            coerced_tool_calls: list[
-                ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall
-            ] = []  # mutable-ok: public Delta.tool_calls contract is a list
+            coerced_tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] = []
             current_index = 0
             for tool_call in tool_calls:
                 if isinstance(tool_call, dict):
@@ -3186,6 +3196,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     cold_storage_object_key: str | None  # S3/GCS object key for cold storage retrieval
     team_alias: str | None
     team_id: str | None
+    used_client_oauth_token: ReadOnly[bool | None]
 
 
 class AzureSpillover(TypedDict):
@@ -3845,10 +3856,13 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
+DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_regex_lookaround"})
+
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
     - frozenset(CustomPricingLiteLLMParams.model_fields)
     - DEPLOYMENT_SCOPED_PRICING_FIELDS
+    - DEPLOYMENT_SCOPED_CAPABILITY_FIELDS
 )
 
 
@@ -3942,14 +3956,19 @@ def pricing_override_fields(*sources: Mapping[str, object]) -> tuple[str, ...]:
     )
 
 
-agentic_loop_internal_litellm_params: Final = list(AGENTIC_LOOP_KWARG_NAMES)  # mutable-ok: public type stays a list
+agentic_loop_internal_litellm_params: Final = list(AGENTIC_LOOP_KWARG_NAMES)
 
 bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = _litellm_params.TRUSTED_CALLBACK_VARS_FIELD
 ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
 
-all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it  # mutable-ok: callers concat
+anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))
+openai_wif_litellm_params: Final = tuple(sorted(OPENAI_WIF_KWARGS_KEYS))
+server_owned_wif_litellm_params: Final = anthropic_wif_litellm_params + openai_wif_litellm_params
+secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
+
+all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
     *OWNED_KWARG_NAMES,
     *KWARG_ARTIFACTS,
     *StandardCallbackDynamicParams.__annotations__,
@@ -4045,6 +4064,8 @@ class LlmProviders(str, Enum):
     OLLAMA_CHAT = "ollama_chat"
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
+    TYPESAFE = "typesafe"
+    STRANDS_DECIDER = "strands_decider"
     MISTRAL = "mistral"
     MILVUS = "milvus"
     GROQ = "groq"
@@ -4153,6 +4174,7 @@ class LlmProviders(str, Enum):
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
+    CORTECS = "cortecs"
     SCX_AI = "scx-ai"
     PRISM = "prism"
     TOPXAI = "topxai"

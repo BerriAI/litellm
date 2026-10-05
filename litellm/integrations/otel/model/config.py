@@ -5,7 +5,8 @@ from functools import lru_cache
 from typing import Annotated, Any, Final
 
 from pydantic import AliasChoices, BaseModel, Field, TypeAdapter, ValidationError, field_validator, model_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic.fields import FieldInfo
+from pydantic_settings import BaseSettings, NoDecode, PydanticBaseSettingsSource, SettingsConfigDict
 
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.baggage import (
@@ -121,8 +122,36 @@ class ExporterSpec(BaseModel):
     )
 
 
+class _EnvWithoutBareExcludedServices(PydanticBaseSettingsSource):
+    def __init__(self, settings_cls: type[BaseSettings], env_settings: PydanticBaseSettingsSource) -> None:
+        super().__init__(settings_cls)
+        self._env_settings: Final = env_settings
+
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[object, str, bool]:
+        return self._env_settings.get_field_value(field, field_name)
+
+    def __call__(self) -> dict[str, object]:
+        return {key: value for key, value in self._env_settings().items() if key != "excluded_services"}
+
+
 class OpenTelemetryV2Config(BaseSettings):
     model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            _EnvWithoutBareExcludedServices(settings_cls, env_settings),
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     # ----- single-destination shorthand, read from standard OTEL_* envs ----- #
     exporter: str = Field(
@@ -178,7 +207,7 @@ class OpenTelemetryV2Config(BaseSettings):
     )
     excluded_services: Annotated[frozenset[str], NoDecode] = Field(
         default_factory=frozenset,
-        validation_alias=AliasChoices("excluded_services", "LITELLM_OTEL_EXCLUDED_SERVICES"),
+        validation_alias=AliasChoices("LITELLM_OTEL_EXCLUDED_SERVICES"),
         description=(
             "Datastore services whose spans are withheld from key/team ``callback_vars`` "
             "OTel destinations (the operator's own exporters still receive them). Accepted "

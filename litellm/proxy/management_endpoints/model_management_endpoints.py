@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.ptu_pricing import (
     SEARCH_CONTEXT_SIZES,
     ptu_config_error,
 )
+from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.proxy._types import (
     BlockModelRequest,
     CommonProxyErrors,
@@ -62,13 +63,20 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.credential_hydration import (
+    effective_server_owned_wif_fields,
+    hydrate_named_credential,
+    submitted_litellm_params,
+    write_touches_federation_surface,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
+from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY, is_team_admin
+from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
     append_team_models,
@@ -114,6 +122,7 @@ from litellm.router_strategy.complexity_router import (
     normalize_classification_examples,
     normalize_classification_prompt,
 )
+from litellm.router_strategy.complexity_router.config import resolve_complexity_router_config_write
 from litellm.router_utils.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
     STRATEGY_ROUTER_PARAM_FIELDS,
@@ -184,6 +193,25 @@ class _ProxyModelRow(Protocol):
     def model_info(self) -> object: ...
 
     def model_dump_json(self, *, exclude_none: bool = False) -> str: ...
+
+
+def _model_write_response(
+    row: _ProxyModelRow, member_write: MemberAutoRouterWrite | None
+) -> _ProxyModelRow | Mapping[str, object]:
+    if member_write is None:
+        return row
+    payload: Final = TypeAdapter(dict[str, object]).validate_json(row.model_dump_json())
+    stored_params: Final = payload.get("litellm_params")
+    params: Final = (
+        TypeAdapter(dict[str, object]).validate_json(stored_params)
+        if isinstance(stored_params, str)
+        else TypeAdapter(dict[str, object]).validate_python(stored_params)
+    )
+    redacted: Final = redact_credentials_in_payload(params)
+    return {
+        **payload,
+        "litellm_params": json.dumps(redacted) if isinstance(stored_params, str) else redacted,
+    }
 
 
 class _ProxyModelTable(Protocol):
@@ -340,6 +368,27 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
+def _reject_non_admin_blocked_flag_on_create(
+    blocked: bool | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Same proxy-admin-only rule patch_model applies to the blocked flag: a team admin passed
+    the team-scoped auth check above, but must not be able to create a model already paused out
+    from under the proxy admin.
+
+    Only a blocking value is refused. A create that sends ``blocked: false`` asks for the state
+    every create already lands in, and dashboards and SDKs send the whole model shape on every
+    create, so refusing the flag's presence would turn a working non-admin create into a 403.
+    """
+    if blocked and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise ProxyException(
+            message="Only proxy admins can set a model's blocked flag.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="blocked",
+        )
+
+
 def _stored_credential_name(existing_litellm_params: GenericLiteLLMParams | None) -> str | None:
     if existing_litellm_params is None or existing_litellm_params.litellm_credential_name is None:
         return None
@@ -406,34 +455,27 @@ WHERE model_id <> $1
 
 def _effective_complexity_router_config(
     incoming_params: GenericLiteLLMParams | None, existing_params: GenericLiteLLMParams | None
-) -> object:
+) -> Mapping[str, object] | None:
     incoming: Final = None if incoming_params is None else incoming_params.complexity_router_config
     existing: Final = None if existing_params is None else existing_params.complexity_router_config
-    if incoming is None:
-        return existing
-    if existing is None or incoming.get("classifier_type") != "jev" or existing.get("classifier_type") != "jev":
-        return incoming
-    incoming_jev: Final[object] = incoming.get("jev_classifier_config")
-    existing_jev: Final[object] = existing.get("jev_classifier_config")
-    if not isinstance(incoming_jev, Mapping) or not isinstance(existing_jev, Mapping):
-        return incoming
-    supplied: Final = TypeAdapter(dict[str, object]).validate_python(incoming_jev)
-    stored: Final = TypeAdapter(dict[str, object]).validate_python(existing_jev)
-    same_base: Final = "api_base" not in supplied or supplied["api_base"] == stored.get("api_base")
-    transport: Final = MappingProxyType(
+    config_adapter: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+    return resolve_complexity_router_config_write(
+        config_adapter.validate_python(incoming), config_adapter.validate_python(existing)
+    ).effective
+
+
+def _decrypted_litellm_params(litellm_params: GenericLiteLLMParams) -> Mapping[str, object]:
+    dumped: Final[Mapping[str, object]] = litellm_params.model_dump(exclude_none=True)
+    return MappingProxyType(
         {
-            key: value
-            for key, value in stored.items()
-            if key in ("api_key", "api_base") and (key != "api_key" or same_base)
+            name: (
+                decrypt_value_helper(value=value, key=name, exception_type="debug", return_original_value=True)
+                if isinstance(value, str)
+                else value
+            )
+            for name, value in dumped.items()
         }
     )
-    return {  # mutable-ok: persisted JSON requires concrete nested dicts
-        **incoming,
-        "jev_classifier_config": {  # mutable-ok: json.dumps cannot serialize MappingProxyType
-            **transport,
-            **supplied,
-        },
-    }
 
 
 def _effective_model(
@@ -959,7 +1001,7 @@ def _cost_map_entry(db_model: Deployment, incoming_model_info: Mapping[str, obje
     return MappingProxyType({})
 
 
-LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]  # mutable-ok: Callable parameter syntax
+LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]
 
 
 def _loaded_catalog_entry(
@@ -1160,6 +1202,7 @@ async def patch_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            incoming_params=submitted_litellm_params(patch_data.litellm_params),
             member_operation="update",
             incoming_model_params=patch_data,
         )
@@ -1303,7 +1346,7 @@ async def patch_model(
             live_after=reload_outcome.live_after,
         )
 
-        return updated_model
+        return _model_write_response(updated_model, member_write)
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in patch_model: %s", e)
@@ -1500,10 +1543,18 @@ async def _add_model_to_db(
     slot: AbstractAsyncContextManager[_ProxyModelTable] | None = None,
 ) -> "_ProxyModelRow | LiteLLM_ProxyModelTable":
     # encrypt litellm params #
-    _litellm_params_dict: Final = model_params.litellm_params.dict(exclude_none=True)
+    _litellm_params_dict: Final = TypeAdapter(dict[str, object]).validate_python(
+        model_params.litellm_params.model_dump(exclude_none=True)
+    )
+    if "complexity_router_config" in _litellm_params_dict:
+        _litellm_params_dict["complexity_router_config"] = _effective_complexity_router_config(
+            model_params.litellm_params, None
+        )
     _original_litellm_model_name: Final = model_params.litellm_params.model
     for k, v in _litellm_params_dict.items():
-        encrypted_value = encrypt_value_helper(value=v, new_encryption_key=new_encryption_key)
+        encrypted_value = (
+            encrypt_value_helper(value=v, new_encryption_key=new_encryption_key) if isinstance(v, str) else v
+        )
         model_params.litellm_params[k] = encrypted_value
     _data: Final[dict] = {
         "model_id": model_params.model_info.id,
@@ -1515,6 +1566,8 @@ async def _add_model_to_db(
     }
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
+    if model_params.blocked is not None:
+        _data["blocked"] = model_params.blocked
     _create_data: Final = cast("Mapping[str, object]", _data)  # cast-ok: str-keyed json payload built just above
     if not should_create_model_in_db:
         return LiteLLM_ProxyModelTable(**_data)
@@ -2004,7 +2057,7 @@ class ModelManagementAuthChecks:
             )
         if user_api_key_dict.user_role and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
-        elif team_obj is None or not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        elif team_obj is None or not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -2097,11 +2150,50 @@ class ModelManagementAuthChecks:
         return True
 
     @staticmethod
+    async def _reject_non_admin_wif_write(
+        *,
+        model_params: Deployment,
+        incoming_params: Mapping[str, object] | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        prisma_client: PrismaClient,
+    ) -> None:
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return
+        if not write_touches_federation_surface(incoming_params):
+            return
+        stored: Final = _decrypted_litellm_params(model_params.litellm_params)
+        wif_fields: Final = await effective_server_owned_wif_fields(stored, incoming_params, prisma_client)
+        if wif_fields:
+            # ProxyException rather than HTTPException so the offending field stays a structured
+            # `param`, which is the contract the narrower gate this replaced already published.
+            raise ProxyException(
+                message=(
+                    f"Only proxy admins can change the credentials of a deployment configured for "
+                    f"workload identity federation ({wif_fields[0]!r})."
+                ),
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param=wif_fields[0],
+            )
+        # A name the caller expects an admin to create later would resolve to nothing today and
+        # start federating the moment it exists, so a non-admin may only attach one that is already there.
+        named: Final = None if incoming_params is None else incoming_params.get("litellm_credential_name")
+        if isinstance(named, str) and await hydrate_named_credential(named, prisma_client) is None:
+            raise ProxyException(
+                message=f"No credential named {named!r} exists.",
+                type=ProxyErrorTypes.bad_request_error.value,
+                code=status.HTTP_400_BAD_REQUEST,
+                param="litellm_credential_name",
+            )
+
+    @staticmethod
     async def can_user_make_model_call(
         model_params: Deployment,
         user_api_key_dict: UserAPIKeyAuth,
         prisma_client: PrismaClient,
         premium_user: bool,
+        *,
+        incoming_params: Mapping[str, object] | None,
         allow_missing_team: bool = False,
         member_operation: Literal["create", "update"] | None = None,
         incoming_model_params: updateDeployment | None = None,
@@ -2111,6 +2203,19 @@ class ModelManagementAuthChecks:
             LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
         ):
             raise HTTPException(status_code=403, detail="View-only users cannot manage models.")
+        # Federation fields choose which server-side secret is read and where the org-scoped token
+        # it buys is sent, so only a proxy admin may point a federated deployment somewhere else.
+        # Evaluated on the RESULTING deployment: a patch attaching a credential by name inherits
+        # whatever that credential holds. `incoming_params` carries only the fields the write set
+        # and is keyword-only with no default, so a new write path cannot typecheck without
+        # deciding what it writes.
+        await ModelManagementAuthChecks._reject_non_admin_wif_write(
+            model_params=model_params,
+            incoming_params=incoming_params,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
+
         ## Check team model auth
         if model_params.model_info.team_id is not None:
             team_obj_row: Final = await _repo_team_table(prisma_client).find_unique(
@@ -2133,11 +2238,8 @@ class ModelManagementAuthChecks:
                 )
             team_obj: Final = LiteLLM_TeamTable.model_validate(team_obj_row.model_dump())
 
-            if (
-                member_operation is not None
-                and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-                and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
-            ):
+            caller_is_admin: Final = await get_team_access().allows(user_api_key_dict, team_obj, TEAM_ADMIN_ONLY)
+            if member_operation is not None and not caller_is_admin:
                 from litellm.proxy.proxy_server import llm_router
 
                 if llm_router is None or (member_operation == "update" and incoming_model_params is None):
@@ -2227,6 +2329,7 @@ async def delete_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            incoming_params=None,
             allow_missing_team=True,
         )
 
@@ -2349,7 +2452,6 @@ async def delete_team_model_alias(
     return removed_model_aliases
 
 
-#### [BETA] - This is a beta endpoint, format might change based on user feedback. - https://github.com/BerriAI/litellm/issues/964
 @router.post(
     "/model/new",
     description="Allows adding new models to the model list in the config.yaml",
@@ -2418,9 +2520,12 @@ async def add_new_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            incoming_params=submitted_litellm_params(model_params.litellm_params),
             member_operation="create",
         )
         member_write: Final = write_authorization if isinstance(write_authorization, MemberAutoRouterWrite) else None
+
+        _reject_non_admin_blocked_flag_on_create(model_params.blocked, user_api_key_dict)
 
         ModelManagementAuthChecks.can_user_attach_credential(
             litellm_params=model_params.litellm_params,
@@ -2538,7 +2643,7 @@ async def add_new_model(
             live_after=reload_outcome.live_after,
         )
 
-        return model_response
+        return _model_write_response(model_response, member_write)
 
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.add_new_model(): Exception occured - %s", e)
@@ -2619,6 +2724,7 @@ async def update_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            incoming_params=submitted_litellm_params(model_params.litellm_params),
             member_operation="update",
             incoming_model_params=model_params,
         )
@@ -2690,12 +2796,10 @@ async def update_model(
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             }
             renamed_update: Final[PrismaCompatibleUpdateDBModel] = (
-                {**base_update, "model_name": renamed_to}  # mutable-ok: Prisma serializes only concrete update dicts
-                if renamed_to is not None
-                else base_update
+                {**base_update, "model_name": renamed_to} if renamed_to is not None else base_update
             )
             _data: Final[PrismaCompatibleUpdateDBModel] = (
-                {  # mutable-ok: Prisma serializes only concrete update dicts
+                {
                     **renamed_update,
                     "model_info": deployment.model_info.model_copy(
                         update=MappingProxyType({"member_auto_router": member_marker})
@@ -2764,7 +2868,7 @@ async def update_model(
                 live_after=reload_outcome.live_after,
             )
 
-            return model_response
+            return None if model_response is None else _model_write_response(model_response, member_write)
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_model(): Exception occured - %s", e)
         if isinstance(e, HTTPException):
@@ -2987,8 +3091,8 @@ class AutoRouterClassifierPromptPreviewRequest(BaseModel):
 @router.post(
     "/auto_router/classifier/default_prompt",
     description="Get the system prompt an auto-router's LLM classifier sends for an edited tier set",
-    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def preview_auto_router_classifier_prompt(
     request: AutoRouterClassifierPromptPreviewRequest,
@@ -2999,7 +3103,7 @@ async def preview_auto_router_classifier_prompt(
     Built by the same function the live classifier uses, so the preview cannot drift from what the
     router sends. Payload validity beyond a renderable definition stays the dry-run's job.
     """
-    labeled_tiers: Final = _validated_labeled_tiers(request.tier_labels or {})  # mutable-ok: Pydantic field default
+    labeled_tiers: Final = _validated_labeled_tiers(request.tier_labels or {})
     system_prompt: Final = (
         custom_tier_classification_prompt(
             request.tier_definitions,
@@ -3022,8 +3126,8 @@ async def preview_auto_router_classifier_prompt(
 @router.get(
     "/auto_router/classifier/default_prompt",
     description="Get the built-in system prompt used by an auto-router's LLM classifier",
-    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
 )
 async def get_auto_router_classifier_default_prompt(
     context_window_size: int = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,

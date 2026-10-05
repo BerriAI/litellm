@@ -73,6 +73,19 @@ def test_integration_groups_require_exclusive_scheduled_circleci_owner(tmp_path:
     assert [(finding.subject, finding.detail) for finding in findings] == [
         (test_path, "integration contract is also selected by GitHub Actions")
     ]
+    github_path: Final = "tests/integration/management/test_github_contract.py"
+    (tmp_path / github_path).write_text("def test_contract(): pass\n")
+    runner: Final = tmp_path / "tests/integration/run.py"
+    runner.write_text(runner.read_text() + f"GITHUB_FILES: Final = frozenset({{{github_path!r}}})\n")
+    workflow.write_text(yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": f"pytest {github_path}"}]}}}))
+    github_owned, github_findings = coverage._integration_ownership(tmp_path)
+    assert github_owned == frozenset({test_path, github_path})
+    assert github_findings == ()
+    workflow.write_text(yaml.safe_dump({"jobs": {}}))
+    _, missing_invocation = coverage._integration_ownership(tmp_path)
+    assert [(finding.subject, finding.detail) for finding in missing_invocation] == [
+        (github_path, "GitHub-owned integration contract has no invoking workflow")
+    ]
 
 
 def test_an_ancestor_directory_covers_a_file_but_does_not_name_it():
@@ -92,7 +105,7 @@ def test_a_glob_names_only_what_it_matches_not_what_sits_below_it():
     glob = "tests/test_litellm/test_*.py"
     assert coverage._token_names(glob, "tests/test_litellm/test_router.py") is True
     assert coverage._token_names(glob, "tests/test_litellm/test_router.py/nested.py") is False
-    assert coverage._token_names(glob, "tests/test_litellm/proxy/test_router.py") is False
+    assert coverage._token_names(glob, "tests/test_litellm/nested/test_router.py") is False
 
 
 def test_a_glob_still_covers_the_subtree_for_the_census():
@@ -169,8 +182,42 @@ def test_every_sharded_root_named_in_the_script_exists_on_disk():
 
 
 def test_the_repo_as_it_stands_has_every_shard_child_assigned():
-    findings = coverage._unassigned_shard_children(coverage._invoked_test_tokens(coverage._all_scalars()))
+    findings = coverage._unassigned_shard_children(
+        coverage._shard_tokens(coverage._all_scalars(), coverage._unit_selection_arms())
+    )
     assert [f.subject for f in findings] == []
+
+
+def test_shard_tokens_credits_only_wired_unit_flags(tmp_path):
+    root = tmp_path / "tests" / "tree"
+    (root / "wired").mkdir(parents=True)
+    (root / "wired" / "test_a.py").write_text("def test_a(): assert True\n")
+    (root / "unwired").mkdir(parents=True)
+    (root / "unwired" / "test_b.py").write_text("def test_b(): assert True\n")
+    script = tmp_path / ".circleci" / "scripts" / "unit_selection.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        "legacy_paths() {\n"
+        "  case \"$1\" in\n"
+        "    wired-flag) echo tests/tree/wired ;;\n"
+        "    unwired-flag)\n"
+        "      echo tests/tree/unwired ;;\n"
+        "  esac\n"
+        "}\n"
+    )
+
+    scalars: Final = (coverage.Scalar(key="unit-flag", value="wired-flag"),)
+    findings = coverage._unassigned_shard_children(
+        coverage._shard_tokens(scalars, coverage._unit_selection_arms(tmp_path)),
+        roots=("tests/tree",),
+        repo_root=tmp_path,
+    )
+
+    assert tuple(f.subject for f in findings) == ("tests/tree/unwired",)
+
+
+def test_check_shards_passes_on_the_repo_as_it_stands(capsys):
+    assert coverage._check_shards() == 0
 
 
 # --------------------------------------------------------------------------- #
