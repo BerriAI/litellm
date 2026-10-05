@@ -70,6 +70,7 @@ export interface ConversationItem {
   messages: TraceMessage[];
   toolCall?: TraceToolCall;
   toolResult?: string;
+  agentId?: string;
   agentName?: string;
   showError?: boolean;
 }
@@ -170,6 +171,21 @@ function withoutForwardedAnswers(
   );
 }
 
+function agentLabels(agents: readonly Span[]): ReadonlyMap<string, string> {
+  const groups = new Map<string, Span[]>();
+  for (const agent of agents) {
+    const name = agent.name || agent.agent || "Agent";
+    groups.set(name, [...(groups.get(name) ?? []), agent]);
+  }
+  return new Map(
+    [...groups].flatMap(([name, group]) =>
+      group
+        .sort((a, b) => a.start_offset_ms - b.start_offset_ms || a.span_id.localeCompare(b.span_id))
+        .map((agent, index) => [agent.span_id, group.length > 1 ? `${name} (${index + 1})` : name] as const),
+    ),
+  );
+}
+
 export function buildConversation(
   spans: readonly Span[],
   details: ReadonlyMap<string, SpanDetail>,
@@ -243,10 +259,16 @@ export function buildConversation(
     };
     if (combined.length || item.showError) items.push(item);
   }
+  const agents = [...new Set(conversationSteps(spans).map(branch))].flatMap((id) => {
+    const span = byId.get(id);
+    return span ? [span] : [];
+  });
+  const labels = agentLabels(agents);
   return items
     .map((item) => ({
       ...item,
-      agentName: byId.get(branch(item.span))?.name || item.span.agent,
+      agentId: branch(item.span),
+      agentName: labels.get(branch(item.span)) || item.span.agent,
       messages: item.messages.filter((message) => Boolean(message.content) || Boolean(message.tool_calls?.length)),
     }))
     .filter((item) => item.messages.length || item.toolResult !== undefined || item.showError);

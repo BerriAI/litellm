@@ -20,6 +20,26 @@ const detail = (span_id: string, input: unknown, output: unknown): SpanDetail =>
 });
 
 describe("trace conversation", () => {
+  it("keeps repeated agent names distinct and stable as more steps load", () => {
+    const first = { ...root, span_id: "first", name: "reviewer", start_offset_ms: 1 };
+    const second = { ...first, span_id: "second", start_offset_ms: 2 };
+    const spans = [second, first];
+    const firstDetails = new Map([["first", detail("first", "Review code", "")]]);
+    const partial = buildConversation(spans, firstDetails, false);
+    const complete = buildConversation(
+      spans,
+      new Map([...firstDetails, ["second", detail("second", "Review tests", "")]]),
+      true,
+    );
+    expect(partial.map(({ agentId, agentName }) => ({ agentId, agentName }))).toEqual([
+      { agentId: "first", agentName: "reviewer (1)" },
+    ]);
+    expect(complete.map(({ agentId, agentName }) => ({ agentId, agentName }))).toEqual([
+      { agentId: "first", agentName: "reviewer (1)" },
+      { agentId: "second", agentName: "reviewer (2)" },
+    ]);
+  });
+
   it("removes repeated prefixes and trimmed context, but preserves a genuinely repeated question", () => {
     expect(newConversationMessages([user, call, result], [user, call, result, answer])).toEqual([answer]);
     expect(newConversationMessages([user, call, result], [call, result, answer])).toEqual([answer]);

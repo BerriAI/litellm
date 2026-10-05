@@ -165,6 +165,8 @@ describe("tool payloads", () => {
     expect(toolSummary('{"command":"npm test\\n-- --run')).toBe("npm test -- --run");
     expect(toolSummary('{"file_path":"/workspace/src/page.tsx","offset":10}')).toBe("/workspace/src/page.tsx");
     expect(toolSummary('{"unknown":42}')).toBe("");
+    expect(toolSummary({ command: "[ -f package.json ] && npm test" })).toBe("[ -f package.json ] && npm test");
+    expect(toolSummary(JSON.stringify({ command: "{ npm test; }" }))).toBe("{ npm test; }");
   });
 
   it("preserves command failure metadata and renders structured results as fields", () => {

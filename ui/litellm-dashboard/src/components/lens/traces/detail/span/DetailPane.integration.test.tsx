@@ -341,12 +341,13 @@ describe("DetailPane", () => {
     expect(output).not.toHaveTextContent("raw output left unparsed");
   });
 
-  it("keeps the failed-tool styling when a tool's output arrives as a single message", async () => {
+  it("identifies a failed tool result when its output arrives as a single message", async () => {
     vi.mocked(agentTraceSpanCall).mockResolvedValue(failedToolMessageDetail);
     renderPane(spanRow(failedTool));
     const output = await screen.findByRole("region", { name: "Output" });
-    const result = within(output).getByText("permission denied: /etc/shadow");
-    expect(result).toHaveClass("text-destructive");
+    const result = within(output).getByRole("group", { name: "Failed tool result" });
+    expect(result).toBeVisible();
+    expect(result).toHaveTextContent("permission denied: /etc/shadow");
     expect(output).not.toHaveTextContent("Assistant");
   });
 

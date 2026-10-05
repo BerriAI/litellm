@@ -323,6 +323,9 @@ const LANGCHAIN_ROLE: Readonly<Record<string, string>> = {
   tool: "tool",
 };
 
+const isMessageContent = (value: unknown): value is string | unknown[] =>
+  typeof value === "string" || Array.isArray(value);
+
 const langchainToolCalls = (data: object): TraceToolCall[] | undefined => {
   const calls: unknown = Reflect.get(data, "tool_calls");
   if (!Array.isArray(calls) || calls.length === 0) return undefined;
@@ -337,7 +340,7 @@ const parseLangchainMessage = (value: object): TraceMessage | null => {
   const data: unknown = Reflect.get(value, "data");
   if (!role || typeof data !== "object" || data === null) return null;
   const content: unknown = Reflect.get(data, "content");
-  if (typeof content !== "string" && !Array.isArray(content)) return null;
+  if (!isMessageContent(content)) return null;
   const name: unknown = Reflect.get(data, "name");
   const toolCalls = langchainToolCalls(data);
   return {
@@ -348,28 +351,29 @@ const parseLangchainMessage = (value: object): TraceMessage | null => {
   };
 };
 
+const parseToolCall = (call: unknown): TraceToolCall | null => {
+  if (!call || typeof call !== "object") return null;
+  const fn: unknown = Reflect.get(call, "function");
+  const source = fn && typeof fn === "object" ? fn : call;
+  const name: unknown = Reflect.get(source, "name");
+  if (typeof name !== "string") return null;
+  if ("args" in source) return { name, args: source.args };
+  const args: unknown = Reflect.get(source, "arguments");
+  return { name, args: typeof args === "string" ? parseJson(args) ?? args : args };
+};
+
 const parseMessage = (value: unknown): TraceMessage | null => {
   if (typeof value !== "object" || value === null) return null;
   if (!("role" in value) && "data" in value) return parseLangchainMessage(value);
   const role: unknown = Reflect.get(value, "role");
   const content: unknown = Reflect.get(value, "content") ?? Reflect.get(value, "parts");
   const rawCalls: unknown = Reflect.get(value, "tool_calls");
+  if (rawCalls != null && !Array.isArray(rawCalls)) return null;
   const hasCalls = Array.isArray(rawCalls) && rawCalls.length > 0;
   const emptyToolMessage = content == null && hasCalls;
-  const hasContent = typeof content === "string" || Array.isArray(content) || emptyToolMessage;
+  const hasContent = isMessageContent(content) || emptyToolMessage;
   if (typeof role !== "string" || !hasContent) return null;
-  const calls = Array.isArray(rawCalls)
-    ? rawCalls.map((call): TraceToolCall | null => {
-        if (!call || typeof call !== "object") return null;
-        const fn: unknown = Reflect.get(call, "function");
-        const source = fn && typeof fn === "object" ? fn : call;
-        const name: unknown = Reflect.get(source, "name");
-        if (typeof name !== "string") return null;
-        if ("args" in source) return { name, args: source.args };
-        const args: unknown = Reflect.get(source, "arguments");
-        return { name, args: typeof args === "string" ? parseJson(args) ?? args : args };
-      })
-    : undefined;
+  const calls = Array.isArray(rawCalls) ? rawCalls.map(parseToolCall) : undefined;
   if (calls?.some((call) => call === null)) return null;
   const text = typeof content === "string" ? content : JSON.stringify(content ?? "");
   return {

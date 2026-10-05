@@ -47,7 +47,7 @@ export function TraceConversation({
   );
   const complete = loadedCount === steps.length;
   const items = buildConversation(trace.spans, details, complete);
-  const multipleAgents = new Set(items.map((item) => item.agentName).filter(Boolean)).size > 1;
+  const multipleAgents = new Set(items.map((item) => item.agentId).filter(Boolean)).size > 1;
   const inlineErrorIds = new Set(items.filter((item) => item.showError).map((item) => item.span.span_id));
   const rootErrors = trace.spans.filter((span) => {
     const failedRoot = span.parent_span_id === null && span.status === "error" && span.type !== "tool";
@@ -63,9 +63,14 @@ export function TraceConversation({
           <section key={item.id} className="min-w-0 space-y-2" aria-label={`Conversation step ${item.span.name}`}>
             {(multipleAgents || item.toolResult === undefined) && (
               <div className="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
-                <span className="min-w-0 truncate">
-                  {multipleAgents ? item.agentName : fmtMs(item.span.start_offset_ms)}
-                </span>
+                <div className="flex min-w-0 items-center gap-2">
+                  {multipleAgents && (
+                    <span className="truncate" title={item.agentName}>
+                      {item.agentName}
+                    </span>
+                  )}
+                  <span className="shrink-0 tabular-nums">{fmtMs(item.span.start_offset_ms)}</span>
+                </div>
                 {item.toolResult === undefined && (
                   <Button
                     variant="ghost"

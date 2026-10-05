@@ -61,7 +61,7 @@ export function ToolArguments({ args }: { args: unknown }) {
 export function ToolOutput({ result, failed = false }: { result: string; failed?: boolean }) {
   const { body, metadata } = toolResult(result);
   return (
-    <div className="min-w-0 space-y-3">
+    <div role="group" aria-label={failed ? "Failed tool result" : "Tool result"} className="min-w-0 space-y-3">
       <div className={cn("min-w-0", failed && "text-destructive")}>
         <ToolValue node={body} label="result" />
       </div>

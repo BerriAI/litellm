@@ -300,6 +300,12 @@ describe("payload helpers", () => {
     expect(
       parseMessages(JSON.stringify({ role: "assistant", content: [{ type: "text", text: "An execution record" }] })),
     ).toEqual([{ role: "assistant", content: "An execution record" }]);
+    expect(parseMessages(JSON.stringify({ role: "assistant", content: "hello", tool_calls: {} }))).toBeNull();
+    expect(
+      parseMessages(
+        JSON.stringify({ role: "assistant", content: "hello", tool_calls: [{ name: "lookup", args: "42" }] }),
+      ),
+    ).toEqual([{ role: "assistant", content: "hello", tool_calls: [{ name: "lookup", args: "42" }] }]);
     expect(parseMessages('[{"role":"assistant","tool_calls":[]}]')).toBeNull();
     expect(parseMessages('[{"role":"user","content":42}]')).toBeNull();
   });

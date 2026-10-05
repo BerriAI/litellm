@@ -138,6 +138,29 @@ describe("TraceConversation", () => {
     expect(screen.queryByRole("button", { name: /Load next/ })).not.toBeInTheDocument();
   });
 
+  it("shows distinct agent invocation labels together with each step's time", async () => {
+    const first = { ...root, name: "reviewer", start_offset_ms: 1000 };
+    const second = { ...first, span_id: "second", start_offset_ms: 2000 };
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) => ({
+      ...rootDetail,
+      span_id: id,
+      input: id === "root" ? "Review code" : "Review tests",
+      output: "",
+    }));
+    renderWithProviders(
+      <TraceConversation
+        trace={{ ...trace, spans: [first, second] } as Trace}
+        accessToken="test"
+        onOpenStep={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText("reviewer (1)")).toBeVisible();
+    expect(screen.getByText("reviewer (2)")).toBeVisible();
+    const steps = screen.getAllByRole("region", { name: "Conversation step reviewer" });
+    expect(within(steps[0]).getByText("1.00s")).toBeVisible();
+    expect(within(steps[1]).getByText("2.00s")).toBeVisible();
+  });
+
   it.each([rootDetail.output, ""])(
     "keeps the root failure visible while loading, then places it in order (output: %s)",
     async (output) => {

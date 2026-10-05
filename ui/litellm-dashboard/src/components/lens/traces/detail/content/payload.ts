@@ -133,7 +133,7 @@ export function toolAction(value: unknown): { key: string; text: string } | null
 
 export function toolSummary(raw: unknown): string {
   const action = toolAction(raw);
-  if (action && !/^\s*[[{]/.test(action.text)) return action.text.replace(/\s+/g, " ");
+  if (action && (action.key !== "arguments" || !looksLikeJson(action.text))) return action.text.replace(/\s+/g, " ");
   if (typeof raw !== "string") return "";
   const match = /"(?:command|cmd|code|patch|file_path|path|file|query|pattern|url)"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(raw);
   if (!match) return "";
