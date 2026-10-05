@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, LITELLM_PROXY_ADMIN_NAME
 from litellm.integrations.shadow_eval_logger import (
     _MAX_CONCURRENT_SHADOW_TASKS,
     _MAX_ERROR_CHARS,
@@ -27,6 +27,7 @@ from litellm.integrations.shadow_eval_logger import (
     _unmask_preference,
     request_guardrail_fingerprint,
 )
+from litellm.proxy._types import LiteLLM_UserTable
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     SHADOW_EVAL_JUDGE_CALL_ORIGIN,
@@ -52,6 +53,7 @@ def _job(**overrides) -> ActiveShadowEvalJob:
         router_name="my-router",
         shadow_percentage=100.0,
         judge_model="judge-model",
+        created_by="evaluation-admin",
         max_turns=200,
         ends_at=datetime.now(timezone.utc) + timedelta(days=1),
         attempts=0,
@@ -74,6 +76,7 @@ def _prisma(jobs=(), attempt_counts=(), attempt_costs=()) -> MagicMock:
         ]
     )
     prisma.db.litellm_shadowevalattempt.create = AsyncMock()
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=LiteLLM_UserTable(user_id="evaluation-admin"))
     return prisma
 
 
@@ -90,6 +93,7 @@ def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash
         baseline_model=job.baseline_model,
         shadow_percentage=job.shadow_percentage,
         judge_model=job.judge_model,
+        created_by=job.created_by,
         max_turns=job.max_turns,
         max_budget=job.max_budget,
         ends_at=job.ends_at,
@@ -402,7 +406,7 @@ class TestSurfaceNormalization:
         assert shadow_call["tools"][0]["type"] == "function"
         assert shadow_call["tools"][0]["function"]["name"] == "get_weather"
         assert "stop_sequences" not in shadow_call
-        assert "stream" not in shadow_call
+        assert shadow_call["stream"] is False
         assert shadow_call["metadata"][INTERNAL_CALL_ORIGIN_METADATA_KEY] == SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
     async def test_responses_arm_translates_wire_body_params_and_drops_surface_only_keys(self):
@@ -1029,7 +1033,7 @@ class TestSuccessHookSkipChain:
 
         shadow_call = router.acompletion.call_args_list[0].kwargs
         assert shadow_call["temperature"] == 0.5
-        assert "stream" not in shadow_call
+        assert shadow_call["stream"] is False
         create = prisma.db.litellm_shadowevalattempt.create
         create.assert_awaited_once()
         row = create.call_args.kwargs["data"]
@@ -1993,6 +1997,7 @@ class TestShadowPipeline:
         shadow_call = router.acompletion.call_args_list[0].kwargs
         judge_call = router.acompletion.call_args_list[1].kwargs
         for call in (shadow_call, judge_call):
+            assert call["stream"] is False
             assert call["num_retries"] == 0
             assert call["fallbacks"] == []
             assert call["metadata"]["user_api_key_hash"] == "key-hash"
@@ -2521,3 +2526,29 @@ class TestSamplingFunnel:
 
         assert logger._test_funnel == []
         prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("evaluation_spend_cache")
+@pytest.mark.parametrize(
+    ("created_by", "failure"),
+    (
+        ("missing-creator", None),
+        ("unreadable-creator", RuntimeError("creator unavailable")),
+        (LITELLM_PROXY_ADMIN_NAME, None),
+        (None, None),
+    ),
+)
+async def test_unavailable_evaluation_creator_withholds_without_calling_a_provider(
+    created_by: str | None, failure: Exception | None
+) -> None:
+    prisma: Final = _prisma()
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None, side_effect=failure)
+    router: Final = _router()
+    job: Final = _job(created_by=created_by)
+    logger: Final = _logger(router=router, prisma=prisma, jobs=(job,))
+    await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+    await _drain(logger)
+    assert router.acompletion.call_count == 0
+    assert logger._test_funnel == [("job-1", "withheld")]
+    prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()

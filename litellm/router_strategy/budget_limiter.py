@@ -21,6 +21,7 @@ anthropic:
 import asyncio
 import builtins
 import logging
+import math
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import groupby
@@ -590,7 +591,7 @@ class RouterBudgetLimiting(CustomLogger):
         else:
             # Within existing window - increment spend
             remaining_time: Final = ttl_seconds - (current_time - budget_start)
-            ttl_for_increment: Final = int(remaining_time)
+            ttl_for_increment: Final = max(1, math.ceil(remaining_time))
 
             await self._increment_spend_in_current_window(
                 spend_key=spend_key, response_cost=response_cost, ttl=ttl_for_increment

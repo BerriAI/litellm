@@ -60,7 +60,7 @@ async def async_completion_with_fallbacks(**kwargs):
             completion_kwargs = filter_internal_params(completion_kwargs)
 
             response = await litellm.acompletion(
-                **completion_kwargs,
+                **{**completion_kwargs, "fallbacks": []},
                 model=model,
                 litellm_logging_obj=litellm_logging_obj,
             )

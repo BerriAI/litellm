@@ -7,9 +7,11 @@
 
 import asyncio
 import contextvars
-from collections.abc import AsyncIterator, Coroutine, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from functools import partial
 from typing import Any, Final, cast
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
@@ -104,6 +106,32 @@ def _deployment_passes_through_anthropic_messages(model_info: object) -> bool:
 
 def _deployment_supports_cache_control_ttl(model_info: object) -> bool:
     return isinstance(model_info, dict) and model_info.get("cache_control_ttl") is True
+
+
+def get_anthropic_messages_provider_config(
+    model: str, custom_llm_provider: str | None, model_info: object
+) -> BaseAnthropicMessagesConfig | None:
+    from litellm.types.utils import LlmProviders
+
+    config: Final = (
+        ProviderConfigManager.get_provider_anthropic_messages_config(model, LlmProviders(custom_llm_provider))
+        if custom_llm_provider is not None and custom_llm_provider in (provider.value for provider in LlmProviders)
+        else None
+    )
+    if config is not None or not _deployment_passes_through_anthropic_messages(model_info):
+        return config
+    from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
+
+    return OpenAILikeAnthropicMessagesConfig(cache_control_ttl=_deployment_supports_cache_control_ttl(model_info))
+
+
+def anthropic_messages_uses_bridge(model: str, request: Mapping[str, object]) -> bool:
+    resolved_model, provider, _, _ = litellm.get_llm_provider(
+        model=model,
+        custom_llm_provider=TypeAdapter[str | None](str | None).validate_python(request.get("custom_llm_provider")),
+        api_base=TypeAdapter[str | None](str | None).validate_python(request.get("api_base")),
+    )
+    return get_anthropic_messages_provider_config(resolved_model, provider, request.get("model_info")) is None
 
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -452,8 +480,6 @@ def anthropic_messages_handler(
     Args:
         container: Container config with skills for code execution
     """
-    from litellm.types.utils import LlmProviders
-
     # Sanitize empty text blocks so the sync entry point
     # (litellm.messages.create -> anthropic_messages_handler) gets the same
     # protection as the async wrapper. The async wrapper already sanitized and
@@ -561,23 +587,9 @@ def anthropic_messages_handler(
                 **kwargs,
             )
 
-    anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None = None
-
-    if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
-        anthropic_messages_provider_config = ProviderConfigManager.get_provider_anthropic_messages_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
-        )
-    if anthropic_messages_provider_config is None and _deployment_passes_through_anthropic_messages(
-        kwargs.get("model_info")
-    ):
-        from litellm.llms.openai_like.messages.transformation import (
-            OpenAILikeAnthropicMessagesConfig,
-        )
-
-        anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig(
-            cache_control_ttl=_deployment_supports_cache_control_ttl(kwargs.get("model_info")),
-        )
+    anthropic_messages_provider_config: Final = get_anthropic_messages_provider_config(
+        model, custom_llm_provider, TypeAdapter(object).validate_python(kwargs.get("model_info"))
+    )
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         if kwargs.get("compaction") is None and _should_route_to_responses_api(
