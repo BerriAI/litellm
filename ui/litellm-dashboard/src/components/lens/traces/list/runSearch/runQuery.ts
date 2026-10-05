@@ -4,7 +4,7 @@ import type { TraceSummary } from "../../types";
 import { previewText, traceAgentNames } from "../../utils";
 
 import { type ClientIndex, filterItems } from "@/components/shared/search/evaluate";
-import type { FieldSpec, QueryLanguage } from "@/components/shared/search/language";
+import { ALL_OPERATORS, type FieldSpec, type QueryLanguage } from "@/components/shared/search/language";
 
 const RUN_FIELDS = {
   name: { group: "Run attributes", icon: SquareChevronRight, suggestValues: true },
@@ -17,7 +17,7 @@ const RUN_FIELDS = {
 
 export type RunField = keyof typeof RUN_FIELDS;
 
-export const RUN_QUERY: QueryLanguage<RunField> = { fields: RUN_FIELDS };
+export const RUN_QUERY: QueryLanguage<RunField> = { fields: RUN_FIELDS, ops: ALL_OPERATORS };
 
 /** Reads the run fields off a loaded page; free text searches trace id, input and name. */
 export const RUN_INDEX: ClientIndex<TraceSummary, RunField> = {

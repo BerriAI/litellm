@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { note, NOTE_INDEX, NOTE_QUERY, notes } from "./__fixtures__/notes";
+import {
+  EXACT_NOTE_QUERY,
+  NEGATION_NOTE_QUERY,
+  note,
+  NOTE_INDEX,
+  NOTE_QUERY,
+  notes,
+  WILDCARD_NOTE_QUERY,
+} from "./__fixtures__/notes";
 import { evaluate, fieldValues, filterItems } from "./evaluate";
 
 const ids = (text: string) => filterItems(NOTE_QUERY, NOTE_INDEX, notes, text).map((n) => n.id);
@@ -18,6 +26,28 @@ describe("evaluate", () => {
     expect(by("neq", "triage")).toEqual(["bbb222", "ccc333"]);
     expect(by("glob", "*search*")).toEqual(["bbb222"]);
     expect(by("nglob", "*search*")).toEqual(["aaa111", "ccc333"]);
+  });
+
+  it("treats a star as a literal under eq and neq, so an equality-only query never globs", () => {
+    const starred = [note({ id: "star", title: "a*b" }), note({ id: "x", title: "axb" })];
+    const by = (op: "eq" | "neq") =>
+      evaluate(NOTE_INDEX, starred, { text: [], filters: [{ field: "title", op, value: "a*b" }] }).map((n) => n.id);
+    expect(by("eq")).toEqual(["star"]);
+    expect(by("neq")).toEqual(["x"]);
+    expect(filterItems(EXACT_NOTE_QUERY, NOTE_INDEX, starred, "title:a*b").map((n) => n.id)).toEqual(["star"]);
+  });
+
+  it("follows the language's capabilities from the typed text to the matched items", () => {
+    const tagged = [...notes, note({ id: "star", tags: ["research*"] })];
+    const hits = (language: typeof NOTE_QUERY, text: string) =>
+      filterItems(language, NOTE_INDEX, tagged, text).map((n) => n.id);
+    expect(hits(NOTE_QUERY, "-tag:research*")).toEqual(["aaa111", "ccc333"]);
+    expect(hits(EXACT_NOTE_QUERY, "tag:research*")).toEqual(["star"]);
+    expect(hits(EXACT_NOTE_QUERY, "-tag:researcher")).toEqual([]);
+    expect(hits(NEGATION_NOTE_QUERY, "-tag:researcher")).toEqual(["aaa111", "ccc333", "star"]);
+    expect(hits(NEGATION_NOTE_QUERY, "-tag:research*")).toEqual(["aaa111", "bbb222", "ccc333"]);
+    expect(hits(WILDCARD_NOTE_QUERY, "tag:research*")).toEqual(["bbb222", "star"]);
+    expect(hits(WILDCARD_NOTE_QUERY, "-tag:researcher")).toEqual([]);
   });
 
   it("requires every term and every filter", () => {

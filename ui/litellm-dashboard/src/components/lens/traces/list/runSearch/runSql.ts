@@ -2,7 +2,7 @@ import { getProxyBaseUrl } from "@/components/networking";
 import type { TimeWindow } from "@/components/shared/timeline/Timeline";
 import type { TraceQueryBody } from "../../types";
 
-import { valueMatcher } from "@/components/shared/search/language";
+import { isNegatedOp, valueMatcher } from "@/components/shared/search/language";
 import type { SearchFilter, SearchQuery } from "@/components/shared/search/searchQuery";
 import type { RunField } from "./runQuery";
 
@@ -48,7 +48,7 @@ const textPredicate = (term: string): string => {
 
 function filterPredicate(filter: SearchFilter<RunField>): string {
   const predicate = FIELD_PREDICATES[filter.field](filter.value);
-  return filter.op === "neq" || filter.op === "nglob" ? `NOT (${predicate})` : predicate;
+  return isNegatedOp(filter.op) ? `NOT (${predicate})` : predicate;
 }
 
 const timeBound = (range: TimeWindow | undefined): string =>
