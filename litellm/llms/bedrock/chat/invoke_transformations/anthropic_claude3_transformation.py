@@ -126,15 +126,24 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             thinking_with_display: Final[AnthropicThinkingParam] = {"type": "adaptive", "display": "updates"}
             optional_params["thinking"] = thinking_with_display
 
-        # The stub model hides the original model from the parent's forced-tool-use backstop
-        response_format_tool_choice: Final = optional_params.get("tool_choice")
-        if (
-            "response_format" in non_default_params
-            and isinstance(response_format_tool_choice, dict)
-            and response_format_tool_choice.get("name") == RESPONSE_FORMAT_TOOL_NAME
-            and AnthropicModelInfo.forced_tool_use_unsupported(original_model)
-        ):
-            optional_params.pop("tool_choice")
+        # The Claude 3 stub hides the real model from the parent's tool_choice
+        # decision, so ``reasoning_effort`` looks like legacy thinking and the
+        # JSON tool is left optional. Re-decide against the original model:
+        # adaptive Claude can be forced, models that reject forced tool use cannot.
+        tools: Final = optional_params.get("tools")
+        has_json_tool: Final = isinstance(tools, list) and any(
+            isinstance(tool, dict) and tool.get("name") == RESPONSE_FORMAT_TOOL_NAME for tool in tools
+        )
+        if "response_format" in non_default_params and has_json_tool:
+            if AnthropicConfig._response_format_tool_choice_allowed(original_model, non_default_params, "bedrock"):
+                optional_params["tool_choice"] = {"name": RESPONSE_FORMAT_TOOL_NAME, "type": "tool"}
+            else:
+                response_format_tool_choice: Final = optional_params.get("tool_choice")
+                if (
+                    isinstance(response_format_tool_choice, dict)
+                    and response_format_tool_choice.get("name") == RESPONSE_FORMAT_TOOL_NAME
+                ):
+                    optional_params.pop("tool_choice")
 
         return optional_params
 

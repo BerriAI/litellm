@@ -1472,6 +1472,29 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return None
 
+    @staticmethod
+    def _response_format_tool_choice_allowed(
+        model: str,
+        non_default_params: dict,
+        custom_llm_provider: str,
+    ) -> bool:
+        """Whether a synthetic JSON tool may be forced for ``response_format``.
+
+        Legacy extended thinking (``thinking.type=enabled`` plus a token budget,
+        including ``reasoning_effort`` on pre-adaptive models) rejects
+        ``tool_choice`` of type ``tool`` with a 400. Adaptive thinking does not,
+        and leaving the tool unforced means Claude answers in prose and the
+        schema is never applied.
+        """
+        if AnthropicModelInfo.forced_tool_use_unsupported(model):
+            return False
+        if AnthropicConfig._is_adaptive_thinking_model(model, custom_llm_provider):
+            return True
+        thinking: Final = non_default_params.get("thinking")
+        if isinstance(thinking, dict) and thinking.get("type") == "enabled":
+            return False
+        return non_default_params.get("reasoning_effort") is None
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -1540,7 +1563,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     _tool = self.map_response_format_to_anthropic_tool(value, optional_params, is_thinking_enabled)
                     if _tool is None:
                         continue
-                    if not is_thinking_enabled and not AnthropicModelInfo.forced_tool_use_unsupported(model):
+                    if AnthropicConfig._response_format_tool_choice_allowed(
+                        model, non_default_params, self._resolved_provider
+                    ):
                         _tool_choice = {
                             "name": RESPONSE_FORMAT_TOOL_NAME,
                             "type": "tool",
@@ -2078,8 +2103,32 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         }
 
         self._apply_output_config(data=data, model=model, optional_params=optional_params)
+        self._nest_output_format_in_output_config(data)
 
         return data
+
+    def _nest_output_format_in_output_config(self, data: dict) -> None:
+        """Move deprecated top-level ``output_format`` into ``output_config.format``.
+
+        Claude only enforces structured output from ``output_config.format``.
+        The old top-level field is ignored once ``output_config`` is also set
+        (adaptive models always send ``effort`` there), so the schema never
+        reaches the grammar. Vertex still accepts ``output_format``, and Bedrock
+        Invoke rewrites that field itself.
+        """
+        if self._resolved_provider in ("vertex_ai", "bedrock"):
+            return
+        output_format: Final = data.get("output_format")
+        if not isinstance(output_format, dict):
+            return
+        data.pop("output_format", None)
+        output_config: Final = data.get("output_config")
+        if isinstance(output_config, dict):
+            merged: Final = dict(output_config)
+            merged.setdefault("format", output_format)
+            data["output_config"] = merged
+            return
+        data["output_config"] = {"format": output_format}
 
     def _apply_output_config(self, data: dict, model: str, optional_params: dict) -> None:
         """Validate and apply output_config to the request data.

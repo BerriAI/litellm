@@ -1972,6 +1972,43 @@ def test_output_config_format_preservation_and_beta_header():
     assert "structured-outputs-2025-11-13" in headers["anthropic-beta"]
 
 
+def test_response_format_is_nested_in_output_config_format():
+    """Claude enforces structured output from output_config.format, including when effort is set."""
+    config = AnthropicConfig()
+    schema = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "answer",
+            "schema": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    optional_params = config.map_openai_params(
+        non_default_params={"max_tokens": 64, "response_format": schema, "reasoning_effort": "low"},
+        optional_params={},
+        model="claude-sonnet-5",
+        drop_params=False,
+    )
+    headers: dict = {}
+    result = config.transform_request(
+        model="claude-sonnet-5",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers,
+    )
+
+    assert "output_format" not in result
+    assert result["output_config"]["effort"] == "low"
+    assert result["output_config"]["format"]["type"] == "json_schema"
+    assert result["output_config"]["format"]["schema"]["properties"]["city"]["type"] == "string"
+    assert "structured-outputs-2025-11-13" in headers["anthropic-beta"]
+
+
 def test_effort_beta_header_injection():
     """Test that effort beta header is automatically added when output_config is detected."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo

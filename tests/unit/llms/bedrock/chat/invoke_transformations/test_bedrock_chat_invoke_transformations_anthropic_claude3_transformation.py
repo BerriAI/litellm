@@ -177,12 +177,10 @@ def test_aws_params_filtered_from_request_body():
     assert len(result["messages"]) == 1, "should have 1 message"
 
 
-def test_output_format_conversion_to_inline_schema():
+def test_output_format_conversion_to_json_tool():
     """
-    Test that output_format is converted to inline schema in message content for Bedrock Invoke.
-
-    Bedrock Invoke doesn't support the output_format parameter, so LiteLLM converts it by
-    embedding the schema directly into the user message content.
+    Bedrock Invoke rejects ``output_format`` on this model, so the schema is forced
+    through a JSON tool instead of being pasted into the user message.
     """
     from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
         AmazonAnthropicClaudeMessagesConfig,
@@ -227,25 +225,9 @@ def test_output_format_conversion_to_inline_schema():
     # Verify output_format was removed from the request
     assert "output_format" not in result, "output_format should be removed from request body"
 
-    # Verify the schema was added to the last user message content
-    assert "messages" in result
-    last_user_message = result["messages"][0]
-    assert last_user_message["role"] == "user"
-
-    content = last_user_message["content"]
-    assert isinstance(content, list), "content should be a list"
-    assert len(content) == 2, "content should have 2 items (original text + schema)"
-
-    # Check original text is preserved
-    assert content[0]["type"] == "text"
-    assert "John Smith" in content[0]["text"]
-
-    # Check schema was added as JSON string
-    assert content[1]["type"] == "text"
-    schema_text = content[1]["text"]
-
-    # Parse the schema JSON
-    parsed_schema = json.loads(schema_text)
+    assert result["messages"][0]["content"].startswith("Extract the key information")
+    assert result["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
+    parsed_schema = result["tools"][-1]["input_schema"]
     assert parsed_schema["type"] == "object"
     assert "name" in parsed_schema["properties"]
     assert "email" in parsed_schema["properties"]
@@ -258,9 +240,7 @@ def test_output_format_conversion_to_inline_schema():
 
 
 def test_output_format_conversion_with_string_content():
-    """
-    Test that output_format conversion works when message content is a string (not a list).
-    """
+    """String message content stays untouched when the schema is forced as a JSON tool."""
     from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
         AmazonAnthropicClaudeMessagesConfig,
     )
@@ -289,20 +269,9 @@ def test_output_format_conversion_with_string_content():
         headers={},
     )
 
-    # Verify the content was converted to list format
-    last_user_message = result["messages"][0]
-    content = last_user_message["content"]
-    assert isinstance(content, list), "content should be converted to list"
-    assert len(content) == 2, "content should have 2 items"
-
-    # Check original text
-    assert content[0]["type"] == "text"
-    assert content[0]["text"] == "What is 2+2?"
-
-    # Check schema was added
-    assert content[1]["type"] == "text"
-    parsed_schema = json.loads(content[1]["text"])
-    assert "result" in parsed_schema["properties"]
+    assert result["messages"][0]["content"] == "What is 2+2?"
+    assert result["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
+    assert "result" in result["tools"][-1]["input_schema"]["properties"]
 
 
 def test_output_format_with_no_schema():
@@ -757,6 +726,10 @@ def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_th
     assert "tools" in result
     assert result["thinking"] == {"type": "adaptive"}
     assert result["output_config"] == {"effort": "high"}
+    if model == "us.anthropic.claude-sonnet-5":
+        assert result["tool_choice"] == {"name": "json_tool_call", "type": "tool"}
+    else:
+        assert "tool_choice" not in result
 
 
 def test_bedrock_chat_invoke_response_format_stub_still_upgrades_legacy_thinking(local_model_cost_map):

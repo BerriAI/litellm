@@ -251,9 +251,83 @@ def _bedrock_model_supports(model: str, key: str) -> bool:
     return _supports_factory(model=model, custom_llm_provider="bedrock", key=key)
 
 
+def _install_bedrock_json_schema_tool(model: str, request_body: dict, schema_format: dict) -> bool:
+    """Force a synthetic JSON tool when Bedrock will not accept ``output_config.format``.
+
+    Returns False when the schema cannot be forced (legacy budget thinking, or a
+    model that rejects ``tool_choice`` of type ``tool``). The caller then keeps
+    the inline-text fallback.
+    """
+    from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    schema: Final = schema_format.get("schema")
+    if not isinstance(schema, dict):
+        return False
+    thinking: Final = request_body.get("thinking")
+    probe: Final = {"thinking": thinking} if thinking is not None else {}
+    if not AnthropicConfig._response_format_tool_choice_allowed(model, probe, "bedrock"):
+        return False
+
+    tool: Final = AnthropicConfig()._create_json_tool_call_for_response_format(json_schema=schema)
+    existing_tools: Final = request_body.get("tools")
+    tools: Final = list(existing_tools) if isinstance(existing_tools, list) else []
+    if not any(isinstance(item, dict) and item.get("name") == RESPONSE_FORMAT_TOOL_NAME for item in tools):
+        tools.append(dict(tool))
+    request_body["tools"] = tools
+    request_body["tool_choice"] = {"type": "tool", "name": RESPONSE_FORMAT_TOOL_NAME}
+    return True
+
+
+def promote_bedrock_json_tool_response(response: dict) -> dict:
+    """Turn a forced ``json_tool_call`` block back into text for Messages clients.
+
+    Bedrock Claude models that reject ``output_config.format`` still return the
+    schema as a tool call. Anthropic structured-output clients expect that JSON
+    in a text block with ``stop_reason`` ``end_turn``.
+    """
+    from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
+    content: Final = response.get("content")
+    if not isinstance(content, list):
+        return response
+    tool_blocks: Final = [
+        block
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == RESPONSE_FORMAT_TOOL_NAME
+    ]
+    other_tools: Final = [
+        block
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") != RESPONSE_FORMAT_TOOL_NAME
+    ]
+    if not tool_blocks or other_tools:
+        return response
+
+    rewritten: Final[list] = []
+    for block in content:
+        if (
+            not isinstance(block, dict)
+            or block.get("name") != RESPONSE_FORMAT_TOOL_NAME
+            or block.get("type") != "tool_use"
+        ):
+            rewritten.append(block)
+            continue
+        payload: Final = block.get("input")
+        text: Final = payload if isinstance(payload, str) else json.dumps(payload)
+        rewritten.append({"type": "text", "text": text})
+    updated: Final = dict(response)
+    updated["content"] = rewritten
+    if updated.get("stop_reason") == "tool_use":
+        updated["stop_reason"] = "end_turn"
+    return updated
+
+
 def apply_bedrock_invoke_structured_output(
     model: str,
     request_body: dict[str, object],  # mutable-ok: edited in place like siblings
+    *,
+    prefer_tool_fallback: bool = False,
 ) -> None:
     """
     Route Anthropic structured-output params to what the Bedrock model supports.
@@ -265,7 +339,8 @@ def apply_bedrock_invoke_structured_output(
     forwarded as ``output_config.format``, which Bedrock relays to the model for
     enforced structured output. For every other model the schema is inlined into
     the last user message as best-effort text, with a warning because nothing
-    enforces it.
+    enforces it. Messages callers pass ``prefer_tool_fallback`` so models that
+    can force a tool actually return the schema instead of unconstrained prose.
     """
     legacy_output_format: Final = request_body.pop("output_format", None)
     output_config_format: Final = pop_bedrock_invoke_output_config_format(request_body)
@@ -279,6 +354,13 @@ def apply_bedrock_invoke_structured_output(
             existing_output_config["format"] = schema_format
         else:
             request_body["output_config"] = {"format": schema_format}  # rebind-ok: out-param
+        return
+
+    if prefer_tool_fallback and _install_bedrock_json_schema_tool(
+        model=model,
+        request_body=request_body,
+        schema_format=schema_format,
+    ):
         return
 
     verbose_logger.warning(

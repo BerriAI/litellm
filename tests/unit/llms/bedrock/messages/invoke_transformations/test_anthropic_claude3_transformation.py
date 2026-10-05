@@ -1068,9 +1068,9 @@ def test_bedrock_messages_forwards_output_config_with_output_format():
     assert "answer" not in json.dumps(result["messages"])
 
 
-def test_bedrock_messages_converts_output_config_format_to_inline_schema():
-    """Without native structured-output support, ``output_config.format`` falls back
-    to the inline schema so Bedrock does not see an unknown nested key."""
+def test_bedrock_messages_converts_output_config_format_to_json_tool():
+    """Without native structured-output support, models that accept a forced tool
+    get a JSON tool instead of an unenforced schema pasted into the prompt."""
     from unittest.mock import patch
 
     from litellm.types.router import GenericLiteLLMParams
@@ -1103,8 +1103,9 @@ def test_bedrock_messages_converts_output_config_format_to_inline_schema():
 
     assert result.get("output_config") == {"effort": "xhigh"}
     assert "output_format" not in result
-    last_content = result["messages"][0]["content"]
-    assert json.loads(last_content[-1]["text"]) == schema
+    assert result["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
+    assert result["tools"][-1]["input_schema"]["properties"] == schema["properties"]
+    assert result["messages"][0]["content"] == [{"type": "text", "text": "Hello"}]
 
 
 @pytest.mark.parametrize(
@@ -1179,8 +1180,8 @@ def test_bedrock_messages_does_not_mutate_callers_messages_when_embedding_schema
         "content": [{"type": "text", "text": "Hello"}],
     }
     assert caller_content == [{"type": "text", "text": "Hello"}]
-    last_content = result["messages"][-1]["content"]
-    assert json.loads(last_content[-1]["text"]) == schema
+    assert result["messages"][-1]["content"] == [{"type": "text", "text": "Hello"}]
+    assert result["tools"][-1]["input_schema"]["properties"] == schema["properties"]
 
 
 def test_bedrock_messages_does_not_mutate_callers_output_config():
@@ -3153,9 +3154,9 @@ def test_bedrock_messages_forwards_output_config_format_natively(local_model_cos
     assert "zebra_count" not in json.dumps(result["messages"])
 
 
-def test_bedrock_messages_inlines_schema_for_claude_5(local_model_cost_map):
-    """Bedrock rejects ``output_config.format`` for the Claude 5 family, so the
-    schema falls back to the inline-text path instead of a deterministic 400."""
+def test_bedrock_messages_forces_json_tool_for_claude_5(local_model_cost_map):
+    """Bedrock rejects ``output_config.format`` for Claude Sonnet 5, so the schema
+    is forced through a JSON tool instead of being pasted into the prompt."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -3176,8 +3177,81 @@ def test_bedrock_messages_inlines_schema_for_claude_5(local_model_cost_map):
     )
 
     assert "output_config" not in result
+    assert result["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
+    assert result["tools"][-1]["input_schema"]["properties"] == schema["properties"]
+    assert "zebra_count" not in json.dumps(result["messages"])
+
+
+def test_bedrock_messages_inlines_schema_when_forced_tool_use_is_rejected(local_model_cost_map):
+    """Sonnet 5.5 rejects both native format and forced tool_choice, so the schema
+    stays on the inline-text path instead of a deterministic 400."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    schema = {
+        "type": "object",
+        "properties": {"zebra_count": {"type": "integer"}},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "say hello"}]}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "output_config": {"format": {"type": "json_schema", "schema": schema}},
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "output_config" not in result
+    assert "tool_choice" not in result
     last_content = result["messages"][-1]["content"]
     assert json.loads(last_content[-1]["text"]) == schema
+
+
+def test_bedrock_messages_json_tool_response_is_text():
+    from litellm.llms.bedrock.common_utils import promote_bedrock_json_tool_response
+
+    response = promote_bedrock_json_tool_response(
+        {
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "thinking", "thinking": "hmm"},
+                {"type": "tool_use", "name": "json_tool_call", "id": "t1", "input": {"zebra_count": 3}},
+            ],
+        }
+    )
+
+    assert response["stop_reason"] == "end_turn"
+    assert response["content"][0]["type"] == "thinking"
+    assert response["content"][1] == {"type": "text", "text": '{"zebra_count": 3}'}
+
+
+def test_bedrock_messages_json_tool_stream_is_text():
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="us.anthropic.claude-sonnet-5")
+
+    start = decoder._chunk_parser(
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "t1", "name": "json_tool_call", "input": {}},
+        }
+    )
+    delta = decoder._chunk_parser(
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"zebra_count": 3}'},
+        }
+    )
+    stop = decoder._chunk_parser(
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}}
+    )
+
+    assert start["content_block"] == {"type": "text", "text": ""}
+    assert delta["delta"] == {"type": "text_delta", "text": '{"zebra_count": 3}'}
+    assert stop["delta"]["stop_reason"] == "end_turn"
 
 
 def test_bedrock_messages_legacy_output_format_wins_over_output_config_format(local_model_cost_map):

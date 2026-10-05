@@ -34,6 +34,7 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
+    promote_bedrock_json_tool_response,
     is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
@@ -740,6 +741,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         apply_bedrock_invoke_structured_output(
             model=model,
             request_body=anthropic_messages_request,
+            prefer_tool_fallback=True,
         )
         normalize_bedrock_opus_output_config_effort(
             model=model,
@@ -793,6 +795,24 @@ class AmazonAnthropicClaudeMessagesConfig(
         anthropic_messages_request = self._strip_unsupported_bedrock_invoke_fields(anthropic_messages_request)
 
         return anthropic_messages_request
+
+    def transform_anthropic_messages_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ):
+        """Unwrap a forced JSON tool so Messages clients see schema text, not a tool call."""
+        from litellm.types.llms.anthropic_messages.anthropic_response import (
+            AnthropicMessagesResponse,
+        )
+
+        response: Final = super().transform_anthropic_messages_response(
+            model=model,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+        return AnthropicMessagesResponse(**promote_bedrock_json_tool_response(dict(response)))
 
     def get_async_streaming_response_iterator(
         self,
@@ -988,4 +1008,33 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
                 }
             )
             chunk_data["usage"] = {**metrics_usage, **preserved_usage}
+        return self._rewrite_json_tool_stream_event(chunk_data)
+
+    def _rewrite_json_tool_stream_event(self, chunk_data: dict) -> dict:
+        """Stream the forced JSON tool as text deltas so clients do not try to run it."""
+        from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+
+        indexes: set[int] | None = getattr(self, "_json_tool_block_indexes", None)
+        if indexes is None:
+            indexes = set()
+            self._json_tool_block_indexes = indexes
+        event_type: Final = chunk_data.get("type")
+        if event_type == "content_block_start":
+            block: Final = chunk_data.get("content_block")
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                if block.get("name") == RESPONSE_FORMAT_TOOL_NAME:
+                    start_index: Final = chunk_data.get("index")
+                    if isinstance(start_index, int):
+                        indexes.add(start_index)
+                    return {**chunk_data, "content_block": {"type": "text", "text": ""}}
+                self._saw_non_json_tool = True
+        elif event_type == "content_block_delta":
+            delta_index: Final = chunk_data.get("index")
+            delta: Final = chunk_data.get("delta")
+            if delta_index in indexes and isinstance(delta, dict) and delta.get("type") == "input_json_delta":
+                return {**chunk_data, "delta": {"type": "text_delta", "text": delta.get("partial_json") or ""}}
+        elif event_type == "message_delta" and indexes and not getattr(self, "_saw_non_json_tool", False):
+            delta = chunk_data.get("delta")
+            if isinstance(delta, dict) and delta.get("stop_reason") == "tool_use":
+                return {**chunk_data, "delta": {**delta, "stop_reason": "end_turn"}}
         return chunk_data
