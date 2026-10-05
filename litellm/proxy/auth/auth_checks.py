@@ -23,6 +23,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
 from litellm.constants import (
@@ -94,6 +95,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 from litellm.proxy.common_utils.model_listing_utils import alias_map
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
     MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
     NO_TEAM_MEMBERSHIP_SENTINEL,
@@ -122,6 +124,7 @@ from litellm.proxy.guardrails.tool_name_extraction import (
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
+from litellm.proxy.spend_tracking.spend_counter_batch import SPEND_COUNTERS_TARGET
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
@@ -481,7 +484,7 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                 continue
         try:
             # Use router's get_model_group_info method directly for better reliability
-            model_group_info = llm_router.get_model_group_info(model_group=model_name)
+            model_group_info = llm_router.get_model_group_info(model_group=model_name, include_hidden=True)
 
             if model_group_info is None:
                 # Model not found or no pricing info available
@@ -1443,6 +1446,7 @@ def get_key_end_user_budget_id(key_metadata: Mapping[str, object] | None) -> str
     return budget_id if isinstance(budget_id, str) and budget_id != "" else None
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_default_end_user_budget(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
@@ -1482,7 +1486,7 @@ async def get_default_end_user_budget(
     # Fetch from database
     try:
         budget_record: Final = await _dictable_table(BudgetRepository(prisma_client), "budget").find_unique(
-            where={"budget_id": default_budget_id}  # mutable-ok: prisma where clause
+            where={"budget_id": default_budget_id}
         )
 
         if budget_record is None:
@@ -1509,6 +1513,7 @@ async def get_default_end_user_budget(
 
 
 @log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_team_member_default_budget(
     budget_id: str,
     prisma_client: PrismaClient | None,
@@ -1690,12 +1695,12 @@ _RESTRICTED_COLUMNS: Final = ("budget_id", "allowed_model_region", "default_mode
 
 def _column_is_set(column: str) -> Mapping[str, object]:
     """``column IS NOT NULL`` as a plain dict, which is the only shape prisma's builder accepts."""
-    return {column: {"not": None}}  # mutable-ok: prisma's query builder isinstance-checks for dict
+    return {column: {"not": None}}
 
 
 def _restricted_end_user_where() -> Mapping[str, object]:
     """Prisma filter selecting every end-user row that carries a restriction auth enforces."""
-    return {"OR": [{"blocked": True}, *map(_column_is_set, _RESTRICTED_COLUMNS)]}  # mutable-ok: prisma needs dict/list
+    return {"OR": [{"blocked": True}, *map(_column_is_set, _RESTRICTED_COLUMNS)]}
 
 
 class _RegistryNotCached:
@@ -1710,6 +1715,7 @@ _END_USER_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
 _MODEL_ACCESS_GROUP_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _cached_registry(
     cache_key: str,
     overflow_sentinel: str,
@@ -1725,6 +1731,7 @@ async def _cached_registry(
     return _REGISTRY_NOT_CACHED
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _cache_registry_answer(
     cache_key: str,
     value: tuple[str, ...] | str,
@@ -1873,6 +1880,7 @@ async def _end_user_is_known_unrestricted(
 
 
 @log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_end_user_object(
     end_user_id: str | None,
     prisma_client: PrismaClient | None,
@@ -1978,6 +1986,7 @@ _END_USER_VALIDATION_NEGATIVE_TTL: Final = 60
 _END_USER_VALIDATION_POSITIVE_TTL: Final = 300
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def resolve_and_validate_end_user_id(
     raw_end_user_id: str | None,
     prisma_client: PrismaClient | None,
@@ -2127,6 +2136,7 @@ async def _load_model_access_group_registry(
     )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _fetch_uncached_model_access_group_budgets(
     uncached_groups: Sequence[str],
     prisma_client: PrismaClient,
@@ -2173,6 +2183,7 @@ def _model_access_group_budget(row: _PrismaModelAccessGroupBudgetRow) -> ModelAc
 
 
 @log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_model_access_group_budgets_batch(
     access_group_names: Sequence[str],
     prisma_client: PrismaClient | None,
@@ -2204,6 +2215,7 @@ async def get_model_access_group_budgets_batch(
     return {group: budget for group, budget in (*probed, *fetched) if budget is not None}
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _fetch_uncached_tags(
     uncached_tags: Sequence[str],
     prisma_client: PrismaClient,
@@ -2244,6 +2256,7 @@ async def _fetch_uncached_tags(
 
 
 @log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_tag_objects_batch(
     tag_names: Sequence[str],
     prisma_client: PrismaClient | None,
@@ -2337,6 +2350,7 @@ def _membership_from_cached_payload(
 
 
 @log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _fetch_team_membership_from_db(
     user_id: str,
     team_id: str,
@@ -2367,6 +2381,7 @@ async def _fetch_team_membership_from_db(
     return membership
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _load_team_membership_on_cache_miss(
     user_id: str,
     team_id: str,
@@ -2391,6 +2406,7 @@ async def _load_team_membership_on_cache_miss(
     )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_team_membership(
     user_id: str,
     team_id: str,
@@ -2584,6 +2600,7 @@ async def _get_fuzzy_user_object(
     return response
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _backfill_null_user_email(
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
@@ -2601,7 +2618,7 @@ async def _backfill_null_user_email(
     db_row: Final = await user_repo.find_by_id(user_row.user_id)
     if db_row is None:
         return user_row
-    email_update: Final = {"user_email": db_row.user_email}  # mutable-ok: model_copy update payload is dict-shaped
+    email_update: Final = {"user_email": db_row.user_email}
     updated_row: Final = user_row.model_copy(update=email_update)
     await user_api_key_cache.async_set_cache(
         key=user_row.user_id,
@@ -2613,6 +2630,7 @@ async def _backfill_null_user_email(
 
 
 @log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_user_object(
     user_id: str | None,
     prisma_client: PrismaClient | None,
@@ -2768,6 +2786,7 @@ def _user_read_failure(user_id: str, error: Exception) -> Exception:
     )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _cache_management_object(
     key: str,
     value: BaseModel | Mapping[str, object],
@@ -2789,6 +2808,7 @@ async def _cache_management_object(
     )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _cache_team_object(
     team_id: str,
     team_table: LiteLLM_TeamTableCachedObj,
@@ -2846,6 +2866,7 @@ async def _cache_team_object(
         await _invalidate_usage_cache_entry(usage_cache, alias_key, redis_shared=redis_shared, stale="team alias")
 
 
+@with_service_target(SPEND_COUNTERS_TARGET)
 async def _invalidate_usage_cache_entry(
     usage_cache: DualCache | None,
     key: str,
@@ -2869,6 +2890,7 @@ async def _invalidate_usage_cache_entry(
         )
 
 
+@with_service_target(SPEND_COUNTERS_TARGET)
 async def invalidate_team_member_spend_state(
     user_id: str,
     team_id: str,
@@ -2958,7 +2980,7 @@ async def invalidate_team_member_spend_state(
                     )
                     raise HTTPException(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail={  # mutable-ok: HTTPException.detail takes a dict
+                        detail={
                             "error": "Spend was reset in the database, but Redis is unreachable and still "
                             "holds the pre-reset counter. Retry once Redis is reachable."
                         },
@@ -2985,6 +3007,7 @@ async def invalidate_team_member_spend_state(
     )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def delete_cache_team_object(
     team_id: str,
     team_alias: str | None,
@@ -3044,6 +3067,7 @@ async def _cache_key_object(
     )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _delete_cache_key_object(
     hashed_token: str,
     user_api_key_cache: UserApiKeyCache,
@@ -3241,6 +3265,7 @@ async def _get_team_object_from_user_api_key_cache(
     return _response
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _get_team_object_from_cache(
     key: str,
     user_api_key_cache: UserApiKeyCache,
@@ -3316,6 +3341,7 @@ async def get_team_object(
         )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _cache_access_object(
     access_group_id: str,
     access_group_table: LiteLLM_AccessGroupTable,
@@ -3331,6 +3357,7 @@ async def _cache_access_object(
     )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _delete_cache_access_object(
     access_group_id: str,
     user_api_key_cache: UserApiKeyCache,
@@ -3346,6 +3373,7 @@ async def _delete_cache_access_object(
 
 
 @log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_access_object(
     access_group_id: str,
     prisma_client: DatabaseClient | None,
@@ -3417,6 +3445,7 @@ async def get_access_object(
 
 
 @log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_team_object_by_alias(
     team_alias: str,
     prisma_client: PrismaClient | None,
@@ -3527,6 +3556,7 @@ async def get_team_object_by_alias(
 
 
 @log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_org_object_by_alias(
     org_alias: str,
     prisma_client: PrismaClient | None,
@@ -3882,6 +3912,7 @@ async def get_jwt_key_mapping_object(
 
 
 @log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_key_object(
     hashed_token: str,
     prisma_client: PrismaClient | None,
@@ -3979,6 +4010,7 @@ def _copy_user_api_key_auth_for_cache(
 
 
 @log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_object_permission(
     object_permission_id: str,
     prisma_client: PrismaClient | None,
@@ -4035,6 +4067,7 @@ async def get_object_permission(
 
 
 @log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_managed_vector_store_rows_by_uuids(
     uuids: list[str],
     prisma_client: PrismaClient | None,
@@ -4104,6 +4137,7 @@ class OrganizationNotFoundError(Exception):
 
 
 @log_db_metrics
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_org_object(
     org_id: str,
     prisma_client: PrismaClient | None,
@@ -4180,6 +4214,7 @@ def _last_known_org_cache_key(org_id: str) -> str:
     return f"org_id:{org_id}:with_budget:last_known"
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _keep_last_known_org(
     org: LiteLLM_OrganizationTable, org_id: str, user_api_key_cache: UserApiKeyCache
 ) -> None:
@@ -4197,6 +4232,7 @@ async def _keep_last_known_org(
     )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_org_object_for_request(
     org_id: str,
     prisma_client: PrismaClient,
@@ -4526,9 +4562,7 @@ def _resolve_team_alias(
         return model
     if isinstance(model, str):
         return _live_team_alias_target(model, team_model_aliases, team_id, llm_router)
-    return [  # mutable-ok: _can_object_call_model takes list[str]
-        _live_team_alias_target(name, team_model_aliases, team_id, llm_router) for name in model
-    ]
+    return [_live_team_alias_target(name, team_model_aliases, team_id, llm_router) for name in model]
 
 
 def _live_team_alias_target(
@@ -4589,8 +4623,8 @@ async def _check_agent_access_group_model_access(
 
 LoadedCallerTeam: TypeAlias = LiteLLM_TeamTable | None
 LoadedCallerUser: TypeAlias = LiteLLM_UserTable | None
-CallerTeamLoader: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LoadedCallerTeam]]  # mutable-ok: Callable params
-CallerUserLoader: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LoadedCallerUser]]  # mutable-ok: Callable params
+CallerTeamLoader: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LoadedCallerTeam]]
+CallerUserLoader: TypeAlias = Callable[[UserAPIKeyAuth], Awaitable[LoadedCallerUser]]
 
 
 async def _check_agent_caller_model_access(
@@ -4951,7 +4985,7 @@ async def stamp_matched_model_access_groups(
         return ()
     if not matched:
         return ()
-    matched_groups: Final = list(matched)  # mutable-ok: the auth field is typed list[str] | None
+    matched_groups: Final = list(matched)
     valid_token.matched_model_access_groups = matched_groups  # rebind-ok: request-scoped carrier for the writer
     return matched
 
@@ -6237,6 +6271,7 @@ async def _project_soft_budget_check(
             )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def get_project_object(
     project_id: str,
     prisma_client: PrismaClient | None,
@@ -6611,6 +6646,19 @@ def _is_wildcard_pattern(allowed_model_pattern: str) -> bool:
     return "*" in allowed_model_pattern
 
 
+def _get_rag_query_vector_store_id(request_body: Mapping[str, object]) -> str | None:
+    """
+    /v1/rag/query carries its vector store in retrieval_config.vector_store_id,
+    not in vector_store_ids or tools[].vector_store_ids.
+    """
+    retrieval_config: Final = request_body.get("retrieval_config")
+    if not isinstance(retrieval_config, dict):
+        return None
+
+    vector_store_id: Final = retrieval_config.get("vector_store_id")
+    return vector_store_id if isinstance(vector_store_id, str) and vector_store_id else None
+
+
 async def vector_store_access_check(
     request_body: dict,
     team_object: LiteLLM_TeamTable | None,
@@ -6630,13 +6678,16 @@ async def vector_store_access_check(
         verbose_proxy_logger.debug("Prisma client not found, skipping vector store access check")
         return True
 
-    if litellm.vector_store_registry is None:
-        verbose_proxy_logger.debug("Vector store registry not found, skipping vector store access check")
-        return True
-
-    vector_store_ids_to_run: Final = litellm.vector_store_registry.get_vector_store_ids_to_run(
-        non_default_params=request_body, tools=request_body.get("tools", None)
-    )
+    registry_ids: Final = (
+        litellm.vector_store_registry.get_vector_store_ids_to_run(
+            non_default_params=request_body, tools=request_body.get("tools", None)
+        )
+        if litellm.vector_store_registry is not None
+        else None
+    ) or ()
+    rag_vector_store_id: Final = _get_rag_query_vector_store_id(_typed_request_body(request_body))
+    rag_ids: Final = (rag_vector_store_id,) if rag_vector_store_id is not None else ()
+    vector_store_ids_to_run: Final = tuple(dict.fromkeys((*registry_ids, *rag_ids)))
     if not vector_store_ids_to_run:
         verbose_proxy_logger.debug("Vector store to run not found, skipping vector store access check")
         return True
@@ -6676,7 +6727,7 @@ async def vector_store_access_check(
 
 def _can_object_call_vector_stores(
     object_type: Literal["key", "team", "org"],
-    vector_store_ids_to_run: list[str],
+    vector_store_ids_to_run: Sequence[str],
     object_permissions: _VectorStorePermissionsRow | None,
 ):
     """

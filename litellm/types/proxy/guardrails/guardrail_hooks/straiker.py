@@ -142,8 +142,8 @@ class StraikerGuardrailConfigModelOptionalParams(BaseModel):
         default=None,
         description=(
             "v3 only. Names the Straiker agent this route's traffic belongs to when one gateway "
-            "fronts several applications, sent as x-s6r-agent. A client-supplied x-s6r-agent header "
-            "wins. Names ONE agent, never a kind of agent: Straiker keys per-agent state on it, so "
+            "fronts several applications, sent as x-s6r-agent. It wins over a client-supplied "
+            "x-s6r-agent header. Names ONE agent, never a kind of agent: Straiker keys per-agent state on it, so "
             "sharing a value across applications merges them into one agent."
         ),
     )

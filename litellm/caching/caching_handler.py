@@ -27,7 +27,7 @@ import litellm
 from litellm._internal_context import post_response_phase
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
-from litellm.caching.caching import S3Cache
+from litellm.caching.caching import S3Cache, response_cache_phase
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
@@ -146,16 +146,17 @@ _PENDING_CACHE_WRITES: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: s
 
 
 async def _complete_cache_write_despite_cancellation(write_factory: Callable[[], Awaitable[None]]) -> None:
-    try:
-        await write_factory()
-    except asyncio.CancelledError:
+    with response_cache_phase("set"):
         try:
-            await asyncio.wait_for(write_factory(), timeout=CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS)
-        except Exception as flush_error:  # noqa: BLE001  # shutdown flush failures are logged, never raised
-            verbose_logger.warning(
-                "LiteLLM Cache: pending cache write failed during event loop shutdown: %s", flush_error
-            )
-        raise
+            await write_factory()
+        except asyncio.CancelledError:
+            try:
+                await asyncio.wait_for(write_factory(), timeout=CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS)
+            except Exception as flush_error:  # noqa: BLE001  # shutdown flush failures are logged, never raised
+                verbose_logger.warning(
+                    "LiteLLM Cache: pending cache write failed during event loop shutdown: %s", flush_error
+                )
+            raise
 
 
 def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "asyncio.Task[None]":
@@ -394,7 +395,8 @@ class LLMCachingHandler:
                 new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
             self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
             print_verbose("Checking Sync Cache")
-            cached_result = litellm.cache.get_cache(**new_kwargs)
+            with response_cache_phase("get"):
+                cached_result = litellm.cache.get_cache(**new_kwargs)
             if cached_result is not None:
                 if "detail" in cached_result:
                     # implies an error occurred
@@ -702,14 +704,14 @@ class LLMCachingHandler:
         )
         merged: Final = EmbeddingResponse(
             model=cached.model,
-            data=[  # mutable-ok: EmbeddingResponse.data is a pydantic list field
+            data=[
                 item
                 if item is not None
                 else Embedding(embedding=next(fresh_items)["embedding"], index=position, object="embedding")
                 for position, item in enumerate(cached.data)
             ],
             usage=merged_usage,
-            hidden_params={  # mutable-ok: EmbeddingResponse._hidden_params is a mutable dict field
+            hidden_params={
                 **cached._hidden_params,
                 "cache_hit": True,
             },
@@ -795,7 +797,7 @@ class LLMCachingHandler:
                 new_kwargs["input"] = [new_kwargs["input"]]
             elif not isinstance(new_kwargs["input"], list):
                 raise ValueError("input must be a string or a list")
-            tasks: Final = []
+            tasks: Final[list[Awaitable[object]]] = []
             for idx, i in enumerate(new_kwargs["input"]):
                 preset_cache_key = litellm.cache.get_cache_key(**{**new_kwargs, "input": i})
                 tasks.append(
@@ -804,7 +806,9 @@ class LLMCachingHandler:
                         dynamic_cache_object=self.dual_cache,
                     )
                 )
-            cached_result = [_current_format_embedding_entry(entry) for entry in await asyncio.gather(*tasks)]
+            with response_cache_phase("get"):
+                entries: Final = await asyncio.gather(*tasks)
+            cached_result = [_current_format_embedding_entry(entry) for entry in entries]
             ## check if cached result is None ##
             if cached_result is not None and isinstance(cached_result, list):
                 # set cached_result to None if all elements are None
@@ -817,18 +821,20 @@ class LLMCachingHandler:
             if litellm.cache._supports_async() is True:
                 ## check if dual cache is supported ##
                 self.preset_cache_key = request_cache_key or litellm.cache.get_cache_key(**request_kwargs)
-                cached_result = await litellm.cache.async_get_cache(
-                    dynamic_cache_object=self.dual_cache,
-                    cache_key=self.preset_cache_key,
-                    **request_kwargs,
-                )
+                with response_cache_phase("get"):
+                    cached_result = await litellm.cache.async_get_cache(
+                        dynamic_cache_object=self.dual_cache,
+                        cache_key=self.preset_cache_key,
+                        **request_kwargs,
+                    )
             else:  # fallback for caches that don't support async
                 self.preset_cache_key = request_cache_key or litellm.cache.get_cache_key(**request_kwargs)
-                cached_result = litellm.cache.get_cache(
-                    dynamic_cache_object=self.dual_cache,
-                    cache_key=self.preset_cache_key,
-                    **request_kwargs,
-                )
+                with response_cache_phase("get"):
+                    cached_result = litellm.cache.get_cache(
+                        dynamic_cache_object=self.dual_cache,
+                        cache_key=self.preset_cache_key,
+                        **request_kwargs,
+                    )
         return cached_result
 
     def _convert_cached_result_to_model_response(
@@ -1118,7 +1124,8 @@ class LLMCachingHandler:
             return
 
         if self._should_store_result_in_cache(original_function=self.original_function, kwargs=new_kwargs):
-            litellm.cache.add_cache(result, **new_kwargs)
+            with response_cache_phase("set"):
+                litellm.cache.add_cache(result, **new_kwargs)
 
         return
 

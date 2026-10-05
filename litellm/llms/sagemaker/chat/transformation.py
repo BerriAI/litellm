@@ -152,6 +152,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -196,6 +197,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, HTTPHandler):
             try:

@@ -47,6 +47,7 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.otel.runtime import phase_event
 from litellm.litellm_core_utils.bug_report import (
     allowlisted,
     bug_report_notice,
@@ -114,7 +115,9 @@ from litellm.proxy.common_utils.sse_keepalive import (
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
-from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.route_llm_request import (
+    route_request,
+)
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
@@ -173,6 +176,7 @@ ProxyRouteType: TypeAlias = Literal[
     "avector_store_file_delete",
     "aocr",
     "asearch",
+    "adecisions",
     "avideo_generation",
     "avideo_list",
     "avideo_status",
@@ -1442,7 +1446,7 @@ def attach_guardrail_information(response: object, request_data: Mapping[str, ob
         ),
         (),
     )
-    guardrail_information: Final = [  # mutable-ok: response list contract
+    guardrail_information: Final = [
         redact_nested_match_and_regex_keys(entry, keys=_RESPONSE_REDACTED_KEYS)
         for entry in recorded
         if isinstance(entry, dict)
@@ -1681,7 +1685,7 @@ def _timing_values(
     """
     if hidden_params.get("_response_ms") is not None or not use_logging_obj or logging_obj is None:
         return hidden_params
-    return getattr(logging_obj, "response_timing_metrics", None) or {}  # mutable-ok: empty fallback
+    return getattr(logging_obj, "response_timing_metrics", None) or {}
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -1703,7 +1707,7 @@ class ProxyBaseLLMRequestProcessing:
 
         Proxy/custom headers win on key collisions.
         """
-        excluded_headers: Final = {  # mutable-ok: set of header names to exclude from forwarding
+        excluded_headers: Final = {
             "transfer-encoding",
             "content-encoding",
             "set-cookie",
@@ -1716,7 +1720,7 @@ class ProxyBaseLLMRequestProcessing:
             "upgrade",
         }
 
-        merged_headers: Final = {  # mutable-ok: dict comprehension for merged headers forwarded to httpx
+        merged_headers: Final = {
             key: value for key, value in dict(response_headers or {}).items() if key.lower() not in excluded_headers
         }
         merged_headers.update(custom_headers)
@@ -1958,6 +1962,7 @@ class ProxyBaseLLMRequestProcessing:
             "avector_store_file_delete",
             "aocr",
             "asearch",
+            "adecisions",
             "avideo_generation",
             "avideo_list",
             "avideo_status",
@@ -2572,6 +2577,7 @@ class ProxyBaseLLMRequestProcessing:
                 route_type=route_type,
                 llm_router=llm_router,
             )
+            phase_event("litellm.request.pre_call_completed")
 
         # Defer async logging when post-call guardrails are configured so the
         # StandardLoggingPayload is built after guardrails write to metadata.
@@ -3709,9 +3715,7 @@ class ProxyBaseLLMRequestProcessing:
             error_body: Final = await http_status_error.response.aread()
             error_text: Final = error_body.decode("utf-8")
 
-            error_headers: Final = {  # mutable-ok: HTTPException takes a plain header dict
-                k: v if isinstance(v, str) else str(v) for k, v in safe_headers.items()
-            }
+            error_headers: Final = {k: v if isinstance(v, str) else str(v) for k, v in safe_headers.items()}
             raise HTTPException(
                 status_code=http_status_error.response.status_code,
                 detail={"error": error_text},
