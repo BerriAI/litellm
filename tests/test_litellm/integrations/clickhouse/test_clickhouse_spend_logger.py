@@ -579,6 +579,33 @@ async def test_batch_line_item_success_event_does_not_write_spend(monkeypatch: p
     assert logger.log_queue[1]["call_type"] == "aretrieve_batch"
     assert logger.log_queue[1]["request_id"] == "batch-1"
     assert logger.log_queue[1]["spend"] == 0.0001032
+
+    # A FAILED batch line is still part of the aggregate row's request counts and
+    # must not add its own spend row; a genuine live failure still writes one.
+    await logger.async_log_failure_event(
+        {
+            "standard_logging_object": _minimal_payload("chatcmpl-line-2", status="failure", cost=0.0),
+            "call_type": "acompletion",
+            "litellm_params": {"batch_parent_id": "batch-1"},
+        },
+        None,
+        now,
+        now,
+    )
+    await logger.async_log_failure_event(
+        {
+            "standard_logging_object": _minimal_payload("chatcmpl-live-2", status="failure", cost=0.0),
+            "call_type": "acompletion",
+            "litellm_params": {},
+        },
+        None,
+        now,
+        now,
+    )
+
+    assert len(logger.log_queue) == 3
+    assert logger.log_queue[-1]["request_id"] == "chatcmpl-live-2"
+    assert logger.log_queue[-1]["status"] == "failure"
     if logger._flush_task is not None:
         logger._flush_task.cancel()
 
