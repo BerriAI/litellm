@@ -27,6 +27,7 @@ class ResponseSpec:
     delay: float = 0
     events: tuple[tuple[str, object], ...] = ()
     ensure_ascii: bool = True
+    truncate: bool = False
 
     def payloads(self) -> tuple[bytes, ...]:
         if isinstance(self.body, bytes):
@@ -86,6 +87,7 @@ def recording_service() -> Iterator[RecordingServer]:
             if response.delay:
                 time.sleep(response.delay)
             payloads: Final = response.payloads()
+            payloads_to_write: Final = payloads[:-1] if response.truncate else payloads
             self.send_response(response.status)
             self.send_header("Content-Type", "text/event-stream" if response.events else "application/json")
             self.send_header("Content-Length", str(sum(len(payload) for payload in payloads)))
@@ -93,11 +95,13 @@ def recording_service() -> Iterator[RecordingServer]:
                 self.send_header(name, value)
             self.end_headers()
             try:
-                for payload in payloads:
+                for payload in payloads_to_write:
                     self.wfile.write(payload)
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 pass
+            if response.truncate:
+                self.close_connection = True
 
         do_POST = _handle
         do_GET = _handle

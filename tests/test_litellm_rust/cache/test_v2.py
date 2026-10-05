@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, cast
 
+import httpx
 import pytest
 from pydantic import BaseModel, TypeAdapter
 
@@ -455,6 +456,88 @@ async def test_v2_messages_replays_a_completed_stream(recording_server: Recordin
     cached_log: Final = TypeAdapter(dict[str, object]).validate_python(successes[-1].kwargs)
     assert cached_log["cache_hit"] is True
     assert cached_log["response_cost"] == 0
+
+
+def uncacheable_messages_stream(
+    case: Literal["oversized", "transport", "error", "incomplete", "abandoned"],
+) -> ResponseSpec:
+    match case:
+        case "oversized":
+            text: Final = "x" * 4_404_019
+            return ResponseSpec(
+                body=None,
+                events=(
+                    (
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": 0,
+                            "delta": {"type": "text_delta", "text": text},
+                        },
+                    ),
+                    ("message_stop", {"type": "message_stop"}),
+                ),
+            )
+        case "transport":
+            return ResponseSpec(body=None, events=MESSAGES_EVENTS, truncate=True)
+        case "error":
+            return ResponseSpec(
+                body=None,
+                events=(
+                    (
+                        "error",
+                        {"type": "error", "error": {"type": "api_error", "message": "synthetic error"}},
+                    ),
+                    ("message_stop", {"type": "message_stop"}),
+                ),
+            )
+        case "incomplete":
+            return ResponseSpec(body=None, events=MESSAGES_EVENTS[:-1])
+        case "abandoned":
+            return ResponseSpec(body=None, events=MESSAGES_EVENTS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("native", "legacy"),
+    ((False, True), (True, True), (True, False)),
+    ids=("python-legacy", "rust-legacy", "rust-native"),
+)
+@pytest.mark.parametrize("case", ("oversized", "transport", "error", "incomplete", "abandoned"))
+async def test_uncacheable_messages_streams_are_not_stored(
+    recording_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    native: bool,
+    legacy: bool,
+    case: Literal["oversized", "transport", "error", "incomplete", "abandoned"],
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    litellm.cache = Cache() if legacy else _v2.Cache.memory()
+    recording_server.expected_requests = 2
+    first_response: Final = uncacheable_messages_stream(case)
+    second_response: Final = ResponseSpec(body=None, events=MESSAGES_EVENTS)
+    recording_server.enqueue(first_response)
+    recording_server.enqueue(second_response)
+    options: Final = {"stream": True}
+
+    first_stream: Final = await invoke("messages", recording_server, options, native=native)
+    if case == "transport":
+        with pytest.raises((litellm.APIConnectionError, httpx.HTTPError)):
+            await collect_chunks(first_stream)
+    elif case == "abandoned":
+        abandoned_stream: Final = cast(ClosableByteStream, first_stream)
+        assert chunk_bytes(await abandoned_stream.__anext__())
+        await abandoned_stream.aclose()
+    else:
+        first_chunks: Final = await collect_chunks(first_stream)
+        if case == "oversized":
+            assert b"".join(first_chunks) == b"".join(first_response.payloads())
+
+    second_stream: Final = await invoke("messages", recording_server, options, native=native)
+    second_chunks: Final = await collect_chunks(second_stream)
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    assert b"".join(second_chunks) == b"".join(second_response.payloads())
+    assert len(recording_server.requests) == 2
 
 
 @pytest.mark.parametrize("route", ("chat", "responses"))

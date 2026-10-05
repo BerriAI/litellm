@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Final, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching_handler import create_cache_write_task
+from litellm.constants import ANTHROPIC_MESSAGES_STREAM_CACHE_MAX_BYTES
 from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
     BaseAnthropicMessagesStreamingIterator,
@@ -44,6 +45,8 @@ class AnthropicMessagesStreamCacheWriter:
         self.stream = stream
         self.caching_handler = caching_handler
         self.collected_chunks: list[bytes] = []  # mutable-ok: rebuilding a tuple per SSE chunk is quadratic
+        self.retained_bytes = 0
+        self.overflowed = False
         self.persisted = False
         self._hidden_params: dict[str, object] = dict(  # mutable-ok: callers stamp cache_key in here
             stream._hidden_params if isinstance(stream, AnthropicMessagesStreamingResponse) else _EMPTY_MAPPING
@@ -80,7 +83,17 @@ class AnthropicMessagesStreamCacheWriter:
         except StopAsyncIteration:
             self._persist()
             raise
-        self.collected_chunks.append(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+        if self.overflowed:
+            return chunk
+        chunk_bytes: Final = chunk.encode("utf-8") if isinstance(chunk, str) else chunk
+        retained_bytes: Final = self.retained_bytes + len(chunk_bytes)
+        if retained_bytes > ANTHROPIC_MESSAGES_STREAM_CACHE_MAX_BYTES:
+            self.collected_chunks.clear()
+            self.retained_bytes = 0
+            self.overflowed = True
+            return chunk
+        self.collected_chunks.append(chunk_bytes)
+        self.retained_bytes = retained_bytes
         return chunk
 
     async def aclose(self) -> None:
@@ -88,7 +101,7 @@ class AnthropicMessagesStreamCacheWriter:
 
     def _persist(self) -> None:
         cache: Final = litellm.cache
-        if self.persisted or cache is None:
+        if self.persisted or self.overflowed or cache is None:
             return
         collected_stream: Final = b"".join(self.collected_chunks)
         if not _is_message_stop_chunk(collected_stream) or _is_provider_error_chunk(collected_stream):

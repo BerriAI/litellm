@@ -8,6 +8,8 @@ use crate::{
     cache_key,
 };
 
+pub const DEFAULT_MAX_ENTRY_BYTES: usize = 4 * 1024 * 1024;
+
 type CacheFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 
 #[derive(Clone)]

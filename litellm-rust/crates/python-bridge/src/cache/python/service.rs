@@ -3,7 +3,8 @@ use std::{future::Future, pin::Pin, time::Duration};
 use bytes::Bytes;
 use litellm_cache::Error;
 use litellm_cache_response::{
-    ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
+    DEFAULT_MAX_ENTRY_BYTES, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
+    ResponseEnvelope,
 };
 use litellm_core::caching::CachedOutput;
 use litellm_host::{
@@ -72,7 +73,7 @@ where
         services,
         config: ResponseCacheConfig {
             namespace,
-            ..Default::default()
+            max_entry_bytes: DEFAULT_MAX_ENTRY_BYTES,
         },
     })
 }

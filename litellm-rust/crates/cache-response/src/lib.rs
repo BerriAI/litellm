@@ -17,6 +17,6 @@ pub use exact::{ConnectionProbe, ExactResponseCache};
 pub use response::{ResponseCache, ResponseCacheRequest};
 
 pub use service::{
-    CacheOptions, CachePolicy, CacheScope, ResponseCacheConfig, ResponseCacheService,
-    ResponseEnvelope, ScopedCache,
+    CacheOptions, CachePolicy, CacheScope, DEFAULT_MAX_ENTRY_BYTES, ResponseCacheConfig,
+    ResponseCacheService, ResponseEnvelope, ScopedCache,
 };

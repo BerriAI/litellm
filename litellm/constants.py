@@ -5,6 +5,9 @@ from typing import Final, Literal
 
 from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_in_range, get_env_int_or_none
 
+# Mirrors Rust's DEFAULT_MAX_ENTRY_BYTES for Anthropic Messages stream capture.
+ANTHROPIC_MESSAGES_STREAM_CACHE_MAX_BYTES: Final = 4 * 1024 * 1024
+
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})

@@ -8,8 +8,8 @@ use serde_json::Value;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::{RedisCache, RedisTopology};
 use litellm_cache_response::{
-    CacheEntry, CacheKeyInput, ExactResponseCache, ResponseCache, ResponseCacheCodec,
-    ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
+    CacheEntry, CacheKeyInput, DEFAULT_MAX_ENTRY_BYTES, ExactResponseCache, ResponseCache,
+    ResponseCacheCodec, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 
@@ -54,7 +54,7 @@ fn request(key: String, ttl: Option<f64>) -> PyResult<ResponseCacheRequest> {
 #[pymethods]
 impl NativeCacheHandle {
     #[staticmethod]
-    #[pyo3(signature = (*, ttl=600.0, capacity=200, max_entry_bytes=4194304))]
+    #[pyo3(signature = (*, ttl=600.0, capacity=200, max_entry_bytes=DEFAULT_MAX_ENTRY_BYTES))]
     fn memory(ttl: f64, capacity: usize, max_entry_bytes: usize) -> PyResult<Self> {
         let ttl = duration(ttl)?;
         if capacity == 0 || max_entry_bytes == 0 {
@@ -76,7 +76,7 @@ impl NativeCacheHandle {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (url, *, namespace, ttl=600.0, max_entry_bytes=4194304))]
+    #[pyo3(signature = (url, *, namespace, ttl=600.0, max_entry_bytes=DEFAULT_MAX_ENTRY_BYTES))]
     fn redis(
         py: Python<'_>,
         url: &str,
