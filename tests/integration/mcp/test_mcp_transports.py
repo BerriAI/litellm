@@ -9,12 +9,12 @@ from integration._support.client import Gateway
 from integration._support.database import read_rows
 from integration._support.mcp import (
     ENTRY_POINTS,
+    INITIALIZE,
     PEER_KINDS,
     EntryPoint,
-    INITIALIZE,
     McpCaller,
-    PeerKind,
     Outcome,
+    PeerKind,
     _outcome_from_rpc,
     mcp_peer,
     official_client_outcomes,

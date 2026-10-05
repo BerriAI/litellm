@@ -104,9 +104,9 @@ def test_callback_forwards_the_code_only_for_the_sealed_issuer_and_relays_idp_er
         assert correct_location.scheme + "://" + correct_location.netloc + correct_location.path == CLIENT_REDIRECT, (
             correct.headers["location"]
         )
-        assert parse_qs(correct_location.query) == {"code": ["c"], "state": ["client-state"]}, (
-            correct.headers["location"]
-        )
+        assert parse_qs(correct_location.query) == {"code": ["c"], "state": ["client-state"]}, correct.headers[
+            "location"
+        ]
         _assert_cleared_oauth_state_cookie(correct, correct_cookie)
 
         error_relay, error_cookie, error_cookie_value = _start_callback_flow(gateway, alias, key, client_id)

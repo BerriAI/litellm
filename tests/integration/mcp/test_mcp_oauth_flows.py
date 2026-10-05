@@ -17,8 +17,6 @@ import jwt
 import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, generate_private_key
-from pydantic import TypeAdapter
-
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.mcp import (
@@ -38,6 +36,7 @@ from integration._support.mcp_grants import create_toolset
 from integration._support.oauth_server import AuthorizationServer, oauth_server
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
+from pydantic import TypeAdapter
 
 ADD: Final = {"a": 2, "b": 3}
 CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
@@ -364,9 +363,7 @@ def test_upstream_token_requests_carry_the_gateway_callback_and_server_credentia
         initial_token_requests: Final = tuple(item for item in auth.drain() if item.target.startswith("/token"))
         assert len(initial_token_requests) == 1, initial_token_requests
         initial_request: Final = initial_token_requests[0]
-        initial_form: Final = {
-            name: values[0] for name, values in parse_qs(initial_request.body.decode()).items()
-        }
+        initial_form: Final = {name: values[0] for name, values in parse_qs(initial_request.body.decode()).items()}
         expected_authorization: Final = "Basic " + base64.b64encode(f"ac-client:{secret}".encode()).decode()
         if auth_method == "client_secret_post":
             assert initial_form == {
@@ -409,18 +406,16 @@ def test_upstream_token_requests_carry_the_gateway_callback_and_server_credentia
             "grant_type": "refresh_token",
             "refresh_token": upstream_refresh_token,
             "scope": "tools.call",
-            **(
-                {"client_id": "ac-client", "client_secret": secret}
-                if auth_method == "client_secret_post"
-                else {}
-            ),
+            **({"client_id": "ac-client", "client_secret": secret} if auth_method == "client_secret_post" else {}),
         }
         assert refresh_form == expected_refresh_form, refresh_form
         if auth_method == "client_secret_post":
             assert refresh_request.headers.get("authorization") is None, refresh_request.headers
         else:
             assert refresh_request.headers.get("authorization") == expected_authorization, refresh_request.headers
-        assert "dummy" not in refresh_request.body.decode() and "dummy" not in repr(refresh_request.headers), refresh_request
+        assert "dummy" not in refresh_request.body.decode() and "dummy" not in repr(refresh_request.headers), (
+            refresh_request
+        )
 
 
 def test_per_user_authorization_code_with_pkce_binds_the_token_to_the_authorizing_user(gateway: Gateway) -> None:
@@ -640,16 +635,14 @@ def test_spec_client_discovers_the_aggregate_authorization_server_and_signs_in_t
         )
         assert started.status_code == 303, started.text
         connect_location: Final = urlsplit(started.headers["location"])
-        assert connect_location.scheme + "://" + connect_location.netloc + connect_location.path == f"{base}/ui/connect", (
-            started.headers["location"]
-        )
+        assert (
+            connect_location.scheme + "://" + connect_location.netloc + connect_location.path == f"{base}/ui/connect"
+        ), started.headers["location"]
         connect_flow: Final = parse_qs(connect_location.query)["connect_flow"][0]
         flow_cookie: Final = f"mcp_connect_flow_{connect_flow}"
         assert flow_cookie in started.cookies, started.headers
         flow_cookies: Final = {**cookies, flow_cookie: started.cookies[flow_cookie]}
-        described: Final = gateway.client.get(
-            "/authorize/flow", params={"flow": connect_flow}, cookies=flow_cookies
-        )
+        described: Final = gateway.client.get("/authorize/flow", params={"flow": connect_flow}, cookies=flow_cookies)
         assert described.status_code == 200, described.text
         assert _response_object(described) == {
             "state": "unscoped",
@@ -658,9 +651,7 @@ def test_spec_client_discovers_the_aggregate_authorization_server_and_signs_in_t
             "server_name": None,
             "connected": None,
         }, described.text
-        completed: Final = gateway.client.post(
-            "/authorize/complete", data={"flow": connect_flow}, cookies=flow_cookies
-        )
+        completed: Final = gateway.client.post("/authorize/complete", data={"flow": connect_flow}, cookies=flow_cookies)
         assert completed.status_code == 303, completed.text
         callback: Final = parse_qs(urlsplit(completed.headers["location"]).query)
         assert callback["state"] == ["rt5-state"], completed.headers["location"]
@@ -1043,7 +1034,7 @@ def test_idp_subject_token_exchange_mints_a_credential_for_the_mapped_user_and_r
         request_id: Final = str(_response_object(completion)["id"])
         spend: Final = eventually(
             lambda: read_rows(
-                'SELECT metadata->>\'user_api_key_user_id\' AS user_api_key_user_id '
+                "SELECT metadata->>'user_api_key_user_id' AS user_api_key_user_id "
                 'FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
                 (request_id,),
             ),
@@ -1051,9 +1042,7 @@ def test_idp_subject_token_exchange_mints_a_credential_for_the_mapped_user_and_r
         )
         assert spend == [{"user_api_key_user_id": subject}], spend
     user: Final = eventually(
-        lambda: read_rows(
-            'SELECT user_id, user_role, teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,)
-        ),
+        lambda: read_rows('SELECT user_id, user_role, teams FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,)),
         lambda rows: len(rows) == 1,
     )
     assert user == [{"user_id": subject, "user_role": None, "teams": []}], user
