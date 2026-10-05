@@ -1,11 +1,11 @@
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime as dt
 from enum import Enum
-from typing import Any, Final, Literal, Optional, Union
+from typing import Annotated, Final
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.utils import LiteLLMPydanticObjectBase
@@ -68,6 +68,26 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         default=SlackAlertingArgsEnum.budget_alert_ttl.value,
         description="Cache ttl for budgets alerts. Prevents spamming same alert, each time budget is crossed. Value is in seconds.",
     )  # 24 hours
+    slack_budget_alert_key_aliases: (  # mutable-ok: public alerting config accepts and serializes a list
+        Annotated[list[Annotated[str, Field(strict=True, min_length=1)]], Field(strict=True)] | None
+    ) = Field(
+        default=None,
+        description="Case-sensitive key alias glob patterns for Slack budget alerts. Null allows all budget alerts; an empty list disables them.",
+    )
+    budget_alert_thresholds: (  # mutable-ok: public configuration accepts and serializes a list
+        Annotated[list[Annotated[int, Field(strict=True, ge=1, le=99)]], Field(strict=True)] | None
+    ) = Field(
+        default=None,
+        description="Consumed budget percentages for enabled alert destinations. Null preserves legacy thresholds; an empty list disables percentage warnings.",
+    )
+
+    @field_validator("budget_alert_thresholds")
+    @classmethod
+    def validate_budget_alert_thresholds(cls, thresholds: Sequence[int] | None) -> Sequence[int] | None:
+        if thresholds is not None and len(thresholds) != len(set(thresholds)):
+            raise ValueError("Budget alert thresholds must be unique")
+        return thresholds
+
     outage_alert_ttl: int = Field(
         default=SlackAlertingArgsEnum.outage_alert_ttl.value,
         description="Cache ttl for model outage alerts. Sets time-window for errors. Default is 1 minute. Value is in seconds.",

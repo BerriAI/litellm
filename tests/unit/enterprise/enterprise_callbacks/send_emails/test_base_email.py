@@ -2,25 +2,117 @@ import asyncio
 import json
 import os
 import unittest.mock as mock
-from unittest.mock import patch
+from typing import Final
+from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
-
-from litellm.caching.caching import DualCache
 from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
     BaseEmailLogger,
 )
-
+from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
+    SendGridEmailLogger,
+)
 from litellm_enterprise.types.enterprise_callbacks.send_emails import (
     EmailEvent,
     SendKeyCreatedEmailEvent,
     SendKeyRotatedEmailEvent,
 )
 
+from litellm.caching.caching import DualCache
+from litellm.constants import EMAIL_BUDGET_ALERT_TTL
 from litellm.integrations.email_templates.email_footer import EMAIL_FOOTER
 from litellm.proxy._types import CallInfo, Litellm_EntityType, WebhookEvent
-from litellm.constants import EMAIL_BUDGET_ALERT_TTL
+
+
+@pytest.mark.asyncio
+async def test_common_budget_thresholds_use_real_email_rendering_and_per_level_dedup(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SENDGRID_API_KEY", "synthetic-not-a-secret")
+    transport: Final = AsyncMock()
+    transport.post.return_value = httpx.Response(202)
+    logger: Final = SendGridEmailLogger()
+    logger.async_httpx_client = transport
+    info: Final = CallInfo(
+        spend=70,
+        max_budget=100,
+        token="synthetic",
+        user_email="owner@example.test",
+        event_group=Litellm_EntityType.KEY,
+    )
+    for spend, count in (
+        (69, 0),
+        (70, 1),
+        (70, 1),
+        (85, 2),
+        (96, 3),
+        (96, 3),
+        (100, 3),
+    ):
+        await logger.budget_alerts(
+            type="max_budget_alert",
+            user_info=info.model_copy(update={"spend": spend}),
+            budget_alert_thresholds=(95, 70, 85),
+        )
+        assert transport.post.await_count == count
+    for call, pct in zip(transport.post.await_args_list, (70, 85, 95)):
+        payload: Final = call.kwargs["json"]
+        assert payload["personalizations"][0]["to"] == [{"email": "owner@example.test"}]
+        assert f"{pct}%" in payload["personalizations"][0]["subject"]
+        assert f"{pct}%" in payload["content"][0]["value"]
+    await logger.budget_alerts(
+        type="max_budget_alert", user_info=info, budget_alert_thresholds=()
+    )
+    assert transport.post.await_count == 3
+    await logger.budget_alerts(
+        type="max_budget_alert",
+        user_info=info.model_copy(
+            update={"max_budget_alert_emails": {"50": ["finance@example.test"]}}
+        ),
+        budget_alert_thresholds=(),
+    )
+    assert transport.post.await_count == 4
+    assert {
+        email["email"]
+        for email in transport.post.await_args.kwargs["json"]["personalizations"][0][
+            "to"
+        ]
+    } == {
+        "owner@example.test",
+        "finance@example.test",
+    }
+    assert "50%" in transport.post.await_args.kwargs["json"]["content"][0]["value"]
+
+
+@pytest.mark.asyncio
+async def test_common_email_threshold_failed_send_releases_claim(monkeypatch) -> None:
+    monkeypatch.setenv("SENDGRID_API_KEY", "synthetic-not-a-secret")
+    transport: Final = AsyncMock()
+    transport.post.side_effect = (
+        httpx.ConnectError("synthetic failure"),
+        httpx.Response(202),
+    )
+    logger: Final = SendGridEmailLogger()
+    logger.async_httpx_client = transport
+    info: Final = CallInfo(
+        spend=70,
+        max_budget=100,
+        token="synthetic",
+        user_email="owner@example.test",
+        event_group=Litellm_EntityType.KEY,
+    )
+    await logger.budget_alerts(
+        type="max_budget_alert", user_info=info, budget_alert_thresholds=(70,)
+    )
+    await logger.budget_alerts(
+        type="max_budget_alert", user_info=info, budget_alert_thresholds=(70,)
+    )
+    await logger.budget_alerts(
+        type="max_budget_alert", user_info=info, budget_alert_thresholds=(70,)
+    )
+    assert transport.post.await_count == 2
 
 
 @pytest.fixture(autouse=True)

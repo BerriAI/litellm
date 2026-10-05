@@ -5720,6 +5720,7 @@ async def _virtual_key_max_budget_alert_check(
     valid_token: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
     user_obj: LiteLLM_UserTable | None = None,
+    budget_alert_thresholds: tuple[int, ...] | None = None,
 ):
     """
     Triggers a budget alert if the token has reached EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
@@ -5765,8 +5766,13 @@ async def _virtual_key_max_budget_alert_check(
                 )
             )
         else:
-            # Old path: existing single 80% threshold — completely unchanged
-            alert_threshold: Final = valid_token.max_budget * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+            if budget_alert_thresholds == ():
+                return
+            alert_threshold: Final = valid_token.max_budget * (
+                min(budget_alert_thresholds) / 100
+                if budget_alert_thresholds is not None
+                else EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE
+            )
 
             if valid_token.spend >= alert_threshold and valid_token.spend < valid_token.max_budget:
                 verbose_proxy_logger.debug(

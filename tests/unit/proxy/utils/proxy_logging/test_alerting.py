@@ -7,16 +7,65 @@ Covers ``failed_tracking_alert``, ``budget_alerts``, ``alerting_handler``,
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
+from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import SendGridEmailLogger
 from prisma.errors import PrismaError
 
 import litellm
 from litellm._service_logger import ServiceTypes
-from litellm.proxy._types import AlertType, CallInfo
+from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+from litellm.proxy._types import AlertType, CallInfo, Litellm_EntityType
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("destinations", (["email"], ["email", "slack", "webhook", "ms_teams"]))
+async def test_common_thresholds_propagate_to_email_without_duplicate_smtp(
+    proxy_logging, monkeypatch, destinations
+) -> None:
+    monkeypatch.setenv("SENDGRID_API_KEY", "synthetic-not-a-secret")
+    monkeypatch.setenv("WEBHOOK_URL", "https://example.test/budget")
+    monkeypatch.setenv("MS_TEAMS_WEBHOOK_URL", "https://example.test/teams")
+    transport: Final = AsyncMock()
+    transport.post.return_value = httpx.Response(200)
+    proxy_logging.alerting = destinations
+    proxy_logging.slack_alerting_instance = SlackAlerting(
+        alerting=destinations,
+        default_webhook_url="https://example.test/slack",
+        alerting_args={"budget_alert_thresholds": [70, 95]},
+        async_http_handler=transport,
+    )
+    email_logger: Final = SendGridEmailLogger()
+    email_logger.async_httpx_client = transport
+    proxy_logging.email_logging_instance = email_logger
+    info: Final = CallInfo(
+        spend=70, max_budget=100, token="synthetic", user_email="owner@example.test", event_group=Litellm_EntityType.KEY
+    )
+    for spend in (70, 70, 96, 96):
+        event: Final = info.model_copy(update={"spend": spend})
+        await proxy_logging.budget_alerts(type="token_budget", user_info=event)
+        await proxy_logging.budget_alerts(type="max_budget_alert", user_info=event)
+        await proxy_logging.slack_alerting_instance.flush_queue()
+    email_posts: Final = tuple(call for call in transport.post.await_args_list if "json" in call.kwargs)
+    assert len(email_posts) == 2
+    assert "70%" in email_posts[0].kwargs["json"]["personalizations"][0]["subject"]
+    assert "95%" in email_posts[1].kwargs["json"]["personalizations"][0]["subject"]
+    assert transport.post.await_count == (2 if destinations == ["email"] else 8)
+
+
+@pytest.mark.asyncio
+async def test_alerting_args_only_reload_validates_and_preserves_last_valid(proxy_logging) -> None:
+    proxy_logging.update_values(alerting_args={"budget_alert_thresholds": [70, 95]})
+    assert proxy_logging.slack_alerting_instance.alerting_args.budget_alert_thresholds == [70, 95]
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        proxy_logging.update_values(alerting_args={"budget_alert_thresholds": [True]})
+    assert proxy_logging.slack_alerting_instance.alerting_args.budget_alert_thresholds == [70, 95]
 
 
 # ---------------------------------------------------------------------------
@@ -160,9 +209,7 @@ async def test_budget_alerts_soft_budget_with_alert_emails_bypasses_global(proxy
 @pytest.mark.asyncio
 async def test_budget_alerts_slack_failure_raises(proxy_logging):
     proxy_logging.alerting = ["slack"]
-    proxy_logging.slack_alerting_instance = MagicMock(
-        budget_alerts=AsyncMock(side_effect=ConnectionError("slack"))
-    )
+    proxy_logging.slack_alerting_instance = MagicMock(budget_alerts=AsyncMock(side_effect=ConnectionError("slack")))
     proxy_logging.email_logging_instance = None
     with pytest.raises(ConnectionError):
         await proxy_logging.budget_alerts(type="user_budget", user_info=_user_info())
@@ -317,11 +364,7 @@ async def test_failure_handler_with_capture_exception_invoked(proxy_logging, mon
 async def test_failure_handler_propagates_service_logging_error_raises(proxy_logging, monkeypatch):
     proxy_logging.alert_types = [AlertType.db_exceptions]
     proxy_logging.alerting_handler = AsyncMock()
-    proxy_logging.service_logging_obj = MagicMock(
-        async_service_failure_hook=AsyncMock(side_effect=RuntimeError("svc"))
-    )
+    proxy_logging.service_logging_obj = MagicMock(async_service_failure_hook=AsyncMock(side_effect=RuntimeError("svc")))
     monkeypatch.setattr(litellm.utils, "capture_exception", None)
     with pytest.raises(RuntimeError):
-        await proxy_logging.failure_handler(
-            original_exception=Exception("x"), duration=0.0, call_type="db_read"
-        )
+        await proxy_logging.failure_handler(original_exception=Exception("x"), duration=0.0, call_type="db_read")

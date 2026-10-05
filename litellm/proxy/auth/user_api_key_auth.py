@@ -2461,10 +2461,16 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                 # Check 4. Max Budget Alert Check (runs before budget enforcement
                 # so multi-threshold 100% alerts fire on the request that crosses
                 # max_budget, before BudgetExceededError is raised below)
+                configured_thresholds: Final = (
+                    proxy_logging_obj.slack_alerting_instance.alerting_args.budget_alert_thresholds
+                )
                 await _virtual_key_max_budget_alert_check(
                     valid_token=valid_token,
                     proxy_logging_obj=proxy_logging_obj,
                     user_obj=user_obj,
+                    budget_alert_thresholds=(
+                        tuple(configured_thresholds) if configured_thresholds is not None else None
+                    ),
                 )
 
                 # Check 5. Token Spend is under budget

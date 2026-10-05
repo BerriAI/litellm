@@ -3,12 +3,13 @@ import datetime
 import json
 import time
 import unittest
-from typing import Final, List, Optional, Tuple
+from collections.abc import Mapping
+from typing import Final, List, Literal, Optional, Tuple
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -17,8 +18,135 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.proxy._types import CallInfo, Litellm_EntityType
-from litellm.types.integrations.slack_alerting import AlertQueueItem, AlertType, SlackAlertingCacheKeys
+from litellm.proxy._types import CallInfo, Litellm_EntityType, WebhookEvent
+from litellm.types.integrations.slack_alerting import (
+    AlertQueueItem,
+    AlertType,
+    SlackAlertingArgs,
+    SlackAlertingCacheKeys,
+)
+
+
+@pytest.mark.parametrize("thresholds", ([0], [100], [70, 70], [True], [70.0], ["70"], "70", (70,), {}))
+def test_budget_alert_thresholds_reject_invalid_configuration(thresholds: object) -> None:
+    with pytest.raises(ValidationError):
+        SlackAlertingArgs.model_validate({"budget_alert_thresholds": thresholds})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("digest", (False, True))
+async def test_configured_budget_thresholds_notify_each_level_and_destination(digest: bool, monkeypatch) -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    monkeypatch.setenv("WEBHOOK_URL", "https://example.test/budget")
+    monkeypatch.setenv("MS_TEAMS_WEBHOOK_URL", "https://example.test/teams")
+    alerts: Final = SlackAlerting(
+        alerting=["slack", "webhook", "ms_teams"],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"budget_alert_thresholds": [95, 70, 85]},
+        alert_type_config={"budget_alerts": {"digest": digest, "digest_interval": 0}},
+        async_http_handler=http_handler,
+    )
+    for spend, expected_posts in ((69, 0), (70, 3), (70, 3), (85, 6), (96, 9), (96, 9), (100, 12)):
+        await alerts.budget_alerts(
+            type="token_budget",
+            user_info=CallInfo(
+                spend=spend,
+                max_budget=100,
+                token="synthetic",
+                key_alias="example-api",
+                event_group=Litellm_EntityType.KEY,
+            ),
+        )
+        await alerts._flush_digest_buckets()
+        await alerts.flush_queue()
+        assert http_handler.post.await_count == expected_posts
+    webhook_events: Final = tuple(
+        json.loads(call.kwargs["data"])
+        for call in http_handler.post.await_args_list
+        if call.kwargs["url"] == "https://example.test/budget"
+    )
+    assert tuple(event["event"] for event in webhook_events) == (
+        "threshold_crossed",
+        "threshold_crossed",
+        "threshold_crossed",
+        "budget_crossed",
+    )
+    assert tuple(event["event_message"] for event in webhook_events[:3]) == tuple(
+        f"Key Budget: {pct}% of budget consumed" for pct in (70, 85, 95)
+    )
+
+
+@pytest.mark.asyncio
+async def test_budget_threshold_jump_empty_reload_and_soft_budget() -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    alerts: Final = SlackAlerting(
+        alerting=["slack"],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"budget_alert_thresholds": [70, 85, 95]},
+        async_http_handler=http_handler,
+    )
+    info: Final = CallInfo(spend=96, max_budget=100, token="synthetic", event_group=Litellm_EntityType.KEY)
+    await alerts.budget_alerts(type="token_budget", user_info=info)
+    await alerts.flush_queue()
+    assert len(_posted_slack_bodies(http_handler)) == 1
+    assert "95% of budget consumed" in _posted_slack_bodies(http_handler)[0]["text"]
+    alerts.update_values(alerting_args={"budget_alert_thresholds": []})
+    await alerts.budget_alerts(type="token_budget", user_info=info.model_copy(update={"spend": 99}))
+    await alerts.flush_queue()
+    assert http_handler.post.await_count == 1
+    await alerts.budget_alerts(type="soft_budget", user_info=info.model_copy(update={"spend": 60, "soft_budget": 50}))
+    await alerts.budget_alerts(type="token_budget", user_info=info.model_copy(update={"spend": 100}))
+    await alerts.flush_queue()
+    assert http_handler.post.await_count == 3
+    alerts.update_values(alerting_args={"budget_alert_thresholds": [50]})
+    await alerts.budget_alerts(type="token_budget", user_info=info.model_copy(update={"spend": 50}))
+    await alerts.flush_queue()
+    assert "50% of budget consumed" in _posted_slack_bodies(http_handler)[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_configured_thresholds_preserve_soft_and_projected_events() -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    alerts: Final = SlackAlerting(
+        alerting=["slack"],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"budget_alert_thresholds": [70, 95]},
+        async_http_handler=http_handler,
+    )
+    info: Final = CallInfo(
+        spend=70, max_budget=100, soft_budget=50, token="synthetic", event_group=Litellm_EntityType.KEY
+    )
+    await alerts.budget_alerts(type="soft_budget", user_info=info, send_threshold_email=False)
+    await alerts.budget_alerts(type="token_budget", user_info=info, send_threshold_email=False)
+    await alerts.budget_alerts(
+        type="projected_limit_exceeded",
+        user_info=info.model_copy(update={"soft_budget": 90}),
+        send_threshold_email=False,
+    )
+    await alerts.flush_queue()
+    assert http_handler.post.await_count == 2
+    assert "Soft Budget Crossed" in _posted_slack_bodies(http_handler)[0]["text"]
+    assert "Projected Limit Exceeded" in _posted_slack_bodies(http_handler)[1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_configured_threshold_respects_pre_upgrade_sent_marker() -> None:
+    cache: Final = DualCache()
+    await cache.async_set_cache("budget_alerts:threshold_crossed:synthetic", "SENT", ttl=86400)
+    http_handler: Final = _webhook_accepting_posts()
+    alerts: Final = SlackAlerting(
+        alerting=["slack"],
+        internal_usage_cache=cache,
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"budget_alert_thresholds": [70]},
+        async_http_handler=http_handler,
+    )
+    await alerts.budget_alerts(
+        type="token_budget",
+        user_info=CallInfo(spend=70, max_budget=100, token="synthetic", event_group=Litellm_EntityType.KEY),
+    )
+    await alerts.flush_queue()
+    http_handler.post.assert_not_awaited()
 
 
 class TestSlackAlerting(unittest.TestCase):
@@ -554,6 +682,455 @@ async def test_async_send_batch_collapses_only_identical_alerts() -> None:
         {"text": f"[Num Alerts: 2]\n\n{THRESHOLD_ALERT}"},
         {"text": CROSSED_ALERT},
     )
+
+
+def _budget_webhook_event(
+    key_alias: str | None, event_group: Litellm_EntityType = Litellm_EntityType.KEY
+) -> WebhookEvent:
+    return WebhookEvent(
+        spend=85.0,
+        max_budget=100.0,
+        token="hashed_key",
+        key_alias=key_alias,
+        event="threshold_crossed",
+        event_message="15% or less of budget remaining",
+        event_group=event_group,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "alerting_args, key_alias, event_group, delivered",
+    [
+        ({}, None, None, True),
+        ({}, None, Litellm_EntityType.KEY, True),
+        ({"slack_budget_alert_key_aliases": None}, None, None, True),
+        ({"slack_budget_alert_key_aliases": None}, None, Litellm_EntityType.TEAM, True),
+        ({"slack_budget_alert_key_aliases": []}, "github-example-api", Litellm_EntityType.KEY, False),
+        (
+            {"slack_budget_alert_key_aliases": ["github-example-api"]},
+            "github-example-api",
+            Litellm_EntityType.KEY,
+            True,
+        ),
+        (
+            {"slack_budget_alert_key_aliases": ["github-example-api"]},
+            "github-example-api-extra",
+            Litellm_EntityType.KEY,
+            False,
+        ),
+        ({"slack_budget_alert_key_aliases": ["github-example-*"]}, "github-example-api", Litellm_EntityType.KEY, True),
+        ({"slack_budget_alert_key_aliases": ["github-example-*"]}, "other-api", Litellm_EntityType.KEY, False),
+        ({"slack_budget_alert_key_aliases": ["github-example-*"]}, "GitHub-example-api", Litellm_EntityType.KEY, False),
+        ({"slack_budget_alert_key_aliases": ["github-example-*"]}, None, Litellm_EntityType.KEY, False),
+        ({"slack_budget_alert_key_aliases": ["*"]}, "", Litellm_EntityType.KEY, False),
+        ({"slack_budget_alert_key_aliases": ["*"]}, None, None, False),
+        (
+            {"slack_budget_alert_key_aliases": ["other-*", "github-example-?"]},
+            "github-example-a",
+            Litellm_EntityType.KEY,
+            True,
+        ),
+        (
+            {"slack_budget_alert_key_aliases": ["github-example-?", "other-*"]},
+            "github-example-a",
+            Litellm_EntityType.KEY,
+            True,
+        ),
+        (
+            {"slack_budget_alert_key_aliases": ["github-example-?", "other-*"]},
+            "github-example-ab",
+            Litellm_EntityType.KEY,
+            False,
+        ),
+        ({"slack_budget_alert_key_aliases": ["github-example-[ab]"]}, "github-example-b", Litellm_EntityType.KEY, True),
+    ],
+)
+async def test_slack_budget_key_alias_filter_delivery(
+    alerting_args: Mapping[str, object],
+    key_alias: str | None,
+    event_group: Litellm_EntityType | None,
+    delivered: bool,
+) -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args=dict(alerting_args),
+        async_http_handler=http_handler,
+    )
+    event: Final = _budget_webhook_event(key_alias, event_group) if event_group is not None else None
+    await slack_alerting.send_alert(
+        message=THRESHOLD_ALERT,
+        level="High",
+        alert_type=AlertType.budget_alerts,
+        alerting_metadata={"key_alias": "github-example-api"},
+        user_info=event,
+    )
+
+    assert len(slack_alerting.log_queue) == int(delivered)
+    await slack_alerting.flush_queue()
+    assert http_handler.post.await_count == int(delivered)
+    if delivered:
+        assert THRESHOLD_ALERT in _posted_slack_bodies(http_handler)[0]["text"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_group", tuple(group for group in Litellm_EntityType if group != Litellm_EntityType.KEY))
+async def test_slack_budget_key_alias_filter_excludes_non_key_entities(event_group: Litellm_EntityType) -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"slack_budget_alert_key_aliases": ["github-example-*"]},
+        async_http_handler=http_handler,
+    )
+    await slack_alerting.send_alert(
+        message=THRESHOLD_ALERT,
+        level="High",
+        alert_type=AlertType.budget_alerts,
+        alerting_metadata={},
+        user_info=_budget_webhook_event("github-example-api", event_group),
+    )
+
+    assert slack_alerting.log_queue == []
+    await slack_alerting.flush_queue()
+    http_handler.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "alert_type",
+    (
+        AlertType.llm_exceptions,
+        AlertType.failed_tracking_spend,
+        AlertType.user_spend_thresholds,
+        AlertType.user_spend_anomalies,
+    ),
+)
+async def test_slack_budget_key_alias_filter_leaves_other_alert_types_unchanged(alert_type: AlertType) -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        alert_types=[alert_type],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"slack_budget_alert_key_aliases": []},
+        async_http_handler=http_handler,
+    )
+    await slack_alerting.send_alert(
+        message="other alert",
+        level="High",
+        alert_type=alert_type,
+        alerting_metadata={},
+    )
+    await slack_alerting.flush_queue()
+
+    http_handler.post.assert_awaited_once()
+    assert "other alert" in _posted_slack_bodies(http_handler)[0]["text"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch_size", (1, 100))
+async def test_slack_budget_key_alias_filter_preserves_webhook_and_teams_delivery(
+    monkeypatch: pytest.MonkeyPatch, batch_size: int
+) -> None:
+    monkeypatch.setenv("WEBHOOK_URL", "https://webhook.example/budget")
+    monkeypatch.setenv("MS_TEAMS_WEBHOOK_URL", "https://teams.example/budget")
+    http_handler: Final = _webhook_accepting_posts()
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack", "webhook", "ms_teams"],
+        alerting_args={"slack_budget_alert_key_aliases": []},
+        async_http_handler=http_handler,
+        batch_size=batch_size,
+    )
+    event: Final = _budget_webhook_event("github-example-api")
+    await slack_alerting.send_alert(
+        message=THRESHOLD_ALERT,
+        level="High",
+        alert_type=AlertType.budget_alerts,
+        alerting_metadata={},
+        user_info=event,
+    )
+    assert tuple(call.kwargs["url"] for call in http_handler.post.call_args_list) == (
+        ("https://webhook.example/budget", "https://teams.example/budget")
+        if batch_size == 1
+        else ("https://webhook.example/budget",)
+    )
+    await slack_alerting.flush_queue()
+
+    assert tuple(call.kwargs["url"] for call in http_handler.post.call_args_list) == (
+        "https://webhook.example/budget",
+        "https://teams.example/budget",
+    )
+    assert WebhookEvent.model_validate_json(http_handler.post.call_args_list[0].kwargs["data"]) == event
+    teams_body: Final = json.loads(http_handler.post.call_args_list[1].kwargs["data"])
+    assert THRESHOLD_ALERT in teams_body["attachments"][0]["content"]["body"][0]["text"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key_alias, delivered", (("github-example-api", True), ("other-api", False)))
+async def test_slack_budget_key_alias_filter_retains_native_thresholds_and_dedup(
+    key_alias: str, delivered: bool
+) -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"slack_budget_alert_key_aliases": ["github-example-*"]},
+        async_http_handler=http_handler,
+    )
+    below_threshold: Final = CallInfo(
+        spend=50.0, max_budget=100.0, token="hashed_key", key_alias=key_alias, event_group=Litellm_EntityType.KEY
+    )
+    await slack_alerting.budget_alerts(type="token_budget", user_info=below_threshold)
+    assert slack_alerting.log_queue == []
+    assert (
+        await slack_alerting.internal_usage_cache.async_get_cache("budget_alerts:threshold_crossed:hashed_key") is None
+    )
+
+    at_threshold: Final = below_threshold.model_copy(update={"spend": 85.0})
+    await slack_alerting.budget_alerts(type="token_budget", user_info=at_threshold)
+    assert len(slack_alerting.log_queue) == int(delivered)
+    assert (
+        await slack_alerting.internal_usage_cache.async_get_cache("budget_alerts:threshold_crossed:hashed_key")
+        == "SENT_WITH_SLACK_DEDUP"
+    )
+    assert (
+        await slack_alerting.internal_usage_cache.async_get_cache("budget_alerts:slack:threshold_crossed:hashed_key")
+    ) == ("SENT" if delivered else None)
+    await slack_alerting.budget_alerts(type="token_budget", user_info=at_threshold)
+    assert len(slack_alerting.log_queue) == int(delivered)
+    await slack_alerting.flush_queue()
+    assert http_handler.post.await_count == int(delivered)
+    if delivered:
+        assert "15% or less of budget remaining" in _posted_slack_bodies(http_handler)[0]["text"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key_alias, delivered", (("github-example-api", True), ("other-api", False)))
+async def test_slack_budget_key_alias_filter_applies_before_digest(key_alias: str, delivered: bool) -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"slack_budget_alert_key_aliases": ["github-example-*"]},
+        alert_type_config={"budget_alerts": {"digest": True, "digest_interval": 0}},
+        async_http_handler=http_handler,
+    )
+    await slack_alerting.send_alert(
+        message=THRESHOLD_ALERT,
+        level="High",
+        alert_type=AlertType.budget_alerts,
+        alerting_metadata={},
+        user_info=_budget_webhook_event(key_alias),
+    )
+    assert slack_alerting.log_queue == []
+    assert len(slack_alerting.digest_buckets) == int(delivered)
+    await slack_alerting._flush_digest_buckets()
+    await slack_alerting.flush_queue()
+    assert http_handler.post.await_count == int(delivered)
+    if delivered:
+        assert THRESHOLD_ALERT in _posted_slack_bodies(http_handler)[0]["text"]
+
+
+@pytest.mark.parametrize("patterns", (None, [], ["github-example-*", "exact-alias", "?"]))
+def test_slack_budget_key_alias_patterns_validate_and_round_trip(patterns: object) -> None:
+    args: Final = SlackAlertingArgs.model_validate({"slack_budget_alert_key_aliases": patterns})
+    assert args.slack_budget_alert_key_aliases == patterns
+    assert args.model_dump()["slack_budget_alert_key_aliases"] == patterns
+
+
+@pytest.mark.parametrize(
+    "patterns", ("github-example-*", 123, {}, ("alias",), [""], [None], [123], [True], [["alias"]])
+)
+def test_slack_budget_key_alias_patterns_reject_invalid_config(patterns: object) -> None:
+    with pytest.raises(ValidationError, match="slack_budget_alert_key_aliases"):
+        SlackAlertingArgs.model_validate({"slack_budget_alert_key_aliases": patterns})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("patterns, delivered", (([], False), (["github-example-*"], True)))
+async def test_slack_budget_key_alias_filter_reload_validates_and_changes_delivery(
+    patterns: list[str], delivered: bool
+) -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        async_http_handler=http_handler,
+    )
+    slack_alerting.update_values(alerting_args={"slack_budget_alert_key_aliases": patterns})
+    with pytest.raises(ValidationError, match="slack_budget_alert_key_aliases"):
+        slack_alerting.update_values(alerting_args={"slack_budget_alert_key_aliases": "github-example-*"})
+    await slack_alerting.send_alert(
+        message=THRESHOLD_ALERT,
+        level="High",
+        alert_type=AlertType.budget_alerts,
+        alerting_metadata={},
+        user_info=_budget_webhook_event("github-example-api"),
+    )
+    await slack_alerting.flush_queue()
+    assert http_handler.post.await_count == int(delivered)
+    if delivered:
+        assert THRESHOLD_ALERT in _posted_slack_bodies(http_handler)[0]["text"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("digest", (False, True))
+@pytest.mark.parametrize("patterns", (["github-example-*"], None))
+@pytest.mark.parametrize(
+    "budget_type, spend, max_budget, soft_budget, event",
+    (
+        ("token_budget", 85.0, 100.0, None, "threshold_crossed"),
+        ("max_budget_alert", 100.0, 100.0, None, "budget_crossed"),
+        ("soft_budget", 50.0, None, 40.0, "soft_budget_crossed"),
+        ("projected_limit_exceeded", 50.0, 100.0, None, "projected_limit_exceeded"),
+    ),
+)
+async def test_budget_filter_reload_sends_slack_without_repeating_other_destinations(
+    monkeypatch: pytest.MonkeyPatch,
+    digest: bool,
+    patterns: list[str] | None,
+    budget_type: Literal["token_budget", "max_budget_alert", "soft_budget", "projected_limit_exceeded"],
+    spend: float,
+    max_budget: float | None,
+    soft_budget: float | None,
+    event: str,
+) -> None:
+    monkeypatch.setenv("WEBHOOK_URL", "https://webhook.example/budget")
+    monkeypatch.setenv("MS_TEAMS_WEBHOOK_URL", "https://teams.example/budget")
+    http_handler: Final = _webhook_accepting_posts()
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack", "webhook", "ms_teams"],
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"slack_budget_alert_key_aliases": []},
+        alert_type_config={"budget_alerts": {"digest": digest, "digest_interval": 0}},
+        async_http_handler=http_handler,
+    )
+    info: Final = CallInfo(
+        spend=spend,
+        max_budget=max_budget,
+        soft_budget=soft_budget,
+        token="hashed_key",
+        key_alias="github-example-api",
+        event_group=Litellm_EntityType.KEY,
+    )
+    await slack_alerting.budget_alerts(type=budget_type, user_info=info)
+    await slack_alerting.flush_queue()
+    assert tuple(c.kwargs["url"] for c in http_handler.post.call_args_list) == (
+        "https://webhook.example/budget",
+        "https://teams.example/budget",
+    )
+    slack_alerting.update_values(alerting_args={"slack_budget_alert_key_aliases": patterns})
+    await slack_alerting.budget_alerts(type=budget_type, user_info=info)
+    await slack_alerting.budget_alerts(type=budget_type, user_info=info)
+    await slack_alerting._flush_digest_buckets()
+    await slack_alerting.flush_queue()
+    assert tuple(c.kwargs["url"] for c in http_handler.post.call_args_list) == (
+        "https://webhook.example/budget",
+        "https://teams.example/budget",
+        SLACK_WEBHOOK_URL,
+    )
+    assert (
+        "github-example-api"
+        in _SLACK_WEBHOOK_BODY.validate_json(http_handler.post.call_args_list[-1].kwargs["data"])["text"]
+    )
+    assert (
+        await slack_alerting.internal_usage_cache.async_get_cache(f"budget_alerts:slack:{event}:hashed_key") == "SENT"
+    )
+
+
+@pytest.mark.asyncio
+async def test_budget_slack_and_other_destination_windows_expire_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WEBHOOK_URL", "https://webhook.example/budget")
+    http_handler: Final = _webhook_accepting_posts()
+    cache: Final = DualCache()
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack", "webhook"],
+        internal_usage_cache=cache,
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"slack_budget_alert_key_aliases": []},
+        async_http_handler=http_handler,
+    )
+    info: Final = CallInfo(
+        spend=85.0,
+        max_budget=100.0,
+        token="hashed_key",
+        key_alias="github-example-api",
+        event_group=Litellm_EntityType.KEY,
+    )
+    await slack_alerting.budget_alerts(type="token_budget", user_info=info)
+    slack_alerting.update_values(alerting_args={"slack_budget_alert_key_aliases": None})
+    await slack_alerting.budget_alerts(type="token_budget", user_info=info)
+    await slack_alerting.flush_queue()
+    cache.delete_cache("budget_alerts:threshold_crossed:hashed_key")
+    await slack_alerting.budget_alerts(type="token_budget", user_info=info)
+    await slack_alerting.flush_queue()
+    cache.delete_cache("budget_alerts:slack:threshold_crossed:hashed_key")
+    await slack_alerting.budget_alerts(type="token_budget", user_info=info)
+    await slack_alerting.flush_queue()
+    assert tuple(c.kwargs["url"] for c in http_handler.post.call_args_list) == (
+        "https://webhook.example/budget",
+        SLACK_WEBHOOK_URL,
+        "https://webhook.example/budget",
+        SLACK_WEBHOOK_URL,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("digest", (False, True))
+async def test_budget_empty_channel_mapping_does_not_consume_slack_dedup(digest: bool) -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        alert_to_webhook_url={AlertType.budget_alerts: []},
+        alert_type_config={"budget_alerts": {"digest": digest, "digest_interval": 0}},
+        async_http_handler=http_handler,
+    )
+    info: Final = CallInfo(
+        spend=85.0,
+        max_budget=100.0,
+        token="hashed_key",
+        key_alias="github-example-api",
+        event_group=Litellm_EntityType.KEY,
+    )
+    await slack_alerting.budget_alerts(type="token_budget", user_info=info)
+    assert slack_alerting.log_queue == []
+    assert slack_alerting.digest_buckets == {}
+    slack_alerting.update_values(alert_to_webhook_url={AlertType.budget_alerts: SLACK_WEBHOOK_URL})
+    await slack_alerting.budget_alerts(type="token_budget", user_info=info)
+    await slack_alerting._flush_digest_buckets()
+    await slack_alerting.flush_queue()
+    assert "github-example-api" in _posted_slack_bodies(http_handler)[0]["text"]
+    http_handler.post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_legacy_budget_sent_marker_does_not_repeat_slack() -> None:
+    http_handler: Final = _webhook_accepting_posts()
+    cache: Final = DualCache()
+    await cache.async_set_cache("budget_alerts:threshold_crossed:hashed_key", "SENT", ttl=86400)
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        internal_usage_cache=cache,
+        default_webhook_url=SLACK_WEBHOOK_URL,
+        alerting_args={"slack_budget_alert_key_aliases": ["github-example-*"]},
+        async_http_handler=http_handler,
+    )
+    await slack_alerting.budget_alerts(
+        type="token_budget",
+        user_info=CallInfo(
+            spend=85.0,
+            max_budget=100.0,
+            token="hashed_key",
+            key_alias="github-example-api",
+            event_group=Litellm_EntityType.KEY,
+        ),
+    )
+    await slack_alerting.flush_queue()
+    http_handler.post.assert_not_awaited()
 
 
 def _periodic_flush_tasks() -> list[asyncio.Task[object]]:
