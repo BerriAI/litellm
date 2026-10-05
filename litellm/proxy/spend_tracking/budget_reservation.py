@@ -1755,18 +1755,23 @@ def _to_float(value: object) -> float | None:
         return None
 
 
-def _cost_info_has_positive_price(cost_info: object) -> bool:
+def _mapping_has_positive_cost_per(cost_info: object) -> bool:
     if not isinstance(cost_info, Mapping):
         return False
-    tiered_pricing: Final = cost_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and any(
-        _cost_info_has_positive_price(tier) for tier in tiered_pricing if isinstance(tier, Mapping)
-    ):
-        return True
     return any(
         price > 0
         for key, value in cost_info.items()
         if isinstance(key, str) and "cost_per" in key and (price := _to_float(value)) is not None
+    )
+
+
+def _cost_info_has_positive_price(cost_info: object) -> bool:
+    if not isinstance(cost_info, Mapping):
+        return False
+    tiered_pricing: Final = cost_info.get("tiered_pricing")
+    return _mapping_has_positive_cost_per(cost_info) or (
+        isinstance(tiered_pricing, list)
+        and any(_mapping_has_positive_cost_per(tier) for tier in tiered_pricing if isinstance(tier, Mapping))
     )
 
 
