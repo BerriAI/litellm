@@ -6,7 +6,15 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
-import { defaultJevClassifierConfig } from "./jev_classifier_config";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { defaultJevClassifierConfig, OSS_CLASSIFIER_MODELS } from "./jev_classifier_config";
+
+const providerDescriptions = {
+  jev: "Uses TypeSafe System One Choice evaluation with your configured tiers",
+  laya: "Uses Laya with your configured tiers. Set LAYA_API_BASE on the gateway to connect your Laya server.",
+  bespoke:
+    "Uses Bespoke Nimble with your configured tiers. Set BESPOKE_API_BASE on the gateway to connect your Nimble server.",
+};
 
 export default function JevClassifierConfig({
   value,
@@ -17,20 +25,34 @@ export default function JevClassifierConfig({
 }) {
   const id = useId();
   const config = value.jev_classifier_config ?? defaultJevClassifierConfig();
+  const models = config.provider && config.provider !== "jev" ? OSS_CLASSIFIER_MODELS[config.provider] : undefined;
   const update = (patch: Partial<typeof config>) =>
     onChange({ ...value, jev_classifier_config: { ...config, ...patch } });
 
   return (
     <div className="mt-4 space-y-3">
-      <p className="text-sm text-muted-foreground">
-        Uses TypeSafe System One Choice evaluation with your configured tiers
-      </p>
+      <p className="text-sm text-muted-foreground">{providerDescriptions[config.provider ?? "jev"]}</p>
       <div>
-        <Label htmlFor={`${id}-model`}>Jev Model</Label>
-        <Input id={`${id}-model`} value={config.model} onChange={(event) => update({ model: event.target.value })} />
+        <Label htmlFor={`${id}-model`}>Classifier Model</Label>
+        {models ? (
+          <Select value={config.model} onValueChange={(model) => model && update({ model })}>
+            <SelectTrigger id={`${id}-model`} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {models.map((model) => (
+                <SelectItem key={model} value={model}>
+                  {model}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <Input id={`${id}-model`} value={config.model} onChange={(event) => update({ model: event.target.value })} />
+        )}
       </div>
       <div>
-        <Label htmlFor={`${id}-timeout`}>Jev Timeout (ms)</Label>
+        <Label htmlFor={`${id}-timeout`}>Classifier Timeout (ms)</Label>
         <Input
           id={`${id}-timeout`}
           type="number"
@@ -50,7 +72,7 @@ export default function JevClassifierConfig({
         }
       />
       <div>
-        <Label htmlFor={`${id}-instructions`}>Jev Instructions</Label>
+        <Label htmlFor={`${id}-instructions`}>Classifier Instructions</Label>
         <AutoRouterAllowanceNote
           feature="tier_or_classifier_prompt"
           label="Custom instructions share the custom-tier allowance"
@@ -63,11 +85,11 @@ export default function JevClassifierConfig({
         />
         {config.instructions && (
           <Button variant="outline" type="button" onClick={() => update({ instructions: undefined })}>
-            Restore built-in Jev instructions
+            Restore built-in instructions
           </Button>
         )}
         <p className="text-xs text-muted-foreground">
-          Built-in Jev is available without a license and uses the shipped tier criteria
+          Built-in OSS classification is available without a license and uses the shipped tier criteria
         </p>
       </div>
     </div>

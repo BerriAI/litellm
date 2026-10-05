@@ -4521,6 +4521,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "tiktoken" },
     { name = "tokenizers" },
+    { name = "typing-extensions" },
 ]
 
 [package.optional-dependencies]
@@ -4669,6 +4670,7 @@ ci = [
     { name = "lunary", version = "1.4.36", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "lunary", version = "1.4.37", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pillow" },
+    { name = "psutil" },
     { name = "psycopg2-binary" },
     { name = "pyarrow" },
     { name = "pygithub" },
@@ -4850,6 +4852,7 @@ requires-dist = [
     { name = "tokenizers", specifier = ">=0.21.0,<1.0" },
     { name = "tomlkit", marker = "extra == 'cli'", specifier = ">=0.13.3,<1.0" },
     { name = "tomlkit", marker = "extra == 'proxy'", specifier = ">=0.13.3,<1.0" },
+    { name = "typing-extensions", specifier = ">=4.13.0,<5.0" },
     { name = "uvicorn", marker = "extra == 'proxy'", specifier = ">=0.33.0,<1.0" },
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.22.1,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
@@ -4883,6 +4886,7 @@ ci = [
     { name = "lunary", marker = "python_full_version == '3.10.*'", specifier = "==1.4.36" },
     { name = "lunary", marker = "python_full_version >= '3.11'", specifier = "==1.4.37" },
     { name = "pillow", specifier = "==12.3.0" },
+    { name = "psutil", specifier = "==7.2.2" },
     { name = "psycopg2-binary", specifier = "==2.9.11" },
     { name = "pyarrow", specifier = "==23.0.1" },
     { name = "pygithub", specifier = "==2.8.1" },
@@ -4965,7 +4969,7 @@ source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.104"
+version = "0.4.105"
 source = { editable = "litellm-proxy-extras" }
 dependencies = [
     { name = "psycopg" },
