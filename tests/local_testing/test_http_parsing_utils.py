@@ -1,75 +1,61 @@
+from collections.abc import Awaitable, Callable
+
 import pytest
 from fastapi import Request
-from fastapi.testclient import TestClient
-from starlette.datastructures import Headers
-from starlette.requests import HTTPConnection
+from starlette.types import Message
 
-
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy._types import ProxyException
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+
+
+def _request(receive: Callable[[], Awaitable[Message]]) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+
+def _request_with_body(body: bytes) -> Request:
+    async def receive() -> Message:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return _request(receive)
 
 
 @pytest.mark.asyncio
 async def test_read_request_body_valid_json():
-    """Test the function with a valid JSON payload."""
-
-    class MockRequest:
-        async def body(self):
-            return b'{"key": "value"}'
-
-    request = MockRequest()
-    result = await _read_request_body(request)
+    result = await _read_request_body(_request_with_body(b'{"key": "value"}'))
     assert result == {"key": "value"}
 
 
 @pytest.mark.asyncio
 async def test_read_request_body_empty_body():
-    """Test the function with an empty body."""
-
-    class MockRequest:
-        async def body(self):
-            return b""
-
-    request = MockRequest()
-    result = await _read_request_body(request)
+    result = await _read_request_body(_request_with_body(b""))
     assert result == {}
 
 
 @pytest.mark.asyncio
 async def test_read_request_body_invalid_json():
-    """Test the function with an invalid JSON payload."""
-
-    class MockRequest:
-        async def body(self):
-            return b'{"key": value}'  # Missing quotes around `value`
-
-    request = MockRequest()
     with pytest.raises(ProxyException):
-        await _read_request_body(request)
+        await _read_request_body(_request_with_body(b'{"key": value}'))
 
 
 @pytest.mark.asyncio
 async def test_read_request_body_large_payload():
-    """Test the function with a very large payload."""
-    large_payload = '{"key":' + '"a"' * 10**6 + "}"  # Large payload
-
-    class MockRequest:
-        async def body(self):
-            return large_payload.encode()
-
-    request = MockRequest()
+    large_payload = '{"key":' + '"a"' * 10**6 + "}"
     with pytest.raises(ProxyException):
-        await _read_request_body(request)
+        await _read_request_body(_request_with_body(large_payload.encode()))
 
 
 @pytest.mark.asyncio
 async def test_read_request_body_unexpected_error():
-    """Test the function when an unexpected error occurs."""
+    async def receive() -> Message:
+        raise ValueError("Unexpected error")
 
-    class MockRequest:
-        async def body(self):
-            raise ValueError("Unexpected error")
-
-    request = MockRequest()
-    result = await _read_request_body(request)
-    assert result == {}  # Ensure fallback behavior
+    result = await _read_request_body(_request(receive))
+    assert result == {}

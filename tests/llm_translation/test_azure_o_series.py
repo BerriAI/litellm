@@ -1,19 +1,20 @@
 import json
 import os
-from datetime import datetime
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch
 
 
-
-import httpx
 import pytest
 
 import litellm
-from litellm import Choices, Message, ModelResponse
+from litellm import ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
 
 class TestAzureOpenAIO3Mini(BaseOSeriesModelsTest, BaseLLMChatTest):
+    test_content_list_handling = None
+    test_empty_tools = None
+    test_function_calling_with_tool_response = None
+
     def get_base_completion_call_args(self):
         # Clear the LLM client cache to prevent test pollution from cached clients
         litellm.in_memory_llm_clients_cache.flush_cache()

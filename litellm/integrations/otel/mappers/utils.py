@@ -6,7 +6,7 @@ they live in one place.
 """
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue
@@ -32,14 +32,6 @@ core telemetry no matter how many vocabularies are configured.
 """
 
 
-MAX_MESSAGE_ATTRS_PER_SPAN: Final = DEFAULT_SPAN_ATTRIBUTE_LIMIT // 8
-"""Span-wide ceiling on per-index chat message attributes, prompt and response together.
-
-An eighth is the largest share that still fits beside the tool ceiling and the core
-of every vocabulary at once. The complete conversation still rides the JSON blobs.
-"""
-
-
 def tool_attr_budget(vocabularies: int) -> int:
     """Split the span-wide tool-definition ceiling across active vocabularies."""
     return MAX_TOOL_DEFINITION_ATTRS_PER_SPAN // max(vocabularies, 1)
@@ -47,7 +39,12 @@ def tool_attr_budget(vocabularies: int) -> int:
 
 def drop_none(values: Mapping[str, AttrValue | None]) -> AttributeMap:
     """Return ``values`` with ``None``-valued entries removed."""
-    return {k: v for k, v in values.items() if v is not None}
+    return drop_none_pairs(values.items())
+
+
+def drop_none_pairs(pairs: Iterable[tuple[str, AttrValue | None]]) -> AttributeMap:
+    """Return ``pairs`` as a map with ``None``-valued entries removed."""
+    return {k: v for k, v in pairs if v is not None}
 
 
 def tool_definition_attrs(

@@ -4,13 +4,10 @@ on:
   pull_request:
     branches:
       - main
-      - litellm_internal_staging
-      - litellm_oss_staging
       - "litellm_**"
   push:
     branches:
       - main
-      - litellm_internal_staging
 
 permissions:
   contents: read
@@ -57,8 +54,19 @@ jobs:
           version: "0.10.9"
 
       - name: Cache uv dependencies
-        if: steps.changes.outputs.decision != 'skip'
+        if: steps.changes.outputs.decision != 'skip' && github.ref == 'refs/heads/main'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Cache uv dependencies
+        if: steps.changes.outputs.decision != 'skip' && github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cache/uv

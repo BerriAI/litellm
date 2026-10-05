@@ -12,7 +12,7 @@ import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_logger
 from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
@@ -127,7 +127,7 @@ class RealTimeStreaming:
     def __init__(
         self,
         websocket: Any,
-        backend_ws: CLIENT_CONNECTION_CLASS,
+        backend_ws: CLIENT_CONNECTION_CLASS | RealtimeBackend,
         logging_obj: LiteLLMLogging,
         provider_config: BaseRealtimeConfig | None = None,
         model: str = "",
