@@ -2453,6 +2453,23 @@
         "rerank": false
       }
     },
+    "synap": {
+      "display_name": "Synap (`synap`)",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "synthetic": {
       "display_name": "Synthetic (`synthetic`)",
       "endpoints": {
