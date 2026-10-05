@@ -170,7 +170,7 @@ export function AgentTracesSection({
       fullScreen={fullScreen}
       onFullScreenChange={setFullScreen}
     >
-      <div className="flex min-h-[560px] flex-1 flex-col overflow-hidden bg-card">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
         {checkHistory && <TraceHistoryError history={history} />}
         <TracesReceived received={setup.received} />
         <Inspector.Panel label="Trace details" testId="run-drawer">

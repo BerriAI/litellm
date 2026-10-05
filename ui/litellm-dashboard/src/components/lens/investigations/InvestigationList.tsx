@@ -282,7 +282,7 @@ export function InvestigationList({
       noun={noun}
       storageKey={FINDING_PANEL_WIDTH_KEY}
     >
-      <div className="flex min-h-[420px] flex-1 flex-col overflow-hidden bg-card">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-card">
         <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-border bg-card p-2">
           <SearchBox.Root
             language={INVESTIGATION_QUERY}
