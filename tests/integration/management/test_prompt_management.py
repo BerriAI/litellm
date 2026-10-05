@@ -13,6 +13,24 @@ from pydantic import JsonValue
 from litellm.types.prompts.init_prompts import ListPromptsResponse, PromptInfoResponse, PromptSpec
 
 _PROVIDER_KEY: Final = "synthetic-prompt-provider-key"
+_PROMPT_LIFECYCLE_STAGING_BODY: Final[dict[str, JsonValue]] = {
+    "model": "gpt-4o-mini",
+    "messages": [
+        {"role": "system", "content": "staging two patched"},
+        {"role": "user", "content": "Hi x"},
+        {"role": "user", "content": "client turn"},
+    ],
+    "temperature": 0.2,
+}
+_PROMPT_LIFECYCLE_PRODUCTION_BODY: Final[dict[str, JsonValue]] = {
+    "model": "gpt-4o-mini",
+    "messages": [
+        {"role": "system", "content": "production one"},
+        {"role": "user", "content": "Hi x"},
+        {"role": "user", "content": "client turn"},
+    ],
+    "temperature": 0.2,
+}
 
 
 def _template(model: str, marker: str) -> str:
@@ -263,26 +281,7 @@ def test_prompt_update_patch_and_environment_delete_are_isolated(gateway: Gatewa
         assert request.method == "POST"
         assert request.target == "/v1/chat/completions"
         body: Final[dict[str, JsonValue]] = json.loads(request.body)
-        assert body in (
-            {
-                "model": "gpt-4o-mini",
-                "messages": [
-                    {"role": "system", "content": "staging two patched"},
-                    {"role": "user", "content": "Hi x"},
-                    {"role": "user", "content": "client turn"},
-                ],
-                "temperature": 0.2,
-            },
-            {
-                "model": "gpt-4o-mini",
-                "messages": [
-                    {"role": "system", "content": "production one"},
-                    {"role": "user", "content": "Hi x"},
-                    {"role": "user", "content": "client turn"},
-                ],
-                "temperature": 0.2,
-            },
-        ), body
+        assert body in (_PROMPT_LIFECYCLE_STAGING_BODY, _PROMPT_LIFECYCLE_PRODUCTION_BODY), body
         return Reply(
             body=json.dumps(
                 {
@@ -405,10 +404,12 @@ def test_prompt_update_patch_and_environment_delete_are_isolated(gateway: Gatewa
         _assert_chat_response(_chat(gateway, model, prompt_id, None))
         requests: Final = wire.drain()
         expected_requests: Final = [
-            ("POST", "/v1/chat/completions"),
-            ("POST", "/v1/chat/completions"),
+            ("POST", "/v1/chat/completions", _PROMPT_LIFECYCLE_STAGING_BODY),
+            ("POST", "/v1/chat/completions", _PROMPT_LIFECYCLE_PRODUCTION_BODY),
         ]
-        assert [(request.method, request.target) for request in requests] == expected_requests
+        assert [
+            (request.method, request.target, json.loads(request.body)) for request in requests
+        ] == expected_requests, requests
 
 
 def test_prompt_environment_delete_stops_applying_the_deleted_template(gateway: Gateway) -> None:
