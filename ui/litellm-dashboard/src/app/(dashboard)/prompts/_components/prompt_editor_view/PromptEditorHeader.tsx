@@ -21,7 +21,7 @@ interface PromptEditorHeaderProps {
   editMode?: boolean;
   onShowHistory?: () => void;
   version?: string | null;
-  promptModel?: string;
+  promptModel?: string | null;
   promptVariables?: Record<string, string>;
   accessToken: string | null;
   proxySettings?: {
@@ -85,10 +85,11 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
       <div className="flex items-center space-x-2">
         <PromptCodeSnippets
           promptId={promptName}
-          model={promptModel}
+          model={promptModel ?? "YOUR_MODEL"}
           promptVariables={promptVariables}
           accessToken={accessToken}
           version={version?.replace("v", "") || "1"}
+          environment={environment}
           proxySettings={proxySettings}
         />
         {editMode && onShowHistory && (

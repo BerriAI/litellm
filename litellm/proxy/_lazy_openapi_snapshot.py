@@ -126,7 +126,6 @@ def _feature_fragment(app: "FastAPI", feat: "LazyFeature", used_operation_ids: s
     full: Final = get_openapi(title=app.title, version=app.version, routes=feat_routes)
     paths: Final = full.get("paths", {})
     _normalize_operation_ids(paths)
-    # Group all of a feature's routes under one tag.
     for path_ops in paths.values():
         for method, op in path_ops.items():
             if isinstance(op, dict):

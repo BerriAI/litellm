@@ -187,9 +187,22 @@ CAPABILITY_RULES: Final = (
     _rule("thinkingmachines/Inkling-Small", "reviewed for the LIT-5968 backfill; no tool or vision support documented"),
     _rule(
         "zai-org/GLM-5.2",
-        "reviewed for the LIT-5968 backfill against https://www.together.ai/models/glm-5-2",
+        "reviewed for the LIT-5968 backfill against https://www.together.ai/models/glm-5-2;"
+        " 128K output ceiling per https://docs.z.ai/guides/llm/glm-5.2",
         **_TOOLS,
         supports_reasoning=True,
+        max_output_tokens=128000,
+        max_tokens=128000,
+    ),
+    _rule(
+        "zai-org/GLM-5.3-Flash",
+        "reviewed for LIT-6489 against https://www.together.ai/models/glm-5-3-flash;"
+        " 128K output ceiling per https://docs.z.ai/guides/llm/glm-5.3",
+        **_TOOLS,
+        supports_reasoning=True,
+        supports_vision=True,
+        max_output_tokens=128000,
+        max_tokens=128000,
     ),
 )
 
@@ -288,15 +301,10 @@ def _api_fields(model: CatalogModel) -> RegistryEntry:
 
 def _new_entry(model: CatalogModel, mode: str) -> RegistryEntry:
     rule: Final = RULES_BY_ID.get(model.id)
-    length_fields: Final = (
-        {}
-        if model.context_length is None
-        else {"max_input_tokens": model.context_length, "max_tokens": model.context_length}
-        | ({"max_output_tokens": model.context_length} if mode == "chat" else {})
-    )
+    legacy_ceiling: Final = {} if model.context_length is None else {"max_tokens": model.context_length}
     merged: Final = {
         **_api_fields(model),
-        **length_fields,
+        **legacy_ceiling,
         "litellm_provider": PROVIDER,
         "mode": mode,
         "source": SOURCE_URL,

@@ -5,5 +5,17 @@ from litellm.proxy.config_resolvers._descriptors import (
     FieldSource,
     resolve_fields,
 )
+from litellm.proxy.config_resolvers.settings_store import (
+    SettingsStore,
+    config_ownership_message,
+    source_for,
+)
 
-__all__ = ["FieldDescriptor", "FieldSource", "resolve_fields"]
+__all__ = (
+    "FieldDescriptor",
+    "FieldSource",
+    "SettingsStore",
+    "config_ownership_message",
+    "resolve_fields",
+    "source_for",
+)
