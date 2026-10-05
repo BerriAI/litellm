@@ -241,7 +241,7 @@ def test_coralbricks_chat_completion_cost_includes_cache_write_and_free_cached_r
                         "billable_cache_write_tokens": 5,
                         "cache_write_blocks": 3,
                     },
-                    "completion_tokens_details": {"reasoning_tokens": 21},
+                    "completion_tokens_details": {"reasoning_tokens": 12},
                 },
             },
         )
@@ -258,7 +258,7 @@ def test_coralbricks_chat_completion_cost_includes_cache_write_and_free_cached_r
             uncached_input_tokens=4357 - 4352 - 5,
             cached_read_tokens=4352,
             cache_write_tokens=5,
-            billed_output_tokens=21,
+            billed_output_tokens=20,
         )
     )
 
@@ -292,7 +292,7 @@ def test_coralbricks_responses_cost_includes_cache_write_and_free_cached_read():
                         "cache_write_tokens": 5,
                         "billable_cache_write_tokens": 5,
                     },
-                    "output_tokens_details": {"reasoning_tokens": 23},
+                    "output_tokens_details": {"reasoning_tokens": 12},
                 },
             },
         )
@@ -309,7 +309,7 @@ def test_coralbricks_responses_cost_includes_cache_write_and_free_cached_read():
             uncached_input_tokens=4357 - 4352 - 5,
             cached_read_tokens=4352,
             cache_write_tokens=5,
-            billed_output_tokens=23,
+            billed_output_tokens=20,
         )
     )
 
@@ -364,7 +364,10 @@ def test_coralbricks_cost_map_backup_mirrors_main():
         (Path(litellm.__file__).parent.parent / "model_prices_and_context_window.json").read_text()
     )
     backup_map: Final = litellm.model_cost
-    for key in (key for key in main_map if key.startswith("coralbricks/")):
+    main_keys: Final = {key for key in main_map if key.startswith("coralbricks/")}
+    backup_keys: Final = {key for key in backup_map if key.startswith("coralbricks/")}
+    assert main_keys and main_keys == backup_keys
+    for key in main_keys:
         assert backup_map[key] == main_map[key]
 
 
@@ -373,6 +376,9 @@ def test_coralbricks_cost_map_rows_declare_same_endpoints_as_providers_json():
         (Path(litellm.__file__).parent / "llms" / "openai_like" / "providers.json").read_text()
     )
     declared: Final = providers_json["coralbricks"]["supported_endpoints"]
-    for key, row in litellm.model_cost.items():
-        if key.startswith("coralbricks/"):
-            assert row["supported_endpoints"] == declared
+    coralbricks_rows: Final = {
+        key: row for key, row in litellm.model_cost.items() if key.startswith("coralbricks/")
+    }
+    assert coralbricks_rows
+    for row in coralbricks_rows.values():
+        assert row["supported_endpoints"] == declared
