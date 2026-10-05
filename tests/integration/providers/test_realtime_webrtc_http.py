@@ -20,7 +20,11 @@ from typing import Final
 import httpx
 import pytest
 from openai import OpenAI
-from openai.types.realtime import ClientSecretCreateResponse
+from openai.types.realtime import (
+    ClientSecretCreateResponse,
+    RealtimeAudioConfigParam,
+    RealtimeSessionCreateRequestParam,
+)
 from pydantic import BaseModel, JsonValue
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, Scenario
@@ -150,10 +154,19 @@ def test_openai_prefixed_realtime_aliases_reach_realtime_handlers(gateway: Gatew
         "pass-through route and return 500 'Required OPENAI_API_KEY' instead of reaching the realtime handlers"
     )
     raw: Final = _raw_secret()
+    transcription_raw: Final = _raw_secret()
     scenario_path: Final = f"/{uuid.uuid4().hex}"
-    with wire_server(_scripted_openai(_realtime_session_reply(raw, _expires_at()))) as wire, gateway.scenario() as scenario:
+    with (
+        wire_server(_scripted_openai(_realtime_session_reply(raw, _expires_at()))) as wire,
+        wire_server(
+            _scripted_openai(_beta_transcription_reply(transcription_raw, _expires_at()))
+        ) as transcription_wire,
+        gateway.scenario() as scenario,
+    ):
         alias: Final = _deployment(scenario, wire, scenario_path, f"openai/{REALTIME_MODEL}")
-        transcription_alias: Final = _deployment(scenario, wire, scenario_path, f"openai/{TRANSCRIBE_MODEL}")
+        transcription_alias: Final = _deployment(
+            scenario, transcription_wire, scenario_path, f"openai/{TRANSCRIBE_MODEL}"
+        )
         key: Final = scenario.key(models=[alias, transcription_alias])
         minted: Final = gateway.request("POST", "/openai/v1/realtime/client_secrets", {"model": alias}, key=key)
         assert minted.status_code == 200, minted.text
@@ -169,15 +182,24 @@ def test_openai_prefixed_realtime_aliases_reach_realtime_handlers(gateway: Gatew
             key=key,
         )
         assert transcribed.status_code == 200, transcribed.text
-        mint_request, calls_request, session_request = wire.drain()
+        transcription_token: Final = _TranscriptionSessionResponse.model_validate_json(
+            transcribed.content
+        ).client_secret["value"]
+        assert isinstance(transcription_token, str) and transcription_token != transcription_raw, transcribed.text
+        assert transcription_raw not in transcribed.text, transcribed.text
+
+        mint_request, calls_request = wire.drain()
         assert [
-            (request.target, request.headers["authorization"])
-            for request in (mint_request, calls_request, session_request)
+            (request.target, request.headers["authorization"]) for request in (mint_request, calls_request)
         ] == [
             (f"{scenario_path}/v1/realtime/client_secrets", f"Bearer {DEPLOYMENT_KEY}"),
             (f"{scenario_path}/v1/realtime/calls", f"Bearer {raw}"),
-            (f"{scenario_path}/v1/realtime/transcription_sessions", f"Bearer {DEPLOYMENT_KEY}"),
         ]
+        (session_request,) = transcription_wire.drain()
+        assert (session_request.target, session_request.headers["authorization"]) == (
+            f"{scenario_path}/v1/realtime/transcription_sessions",
+            f"Bearer {DEPLOYMENT_KEY}",
+        )
         assert _json_body(session_request) == _beta_transcription_body(TRANSCRIBE_MODEL), session_request.body
 
 
@@ -185,7 +207,7 @@ def test_sdk_client_secret_create_forwards_session_and_expires_after_with_deploy
     raw: Final = _raw_secret()
     expires_at: Final = _expires_at()
     scenario_path: Final = f"/{uuid.uuid4().hex}"
-    audio: Final[dict[str, JsonValue]] = {
+    audio: Final[RealtimeAudioConfigParam] = {
         "input": {"format": {"type": "audio/pcm", "rate": 24000}, "turn_detection": {"type": "semantic_vad"}},
         "output": {"voice": "marin"},
     }
@@ -193,7 +215,9 @@ def test_sdk_client_secret_create_forwards_session_and_expires_after_with_deploy
         alias: Final = _deployment(scenario, wire, scenario_path, f"openai/{REALTIME_MODEL}")
         key: Final = scenario.key(models=[alias])
         created: Final = _sdk(gateway, key).realtime.client_secrets.with_raw_response.create(
-            session={"type": "realtime", "model": alias, "instructions": "x", "audio": audio},  # type: ignore[typeddict-item]
+            session=RealtimeSessionCreateRequestParam(
+                type="realtime", model=alias, instructions="x", audio=audio
+            ),
             expires_after={"anchor": "created_at", "seconds": 600},
         )
 
