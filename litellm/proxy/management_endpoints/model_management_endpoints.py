@@ -2515,6 +2515,19 @@ async def add_new_model(
             )
 
         ## Auth check
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            model_creation_disabled_for_internal_users,
+            sync_ui_settings_to_general_settings,
+        )
+
+        internal_user_creation: Final = user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
+        if internal_user_creation:
+            await sync_ui_settings_to_general_settings(prisma_client, require_fresh=True)
+        if internal_user_creation and model_creation_disabled_for_internal_users(general_settings):
+            raise HTTPException(
+                status_code=403,
+                detail="Model creation is disabled for internal users by disable_model_add_for_internal_users.",
+            )
         write_authorization: Final = await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=model_params,
             user_api_key_dict=user_api_key_dict,
@@ -2547,8 +2560,8 @@ async def add_new_model(
             enforced=bool(general_settings.get(ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING, False)),
         )
 
-        clean_model_info: Final = ModelInfo(
-            **without_server_derived_pricing(model_params.model_info.model_dump(exclude_none=True))
+        clean_model_info: Final = ModelInfo.model_validate(
+            dict(without_server_derived_pricing(model_params.model_info.model_dump(exclude_none=True)))
         )
         model_params.model_info = (  # rebind-ok: downstream team-model handling mutates this same object
             clean_model_info.model_copy(update=MappingProxyType({"member_auto_router": True}))
@@ -2591,7 +2604,9 @@ async def add_new_model(
                     ),
                 )
                 reload_outcome = await proxy_config.add_deployment(
-                    prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+                    prisma_client=prisma_client,
+                    proxy_logging_obj=proxy_logging_obj,
+                    ui_settings_already_synced=internal_user_creation,
                 )
                 # don't let failed slack alert block the /model/new response
                 _alerting: Final = general_settings.get("alerting", []) or []
@@ -3194,6 +3209,9 @@ def _deduplicate_litellm_router_models(models: list[dict]) -> list[dict]:
     return unique_models
 
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
 def model_info_as_mapping(model_info: object) -> Mapping[str, object] | None:
     """A DB row's model_info column arrives as a dict or as its JSON string depending on
     the query path, and every consumer needs the mapping. Single owner of that parse:
@@ -3204,10 +3222,9 @@ def model_info_as_mapping(model_info: object) -> Mapping[str, object] | None:
     if not isinstance(model_info, str):
         return None
     try:
-        parsed: Final = json.loads(model_info)
+        return _JSON_OBJECT.validate_python(json.loads(model_info))
     except (TypeError, ValueError):
         return None
-    return parsed if isinstance(parsed, Mapping) else None
 
 
 def _expects_liveness_on_this_pod(model_info: object) -> bool:

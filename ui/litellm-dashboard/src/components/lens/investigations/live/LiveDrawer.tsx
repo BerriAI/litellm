@@ -21,7 +21,7 @@ const STATUS: Record<Job["status"], { label: string; tone: StatusTone }> = {
   failed: { label: "Failed", tone: "error" },
   cancelled: { label: "Cancelled", tone: "neutral" },
 };
-const PANE_TITLE = "text-[12px] font-semibold text-foreground";
+const PANE_TITLE = "text-xs font-semibold text-foreground";
 
 function Stage({
   reviews,
@@ -112,7 +112,7 @@ export function LiveDrawer({
                 >
                   <div className="mb-2 flex items-baseline justify-between gap-3 px-2">
                     <h2 className={PANE_TITLE}>Traces</h2>
-                    <span className="inline-flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground">
+                    <span className="inline-flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
                       {done ?? `${reviewed} reviewed`}
                       {done && <ModelName model={model} />}
                       {reviewed > reviews.length && reviews.length ? ` · showing latest ${reviews.length}` : ""}
@@ -123,8 +123,8 @@ export function LiveDrawer({
                     <TraceList reviews={listed} group={group} />
                   ) : (
                     !running && (
-                      <div className="flex flex-col gap-1 px-2 py-6 text-[12px] text-muted-foreground">
-                        <p className="text-[13px] text-foreground">Waiting for the first trace…</p>
+                      <div className="flex flex-col gap-1 px-2 py-6 text-xs text-muted-foreground">
+                        <p className="text-sm text-foreground">Waiting for the first trace…</p>
                         {waiting}
                       </div>
                     )

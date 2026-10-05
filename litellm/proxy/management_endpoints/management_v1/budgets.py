@@ -85,8 +85,7 @@ class PrismaBudgetListExecutor:
     async def count(self, where: tuple[Predicate, ...]) -> int:
         clauses, params = where_sql(where)
         sql: Final = f"SELECT COUNT(*) AS count FROM {BUDGET_TABLE}" + (f" WHERE {clauses}" if clauses else "")
-        rows: Final = await self.prisma_client.db.query_raw(sql, *params)
-        counted: Final = _ROW_COUNTS.validate_python(rows)
+        counted: Final = _ROW_COUNTS.validate_python(await self.prisma_client.db.query_raw(sql, *params))
         return counted[0].count if counted else 0
 
     async def find_many(self, plan: QueryPlan) -> Sequence[BudgetListItem]:
@@ -97,8 +96,7 @@ class PrismaBudgetListExecutor:
             + f" ORDER BY {order_by_sql(plan.order)}"
             + f" LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
         )
-        rows: Final = await self.prisma_client.db.query_raw(sql, *params, plan.take, plan.skip)
-        return _BUDGET_ROWS.validate_python(rows)
+        return _BUDGET_ROWS.validate_python(await self.prisma_client.db.query_raw(sql, *params, plan.take, plan.skip))
 
 
 def _serialize(row: BudgetListItem) -> BudgetListItem:

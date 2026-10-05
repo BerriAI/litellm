@@ -19,7 +19,7 @@ from litellm.proxy.lens.endpoints import (
     watching,
     worker_supports_model,
 )
-from litellm.proxy.lens.models import Lens, LensSettings, RunRequest, Scope
+from litellm.proxy.lens.models import ActivitySelection, Lens, LensSettings, RunRequest, Scope
 
 
 @pytest.fixture
@@ -292,13 +292,32 @@ def test_model_errors_reach_worker_with_status_and_redacted_provider_message(pro
 
 
 @pytest.mark.asyncio
+async def test_preview_samples_a_selection_without_investigation_settings() -> None:
+    from litellm.proxy.lens.endpoints import Preview, preview_sample
+
+    class SelectionStorage:
+        async def lens_sample(self, parameters):
+            assert (parameters.source, parameters.agent_name, parameters.selected_team) == ("requests", "billing", "t1")
+            assert parameters.preview == 1 and parameters.offset == 3
+            return []
+
+    body: Final = Preview.model_validate(
+        {"selection": {"source": "requests", "agent_name": "billing", "team_id": "t1"}, "offset": 3}
+    )
+    sample: Final = await preview_sample(
+        body, UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN), SelectionStorage()
+    )
+    assert sample.eligible == 0 and not sample.executions
+
+
+@pytest.mark.asyncio
 async def test_preview_reports_calendar_overflow_as_a_validation_error() -> None:
     from datetime import datetime, timezone
 
     from litellm.proxy.lens.endpoints import Preview, preview_sample
 
     body: Final = Preview(
-        settings=LensSettings(name="Calendar regression", model="analysis", context="Read recorded activity"),
+        selection=ActivitySelection(),
         as_of=datetime.min.replace(tzinfo=timezone.utc),
     )
     with pytest.raises(HTTPException) as error:

@@ -8,6 +8,8 @@ import lock. These tests pin the import to a single resolution.
 """
 
 import builtins
+import importlib.abc
+import sys
 
 import litellm.integrations.otel.runtime as runtime
 
@@ -69,3 +71,25 @@ def test_phase_event_no_ops_when_runtime_absent(monkeypatch):
 
     assert runtime.phase_event("litellm.request.body_parsed") is None
     assert runtime.phase_event("litellm.request.body_received", {"litellm.request.body_bytes": 3}) is None
+
+
+def test_phase_span_does_not_import_the_proxy_in_an_sdk_process(monkeypatch):
+    import litellm.proxy
+
+    monkeypatch.delitem(sys.modules, "litellm.proxy.proxy_server", raising=False)
+    monkeypatch.delattr(litellm.proxy, "proxy_server", raising=False)
+    proxy_imports: list[str] = []
+
+    class _RefuseProxyImport(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path, target=None):
+            if fullname == "litellm.proxy.proxy_server":
+                proxy_imports.append(fullname)
+                raise ImportError(fullname)
+            return None
+
+    monkeypatch.setattr(sys, "meta_path", [_RefuseProxyImport(), *sys.meta_path])
+
+    with runtime.phase_span("route gpt-5-mini") as span:
+        assert span is None
+
+    assert proxy_imports == []

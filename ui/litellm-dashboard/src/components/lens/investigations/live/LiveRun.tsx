@@ -59,7 +59,7 @@ export function LiveRun({
         <button
           type="button"
           onClick={() => setStripOpen(true)}
-          className="self-start text-[11px] text-muted-foreground hover:text-foreground"
+          className="self-start text-xs text-muted-foreground hover:text-foreground"
         >
           Show live trace results
         </button>

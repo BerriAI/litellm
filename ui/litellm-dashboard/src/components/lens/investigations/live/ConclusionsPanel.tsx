@@ -36,7 +36,7 @@ export function ConclusionsPanel({
   onSelect: (key: string | null) => void;
 }) {
   const flashing = useFlashing(groups);
-  if (!groups.length) return <p className="text-[12px] text-muted-foreground">Nothing concluded yet.</p>;
+  if (!groups.length) return <p className="text-xs text-muted-foreground">Nothing concluded yet.</p>;
   return (
     <div className="flex flex-col gap-1.5">
       <ol aria-label="Conclusions" className="flex flex-col gap-1.5">
@@ -61,27 +61,27 @@ export function ConclusionsPanel({
                       aria-hidden="true"
                       className={cn(
                         "mt-[0.4rem] size-1.5 shrink-0 rounded-full",
-                        group.issue ? "bg-[#e5484d]" : "bg-muted-foreground/40",
+                        group.issue ? "bg-destructive" : "bg-muted-foreground/40",
                       )}
                     />
                     <span className="flex min-w-0 flex-col gap-0.5">
-                      <span className="line-clamp-2 text-[13px] leading-snug font-medium text-foreground">
+                      <span className="line-clamp-2 text-sm leading-snug font-medium text-foreground">
                         {group.label}
                       </span>
-                      <span className="line-clamp-1 text-[11px] text-muted-foreground">{group.latest}</span>
+                      <span className="line-clamp-1 text-xs text-muted-foreground">{group.latest}</span>
                     </span>
                   </span>
                   <span className="flex shrink-0 flex-col items-end gap-0.5">
                     <span
                       className={cn(
-                        "text-[20px] leading-none font-semibold tabular-nums",
+                        "text-xl leading-none font-semibold tabular-nums",
                         group.count ? "text-foreground" : "text-muted-foreground",
                       )}
                     >
                       {group.count}
                     </span>
                     {group.noted > 0 && (
-                      <span className="text-[10px] tabular-nums text-muted-foreground">{group.noted} noted</span>
+                      <span className="text-xs tabular-nums text-muted-foreground">{group.noted} noted</span>
                     )}
                   </span>
                 </span>
@@ -89,7 +89,7 @@ export function ConclusionsPanel({
                   <span
                     className={cn(
                       "block h-full rounded-full transition-[width] duration-300 motion-reduce:transition-none",
-                      group.issue ? "bg-[#e5484d]/70" : "bg-muted-foreground/40",
+                      group.issue ? "bg-destructive/70" : "bg-muted-foreground/40",
                     )}
                     style={{ width: `${share(group.count, total) * 100}%` }}
                   />
@@ -99,7 +99,7 @@ export function ConclusionsPanel({
           );
         })}
       </ol>
-      {scope && <p className="text-[11px] text-muted-foreground">{scope}</p>}
+      {scope && <p className="text-xs text-muted-foreground">{scope}</p>}
     </div>
   );
 }

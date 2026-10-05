@@ -100,6 +100,11 @@ const eslintConfig = [
     rules: { "local/no-ad-hoc-z-index": ["error", { allowPopupLayer: true }] },
   },
   {
+    files: ["src/components/lens/**/*.tsx"],
+    ignores: ["src/**/*.test.tsx"],
+    rules: { "local/no-arbitrary-design-value": "error" },
+  },
+  {
     files: ["tests/eslint-rules/**/*.{ts,tsx}"],
     rules: { "local/no-noop-hover-variant": "off", "local/no-ad-hoc-z-index": "off" },
   },

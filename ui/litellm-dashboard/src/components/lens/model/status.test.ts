@@ -1,4 +1,14 @@
-import { nextCheckStatus, queueReason, queueReasonText, workerConnected, workerTaskText } from "./status";
+import {
+  activeJob,
+  investigationActivity,
+  listPollInterval,
+  nextCheckStatus,
+  queueReason,
+  secondsToFinishReading,
+  queueReasonText,
+  workerConnected,
+  workerTaskText,
+} from "./status";
 import { describe, expect, it } from "vitest";
 
 import type { Job, Lens, LensList } from "./types";
@@ -181,4 +191,77 @@ it("shows the actual next schedule and avoids a stale countdown during active sc
     "Waiting for an analyzer",
   );
   expect(nextCheckStatus(lens, now)).toBeNull();
+});
+
+it("summarizes activity across investigations, preferring a running scan over a queued one", () => {
+  const withStatus = (status: Job["status"]): Lens => ({ ...lens, jobs: [{ ...job, status }] });
+  expect(investigationActivity([])).toBe("idle");
+  expect(investigationActivity([lens, withStatus("failed")])).toBe("idle");
+  expect(investigationActivity([lens, withStatus("queued")])).toBe("queued");
+  expect(investigationActivity([withStatus("queued"), withStatus("running")])).toBe("running");
+  expect(investigationActivity([{ ...lens, jobs: [lens.jobs[0], { ...job, status: "running" }] }])).toBe("running");
+});
+
+describe("List polling cadence", () => {
+  const now = Date.parse("2026-10-01T12:00:00Z");
+  const connectedWorker: LensList["workers"][number] = {
+    id: "worker",
+    name: "Worker",
+    revoked: false,
+    analysis_key_id: "key",
+    last_seen: "2026-10-01T11:59:59Z",
+    scope: { all_teams: true, api_key_hash: "", team_id: "" },
+  };
+  const staleWorker = { ...connectedWorker, last_seen: "2026-10-01T11:00:00Z" };
+  const list = (workers: LensList["workers"], lenses: Lens[] = [lens]): LensList => ({
+    lenses,
+    workers,
+    tracing_enabled: true,
+  });
+
+  it("polls slowly when nothing is running and Settings is closed", () => {
+    expect(listPollInterval(list([staleWorker]), false, now)).toBe(10000);
+    expect(listPollInterval(undefined, false, now)).toBe(10000);
+  });
+
+  it("polls fast while Settings waits for a worker and slows down once one connects", () => {
+    expect(listPollInterval(undefined, true, now)).toBe(2000);
+    expect(listPollInterval(list([staleWorker]), true, now)).toBe(2000);
+    expect(listPollInterval(list([connectedWorker]), true, now)).toBe(10000);
+  });
+
+  it("speeds up as soon as any investigation is queued or running, whatever tab is open", () => {
+    const queued: Lens = { ...lens, jobs: [{ ...job, status: "queued" }] };
+    const running: Lens = { ...lens, jobs: [lens.jobs[0], { ...job, status: "running" }] };
+    expect(listPollInterval(list([connectedWorker], [lens, queued]), false, now)).toBe(2000);
+    expect(listPollInterval(list([connectedWorker], [running]), false, now)).toBe(2000);
+    expect(listPollInterval(list([connectedWorker], [lens]), false, now)).toBe(10000);
+  });
+});
+
+describe("activeJob", () => {
+  it("picks the queued or running job and ignores finished ones", () => {
+    const done = { ...job, id: "done", status: "completed" as const };
+    expect(activeJob([done, job])).toBe(job);
+    expect(activeJob([done, { ...job, status: "queued" }])?.status).toBe("queued");
+    expect(activeJob([done])).toBeUndefined();
+  });
+});
+
+describe("time left reading", () => {
+  const started = {
+    created_at: "2026-10-03T16:00:00Z",
+    steps: [{ kind: "stage", label: "Reading executions", at: "2026-10-03T16:00:20Z" }] as Job["steps"],
+    coverage: { selected: 328 } as Job["coverage"],
+  };
+  const now = Date.parse("2026-10-03T16:01:00Z");
+
+  it("projects the remaining traces at the rate since reading started", () => {
+    expect(secondsToFinishReading({ ...started, reviewed: 80 }, now)).toBe(124);
+  });
+
+  it("has no estimate before the first review or once every trace is read", () => {
+    expect(secondsToFinishReading({ ...started, reviewed: 0 }, now)).toBeNull();
+    expect(secondsToFinishReading({ ...started, reviewed: 328 }, now)).toBeNull();
+  });
 });

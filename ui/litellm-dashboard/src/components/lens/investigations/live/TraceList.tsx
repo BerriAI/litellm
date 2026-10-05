@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { agoLabel } from "@/components/view_logs/TraceView/lensField";
+import { agoLabel } from "../../model/format";
 import { useNow } from "@/hooks/useNow";
 import { cn } from "@/lib/cva.config";
 
@@ -10,9 +10,9 @@ import { briefReasoning, durationLabel, inGroup, newestFirst, outcome, shortVerd
 import type { Review } from "../../model/types";
 
 const LIMIT = 200;
-const RED = "text-[#e5484d]";
+const RED = "text-destructive";
 const ROW =
-  "grid h-9 w-full grid-cols-[0.75rem_minmax(0,8rem)_minmax(0,1fr)_auto] items-center gap-2 px-2 text-left text-[12px]";
+  "grid h-9 w-full grid-cols-[0.75rem_minmax(0,8rem)_minmax(0,1fr)_auto] items-center gap-2 px-2 text-left text-xs";
 
 function Expanded({ review }: { review: Review }) {
   const verdicts = review.verdicts.length
@@ -25,7 +25,7 @@ function Expanded({ review }: { review: Review }) {
         },
       ];
   return (
-    <div className="flex flex-col gap-1.5 px-7 pt-0.5 pb-2.5 text-[12px] leading-relaxed">
+    <div className="flex flex-col gap-1.5 px-7 pt-0.5 pb-2.5 text-xs leading-relaxed">
       {review.reasoning && <p className="text-muted-foreground">{briefReasoning(review.reasoning)}</p>}
       <ul className="flex flex-col gap-1">
         {verdicts.map((verdict, index) => (
@@ -37,7 +37,7 @@ function Expanded({ review }: { review: Review }) {
               aria-hidden="true"
               className={cn(
                 "mt-[0.45rem] size-1.5 shrink-0 rounded-full",
-                verdict.kind === "issue" ? "bg-[#e5484d]" : "bg-muted-foreground/40",
+                verdict.kind === "issue" ? "bg-destructive" : "bg-muted-foreground/40",
               )}
             />
             <span className="min-w-0">{verdict.summary}</span>
@@ -65,7 +65,7 @@ function DoneRow({
       <button type="button" aria-expanded={open} onClick={onToggle} className={cn(ROW, "rounded-lg hover:bg-muted/50")}>
         <span
           aria-label={result}
-          className={cn("size-1.5 rounded-full", result === "issue" ? "bg-[#e5484d]" : "bg-muted-foreground/40")}
+          className={cn("size-1.5 rounded-full", result === "issue" ? "bg-destructive" : "bg-muted-foreground/40")}
         />
         <span className="truncate text-foreground">{review.agent || review.name}</span>
         <span
@@ -76,7 +76,7 @@ function DoneRow({
         >
           {shortVerdict(review)}
         </span>
-        <span className="text-[11px] tabular-nums text-muted-foreground">
+        <span className="text-xs tabular-nums text-muted-foreground">
           {durationLabel(review.duration_ms)} · {agoLabel(Date.parse(review.at), now)}
         </span>
       </button>
@@ -89,7 +89,7 @@ export function TraceList({ reviews, group }: { reviews: readonly Review[]; grou
   const now = useNow(5000);
   const [expanded, setExpanded] = useState<string | null>(null);
   const rows = newestFirst(reviews, LIMIT).filter((review) => inGroup(review, group));
-  if (!rows.length) return <p className="px-2 py-2 text-[12px] text-muted-foreground">No traces here yet.</p>;
+  if (!rows.length) return <p className="px-2 py-2 text-xs text-muted-foreground">No traces here yet.</p>;
   return (
     <ol aria-label="Reviewed traces" className="flex flex-col">
       {rows.map((review) => (

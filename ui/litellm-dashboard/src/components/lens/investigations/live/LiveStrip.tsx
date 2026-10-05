@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
-import { agoLabel } from "@/components/view_logs/TraceView/lensField";
+import { agoLabel } from "../../model/format";
 import { Button } from "@/components/ui/button";
 import { useNow } from "@/hooks/useNow";
 import { cn } from "@/lib/cva.config";
@@ -33,7 +33,7 @@ export function ModelName({ model, size = "sm" }: { model: string; size?: keyof 
   return (
     <span data-testid="live-model" className="inline-flex shrink-0 items-center gap-1.5 text-foreground">
       {provider && <ProviderLogo provider={provider} className={cn("shrink-0", LOGO[size])} />}
-      <span className={cn("font-mono", size === "md" ? "text-[12px]" : "text-[11px]")}>{model}</span>
+      <span className={cn("font-mono", size === "md" ? "text-xs" : "text-xs")}>{model}</span>
     </span>
   );
 }
@@ -51,11 +51,11 @@ function RecentLine({ review, now, onOpen }: { review: Review; now: number; onOp
         }}
         className="grid w-full grid-cols-[0.75rem_minmax(0,9rem)_minmax(0,1fr)_auto] items-center gap-2 rounded px-1.5 py-0.5 text-left hover:bg-muted"
       >
-        <span aria-label={result} className={issue ? "text-[#e5484d]" : ""}>
+        <span aria-label={result} className={issue ? "text-destructive" : ""}>
           {MARK[result]}
         </span>
         <span className="truncate text-foreground">{review.agent || review.name}</span>
-        <span className={cn("truncate", issue && "text-[#e5484d]")}>{shortVerdict(review)}</span>
+        <span className={cn("truncate", issue && "text-destructive")}>{shortVerdict(review)}</span>
         <span className="tabular-nums">{agoLabel(Date.parse(review.at), now)}</span>
       </button>
     </li>
@@ -97,7 +97,7 @@ export function LiveStrip({
     <section
       aria-label="Live trace results"
       onClick={onOpen}
-      className="flex cursor-pointer flex-wrap items-start gap-x-6 gap-y-2 rounded-md bg-muted/30 px-3 py-2 text-[12px] text-muted-foreground transition-colors hover:bg-muted/50"
+      className="flex cursor-pointer flex-wrap items-start gap-x-6 gap-y-2 rounded-md bg-muted/30 px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-muted/50"
     >
       <div className="flex min-w-[16rem] items-start gap-3">
         <div className="flex flex-col gap-1">
@@ -122,7 +122,7 @@ export function LiveStrip({
       </div>
       <div className="min-w-0 flex-1">
         {state.kind === "failed" && (
-          <p role="alert" className="py-0.5 text-[#e5484d]">
+          <p role="alert" className="py-0.5 text-destructive">
             {state.message}
           </p>
         )}

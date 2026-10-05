@@ -6,11 +6,11 @@ import { durationLabel, outcome, shortVerdict } from "../../model/live";
 import { laneText, typedChars, type Lane } from "../../model/stage";
 import { ModelName } from "./LiveStrip";
 
-const RED = "text-[#e5484d]";
+const RED = "text-destructive";
 
 function dotTone(reading: boolean, issueShown: boolean): string {
   if (reading) return "bg-foreground motion-safe:animate-pulse";
-  return issueShown ? "bg-[#e5484d]" : "bg-foreground/50";
+  return issueShown ? "bg-destructive" : "bg-foreground/50";
 }
 
 function LaneRow({ lane, now, charMs }: { lane: Lane; now: number; charMs: number }) {
@@ -20,12 +20,12 @@ function LaneRow({ lane, now, charMs }: { lane: Lane; now: number; charMs: numbe
   const typing = !!review && typed < text.length;
   const issue = review ? outcome(review) === "issue" : false;
   return (
-    <li className="flex flex-col gap-1 rounded-lg bg-background/70 px-2.5 py-2 text-[12px] ring-1 ring-border/60 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-200">
+    <li className="flex flex-col gap-1 rounded-lg bg-background/70 px-2.5 py-2 text-xs ring-1 ring-border/60 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 motion-safe:duration-200">
       <div className="flex items-center gap-2">
         <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", dotTone(!review, issue && !typing))} />
         <span className="truncate font-medium text-foreground">{lane.agent || "trace"}</span>
-        <span className="truncate font-mono text-[11px] text-muted-foreground">{lane.traceId.slice(0, 8)}</span>
-        <span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground">
+        <span className="truncate font-mono text-xs text-muted-foreground">{lane.traceId.slice(0, 8)}</span>
+        <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
           {review ? durationLabel(review.duration_ms) : `reading · ${durationLabel(Math.max(0, now - lane.startedAt))}`}
         </span>
       </div>
@@ -74,7 +74,7 @@ export function NowReading({
     <section aria-label="Now reading" className="mb-3 flex flex-col gap-2 rounded-xl bg-muted p-2.5 ring-1 ring-border">
       <header className="flex items-center justify-between gap-3 px-0.5">
         <ModelName model={model} size="md" />
-        <span role="status" className="text-[11px] tabular-nums text-muted-foreground">
+        <span role="status" className="text-xs tabular-nums text-muted-foreground">
           {counter}
         </span>
       </header>

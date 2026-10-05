@@ -1,4 +1,5 @@
 import { durationText } from "./format";
+import { activeJob, isActive, readingStart } from "./status";
 import type { InFlight, Job, Review, ReviewVerdict, Settings } from "./types";
 
 export type Outcome = "issue" | "clear" | "unknown";
@@ -14,7 +15,7 @@ export interface Conclusion {
 }
 
 export function liveJob(jobs: readonly Job[]): Job | undefined {
-  const active = jobs.find(isActive);
+  const active = activeJob(jobs);
   if (active) return active;
   const latest = jobs[0];
   return latest && latest.reviewed > 0 ? latest : undefined;
@@ -101,10 +102,6 @@ export function polling(job: Pick<Job, "status" | "reviewed">, feed: ReviewFeed)
   return isActive(job) || feed.cursor < job.reviewed;
 }
 
-export function isActive(job: Pick<Job, "status">): boolean {
-  return job.status === "queued" || job.status === "running";
-}
-
 export function unseen(reviews: readonly Review[], seen: ReadonlySet<string>): Review[] {
   return reviews.filter((review) => !seen.has(reviewKey(review)));
 }
@@ -172,26 +169,12 @@ export function grownGroups(before: readonly Conclusion[], after: readonly Concl
   );
 }
 
-export function readingStart(job: Pick<Job, "steps" | "created_at">): string {
-  return job.steps.find((step) => step.kind === "stage" && step.label === "Reading executions")?.at ?? job.created_at;
-}
-
-export function secondsToFinishReading(
-  job: Pick<Job, "steps" | "created_at" | "reviewed" | "coverage">,
-  now: number,
-): number | null {
-  const remaining = job.coverage.selected - job.reviewed;
-  const elapsed = (now - Date.parse(readingStart(job))) / 1000;
-  if (remaining <= 0 || job.reviewed <= 0 || elapsed <= 0) return null;
-  return Math.ceil(remaining / (job.reviewed / elapsed));
-}
-
 export function newestFirst(reviews: readonly Review[], limit: number): Review[] {
   return [...reviews].reverse().slice(0, limit);
 }
 
 export function inFlight(job: Pick<Job, "status" | "reading">): readonly InFlight[] {
-  return job.status === "running" ? job.reading : [];
+  return job.status === "running" ? job.reading ?? [] : [];
 }
 
 export function nowLine(job: Pick<Job, "coverage" | "reviewed">, reading: number): string {

@@ -12,7 +12,16 @@ const nextConfig = {
     ? {
         async rewrites() {
           return {
-            beforeFiles: [{ source: "/ui/:path*", destination: "/:path*" }],
+            beforeFiles: [
+              // Every dashboard HTTP client sends Accept: application/json; page loads and RSC
+              // fetches do not. That is what keeps GET /lens (API) apart from /lens (page) in dev.
+              {
+                source: "/:path*",
+                has: [{ type: "header", key: "accept", value: "application/json.*" }],
+                destination: `${devProxyUrl}/:path*`,
+              },
+              { source: "/ui/:path*", destination: "/:path*" },
+            ],
             fallback: [{ source: "/:path*", destination: `${devProxyUrl}/:path*` }],
           };
         },

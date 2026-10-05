@@ -3,8 +3,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { lensQueries } from "../../api/queries";
-import type { LensApi } from "../../api/service";
+import { lensQueries } from "../../data/queries";
+import type { LensApi } from "../../data/service";
 import { appendPage, EMPTY_FEED, polling, type ReviewFeed } from "../../model/live";
 import type { Job, Review } from "../../model/types";
 
