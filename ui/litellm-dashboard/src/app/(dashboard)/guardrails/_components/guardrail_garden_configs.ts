@@ -2,7 +2,9 @@ export interface GuardrailPreset {
   provider: string;
   categoryName?: string;
   guardrailNameSuggestion: string;
-  mode: string;
+  // A guardrail that both rewrites the request and repairs the response needs two
+  // modes seeded, not one; the form already normalises either shape.
+  mode: string | string[];
   defaultOn: boolean;
 }
 
@@ -324,6 +326,14 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_mcp_call",
     // MCP-only: default_on is the only activation path on the MCP hook
     defaultOn: true,
+  },
+  llm_shield_proxy: {
+    provider: "LLM Shield Proxy",
+    guardrailNameSuggestion: "LLM Shield Proxy",
+    // Both halves are required. With only pre_call the request is redacted and the
+    // placeholders are handed straight back to the caller.
+    mode: ["pre_call", "post_call"],
+    defaultOn: false,
   },
   conduct: {
     provider: "Conduct",
