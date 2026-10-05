@@ -120,8 +120,6 @@ fn array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
 #[case::crewai_swarm(include_bytes!("fixtures/crewai_swarm.json"))]
 #[case::deepagents_simple(include_bytes!("fixtures/deepagents_simple.json"))]
 #[case::deepagents_swarm(include_bytes!("fixtures/deepagents_swarm.json"))]
-#[case::deeplite_auth_error(include_bytes!("fixtures/deeplite_auth_error.json"))]
-#[case::deeplite_swarm(include_bytes!("fixtures/deeplite_swarm.json"))]
 #[case::google_adk_simple(include_bytes!("fixtures/google_adk_simple.json"))]
 #[case::google_adk_swarm(include_bytes!("fixtures/google_adk_swarm.json"))]
 #[case::langchain_simple(include_bytes!("fixtures/langchain_simple.json"))]
@@ -137,6 +135,7 @@ fn array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
 #[case::opentelemetry_swarm(include_bytes!("fixtures/opentelemetry_swarm.json"))]
 #[case::pydantic_ai_simple(include_bytes!("fixtures/pydantic_ai_simple.json"))]
 #[case::pydantic_ai_swarm(include_bytes!("fixtures/pydantic_ai_swarm.json"))]
+#[case::pydantic_ai_token_limit_swarm(include_bytes!("fixtures/pydantic_ai_token_limit_swarm.json"))]
 #[case::query_alternate(include_bytes!("fixtures/query_alternate.json"))]
 #[case::query_children(include_bytes!("fixtures/query_children.json"))]
 #[case::query_other_team(include_bytes!("fixtures/query_other_team.json"))]
@@ -145,6 +144,22 @@ fn array<'a>(value: &'a Value, key: &str) -> &'a [Value] {
 #[case::strands_swarm(include_bytes!("fixtures/strands_swarm.json"))]
 #[case::vercel_ai_sdk_simple(include_bytes!("fixtures/vercel_ai_sdk_simple.json"))]
 #[case::vercel_ai_sdk_swarm(include_bytes!("fixtures/vercel_ai_sdk_swarm.json"))]
+#[case::google_adk_stream(include_bytes!("fixtures/google_adk_stream.json"))]
+#[case::google_adk_retry(include_bytes!("fixtures/google_adk_retry.json"))]
+#[case::google_adk_billed_failure(include_bytes!("fixtures/google_adk_billed_failure.json"))]
+#[case::pydantic_ai_stream(include_bytes!("fixtures/pydantic_ai_stream.json"))]
+#[case::pydantic_ai_swarm_stream(include_bytes!("fixtures/pydantic_ai_swarm_stream.json"))]
+#[case::pydantic_ai_retry(include_bytes!("fixtures/pydantic_ai_retry.json"))]
+#[case::pydantic_ai_billed_failure(include_bytes!("fixtures/pydantic_ai_billed_failure.json"))]
+#[case::strands_retry(include_bytes!("fixtures/strands_retry.json"))]
+#[case::vercel_ai_sdk_stream(include_bytes!("fixtures/vercel_ai_sdk_stream.json"))]
+#[case::vercel_ai_sdk_retry(include_bytes!("fixtures/vercel_ai_sdk_retry.json"))]
+#[case::vercel_ai_sdk_billed_failure(include_bytes!("fixtures/vercel_ai_sdk_billed_failure.json"))]
+#[case::strands_billed_failure(include_bytes!("fixtures/strands_billed_failure.json"))]
+#[case::mastra_simple(include_bytes!("fixtures/mastra_simple.json"))]
+#[case::mastra_swarm(include_bytes!("fixtures/mastra_swarm.json"))]
+#[case::vercel_ai_sdk_py_simple(include_bytes!("fixtures/vercel_ai_sdk_py_simple.json"))]
+#[case::vercel_ai_sdk_py_swarm(include_bytes!("fixtures/vercel_ai_sdk_py_swarm.json"))]
 fn fixture_normalization(#[case] body: &[u8]) {
     let spans = decode_otlp(body, Some("application/json")).expect("captured OTLP export");
     assert!(!spans.is_empty());
@@ -182,6 +197,9 @@ fn fixture_normalization(#[case] body: &[u8]) {
 #[case::pydantic_tool(include_bytes!("fixtures/pydantic_ai_swarm.json"), "execute_tool search", ObservationType::Tool, false)]
 #[case::strands_cycle(include_bytes!("fixtures/strands_simple.json"), "execute_event_loop_cycle", ObservationType::Chain, false)]
 #[case::vercel_step(include_bytes!("fixtures/vercel_ai_sdk_simple.json"), "step 1", ObservationType::Chain, false)]
+#[case::vercel_py_llm(include_bytes!("fixtures/vercel_ai_sdk_py_simple.json"), "chat openai/gpt-6-luna", ObservationType::Llm, false)]
+#[case::mastra_llm(include_bytes!("fixtures/mastra_simple.json"), "chat openai/gpt-6-luna", ObservationType::Llm, false)]
+#[case::mastra_agent(include_bytes!("fixtures/mastra_simple.json"), "invoke_agent research_agent", ObservationType::Agent, false)]
 fn fixture_sdk_roles(
     #[case] body: &[u8],
     #[case] name: &str,
@@ -235,6 +253,7 @@ fn llamaindex_wrapped_responses_keep_provider_call_keys(#[case] body: &[u8]) {
 #[case::request(litellm_traces::CallKey::LiteLlmRequest("request:with:colons".to_owned()))]
 #[case::response(litellm_traces::CallKey::ProviderResponse("response:with:colons".to_owned()))]
 #[case::transport(litellm_traces::CallKey::Transport)]
+#[case::gateway_attempt(litellm_traces::CallKey::GatewayAttempt)]
 fn call_keys_round_trip_through_storage(#[case] key: litellm_traces::CallKey) {
     assert_eq!(
         key.to_string().parse::<litellm_traces::CallKey>().unwrap(),
@@ -252,6 +271,8 @@ fn call_keys_round_trip_through_storage(#[case] key: litellm_traces::CallKey) {
 #[case::missing_response("provider_response:")]
 #[case::missing_request("litellm_request:")]
 #[case::transport_id("transport:unexpected")]
+#[case::gateway_attempt_separator("gateway_attempt")]
+#[case::gateway_attempt_id("gateway_attempt:unexpected")]
 #[case::unknown("unknown:id")]
 fn malformed_call_keys_are_rejected_at_the_boundary(#[case] encoded: &str) {
     assert!(encoded.parse::<litellm_traces::CallKey>().is_err());

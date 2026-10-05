@@ -55,6 +55,11 @@ from litellm.types.llms.base import (
     LiteLLMPydanticObjectBase,
 )
 from litellm.types.mcp import MCPServerCostInfo
+from litellm.types.workload_identity import (
+    ANTHROPIC_WIF_KWARGS_KEYS,
+    OPENAI_WIF_KWARGS_KEYS,
+    WIF_SECRET_BEARING_KEYS,
+)
 
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
 from . import litellm_params as _litellm_params
@@ -468,6 +473,8 @@ class CallTypes(str, Enum):
     arerank = "arerank"
     search = "search"
     asearch = "asearch"
+    decisions = "decisions"
+    adecisions = "adecisions"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
@@ -654,6 +661,8 @@ CallTypesLiteral = Literal[
     "arerank",
     "search",
     "asearch",
+    "decisions",
+    "adecisions",
     "_arealtime",
     "_aresponses_websocket",
     "create_batch",
@@ -763,6 +772,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     # Search
     "/search": [CallTypes.asearch, CallTypes.search],
     "/v1/search": [CallTypes.asearch, CallTypes.search],
+    "/decisions": [CallTypes.adecisions, CallTypes.decisions],
+    "/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
     # Batches
     "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
     "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
@@ -3952,6 +3963,11 @@ bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
 TRUSTED_CALLBACK_VARS_FIELD: Final = _litellm_params.TRUSTED_CALLBACK_VARS_FIELD
 ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
 
+anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))
+openai_wif_litellm_params: Final = tuple(sorted(OPENAI_WIF_KWARGS_KEYS))
+server_owned_wif_litellm_params: Final = anthropic_wif_litellm_params + openai_wif_litellm_params
+secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
+
 all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
     *OWNED_KWARG_NAMES,
     *KWARG_ARTIFACTS,
@@ -4048,6 +4064,8 @@ class LlmProviders(str, Enum):
     OLLAMA_CHAT = "ollama_chat"
     DEEPINFRA = "deepinfra"
     PERPLEXITY = "perplexity"
+    TYPESAFE = "typesafe"
+    STRANDS_DECIDER = "strands_decider"
     MISTRAL = "mistral"
     MILVUS = "milvus"
     GROQ = "groq"

@@ -2,24 +2,16 @@
 
 import { Controller, useFormContext, useWatch } from "react-hook-form";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { analysisModelOptions, type AnalysisModelInfo } from "./analysisModels";
+import { analysisModelOptions, type ModelGate } from "./analysisModels";
+import type { AnalysisModels } from "./useAnalysisModels";
 import type { InvestigationInput } from "../investigationSchema";
 
-export function AnalysisModelField({
-  models,
-  modelDetails,
-  modelsLoading,
-  modelsError,
-  unavailable,
-  unsupported,
-}: {
-  models: string[];
-  modelDetails: AnalysisModelInfo[];
-  modelsLoading: boolean;
-  modelsError?: string;
-  unavailable: boolean;
-  unsupported: boolean;
-}) {
+export interface AnalysisModelFieldProps {
+  readonly models: AnalysisModels;
+  readonly gate: ModelGate;
+}
+
+export function AnalysisModelField({ models, gate }: AnalysisModelFieldProps) {
   const { control } = useFormContext<InvestigationInput>();
   const model = useWatch({ control, name: "selectedModel" });
   return (
@@ -31,26 +23,26 @@ export function AnalysisModelField({
         render={({ field }) => (
           <SearchSelect
             aria-label="Analysis model"
-            options={analysisModelOptions(models, modelDetails)}
+            options={analysisModelOptions(models.models, models.modelDetails)}
             value={field.value ?? ""}
             onValueChange={(value) => field.onChange(value ?? "")}
-            placeholder={modelsLoading ? "Loading models…" : "Choose a model"}
-            disabled={modelsLoading}
+            placeholder={models.modelsLoading ? "Loading models…" : "Choose a model"}
+            disabled={models.modelsLoading}
             emptyText="No matching models configured on this gateway"
           />
         )}
       />
-      {modelsError && (
+      {models.modelsError && (
         <p role="alert" className="text-sm text-destructive">
-          Could not load models: {modelsError}
+          Could not load models: {models.modelsError}
         </p>
       )}
-      {unavailable && (
+      {gate.unavailable && (
         <p role="alert" className="text-sm text-destructive">
           {model} is no longer available. Choose another analysis model.
         </p>
       )}
-      {unsupported && (
+      {gate.unsupported && (
         <p role="alert" className="text-sm text-destructive">
           Choose a chat model that supports JSON output.
         </p>

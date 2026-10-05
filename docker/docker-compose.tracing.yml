@@ -5,6 +5,8 @@ services:
     build:
       context: ..
       target: runtime
+      args:
+        LITELLM_RELEASE_TAG: ${LITELLM_RELEASE_TAG:-}
     command: ["--config", "/app/tracing-config.yaml", "--port", "4000"]
     environment:
       LITELLM_MASTER_KEY: sk-1234
@@ -15,6 +17,7 @@ services:
       CLICKHOUSE_URL: http://default:local-tracing@clickhouse:8123
       CLICKHOUSE_DATABASE: litellm
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LENS_WORKER_IMAGE: ${LENS_WORKER_IMAGE:-}
     volumes:
       - ./tracing-config.yaml:/app/tracing-config.yaml:ro
     ports:

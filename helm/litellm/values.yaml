@@ -629,3 +629,26 @@ ui:
   affinity: {}
   # Same shape as gateway.topologySpreadConstraints.
   topologySpreadConstraints: []
+
+lensWorker:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: ghcr.io/berriai/litellm-lens-worker
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  tokenSecret:
+    name: ""
+    key: token
+  url: ""
+  tmpSizeLimit: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 2Gi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

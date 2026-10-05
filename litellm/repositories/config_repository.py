@@ -33,6 +33,10 @@ class _ConfigTable(Protocol):
     async def delete(self, *, where: Mapping[str, str]) -> _ConfigRow | None: ...
 
 
+class _ConfigDatabase(Protocol):
+    async def query_raw(self, query: str, *args: object) -> object: ...
+
+
 class ConfigParam:
     """Simple wrapper for config parameter from DB."""
 
@@ -84,6 +88,26 @@ class ConfigRepository:
             },
         )
         return ConfigParam(param_name=param_name, param_value=param_value)
+
+    async def set_param_if_revision(self, param_name: str, param_value: object, revision: int) -> bool:
+        delegate: Final = self.prisma_client.writer_db
+        database: Final = cast(_ConfigDatabase, delegate)  # cast-ok: Prisma delegates database methods dynamically
+        rows: Final = await database.query_raw(
+            """INSERT INTO "LiteLLM_Config" (param_name, param_value, last_run_at)
+               SELECT $1, $2::jsonb, NOW() WHERE $3::int = 0
+               ON CONFLICT (param_name) DO UPDATE
+               SET param_value = EXCLUDED.param_value, last_run_at = NOW()
+               WHERE COALESCE(("LiteLLM_Config".param_value->>'revision')::int, 0) = $3::int
+               RETURNING param_name"""
+            if revision == 0
+            else """UPDATE "LiteLLM_Config" SET param_value = $2::jsonb, last_run_at = NOW()
+               WHERE param_name = $1 AND COALESCE((param_value->>'revision')::int, 0) = $3::int
+               RETURNING param_name""",
+            param_name,
+            json.dumps(param_value),
+            revision,
+        )
+        return bool(rows)
 
     async def delete_param(self, param_name: str) -> bool:
         """Delete a config parameter from the database."""

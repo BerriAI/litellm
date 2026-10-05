@@ -281,6 +281,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         mcp_tools_with_litellm_proxy: Sequence[Mapping[str, object]] | None = None,
         user_api_key_auth: "UserAPIKeyAuth | None" = None,
         original_request_params: dict[str, Any] | None = None,
+        served_tools: Sequence[MCPTool] | None = None,
     ):
         # MCP setup
         self.mcp_tools_with_litellm_proxy = mcp_tools_with_litellm_proxy or []
@@ -300,6 +301,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.mcp_discovery_generated = True  # Events are already generated
         self.mcp_events = mcp_events  # Store the initial MCP events for backward compatibility
         self.tool_server_map = tool_server_map
+        self.served_tools = tuple(served_tools) if served_tools is not None else None
 
         # Iterator references
         self.base_iterator: BaseResponsesAPIStreamingIterator | ResponsesAPIResponse | None = (
@@ -796,6 +798,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Execute the tools
             tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
                 tool_server_map=self.tool_server_map,
+                served_tools=self.served_tools,
                 tool_calls=tool_calls,
                 user_api_key_auth=self.user_api_key_auth,
                 mcp_auth_header=self.mcp_auth_header,

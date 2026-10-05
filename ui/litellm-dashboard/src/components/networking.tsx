@@ -116,8 +116,8 @@ import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
-import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
-import type { SpanDetail, SpanErrorPage, Trace, TracePage } from "./view_logs/TraceView/traceTypes";
+import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
+import type { SpanDetail, SpanErrorPage, Trace, TracePage } from "./lens/traces/types";
 import {
   createApiClient,
   deriveErrorMessage,
@@ -1975,10 +1975,15 @@ export const agentTraceListCall = async ({
 export const sendOtlpTraceCall = async (accessToken: string, exportRequest: object): Promise<void> =>
   apiClient.post(`/v1/traces`, { accessToken, body: exportRequest });
 
-export const agentTraceCall = async (accessToken: string, traceId: string, traceRef?: string): Promise<Trace> =>
+export const agentTraceCall = async (
+  accessToken: string,
+  traceId: string,
+  traceRef?: string,
+  cursor?: string | null,
+): Promise<Trace> =>
   apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
     accessToken,
-    query: { trace_ref: traceRef || undefined },
+    query: { trace_ref: traceRef || undefined, cursor: cursor ?? undefined, page_size: 200 },
   });
 
 export const agentTraceSpanCall = async (
@@ -2160,7 +2165,7 @@ export const testConnectionRequest = async (
   accessToken: string,
   litellm_params: Record<string, any>,
   model_info: Record<string, any>,
-  mode: string,
+  mode?: string,
 ) => {
   try {
     // Construct the URL based on environment
