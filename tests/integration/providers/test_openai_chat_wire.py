@@ -330,6 +330,8 @@ def test_azure_gpt_6_bridged_no_cache_function_requests_each_reach_provider_and_
             api_base=wire.url,
             api_key=_API_KEY,
             api_version="2025-04-01-preview",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
         )
         request: Final = _gpt_6_function_request(model, identity, cache={"no-cache": True})
         first: Final = gateway.request("POST", "/v1/chat/completions", request)
@@ -343,20 +345,26 @@ def test_azure_gpt_6_bridged_no_cache_function_requests_each_reach_provider_and_
             ("POST", _RESPONSES_TARGET),
         ]
         rows: Final = eventually(
-            lambda: read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,)),
+            lambda: read_rows(
+                'SELECT request_id, status, cache_hit, spend FROM "LiteLLM_SpendLogs" WHERE model_group=%s',
+                (model,),
+            ),
             lambda found: len(found) == 2,
             seconds=70,
         )
-        decoded: Final = sorted(
-            base64.b64decode(string_value(row["request_id"]).removeprefix("resp_")).decode() for row in rows
-        )
-        assert all(
-            item.startswith("litellm:custom_llm_provider:azure;model_id:") for item in decoded
-        ), rows
-        assert [item.rsplit("response_id:", 1)[1] for item in decoded] == [
-            "resp_first",
-            "resp_second",
-        ], rows
+        by_response_id: Final = {
+            base64.b64decode(string_value(row["request_id"]).removeprefix("resp_"))
+            .decode()
+            .rsplit("response_id:", 1)[1]: row
+            for row in rows
+        }
+        for response_id in response_ids:
+            row: Final = by_response_id[response_id]
+            assert (
+                string_value(row["status"]),
+                string_value(row["cache_hit"]),
+                float(row["spend"]),
+            ) == ("success", "None", pytest.approx(10 * 0.001 + 5 * 0.002)), rows
 
 
 def test_azure_gpt_6_bridged_function_requests_without_cache_field_still_hit_cache(
@@ -377,6 +385,8 @@ def test_azure_gpt_6_bridged_function_requests_without_cache_field_still_hit_cac
             api_base=wire.url,
             api_key=_API_KEY,
             api_version="2025-04-01-preview",
+            input_cost_per_token=0.001,
+            output_cost_per_token=0.002,
         )
         request: Final = _gpt_6_function_request(model, identity)
         first: Final = gateway.request("POST", "/v1/chat/completions", request)
@@ -401,6 +411,10 @@ def test_azure_gpt_6_bridged_function_requests_without_cache_field_still_hit_cac
         ).decode()
         assert priced_request.startswith("litellm:custom_llm_provider:azure;model_id:"), rows
         assert priced_request.endswith(";response_id:resp_cached"), rows
-        assert (priced["status"], priced["cache_hit"] != "True") == ("success", True), rows
+        assert (
+            priced["status"],
+            priced["cache_hit"],
+            float(priced["spend"]),
+        ) == ("success", "None", pytest.approx(10 * 0.001 + 5 * 0.002)), rows
         assert string_value(cached["request_id"]).startswith("resp_cached_cache_hit"), rows
         assert (cached["status"], cached["cache_hit"], float(cached["spend"])) == ("success", "True", 0), rows
