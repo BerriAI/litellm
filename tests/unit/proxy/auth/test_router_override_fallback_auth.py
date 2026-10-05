@@ -11,11 +11,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import iter_request_fallback_targets
-from litellm.proxy.auth.user_api_key_auth import (
-    _enforce_key_and_fallback_model_access,
-    _fallback_target_model_name,
-)
+from litellm.proxy.auth.auth_utils import fallback_target_model_name, iter_request_fallback_targets
+from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
 
 
 def _fallback_model_names(fallbacks):
@@ -23,7 +20,7 @@ def _fallback_model_names(fallbacks):
     return [
         name
         for target in iter_request_fallback_targets({"fallbacks": fallbacks})
-        if (name := _fallback_target_model_name(target)) is not None
+        if (name := fallback_target_model_name(target)) is not None
     ]
 
 

@@ -103,6 +103,7 @@ _PROXY_ERROR_TYPE_MAP: Final[Mapping[str, str]] = MappingProxyType(
         "org_model_access_denied": MODEL_ACCESS_DENIED,
         "project_model_access_denied": MODEL_ACCESS_DENIED,
         "agent_model_access_denied": MODEL_ACCESS_DENIED,
+        "customer_model_access_denied": MODEL_ACCESS_DENIED,
         "key_vector_store_access_denied": PERMISSION_DENIED,
         "team_vector_store_access_denied": PERMISSION_DENIED,
         "org_vector_store_access_denied": PERMISSION_DENIED,

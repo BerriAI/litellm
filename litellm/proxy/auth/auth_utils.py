@@ -522,6 +522,26 @@ def iter_request_fallback_targets(request_body: Mapping[str, object]) -> Iterato
         yield from _iter_fallback_targets(value, 0)
 
 
+def fallback_target_model_name(target: object) -> str | None:
+    if isinstance(target, str):
+        return target
+    if isinstance(target, Mapping):
+        model: Final = target.get("model")
+        if isinstance(model, str):
+            return model
+    return None
+
+
+def request_fallback_model_names(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            name
+            for target in iter_request_fallback_targets(request_body)
+            if (name := fallback_target_model_name(target)) is not None
+        )
+    )
+
+
 def _reject_url_valued_fallback_target(value: str) -> None:
     allowed_hosts: Final = getattr(litellm, "provider_url_destination_allowed_hosts", []) or []
     for candidate in provider_url_destination_candidates(value):

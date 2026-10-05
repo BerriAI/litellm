@@ -13,7 +13,7 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
-from litellm.proxy.management_endpoints.customer_endpoints import router
+from litellm.proxy.management_endpoints.customer_endpoints import _should_update_field, router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -40,6 +40,48 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 app.include_router(router)
 client = TestClient(app)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "sent_fields", "expected"),
+    (
+        ("models", None, frozenset({"models"}), False),
+        ("blocked", False, frozenset({"blocked"}), True),
+        ("blocked", False, frozenset(), False),
+        ("models", [], frozenset({"models"}), True),
+        ("models", [], frozenset(), False),
+        ("metadata", {}, frozenset({"metadata"}), False),
+        ("object_permission", {"mcp_servers": ["s1"]}, frozenset(), True),
+        ("object_permission", {"mcp_servers": ["s1"]}, frozenset({"object_permission"}), True),
+        ("metadata", ["m1"], frozenset(), True),
+        ("models", ["m1"], frozenset(), True),
+        ("max_budget", 0, frozenset({"max_budget"}), False),
+        ("max_budget", 5.0, frozenset(), True),
+        ("alias", "a", frozenset(), True),
+    ),
+    ids=(
+        "null-models",
+        "explicit-false",
+        "omitted-false",
+        "clear-models",
+        "omitted-empty-models",
+        "empty-metadata",
+        "nonempty-object-permission-omitted",
+        "nonempty-object-permission-sent",
+        "nonempty-list-other-field",
+        "nonempty-models",
+        "zero-budget",
+        "nonzero-budget",
+        "alias",
+    ),
+)
+def test_should_update_field(
+    field: str,
+    value: object,
+    sent_fields: frozenset[str],
+    expected: bool,
+) -> None:
+    assert _should_update_field(field, value, sent_fields) is expected
 
 
 @pytest.fixture
@@ -749,6 +791,7 @@ _FULL_DB_ROW = {
     "spend": 1.5,
     "allowed_model_region": None,
     "default_model": None,
+    "models": ["allowed-model"],
     "budget_id": "b1",
     "object_permission_id": "p1",
     "litellm_budget_table": {
@@ -794,6 +837,7 @@ _EXPECTED_CUSTOMER = {
     "spend": 1.5,
     "allowed_model_region": None,
     "default_model": None,
+    "models": ["allowed-model"],
     "budget_id": "b1",
     "litellm_budget_table": {
         "budget_id": "b1",
@@ -857,6 +901,19 @@ def test_char_new_body(mock_prisma_client, mock_user_api_key_auth):
     assert response.json() == _EXPECTED_CUSTOMER
 
 
+def test_customer_new_forwards_models_to_db(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))
+
+    response = client.post(
+        "/customer/new",
+        json={"user_id": "c1", "models": ["allowed-model"]},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert mock_prisma_client.db.litellm_endusertable.create.call_args.kwargs["data"]["models"] == ["allowed-model"]
+
+
 @pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
 def test_customer_new_rejects_a_duration_that_never_advances(
     mock_prisma_client, mock_user_api_key_auth, bad_duration
@@ -903,6 +960,50 @@ def test_char_update_body(mock_prisma_client, mock_user_api_key_auth):
     )
     assert response.status_code == 200
     assert response.json() == _EXPECTED_CUSTOMER
+    assert "models" not in mock_prisma_client.db.litellm_endusertable.update.call_args.kwargs["data"]
+
+
+def test_customer_update_clears_models_allowlist(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=_row({"user_id": "c1", "blocked": False})
+    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=_row(_FULL_DB_ROW))
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "c1", "models": []},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert mock_prisma_client.db.litellm_endusertable.update.call_args.kwargs["data"]["models"] == []
+
+
+def test_customer_update_applies_nonempty_object_permission(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=_row({"user_id": "c1", "blocked": False, "object_permission_id": None})
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=None)
+    updated_permission = MagicMock()
+    updated_permission.object_permission_id = "permission-1"
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert = AsyncMock(return_value=updated_permission)
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        return_value=LiteLLM_EndUserTable(user_id="c1", blocked=False, object_permission_id="permission-1")
+    )
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "c1", "object_permission": {"mcp_servers": ["s1"]}},
+        headers={"Authorization": "Bearer k"},
+    )
+
+    assert response.status_code == 200, response.text
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_awaited_once()
+    permission_upsert = mock_prisma_client.db.litellm_objectpermissiontable.upsert.call_args.kwargs
+    assert permission_upsert["data"]["create"]["mcp_servers"] == ["s1"]
+    assert mock_prisma_client.db.litellm_endusertable.update.call_args.kwargs["data"]["object_permission_id"] == (
+        "permission-1"
+    )
 
 
 def test_char_delete_body(mock_prisma_client, mock_user_api_key_auth):

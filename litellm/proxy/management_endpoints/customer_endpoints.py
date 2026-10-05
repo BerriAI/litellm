@@ -11,6 +11,7 @@ All /customer management endpoints
 
 #### END-USER/CUSTOMER MANAGEMENT ####
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypeVar, overload
@@ -56,6 +57,18 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 
 _RowT_co: Final = TypeVar("_RowT_co", covariant=True)
 _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
+_CLEARABLE_LIST_FIELDS: Final = frozenset({"models"})
+
+
+def _should_update_field(field: str, value: object, sent_fields: AbstractSet[str]) -> bool:
+    if value is None:
+        return False
+    if field in sent_fields and (isinstance(value, bool) or field in _CLEARABLE_LIST_FIELDS):
+        return True
+    if isinstance(value, (list, dict)) and not value:
+        return False
+    return value != 0
+
 
 if TYPE_CHECKING:
 
@@ -333,6 +346,7 @@ async def new_end_user(
     - budget_id: Optional[str] - The identifier for an existing budget allocated to the user. Either 'max_budget' or 'budget_id' should be provided, not both.
     - allowed_model_region: Optional[Union[Literal["eu"], Literal["us"]]] - Require all user requests to use models in this specific region.
     - default_model: Optional[str] - If no equivalent model in the allowed region, default all requests to this model.
+    - models: Optional[list[str]] - Restrict this customer's access to the listed models.
     - metadata: Optional[dict] = Metadata for customer, store information for customer. Example metadata = {"data_training_opt_out": True}
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
     - tpm_limit: Optional[int] - [Not Implemented Yet] Specify tpm limit for a given customer (Tokens per minute)
@@ -367,6 +381,7 @@ async def new_end_user(
             "user_id" : "ishaan-jaff-3",
             "allowed_region": "eu",
             "budget_id": "free_tier",
+            "models": ["gpt-4o-mini"],
             "default_model": "azure/gpt-3.5-turbo-eu"
         }'
 
@@ -608,6 +623,7 @@ async def update_end_user(
     - default_model: Optional[str] = (
         None  # if no equivalent model in allowed region - default all requests to this model
     )
+    - models: Optional[list[str]] = None  # omitted or null leaves the allowlist unchanged; an empty list clears it
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Customer-specific object permissions to control access to resources.
         Supported fields:
         * mcp_servers: List[str] - List of allowed MCP server IDs
@@ -626,7 +642,8 @@ async def update_end_user(
     --header 'Content-Type: application/json' \
     --data '{
         "user_id": "test-litellm-user-4",
-        "budget_id": "paid_tier"
+        "budget_id": "paid_tier",
+        "models": ["gpt-4o-mini"]
     }'
 
     # Updating object permissions
@@ -653,11 +670,10 @@ async def update_end_user(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
-        # get non default values for key
-        non_default_values: Final = dict[str, object]()
-        for k, v in data_json.items():
-            if v is not None and ((isinstance(v, bool) and k in data.fields_set()) or v not in ([], {}, 0)):
-                non_default_values[k] = v
+        sent_fields: Final = data.fields_set()
+        non_default_values: Final[dict[str, object]] = {
+            k: v for k, v in data_json.items() if _should_update_field(k, v, sent_fields)
+        }
 
         ## Get end user table data ##
         end_user_table_data: Final = await _typed_table(EndUserRepository(prisma_client)).find_first(

@@ -656,6 +656,7 @@ model LiteLLM_EndUserTable {
   spend      Float    @default(0.0)
   allowed_model_region String? // require all user requests to use models in this specific region
   default_model String? // use along with 'allowed_model_region'. if no available model in region, default to this model.
+  models String[] @default([])
   budget_id String?
   object_permission_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])

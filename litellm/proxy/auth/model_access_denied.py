@@ -7,9 +7,18 @@ MODEL_ACCESS_DENIED_CLIENT_MESSAGE: Final = (
     "Check the models available to you and try again."
 )
 
+CUSTOMER_MODEL_ACCESS_DENIED_CLIENT_MESSAGE: Final = (
+    "The requested model '{model}' is not in the allowed models for this customer. "
+    "Check the models this customer can use and try again."
+)
+
 
 def model_access_denied_client_message(model: str | list[str]) -> str:
     return MODEL_ACCESS_DENIED_CLIENT_MESSAGE.format(model=model)
+
+
+def customer_model_access_denied_client_message(model: str | list[str]) -> str:
+    return CUSTOMER_MODEL_ACCESS_DENIED_CLIENT_MESSAGE.format(model=model)
 
 
 class ModelAccessDeniedHTTPException(HTTPException):
