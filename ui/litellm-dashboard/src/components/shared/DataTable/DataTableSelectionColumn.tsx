@@ -5,7 +5,7 @@ import type React from "react";
 
 import { Checkbox } from "@/components/ui/checkbox";
 
-import { idsBetween, paintRowSelection } from "./rowSelectionRange";
+import { startDragSelection } from "./dragRowSelection";
 
 interface SelectionColumnOptions<TData> {
   rowAriaLabel?: (row: Row<TData>) => string;
@@ -26,47 +26,19 @@ function SelectAllCheckbox<TData>({ table }: { table: Table<TData> }) {
   );
 }
 
-const rowIdAt = (tableElement: HTMLTableElement, x: number, y: number): string | null => {
-  const rowElement = document.elementFromPoint(x, y)?.closest<HTMLElement>("tr[data-row-id]");
-  if (rowElement == null || !tableElement.contains(rowElement)) return null;
-  return rowElement.dataset.rowId ?? null;
-};
-
-function startDragSelection<TData>(event: React.PointerEvent<HTMLElement>, table: Table<TData>, anchor: Row<TData>) {
-  const tableElement = event.currentTarget.closest("table");
-  if (tableElement === null) return;
-  const rows = table.getRowModel().rows;
-  const orderedIds = rows.map((row) => row.id);
-  const selectableIds: ReadonlySet<string> = new Set(rows.filter((row) => row.getCanSelect()).map((row) => row.id));
-  const snapshot = table.getState().rowSelection;
-  const selected = !anchor.getIsSelected();
-  const anchorX = event.clientX;
-
-  const paintTo = (rowId: string) => {
-    const range = idsBetween(orderedIds, anchor.id, rowId).filter((id) => selectableIds.has(id));
-    table.setRowSelection(paintRowSelection(snapshot, range, selected));
-  };
-  const onMove = (moveEvent: PointerEvent) => {
-    const rowId = rowIdAt(tableElement, anchorX, moveEvent.clientY);
-    if (rowId !== null) paintTo(rowId);
-  };
-  const stop = () => {
-    document.removeEventListener("pointermove", onMove);
-    document.removeEventListener("pointerup", stop);
-    document.removeEventListener("pointercancel", stop);
-  };
-
-  paintTo(anchor.id);
-  document.addEventListener("pointermove", onMove);
-  document.addEventListener("pointerup", stop);
-  document.addEventListener("pointercancel", stop);
-}
-
 function SelectRowCheckbox<TData>({ row, table, label }: { row: Row<TData>; table: Table<TData>; label: string }) {
   const onPointerDown = (event: React.PointerEvent<HTMLElement>) => {
-    if (event.button !== 0 || !row.getCanSelect()) return;
+    const tableElement = event.currentTarget.closest("table");
+    if (event.button !== 0 || !row.getCanSelect() || tableElement === null) return;
     event.preventDefault();
-    startDragSelection(event, table, row);
+    const drag = {
+      table,
+      anchor: row,
+      tableElement,
+      pointer: { x: event.clientX, y: event.clientY },
+      waitForRowChange: false,
+    };
+    startDragSelection(drag);
   };
   // Pointer presses are applied on pointerdown so a drag can start there; the click that follows would toggle again.
   const swallowPointerClick = (event: React.MouseEvent<HTMLElement>) => {

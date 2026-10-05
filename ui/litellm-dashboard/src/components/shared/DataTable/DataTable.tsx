@@ -44,6 +44,7 @@ import { cn, cva } from "@/lib/cva.config";
 
 import "./columnMeta";
 import { DataTablePagination, DEFAULT_PAGE_SIZE_OPTIONS } from "./DataTablePagination";
+import { startDragSelection } from "./dragRowSelection";
 import type {
   ColumnPinnedSide,
   DataTableProps,
@@ -267,6 +268,8 @@ function DataTableBodyCell<TData>({ cell, size, stickyHeader, enableColumnResizi
 
 interface BodyRowProps<TData> {
   row: Row<TData>;
+  table: Table<TData>;
+  dragSelect: boolean;
   size: DataTableSize;
   stickyHeader: boolean;
   enableColumnResizing: boolean;
@@ -277,6 +280,8 @@ interface BodyRowProps<TData> {
 
 function DataTableBodyRow<TData>({
   row,
+  table,
+  dragSelect,
   size,
   stickyHeader,
   enableColumnResizing,
@@ -287,10 +292,29 @@ function DataTableBodyRow<TData>({
   const clickable = onRowClick !== undefined;
   const cells = row.getVisibleCells();
   const pressStartedOnControl = useRef(false);
+  const pressBecameSelection = useRef(false);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLTableRowElement>) => {
     pressStartedOnControl.current =
       event.target instanceof Element && event.target.closest(INTERACTIVE_SELECTOR) !== null;
+    pressBecameSelection.current = false;
+    const tableElement = event.currentTarget.closest("table");
+    const isPlainPrimaryPress = event.button === 0 && !pressStartedOnControl.current;
+    const canStartDrag = dragSelect && isPlainPrimaryPress && row.getCanSelect();
+    if (!canStartDrag || tableElement === null) {
+      return;
+    }
+    const drag = {
+      table,
+      anchor: row,
+      tableElement,
+      pointer: { x: event.clientX, y: event.clientY },
+      waitForRowChange: true,
+      onSelectionStart: () => {
+        pressBecameSelection.current = true;
+      },
+    };
+    startDragSelection(drag);
   };
 
   const handleClick = (event: React.MouseEvent<HTMLTableRowElement>) => {
@@ -301,7 +325,11 @@ function DataTableBodyRow<TData>({
     if (target === null || !event.currentTarget.contains(target)) {
       return;
     }
-    if (target.closest(INTERACTIVE_SELECTOR) !== null || pressStartedOnControl.current) {
+    if (
+      target.closest(INTERACTIVE_SELECTOR) !== null ||
+      pressStartedOnControl.current ||
+      pressBecameSelection.current
+    ) {
       return;
     }
     if (window.getSelection()?.isCollapsed === false) {
@@ -633,6 +661,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
     pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS,
     enableColumnResizing = false,
     onRowClick,
+    enableRowSelection,
     rowClassName,
     renderSubComponent,
     maxBodyHeight,
@@ -648,6 +677,7 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
   const rows = table.getRowModel().rows;
   const visibleColumnCount = table.getVisibleLeafColumns().length;
   const stickyHeader = maxBodyHeight !== undefined || fillHeight;
+  const dragSelect = enableRowSelection !== undefined;
   const stretchEmpty = fillHeight && !isLoading && rows.length === 0;
   const tableStyle = enableColumnResizing ? { width: table.getTotalSize(), minWidth: "100%" } : undefined;
 
@@ -695,6 +725,8 @@ export function DataTable<TData extends RowData, TValue>(props: DataTableProps<T
       <DataTableBodyRow
         key={row.id}
         row={row}
+        table={table}
+        dragSelect={dragSelect}
         size={size}
         stickyHeader={stickyHeader}
         enableColumnResizing={enableColumnResizing}
