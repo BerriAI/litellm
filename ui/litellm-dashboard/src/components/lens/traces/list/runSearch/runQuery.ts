@@ -24,7 +24,7 @@ export const RUN_INDEX: ClientIndex<TraceSummary, RunField> = {
   read: {
     name: (run) => [run.name],
     agent: traceAgentNames,
-    status: (run) => [run.error_count > 0 ? "error" : "ok"],
+    status: (run) => [run.status],
     model: (run) => run.models,
     input: (run) => [previewText(run.input_preview)],
     trace_id: (run) => [run.trace_id],
@@ -38,7 +38,6 @@ export function filterRuns(
   filters: { agent: string; status: "all" | "ok" | "error" } = { agent: "", status: "all" },
 ): TraceSummary[] {
   const matchesAgent = (run: TraceSummary) => !filters.agent || traceAgentNames(run).includes(filters.agent);
-  const matchesStatus = (run: TraceSummary) =>
-    filters.status === "all" || (run.error_count > 0 ? "error" : "ok") === filters.status;
+  const matchesStatus = (run: TraceSummary) => filters.status === "all" || run.status === filters.status;
   return filterItems(RUN_QUERY, RUN_INDEX, runs, query).filter((run) => matchesAgent(run) && matchesStatus(run));
 }

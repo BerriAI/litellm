@@ -7,6 +7,7 @@ import type { SearchFilter, SearchQuery } from "@/components/shared/search/searc
 import type { RunField } from "./runQuery";
 
 const RUN_ROWS = `SELECT TraceId AS trace_id, any(RootName) AS name, any(RootInput) AS input, sum(ErrorCount) AS errors,
+       if(ifNull(any(RootStatus), '') IN ('STATUS_CODE_ERROR', 'error'), 'error', 'ok') AS status,
        groupUniqArrayArray(AgentNames) AS agents, groupUniqArrayArray(Models) AS models
 FROM agent_traces_by_key
 GROUP BY TraceId`;
@@ -21,7 +22,7 @@ const likePattern = (value: string): string => likeLiteral(value).replaceAll("*"
 const matches = (column: string, pattern: string): string => `${column} ILIKE ${sqlString(pattern)}`;
 const anyMatches = (column: string, pattern: string): string => `arrayExists(x -> ${matches("x", pattern)}, ${column})`;
 
-const STATUS_PREDICATES = { error: "errors > 0", ok: "errors = 0" } as const;
+const STATUS_PREDICATES = { error: "status = 'error'", ok: "status = 'ok'" } as const;
 
 /** Status has two values, so a glob over it resolves statically to one, both or neither predicate. */
 function statusPredicate(value: string): string {

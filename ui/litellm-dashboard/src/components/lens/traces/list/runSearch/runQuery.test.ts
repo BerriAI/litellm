@@ -15,10 +15,17 @@ describe("filterRuns", () => {
     expect(ids("gpt-5")).toEqual([]);
   });
 
-  it("splits runs by status, judged by recorded errors", () => {
+  it("splits runs by their overall status", () => {
     expect(ids("status:error")).toEqual(["bbb222"]);
     expect(ids("-status:error")).toEqual(["aaa111", "ccc333"]);
     expect(ids("status:OK")).toEqual(["aaa111", "ccc333"]);
+  });
+
+  it("keeps recovered tool errors out of failed-run searches and quick filters", () => {
+    const recovered = run({ status: "ok", error_count: 8 });
+    expect(filterRuns([recovered], "status:error")).toEqual([]);
+    expect(filterRuns([recovered], "", { agent: "", status: "error" })).toEqual([]);
+    expect(filterRuns([recovered], "status:ok")).toEqual([recovered]);
   });
 
   it("reads agents from the trace, falling back to the service, and models from the run", () => {

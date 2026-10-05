@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatActivityTimestamp, formatRunTimestamp, localTimeZoneAbbreviation } from "@/utils/activityTimestamp";
 
 import { SpanIcon } from "../ui/SpanIcon";
-import { StatusMark } from "../ui/StatusMark";
+import type { TraceFindingState } from "./useTraceFindings";
 import { FrameworkLogo, traceFramework } from "../ui/TraceFramework";
 import type { TraceSummary } from "../types";
 import { traceRefOf } from "../routing";
@@ -21,6 +21,8 @@ import { fmtMs, previewText, traceDisplayName, traceAgentNames } from "../utils"
 
 interface AgentTracesTableProps {
   traces: TraceSummary[];
+  findings: ReadonlyMap<string, TraceFindingState>;
+  canViewFindings?: boolean;
   isLoading: boolean;
   error: Error | null;
   hasMore: boolean;
@@ -62,7 +64,6 @@ function AgentCell({ run }: { run: TraceSummary }) {
 function InputCell({ run }: { run: TraceSummary }) {
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <StatusMark status={run.error_count > 0 ? "error" : "ok"} subtle />
       <span className="truncate text-foreground">
         {firstLine(previewText(run.input_preview)) || traceDisplayName(run)}
       </span>
@@ -79,7 +80,15 @@ function InputCell({ run }: { run: TraceSummary }) {
   );
 }
 
-const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
+function FindingCount({ state }: { state?: TraceFindingState }) {
+  if (!state || state.status === "pending")
+    return <Skeleton aria-label="Loading findings" className="ml-auto h-3 w-5" />;
+  if (state.status === "error") return <span title="Could not load findings">Unavailable</span>;
+  if (state.count === null) return <span title="No conclusive investigation for this trace">-</span>;
+  return <span title={`${state.count} findings from completed investigations`}>{state.count.toLocaleString()}</span>;
+}
+
+const runColumns = (findings: ReadonlyMap<string, TraceFindingState>): ColumnDef<TraceSummary>[] => [
   {
     id: "time",
     size: 170,
@@ -148,16 +157,11 @@ const RUN_COLUMNS: ColumnDef<TraceSummary>[] = [
     meta: { numeric: true, className: NUM },
   },
   {
-    id: "failed",
-    size: 72,
-    header: "Failed",
-    cell: ({ row }) =>
-      row.original.error_count > 0 ? (
-        <StatusMark status="error" count={row.original.error_count} />
-      ) : (
-        <span className="font-mono text-muted-foreground/60">0</span>
-      ),
-    meta: { numeric: true },
+    id: "findings",
+    size: 96,
+    header: "Findings",
+    cell: ({ row }) => <FindingCount state={findings.get(runKey(row.original))} />,
+    meta: { numeric: true, className: NUM },
   },
   {
     id: "open",
@@ -208,6 +212,8 @@ function EmptyRuns({ rangeEmpty, onSetUpTracing }: { rangeEmpty: boolean; onSetU
 /** Devtool-dense runs list: one row per agent run, newest first. */
 export function AgentTracesTable({
   traces,
+  findings,
+  canViewFindings = true,
   isLoading,
   error,
   hasMore,
@@ -224,7 +230,7 @@ export function AgentTracesTable({
   const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility("lens-traces");
   const tableOptions: TableOptions<TraceSummary> = {
     data: traces,
-    columns: RUN_COLUMNS,
+    columns: runColumns(findings).filter((column) => canViewFindings || column.id !== "findings"),
     defaultColumn: { size: undefined },
     getRowId: runKey,
     autoResetAll: false,
