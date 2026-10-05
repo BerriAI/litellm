@@ -9,7 +9,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import psycopg
 import pytest
 import pytest_asyncio
-from integration._support.client import Gateway
+from integration._support.client import Gateway, eventually, object_value, string_value
+from integration._support.database import read_rows
 from prisma import Prisma
 from psycopg import sql
 from psycopg.types.json import Jsonb
@@ -245,9 +246,6 @@ def _legacy_spend_rows(gateway: Gateway, key: str, params: dict[str, str]) -> li
 
 
 def test_legacy_spend_logs_clamp_internal_user_filters_to_their_own_user(gateway: Gateway) -> None:
-    from integration._support.client import eventually, object_value, string_value
-    from integration._support.database import read_rows
-
     with gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
         user_a: Final = scenario.user(user_role="internal_user")
@@ -278,7 +276,7 @@ def test_legacy_spend_logs_clamp_internal_user_filters_to_their_own_user(gateway
 
         # a foreign request_id returns nothing
         by_request: Final = _legacy_spend_rows(gateway, key_a, {"request_id": request_b})
-        assert all(string_value(object_value(row)["request_id"]) != request_b for row in by_request), by_request
+        assert by_request == [], by_request
 
         # the date-window forms clamp the same way
         now: Final = datetime.now(timezone.utc)

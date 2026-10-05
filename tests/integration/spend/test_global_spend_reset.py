@@ -66,7 +66,9 @@ def test_global_spend_reset_zeroes_token_and_team_spend_but_keeps_logs(gateway: 
 
         refused: Final = gateway.request("POST", "/global/spend/reset", key=internal_key)
         assert refused.status_code == 401, refused.text
-        assert _token_spend(key_a)[0]["spend"] != 0, refused.text
+        assert float(str(_token_spend(key_a)[0]["spend"])) == pytest.approx(0.06), _token_spend(key_a)
+        assert float(str(_token_spend(key_b)[0]["spend"])) == pytest.approx(0.06), _token_spend(key_b)
+        assert float(str(_team_spend(team_id)[0]["spend"])) == pytest.approx(0.12), _team_spend(team_id)
 
         denied: Final = _chat(gateway, model, key_a)
         assert denied.status_code == 422, denied.text

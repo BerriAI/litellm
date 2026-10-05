@@ -4,13 +4,28 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Final
 
+import httpx
 import pytest
-from integration._support.client import Gateway, eventually, object_value
+from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel
 
-REPORT_ROWS: Final = TypeAdapter(list[dict[str, JsonValue]])
-DETAIL_ROWS: Final = TypeAdapter(list[dict[str, JsonValue]])
+
+class ModelDetail(BaseModel):
+    model: str
+    total_cost: float
+    total_input_tokens: float
+    total_output_tokens: float
+    team_id: str | None = None
+
+
+class ReportRow(BaseModel):
+    api_key: str
+    total_cost: float
+    total_input_tokens: float
+    total_output_tokens: float
+    model_details: list[ModelDetail]
+
 
 
 def _chat(gateway: Gateway, model: str, key: str) -> None:
@@ -27,17 +42,21 @@ def _today() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
-def _report(gateway: Gateway, path: str, *, key: str | None = None, params: Mapping[str, str] | None = None):
+def _report(
+    gateway: Gateway, path: str, *, key: str | None = None, params: Mapping[str, str] | None = None
+) -> httpx.Response:
     return gateway.request("GET", path, key=key, params=params)
 
 
-def _rows(gateway: Gateway, path: str, *, key: str | None = None, params: Mapping[str, str] | None = None):
+def _rows(
+    gateway: Gateway, path: str, *, key: str | None = None, params: Mapping[str, str] | None = None
+) -> list[ReportRow]:
     response: Final = _report(gateway, path, key=key, params=params)
     assert response.status_code == 200, response.text
-    return REPORT_ROWS.validate_json(response.content)
+    return [ReportRow.model_validate(row) for row in response.json()]
 
 
-def _logged(scope_column: str, scope_value: str) -> list[dict[str, JsonValue]]:
+def _logged(scope_column: str, scope_value: str) -> list[dict[str, object]]:
     return read_rows(
         f'SELECT api_key, model, spend, prompt_tokens, completion_tokens, team_id FROM "LiteLLM_SpendLogs" '
         f'WHERE "startTime" >= (CURRENT_DATE AT TIME ZONE \'UTC\') AND {scope_column} = %s',
@@ -45,29 +64,28 @@ def _logged(scope_column: str, scope_value: str) -> list[dict[str, JsonValue]]:
     )
 
 
-def _assert_report_matches_db(report, logged: list[dict[str, JsonValue]]) -> None:
+def _assert_report_matches_db(report: list[ReportRow], logged: list[dict[str, object]]) -> None:
     assert len(report) == len({row["api_key"] for row in logged}), (report, logged)
-    by_key: Final = {}
+    by_key: Final[dict[str, dict[str, list[float]]]] = {}
     for row in logged:
         bucket: Final = by_key.setdefault(str(row["api_key"]), {})
-        model_bucket: Final = bucket.setdefault(str(row["model"]), [0.0, 0, 0])
+        model_bucket: Final = bucket.setdefault(str(row["model"]), [0.0, 0.0, 0.0])
         model_bucket[0] += float(str(row["spend"]))
         model_bucket[1] += int(str(row["prompt_tokens"]))
         model_bucket[2] += int(str(row["completion_tokens"]))
     for entry in report:
-        api_key: Final = str(entry["api_key"])
-        assert api_key in by_key, (entry, logged)
-        models: Final = by_key[api_key]
-        assert float(str(entry["total_cost"])) == pytest.approx(sum(v[0] for v in models.values())), entry
-        assert float(str(entry["total_input_tokens"])) == pytest.approx(sum(v[1] for v in models.values())), entry
-        assert float(str(entry["total_output_tokens"])) == pytest.approx(sum(v[2] for v in models.values())), entry
-        details: Final = {str(d["model"]): d for d in DETAIL_ROWS.validate_python(entry["model_details"])}
+        assert entry.api_key in by_key, (entry, logged)
+        models: Final = by_key[entry.api_key]
+        assert entry.total_cost == pytest.approx(sum(v[0] for v in models.values())), entry
+        assert entry.total_input_tokens == pytest.approx(sum(v[1] for v in models.values())), entry
+        assert entry.total_output_tokens == pytest.approx(sum(v[2] for v in models.values())), entry
+        details: Final = {detail.model: detail for detail in entry.model_details}
         assert set(details) == set(models), (entry, logged)
         for model, detail in details.items():
             cost, prompt, completion = models[model]
-            assert float(str(detail["total_cost"])) == pytest.approx(cost), detail
-            assert float(str(detail["total_input_tokens"])) == pytest.approx(prompt), detail
-            assert float(str(detail["total_output_tokens"])) == pytest.approx(completion), detail
+            assert detail.total_cost == pytest.approx(cost), detail
+            assert detail.total_input_tokens == pytest.approx(prompt), detail
+            assert detail.total_output_tokens == pytest.approx(completion), detail
 
 
 def test_scoped_spend_reports_match_sql_and_enforce_caller_scope(gateway: Gateway) -> None:
@@ -93,6 +111,10 @@ def test_scoped_spend_reports_match_sql_and_enforce_caller_scope(gateway: Gatewa
         _assert_report_matches_db(_rows(gateway, "/key/spend/report", key=k1, params=window), _logged("api_key", k1_hash))
         _assert_report_matches_db(_rows(gateway, "/user/spend/report", key=k1, params=window), _logged('"user"', user1))
         _assert_report_matches_db(_rows(gateway, "/team/spend/report", key=k1, params=window), _logged("team_id", team1))
+        # a key in a team under org1 has no org scope of its own: own-org reads are also refused
+        own_org: Final = _report(gateway, "/organization/spend/report", key=k1, params=window)
+        assert own_org.status_code == 403, own_org.text
+        assert own_org.json() == {"detail": "You do not have access to this organization"}, own_org.text
 
         # raw key works like its hash
         assert _rows(gateway, "/key/spend/report", key=k1, params={**window, "api_key": k1}) == _rows(
@@ -123,11 +145,8 @@ def test_scoped_spend_reports_match_sql_and_enforce_caller_scope(gateway: Gatewa
         org_report: Final = _rows(
             gateway, "/organization/spend/report", params={**window, "organization_id": org2}
         )
-        org_logged: Final = _logged("team_id", team2)
-        _assert_report_matches_db(org_report, org_logged)
-        assert {
-            str(d["team_id"]) for e in org_report for d in DETAIL_ROWS.validate_python(e["model_details"])
-        } == {team2}, org_report
+        _assert_report_matches_db(org_report, _logged("team_id", team2))
+        assert {detail.team_id for entry in org_report for detail in entry.model_details} == {team2}, org_report
 
 
 def test_spend_report_rejects_missing_and_malformed_dates(gateway: Gateway) -> None:
