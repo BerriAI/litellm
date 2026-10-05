@@ -84,7 +84,10 @@ from litellm.proxy.auth.budget_throttle import (
     budget_throttle_percentage,
     should_throttle_budget_exceeded,
 )
-from litellm.proxy.auth.model_access_denied import model_access_denied_client_message
+from litellm.proxy.auth.model_access_denied import (
+    customer_model_access_denied_client_message,
+    model_access_denied_client_message,
+)
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import publish_auth_cache_invalidation
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
@@ -151,7 +154,7 @@ from .auth_checks_organization import (
     add_team_org_context_to_request_body,
     organization_role_based_access_check,
 )
-from .auth_utils import get_model_from_request, get_request_route_template
+from .auth_utils import get_model_from_request, get_request_route_template, request_fallback_model_names
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -1096,6 +1099,23 @@ async def common_checks(
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
 
+    if end_user_object is not None and end_user_object.models:
+        with tracer.trace("litellm.proxy.auth.common_checks.can_customer_call_model"):
+            if _model:
+                can_customer_access_model(
+                    model=_model,
+                    end_user_object=end_user_object,
+                    llm_router=llm_router,
+                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                )
+            for fallback_model in request_fallback_model_names(_typed_request_body(request_body)):
+                can_customer_access_model(
+                    model=fallback_model,
+                    end_user_object=end_user_object,
+                    llm_router=llm_router,
+                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                )
+
     # 1.1 - 2.2 - 3.0.2 - 3.0.3: Project checks (blocked, model access, budget)
     with tracer.trace("litellm.proxy.auth.common_checks.run_project_checks"):
         await _run_project_checks(
@@ -1436,6 +1456,7 @@ def get_actual_routes(allowed_routes: list) -> list:
 
 
 KEY_END_USER_BUDGET_ID_METADATA_FIELD: Final = "end_user_budget_id"
+_KEY_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 
 def get_key_end_user_budget_id(key_metadata: Mapping[str, object] | None) -> str | None:
@@ -1698,9 +1719,15 @@ def _column_is_set(column: str) -> Mapping[str, object]:
     return {column: {"not": None}}
 
 
+def _array_is_not_empty(column: str) -> Mapping[str, object]:
+    """``column`` holds at least one element, as a plain dict for prisma's builder."""
+    return {column: {"is_empty": False}}
+
+
 def _restricted_end_user_where() -> Mapping[str, object]:
     """Prisma filter selecting every end-user row that carries a restriction auth enforces."""
-    return {"OR": [{"blocked": True}, *map(_column_is_set, _RESTRICTED_COLUMNS)]}
+    restrictions: Final = (*map(_column_is_set, _RESTRICTED_COLUMNS), _array_is_not_empty("models"))
+    return {"OR": [{"blocked": True}, *restrictions]}
 
 
 class _RegistryNotCached:
@@ -1857,8 +1884,8 @@ async def _end_user_is_known_unrestricted(
     True when the cached registry proves the id restricts nothing, so its row need not be read.
 
     Every field ``get_end_user_object`` callers consume (budget, spend under that budget, region,
-    default model, object permission, blocked) is part of the registry predicate, so an id outside
-    it is indistinguishable from one with no row at all. The skip is off whenever mere existence of
+    default model, models, object permission, blocked) is part of the registry predicate, so an id
+    outside it is indistinguishable from one with no row at all. The skip is off whenever mere existence of
     the row is meaningful: ``max_end_user_budget_id`` or the key's ``end_user_budget_id`` grafts a
     default budget onto any row that exists, ``validate_end_user_id_in_db`` rejects ids that resolve
     to no row, and a token-supplied ``end_user_max_budget`` (a ``user_custom_auth`` callable can set
@@ -4463,7 +4490,7 @@ def _can_object_call_model(
     team_model_aliases: dict[str, str] | None = None,
     team_id: str | None = None,
     key_model_aliases: Mapping[str, str] | None = None,
-    object_type: Literal["user", "team", "key", "org", "project", "agent"] = "user",
+    object_type: Literal["user", "customer", "team", "key", "org", "project", "agent"] = "user",
     fallback_depth: int = 0,
 ) -> Literal[True]:
     """
@@ -4544,7 +4571,11 @@ def _can_object_call_model(
         f"Tried to access {model}"
     )
     raise ModelAccessDeniedProxyException(
-        message=model_access_denied_client_message(model=model),
+        message=(
+            customer_model_access_denied_client_message(model=model)
+            if object_type == "customer"
+            else model_access_denied_client_message(model=model)
+        ),
         internal_message=internal_message,
         type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
         param="model",
@@ -5135,6 +5166,24 @@ async def can_key_call_resolved_model(
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
             )
 
+    if valid_token.end_user_id is not None and prisma_client is not None:
+        key_metadata: Final = _KEY_METADATA_ADAPTER.validate_python(valid_token.metadata)
+        end_user_object: Final = await get_end_user_object(
+            end_user_id=valid_token.end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            token_end_user_max_budget=valid_token.end_user_max_budget,
+            key_end_user_budget_id=get_key_end_user_budget_id(key_metadata),
+        )
+        if end_user_object is not None and end_user_object.models:
+            can_customer_access_model(
+                model=model,
+                end_user_object=end_user_object,
+                llm_router=llm_router,
+                key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+            )
+
 
 def can_org_access_model(
     model: str,
@@ -5299,6 +5348,21 @@ def can_project_access_model(
         models=project_object.models if project_object else [],
         key_model_aliases=key_model_aliases,
         object_type="project",
+    )
+
+
+def can_customer_access_model(
+    model: str | list[str],
+    end_user_object: LiteLLM_EndUserTable,
+    llm_router: Router | None,
+    key_model_aliases: Mapping[str, str] | None = None,
+) -> Literal[True]:
+    return _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=end_user_object.models,
+        key_model_aliases=key_model_aliases,
+        object_type="customer",
     )
 
 
