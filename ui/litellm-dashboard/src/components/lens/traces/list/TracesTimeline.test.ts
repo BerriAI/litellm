@@ -7,11 +7,12 @@ const HOUR = 3600 * 1000;
 const START = Date.UTC(2026, 8, 30, 0, 0, 0);
 const range = { startMs: START, endMs: START + 10 * HOUR };
 
-const run = (offsetMs: number, errorCount = 0): TraceSummary =>
+const run = (offsetMs: number, errorCount = 0, status: TraceSummary["status"] = "ok"): TraceSummary =>
   ({
     trace_id: `t${offsetMs}`,
     start_time: new Date(START + offsetMs).toISOString(),
     error_count: errorCount,
+    status,
   }) as TraceSummary;
 
 describe("bucketRuns", () => {
@@ -35,9 +36,9 @@ describe("bucketRuns", () => {
     expect(buckets[1].total).toBe(1);
   });
 
-  it("counts runs with any errors as failed", () => {
-    const buckets = bucketRuns([run(HOUR, 3), run(HOUR + 1), run(HOUR + 2, 1), run(5 * HOUR)], range, 10);
-    expect(buckets[1]).toMatchObject({ total: 3, failed: 2 });
+  it("counts failed runs without treating recovered tool errors as run failures", () => {
+    const buckets = bucketRuns([run(HOUR, 8), run(HOUR + 1), run(HOUR + 2, 1, "error"), run(5 * HOUR)], range, 10);
+    expect(buckets[1]).toMatchObject({ total: 3, failed: 1 });
     expect(buckets[5]).toMatchObject({ total: 1, failed: 0 });
   });
 });
