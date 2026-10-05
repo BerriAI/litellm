@@ -1,9 +1,12 @@
 import json
 import uuid
 from collections.abc import Callable, Mapping
+from email.parser import BytesParser
+from email.policy import HTTP
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
+from urllib.parse import parse_qsl
 
 import pytest
 from integration._support.client import Gateway, JsonValue, Scenario, eventually, object_value
@@ -419,3 +422,215 @@ def test_anthropic_passthrough_spend_row_carries_key_team_project_tags_and_spend
                 row
             )
             assert _spend_logs_metadata(row) == {"cost_center": marker, "team_field": marker}, row
+
+
+_CONTRACT_TOKEN_ENV: Final = "INTEGRATION_PASSTHROUGH_CONTRACT_TOKEN"
+_CONTRACT_TOKEN: Final = "scripted-configured-endpoint-token"
+_ENDPOINTS: Final = TypeAdapter(list[dict[str, JsonValue]])
+
+
+def _received_reply(request: Request) -> Reply:
+    return Reply(body=json.dumps({"received": request.target}).encode())
+
+
+def _create_endpoint(gateway: Gateway, scenario: Scenario, body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    response: Final = gateway.request("POST", "/config/pass_through_endpoint", dict(body))
+    assert response.status_code == 200, response.text
+    created: Final = _ENDPOINTS.validate_python(response.json()["endpoints"])
+    assert len(created) == 1, response.text
+    endpoint_id: Final = str(created[0]["id"])
+    scenario.cleanups.callback(
+        lambda: gateway.request("DELETE", "/config/pass_through_endpoint", params={"endpoint_id": endpoint_id})
+    )
+    return created[0]
+
+
+def _readback(gateway: Gateway, endpoint_id: str) -> list[dict[str, JsonValue]]:
+    response: Final = gateway.request("GET", "/config/pass_through_endpoint", params={"endpoint_id": endpoint_id})
+    assert response.status_code == 200, response.text
+    return _ENDPOINTS.validate_python(response.json()["endpoints"])
+
+
+def _stored_endpoint_ids() -> list[JsonValue]:
+    rows: Final = read_rows(
+        "SELECT param_value FROM \"LiteLLM_Config\" WHERE param_name = %s", ("general_settings",)
+    )
+    assert len(rows) == 1, rows
+    settings: Final = object_value(rows[0]["param_value"])
+    stored: Final = _ENDPOINTS.validate_python(settings.get("pass_through_endpoints") or [])
+    return [endpoint["id"] for endpoint in stored]
+
+
+def _query(request: Request) -> tuple[str, dict[str, str]]:
+    path, _, query = request.target.partition("?")
+    return path, dict(parse_qsl(query, keep_blank_values=True))
+
+
+def _multipart_parts(content_type: str, body: bytes) -> list[tuple[str, str | None, bytes]]:
+    parsed: Final = BytesParser(policy=HTTP).parsebytes(f"content-type: {content_type}\r\n\r\n".encode() + body)
+    assert parsed.is_multipart(), content_type
+    return [
+        (str(part.get_param("name", header="content-disposition")), part.get_filename(), part.get_payload(decode=True))
+        for part in parsed.iter_parts()
+    ]
+
+
+def test_configured_endpoint_forwards_json_multipart_and_query_and_an_update_keeps_omitted_fields(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    path: Final = f"/integration-contract-{marker}"
+    subpath_root: Final = f"/integration-contract-subpath-{marker}"
+    with (
+        wire_server(_received_reply) as wire,
+        owned_proxy(gateway, tmp_path, {_CONTRACT_TOKEN_ENV: _CONTRACT_TOKEN}, workers=2) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        created: Final = _create_endpoint(
+            candidate,
+            scenario,
+            {
+                "path": path,
+                "target": f"{wire.url}/base",
+                "headers": {"Authorization": f"Bearer os.environ/{_CONTRACT_TOKEN_ENV}", "x-static": "static-v1"},
+                "methods": ["POST"],
+                "default_query_params": {"api-version": "2024-01-01"},
+                "auth": False,
+            },
+        )
+        _create_endpoint(
+            candidate,
+            scenario,
+            {"path": subpath_root, "target": f"{wire.url}/nested", "include_subpath": True, "auth": True},
+        )
+        endpoint_id: Final = str(created["id"])
+        body: Final[dict[str, JsonValue]] = {"input": marker, "options": {"trace": marker, "stream": False}, "n": 2}
+
+        sent_json: Final = candidate.client.post(path, params={"trace": "1"}, json=body)
+        assert sent_json.status_code == 200, sent_json.text
+        assert sent_json.json() == {"received": "/base?api-version=2024-01-01&trace=1"}, sent_json.text
+        overridden: Final = candidate.client.post(path, params={"api-version": "2025-02-02"}, json=body)
+        assert overridden.status_code == 200, overridden.text
+        form: Final = candidate.client.post(
+            path,
+            files=[
+                ("tag", (None, "first")),
+                ("tag", (None, "second")),
+                ("file", ("one.bin", b"\x00one", "application/octet-stream")),
+                ("file", ("two.bin", b"\x00two", "application/octet-stream")),
+            ],
+        )
+        assert form.status_code == 200, form.text
+        refused_verb: Final = candidate.client.get(path)
+        assert refused_verb.status_code == 405, refused_verb.text
+        nested: Final = candidate.request("POST", f"{subpath_root}/sub/route", body, params={"q": "1"})
+        assert nested.status_code == 200, nested.text
+        before: Final = wire.drain()
+        assert [(request.method, *_query(request)) for request in before] == [
+            ("POST", "/base", {"api-version": "2024-01-01", "trace": "1"}),
+            ("POST", "/base", {"api-version": "2025-02-02"}),
+            ("POST", "/base", {"api-version": "2024-01-01"}),
+            ("POST", "/nested/sub/route", {"q": "1"}),
+        ], before
+        for request in before[:3]:
+            assert request.headers["authorization"] == f"Bearer {_CONTRACT_TOKEN}", request.headers
+            assert request.headers["x-static"] == "static-v1", request.headers
+        assert [json.loads(request.body) for request in (before[0], before[1], before[3])] == [body] * 3, before
+        assert _multipart_parts(before[2].headers["content-type"], before[2].body) == [
+            ("tag", None, b"first"),
+            ("tag", None, b"second"),
+            ("file", "one.bin", b"\x00one"),
+            ("file", "two.bin", b"\x00two"),
+        ], before[2].body
+
+        retargeted: Final = candidate.request(
+            "POST", f"/config/pass_through_endpoint/{endpoint_id}", {"path": path, "target": f"{wire.url}/v2"}
+        )
+        assert retargeted.status_code == 200, retargeted.text
+        expected: Final = {**created, "target": f"{wire.url}/v2"}
+        assert _ENDPOINTS.validate_python(retargeted.json()["endpoints"]) == [expected], retargeted.text
+        assert _readback(candidate, endpoint_id) == [expected]
+        after_retarget: Final = candidate.client.post(path, json=body)
+        assert after_retarget.status_code == 200, after_retarget.text
+        assert after_retarget.json() == {"received": "/v2?api-version=2024-01-01"}, after_retarget.text
+        retargeted_request: Final = wire.drain()
+        assert [(request.method, request.target) for request in retargeted_request] == [
+            ("POST", "/v2?api-version=2024-01-01")
+        ], retargeted_request
+        assert retargeted_request[0].headers["authorization"] == f"Bearer {_CONTRACT_TOKEN}", retargeted_request
+
+        locked: Final = candidate.request(
+            "POST",
+            f"/config/pass_through_endpoint/{endpoint_id}",
+            {"path": path, "target": f"{wire.url}/v2", "auth": True, "headers": {"x-static": "static-v2"}},
+        )
+        assert locked.status_code == 200, locked.text
+        assert _readback(candidate, endpoint_id) == [{**expected, "auth": True, "headers": {"x-static": "static-v2"}}]
+        anonymous: Final = candidate.client.post(path, json=body)
+        assert anonymous.status_code == 401, anonymous.text
+        assert wire.drain() == ()
+        keyed: Final = candidate.request("POST", path, body)
+        assert keyed.status_code == 200, keyed.text
+        locked_request: Final = wire.drain()
+        assert [(request.method, request.target) for request in locked_request] == [
+            ("POST", "/v2?api-version=2024-01-01")
+        ], locked_request
+        assert locked_request[0].headers["x-static"] == "static-v2", locked_request[0].headers
+        assert "authorization" not in locked_request[0].headers, locked_request[0].headers
+
+
+def test_configured_endpoint_without_auth_serves_its_subpaths_without_a_key(gateway: Gateway) -> None:
+    pytest.skip("BUG: an auth=false include_subpath pass-through endpoint answers 401 on every subpath request")
+    marker: Final = uuid.uuid4().hex
+    path: Final = f"/integration-open-subpath-{marker}"
+    with wire_server(_received_reply) as wire, gateway.scenario() as scenario:
+        _create_endpoint(
+            gateway, scenario, {"path": path, "target": f"{wire.url}/open", "include_subpath": True, "auth": False}
+        )
+        response: Final = gateway.client.post(f"{path}/sub", json={"input": marker})
+        assert response.status_code == 200, response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/open/sub")]
+
+
+def test_deleted_configured_endpoint_leaves_readback_storage_and_runtime_and_team_get_filters(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with (
+        wire_server(_received_reply) as wire,
+        owned_proxy(gateway, tmp_path, {}, workers=2) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        allowed: Final = _create_endpoint(
+            candidate, scenario, {"path": f"/integration-allowed-{marker}", "target": f"{wire.url}/allowed"}
+        )
+        hidden: Final = _create_endpoint(
+            candidate, scenario, {"path": f"/integration-hidden-{marker}", "target": f"{wire.url}/hidden"}
+        )
+        team: Final = scenario.team(metadata={"allowed_passthrough_routes": [allowed["path"]]})
+        team_view: Final = candidate.request("GET", f"/config/pass_through_endpoint/team/{team}")
+        assert team_view.status_code == 200, team_view.text
+        assert [endpoint["path"] for endpoint in _ENDPOINTS.validate_python(team_view.json()["endpoints"])] == [
+            allowed["path"]
+        ], team_view.text
+
+        served: Final = candidate.request("POST", str(hidden["path"]), {"input": marker})
+        assert served.status_code == 200, served.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/hidden")]
+
+        deleted: Final = candidate.request(
+            "DELETE", "/config/pass_through_endpoint", params={"endpoint_id": str(hidden["id"])}
+        )
+        assert deleted.status_code == 200, deleted.text
+        assert _ENDPOINTS.validate_python(deleted.json()["endpoints"]) == [hidden], deleted.text
+        assert _readback(candidate, str(hidden["id"])) == []
+        listed: Final = candidate.request("GET", "/config/pass_through_endpoint")
+        assert listed.status_code == 200, listed.text
+        listed_ids: Final = [endpoint["id"] for endpoint in _ENDPOINTS.validate_python(listed.json()["endpoints"])]
+        assert hidden["id"] not in listed_ids and allowed["id"] in listed_ids, listed.text
+        stored_ids: Final = _stored_endpoint_ids()
+        assert hidden["id"] not in stored_ids and allowed["id"] in stored_ids, stored_ids
+
+        refused: Final = candidate.request("POST", str(hidden["path"]), {"input": marker})
+        assert refused.status_code == 404, refused.text
+        assert wire.drain() == ()
