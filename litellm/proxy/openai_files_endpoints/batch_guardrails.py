@@ -28,7 +28,12 @@ from litellm.litellm_core_utils.api_route_to_call_types import (
     get_primary_call_type_for_route,
     get_routes_for_call_type,
 )
+from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+from litellm.llms.vertex_ai.files.transformation import (
+    _is_embeddings_batch_entry,  # pyright: ignore[reportPrivateUsage]  # Vertex's runtime rule
+)
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.llms.bedrock import BedrockBatchRecordKind
 from litellm.types.llms.openai import BatchGuardrailRecord, BatchGuardrailReport
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
@@ -343,31 +348,27 @@ def _record_route(url: object, call_type: CallTypesLiteral) -> str | None:
     return next((route for route in candidates if _route_runs_as(route, call_type)), None)
 
 
+_BEDROCK_RECORD_CALL_TYPES: Final = MappingProxyType(
+    {
+        BedrockBatchRecordKind.CHAT: CallTypes.acompletion,
+        BedrockBatchRecordKind.TEXT_COMPLETION: CallTypes.atext_completion,
+        BedrockBatchRecordKind.RESPONSES: CallTypes.aresponses,
+        BedrockBatchRecordKind.EMBEDDING: CallTypes.aembedding,
+    }
+)
+
+
 def _executed_call_types(payload: Mapping[str, object]) -> frozenset[str]:
     """
     The call types Bedrock and Vertex run this record as, from their own record classifiers. OpenAI and
     Azure run the record's url, which is already the scan's call type whenever the url is recognized.
     """
-    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
-    from litellm.llms.vertex_ai.files.transformation import (
-        _is_embeddings_batch_entry,  # pyright: ignore[reportPrivateUsage]  # Vertex's runtime rule
-    )
-    from litellm.types.llms.bedrock import BedrockBatchRecordKind
-
-    bedrock_call_types: Final = MappingProxyType(
-        {
-            BedrockBatchRecordKind.CHAT: CallTypes.acompletion,
-            BedrockBatchRecordKind.TEXT_COMPLETION: CallTypes.atext_completion,
-            BedrockBatchRecordKind.RESPONSES: CallTypes.aresponses,
-            BedrockBatchRecordKind.EMBEDDING: CallTypes.aembedding,
-        }
-    )
     classify: Final = BedrockFilesConfig._classify_batch_record  # pyright: ignore[reportPrivateUsage]  # its own rule
     bedrock_kind: Final = classify(payload)  # pyright: ignore[reportArgumentType]  # reads only url and body
     vertex_embeds: Final = _is_embeddings_batch_entry(payload)
     return frozenset(
         {
-            bedrock_call_types[bedrock_kind].value,
+            _BEDROCK_RECORD_CALL_TYPES[bedrock_kind].value,
             (CallTypes.aembedding if vertex_embeds else CallTypes.acompletion).value,
         }
     )

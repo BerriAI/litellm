@@ -1,13 +1,19 @@
 import io
 import json
+from typing import Final
 
+import httpx
 import pytest
 from fastapi import HTTPException
+
+import litellm
 
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 
 from litellm.caching import DualCache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.openai_files_endpoints.batch_guardrails import (
     BatchScanResult,
@@ -1188,25 +1194,19 @@ async def test_a_dropped_record_without_a_named_guardrail_reports_none():
     assert result.changes == (RecordDropped(line_number=1, custom_id="b", guardrail=None),)
 
 
-_CHAT_BODY = {"messages": [{"role": "user", "content": "x"}]}
+_CHAT_BODY: Final = {"messages": [{"role": "user", "content": "x"}]}
 
 
 @pytest.mark.asyncio
-async def test_a_record_carrying_its_own_logging_obj_is_still_scanned_when_the_guardrail_fails_open(monkeypatch):
+async def test_a_record_carrying_its_own_logging_obj_is_still_scanned_when_the_guardrail_fails_open():
     """A caller's litellm_logging_obj used to crash the guardrail call, which fail_on_error=False then let through."""
-    import httpx
-
-    import litellm
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-    from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
-
-    received = []
+    received: Final[list[dict[str, object]]] = []
 
     def _respond(request):
         received.append(json.loads(request.content))
         return httpx.Response(200, json={"action": "BLOCKED", "blocked_reason": "blocked by test endpoint"})
 
-    guardrail = GenericGuardrailAPI(
+    guardrail: Final = GenericGuardrailAPI(
         api_base="https://guardrail.test",
         guardrail_name="fail-open-guard",
         event_hook="pre_call",
@@ -1214,16 +1214,18 @@ async def test_a_record_carrying_its_own_logging_obj_is_still_scanned_when_the_g
         fail_on_error=False,
         async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(_respond)),
     )
-    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    carrier: Final = _record("carrier", content="carried chat")
+    record: Final = {**carrier, "body": {**carrier["body"], "litellm_logging_obj": {"a": 1}}}
+    litellm.logging_callback_manager.add_litellm_callback(guardrail)
     ProxyLogging._callback_capabilities_cache.clear()
-    record = _record("carrier", content="carried chat")
-    record["body"]["litellm_logging_obj"] = {"a": 1}
-
-    result = await _scan_full(_jsonl(record), ProxyLogging(user_api_key_cache=DualCache()))
+    try:
+        result: Final = await _scan_full(_jsonl(record), ProxyLogging(user_api_key_cache=DualCache()))
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_all_lists(guardrail)
+        ProxyLogging._callback_capabilities_cache.clear()
 
     assert len(received) == 1, "the record reached the guardrail endpoint"
     assert result.changes == (RecordDropped(line_number=1, custom_id="carrier", guardrail="generic_guardrail_api"),)
-    ProxyLogging._callback_capabilities_cache.clear()
 
 
 class RouteRecordingProxyLogging(FakeProxyLogging):
@@ -1256,8 +1258,8 @@ async def test_each_record_is_scanned_under_the_route_every_provider_runs_it_as(
     Guardrails that classify by the key's route see the record's endpoint, not the upload route, and no
     route at all when some batch provider would run the record as a different call type than its url says
     """
-    upload_key = UserAPIKeyAuth(api_key="sk-test", request_route="/v1/files")
-    logging_obj = RouteRecordingProxyLogging()
+    upload_key: Final = UserAPIKeyAuth(api_key="sk-test", request_route="/v1/files")
+    logging_obj: Final = RouteRecordingProxyLogging()
 
     await scan_batch_input_file(
         file_source=_jsonl({"custom_id": "r", "method": "POST", "url": url, "body": {"model": "m", **body}}),

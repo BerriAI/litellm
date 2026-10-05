@@ -2,7 +2,7 @@ import json
 import time
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Final, List, Optional
 from unittest.mock import AsyncMock
 
 import httpx
@@ -20,6 +20,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     RegisterGuardrailRequest,
     TestCustomCodeGuardrailRequest,
     UpdateGuardrailRequest,
+    _get_fields_from_model,
     apply_guardrail,
     approve_guardrail_submission,
     create_guardrail,
@@ -39,6 +40,7 @@ from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPIOptionalParams
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
@@ -3058,3 +3060,11 @@ async def test_patch_guardrail_rejects_encrypted_marker_values(mocker, mock_guar
 
     assert exc_info.value.status_code == 400
     mock_guardrail_registry.update_guardrail_in_db.assert_not_called()
+
+
+@pytest.mark.parametrize("field", ["run_only_on_call_types", "skip_call_types"])
+def test_a_call_type_filter_stays_out_of_the_form_but_still_validates(field: str) -> None:
+    form_fields: Final = _get_fields_from_model(GenericGuardrailAPIOptionalParams)
+
+    assert field not in form_fields
+    assert getattr(GenericGuardrailAPIOptionalParams(**{field: ["aembedding"]}), field) == ("aembedding",)

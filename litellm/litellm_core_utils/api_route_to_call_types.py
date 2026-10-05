@@ -80,23 +80,17 @@ def get_call_types_for_route(route: str) -> Sequence[CallTypes] | None:
     return None
 
 
-def get_primary_call_type_for_route(route: str | None) -> CallTypes | None:
-    call_types: Final = get_call_types_for_route(route) if route else None
+def _primary(call_types: Sequence[CallTypes] | None) -> CallTypes | None:
     return call_types[0] if call_types else None
 
 
-def get_routes_for_call_type(call_type: CallTypes) -> list[str]:
-    """
-    Get all routes that use a specific CallType.
+def get_primary_call_type_for_route(route: str | None) -> CallTypes | None:
+    return _primary(get_call_types_for_route(route) if route else None)
 
-    Args:
-        call_type: The CallType to search for
 
-    Returns:
-        List of routes that use this CallType
-    """
-    routes: Final[list[str]] = []
-    for route, types in API_ROUTE_TO_CALL_TYPES.items():
-        if call_type in types:
-            routes.append(route)
-    return routes
+def primary_call_types() -> frozenset[CallTypes]:
+    return frozenset(primary for types in API_ROUTE_TO_CALL_TYPES.values() if (primary := _primary(types)))
+
+
+def get_routes_for_call_type(call_type: CallTypes) -> tuple[str, ...]:
+    return tuple(route for route, types in API_ROUTE_TO_CALL_TYPES.items() if call_type in types)

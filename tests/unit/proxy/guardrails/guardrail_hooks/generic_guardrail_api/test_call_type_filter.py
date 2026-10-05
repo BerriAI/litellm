@@ -30,6 +30,10 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 _INPUTS: Final = GenericGuardrailAPIInputs(texts=["hello"])
 _CHAT_ROUTE: Final = {"metadata": {"user_api_key_request_route": "/v1/chat/completions"}}
+_CALL_TYPE_HELP: Final = (
+    "Use CallTypes values, the strings logged as call_type (e.g. acompletion, aembedding, anthropic_messages, "
+    "pass_through_endpoint)."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -395,6 +399,18 @@ async def test_skipped_call_records_one_not_run_entry(
     assert _recorded(request_data) == [("not_run", f"skipped: call type {call_type} {reason}")]
 
 
+async def test_a_skipped_call_entry_records_the_moment_it_was_skipped():
+    guardrail: Final = _guardrail(_endpoint(), skip_call_types=["aembedding"])
+    request_data: Final[dict[str, object]] = {"model": "gpt-test"}
+
+    await _apply(guardrail, call_type="aembedding", request_data=request_data)
+
+    _, bucket = get_or_create_metadata_bucket(request_data)
+    (entry,) = bucket["standard_logging_guardrail_information"]
+    assert isinstance(entry["start_time"], float)
+    assert (entry["end_time"], entry["duration"]) == (entry["start_time"], 0.0)
+
+
 async def test_scanned_call_still_records_success():
     endpoint: Final = _endpoint()
     guardrail: Final = _guardrail(endpoint, skip_call_types=["aembedding"])
@@ -405,27 +421,179 @@ async def test_scanned_call_still_records_success():
     assert [status for status, _ in _recorded(request_data)] == ["success"]
 
 
-@pytest.mark.parametrize("option", ["run_only_on_call_types", "skip_call_types"])
-def test_single_string_config_is_rejected(option: str):
-    with pytest.raises(ValueError, match=f"{option} must be a list of strings"):
-        _guardrail(_endpoint(), **{option: "aembedding"})
+def _ignored_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [message for message in caplog.messages if message.startswith("Ignoring")]
 
 
-@pytest.mark.parametrize("option", ["run_only_on_call_types", "skip_call_types"])
-def test_unknown_call_type_is_rejected(option: str):
-    with pytest.raises(ValueError, match=f"{option} contains unknown call type"):
-        _guardrail(_endpoint(), **{option: ["acompletion", "chat_completion"]})
+@pytest.mark.parametrize(
+    ("run_only_on_call_types", "warning"),
+    [
+        (
+            "acompletion",
+            "Ignoring run_only_on_call_types='acompletion', expected a list of strings. Every call type is scanned",
+        ),
+        (
+            ["acompletion", "chat_completion"],
+            "Ignoring run_only_on_call_types=['acompletion', 'chat_completion']: unknown call type(s) "
+            f"['chat_completion']. {_CALL_TYPE_HELP} Every call type is scanned",
+        ),
+        (
+            ["completion"],
+            "Ignoring run_only_on_call_types=['completion']: unknown call type(s) ['completion']. "
+            f"{_CALL_TYPE_HELP} Use these call types instead: 'completion' -> 'acompletion'. "
+            "Every call type is scanned",
+        ),
+        (
+            ["video_generation"],
+            "Ignoring run_only_on_call_types=['video_generation']: unknown call type(s) ['video_generation']. "
+            f"{_CALL_TYPE_HELP} Use these call types instead: 'video_generation' -> 'acreate_video'. "
+            "Every call type is scanned",
+        ),
+    ],
+    ids=["bare_string", "unknown_call_type", "sync_call_type_name", "video_generation_name"],
+)
+async def test_an_invalid_allowlist_is_ignored_with_a_warning_and_every_call_type_is_scanned(
+    caplog: pytest.LogCaptureFixture, run_only_on_call_types: object, warning: str
+):
+    endpoint: Final = _endpoint()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        guardrail: Final = _guardrail(endpoint, run_only_on_call_types=run_only_on_call_types)
+
+    await _apply(guardrail, call_type="aembedding")
+
+    assert _ignored_warnings(caplog) == [warning]
+    assert len(endpoint.received) == 1
 
 
-def test_call_types_member_name_is_rejected_with_its_value():
-    with pytest.raises(ValueError, match="'pass_through' -> 'pass_through_endpoint'"):
-        _guardrail(_endpoint(), skip_call_types=["pass_through"])
+@pytest.mark.parametrize(
+    ("skip_call_types", "warning", "embeddings_scanned"),
+    [
+        (
+            "aembedding",
+            "Ignoring skip_call_types='aembedding', expected a list of strings. Every call type is scanned",
+            1,
+        ),
+        (
+            ["aembedding", "embedding_typo"],
+            f"Ignoring skip_call_types entries ['embedding_typo']: unknown call type(s). {_CALL_TYPE_HELP} "
+            "Those call types are scanned",
+            0,
+        ),
+        (
+            ["aembedding", "pass_through"],
+            f"Ignoring skip_call_types entries ['pass_through']: unknown call type(s). {_CALL_TYPE_HELP} "
+            "Use these call types instead: 'pass_through' -> 'pass_through_endpoint'. Those call types are scanned",
+            0,
+        ),
+        (
+            ["aembedding", "embedding"],
+            f"Ignoring skip_call_types entries ['embedding']: unknown call type(s). {_CALL_TYPE_HELP} "
+            "Use these call types instead: 'embedding' -> 'aembedding'. Those call types are scanned",
+            0,
+        ),
+        (
+            ["aembedding", "avideo_generation"],
+            f"Ignoring skip_call_types entries ['avideo_generation']: unknown call type(s). {_CALL_TYPE_HELP} "
+            "Use these call types instead: 'avideo_generation' -> 'acreate_video'. Those call types are scanned",
+            0,
+        ),
+    ],
+    ids=["bare_string", "unknown_call_type", "member_name", "sync_call_type_name", "video_generation_route_type"],
+)
+async def test_an_invalid_denylist_entry_is_dropped_with_a_warning_and_the_valid_ones_still_skip(
+    caplog: pytest.LogCaptureFixture, skip_call_types: object, warning: str, embeddings_scanned: int
+):
+    endpoint: Final = _endpoint()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        guardrail: Final = _guardrail(endpoint, skip_call_types=skip_call_types)
+
+    await _apply(guardrail, call_type="aembedding")
+
+    assert _ignored_warnings(caplog) == [warning]
+    assert len(endpoint.received) == embeddings_scanned
 
 
-@pytest.mark.parametrize("option", ["run_only_on_call_types", "skip_call_types"])
-def test_mcp_tool_calls_are_rejected_because_they_never_resolve(option: str):
-    with pytest.raises(ValueError, match="call_mcp_tool"):
-        _guardrail(_endpoint(), **{option: ["call_mcp_tool"]})
+@pytest.mark.parametrize(
+    "run_only_on_call_types",
+    [["acompletion", "chat_completion"], "acompletion", ""],
+    ids=["unknown_call_type", "bare_string", "empty_string"],
+)
+async def test_an_invalid_allowlist_still_overrides_skip_call_types(run_only_on_call_types: object):
+    endpoint: Final = _endpoint()
+    guardrail: Final = _guardrail(
+        endpoint, run_only_on_call_types=run_only_on_call_types, skip_call_types=["acompletion"]
+    )
+
+    await _apply(guardrail, call_type="acompletion")
+
+    assert len(endpoint.received) == 1, "an allowlist the admin set makes skip_call_types ignored, valid or not"
+
+
+@pytest.mark.parametrize("run_only_on_call_types", [[], ()], ids=["yaml_list", "validated_optional_params"])
+async def test_an_empty_allowlist_leaves_skip_call_types_in_force(run_only_on_call_types: object):
+    endpoint: Final = _endpoint()
+    guardrail: Final = _guardrail(
+        endpoint, run_only_on_call_types=run_only_on_call_types, skip_call_types=["aembedding"]
+    )
+
+    await _apply(guardrail, call_type="aembedding")
+
+    assert endpoint.received == []
+
+
+async def test_a_logged_call_type_outside_call_types_is_still_scanned_when_listed_in_skip_call_types():
+    endpoint: Final = _endpoint()
+    guardrail: Final = _guardrail(endpoint, skip_call_types=["avideo_status"])
+
+    await _apply(guardrail, call_type="avideo_status")
+
+    assert len(endpoint.received) == 1
+
+
+@pytest.mark.parametrize(
+    "call_type", ["acompletion", "aresponses", "anthropic_messages", "pass_through_endpoint", "_arealtime"]
+)
+async def test_a_call_type_the_proxy_logs_is_accepted_without_a_warning(
+    caplog: pytest.LogCaptureFixture, call_type: str
+):
+    endpoint: Final = _endpoint()
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        guardrail: Final = _guardrail(endpoint, run_only_on_call_types=[call_type])
+
+    await _apply(guardrail, call_type="aembedding")
+
+    assert _ignored_warnings(caplog) == []
+    assert endpoint.received == [], "the allowlist must stand, so a call type it does not list is not scanned"
+
+
+async def test_call_mcp_tool_is_an_ordinary_call_type_value():
+    endpoint: Final = _endpoint()
+    guardrail: Final = _guardrail(endpoint, skip_call_types=["call_mcp_tool"])
+
+    await _apply(guardrail, call_type="call_mcp_tool")
+
+    assert endpoint.received == []
+
+
+async def test_an_invalid_filter_config_still_loads_a_guardrail_that_scans_every_call_type():
+    endpoint: Final = _endpoint()
+    litellm_params: Final = LitellmParams.model_validate(
+        {
+            "guardrail": "generic_guardrail_api",
+            "mode": "pre_call",
+            "api_base": "https://guardrail.test",
+            "run_only_on_call_types": ["chat_completion"],
+        }
+    )
+    guardrail: Final = initialize_guardrail(
+        litellm_params, {"guardrail_name": "typo-config"}, async_handler=endpoint.handler
+    )
+    try:
+        await _apply(guardrail, call_type="aembedding")
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_all_lists(guardrail)
+
+    assert len(endpoint.received) == 1
 
 
 async def test_call_types_value_that_differs_from_its_name_matches():
@@ -470,7 +638,8 @@ async def test_no_filter_config_keeps_every_call_type_scanned(call_type: str | N
         {"optional_params": {"skip_call_types": ["aembedding"]}},
     ],
 )
-def test_initialize_guardrail_forwards_call_type_filters(config: dict[str, object]):
+async def test_initialize_guardrail_forwards_call_type_filters(config: dict[str, object]):
+    endpoint: Final = _endpoint()
     litellm_params: Final = LitellmParams.model_validate(
         {
             "guardrail": "generic_guardrail_api",
@@ -479,11 +648,17 @@ def test_initialize_guardrail_forwards_call_type_filters(config: dict[str, objec
             **config,
         }
     )
+    guardrail: Final = initialize_guardrail(
+        litellm_params, {"guardrail_name": "from-config"}, async_handler=endpoint.handler
+    )
+    try:
+        await _apply(guardrail, call_type="aembedding")
+        embeddings_sent: Final = len(endpoint.received)
+        await _apply(guardrail, call_type="acompletion")
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_all_lists(guardrail)
 
-    guardrail: Final = initialize_guardrail(litellm_params, {"guardrail_name": "from-config"})
-
-    assert guardrail.call_type_filter.allows("acompletion")
-    assert not guardrail.call_type_filter.allows("aembedding")
+    assert (embeddings_sent, len(endpoint.received)) == (0, 1)
 
 
 def _pass_through_http_request(body: dict[str, object]) -> Request:
@@ -509,7 +684,13 @@ def _pass_through_http_request(body: dict[str, object]) -> Request:
     [
         {},
         {"litellm_metadata": {"user_api_key_request_route": "/v1/embeddings"}},
+        {"metadata": {"user_api_key_request_route": "/v1/embeddings"}},
+        {
+            "metadata": {"user_api_key_request_route": "/v1/embeddings"},
+            "litellm_metadata": {"user_api_key_request_route": "/v1/embeddings"},
+        },
     ],
+    ids=["no_forgery", "litellm_metadata", "metadata", "both_buckets"],
 )
 async def test_pass_through_caller_cannot_forge_a_skipped_route(forged: dict[str, object]):
     endpoint: Final = _endpoint(action="BLOCKED")

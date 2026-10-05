@@ -2,15 +2,21 @@
 Test the /guardrails/apply_guardrail endpoint
 """
 
+import json
+from typing import Final
 from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 
 
 from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_endpoints import apply_guardrail
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.guardrails import ApplyGuardrailRequest, ApplyGuardrailResponse
 
@@ -210,3 +216,39 @@ async def test_apply_guardrail_endpoint_without_optional_params(mock_proxy_loggi
             request_data={"metadata": _identity_with_hash(user_api_key_dict)},
             input_type="request",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "forged_metadata",
+    [
+        {},
+        {"user_api_key_request_route": "/v1/embeddings"},
+    ],
+    ids=["no_forgery", "forged_route"],
+)
+async def test_apply_guardrail_caller_cannot_forge_a_skipped_route(mock_proxy_logging_ctx, forged_metadata):
+    received: Final[list[dict[str, object]]] = []
+
+    def _respond(request: httpx.Request) -> httpx.Response:
+        received.append(json.loads(request.content))
+        return httpx.Response(200, json={"action": "NONE"})
+
+    guardrail: Final = GenericGuardrailAPI(
+        api_base="https://guardrail.test",
+        guardrail_name="apply-guard",
+        skip_call_types=["aembedding"],
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(_respond)),
+    )
+    with (
+        patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY") as mock_registry,
+        mock_proxy_logging_ctx(),
+    ):
+        mock_registry.get_initialized_guardrail_callback.return_value = guardrail
+        await apply_guardrail(
+            fastapi_request=Mock(),
+            request=ApplyGuardrailRequest(guardrail_name="apply-guard", text="hello", metadata=forged_metadata),
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+
+    assert len(received) == 1, "a caller-supplied route must not decide which call types skip the guardrail"

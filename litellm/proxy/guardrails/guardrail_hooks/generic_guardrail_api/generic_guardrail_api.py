@@ -7,6 +7,7 @@
 
 import fnmatch
 import os
+import time
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
@@ -452,10 +453,14 @@ class GenericGuardrailAPI(CustomGuardrail):
         skip_reason: Final = self.call_type_filter.skip_reason(request_data=request_data, logging_obj=logging_obj)
         if skip_reason is not None:
             verbose_proxy_logger.debug("Generic Guardrail API: %s (input_type=%s)", skip_reason, input_type)
+            skipped_at: Final = time.time()
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response=skip_reason,
                 request_data=request_data,
                 guardrail_status="not_run",
+                start_time=skipped_at,
+                end_time=skipped_at,
+                duration=0.0,
             )
             return _passthrough_inputs(inputs)
 

@@ -1044,6 +1044,25 @@ class TestStreamingTransform:
         assert streamed != streamed.upper()
 
     @pytest.mark.asyncio
+    async def test_incremental_diff_on_a_route_whose_handler_is_not_openai_chat_falls_back_to_block_only(
+        self, monkeypatch, caplog
+    ):
+        _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
+        chunks: Final = [_stream_chunk("hello "), _stream_chunk("world"), _stream_chunk("", finish_reason="stop")]
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            out: Final = await _drive_stream(
+                UnifiedLLMGuardrails(), _StreamingTextGuardrail(), chunks, request_route="/v1/messages"
+            )
+
+        assert [message for message in caplog.messages if "falling back to block_only" in message] == [
+            "UnifiedLLMGuardrails: streaming_transform_mode=incremental_diff is only supported for the OpenAI chat "
+            "completions streaming path with a resolvable request route; falling back to block_only for "
+            "streaming-text-guardrail"
+        ]
+        assert "".join(_delta_text(item) for item in out) == "hello world"
+
+    @pytest.mark.asyncio
     async def test_incremental_diff_emits_uppercased_deltas(self):
         """incremental_diff: the client receives uppercased deltas whose
         concatenation equals uppercase(full)."""

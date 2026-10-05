@@ -13,6 +13,7 @@ import pytest
 from litellm.litellm_core_utils.api_route_to_call_types import (
     get_call_types_for_route,
     get_primary_call_type_for_route,
+    primary_call_types,
 )
 from litellm.types.utils import API_ROUTE_TO_CALL_TYPES, CallTypes
 
@@ -125,3 +126,9 @@ def test_primary_call_type_is_the_first_call_type_of_the_route(route):
 @pytest.mark.parametrize("route", [None, "", "/not/a/real/route"])
 def test_primary_call_type_is_none_without_a_mapped_route(route):
     assert get_primary_call_type_for_route(route) is None
+
+
+def test_primary_call_types_are_exactly_what_the_route_lookup_resolves_to():
+    assert primary_call_types() == frozenset(
+        get_primary_call_type_for_route(route) for route in API_ROUTE_TO_CALL_TYPES
+    ) - {None}

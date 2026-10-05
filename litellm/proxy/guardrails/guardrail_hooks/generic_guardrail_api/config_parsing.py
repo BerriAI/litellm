@@ -1,15 +1,19 @@
-import re
-from collections.abc import Sequence
+from typing import Final
+
+from pydantic import StrictStr, TypeAdapter, ValidationError
+
+from litellm._logging import verbose_proxy_logger
+
+_STRINGS: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[StrictStr, ...])
 
 
-def config_values(raw: Sequence[str] | None, *, option_name: str) -> tuple[str, ...]:
-    if isinstance(raw, str):
-        raise ValueError(f"{option_name} must be a list of strings, got the single string {raw!r}")
-    return tuple(raw or ())
-
-
-def compile_patterns(raw: Sequence[str] | None, *, option_name: str) -> tuple[re.Pattern[str], ...]:
+def config_strings(
+    raw: object, *, option_name: str, fallback: str = "Nothing is skipped for this option"
+) -> tuple[str, ...]:
+    if raw is None:
+        return ()
     try:
-        return tuple(re.compile(pattern) for pattern in config_values(raw, option_name=option_name))
-    except re.error as e:
-        raise ValueError(f"{option_name} contains an invalid regex: {e}") from e
+        return _STRINGS.validate_python(raw)
+    except ValidationError:
+        verbose_proxy_logger.warning("Ignoring %s=%r, expected a list of strings. %s", option_name, raw, fallback)
+        return ()
