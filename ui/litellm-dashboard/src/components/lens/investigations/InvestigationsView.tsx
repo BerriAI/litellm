@@ -3,7 +3,6 @@
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 import { LensPreviewButton } from "@/components/lens/ui/LensPreviewButton";
 
@@ -31,7 +30,6 @@ import {
 } from "./InvestigationStates";
 import { ReadinessBanner } from "./ReadinessBanner";
 import { useInvestigationActions } from "./useInvestigationActions";
-import { WatchAllBanner } from "./WatchAllBanner";
 
 export interface InvestigationsViewProps {
   readonly readOnly?: boolean;
@@ -131,12 +129,15 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
             onRunNow={(id) => openDialog("run_now", id)}
             actions={
               !readOnly && (
-                <>
-                  <WatchAllBanner lenses={current.lenses} />
-                  <Button size="sm" className="h-8" disabled={!status.ready} onClick={() => openDialog("new")}>
-                    <Plus className="size-4" /> New investigation
-                  </Button>
-                </>
+                <button
+                  type="button"
+                  disabled={!status.ready}
+                  onClick={() => openDialog("new")}
+                  className="flex items-center gap-1.5 border-l border-border px-3 text-sm font-medium whitespace-nowrap text-foreground transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60 disabled:pointer-events-none disabled:opacity-50"
+                >
+                  <Plus aria-hidden="true" className="size-3.5 text-muted-foreground" />
+                  New investigation
+                </button>
               )
             }
           >
