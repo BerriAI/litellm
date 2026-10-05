@@ -966,6 +966,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.cortecs.ai/v1",
     "https://api.scx.ai/v1",
     "https://api.prisminference.com/v1",
+    "https://api.vynaris.com/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
 ]
 
@@ -1041,6 +1042,7 @@ openai_compatible_providers: Final[list] = [
     "cortecs",
     "scx-ai",
     "prism",
+    "vynaris",
     "sail",
 ]
 
