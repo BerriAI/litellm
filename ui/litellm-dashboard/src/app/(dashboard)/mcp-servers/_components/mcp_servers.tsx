@@ -500,7 +500,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
             setDiscoveryVisible(true);
           }}
         />
-        <div className="flex items-center justify-between max-md:flex-wrap max-md:gap-3">
+        <div className="flex items-center justify-between">
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-xl font-semibold">MCP Servers</h1>
@@ -508,7 +508,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
             </div>
             <p className="mt-1 text-sm text-muted-foreground">Configure and manage your MCP servers</p>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2 max-md:justify-start">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Link href={uiHref("connect")} className={cn(buttonVariants({ variant: "outline" }), "shrink-0")}>
               <Plug />
               My Connections

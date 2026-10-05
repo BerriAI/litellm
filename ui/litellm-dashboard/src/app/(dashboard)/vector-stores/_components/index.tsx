@@ -141,8 +141,8 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
     </div>
   ) : (
     <div className="mx-4">
-      <div className="gap-2 p-8 w-full mt-2 max-md:min-w-0 max-md:p-4">
-        <div className="flex justify-between mt-2 w-full items-center mb-4 max-md:flex-wrap max-md:gap-3">
+      <div className="gap-2 p-8 w-full mt-2">
+        <div className="flex justify-between mt-2 w-full items-center mb-4">
           <h1 className="text-xl font-semibold tracking-tight text-foreground">Vector Store Management</h1>
           <div className="flex items-center space-x-2">
             {lastRefreshed && <p className="text-sm text-muted-foreground">Last Refreshed: {lastRefreshed}</p>}

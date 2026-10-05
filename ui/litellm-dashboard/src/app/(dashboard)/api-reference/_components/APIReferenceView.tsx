@@ -21,10 +21,10 @@ const APIReferenceView: React.FC<ApiRefProps> = ({ proxySettings }) => {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-2 p-8 h-[80vh] w-full mt-2 max-md:min-w-0 max-md:p-4">
+    <div className="grid grid-cols-1 gap-2 p-8 h-[80vh] w-full mt-2">
       <div className="mb-5">
         {/* Header row with Docs link on the right */}
-        <div className="flex items-center justify-between max-md:flex-wrap max-md:gap-3">
+        <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold text-foreground">OpenAI Compatible Proxy: API Reference</h1>
           <DocLink className="ml-3 shrink-0" href="https://docs.litellm.ai/docs/proxy/user_keys" />
         </div>

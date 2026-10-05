@@ -468,7 +468,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
         <TabsContent value="policies" keepMounted>
           <AboutPoliciesAlert />
 
-          <div className="mb-4 flex items-center justify-between max-md:flex-wrap max-md:gap-3">
+          <div className="mb-4 flex items-center justify-between">
             <Button onClick={handleAddPolicy} disabled={!accessToken}>
               + Add New Policy
             </Button>
@@ -575,7 +575,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
             Parts of policy attachments will be on LiteLLM Enterprise in subsequent releases.
           </DismissibleAlert>
 
-          <div className="mb-4 flex items-center justify-between max-md:flex-wrap max-md:gap-3">
+          <div className="mb-4 flex items-center justify-between">
             <Button
               onClick={() => setIsAddAttachmentModalVisible(true)}
               disabled={!accessToken || policiesList.length === 0}

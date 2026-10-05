@@ -159,7 +159,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
         />
       ) : (
         <>
-          <div className="flex justify-between items-center mb-4 max-md:flex-wrap max-md:gap-3">
+          <div className="flex justify-between items-center mb-4">
             <div className="flex gap-2">
               {canModify && (
                 <>

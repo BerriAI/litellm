@@ -417,7 +417,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
   ];
 
   return (
-    <div className="w-full m-2 mt-2 p-8 max-md:mx-0 max-md:min-w-0 max-md:p-4">
+    <div className="w-full m-2 mt-2 p-8">
       <h2 className="mb-2 text-base font-semibold text-foreground">Admin Access</h2>
       <p className="mb-4 text-sm text-foreground">Go to &apos;Internal Users&apos; page to add other admins.</p>
       <Tabs defaultValue={tabItems[0].key}>

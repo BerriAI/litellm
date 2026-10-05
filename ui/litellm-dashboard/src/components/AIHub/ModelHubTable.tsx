@@ -401,9 +401,9 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   return (
     <div className="mx-4">
       {publicPage == false ? (
-        <div className="w-full m-2 mt-2 p-8 max-md:mx-0 max-md:min-w-0 max-md:p-4">
+        <div className="w-full m-2 mt-2 p-8">
           {/* Header with Title, Description and URL */}
-          <div className="flex justify-between items-center mb-6 max-md:flex-wrap max-md:gap-3">
+          <div className="flex justify-between items-center mb-6">
             <div className="flex flex-col items-start">
               <h2 className="text-center text-xl font-semibold">AI Hub</h2>
               {isAdminRole(userRole || "") ? (

@@ -2,7 +2,6 @@
 
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useMediaQuery } from "usehooks-ts";
 import { RotateCcw, Sparkles, X } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useDisableLiteAdmin } from "@/app/(dashboard)/hooks/useDisableLiteAdmin";
@@ -17,7 +16,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/cva.config";
 import { isProxyAdminRole } from "@/utils/roles";
 import { MAX_INPUT_LENGTH, resolveInferenceTarget } from "./agent";
@@ -134,7 +132,7 @@ function Destination({
     return <LiteAdminChat session={{ ...session, inferenceBaseUrl: target.baseUrl }} open={open} close={close} />;
   }
   return (
-    <Panel open={open} close={close}>
+    <Panel open={open}>
       <PanelHeader close={close} />
       <div className="p-4">
         {loading && <Skeleton className="h-24" aria-label="Loading gateway settings" />}
@@ -171,17 +169,14 @@ function Destination({
 /** On open, focus `initialFocus` when given, else the composer when it is usable, else the panel itself. */
 function Panel({
   open,
-  close,
   initialFocus,
   children,
 }: {
   open: boolean;
-  close: () => void;
   initialFocus?: RefObject<HTMLElement | null>;
   children: ReactNode;
 }) {
   const ref = useRef<HTMLElement>(null);
-  const isMobile = useMediaQuery("(max-width: 767px)", { initializeWithValue: false });
   useEffect(() => {
     const panel = ref.current;
     if (!open || !panel) return;
@@ -189,26 +184,6 @@ function Panel({
       preventScroll: true,
     });
   }, [open, initialFocus]);
-  if (isMobile) {
-    return (
-      <Sheet
-        open={open}
-        onOpenChange={(next) => {
-          if (!next) close();
-        }}
-      >
-        <SheetContent
-          side="right"
-          showCloseButton={false}
-          initialFocus={initialFocus}
-          className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-full"
-        >
-          <SheetTitle className="sr-only">LiteAdmin</SheetTitle>
-          {children}
-        </SheetContent>
-      </Sheet>
-    );
-  }
   return (
     <aside
       ref={ref}
@@ -249,7 +224,7 @@ function LiteAdminChat({ session, open, close }: { session: LiteAdminSession; op
     setInput("");
   };
   return (
-    <Panel open={open} close={close} initialFocus={chat.phase === "review" ? reviewRef : undefined}>
+    <Panel open={open} initialFocus={chat.phase === "review" ? reviewRef : undefined}>
       <PanelHeader close={close}>
         <Button
           variant="ghost"

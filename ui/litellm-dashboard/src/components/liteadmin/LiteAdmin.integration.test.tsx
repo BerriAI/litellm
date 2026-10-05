@@ -199,25 +199,6 @@ afterEach(() => {
 });
 
 describe("LiteAdmin in the gateway", () => {
-  it("opens a dismissible dialog on mobile", async () => {
-    const matchMedia = window.matchMedia;
-    const media = vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
-      ...matchMedia(query),
-      matches: query === "(max-width: 767px)",
-    }));
-    try {
-      gateway([]);
-      renderWidget();
-      fireEvent.click(await screen.findByRole("button", { name: "LiteAdmin" }));
-      const dialog = await screen.findByRole("dialog", { name: "LiteAdmin" });
-      expect(screen.queryByRole("complementary", { name: "LiteAdmin" })).not.toBeInTheDocument();
-      fireEvent.keyDown(dialog, { key: "Escape" });
-      await waitFor(() => expect(screen.queryByRole("dialog", { name: "LiteAdmin" })).not.toBeInTheDocument());
-    } finally {
-      media.mockRestore();
-    }
-  });
-
   it.each([
     ["sidebar", SidebarAccountMenu],
     ["navbar", UserDropdown],
