@@ -97,10 +97,9 @@ def _text_parts(request: Request) -> dict[str, str]:
     assert parsed.is_multipart(), request.headers["content-type"]
     parts: Final[tuple[Message, ...]] = tuple(parsed.iter_parts())
     assert [part.get_filename() for part in parts] == [None] * len(parts), request.body
-    return {
-        str(part.get_param("name", header="content-disposition")): bytes(part.get_payload(decode=True)).decode()
-        for part in parts
-    }
+    names: Final = tuple(str(part.get_param("name", header="content-disposition")) for part in parts)
+    assert len(names) == len(set(names)), request.body
+    return {name: bytes(part.get_payload(decode=True)).decode() for name, part in zip(names, parts)}
 
 
 def _redeem(gateway: Gateway, token: str, path: str = "/v1/realtime/calls") -> httpx.Response:
@@ -154,7 +153,8 @@ def test_openai_prefixed_realtime_aliases_reach_realtime_handlers(gateway: Gatew
     scenario_path: Final = f"/{uuid.uuid4().hex}"
     with wire_server(_scripted_openai(_realtime_session_reply(raw, _expires_at()))) as wire, gateway.scenario() as scenario:
         alias: Final = _deployment(scenario, wire, scenario_path, f"openai/{REALTIME_MODEL}")
-        key: Final = scenario.key(models=[alias])
+        transcription_alias: Final = _deployment(scenario, wire, scenario_path, f"openai/{TRANSCRIBE_MODEL}")
+        key: Final = scenario.key(models=[alias, transcription_alias])
         minted: Final = gateway.request("POST", "/openai/v1/realtime/client_secrets", {"model": alias}, key=key)
         assert minted.status_code == 200, minted.text
         answered: Final = _redeem(
@@ -162,10 +162,23 @@ def test_openai_prefixed_realtime_aliases_reach_realtime_handlers(gateway: Gatew
         )
         assert answered.status_code == CALLS_STATUS, answered.text
         assert answered.content == ANSWER, answered.text
-        assert [(request.target, request.headers["authorization"]) for request in wire.drain()] == [
+        transcribed: Final = gateway.request(
+            "POST",
+            "/openai/v1/realtime/transcription_sessions",
+            _beta_transcription_body(transcription_alias),
+            key=key,
+        )
+        assert transcribed.status_code == 200, transcribed.text
+        mint_request, calls_request, session_request = wire.drain()
+        assert [
+            (request.target, request.headers["authorization"])
+            for request in (mint_request, calls_request, session_request)
+        ] == [
             (f"{scenario_path}/v1/realtime/client_secrets", f"Bearer {DEPLOYMENT_KEY}"),
             (f"{scenario_path}/v1/realtime/calls", f"Bearer {raw}"),
+            (f"{scenario_path}/v1/realtime/transcription_sessions", f"Bearer {DEPLOYMENT_KEY}"),
         ]
+        assert _json_body(session_request) == _beta_transcription_body(TRANSCRIBE_MODEL), session_request.body
 
 
 def test_sdk_client_secret_create_forwards_session_and_expires_after_with_deployment_model(gateway: Gateway) -> None:
