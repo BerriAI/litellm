@@ -23,6 +23,7 @@ _ACCESS_KEY: Final = "AKIAINTEGRATION000009"
 _SECRET_KEY: Final = "synthetic-secret-key-for-testing"
 _MESSAGES_PATH: Final = "/anthropic/v1/messages"
 _BRIDGE_VERSION: Final = "bedrock-2023-05-31"
+_HEALTH_PROMPTS: Final = ("Hey how's it going?", "What's 1 + 1?")
 _INPUT_TOKENS: Final = 23
 _OUTPUT_TOKENS: Final = 7
 _USAGE: Final = (_INPUT_TOKENS, _OUTPUT_TOKENS, _INPUT_TOKENS + _OUTPUT_TOKENS)
@@ -869,8 +870,12 @@ def test_responses_api_stream_on_a_mantle_claude_id_bridges_to_the_native_stream
 def _health_peer(request: Request) -> Reply:
     assert (request.method, request.target) == ("POST", _MESSAGES_PATH), request.target
     assert request.headers["authorization"] == f"Bearer {_API_KEY}", sorted(request.headers)
+    assert request.headers["anthropic-version"] == "2023-06-01", sorted(request.headers)
     body: Final = _JSON_OBJECT.validate_json(request.body)
-    assert (body["model"], body["anthropic_version"]) == (_HAIKU, _BRIDGE_VERSION), request.body
+    assert body in tuple(
+        {"model": _HAIKU, "max_tokens": 16, "messages": [{"role": "user", "content": prompt}]}
+        for prompt in _HEALTH_PROMPTS
+    ), request.body
     return _text_reply(uuid4().hex)
 
 
