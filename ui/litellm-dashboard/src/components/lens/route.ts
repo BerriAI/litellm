@@ -4,7 +4,12 @@ import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } f
 import { useCallback } from "react";
 import { OPEN_TRACE_PARSERS, RUN_FILTER_PARSERS } from "@/components/lens/traces/routing";
 
-export const LENS_TABS = { traces: "Traces", investigations: "Investigations", settings: "Settings" } as const;
+export const LENS_TABS = {
+  traces: "Traces",
+  findings: "Findings",
+  investigations: "Investigations",
+  settings: "Settings",
+} as const;
 export type LensTab = keyof typeof LENS_TABS;
 const lensTabs = Object.keys(LENS_TABS) as LensTab[];
 
@@ -22,6 +27,11 @@ const LENS_PARSERS = {
 };
 
 const ISSUE_PARSERS = { issue: parseAsString };
+
+const INBOX_PARSERS = {
+  inbox_agent: parseAsString.withDefault("all"),
+  priority: parseAsStringLiteral(["all", "high", "medium", "low"]).withDefault("all"),
+};
 
 const LIST_PARSERS = { search: parseAsString.withDefault("") };
 
@@ -44,6 +54,7 @@ const SESSION_PARSERS = {
   ...RUN_FILTER_PARSERS,
   ...ISSUE_PARSERS,
   ...LIST_PARSERS,
+  ...INBOX_PARSERS,
   ...RESULT_PARSERS,
   ...DIALOG_PARSERS,
 };
@@ -176,4 +187,14 @@ export function useEvidenceRoute() {
   );
   const current: EvidenceRef | null = evidence === null ? null : { id: evidence, span: evidence_span ?? "" };
   return { evidence: current, setEvidence };
+}
+
+export function useInboxFilters() {
+  const [{ inbox_agent, priority }, setParams] = useQueryStates(INBOX_PARSERS);
+  return {
+    agent: inbox_agent,
+    priority,
+    setAgent: (agent: string) => void setParams({ inbox_agent: agent }),
+    setPriority: (priority: "all" | "high" | "medium" | "low") => void setParams({ priority }),
+  };
 }

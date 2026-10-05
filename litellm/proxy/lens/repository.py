@@ -1,4 +1,6 @@
+import asyncio
 import json
+import random
 from collections.abc import AsyncIterator, Awaitable, Callable
 from types import MappingProxyType
 from typing import Final, Protocol
@@ -19,11 +21,14 @@ class Row(BaseModel):
 
 
 _ROWS: Final = TypeAdapter(tuple[Row, ...])
+UPDATE_ATTEMPTS: Final = 40
+UPDATE_BACKOFF_SECONDS: Final = 0.02
 
 
 class LensRepository:
-    def __init__(self, db: Database) -> None:
+    def __init__(self, db: Database, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
         self.db: Final = db
+        self.sleep: Final = sleep
 
     async def lenses(self) -> tuple[Lens, ...]:
         rows: Final = _ROWS.validate_python(await self.db.query_raw('SELECT data FROM "LiteLLM_Lens" ORDER BY id'))
@@ -47,12 +52,18 @@ class LensRepository:
         return lens
 
     async def update(
-        self, lens_id: str, transform: Callable[[Lens], Lens], attempts: int = 8, *, changed_only: bool = False
+        self,
+        lens_id: str,
+        transform: Callable[[Lens], Lens],
+        attempts: int = UPDATE_ATTEMPTS,
+        *,
+        changed_only: bool = False,
     ) -> Lens | None:
-        for _ in range(attempts):
+        for attempt in range(attempts):
             completed, updated = await self._try_update(lens_id, transform, changed_only)
             if completed:
                 return updated
+            await self.sleep(random.uniform(0, UPDATE_BACKOFF_SECONDS * min(attempt + 1, 8)))
         return None
 
     async def _try_update(

@@ -4,12 +4,17 @@ from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.proxy.lens.models import (
+    MAX_REVIEWS,
     MAX_STEPS,
     Finding,
     FindingDraft,
     Job,
     Lens,
     LensSettings,
+    Progress,
+    Review,
+    ReviewPage,
+    Sample,
     Scope,
     Step,
     Worker,
@@ -82,6 +87,45 @@ def add_step(job: Job, step: Step) -> Job:
     return job.model_copy(update=MappingProxyType({"steps": (*job.steps, step)[-MAX_STEPS:]}))
 
 
+def end_job(job: Job, status: Literal["completed", "failed", "cancelled"], now: datetime) -> Job:
+    stage: Final = {"completed": "Complete", "failed": "Failed", "cancelled": "Cancelled"}[status]
+    return job.model_copy(
+        update=MappingProxyType({"status": status, "stage": stage, "finished_at": now, "reading": ()})
+    )
+
+
+def cancel_job(lens: Lens, now: datetime) -> Lens:
+    job: Final = current_job(lens)
+    if job is None:
+        return lens
+    return replace_job(lens, end_job(job, "cancelled", now)).model_copy(
+        update=MappingProxyType({"next_run_at": now + timedelta(minutes=lens.settings.interval_minutes)})
+    )
+
+
+def apply_progress(job: Job, progress: Progress, now: datetime) -> Job:
+    updates: Final = MappingProxyType(
+        {
+            "stage": progress.stage,
+            "coverage": progress.coverage,
+            "lease_until": now + timedelta(minutes=5),
+            "reading": job.reading if progress.reading is None else progress.reading,
+        }
+    )
+    renewed: Final = add_review(job.model_copy(update=updates), progress.review)
+    if progress.stage == job.stage:
+        return renewed
+    return add_step(renewed, Step(at=now, kind="stage", label=progress.stage))
+
+
+def add_review(job: Job, review: Review | None) -> Job:
+    if review is None:
+        return job
+    return job.model_copy(
+        update=MappingProxyType({"reviews": (*job.reviews, review)[-MAX_REVIEWS:], "reviewed": job.reviewed + 1})
+    )
+
+
 def claim_job(lens: Lens, worker: Worker, now: datetime) -> Lens:
     job: Final = current_job(lens)
     if job is None or not can_access(worker.scope, lens.scope):
@@ -91,15 +135,8 @@ def claim_job(lens: Lens, worker: Worker, now: datetime) -> Lens:
     if job.attempts >= 3:
         return replace_job(
             lens,
-            job.model_copy(
-                update=MappingProxyType(
-                    {
-                        "status": "failed",
-                        "stage": "Failed",
-                        "error": "Worker disconnected repeatedly",
-                        "finished_at": now,
-                    }
-                )
+            end_job(job, "failed", now).model_copy(
+                update=MappingProxyType({"error": "Worker disconnected repeatedly"})
             ),
         ).model_copy(update=MappingProxyType({"next_run_at": now + timedelta(minutes=lens.settings.interval_minutes)}))
     return replace_job(
@@ -112,6 +149,9 @@ def claim_job(lens: Lens, worker: Worker, now: datetime) -> Lens:
                     "worker_id": worker.id,
                     "lease_until": now + timedelta(minutes=5),
                     "attempts": job.attempts + 1,
+                    "reviews": (),
+                    "reviewed": 0,
+                    "reading": (),
                 }
             )
         ),
@@ -188,3 +228,22 @@ def snapshot_finding(lens: Lens, draft: FindingDraft, revision: int, now: dateti
             }
         )
     )
+
+
+def without_attributes(sample: Sample) -> Sample:
+    executions: Final = tuple(e.model_copy(update=MappingProxyType({"metadata": ()})) for e in sample.executions)
+    return sample.model_copy(update=MappingProxyType({"executions": executions}))
+
+
+def summarized_job(job: Job) -> Job:
+    sample: Final = without_attributes(job.sample) if job.sample else None
+    return job.model_copy(update=MappingProxyType({"reviews": (), "sample": sample}))
+
+
+def summarized(lens: Lens) -> Lens:
+    return lens.model_copy(update=MappingProxyType({"jobs": tuple(summarized_job(job) for job in lens.jobs)}))
+
+
+def reviews_after(job: Job, after: int) -> ReviewPage:
+    first_kept: Final = job.reviewed - len(job.reviews)
+    return ReviewPage(reviews=job.reviews[max(0, after - first_kept) :], reviewed=job.reviewed)

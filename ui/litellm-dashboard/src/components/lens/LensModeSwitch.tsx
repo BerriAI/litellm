@@ -1,103 +1,63 @@
 "use client";
 
 import { Tabs as TabsPrimitive } from "@base-ui/react/tabs";
-import { Activity, ScanSearch, Settings } from "lucide-react";
+import { Settings } from "lucide-react";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { cn } from "@/lib/cva.config";
 import type { InvestigationActivity } from "./model/status";
 import { useWorkerConnected } from "./hooks/useWorkerConnected";
 import type { LensList } from "./model/types";
-import { LENS_TABS, type LensTab } from "./route";
-import { frameCorner, frameTab } from "./ui/frame";
+import { LENS_TABS } from "./route";
 
-const MODE_ICONS = { traces: Activity, investigations: ScanSearch, settings: Settings } as const;
-
-const ACTIVITY_DOT: Record<Exclude<InvestigationActivity, "idle">, { className: string; label: string }> = {
-  running: { className: "bg-info motion-safe:animate-pulse", label: "An investigation is running" },
-  queued: { className: "bg-muted-foreground/60", label: "An investigation is queued" },
-};
-
-function ActivityDot({ activity }: { activity: InvestigationActivity }) {
-  if (activity === "idle") return null;
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "size-1.5 rounded-full animate-in fade-in-0 zoom-in-50 duration-300",
-        ACTIVITY_DOT[activity].className,
-      )}
-    />
-  );
-}
-
-function NotchCorner({ side, demo }: { side: "left" | "right"; demo: boolean }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "pointer-events-none absolute bottom-0 hidden size-3 overflow-hidden @min-[24rem]/lens-frame:block",
-        side === "left" ? "-left-3" : "-right-3",
-      )}
-    >
-      <span className={frameCorner({ session: demo ? "demo" : "live", side })} />
-    </span>
-  );
-}
+const ACTIVITY_LABEL = { running: "An investigation is running", queued: "An investigation is queued" };
 
 export function LensModeSwitch({
   activity,
-  demo,
   workers,
-  setup,
 }: {
   activity: InvestigationActivity;
-  demo: boolean;
   workers: LensList["workers"] | null;
-  setup?: string;
 }) {
   const connected = useWorkerConnected(workers);
   const settingsTitle = connected ? "Worker connected" : "Connect worker";
   const tabs = Object.entries(LENS_TABS).filter(([view]) => view !== "settings" || workers);
   return (
-    <div className={frameTab({ session: demo ? "demo" : "live" })}>
-      <NotchCorner side="left" demo={demo} />
-      <NotchCorner side="right" demo={demo} />
-      <TabsPrimitive.List
-        aria-label="Lens"
-        className="relative flex h-9 items-center justify-center p-1 @min-[24rem]/lens-frame:justify-start"
-      >
-        <TabsPrimitive.Indicator className="absolute top-1 bottom-1 left-(--active-tab-left) w-(--active-tab-width) rounded-full bg-muted transition-[left,width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none" />
-        {tabs.map(([view, label]) => {
-          const Icon = MODE_ICONS[view as LensTab];
-          const workerDisconnected = view === "settings" && workers !== null && !connected;
-          return (
-            <TabsPrimitive.Tab
-              key={view}
-              value={view}
-              title={view === "settings" ? settingsTitle : undefined}
-              aria-description={
-                view === "investigations" && activity !== "idle" ? ACTIVITY_DOT[activity].label : undefined
-              }
+    <TabsPrimitive.List
+      aria-label="Lens"
+      className="relative inline-flex h-8 max-w-full items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
+    >
+      <TabsPrimitive.Indicator className="absolute top-0.5 bottom-0.5 left-(--active-tab-left) w-(--active-tab-width) rounded-md bg-card shadow-sm transition-[left,width] duration-200 motion-reduce:transition-none" />
+      {tabs.map(([view, label]) => (
+        <TabsPrimitive.Tab
+          key={view}
+          value={view}
+          title={view === "settings" ? settingsTitle : undefined}
+          aria-description={view === "investigations" && activity !== "idle" ? ACTIVITY_LABEL[activity] : undefined}
+          className={cn(
+            "relative z-raised inline-flex h-full items-center gap-1.5 rounded-md text-xs font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-active:text-foreground sm:text-sm",
+            view === "settings" ? "px-2" : "px-2.5 sm:px-3",
+          )}
+        >
+          {view === "settings" ? (
+            <span className="relative inline-flex">
+              <Settings aria-hidden="true" className="size-3.5" />
+              {!connected && <StatusDot state="error" className="absolute -top-0.5 -right-0.5 size-1.5" />}
+              <span className="sr-only">{label}</span>
+            </span>
+          ) : (
+            label
+          )}
+          {view === "investigations" && activity !== "idle" && (
+            <span
+              aria-hidden="true"
               className={cn(
-                "relative z-raised inline-flex h-full items-center gap-2 rounded-full text-sm font-medium text-muted-foreground outline-none transition-colors duration-200 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-active:text-foreground",
-                view === "settings" ? "px-2.5" : "px-3 sm:px-4",
+                "size-1.5 rounded-full",
+                activity === "running" ? "bg-info motion-safe:animate-pulse" : "bg-muted-foreground/60",
               )}
-            >
-              <span className="relative inline-flex">
-                <Icon aria-hidden="true" className="size-4" />
-                {workerDisconnected && <StatusDot state="error" className="absolute -top-0.5 -right-0.5 size-1.5" />}
-              </span>
-              <span className={cn(view === "settings" && "sr-only")}>{label}</span>
-              {view === "investigations" && setup && (
-                <span className="absolute -top-3 right-2 rounded-full border border-border bg-card px-1.5 py-0.5 text-xs leading-none font-medium text-muted-foreground animate-in fade-in-0 duration-200">
-                  {setup}
-                </span>
-              )}
-              {view === "investigations" && <ActivityDot activity={activity} />}
-            </TabsPrimitive.Tab>
-          );
-        })}
-      </TabsPrimitive.List>
-    </div>
+            />
+          )}
+        </TabsPrimitive.Tab>
+      ))}
+    </TabsPrimitive.List>
   );
 }

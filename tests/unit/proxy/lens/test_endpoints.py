@@ -10,6 +10,7 @@ from litellm import Router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.lens.endpoints import (
     list_agents,
+    read_reviews,
     run_settings,
     run_window,
     user_scope,
@@ -172,6 +173,15 @@ async def test_incompatible_worker_is_rejected_before_claiming_work(
         await claim(worker(), protocol_version=protocol_version)
     assert error.value.status_code == 409
     assert "Upgrade" in error.value.detail
+
+
+@pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.TEAM, None))
+@pytest.mark.asyncio
+async def test_regular_keys_cannot_poll_live_reviews(role: LitellmUserRoles | None) -> None:
+    auth: Final = UserAPIKeyAuth(user_role=role, team_id="team", token="hashed-test-key")
+    with pytest.raises(HTTPException) as error:
+        await read_reviews("lens", "job", auth)
+    assert error.value.status_code == 403
 
 
 @pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.TEAM, None))

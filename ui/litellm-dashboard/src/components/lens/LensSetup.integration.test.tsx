@@ -21,7 +21,7 @@ const worker = () => ({
 function serve({ enabled = false, traces = false, requests = false, connected = false } = {}) {
   list.mockResolvedValue({ lenses: [], workers: connected ? [worker()] : [], tracing_enabled: enabled });
   network.mockImplementation(async (input, init) => {
-    const { path, method, body } = await readRequest(input, init);
+    const { path, method, body, query } = await readRequest(input, init);
     if (path === "/v1/traces")
       return enabled
         ? Response.json({ data: traces ? [data.runs[0].trace.summary] : [] })
@@ -44,6 +44,11 @@ function serve({ enabled = false, traces = false, requests = false, connected = 
     if (path === "/key/info") return Response.json({ info: { models: ["analysis"], max_budget: 100 } });
     if (path === "/lens/agents") return Response.json(["support_agent"]);
     if (path === "/lens/preview/sample") return Response.json({ eligible: 1, selected: 1, executions: [] });
+    if (path.endsWith("/reviews"))
+      return Response.json({
+        reviews: data.lenses[0].jobs[0].reviews.slice(Number(query.get("after") ?? 0)),
+        reviewed: data.lenses[0].jobs[0].reviewed,
+      });
     if (path.endsWith("/runs")) return Response.json(data.lenses[0].jobs);
     return Response.json({ data: [] });
   });

@@ -207,6 +207,49 @@ class Step(Record):
     cost: float = 0
 
 
+MAX_REVIEWS = 60
+
+
+class ReviewSpan(Record):
+    span_id: str
+    name: str = Field(max_length=120)
+    kind: str = Field(max_length=40)
+    preview: str = Field(max_length=240)
+    cited: bool = False
+
+
+class ReviewVerdict(Record):
+    check_id: str
+    kind: Literal["issue", "pattern"]
+    summary: str = Field(max_length=300)
+
+
+class Review(Record):
+    execution_id: str
+    trace_id: str
+    agent: str
+    name: str
+    spans: tuple[ReviewSpan, ...] = Field(default=(), max_length=8)
+    reasoning: str = Field(default="", max_length=800)
+    verdicts: tuple[ReviewVerdict, ...] = ()
+    cannot_assess: bool = False
+    model: str
+    duration_ms: int = Field(ge=0)
+    at: datetime
+
+
+class ReviewPage(Record):
+    reviews: tuple[Review, ...]
+    reviewed: int
+
+
+class InFlight(Record):
+    execution_id: str
+    trace_id: str
+    agent: str
+    started_at: datetime
+
+
 class Job(Record):
     id: str
     status: Literal["queued", "running", "completed", "failed", "cancelled"] = "queued"
@@ -227,6 +270,9 @@ class Job(Record):
     findings: tuple[Finding, ...] | None = None
     assessments: tuple[RunAssessment, ...] = ()
     steps: tuple[Step, ...] = ()
+    reviews: tuple[Review, ...] = ()
+    reviewed: int = 0
+    reading: tuple[InFlight, ...] = ()
     trigger: Literal["schedule", "manual"] = "schedule"
 
 
@@ -307,6 +353,8 @@ class Claim(Record):
 class Progress(Record):
     stage: str = Field()
     coverage: Coverage = Coverage()
+    review: Review | None = None
+    reading: tuple[InFlight, ...] | None = None
 
 
 class Result(Record):

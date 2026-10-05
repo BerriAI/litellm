@@ -63,13 +63,20 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
   const actions = useInvestigationActions();
   const { dialog, target, openDialog, closeDialog } = useDialogRoute();
   const { issueKey, setIssueKey } = useIssueRoute();
-  const { lensId, setLensId } = useLensRoute();
+  const { lensId, setLensId, setTab } = useLensRoute();
   const list = useQuery(lensQueries.list(api));
   const status = useLensReadiness(true);
   const { connected } = status;
   const screenInput = { list, lensId, dialog, target };
   const screen = investigationScreen(screenInput);
   const lenses = list.data?.lenses ?? [];
+  const queue = {
+    api,
+    lenses,
+    workers: list.data?.workers ?? [],
+    onConnect: () => setTab("settings"),
+    onOpenLens: setLensId,
+  };
   const lens = lenses.find((candidate) => candidate.id === lensId);
   const peeked = issueKey ? findFinding(lenses, issueKey) ?? null : null;
   const selectedRow = (open: Lens | undefined): InvestigationRow | null => {
@@ -156,6 +163,7 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
                     ready={status.ready}
                     busy={actions.busy}
                     connected={connected}
+                    queue={queue}
                     onEdit={() => openDialog("edit")}
                     onDuplicate={() => openDialog("duplicate")}
                     onPause={() => void actions.pause(row.lens)}
@@ -205,8 +213,11 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
           busy={actions.busy}
           onClose={closeDialog}
           onRun={async (request) => {
-            await actions.startRun(dialogLens, request);
-            closeDialog();
+            const started = await actions.startRun(dialogLens, request);
+            if (started) {
+              closeDialog();
+              setLensId(dialogLens.id);
+            }
           }}
         />
       )}

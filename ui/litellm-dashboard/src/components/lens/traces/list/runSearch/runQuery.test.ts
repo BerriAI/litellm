@@ -45,3 +45,10 @@ describe("RUN_INDEX values", () => {
     expect(fieldValues(RUN_INDEX, [run({ models: [] })], "model")).toEqual([]);
   });
 });
+
+it("combines quick filters with search and treats agent names literally", () => {
+  const selected = filterRuns(runs, "vector", { agent: "researcher", status: "error" });
+  expect(selected.map((run) => run.trace_id)).toEqual(["bbb222"]);
+  expect(filterRuns(runs, "vector", { agent: "triage", status: "all" })).toEqual([]);
+  expect(filterRuns(runs, "", { agent: "research*", status: "all" })).toEqual([]);
+});

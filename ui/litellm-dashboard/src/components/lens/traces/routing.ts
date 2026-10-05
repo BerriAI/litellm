@@ -59,6 +59,8 @@ export const OPEN_TRACE_PARSERS = {
 
 export const RUN_FILTER_PARSERS = {
   q: parseAsString.withDefault(""),
+  agent: parseAsString.withDefault(""),
+  status: parseAsStringLiteral(["all", "ok", "error"]).withDefault("all"),
   hours: parseAsNumberLiteral(RANGE_HOURS).withDefault(DEFAULT_RANGE_HOURS),
   from: parseAsInteger,
   to: parseAsInteger,
@@ -139,9 +141,16 @@ export function useLocalRunSelection(initialSpanId: string | null): RunSelection
   return { spanId, view, spanTab, stepQuery, errorsOnly, selectSpan, setView, setSpanTab, setStepQuery, setErrorsOnly };
 }
 
-export function useRunFilterRouting(): { query: string; setQuery: (query: string) => void } {
-  const [query, setQuery] = useQueryState("q", RUN_FILTER_PARSERS.q);
-  return { query, setQuery: useCallback((q: string) => void setQuery(q), [setQuery]) };
+export function useRunFilterRouting() {
+  const [{ q, agent, status }, setParams] = useQueryStates(RUN_FILTER_PARSERS);
+  return {
+    query: q,
+    agent,
+    status,
+    setQuery: (query: string) => void setParams({ q: query }),
+    setAgent: (agent: string) => void setParams({ agent }),
+    setStatus: (status: "all" | "ok" | "error") => void setParams({ status }),
+  };
 }
 
 export function useRangeHoursRouting(): [number, (hours: number) => void] {
