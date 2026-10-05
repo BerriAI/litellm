@@ -7,8 +7,9 @@ export type SpanErrorPage =
 export type TraceListQuery = NonNullable<paths["/v1/traces"]["get"]["parameters"]["query"]>;
 export type TraceDetailQuery = NonNullable<paths["/v1/traces/{trace_id}"]["get"]["parameters"]["query"]>;
 export type SpanQuery = NonNullable<paths["/v1/traces/{trace_id}/spans/{span_id}"]["get"]["parameters"]["query"]>;
-export type SpanErrorQuery =
-  NonNullable<paths["/v1/traces/{trace_id}/spans/{span_id}/error"]["get"]["parameters"]["query"]>;
+export type SpanErrorQuery = NonNullable<
+  paths["/v1/traces/{trace_id}/spans/{span_id}/error"]["get"]["parameters"]["query"]
+>;
 export type TraceQueryBody = components["schemas"]["TraceQueryRequest"];
 type ApiSpanDetail =
   paths["/v1/traces/{trace_id}/spans/{span_id}"]["get"]["responses"][200]["content"]["application/json"];
