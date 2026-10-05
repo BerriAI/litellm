@@ -118,7 +118,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         )
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+        self, error_message: str, status_code: int, headers: dict | httpx.Headers  # mutable-ok: mirrors the base class signature
     ) -> BaseLLMException:
         return super().get_error_class(
             error_message=error_message,
