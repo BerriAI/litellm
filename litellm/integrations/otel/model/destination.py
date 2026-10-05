@@ -38,6 +38,17 @@ class OtelDestination(BaseModel):
         default="full",
         description="``llm_only`` keeps just the model-call spans; the rest of the request tree is not forwarded.",
     )
+    success_sampling_rate: float | None = Field(
+        default=None,
+        description=(
+            "Share of the request trees forwarded, 0.0..1.0, drawn once per request when its root span ends; "
+            "``None`` forwards every one."
+        ),
+    )
+    error_sampling_rate: float | None = Field(
+        default=None,
+        description="Same, for the requests with a failed span in their tree; ``None`` forwards every one.",
+    )
 
     def header_string(self) -> str:
         """Render headers as the ``k=v,k2=v2`` form an ``ExporterSpec`` expects.
@@ -52,9 +63,9 @@ class OtelDestination(BaseModel):
     def cache_key(self) -> tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, str], ...], str | None]:
         """Identity for processor reuse, so one destination means one exporter.
 
-        ``span_scope`` is left out on purpose: the scope decides which spans reach the
-        processor, not how the processor exports them, so a full and an ``llm_only``
-        view of the same account share one exporter.
+        ``span_scope`` and the sampling rates are left out on purpose: they decide which
+        spans reach the processor, not how the processor exports them, so a full and an
+        ``llm_only`` view of the same account share one exporter.
         """
         return (
             self.endpoint,
