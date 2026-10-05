@@ -5,7 +5,9 @@ use litellm_traces::{
     query::named::{ReadAccessParams, SpendByResponseIdsRow, TraceSpansRow},
     resolve_trace,
 };
-use litellm_traces_cache::{Error, SnapshotCache, SnapshotKey};
+use std::sync::Arc;
+
+use litellm_traces_cache::{Error, Freshness, Snapshot, SnapshotCache, SnapshotKey};
 use rstest::{fixture, rstest};
 
 const T0: i64 = 1_790_742_989_000_000_000;
@@ -60,6 +62,18 @@ fn key(
     SnapshotKey::new(source, access, trace_id, trace_ref, ms).unwrap()
 }
 
+async fn insert(
+    cache: &SnapshotCache,
+    key: SnapshotKey,
+    trace: Trace,
+) -> Result<Arc<Snapshot>, Arc<Error>> {
+    cache
+        .pinned_or_load(key, 100, async {
+            Ok::<_, Error>((trace, Freshness::Settled))
+        })
+        .await
+}
+
 #[fixture]
 fn trace() -> Trace {
     resolve_trace(
@@ -85,7 +99,7 @@ async fn cached_trace_is_isolated_by_access_scope(
     let cache = SnapshotCache::new(1024 * 1024, TTL);
     let stored = key("source", &access(), "trace", "ref", 100);
 
-    cache.insert(stored.clone(), trace.clone()).await.unwrap();
+    insert(&cache, stored.clone(), trace.clone()).await.unwrap();
 
     let other_access = ReadAccessParams {
         all_teams,
@@ -115,7 +129,7 @@ async fn cached_trace_is_isolated_by_key_fields(
     let cache = SnapshotCache::new(1024 * 1024, TTL);
     let stored = key("source", &access(), "trace", "ref", 100);
 
-    cache.insert(stored.clone(), trace.clone()).await.unwrap();
+    insert(&cache, stored.clone(), trace.clone()).await.unwrap();
 
     let other = key(source, &access(), trace_id, trace_ref, snapshot_ms);
     assert!(cache.get(&other).await.is_none());
@@ -129,7 +143,7 @@ async fn snapshot_at_the_size_limit_is_accepted(trace: Trace) {
     let cache = SnapshotCache::new(size, TTL);
     let stored = key("source", &access(), "trace", "ref", 100);
 
-    cache.insert(stored.clone(), trace).await.unwrap();
+    insert(&cache, stored.clone(), trace).await.unwrap();
     assert!(cache.get(&stored).await.is_some());
 }
 
@@ -141,8 +155,8 @@ async fn snapshot_one_byte_over_the_size_limit_is_rejected(trace: Trace) {
     let stored = key("source", &access(), "trace", "ref", 100);
 
     assert!(matches!(
-        cache.insert(stored.clone(), trace).await,
-        Err(Error::ReadTooLarge)
+        insert(&cache, stored.clone(), trace).await,
+        Err(error) if matches!(*error, Error::ReadTooLarge)
     ));
     assert!(cache.get(&stored).await.is_none());
 }
@@ -166,25 +180,31 @@ async fn snapshot_version_tracks_the_ordered_span_ids(
     };
     let cache = SnapshotCache::new(1024 * 1024, TTL);
 
-    let first = cache
-        .insert(key("source", &access(), "a", "ref", 100), build(first_ids))
-        .await
-        .unwrap();
-    let second = cache
-        .insert(key("source", &access(), "b", "ref", 100), build(second_ids))
-        .await
-        .unwrap();
+    let first = insert(
+        &cache,
+        key("source", &access(), "a", "ref", 100),
+        build(first_ids),
+    )
+    .await
+    .unwrap();
+    let second = insert(
+        &cache,
+        key("source", &access(), "b", "ref", 100),
+        build(second_ids),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(first.version() == second.version(), equal);
 }
 
 #[rstest]
 #[tokio::test]
-async fn snapshots_expire_after_the_ttl(trace: Trace) {
+async fn snapshots_expire_when_idle(trace: Trace) {
     let cache = SnapshotCache::new(1024 * 1024, Duration::from_millis(50));
     let stored = key("source", &access(), "trace", "ref", 100);
 
-    cache.insert(stored.clone(), trace).await.unwrap();
+    insert(&cache, stored.clone(), trace).await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     assert!(cache.get(&stored).await.is_none());

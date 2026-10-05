@@ -14,7 +14,7 @@ global state.
 
 import re
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, Literal
 
 from botocore.exceptions import (
     CredentialRetrievalError,
@@ -125,6 +125,14 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
                 "or pass api_key for Bearer auth, or provide AWS credentials "
                 "(IAM role / access key / profile / web identity) for SigV4."
             ) from e
+
+
+def is_mantle_claude_model(model: str) -> bool:
+    return "claude" in model.lower()
+
+
+def mantle_health_check_mode(model: str) -> Literal["anthropic_messages"] | None:
+    return "anthropic_messages" if is_mantle_claude_model(model) else None
 
 
 def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:

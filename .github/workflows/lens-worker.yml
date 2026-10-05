@@ -34,7 +34,14 @@ jobs:
         with:
           persist-credentials: false
       - name: Build Lens worker
-        run: docker build -f deploy/lens/Dockerfile -t lens-worker:${{ github.sha }} .
+        run: docker build --build-arg LITELLM_RELEASE_TAG=sha-${{ github.sha }} -f deploy/lens/Dockerfile -t lens-worker:${{ github.sha }} .
+      - name: Reject custom builds without a matching release tag
+        run: |
+          if docker build --progress plain -f deploy/lens/Dockerfile -t lens-worker:unversioned . > missing-tag.log 2>&1; then
+            echo "::error::An unversioned worker build unexpectedly succeeded"
+            exit 1
+          fi
+          grep -F 'LITELLM_RELEASE_TAG: Pass --build-arg LITELLM_RELEASE_TAG matching the gateway' missing-tag.log
       - name: Verify standalone imports with a read-only filesystem
         run: |
           docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,size=1g \
@@ -54,11 +61,11 @@ jobs:
             -v "$PWD/tests/proxy_behavior/lens/worker_storage_smoke.py:/app/storage_smoke.py:ro" \
             --entrypoint python lens-worker:${{ github.sha }} /app/storage_smoke.py
       - name: Publish versioned Lens worker
-        if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
+        if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm' && github.ref == 'refs/heads/main'
         env:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REGISTRY_USER: ${{ github.actor }}
-          IMAGE: ghcr.io/berriai/litellm-lens-worker:sha-${{ github.sha }}
+          IMAGE: ghcr.io/berriai/litellm-lens-worker-dev:sha-${{ github.sha }}
         run: |
           printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
           docker tag lens-worker:${{ github.sha }} "$IMAGE"

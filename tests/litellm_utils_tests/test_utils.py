@@ -1349,7 +1349,10 @@ def test_is_prompt_caching_enabled_return_default_image_dimensions():
     IMPORTANT: Ensures Get token counter does not make a GET request to the image url
     """
     mock_token_counter = MagicMock(return_value=False)
-    with patch("litellm.utils._get_messages_reach_token_count", return_value=mock_token_counter):
+    with patch(
+        "litellm.utils._get_messages_reach_token_count",
+        return_value=mock_token_counter,
+    ):
         litellm.utils.is_prompt_caching_valid_prompt(
             messages=[
                 {
@@ -1371,6 +1374,7 @@ def test_is_prompt_caching_enabled_return_default_image_dimensions():
             model="gpt-4o-mini",
         )
 
+        # Assert token_counter was called with use_default_image_token_count=True
         args_to_mock_token_counter = mock_token_counter.call_args[1]
         print("args_to_mock", args_to_mock_token_counter)
         assert args_to_mock_token_counter["use_default_image_token_count"] is True
