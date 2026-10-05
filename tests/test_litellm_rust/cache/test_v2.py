@@ -2,7 +2,7 @@ import asyncio
 import datetime
 from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
-from typing import Final, Literal, cast
+from typing import Final, Literal, Protocol, cast
 
 import pytest
 from pydantic import BaseModel, TypeAdapter
@@ -59,6 +59,8 @@ async def invoke(
     server: RecordingServer,
     options: Mapping[str, object],
     native: bool = True,
+    events: tuple[tuple[str, object], ...] | None = None,
+    ensure_ascii: bool = True,
 ) -> object:
     common: Final = {"api_key": "test-key", "api_base": server.base_url, **options}
     if route == "responses":
@@ -77,7 +79,11 @@ async def invoke(
             rules=(RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),),
         )
     server.default_response = (
-        ResponseSpec(body=None, events=MESSAGES_EVENTS)
+        ResponseSpec(
+            body=None,
+            events=MESSAGES_EVENTS if events is None else events,
+            ensure_ascii=ensure_ascii,
+        )
         if options.get("stream")
         else ResponseSpec(body=MESSAGES_RESPONSE)
     )
@@ -343,9 +349,79 @@ async def collect(stream: object) -> bytes:
     return b"".join([chunk_bytes(chunk) async for chunk in stream])
 
 
+class ClosableByteStream(Protocol):
+    def __aiter__(self) -> AsyncIterator[bytes]: ...
+
+    async def __anext__(self) -> bytes: ...
+
+    async def aclose(self) -> None: ...
+
+
+async def collect_chunks(stream: object) -> tuple[bytes, ...]:
+    assert isinstance(stream, AsyncIterator)
+    return tuple([chunk_bytes(chunk) async for chunk in stream])
+
+
 def chunk_bytes(value: object) -> bytes:
     assert isinstance(value, bytes)
     return value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", (False, True), ids=("native-v2", "legacy-python"))
+async def test_rust_messages_replays_each_cached_sse_event_and_closes_cleanly(
+    recording_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    legacy: bool,
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    events: Final = (
+        *MESSAGES_EVENTS[:2],
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "é🙂"},
+            },
+        ),
+        *MESSAGES_EVENTS[3:],
+    )
+    litellm.cache = Cache() if legacy else _v2.Cache.memory()
+    recorder: Final = RecordingLogger()
+    options: Final = {
+        "model": MESSAGES_MODEL,
+        "messages": list(MESSAGES),
+        "max_tokens": 32,
+        "api_key": "test-key",
+        "api_base": recording_server.base_url,
+        "stream": True,
+        "callbacks": [recorder],
+    }
+    first: Final = await invoke(
+        "messages", recording_server, options, native=True, events=events, ensure_ascii=False
+    )
+    expected: Final = recording_server.default_response.payloads()
+    first_chunks: Final = await collect_chunks(first)
+    assert b"".join(first_chunks) == b"".join(expected)
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    second: Final = await invoke(
+        "messages", recording_server, options, native=True, events=events, ensure_ascii=False
+    )
+    second_chunks: Final = await collect_chunks(second)
+    assert second_chunks == expected
+    assert "é🙂".encode() in b"".join(second_chunks)
+    third: Final = cast(
+        ClosableByteStream,
+        await invoke("messages", recording_server, options, native=True, events=events, ensure_ascii=False),
+    )
+    third_first: Final = chunk_bytes(await third.__anext__())
+    await third.aclose()
+    assert third_first == expected[0]
+    assert tuple([chunk_bytes(chunk) async for chunk in third]) == ()
+    await drain_logging()
+    assert "async_log_failure_event" not in recorder.names
+    assert len(recording_server.requests) == 1
 
 
 @pytest.mark.asyncio

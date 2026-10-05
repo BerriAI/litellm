@@ -1,6 +1,6 @@
 use std::str;
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::SseError;
@@ -59,6 +59,21 @@ impl SseCodec {
         self.past_bom = true;
         true
     }
+}
+
+pub fn split_raw_blocks(bytes: Bytes) -> impl Iterator<Item = Bytes> {
+    let mut start = 0;
+    std::iter::from_fn(move || {
+        let remaining = &bytes[start..];
+        let length = block_end(remaining).unwrap_or(remaining.len());
+        if length == 0 {
+            return None;
+        }
+        let end = start + length;
+        let block = bytes.slice(start..end);
+        start = end;
+        Some(block)
+    })
 }
 
 fn block_end(bytes: &[u8]) -> Option<usize> {

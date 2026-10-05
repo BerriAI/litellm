@@ -46,6 +46,7 @@ litellm-auth-aws.workspace = true
 litellm-callbacks-legacy-python.workspace = true
 litellm-core.workspace = true
 litellm-core-utils.workspace = true
+litellm-framer.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
 litellm-secrets = { workspace = true, features = ["aws", "azure", "google", "hashicorp", "cyberark"] }
