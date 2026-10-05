@@ -550,6 +550,9 @@ async def test_candidate_distinguishes_gateway_schema_failure_from_malformed_mod
         calls.put(request)
         if failure == "model":
             return ModelResult(content="raw-private-model-output", cost=0)
+        if failure == "content" and calls.qsize() == 2:
+            assert "Could not verify this citation" in request.messages[-1].content
+            return ModelResult(content=AgentTurn[Findings](result=Findings()).model_dump_json(), cost=0)
         return ModelResult(
             content=AgentTurn[Findings](
                 result=Findings(
@@ -581,8 +584,9 @@ async def test_candidate_distinguishes_gateway_schema_failure_from_malformed_mod
     elif failure == "content":
         incomplete: Final = await investigate_context_candidate(claim, candidate, workspace, model)
         assert incomplete.findings == ()
-        assert "repeated a pagination cursor" in incomplete.error
-        assert calls.qsize() == 1
+        assert incomplete.error == ""
+        assert any("repeated a pagination cursor" in error for error in workspace.read_errors)
+        assert calls.qsize() == 2
         assert tuple(reads.get_nowait() for _ in range(reads.qsize())) == (run.id, run.id)
     else:
         result: Final = await investigate_context_candidate(claim, candidate, workspace, model)
@@ -680,6 +684,16 @@ async def test_failed_session_review_preserves_other_results_and_reports_its_err
             assigned: Final = AssignedSession.model_validate_json(payload.supplied).execution
             if assigned.name == "failed":
                 if failure in ("cursor", "span", "eof"):
+                    if len(request.messages) > 2:
+                        reply: Final = ToolReply.model_validate_json(request.messages[-1].content)
+                        problem: Final = EvidenceReply.model_validate_json(reply.tool_results[0])
+                        assert "Original trace" in problem.error
+                        return ModelResult(
+                            content=AgentTurn[Extraction](
+                                result=Extraction(cannot_assess=True, reasoning=problem.error)
+                            ).model_dump_json(),
+                            cost=0,
+                        )
                     return ModelResult(
                         content=AgentTurn[Extraction](
                             tools=(
@@ -760,6 +774,106 @@ async def test_failed_session_review_preserves_other_results_and_reports_its_err
         assert "Original trace" in result.error
     completed: Final = tuple(reviews.get_nowait() for _ in range(reviews.qsize()))
     assert {review.execution_id: review.cannot_assess for review in completed} == {"failed": True, "valid": False}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("phase", "action"),
+    (("review", "read"), ("review", "search"), ("review", "catalog"), ("investigate", "read"), ("empty", "read")),
+)
+@pytest.mark.parametrize("already_partial", (False, True))
+async def test_late_content_failure_refreshes_partial_coverage_without_changing_the_source_verdict(
+    phase: str, action: Literal["read", "search", "catalog"], already_partial: bool
+) -> None:
+    runs: Final = tuple(
+        execution(identity).model_copy(
+            update=MappingProxyType({"root_seen": identity == "source" or not already_partial})
+        )
+        for identity in ("source", "reader")
+    )
+    source_reviewed: Final = asyncio.Event()
+    evidence: Final = Evidence(execution_id="r0" if phase == "investigate" else "r1", span_id="span", quote="timeout")
+    observation: Final = Observation(check_id="retries", summary="The tool timed out", evidence=(evidence,))
+    finding: Final = FindingDraft(
+        title=observation.summary,
+        description="A recorded operation timed out",
+        check_id="retries",
+        brief=issue_brief("The operation timed out"),
+        evidence=(evidence,),
+    )
+    tool_call: Final = AgentTurn[Extraction](
+        tools=(EvidenceRequest(action=action, execution_id="r0", query="timeout"),)
+    ).model_dump_json()
+
+    async def read(identity: str, cursor: str, _offset: int) -> ExecutionContent:
+        if cursor:
+            assert source_reviewed.is_set()
+        return ExecutionContent(
+            execution=next(run for run in runs if run.id == identity),
+            parts=(TracePart(execution_id=identity, span_id="span", name="tool", kind="tool", content="timeout"),),
+            next_cursor="repeat" if identity == "source" else None,
+        )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if request.purpose == "cluster":
+            groups: Final = GroupPrompt.model_validate_json(request.prompt)
+            return ModelResult(content=Clusters(candidates=groups.candidates).model_dump_json(), cost=0)
+        payload: Final = InitialPrompt.model_validate_json(request.messages[1].content)
+        if len(request.messages) > 2:
+            reply: Final = ToolReply.model_validate_json(request.messages[-1].content)
+            failure: Final = EvidenceReply.model_validate_json(reply.tool_results[0])
+            assert "repeated a pagination cursor" in failure.error
+            assert "r0" in failure.error and "source" in failure.error
+            assert "narrower" in failure.error and "other evidence" in failure.error
+        if request.purpose == "extract":
+            assigned: Final = AssignedSession.model_validate_json(payload.supplied).execution
+            if assigned.name == "reader":
+                await source_reviewed.wait()
+                if phase != "investigate" and len(request.messages) == 2:
+                    return ModelResult(content=tool_call, cost=0)
+            observes: Final = (assigned.name == "source" and phase == "investigate") or (
+                assigned.name == "reader" and phase == "review"
+            )
+            return ModelResult(
+                content=AgentTurn[Extraction](
+                    result=Extraction(observations=(observation,) if observes else ())
+                ).model_dump_json(),
+                cost=0,
+            )
+        if phase == "investigate" and len(request.messages) == 2:
+            return ModelResult(content=tool_call, cost=0)
+        return ModelResult(
+            content=AgentTurn[Findings](result=Findings(findings=(finding,))).model_dump_json(),
+            cost=0,
+        )
+
+    async def progress(
+        _stage: str | None,
+        _coverage: Coverage | None,
+        review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        if review is not None and review.execution_id == "source":
+            assert not review.cannot_assess
+            source_reviewed.set()
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    result: Final = await analyze_sample(claim, Sample(executions=runs, eligible=2), read, model, progress)
+    assert tuple(item.evidence[0].execution_id for item in result.findings) == (
+        () if phase == "empty" else ("source" if phase == "investigate" else "reader",)
+    )
+    assert result.coverage.partial == 1 + int(already_partial)
+    assert result.coverage.screened == 2
+    assert result.coverage.investigated == int(phase != "empty")
+    assert result.coverage.unassessable == 0
+    assert "repeated a pagination cursor" in result.error
+    assert "source" in result.error
+    assert {assessment.execution_id: assessment.cannot_assess for assessment in result.assessments} == {
+        "source": False,
+        "reader": False,
+    }
 
 
 @pytest.mark.asyncio

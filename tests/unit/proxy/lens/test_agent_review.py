@@ -7,7 +7,7 @@ from litellm.proxy.lens.agent_review import review_context
 from litellm.proxy.lens.agent_runtime import AgentTurn
 from litellm.proxy.lens.agent_workspace import EvidenceReply, EvidenceRequest, EvidenceWorkspace, SessionContent
 from litellm.proxy.lens.analysis import Extraction, Observation, review_of
-from litellm.proxy.lens.models import Claim, Evidence, ModelRequest, ModelResult, TracePart
+from litellm.proxy.lens.models import Claim, Evidence, ExecutionContent, ModelRequest, ModelResult, TracePart
 from litellm.proxy.lens.state import queue_job
 from tests.unit.proxy.lens.test_agent_runtime import InitialPrompt, ToolReply
 from tests.unit.proxy.lens.test_agent_workspace import execution
@@ -148,3 +148,83 @@ async def test_observation_with_only_counterexamples_requires_supporting_evidenc
 
     result: Final = await review_context(claim, session, EvidenceWorkspace(sessions=(session,)), model)
     assert result.observations[0].evidence == (Evidence(execution_id="run", span_id="span", quote=part.content),)
+
+
+@pytest.mark.asyncio
+async def test_unreadable_citation_can_be_repaired_without_discarding_the_healthy_review() -> None:
+    runs: Final = (execution("healthy"), execution("damaged"))
+    sessions: Final = tuple(SessionContent(execution=run, partial=False) for run in runs)
+    part: Final = TracePart(
+        execution_id="healthy", span_id="span", name="tool", kind="tool", content="Recorded failure"
+    )
+    turns: Final = iter(("damaged", "healthy"))
+
+    async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return (
+            ExecutionContent(execution=runs[0], parts=(part,))
+            if identity == "healthy"
+            else ExecutionContent(execution=runs[1], parts=(), next_cursor="repeat")
+        )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        identity: Final = next(turns)
+        if identity == "healthy":
+            assert "Could not verify this citation" in request.messages[-1].content
+            assert "damaged" in request.messages[-1].content
+        return ModelResult(
+            content=AgentTurn[Extraction](
+                result=Extraction(
+                    observations=(
+                        Observation(
+                            check_id="retries",
+                            summary=part.content,
+                            evidence=(Evidence(execution_id=identity, span_id="span", quote=part.content),),
+                        ),
+                    )
+                )
+            ).model_dump_json(),
+            cost=0,
+        )
+
+    workspace: Final = EvidenceWorkspace(sessions=sessions, read=read)
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    result: Final = await review_context(claim, sessions[0], workspace, model)
+    assert not result.cannot_assess and not result.partial
+    assert result.observations[0].evidence == (Evidence(execution_id="healthy", span_id="span", quote=part.content),)
+    assert workspace.partial_sessions == {"damaged"}
+
+
+@pytest.mark.asyncio
+async def test_review_previews_use_verified_quotes_without_rereading_mutable_sources() -> None:
+    run: Final = execution("run")
+    session: Final = SessionContent(execution=run, partial=False)
+    part: Final = TracePart(
+        execution_id=run.id, span_id="span", parent_span_id="root", name="tool", kind="tool", content="first then last"
+    )
+    reads: Final = iter((part, part))
+    quotes: Final = ("first", "last")
+    expected: Final = Extraction(
+        observations=(
+            Observation(
+                check_id="retries",
+                summary="Two verified excerpts",
+                evidence=tuple(Evidence(execution_id=run.id, span_id=part.span_id, quote=quote) for quote in quotes),
+            ),
+        )
+    )
+
+    async def read(_identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(execution=run, parts=(next(reads),))
+
+    async def model(_request: ModelRequest) -> ModelResult:
+        return ModelResult(content=AgentTurn[Extraction](result=expected).model_dump_json(), cost=0)
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    workspace: Final = EvidenceWorkspace(sessions=(session,), read=read)
+    result: Final = await review_context(claim, session, workspace, model)
+    assert result.observations == expected.observations
+    assert result.parts == (
+        part.model_copy(
+            update=MappingProxyType({"content": "first\n[... content omitted ...]\nlast", "truncated": True})
+        ),
+    )

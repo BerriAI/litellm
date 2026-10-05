@@ -9,7 +9,7 @@ from pydantic import Field
 
 from .activity import ActivityTracker, observe_operation, observed_model
 from .agent_context import compact_context
-from .agent_workspace import EvidenceRequest, EvidenceWorkspace, PythonRequest
+from .agent_workspace import EvidenceReadError, EvidenceRequest, EvidenceWorkspace, PythonRequest
 from .analysis import AnalysisContextExceeded, AnalysisResponseError, ModelCall, structured_response_with_history
 from .models import Claim, ModelMessage, ModelRequest, Record, TracePart
 from .python_tool import execute_python
@@ -141,7 +141,15 @@ async def run_agent(
 
     async def respond(request: EvidenceRequest | PythonRequest) -> str:
         async with observe_operation(activity, request.action):
-            return await tool_result(request)
+            try:
+                return await tool_result(request)
+            except EvidenceReadError as error:
+                return json.dumps(
+                    {
+                        "request": request.model_dump(),
+                        "error": f"{error}. Try narrower spans or other evidence; this source is incomplete.",
+                    }
+                )
 
     call: Final = observed_model(model, activity)
     prompt: Final = json.dumps(

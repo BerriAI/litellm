@@ -4,7 +4,7 @@ from typing import Final
 
 from .activity import ActivityTracker
 from .agent_runtime import run_agent
-from .agent_workspace import EvidenceWorkspace, SessionContent
+from .agent_workspace import EvidenceReadError, EvidenceWorkspace, SessionContent
 from .analysis import Examined, Extraction, ModelCall
 from .models import Claim, Coverage, Evidence, FindingDraft, Record, Result, RunAssessment, Sample
 from .prompts import PROMPTS
@@ -34,8 +34,13 @@ async def validate_evidence(
     if check_id not in frozenset(check.id for check in claim.job.settings.analysis_checks):
         return "Use an enabled check ID."
     for quote in evidence:
-        if not await workspace.valid(quote):
-            return "Every evidence quote must exactly match its execution and span in the original recorded content."
+        try:
+            if not await workspace.valid(quote):
+                return (
+                    "Every evidence quote must exactly match its execution and span in the original recorded content."
+                )
+        except EvidenceReadError as error:
+            return f"Could not verify this citation: {error}. Inspect narrower spans or other evidence and revise the citation."
     return None
 
 
@@ -98,7 +103,7 @@ async def review_context(
         activity=activity,
     )
     citations: Final = tuple(chain.from_iterable(observation.evidence for observation in response.observations))
-    cited: Final = await workspace.cited_parts(citations, preview=True)
+    cited: Final = workspace.cited_parts(citations)
     assigned_cited: Final = tuple(part for part in cited if part.execution_id == session.execution.id)
     completed: Final = await workspace.summary(session.execution.id)
     return Examined(

@@ -258,7 +258,9 @@ async def analyze_context(
         update=MappingProxyType(
             {
                 "screened": len(examined),
-                "partial": sum(review.partial for review in examined),
+                "partial": sum(
+                    review.partial or review.execution.id in workspace.partial_sessions for review in examined
+                ),
                 "unassessable": sum(review.cannot_assess for review in examined),
             }
         )
@@ -285,7 +287,9 @@ async def analyze_context(
         return Result(
             coverage=coverage,
             assessments=assessments,
-            error="\n\n".join(dict.fromkeys(review.error for review in examined if review.error)),
+            error="\n\n".join(
+                dict.fromkeys((*(review.error for review in examined if review.error), *sorted(workspace.read_errors)))
+            ),
         )
     records: Final = tuple(
         ReviewRecord(
@@ -344,10 +348,20 @@ async def analyze_context(
     return Result(
         findings=tuple(chain.from_iterable(item.findings for item in ordered)),
         assessments=assessments,
-        error="\n\n".join(dict.fromkeys(item.error for item in (*examined, *ordered) if item.error)),
+        error="\n\n".join(
+            dict.fromkeys(
+                (*(item.error for item in (*examined, *ordered) if item.error), *sorted(workspace.read_errors))
+            )
+        ),
         coverage=investigating.model_copy(
             update=MappingProxyType(
-                {"investigated": len(ordered), "inconclusive": sum(not item.findings for item in ordered)}
+                {
+                    "investigated": len(ordered),
+                    "inconclusive": sum(not item.findings for item in ordered),
+                    "partial": sum(
+                        review.partial or review.execution.id in workspace.partial_sessions for review in examined
+                    ),
+                }
             )
         ),
     )

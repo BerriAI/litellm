@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 from queue import SimpleQueue
 from typing import Final
 
@@ -49,7 +51,12 @@ class PythonReply(BaseModel):
     output: PythonOutput
 
 
-async def main() -> None:
+class ToolError(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    error: str
+
+
+async def investigate(damaged_peer: bool) -> None:
     now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
     settings: Final = LensSettings(
         name="Tool review",
@@ -62,7 +69,24 @@ async def main() -> None:
         findings=(),
     )
     execution: Final = Execution(
-        id="original-run", source="traces", trace_id="trace", team_id="", name="Task", start_time="", span_count=2
+        id="original-run",
+        source="traces",
+        trace_id="trace",
+        team_id="",
+        name="Task",
+        start_time="",
+        span_count=2,
+        root_seen=True,
+    )
+    damaged: Final = Execution(
+        id="damaged-run",
+        source="traces",
+        trace_id="damaged-trace",
+        team_id="",
+        name="Damaged source",
+        start_time="",
+        span_count=2,
+        root_seen=True,
     )
     quote: Final = "grep: unknown option --pattern"
     nested: Final = TracePart(
@@ -101,12 +125,31 @@ async def main() -> None:
                 )
             ).model_dump_json()
         if body.purpose == "extract":
+            if "Damaged source" in body.messages[1].content:
+                return PythonAgentTurn[Extraction](result=Extraction()).model_dump_json()
             if len(body.messages) == 2:
                 assert quote not in body.messages[1].content
                 return PythonAgentTurn[Extraction](
                     tools=(
                         PythonRequest(
                             action="python",
+                            code='print(sum(p["kind"] == "tool" for s in data["sessions"] for p in s["parts"]))',
+                        ),
+                    )
+                ).model_dump_json()
+            if damaged_peer and len(body.messages) == 4:
+                failure: Final = ToolError.model_validate_json(
+                    ToolReply.model_validate_json(body.messages[-1].content).tool_results[0]
+                )
+                assert "r1" in failure.error and "damaged-trace" in failure.error, failure
+                assert "narrower" in failure.error and "other evidence" in failure.error, failure
+                assert not tuple(Path("/tmp").glob("lens-python-*")), "input failure leaked scratch"
+                assert not Path(f"/proc/self/task/{os.getpid()}/children").read_text().strip()
+                return PythonAgentTurn[Extraction](
+                    tools=(
+                        PythonRequest(
+                            action="python",
+                            execution_ids=("r0",),
                             code='print(sum(p["kind"] == "tool" for s in data["sessions"] for p in s["parts"]))',
                         ),
                     )
@@ -133,8 +176,17 @@ async def main() -> None:
         if path.endswith("/claim"):
             return httpx.Response(200, json=claim.model_dump(mode="json"))
         if path.endswith("/sample"):
-            return httpx.Response(200, json=Sample(executions=(execution,), eligible=1).model_dump())
+            return httpx.Response(
+                200,
+                json=Sample(
+                    executions=(execution, damaged) if damaged_peer else (execution,), eligible=2 if damaged_peer else 1
+                ).model_dump(),
+            )
         if path.endswith("/content"):
+            if request.url.params["execution_id"] == damaged.id:
+                return httpx.Response(
+                    200, json=ExecutionContent(execution=damaged, parts=(), next_cursor="repeat").model_dump()
+                )
             assert request.url.params["execution_id"] == execution.id
             return httpx.Response(200, json=ExecutionContent(execution=execution, parts=(root, nested)).model_dump())
         if path.endswith("/model"):
@@ -153,19 +205,30 @@ async def main() -> None:
     async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
         assert await LensWorker(client).run_once()
     result: Final = saved.get_nowait()
-    assert not result.error, result.error
-    assert result.coverage.screened == 1 and result.coverage.investigated == 1
+    assert result.coverage.unassessable == 0, result
+    assert bool(result.error) is damaged_peer, result.error
+    assert not damaged_peer or "damaged-trace" in result.error, result.error
+    assert result.coverage.screened == (2 if damaged_peer else 1) and result.coverage.investigated == 1
+    assert result.coverage.partial == int(damaged_peer) and result.coverage.unassessable == 0
     expected: Final = finding.model_copy(
         update={"evidence": (evidence.model_copy(update={"execution_id": execution.id}),)}
     )
     assert result.findings == (expected,)
     progress: Final = tuple(events.get_nowait() for _ in range(events.qsize()))
     reviews: Final = tuple(event.review for event in progress if event.review is not None)
-    assert len(reviews) == 1 and reviews[0].execution_id == execution.id
-    assert reviews[0].tool_calls == (ToolCount(name="python", calls=1),)
+    assert len(reviews) == (2 if damaged_peer else 1)
+    original_review: Final = next(review for review in reviews if review.execution_id == execution.id)
+    assert original_review.tool_calls == (ToolCount(name="python", calls=2 if damaged_peer else 1),)
     assert any(event.activity is not None and "python" in event.activity.operations for event in progress)
     assert all(quote not in event.activity.model_dump_json() for event in progress if event.activity is not None)
-    logging.warning("Default worker: confined Python, live activity, nested evidence and unchanged final finding verified")
+    logging.warning(
+        "Default worker: confined Python, live activity, nested evidence and unchanged final finding verified"
+    )
+
+
+async def main() -> None:
+    await investigate(False)
+    await investigate(True)
 
 
 if __name__ == "__main__":

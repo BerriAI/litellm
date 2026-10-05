@@ -90,13 +90,21 @@ class EvidenceWorkspace:
     partial_sessions: set[str] = field(  # mutable-ok: retain source-reported incompleteness across concurrent reads
         default_factory=set
     )
+    read_errors: set[str] = field(  # mutable-ok: preserve source diagnostics when concurrent agents recover
+        default_factory=set
+    )
+    verified_parts: dict[Evidence, TracePart] = field(  # mutable-ok: retain verified quote metadata for review previews
+        default_factory=dict
+    )
 
     def with_reviews(self, records: tuple[ReviewRecord, ...]) -> "EvidenceWorkspace":
         return replace(self, reviews=records)
 
     def _content_error(self, execution: Execution, message: str) -> EvidenceReadError:
+        detail: Final = f"{message} (execution {execution.id}, trace {execution.trace_id})"
         self.partial_sessions.add(execution.id)
-        return EvidenceReadError(message)
+        self.read_errors.add(detail)
+        return EvidenceReadError(detail)
 
     async def summary(self, execution_id: str) -> SessionSummary:
         session: Final = next(session for session in self.sessions if session.execution.id == execution_id)
@@ -228,27 +236,30 @@ class EvidenceWorkspace:
                 parts = (*parts, await self._complete(source))
         return parts
 
-    async def cited_parts(self, evidence: tuple[Evidence, ...], *, preview: bool = False) -> tuple[TracePart, ...]:
+    def cited_parts(self, evidence: tuple[Evidence, ...]) -> tuple[TracePart, ...]:
         parts: tuple[TracePart, ...] = ()  # rebind-ok: retain only cited execution/span pairs
         for session in self.sessions:
             spans: tuple[str, ...] = tuple(
                 dict.fromkeys(quote.span_id for quote in evidence if quote.execution_id == session.execution.id)
             )
-            if spans:
-                async for source in self._sources(session, spans):
-                    content: str = "\n[... content omitted ...]\n".join(
-                        dict.fromkeys(
-                            quote.quote
-                            for quote in evidence
-                            if quote.execution_id == session.execution.id and quote.span_id == source.part.span_id
+            for span in spans:
+                verified: tuple[TracePart, ...] = tuple(
+                    self.verified_parts[quote]
+                    for quote in evidence
+                    if quote.execution_id == session.execution.id and quote.span_id == span
+                )
+                parts = (
+                    *parts,
+                    verified[0].model_copy(
+                        update=MappingProxyType(
+                            {
+                                "content": "\n[... content omitted ...]\n".join(
+                                    dict.fromkeys(p.content for p in verified)
+                                )
+                            }
                         )
-                    )
-                    parts = (
-                        *parts,
-                        source.part.model_copy(update=MappingProxyType({"content": content, "truncated": True}))
-                        if preview
-                        else await self._complete(source),
-                    )
+                    ),
+                )
         return parts
 
     async def valid(self, evidence: Evidence) -> bool:
@@ -257,6 +268,9 @@ class EvidenceWorkspace:
                 continue
             async for source in self._sources(session, (evidence.span_id,)):
                 if await self._contains(source, evidence.quote, literal_quote=True):
+                    self.verified_parts[evidence] = source.part.model_copy(
+                        update=MappingProxyType({"content": evidence.quote, "truncated": True})
+                    )
                     return True
         return False
 
