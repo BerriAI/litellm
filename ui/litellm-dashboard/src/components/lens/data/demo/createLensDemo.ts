@@ -60,6 +60,34 @@ function demoTracesApi(data: LensDemoData): TracesApi {
         .filter((trace) => Date.parse(trace.start_time) >= startMs && Date.parse(trace.start_time) <= endMs),
       next_cursor: null,
     }),
+    findings: async (traces) =>
+      traces.map((trace) => {
+        const jobs = data.lenses.flatMap((lens) => lens.jobs).filter((job) => job.status === "completed");
+        const assessed = jobs.flatMap((job) =>
+          (job.sample?.executions ?? [])
+            .filter((execution) => {
+              const matches =
+                execution.source === "traces" &&
+                execution.trace_id === trace.trace_id &&
+                (execution.trace_ref ?? "") === (trace.trace_ref ?? "");
+              return (
+                matches &&
+                job.assessments.some(
+                  (assessment) => assessment.execution_id === execution.id && !assessment.cannot_assess,
+                )
+              );
+            })
+            .map((execution) => ({ job, execution })),
+        );
+        const findings = new Set(
+          assessed.flatMap(({ job, execution }) =>
+            (job.findings ?? [])
+              .filter((finding) => finding.occurrences.includes(execution.id))
+              .map((finding) => finding.id),
+          ),
+        );
+        return { ...trace, finding_count: assessed.length ? findings.size : null };
+      }),
     anyRecorded: async () => data.runs.length > 0,
     trace: (traceId) => found(run(traceId)?.trace),
     span: (traceId, spanId) => found(run(traceId)?.details.find((span) => span.span_id === spanId)),

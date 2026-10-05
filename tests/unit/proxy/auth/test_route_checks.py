@@ -2568,6 +2568,29 @@ def test_proxy_admin_viewer_post_blocked_outside_allowlists(route):
     assert exc_info.value.status_code == 403
 
 
+@pytest.mark.parametrize("route,allowed", (("/lens/traces/findings", True), ("/lens/example/run", False)))
+def test_admin_viewer_can_read_trace_findings_but_cannot_start_investigations(route: str, allowed: bool) -> None:
+    request: Final = Request({"type": "http", "method": "POST", "path": route, "query_string": b""})
+    auth: Final = UserAPIKeyAuth(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+    def check_access() -> None:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=LiteLLM_UserTable(user_id="viewer", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=auth,
+            request_data={},
+        )
+
+    if allowed:
+        assert check_access() is None
+    else:
+        with pytest.raises(HTTPException) as error:
+            check_access()
+        assert error.value.status_code == 403
+
+
 # ── Admin Viewer: management_routes write endpoints stay blocked ─────────────
 #
 # `management_routes` is a mix of reads (info/list, handled via the safe-method

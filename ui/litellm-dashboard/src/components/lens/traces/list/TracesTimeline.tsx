@@ -13,7 +13,7 @@ export function bucketRuns(runs: readonly TraceSummary[], range: TimeWindow, buc
   const width = (range.endMs - range.startMs) / buckets;
   const placed = runs.map((run) => ({
     index: Math.floor((moment(run.start_time).valueOf() - range.startMs) / width),
-    failed: run.error_count > 0,
+    failed: run.status === "error",
     agent: traceAgentNames(run)[0] ?? "",
   }));
   return Array.from({ length: buckets }, (_, i) => {

@@ -194,6 +194,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                     isActive={activeTab === "traces"}
                     readOnly={readOnly}
                     canMintTracingKey={isAdmin}
+                    canViewFindings={canViewInvestigations}
                   />
                 </TabsContent>
                 <TabsContent value="findings" className={PANEL}>

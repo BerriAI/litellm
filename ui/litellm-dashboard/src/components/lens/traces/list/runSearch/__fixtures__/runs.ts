@@ -36,6 +36,7 @@ const researchOverrides = {
   agent_names: ["researcher"],
   models: ["claude-opus"],
   error_count: 2,
+  status: "error" as const,
 };
 const research = run(researchOverrides);
 const plain = run({ trace_id: "ccc333", name: "health", service: "cron" });

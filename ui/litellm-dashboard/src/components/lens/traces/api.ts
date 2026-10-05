@@ -9,7 +9,15 @@ import {
   apiClient,
   getProxyBaseUrl,
 } from "../../networking";
-import type { SpanDetail, SpanErrorPage, Trace, TraceListQuery, TracePage } from "./types";
+import type {
+  SpanDetail,
+  SpanErrorPage,
+  Trace,
+  TraceListQuery,
+  TracePage,
+  TraceFindingCount,
+  TraceFindingsRequest,
+} from "./types";
 
 export interface TraceWindow {
   readonly startMs: number;
@@ -27,6 +35,7 @@ export interface TracesApi {
   readonly live: boolean;
   handoff(traceId: string, spanId?: string | null, traceRef?: string): TraceHandoff;
   list(window: TraceWindow): Promise<TracePage>;
+  findings(traces: TraceFindingsRequest["traces"]): Promise<TraceFindingCount[]>;
   anyRecorded(): Promise<boolean>;
   trace(traceId: string, traceRef?: string, cursor?: string | null): Promise<Trace>;
   span(traceId: string, spanId: string, traceRef?: string): Promise<SpanDetail>;
@@ -41,7 +50,7 @@ export interface TracesApi {
 export const agentHandoffText = (traceId: string, spanId?: string | null, traceRef?: string): string => {
   const url = `${getProxyBaseUrl().replace(/\/$/, "")}/v1/traces/${traceId}?format=md${spanId ? `&span_id=${spanId}` : ""}${traceRef ? `&trace_ref=${traceRef}` : ""}`;
   const what = spanId ? "this step of a LiteLLM agent trace" : "this LiteLLM agent trace";
-  return `Read ${what} and explain what happened and why it failed:\ncurl -s -H "Authorization: Bearer $LITELLM_API_KEY" "${url}"`;
+  return `Read ${what}, explain what happened, and investigate any issues:\ncurl -s -H "Authorization: Bearer $LITELLM_API_KEY" "${url}"`;
 };
 
 export function liveTracesApi(accessToken: string): TracesApi {
@@ -52,6 +61,11 @@ export function liveTracesApi(accessToken: string): TracesApi {
       copied: "Command copied",
     }),
     list: (window) => agentTraceListCall({ accessToken, ...window }),
+    findings: (traces) =>
+      apiClient.post<TraceFindingCount[]>("/lens/traces/findings", {
+        accessToken,
+        body: { traces } satisfies TraceFindingsRequest,
+      }),
     anyRecorded: async () => {
       const page = await apiClient.get<TracePage>("/v1/traces", {
         accessToken,

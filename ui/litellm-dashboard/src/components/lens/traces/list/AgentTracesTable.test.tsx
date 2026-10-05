@@ -28,6 +28,7 @@ const renderEmpty = (rangeEmpty: boolean) => {
     inList(
       <AgentTracesTable
         traces={[]}
+        findings={new Map()}
         isLoading={false}
         error={null}
         hasMore={false}
@@ -58,6 +59,7 @@ describe("AgentTracesTable loading state", () => {
       inList(
         <AgentTracesTable
           traces={[]}
+          findings={new Map()}
           isLoading
           error={null}
           hasMore={false}
@@ -89,6 +91,7 @@ describe("AgentTracesTable virtualization", () => {
       inList(
         <AgentTracesTable
           traces={manyRuns}
+          findings={new Map()}
           isLoading={false}
           error={null}
           hasMore={false}
@@ -117,6 +120,7 @@ describe("AgentTracesTable column picker", () => {
       inList(
         <AgentTracesTable
           traces={runs}
+          findings={new Map()}
           isLoading={false}
           error={null}
           hasMore={false}
@@ -163,6 +167,7 @@ describe("AgentTracesTable column picker", () => {
       inList(
         <AgentTracesTable
           traces={[]}
+          findings={new Map()}
           isLoading
           error={null}
           hasMore={false}

@@ -15,13 +15,24 @@ from litellm.proxy.lens.endpoints import (
     result,
     run_settings,
     run_window,
+    trace_findings,
     user_scope,
     validate_model,
     watchable,
     watching,
     worker_supports_model,
 )
-from litellm.proxy.lens.models import ActivitySelection, Coverage, Lens, LensSettings, Result, RunRequest, Scope
+from litellm.proxy.lens.models import (
+    ActivitySelection,
+    Coverage,
+    Lens,
+    LensSettings,
+    Result,
+    RunRequest,
+    Scope,
+    TraceFindingsRequest,
+    TraceIdentity,
+)
 from litellm.proxy.lens.repository import Row
 from litellm.proxy.lens.state import claim_job, queue_job, replace_job
 from tests.unit.proxy.lens.test_state import NOW, lens, worker
@@ -191,6 +202,15 @@ async def test_agent_discovery_without_trace_storage_still_requires_admin_access
     auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
     with pytest.raises(HTTPException) as error:
         await list_agents(auth, None)
+    assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_trace_finding_counts_require_investigation_read_access() -> None:
+    auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+    request: Final = TraceFindingsRequest(traces=(TraceIdentity(trace_id="trace"),))
+    with pytest.raises(HTTPException) as error:
+        await trace_findings(request, auth)
     assert error.value.status_code == 403
 
 

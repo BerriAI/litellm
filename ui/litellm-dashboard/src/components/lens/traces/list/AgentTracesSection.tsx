@@ -11,6 +11,7 @@ import { Inspector } from "@/components/shared/Inspector";
 import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
+import { useTraceFindings } from "./useTraceFindings";
 import {
   type TraceRef,
   traceKey,
@@ -53,6 +54,7 @@ interface AgentTracesSectionProps {
   timeControls?: TimeControls;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
+  canViewFindings?: boolean;
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -93,6 +95,7 @@ export function AgentTracesSection({
   timeControls,
   readOnly = false,
   canMintTracingKey = false,
+  canViewFindings,
 }: AgentTracesSectionProps) {
   const live = useTracesLive();
   const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
@@ -123,6 +126,7 @@ export function AgentTracesSection({
   );
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
+  const findings = useTraceFindings(accessToken, runs, isActive, canViewFindings);
 
   const changeRange = (hours: number, apply: (hours: number) => void) => {
     setZoom(null);
@@ -219,6 +223,8 @@ export function AgentTracesSection({
         <TracesTimeline runs={filtered} range={range} selection={zoom} onSelect={setZoom} />
         <AgentTracesTable
           traces={runs}
+          findings={findings}
+          canViewFindings={canViewFindings}
           isLoading={traces.isLoading || (checkHistory && history.isLoading)}
           error={traces.error}
           hasMore={traces.hasMore}
@@ -244,13 +250,11 @@ function TracesReceived({ received }: { received: boolean }) {
 }
 
 function TraceCounts({ runs }: { runs: readonly TraceSummary[] }) {
-  const failed = runs.filter((run) => run.error_count > 0).length;
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-2 text-xs text-muted-foreground">
       <span>
         {runs.length} {runs.length === 1 ? "run" : "runs"} from {new Set(runs.flatMap(traceAgentNames)).size} agents
       </span>
-      {failed > 0 && <span className="text-destructive">{failed} with errors</span>}
     </div>
   );
 }

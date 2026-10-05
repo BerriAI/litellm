@@ -3,6 +3,7 @@ import os
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
@@ -13,8 +14,24 @@ import pytest_asyncio
 from prisma import Prisma
 from psycopg import sql
 
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.db.prisma_client import PrismaWrapper
-from litellm.proxy.lens.models import Check, Lens, LensSettings, Scope, Worker
+from litellm.proxy.lens.models import (
+    Check,
+    Evidence,
+    Execution,
+    Finding,
+    Job,
+    Lens,
+    LensSettings,
+    RunAssessment,
+    Sample,
+    Scope,
+    TraceFindingCount,
+    TraceFindingsRequest,
+    TraceIdentity,
+    Worker,
+)
 from litellm.proxy.lens.repository import LensRepository, WriterDatabase
 from litellm.proxy.lens.state import claim_job, queue_job
 
@@ -67,6 +84,109 @@ async def test_heartbeat_never_restores_revoked_access(lens_db: Prisma) -> None:
         assert stored is not None and stored.revoked is True
     finally:
         await lens_db.execute_raw('DELETE FROM "LiteLLM_LensWorker" WHERE id=$1', worker.id)
+
+
+@pytest.mark.asyncio
+async def test_trace_findings_include_archived_assessments_without_counting_retries_or_counterexamples(
+    lens_db: Prisma,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.lens.endpoints import trace_findings
+
+    monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=lens_db))
+    now: Final = datetime.now(timezone.utc)
+    prefix: Final = uuid4().hex
+    repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
+    settings: Final = LensSettings(name="Finding counts", model="test", context="Answer the question")
+    identities: Final = tuple(TraceIdentity(trace_id=prefix, trace_ref=f"{prefix}-{i}") for i in range(7))
+    executions: Final = tuple(
+        Execution(
+            id=f"{prefix}-{i}",
+            source="traces",
+            trace_id=identity.trace_id,
+            trace_ref=identity.trace_ref,
+            team_id="",
+            name="Run",
+            start_time=now.isoformat(),
+            span_count=1,
+        )
+        for i, identity in enumerate(identities)
+    )
+    finding: Final = Finding(
+        id=prefix,
+        title="Repeated lookup",
+        description="The agent never answered the question",
+        check_id="expected_behavior",
+        first_seen=now,
+        last_seen=now,
+        revision=1,
+        occurrences=(executions[0].id,),
+        evidence=(
+            Evidence(execution_id=executions[0].id, span_id="step", quote="no answer"),
+            Evidence(execution_id=executions[1].id, span_id="step", quote="answered", role="counterexample"),
+        ),
+    )
+    completed: Final = Job(
+        id=f"{prefix}-old",
+        status="completed",
+        created_at=now,
+        start=now,
+        end=now,
+        settings=settings,
+        revision=1,
+        sample=Sample(executions=executions[:4], eligible=4),
+        assessments=(
+            RunAssessment(execution_id=executions[0].id),
+            RunAssessment(execution_id=executions[1].id),
+            RunAssessment(execution_id=executions[2].id, cannot_assess=True),
+        ),
+        findings=(finding,),
+    )
+    lens: Final = Lens(
+        id=prefix,
+        scope=Scope(all_teams=True),
+        settings=settings,
+        created_at=now,
+        next_run_at=now,
+        budget_month=now.strftime("%Y-%m"),
+        jobs=(completed,),
+    )
+    await repo.create(lens)
+    try:
+        current: Final = completed.model_copy(update={"id": f"{prefix}-current"})
+        unfinished: Final = tuple(
+            completed.model_copy(
+                update={
+                    "id": f"{prefix}-{status}",
+                    "status": status,
+                    "sample": Sample(executions=(executions[index],), eligible=1),
+                    "assessments": (RunAssessment(execution_id=executions[index].id),),
+                    "findings": (),
+                }
+            )
+            for index, status in enumerate(("running", "failed", "cancelled"), start=4)
+        )
+        await repo.update(prefix, lambda item: item.model_copy(update={"jobs": (current, *unfinished)}))
+        archived: Final = await repo.job(prefix, completed.id)
+        assert archived is not None and archived.status == "completed"
+        expected: Final = tuple(
+            TraceFindingCount(**identity.model_dump(), finding_count=1 if i == 0 else 0 if i == 1 else None)
+            for i, identity in enumerate(identities)
+        )
+        counts: Final = await trace_findings(
+            TraceFindingsRequest(traces=identities), UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+        )
+        assert sorted(counts, key=lambda item: item.trace_ref) == list(expected)
+        await repo.update(prefix, lambda item: item.model_copy(update={"jobs": unfinished}))
+        archived_counts: Final = await repo.trace_findings(identities)
+        assert sorted(archived_counts, key=lambda item: item.trace_ref) == list(expected)
+        assert await repo.trace_findings((TraceIdentity(trace_id=prefix),)) == (
+            TraceFindingCount(trace_id=prefix, finding_count=None),
+        )
+    finally:
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_LensRun" WHERE lens_id=$1', prefix)
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', prefix)
 
 
 @pytest.mark.parametrize("populated", (False, True))

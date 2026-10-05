@@ -27,6 +27,7 @@ function serve({ enabled = false, traces = false, requests = false, connected = 
         ? Response.json({ data: traces ? [data.runs[0].trace.summary] : [] })
         : Response.json({ detail: "Tracing is not enabled" }, { status: 501 });
     if (path === "/lens/activity/available") return Response.json({ traces, requests });
+    if (path === "/lens/traces/findings") return Response.json([]);
     if (path === "/lens" && method === "POST") {
       const saved = { ...data.lenses[0], settings: { ...data.lenses[0].settings, ...(body as object) } };
       list.mockResolvedValue({ lenses: [saved], workers: [worker()], tracing_enabled: true });
