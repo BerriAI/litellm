@@ -4462,6 +4462,10 @@ class PrismaClient:
     autorouter_turn_transactions: ClassVar[list["AutoRouterTurnTransaction"]] = []
     _autorouter_turn_transactions_lock = asyncio.Lock()
 
+    async def append_model_usage_transactions(self, transactions: Sequence["ModelUsageTransaction"]) -> None:
+        async with self._model_usage_transactions_lock:
+            self.model_usage_transactions.extend(transactions)
+
     # How long a health probe failure waits for an in-flight planned engine
     # replacement to settle before deciding whether to report itself. Generous
     # against a replacement that takes well under a second, and far short of the

@@ -23,6 +23,7 @@ from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, S
 from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
+    _model_usage_prompt,
     DBSpendUpdateWriter,
     _spend_tables_left_to_send,
     _SpendTableName,
@@ -34,6 +35,47 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
+
+
+def test_model_usage_prompt_reads_the_user_message_from_standard_logging_object() -> None:
+    prompt: Final = _model_usage_prompt(
+        {
+            "litellm_params": {"metadata": {"headers": {"litellm-disable-message-redaction": True}}},
+            "standard_logging_object": {"messages": [{"role": "user", "content": "Explain this code"}]},
+        }
+    )
+
+    assert prompt == "Explain this code"
+
+
+def test_model_usage_prompt_drops_messages_when_message_logging_is_disabled() -> None:
+    prompt: Final = _model_usage_prompt(
+        {
+            "turn_off_message_logging": True,
+            "standard_logging_object": {"messages": "private prompt"},
+        }
+    )
+
+    assert prompt is None
+
+
+def test_model_usage_prompt_drops_messages_when_redaction_is_enabled() -> None:
+    prompt: Final = _model_usage_prompt(
+        {
+            "litellm_params": {"metadata": {"headers": {"x-litellm-enable-message-redaction": True}}},
+            "standard_logging_object": {"messages": "private prompt"},
+        }
+    )
+
+    assert prompt is None
+
+
+def test_model_usage_prompt_drops_unparseable_chat_messages() -> None:
+    prompt: Final = _model_usage_prompt(
+        {"standard_logging_object": {"messages": [{"role": "user", "content": object()}]}}
+    )
+
+    assert prompt is None
 
 
 @pytest.mark.asyncio

@@ -1679,15 +1679,23 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         await flush_spend_counters_on_shutdown()
 
         await _flush_spend_logs_queue_on_shutdown()
-
         await proxy_config.stop_config_sync_subscriber()
-
         await proxy_config.stop_auth_cache_invalidation_subscriber()
-
         await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
-
         if prometheus_multiproc_dir:
             mark_worker_exit(os.getpid())
+
+
+async def classify_model_usage_job(prisma_client: PrismaClient) -> None:
+    from litellm.proxy.db.model_usage_task_classifier import classify_pending_model_usage
+
+    try:
+        await classify_pending_model_usage(prisma_client)
+    except Exception as exc:
+        verbose_proxy_logger.warning(
+            "Model insights task classification job failed (%s)",
+            type(exc).__name__,
+        )
 
 
 def _generate_stable_operation_id(route: "APIRoute") -> str:
@@ -10729,6 +10737,15 @@ class ProxyStartupEvent:
             # REMOVED jitter parameter - major cause of memory leak
             args=[prisma_client, db_writer_client, proxy_logging_obj],
             id="update_spend_job",
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+        scheduler.add_job(
+            classify_model_usage_job,
+            "interval",
+            seconds=batch_writing_interval,
+            args=[prisma_client],
+            id="classify_model_usage_job",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )

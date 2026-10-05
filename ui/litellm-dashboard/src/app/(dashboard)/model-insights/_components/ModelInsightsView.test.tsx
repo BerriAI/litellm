@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import ModelInsightsView from "./ModelInsightsView";
 import { apiClient } from "@/components/networking";
 
-vi.mock("@/components/networking", () => ({ apiClient: { get: vi.fn() } }));
+vi.mock("@/components/networking", () => ({ apiClient: { get: vi.fn(), put: vi.fn(), delete: vi.fn() } }));
 vi.mock("@/components/ui/chart", () => ({
   ChartContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   ChartTooltip: () => null,
@@ -61,16 +61,25 @@ const taskResponse = {
   ],
 };
 
-const mockApi = (tasks: unknown = taskResponse) =>
-  vi
-    .mocked(apiClient.get)
-    .mockImplementation((path: string) =>
-      path === "/model-insights/tasks" ? (tasks as Promise<unknown>) : Promise.resolve(response),
-    );
+const providers = [
+  { provider: "jev", label: "Jev (TypeSafe)", models: ["jev-latest"], ready: true, missing_env: [] },
+  { provider: "laya", label: "Laya", models: ["english"], ready: false, missing_env: ["LAYA_API_BASE"] },
+];
+const unconfigured = { configured: null, providers };
+const configured = { configured: { provider: "jev", model: "jev-latest" }, providers };
+
+const mockApi = (tasks: unknown = taskResponse, classifier: unknown = configured) =>
+  vi.mocked(apiClient.get).mockImplementation((path: string) => {
+    if (path === "/model-insights/tasks") return tasks as Promise<unknown>;
+    if (path === "/model-insights/task-classifier") return Promise.resolve(classifier);
+    return Promise.resolve(response);
+  });
 
 describe("ModelInsightsView", () => {
   beforeEach(() => {
     vi.mocked(apiClient.get).mockReset();
+    vi.mocked(apiClient.put).mockReset();
+    vi.mocked(apiClient.delete).mockReset();
     mockApi(Promise.resolve(taskResponse));
   });
 
@@ -166,5 +175,50 @@ describe("ModelInsightsView", () => {
     expect(chart).toHaveAttribute("data-buckets", "12");
     expect(chart).toHaveAttribute("data-first", "2026-07-13");
     expect(screen.getByText("Weekly tokens across your gateway")).toBeInTheDocument();
+  });
+
+  it("tells the admin the task classifier is not set up and enables the first ready System One model", async () => {
+    mockApi(Promise.resolve({ ...taskResponse, tasks: [] }), unconfigured);
+    vi.mocked(apiClient.put).mockResolvedValue(configured);
+    render(<ModelInsightsView accessToken="token" />);
+
+    expect(await screen.findByText("Task classifier is not set up")).toBeInTheDocument();
+    expect(screen.getByText("No task data yet")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Enable classifier" }));
+
+    expect(apiClient.put).toHaveBeenCalledWith("/model-insights/task-classifier", {
+      accessToken: "token",
+      body: { provider: "jev", model: "jev-latest" },
+    });
+    expect(await screen.findByText("jev-latest")).toBeInTheDocument();
+    expect(screen.queryByText("Task classifier is not set up")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("No requests classified yet. New requests show up here after the next background batch"),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the setup prompt and shows the server error when enabling fails", async () => {
+    mockApi(Promise.resolve(taskResponse), unconfigured);
+    vi.mocked(apiClient.put).mockRejectedValue(new Error("TYPESAFE_API_KEY is not set"));
+    render(<ModelInsightsView accessToken="token" />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Enable classifier" }));
+
+    expect(await screen.findByText("TYPESAFE_API_KEY is not set")).toBeInTheDocument();
+    expect(screen.getByText("Task classifier is not set up")).toBeInTheDocument();
+  });
+
+  it("shows the configured classifier and turns it off", async () => {
+    vi.mocked(apiClient.delete).mockResolvedValue(unconfigured);
+    render(<ModelInsightsView accessToken="token" />);
+
+    expect(await screen.findByText("jev-latest")).toBeInTheDocument();
+    expect(screen.queryByText("Task classifier is not set up")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Turn off" }));
+
+    expect(apiClient.delete).toHaveBeenCalledWith("/model-insights/task-classifier", { accessToken: "token" });
+    expect(await screen.findByText("Task classifier is not set up")).toBeInTheDocument();
   });
 });
