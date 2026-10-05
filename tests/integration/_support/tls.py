@@ -19,25 +19,24 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from pydantic import JsonValue, TypeAdapter
 
-JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
-
-def write_self_signed_cert(cert_dir: Path) -> tuple[Path, Path]:
+def write_self_signed_cert(cert_dir: Path, names: tuple[str, ...] = ("localhost",)) -> tuple[Path, Path]:
+    """Write a loopback certificate valid for `names` and 127.0.0.1; returns (cert path, key path)."""
     key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     now: Final = datetime.datetime.now(datetime.timezone.utc)
-    name: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    subject: Final = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, names[0])])
+    alternatives: Final[tuple[x509.GeneralName, ...]] = tuple(x509.DNSName(name) for name in names) + (
+        x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+    )
     cert: Final = (
         x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
+        .subject_name(subject)
+        .issuer_name(subject)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - datetime.timedelta(days=1))
         .not_valid_after(now + datetime.timedelta(days=7))
-        .add_extension(
-            x509.SubjectAlternativeName([x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
-            critical=False,
-        )
+        .add_extension(x509.SubjectAlternativeName(alternatives), critical=False)
         .sign(key, hashes.SHA256())
     )
     cert_file: Final = cert_dir / "cert.pem"
@@ -51,6 +50,15 @@ def write_self_signed_cert(cert_dir: Path) -> tuple[Path, Path]:
         )
     )
     return cert_file, key_file
+
+
+def server_context(cert_file: Path, key_file: Path) -> ssl.SSLContext:
+    context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certfile=cert_file, keyfile=key_file)
+    return context
+
+
+JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,8 +211,7 @@ class TlsPeer:
 
     def start(self) -> None:
         server: Final = _CipherPeer(("127.0.0.1", self.port), self)
-        context: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(str(self.cert_file), str(self.key_file))
+        context: Final = server_context(cert_file=self.cert_file, key_file=self.key_file)
         context.maximum_version = ssl.TLSVersion.TLSv1_2
         context.set_ciphers(self.cipher)
         server.socket = context.wrap_socket(server.socket, server_side=True)

@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 
 export const TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING = "team_admin_editable_team_fields";
 
@@ -48,6 +48,7 @@ const TEAM_ADMIN_FIELD_LABELS: ReadonlyMap<string, string> = new Map([
   ["rpm_limit", "Requests per minute Limit (RPM)"],
   ["max_budget", "Max Budget (USD)"],
   ["projects", "Create and update projects"],
+  ["member_key_budgets", "Update budgets on team members' keys"],
 ]);
 
 export const teamAdminFieldLabel = (field: string): string => TEAM_ADMIN_FIELD_LABELS.get(field) ?? field;

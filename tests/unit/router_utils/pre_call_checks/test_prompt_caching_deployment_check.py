@@ -181,6 +181,56 @@ async def test_async_filter_deployments_narrows_prompt_above_model_minimum():
     assert filtered == [deployments[1]]
 
 
+class _PinLookupCounter(DualCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.pin_lookups = 0
+
+    async def async_batch_get_cache(
+        self,
+        keys: list[str],
+        parent_otel_span: object = None,
+        local_only: bool = False,
+        throttle_redis: bool = True,
+        **kwargs: object,
+    ):
+        self.pin_lookups += 1
+        return await super().async_batch_get_cache(
+            keys,
+            parent_otel_span=parent_otel_span,
+            local_only=local_only,
+            throttle_redis=throttle_redis,
+            **kwargs,
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_filter_deployments_skips_prefix_hash_for_a_single_deployment():
+    """
+    With one healthy deployment there is nothing to pin to, so the check must hand the group
+    back without hashing the prefix or probing the pin cache: on a 400k-token Claude Code
+    prompt that hash alone is ~30 ms of GIL-holding work per request.
+    """
+    cache = _PinLookupCounter()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments("anthropic/claude-opus-4-6")
+    messages = _messages(word_count=5000)
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-1", messages=messages, tools=None)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=messages
+    )
+
+    assert filtered == deployments
+    assert cache.pin_lookups == 0
+
+    two = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+    assert await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS, healthy_deployments=two, messages=messages
+    ) == [two[0]]
+    assert cache.pin_lookups == 1
+
+
 @pytest.mark.asyncio
 async def test_async_filter_deployments_does_not_pin_when_target_order_is_set():
     cache = DualCache()
@@ -565,7 +615,7 @@ async def test_wildcard_route_resolves_underlying_model_minimum(local_model_cost
 @pytest.mark.asyncio
 async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
     from tests.large_text import text
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+    from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
         warm_tokenizer,
@@ -573,7 +623,7 @@ async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
 
     warm_tokenizer("anthropic/claude-fable-5")
     check = PromptCachingDeploymentCheck(cache=DualCache())
-    deployments = _deployments("anthropic/claude-fable-5")
+    deployments = _deployments("anthropic/claude-fable-5", "anthropic/claude-fable-5")
     messages = cast(list[AllMessageValues], [{"role": "user", "content": text * 100}])
 
     result, took, lags = await timed_with_loop_lags(
@@ -589,7 +639,7 @@ async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
 @pytest.mark.asyncio
 async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
     from tests.large_text import text
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+    from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
         warm_tokenizer,

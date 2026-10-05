@@ -25,6 +25,9 @@ class FakeLogging:
     def update_from_kwargs(self, **kwargs):
         pass
 
+    def pre_call(self, **kwargs):
+        pass
+
 
 def test_resolves_top_level_session_model():
     resolved = _with_resolved_session_model({"model": "alias/gpt-realtime"}, "gpt-realtime")
@@ -574,3 +577,25 @@ async def test_arealtime_keeps_gemini_live_on_the_vertex_realtime_websocket(monk
 async def test_realtime_health_check_names_the_batch_mode_for_chirp_models():
     with pytest.raises(ValueError, match="mode audio_transcription"):
         await realtime_main._realtime_health_check(model="chirp_3", custom_llm_provider="vertex_ai", api_key=None)
+
+
+class _ClosableGaClientWebSocket:
+    def __init__(self) -> None:
+        self.scope: Final = {"headers": ()}
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_arealtime_openai_forwards_the_intent_query_param_to_the_upstream_url():
+    connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
+    with patch("websockets.connect", connect):
+        await realtime_main._arealtime.__wrapped__(
+            model="openai/gpt-realtime",
+            websocket=_ClosableGaClientWebSocket(),
+            api_key="fake-key",
+            query_params={"model": "openai/gpt-realtime", "intent": "chat"},
+            litellm_logging_obj=FakeLogging(),
+        )
+    assert connect.url == "wss://api.openai.com/v1/realtime?model=gpt-realtime&intent=chat"

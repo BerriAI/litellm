@@ -360,7 +360,7 @@ class XecGuardGuardrail(CustomGuardrail):
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=10.0,
+                timeout=self.timeout if self.timeout is not None else 10.0,
             )
             response.raise_for_status()
             return response.json()
@@ -474,7 +474,7 @@ class XecGuardGuardrail(CustomGuardrail):
         return "\n".join(text_parts) or None
 
     @staticmethod
-    def _extract_choice_content(choice: Any) -> Any:
+    def _extract_choice_content(choice: Any) -> object:
         if hasattr(choice, "message"):
             message = choice.message
         elif isinstance(choice, dict):
