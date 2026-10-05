@@ -652,7 +652,14 @@ class DBSpendUpdateWriter:
         from litellm.repositories.table_repositories import SpendLogsRepository
 
         request_id: Final = payload["request_id"]
-        row: Final = _batch_cost_row_to_write(payload, disable_spend_logs)
+        from litellm.proxy.spend_tracking.spend_tracking_utils import (
+            configured_spend_logs_metadata_fields,
+            spend_log_row_with_retained_metadata,
+        )
+
+        row: Final = spend_log_row_with_retained_metadata(
+            _batch_cost_row_to_write(payload, disable_spend_logs), configured_spend_logs_metadata_fields()
+        )
         spend_logs: Final = SpendLogsRepository(prisma_client).table
         try:
             claimed: Final = await spend_logs.create_many(
@@ -1511,9 +1518,16 @@ class DBSpendUpdateWriter:
             )
         )
         if prisma_client is not None and spend_logs_url is not None or prisma_client is not None:
+            from litellm.proxy.spend_tracking.spend_tracking_utils import (
+                configured_spend_logs_metadata_fields,
+                spend_log_row_with_retained_metadata,
+            )
             from litellm.proxy.utils import enqueue_spend_logs, request_spend_log_flush
 
-            await enqueue_spend_logs(prisma_client, (payload,))
+            await enqueue_spend_logs(
+                prisma_client,
+                (spend_log_row_with_retained_metadata(payload, configured_spend_logs_metadata_fields()),),
+            )
             if payload.get("call_type") in RESPONSES_SESSION_CALL_TYPES:
                 request_spend_log_flush(prisma_client)
         else:

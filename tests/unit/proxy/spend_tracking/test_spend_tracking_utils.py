@@ -23,7 +23,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy._types import SpendLogsMetadataFields, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
@@ -41,9 +41,11 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
     _scrub_raw_model_from_error_information,
+    configured_spend_logs_metadata_fields,
     get_logging_payload,
     get_spend_logs_id,
     should_store_prompts_and_responses_in_spend_logs,
+    spend_log_row_with_retained_metadata,
 )
 from litellm.proxy.utils import hash_token
 from litellm.types.router import GenericLiteLLMParams
@@ -83,10 +85,16 @@ def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch
         "classifier_input": {"system": "rubric" * 1000, "messages": [{"role": "user", "content": "ask"}]},
         "originating_request_masked": {"input": "source-only", "api_key": "REDACTED"},
     }
-    stored: Final = json.loads(_get_proxy_server_request_for_spend_logs_payload(
-        metadata={}, litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
-        kwargs={"standard_logging_object": audit, "standard_callback_dynamic_params": {"turn_off_message_logging": redact}},
-    ))
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
+            kwargs={
+                "standard_logging_object": audit,
+                "standard_callback_dynamic_params": {"turn_off_message_logging": redact},
+            },
+        )
+    )
     if not store_prompts or redact:
         assert "classifier_input" not in stored
         assert "originating_request_masked" not in stored
@@ -212,9 +220,7 @@ def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
 
     create_session: Final = _get_batch_trace_session_id(call_type="acreate_batch", request_id="batch-uid-1")
-    cost_session: Final = _get_batch_trace_session_id(
-        call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost"
-    )
+    cost_session: Final = _get_batch_trace_session_id(call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost")
     assert create_session == cost_session == "batch-uid-1"
 
 
@@ -2756,7 +2762,11 @@ def test_proxy_server_request_payload_redacts_provider_credentials(mock_should_s
                 "extra_headers": {"Authorization": "Bearer canary-extra-header"},
                 "tools": [
                     {"type": "function", "function": {"name": "f", "parameters": tool_parameters}},
-                    {"type": "mcp", "server_url": "https://mcp.example.com", "headers": {"Authorization": "canary-mcp"}},
+                    {
+                        "type": "mcp",
+                        "server_url": "https://mcp.example.com",
+                        "headers": {"Authorization": "canary-mcp"},
+                    },
                 ],
                 "fallbacks": [{"model": "azure-b", **credentials}],
                 "metadata": metadata,
@@ -5310,7 +5320,7 @@ ANTHROPIC_MESSAGES_SSE_CHUNKS: Final = (
     'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
     'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
     '"usage":{"output_tokens":4}}\n\n',
-    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
 )
 
 
@@ -5348,9 +5358,7 @@ def test_spend_log_request_id_is_the_message_id_a_non_streaming_messages_caller_
     """
     logging_obj = _anthropic_messages_logging_obj(stream=False)
 
-    logged_response = logging_obj._handle_anthropic_messages_response_logging(
-        result=ANTHROPIC_MESSAGES_RESPONSE
-    )
+    logged_response = logging_obj._handle_anthropic_messages_response_logging(result=ANTHROPIC_MESSAGES_RESPONSE)
 
     assert logged_response.id == "msg_01Lit6806NonStreaming"
     assert (
@@ -5426,9 +5434,7 @@ def test_spend_log_request_id_still_falls_back_to_litellm_call_id_without_a_prov
         end_time=datetime.datetime.now(timezone.utc),
         logging_obj=logging_obj,
     )
-    assert logging_obj.model_call_details["complete_streaming_response"].id == (
-        "6806cafe-0000-4000-8000-000000000001"
-    )
+    assert logging_obj.model_call_details["complete_streaming_response"].id == ("6806cafe-0000-4000-8000-000000000001")
 
 
 def test_spend_log_request_id_for_chat_completions_is_untouched():
@@ -5509,6 +5515,7 @@ def test_failed_agent_request_keeps_registered_display_name():
     assert payload["model"] == agent_model
     assert payload["status"] == "failure"
     assert payload["model_id"] == "registered-agent"
+
 
 _CLI_SESSION_ALIAS: Final = "cli-session-alice"
 _CLI_SESSION_TOKEN: Final = "cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"
@@ -5641,15 +5648,104 @@ def test_baseline_estimate_metadata_comes_from_the_logging_stamp() -> None:
 def test_untrusted_agent_label_cannot_replace_verified_billing_identity(billing_agent: str | None) -> None:
     kwargs = {
         "model": "gpt-4",
-        "litellm_params": {"metadata": {
-            "user_api_key": "test-key",
-            "agent_id": "header-selected-agent",
-            "billing_agent_id": billing_agent,
-        }},
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+                "agent_id": "header-selected-agent",
+                "billing_agent_id": billing_agent,
+            }
+        },
     }
     payload = get_logging_payload(
-        kwargs=kwargs, response_obj={"id": "request"},
-        start_time=datetime.datetime.now(timezone.utc), end_time=datetime.datetime.now(timezone.utc),
+        kwargs=kwargs,
+        response_obj={"id": "request"},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
     )
     assert payload["agent_id"] == "header-selected-agent"
     assert payload["billing_agent_id"] == billing_agent
+
+
+def _spend_log_row(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({"request_id": "req-1", "spend": 0.5, "metadata": json.dumps(dict(metadata))})
+
+
+_STORED_METADATA: Final = MappingProxyType(
+    {
+        "status": "success",
+        "cold_storage_object_key": "logs/req-1.json",
+        "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"max_tokens": 10}},
+        "usage_object": {"prompt_tokens": 3},
+        "user_api_key_alias": "alias",
+    }
+)
+
+
+def test_spend_log_row_keeps_every_metadata_field_when_unconfigured() -> None:
+    row: Final = _spend_log_row(_STORED_METADATA)
+
+    assert spend_log_row_with_retained_metadata(row, None) is row
+
+
+def test_spend_log_row_drops_excluded_metadata_fields_only() -> None:
+    row: Final = _spend_log_row(_STORED_METADATA)
+
+    stored: Final = spend_log_row_with_retained_metadata(
+        row, SpendLogsMetadataFields(exclude=("model_map_information", "user_api_key_alias"))
+    )
+
+    assert json.loads(cast(str, stored["metadata"])) == {
+        "status": "success",
+        "cold_storage_object_key": "logs/req-1.json",
+        "usage_object": {"prompt_tokens": 3},
+    }
+    assert {name: value for name, value in stored.items() if name != "metadata"} == {
+        "request_id": "req-1",
+        "spend": 0.5,
+    }
+
+
+def test_spend_log_row_include_keeps_listed_and_always_kept_fields() -> None:
+    stored: Final = spend_log_row_with_retained_metadata(
+        _spend_log_row(_STORED_METADATA), SpendLogsMetadataFields(include=("usage_object",))
+    )
+
+    assert json.loads(cast(str, stored["metadata"])) == {
+        "status": "success",
+        "cold_storage_object_key": "logs/req-1.json",
+        "usage_object": {"prompt_tokens": 3},
+    }
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        {"include": ["usage_object"], "exclude": ["model_map_information"]},
+        {},
+        {"exclude": ["model_map_informaton"]},
+        {"include": ["usage_object", "not_a_field"]},
+        {"exclude": ["status"]},
+        {"exclude": ["cold_storage_object_key"]},
+        {"exclude": ["model_map_information"], "drop": ["usage_object"]},
+    ],
+)
+def test_spend_logs_metadata_fields_rejects_ambiguous_or_lossy_config(configured: dict[str, list[str]]) -> None:
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    with pytest.raises(ValidationError):
+        ConfigGeneralSettings.model_validate({"spend_logs_metadata_fields": configured})
+
+
+def test_configured_spend_logs_metadata_fields_ignores_invalid_runtime_value() -> None:
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"spend_logs_metadata_fields": {"include": ["usage_object"], "exclude": ["status"]}},
+    ):
+        assert configured_spend_logs_metadata_fields() is None
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"spend_logs_metadata_fields": {"exclude": ["model_map_information"]}},
+    ):
+        assert configured_spend_logs_metadata_fields() == SpendLogsMetadataFields(exclude=("model_map_information",))
