@@ -9659,3 +9659,114 @@ async def test_cli_sign_in_enrolls_only_verified_subjects_before_completing(
         )
     else:
         table.upsert.assert_not_awaited()
+
+
+_GOOGLE_DISCOVERY_DOCUMENT = {
+    "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+    "token_endpoint": "https://oauth2.googleapis.com/token",
+    "userinfo_endpoint": "https://openidconnect.googleapis.com/v1/userinfo",
+}
+
+
+async def _sso_key_generate_on_ui_disabled_node(*, source, key, google_sso_configured, known_login_ids):
+    """Drives GET /sso/key/generate on a node running with DISABLE_ADMIN_UI=true, the worker
+    shape of a control plane deployment, with a real Google redirect builder behind a mocked
+    discovery document."""
+    from litellm.proxy.management_endpoints.ui_sso import _get_cli_sso_flow_cache_key, google_login
+
+    env_without_sso_providers = {name: value for name, value in os.environ.items() if name not in _SSO_PROVIDER_ENV_VARS}
+    env = {
+        **env_without_sso_providers,
+        "DISABLE_ADMIN_UI": "true",
+        "PROXY_BASE_URL": "https://worker.example.com",
+        **(
+            {"GOOGLE_CLIENT_ID": "google-client-id", "GOOGLE_CLIENT_SECRET": "google-client-secret"}
+            if google_sso_configured
+            else {}
+        ),
+    }
+    flows = {_get_cli_sso_flow_cache_key(login_id): {"poll_secret_hash": "h"} for login_id in known_login_ids}
+    cli_cache = MagicMock(redis_cache=None)
+    cli_cache.get_cache.side_effect = lambda key: flows.get(key)
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://worker.example.com/"
+    mock_request.url.scheme = "https"
+    mock_request.cookies = {}
+
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.cli_sso_session_cache", cli_cache),
+        patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None),
+        patch("litellm.proxy.management_endpoints.ui_sso.show_missing_vars_in_env", return_value=None),
+        respx.mock(assert_all_called=False) as router,
+    ):
+        router.get("https://accounts.google.com/.well-known/openid-configuration").mock(
+            return_value=httpx.Response(200, json=_GOOGLE_DISCOVERY_DOCUMENT)
+        )
+        return await google_login(request=mock_request, source=source, key=key)
+
+
+@pytest.mark.asyncio
+async def test_cli_sso_login_reaches_the_idp_on_a_ui_disabled_node():
+    """Regression: a Claude Code gateway or `lite login` sign-in whose verification link lands on a
+    worker running DISABLE_ADMIN_UI=true used to get the "Admin UI is Disabled" page instead of the
+    IdP redirect, so sign-in never completed off the admin node."""
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
+
+    login_id = "cli-worker-login-session-0001"
+
+    response = await _sso_key_generate_on_ui_disabled_node(
+        source="litellm-cli", key=login_id, google_sso_configured=True, known_login_ids=(login_id,)
+    )
+
+    assert response.status_code == 303
+    location = urlparse(response.headers["location"])
+    assert location.hostname == "accounts.google.com"
+    query = parse_qs(location.query)
+    assert query["state"] == [f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{login_id}"]
+    assert query["redirect_uri"] == ["https://worker.example.com/sso/callback"]
+
+
+@pytest.mark.asyncio
+async def test_admin_ui_login_stays_refused_on_a_ui_disabled_node():
+    """The gate still covers the admin UI: the same SSO-configured worker refuses a plain UI login."""
+    response = await _sso_key_generate_on_ui_disabled_node(
+        source=None, key=None, google_sso_configured=True, known_login_ids=()
+    )
+
+    assert response.status_code == 200
+    assert "Admin UI is Disabled" in response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_cli_sso_login_with_an_unknown_session_is_rejected_on_a_ui_disabled_node():
+    """Only a login session the proxy issued passes the gate; a made-up key is refused before any redirect."""
+    with pytest.raises(HTTPException) as exc:
+        await _sso_key_generate_on_ui_disabled_node(
+            source="litellm-cli", key="cli-never-issued-session-00", google_sso_configured=True, known_login_ids=()
+        )
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_cli_sso_login_never_serves_the_admin_login_form_on_a_ui_disabled_node():
+    """Without an SSO provider the endpoint falls back to the admin username/password form, which a
+    UI-disabled node must not serve even to a valid CLI login session."""
+    login_id = "cli-worker-login-session-0002"
+
+    response = await _sso_key_generate_on_ui_disabled_node(
+        source="litellm-cli", key=login_id, google_sso_configured=False, known_login_ids=(login_id,)
+    )
+
+    assert response.status_code == 200
+    body = response.body.decode()
+    assert "Admin UI is Disabled" in body
+    assert 'name="username"' not in body
