@@ -2,11 +2,9 @@
 
 import { useEffect, useState } from "react";
 
-import type { InFlight } from "../../model/live";
-import { startStage, stepStage, type Stage } from "../../model/stage";
-import type { Review } from "../../model/types";
+import { stageTick, startStage, stepStage, type Stage } from "../../model/stage";
+import type { InFlight, Review } from "../../model/types";
 
-const TICK_MS = 30;
 const CHAR_MS = 3;
 
 function prefersReducedMotion(): boolean {
@@ -25,11 +23,11 @@ export function useStage(
   const input = { reading, reviews, now, slots, running, charMs };
   const next = stepStage(stage, input);
   if (next !== stage) setStage(next);
-  const busy = running || next.lanes.length > 0;
+  const tick = stageTick(next, running, now, charMs);
   useEffect(() => {
-    if (!busy) return;
-    const timer = window.setInterval(() => setNow(Date.now()), TICK_MS);
+    if (!tick) return;
+    const timer = window.setInterval(() => setNow(Date.now()), tick);
     return () => window.clearInterval(timer);
-  }, [busy]);
+  }, [tick]);
   return { stage: next, now, charMs };
 }

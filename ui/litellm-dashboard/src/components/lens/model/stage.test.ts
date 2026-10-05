@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { holdMs, laneText, releasedReviews, startStage, stepStage, typedChars, type StageInput } from "./stage";
+import {
+  holdMs,
+  laneText,
+  releasedReviews,
+  stageTick,
+  startStage,
+  stepStage,
+  typedChars,
+  type StageInput,
+} from "./stage";
 import type { Review } from "./types";
 
 function review(id: string, reasoning = "Checked the tool output. It matched."): Review {
@@ -104,5 +113,15 @@ describe("now reading stage", () => {
     const stopped = stepStage(opened, input({ running: false, reviews: [review("a"), review("x")] }));
     expect(stopped.lanes).toEqual([]);
     expect([...stopped.released].sort()).toEqual(["a", "x"]);
+  });
+});
+
+describe("stage tick", () => {
+  it("ticks fast only while reasoning is typing, slowly for live timers, and stops when idle", () => {
+    const landed = stepStage(startStage([]), input({ reviews: [review("a")], now: 0, charMs: 3 }));
+    expect(stageTick(landed, true, 1, 3)).toBe(30);
+    expect(stageTick(landed, true, 10_000, 3)).toBe(500);
+    expect(stageTick(startStage([]), true, 0, 3)).toBe(500);
+    expect(stageTick(startStage([]), false, 0, 3)).toBeNull();
   });
 });

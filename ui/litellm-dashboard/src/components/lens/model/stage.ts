@@ -1,4 +1,4 @@
-import type { InFlight } from "./live";
+import type { InFlight } from "./types";
 import type { Review } from "./types";
 
 export interface Lane {
@@ -117,6 +117,17 @@ export function stepStage(stage: Stage, input: StageInput): Stage {
     lanes: [...kept, ...landing.map((review) => landedLane(review, now)), ...starting.map(readingLane)],
     released: releasedNow.length ? new Set([...stage.released, ...releasedNow]) : stage.released,
   };
+}
+
+const TYPING_TICK_MS = 30;
+const CLOCK_TICK_MS = 500;
+
+export function stageTick(stage: Stage, running: boolean, now: number, charMs: number): number | null {
+  const typing = stage.lanes.some(
+    (lane) => lane.review && typedChars(lane, now, charMs) < laneText(lane.review.reasoning).length,
+  );
+  if (typing) return TYPING_TICK_MS;
+  return running || stage.lanes.length ? CLOCK_TICK_MS : null;
 }
 
 export function releasedReviews(reviews: readonly Review[], stage: Stage): Review[] {
