@@ -391,7 +391,6 @@ it("appends the next preview page as the list scrolls near its end, then stops a
   });
   renderWithProviders(<InvestigationSetup mode="edit" initial={settings} onClose={vi.fn()} onSave={vi.fn()} />);
   expect(await screen.findByText("Run one")).toBeVisible();
-  expect(screen.getByText(/Showing 1 of 2/)).toBeVisible();
   expect(screen.getByText("100% of 2")).toBeVisible();
   const nextPageCalls = () =>
     proxy.post.mock.calls.filter(([, options]) => (options?.body as { cursor: string }).cursor === "next");
@@ -403,7 +402,6 @@ it("appends the next preview page as the list scrolls near its end, then stops a
   act(() => finishSecondPage());
   expect(await screen.findByText("Run two")).toBeVisible();
   expect(screen.getByText("Run one")).toBeVisible();
-  expect(screen.queryByText(/Showing/)).not.toBeInTheDocument();
   expect(screen.queryByTestId("preview-placeholder")).not.toBeInTheDocument();
   act(() => mockAllIsIntersecting(true));
   expect(nextPageCalls()).toHaveLength(1);

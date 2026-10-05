@@ -20,35 +20,18 @@ const noSetup = () => {};
 /** The preview can hold hundreds of rows; it re-renders only when its rows or paging change, not on every keystroke. */
 const PreviewTable = memo(AgentTracesTable);
 
-type PreviewFooterProps = ComponentProps<"div"> & Pick<MatchingPreview, "page" | "selection">;
-
-/** Selection count and a way to undo manual picks; hidden while every match is simply going to be analyzed. */
-function PreviewFooter({ page, selection, className, ...props }: PreviewFooterProps) {
-  const partial = page.eligible != null && page.executions.length < page.eligible;
-  const count = selection?.count ?? page.selected;
-  const picked = selection?.ids.length ?? 0;
-  const everything = count === page.eligible && !partial && picked === 0;
-  if (page.eligible == null || everything) return null;
+/** Runs saved by hand on an older investigation; picks are no longer made here, only cleared. */
+function PickedRuns({ selection }: { selection: PreviewSelection }) {
+  const picked = selection.ids.length;
+  if (picked === 0) return null;
   return (
-    <div
-      data-slot="preview-footer"
-      className={cn("flex flex-wrap items-center justify-between gap-3 border-t bg-muted/30 px-4 py-2", className)}
-      {...props}
-    >
+    <div className="flex items-center justify-between gap-3 border-t bg-muted/30 px-4 py-2">
       <p className="text-xs tabular-nums text-muted-foreground">
-        {count.toLocaleString()} selected for analysis
-        {partial && (
-          <>
-            {" "}
-            · Showing {page.executions.length.toLocaleString()} of {page.eligible.toLocaleString()}
-          </>
-        )}
+        {selection.count.toLocaleString()} selected for analysis
       </p>
-      {selection && picked > 0 && (
-        <Button variant="ghost" size="xs" onClick={selection.clear}>
-          Clear {picked} selected runs
-        </Button>
-      )}
+      <Button variant="ghost" size="xs" onClick={selection.clear}>
+        Clear {picked} selected runs
+      </Button>
     </div>
   );
 }
@@ -110,7 +93,7 @@ export function MatchingActivityPreview({
           />
         </div>
       )}
-      {shown && <PreviewFooter page={page} selection={selection} />}
+      {shown && selection && <PickedRuns selection={selection} />}
     </section>
   );
 }

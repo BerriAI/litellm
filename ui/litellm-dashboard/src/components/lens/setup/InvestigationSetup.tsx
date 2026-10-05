@@ -199,7 +199,7 @@ function SetupEditor({
           aria-label="Investigation setup"
           current={step}
           onOpen={setStep}
-          className="lg:-m-1 lg:max-h-full lg:overflow-y-auto lg:p-1"
+          className="lg:-mx-2 lg:-my-1 lg:max-h-full lg:overflow-y-auto lg:px-2 lg:py-1"
         >
           <SetupStep id="activity" heading="Activity" description="Which runs to review" summary={<ActivitySummary />}>
             <ScopeFields {...activity.scope} />
