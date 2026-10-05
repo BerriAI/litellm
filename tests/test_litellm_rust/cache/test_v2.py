@@ -876,6 +876,25 @@ async def test_rust_cache_reports_the_key_used_for_python_cache(
 
 
 @pytest.mark.asyncio
+async def test_rust_cache_preserves_caller_supplied_cache_key(recording_server: RecordingServer) -> None:
+    recording_server.expected_requests = 1
+    litellm.cache = Cache()
+    recorder: Final = RecordingLogger()
+    options: Final = {"cache_key": "caller-supplied-key", "callbacks": [recorder]}
+    first: Final = await invoke("messages", recording_server, options)
+    second: Final = await invoke("messages", recording_server, options)
+    successes: Final = await recorder.wait_for_async("async_log_success_event", count=2)
+    callback_metadata: Final = TypeAdapter(dict[str, object]).validate_python(successes[-1].kwargs)
+    reported: Final = cache_key(second)
+    assert reported == "caller-supplied-key"
+    assert get_hidden_params_dict(second)["cache_key"] == reported
+    assert callback_metadata["cache_key"] == reported
+    assert litellm.cache.cache.get_cache("caller-supplied-key") is not None
+    assert payload(first) == payload(second)
+    assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
 async def test_rust_cache_hit_refreshes_call_metadata_without_rewriting_the_entry(
     recording_server: RecordingServer,
 ) -> None:
