@@ -175,7 +175,7 @@ def create_fine_tuning_job(
         optional_params: Final = GenericLiteLLMParams(**kwargs)
 
         # handle hyperparameters
-        hyperparameters = hyperparameters or {}  # original hyperparameters
+        hyperparameters = dict(hyperparameters or {})  # shallow copy; callers' dict is not mutated
 
         # For Azure, extract Azure-specific hyperparameters before creating OpenAI-spec hyperparameters
         azure_specific_hyperparams: Final = {}
