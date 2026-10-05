@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterator
 from dataclasses import dataclass
 from hashlib import sha256
@@ -12,7 +13,7 @@ from integration._support.client import (
     object_value,
     string_value,
 )
-from integration._support.database import read_rows
+from integration._support.database import read_rows, write_rows
 from pydantic import BaseModel, JsonValue
 
 PERMISSION_ERROR: Final = "team_member_permission_error"
@@ -119,6 +120,19 @@ def _team_permission_rows(team_ids: tuple[str, ...]) -> tuple[_TeamPermissionRow
             'SELECT team_id, team_member_permissions FROM "LiteLLM_TeamTable" WHERE team_id = ANY(%s) ORDER BY team_id',
             (list(team_ids),),
         )
+    )
+
+
+def _restore_team_permissions(team_id: str, permissions: list[str] | None) -> None:
+    if permissions is None:
+        write_rows(
+            'UPDATE "LiteLLM_TeamTable" SET team_member_permissions = NULL WHERE team_id = %s',
+            (team_id,),
+        )
+        return
+    write_rows(
+        'UPDATE "LiteLLM_TeamTable" SET team_member_permissions = ARRAY(SELECT jsonb_array_elements_text(%s::jsonb)) WHERE team_id = %s',
+        (json.dumps(permissions), team_id),
     )
 
 
@@ -248,6 +262,9 @@ def test_permissions_bulk_update_appends_only_to_the_listed_teams(gateway: Gatew
                 (),
             )
         )
+        for row in all_before:
+            if row.team_id not in team_ids and "/key/update" not in (row.team_member_permissions or []):
+                scenario.cleanups.callback(_restore_team_permissions, row.team_id, row.team_member_permissions)
         missing: Final = tuple(
             row.team_id for row in all_before if "/key/update" not in (row.team_member_permissions or [])
         )

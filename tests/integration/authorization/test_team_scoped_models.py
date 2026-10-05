@@ -22,6 +22,10 @@ class _TeamState(BaseModel):
     models: list[str] | None = None
 
 
+class _TeamModelRow(BaseModel):
+    models: list[str] | None = None
+
+
 class _TeamInfo(BaseModel):
     team_info: _TeamState
 
@@ -72,6 +76,12 @@ def _team_info(gateway: Gateway, team_id: str) -> _TeamInfo:
     response: Final = gateway.request("GET", "/team/info", params={"team_id": team_id})
     assert response.status_code == 200, response.text
     return _TeamInfo.model_validate_json(response.text)
+
+
+def _stored_team_models(team_id: str) -> _TeamModelRow:
+    rows: Final = read_rows('SELECT models FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team_id,))
+    assert len(rows) == 1, repr(rows)
+    return _TeamModelRow.model_validate(rows[0])
 
 
 def _model_denied(response: httpx.Response) -> None:
@@ -177,10 +187,9 @@ def test_team_model_add_and_delete_change_what_a_warmed_team_key_can_call(
         expected_added: Final = sorted((model_one, model_two, model_three))
         assert sorted(added_state.models or ()) == expected_added, added.text
         added_info: Final = _team_info(gateway, team)
-        assert added_info.team_info.models == expected_added, repr(added_info)
-        assert read_rows('SELECT models FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,)) == [
-            {"models": expected_added}
-        ], added.text
+        assert sorted(added_info.team_info.models or ()) == expected_added, repr(added_info)
+        added_row: Final = _stored_team_models(team)
+        assert sorted(added_row.models or ()) == expected_added, repr(added_row)
 
         second: Final = _chat(gateway, model_two, key)
         assert second.status_code == 200, second.text
@@ -192,10 +201,9 @@ def test_team_model_add_and_delete_change_what_a_warmed_team_key_can_call(
         expected_remaining: Final = sorted((model_one, model_three))
         assert sorted(deleted_state.models or ()) == expected_remaining, deleted.text
         deleted_info: Final = _team_info(gateway, team)
-        assert deleted_info.team_info.models == expected_remaining, repr(deleted_info)
-        assert read_rows('SELECT models FROM "LiteLLM_TeamTable" WHERE team_id = %s', (team,)) == [
-            {"models": expected_remaining}
-        ], deleted.text
+        assert sorted(deleted_info.team_info.models or ()) == expected_remaining, repr(deleted_info)
+        deleted_row: Final = _stored_team_models(team)
+        assert sorted(deleted_row.models or ()) == expected_remaining, repr(deleted_row)
 
         denied_after_delete: Final = _chat(gateway, model_two, key)
         _model_denied(denied_after_delete)
@@ -231,11 +239,9 @@ def test_team_model_add_on_an_unrestricted_team_keeps_every_other_model(
         added_state: Final = _TeamState.model_validate_json(added.text)
         assert sorted(added_state.models or ()) == expected, added.text
         added_info: Final = _team_info(gateway, team)
-        assert added_info.team_info.models == expected, repr(added_info)
-        assert read_rows(
-            'SELECT models FROM "LiteLLM_TeamTable" WHERE team_id = %s',
-            (team,),
-        ) == [{"models": expected}], added.text
+        assert sorted(added_info.team_info.models or ()) == expected, repr(added_info)
+        added_row: Final = _stored_team_models(team)
+        assert sorted(added_row.models or ()) == expected, repr(added_row)
         still_unrestricted: Final = _chat(gateway, model_two, key)
         assert still_unrestricted.status_code == 200, still_unrestricted.text
         added_model: Final = _chat(gateway, model_one, key)

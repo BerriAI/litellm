@@ -846,10 +846,8 @@ def test_bulk_update_restores_team_default_when_last_member_limit_is_cleared(
 
 
 @pytest.fixture(autouse=True)
-def _drain_unobserved_requests_without_upstream(gateway: Gateway, request: pytest.FixtureRequest) -> Iterator[None]:
+def _drain_unobserved_requests(gateway: Gateway) -> Iterator[None]:
     yield
-    if "upstream" in request.fixturenames:
-        return
     with httpx.Client(base_url=gateway.upstream_url, timeout=15, trust_env=False) as client:
         response: Final = client.get("/__observations")
         assert response.status_code == 200, response.text
