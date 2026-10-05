@@ -416,11 +416,12 @@ def test_batch_output_file_content_downloads_through_the_model_encoded_id(
         encoded_output, raw_output = _encoded_output_file_id(gateway, alias, key)
         assert encoded_output == encode_file_id_with_model(file_id=raw_output, model=alias), encoded_output
 
-        settled: Final[list[Request]] = []
-        eventually(
-            lambda: settled.extend(_drained_other_than_model_list_probes(wire)) or settled,
-            lambda drained: any("/content" in request.target for request in drained),
+        setup: Final = _drained_other_than_model_list_probes(wire)
+        late: Final = eventually(
+            lambda: _drained_other_than_model_list_probes(wire),
+            lambda drained: bool(drained) or any("/content" in request.target for request in setup),
         )
+        settled: Final = setup + late
         base_prefix: Final = "/v1/" if provider == "openai" else "/openai/"
         api_suffix: Final = "" if provider == "openai" else f"?api-version={AZURE_API_VERSION}"
         expected_content_target: Final = f"{base_prefix}files/{raw_output}/content{api_suffix}"
