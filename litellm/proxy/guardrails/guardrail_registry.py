@@ -41,6 +41,9 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrail,
 )
+from litellm.proxy.guardrails.guardrail_hooks.ztds import (
+    ZTDSGuardrail,
+)
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.prisma_protocols import TableActions
@@ -64,6 +67,7 @@ from .guardrail_initializers import (
     initialize_lakera_v2,
     initialize_presidio,
     initialize_tool_permission,
+    initialize_ztds,
 )
 
 if TYPE_CHECKING:
@@ -76,7 +80,9 @@ class _GuardrailRowLike(Protocol):
     def __iter__(self) -> Iterator[tuple[str, object]]: ...
 
 
-def _guardrail_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_GuardrailsTable]":
+def _guardrail_table(
+    prisma_client: PrismaClient,
+) -> "TableActions[prisma_models.LiteLLM_GuardrailsTable]":
     """Typed view of the guardrails table actions exposed by the Prisma repository."""
     return GuardrailsRepository(prisma_client).table
 
@@ -213,6 +219,7 @@ guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.TOOL_PERMISSION.value: initialize_tool_permission,
     SupportedGuardrailIntegrations.GRAYSWAN.value: initialize_grayswan,
     SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value: initialize_llm_as_a_judge,
+    SupportedGuardrailIntegrations.ZTDS.value: initialize_ztds,
 }
 
 CONFIG_GUARDRAIL_ID_NAMESPACE: Final = uuid.UUID("625f63f4-935a-50e5-98b5-fbe77babc74a")
@@ -226,6 +233,7 @@ guardrail_class_registry: Final[dict[str, type[CustomGuardrail]]] = {
     SupportedGuardrailIntegrations.LAKERA_V2.value: LakeraAIGuardrail,
     SupportedGuardrailIntegrations.PRESIDIO.value: _OPTIONAL_PresidioPIIMasking,
     SupportedGuardrailIntegrations.TOOL_PERMISSION.value: ToolPermissionGuardrail,
+    SupportedGuardrailIntegrations.ZTDS.value: ZTDSGuardrail,
 }
 
 
@@ -278,7 +286,9 @@ def get_guardrail_initializer_from_hooks():
                     if isinstance(registry, dict):
                         discovered_initializers.update(registry)
                         verbose_proxy_logger.debug(
-                            "Found guardrail_initializer_registry in %s: %s", module_path, list(registry.keys())
+                            "Found guardrail_initializer_registry in %s: %s",
+                            module_path,
+                            tuple(registry.keys()),
                         )
 
                 # Check for standalone initialize_guardrail function (fallback for directory-based guardrails)
@@ -573,14 +583,20 @@ def _as_callback_tuple(
 
 
 def _configure_callback_scoping(
-    custom_guardrail_callback: CustomGuardrail, guardrail_name: str, litellm_params: LitellmParams
+    custom_guardrail_callback: CustomGuardrail,
+    guardrail_name: str,
+    litellm_params: LitellmParams,
 ) -> None:
     for scoping_param in (
         "skip_system_message_in_guardrail",
         "skip_tool_message_in_guardrail",
         "scan_only_tool_results",
     ):
-        setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
+        setattr(
+            custom_guardrail_callback,
+            scoping_param,
+            getattr(litellm_params, scoping_param, None),
+        )
     scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(custom_guardrail_callback)
     if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():
         raise ValueError(
@@ -623,7 +639,10 @@ class InMemoryGuardrailHandler:
         """
 
     def _stable_guardrail_id(self, guardrail_name: str) -> str:
-        seeds: Final = chain((guardrail_name,), (f"{guardrail_name}:{occurrence}" for occurrence in count(1)))
+        seeds: Final = chain(
+            (guardrail_name,),
+            (f"{guardrail_name}:{occurrence}" for occurrence in count(1)),
+        )
         candidate_ids: Final = (str(uuid.uuid5(CONFIG_GUARDRAIL_ID_NAMESPACE, seed.encode("utf-8"))) for seed in seeds)
         return next(candidate_id for candidate_id in candidate_ids if candidate_id not in self.IN_MEMORY_GUARDRAILS)
 
@@ -657,7 +676,7 @@ class InMemoryGuardrailHandler:
         else:
             litellm_params = litellm_params_data
 
-        if "category_thresholds" in litellm_params_data and litellm_params_data["category_thresholds"]:
+        if litellm_params_data.get("category_thresholds"):
             lakera_category_thresholds: Final = LakeraCategoryThresholds(**litellm_params_data["category_thresholds"])
             litellm_params.category_thresholds = lakera_category_thresholds
 
@@ -987,7 +1006,9 @@ class InMemoryGuardrailHandler:
                 )
                 try:
                     self.initialize_guardrail(
-                        guardrail=previous_guardrail, config_file_path=config_file_path, source=previous_source
+                        guardrail=previous_guardrail,
+                        config_file_path=config_file_path,
+                        source=previous_source,
                     )
                 except Exception:  # noqa: BLE001  # the original failure must propagate even if the restore breaks
                     verbose_proxy_logger.exception("Restoring previous guardrail %s also failed", guardrail_id)
@@ -1038,7 +1059,9 @@ class InMemoryGuardrailHandler:
         if self._has_guardrail_params_changed(guardrail_id, synced):
             guardrail_name: Final = synced.get("guardrail_name", "Unknown")
             verbose_proxy_logger.info(
-                "Guardrail '%s' (ID: %s) params changed, re-initializing...", guardrail_name, guardrail_id
+                "Guardrail '%s' (ID: %s) params changed, re-initializing...",
+                guardrail_name,
+                guardrail_id,
             )
             return self.reinitialize_guardrail(
                 guardrail=synced,
