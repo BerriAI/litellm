@@ -15,6 +15,7 @@ mod normalize;
 mod otlp;
 pub mod query;
 mod query_access;
+pub mod request;
 mod resolve;
 #[cfg(feature = "schema")]
 pub mod schema;

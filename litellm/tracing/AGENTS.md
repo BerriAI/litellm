@@ -4,3 +4,4 @@
 - Use `litellm.rust_bridge.trace.storage.ClickHouseStorage` for ClickHouse; keep trace schema, SQL and encoding in `litellm-traces`, and generic transport in `litellm-storage-clickhouse`
 - Derive tenant fields from authentication and overwrite matching fields supplied by the exporter
 - Test confirmed writes, failures, tenant isolation and read behavior through public functions
+- Trace routes in `litellm/proxy/tracing_endpoints.py` bind query parameters with `Annotated[<generated request model>, Query()]` and bodies with the generated model; never redeclare field constraints in `Query(...)` or a local model

@@ -34,7 +34,7 @@ class GeneratorConfig(BaseModel):
     options: tuple[str, ...]
 
 
-def export(crate: str) -> Mapping[str, Mapping[str, JsonValue]]:
+def export(crate: str, extra_args: tuple[str, ...] = ()) -> Mapping[str, Mapping[str, JsonValue]]:
     result: Final = subprocess.run(
         (
             "cargo",
@@ -48,6 +48,7 @@ def export(crate: str) -> Mapping[str, Mapping[str, JsonValue]]:
             f"export-{crate}-schema",
             "--features",
             "schema",
+            *(("--", *extra_args) if extra_args else ()),
         ),
         check=True,
         stdout=subprocess.PIPE,
@@ -163,8 +164,9 @@ def main() -> int:
         sys.stderr.write(f"requires datamodel-code-generator=={config.version}\n")
         return 1
     domain: Final = export("traces")
+    requests: Final = export("traces", ("--requests",))
     clickhouse: Final = export("traces-clickhouse")
-    exported: Final = tuple(schema_files(domain, clickhouse))
+    exported: Final = tuple(schema_files(domain, clickhouse, requests))
     schema_results: Final = tuple(publish(path, content, args.check) for path, content in exported)
     schema_set_matches: Final = reconcile_schemas(frozenset(path for path, _ in exported), args.check)
     with TemporaryDirectory(prefix="trace-codegen-") as temporary:
@@ -176,9 +178,11 @@ def main() -> int:
             directory,
             config,
         )
+        request_models: Final = generate(requests, "requests", directory, config)
         python_results: Final = (
             publish(GENERATED / "types.py", types.read_text(), args.check),
             publish(GENERATED / "models.py", models.read_text(), args.check),
+            publish(GENERATED / "requests.py", request_models.read_text(), args.check),
         )
     return 0 if all((schema_set_matches, *schema_results, *python_results)) else 1
 
@@ -186,8 +190,9 @@ def main() -> int:
 def schema_files(
     domain: Mapping[str, Mapping[str, JsonValue]],
     clickhouse: Mapping[str, Mapping[str, JsonValue]],
+    requests: Mapping[str, Mapping[str, JsonValue]],
 ) -> Iterator[tuple[Path, str]]:
-    for crate, schemas in (("traces", domain), ("traces-clickhouse", clickhouse)):
+    for crate, schemas in (("traces", domain), ("traces-clickhouse", clickhouse), ("traces", requests)):
         for name, schema in schemas.items():
             yield TOOLING / "schemas" / crate / f"{name}.json", json.dumps(schema, indent=2, sort_keys=True) + "\n"
 

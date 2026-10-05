@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "cursor": {
+      "default": null,
+      "maxLength": 512,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "end_ms": {
+      "default": null,
+      "description": "Window end, unix ms. Default: now",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "start_ms": {
+      "default": null,
+      "description": "Window start, unix ms. Default: 24h ago",
+      "format": "int64",
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  },
+  "title": "TraceListRequest",
+  "type": "object"
+}
