@@ -138,6 +138,7 @@ async def acompletion_with_mcp(
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
         request_tags=request_tags,
+        raw_headers=raw_headers,
     )
 
     openai_tools: Final = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
@@ -434,6 +435,7 @@ async def acompletion_with_mcp(
                         # Execute tool calls
                         self.tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
                             tool_server_map=self.tool_server_map,
+                            served_tools=deduplicated_mcp_tools,
                             tool_calls=self.tool_calls,
                             user_api_key_auth=self.user_api_key_auth,
                             mcp_auth_header=self.mcp_auth_header,
@@ -608,6 +610,7 @@ async def acompletion_with_mcp(
     tool_results: Final = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
         tool_server_map=tool_server_map,
         tool_calls=tool_calls,
+        served_tools=deduplicated_mcp_tools,
         user_api_key_auth=user_api_key_auth,
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,

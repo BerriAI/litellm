@@ -37,12 +37,7 @@ def _tools_of_item(item: object) -> tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]:
         parsed: Final = _AdditionalToolsItem.model_validate(item)
     except ValidationError:
         return ()
-    return tuple(
-        cast(
-            "ALL_RESPONSES_API_TOOL_PARAMS", tool
-        )  # cast-ok: nested tools carry the same raw tool JSON as top-level tools
-        for tool in parsed.tools
-    )
+    return tuple(cast("ALL_RESPONSES_API_TOOL_PARAMS", tool) for tool in parsed.tools)
 
 
 def hoist_additional_tools(

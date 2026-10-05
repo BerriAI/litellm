@@ -7,6 +7,7 @@ import litellm
 from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
 )
+from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -33,6 +34,7 @@ def make_sync_call(
     json_mode: bool | None = False,
     fake_stream: bool = False,
     stream_chunk_size: int | None = None,
+    timeout: float | httpx.Timeout | None = None,
 ) -> tuple[Any, httpx.Headers]:
     if client is None:
         client = _get_httpx_client()  # Create a new client if none provided
@@ -43,6 +45,7 @@ def make_sync_call(
         data=data,
         stream=not fake_stream,
         logging_obj=logging_obj,
+        timeout=timeout,
     )
 
     if response.status_code != 200:
@@ -69,7 +72,9 @@ def make_sync_call(
         completion_stream: Any = MockResponseIterator(model_response=model_response, json_mode=json_mode)
     else:
         decoder: Final = AWSEventStreamDecoder(model=model, json_mode=json_mode)
-        completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
+        completion_stream = decoder.iter_bytes(
+            response.iter_bytes(chunk_size=stream_chunk_size), response_headers=response.headers
+        )
 
     # LOGGING
     logging_obj.post_call(
@@ -149,6 +154,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             fake_stream=fake_stream,
             json_mode=json_mode,
             stream_chunk_size=stream_chunk_size,
+            timeout=timeout,
         )
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -278,7 +284,7 @@ class BedrockConverseLLM(BaseAWSLLM):
     ):
         ## SETUP ##
         stream: Final = optional_params.pop("stream", None)
-        stream_chunk_size: Final = optional_params.pop("stream_chunk_size", None)
+        stream_chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size if stream is True else None
         unencoded_model_id: Final = optional_params.pop("model_id", None)
         fake_stream = optional_params.pop("fake_stream", False)
         json_mode: Final = optional_params.get("json_mode", False)
@@ -453,6 +459,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 json_mode=json_mode,
                 fake_stream=fake_stream,
                 stream_chunk_size=stream_chunk_size,
+                timeout=timeout,
             )
             streaming_response: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,

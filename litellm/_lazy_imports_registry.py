@@ -151,6 +151,7 @@ LLM_CONFIG_NAMES: Final = (
     "AzureAIRerankConfig",
     "InfinityRerankConfig",
     "JinaAIRerankConfig",
+    "ScalewayRerankConfig",
     "DeepinfraRerankConfig",
     "HostedVLLMRerankConfig",
     "NvidiaNimRerankConfig",
@@ -206,6 +207,7 @@ LLM_CONFIG_NAMES: Final = (
     "AmazonTwelveLabsPegasusConfig",
     "AmazonInvokeConfig",
     "AmazonBedrockOpenAIConfig",
+    "AmazonBedrockRuntimeChatCompletionsConfig",
     "AmazonStabilityConfig",
     "AmazonStability3Config",
     "AmazonNovaCanvasConfig",
@@ -245,6 +247,7 @@ LLM_CONFIG_NAMES: Final = (
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
+    "BedrockOpenAIResponsesConfig",
     "BedrockMantleResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "VertexAIInteractionsConfig",
@@ -263,6 +266,7 @@ LLM_CONFIG_NAMES: Final = (
     "NvidiaNimEmbeddingConfig",
     "FeatherlessAIConfig",
     "CerebrasConfig",
+    "NadirConfig",
     "BasetenConfig",
     "SambanovaConfig",
     "SambaNovaEmbeddingConfig",
@@ -393,12 +397,10 @@ UTILS_MODULE_NAMES: Final = (
     "redact_message_input_output_from_logging",
     "CustomStreamWrapper",
     "BaseGoogleGenAIGenerateContentConfig",
-    "BaseOCRConfig",
     "BaseSearchConfig",
     "BaseTextToSpeechConfig",
     "BedrockModelInfo",
     "CohereModelInfo",
-    "MistralOCRConfig",
     "Rules",
     "AsyncHTTPHandler",
     "HTTPHandler",
@@ -687,6 +689,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "InfinityRerankConfig",
     ),
     "JinaAIRerankConfig": (".llms.jina_ai.rerank.transformation", "JinaAIRerankConfig"),
+    "ScalewayRerankConfig": (".llms.scaleway.rerank.transformation", "ScalewayRerankConfig"),
     "DeepinfraRerankConfig": (
         ".llms.deepinfra.rerank.transformation",
         "DeepinfraRerankConfig",
@@ -742,7 +745,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     ),
     "CohereChatConfig": (".llms.cohere.chat.transformation", "CohereChatConfig"),
     "AnthropicMessagesConfig": (
-        ".llms.anthropic.experimental_pass_through.messages.transformation",
+        ".llms.anthropic.pass_through.messages.transformation",
         "AnthropicMessagesConfig",
     ),
     "BedrockClaudePlatformMessagesConfig": (
@@ -868,6 +871,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.bedrock.chat.invoke_transformations.amazon_openai_transformation",
         "AmazonBedrockOpenAIConfig",
     ),
+    "AmazonBedrockRuntimeChatCompletionsConfig": (
+        ".llms.bedrock.chat.chat_completions.transformation",
+        "AmazonBedrockRuntimeChatCompletionsConfig",
+    ),
     "AmazonStabilityConfig": (
         ".llms.bedrock.image_generation.amazon_stability1_transformation",
         "AmazonStabilityConfig",
@@ -921,6 +928,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "OpenAITextCompletionConfig",
     ),
     "GroqChatConfig": (".llms.groq.chat.transformation", "GroqChatConfig"),
+    "BedrockOpenAIResponsesConfig": (
+        ".llms.bedrock.responses.transformation",
+        "BedrockOpenAIResponsesConfig",
+    ),
     "BedrockMantleChatConfig": (
         ".llms.bedrock_mantle.chat.transformation",
         "BedrockMantleChatConfig",
@@ -1058,6 +1069,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "FeatherlessAIConfig",
     ),
     "CerebrasConfig": (".llms.cerebras.chat", "CerebrasConfig"),
+    "NadirConfig": (".llms.nadir.chat.transformation", "NadirConfig"),
     "BasetenConfig": (".llms.baseten.chat", "BasetenConfig"),
     "SambanovaConfig": (".llms.sambanova.chat", "SambanovaConfig"),
     "SambaNovaEmbeddingConfig": (
@@ -1362,7 +1374,6 @@ _UTILS_MODULE_IMPORT_MAP: Final = {
         "litellm.llms.base_llm.google_genai.transformation",
         "BaseGoogleGenAIGenerateContentConfig",
     ),
-    "BaseOCRConfig": ("litellm.llms.base_llm.ocr.transformation", "BaseOCRConfig"),
     "BaseSearchConfig": (
         "litellm.llms.base_llm.search.transformation",
         "BaseSearchConfig",
@@ -1373,7 +1384,6 @@ _UTILS_MODULE_IMPORT_MAP: Final = {
     ),
     "BedrockModelInfo": ("litellm.llms.bedrock.common_utils", "BedrockModelInfo"),
     "CohereModelInfo": ("litellm.llms.cohere.common_utils", "CohereModelInfo"),
-    "MistralOCRConfig": ("litellm.llms.mistral.ocr.transformation", "MistralOCRConfig"),
     "Rules": ("litellm.litellm_core_utils.rules", "Rules"),
     "AsyncHTTPHandler": ("litellm.llms.custom_httpx.http_handler", "AsyncHTTPHandler"),
     "HTTPHandler": ("litellm.llms.custom_httpx.http_handler", "HTTPHandler"),

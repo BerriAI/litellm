@@ -1,0 +1,91 @@
+name: litellm-lens
+
+services:
+  litellm:
+    image: ghcr.io/berriai/litellm:${LITELLM_VERSION:?Set LITELLM_VERSION to a published release, without the v prefix}
+    entrypoint:
+      - python3
+      - -c
+      - |
+        import os, sys
+        from urllib.parse import quote
+        postgres_password = quote(os.environ["POSTGRES_PASSWORD"], safe="")
+        clickhouse_password = quote(os.environ["CLICKHOUSE_PASSWORD"], safe="")
+        os.environ["DATABASE_URL"] = f"postgresql://litellm:{postgres_password}@db:5432/litellm"
+        os.environ["CLICKHOUSE_URL"] = f"http://default:{clickhouse_password}@clickhouse:8123"
+        os.execv("docker/prod_entrypoint.sh", ["docker/prod_entrypoint.sh", *sys.argv[1:]])
+    command: ["--config", "/app/lens-config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Set a strong master key}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?Set a permanent encryption key and keep it across upgrades}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a permanent database password}
+      STORE_MODEL_IN_DB: "True"
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Set a permanent ClickHouse password}
+      LENS_WORKER_IMAGE: ghcr.io/berriai/litellm-lens-worker:v${LITELLM_VERSION}
+    volumes:
+      - ./config.yaml:/app/lens-config.yaml:ro
+    ports:
+      - "127.0.0.1:${LITELLM_PORT:-4000}:4000"
+    networks: [proxy, storage]
+    depends_on:
+      db:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    restart: unless-stopped
+
+  lens-worker:
+    profiles: [lens]
+    image: ghcr.io/berriai/litellm-lens-worker:v${LITELLM_VERSION}
+    environment:
+      LITELLM_URL: http://litellm:4000
+      LENS_WORKER_TOKEN: ${LENS_WORKER_TOKEN:-}
+    depends_on: [litellm]
+    networks: [proxy]
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${LENS_WORKER_TMP_SIZE:-1g}
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    networks: [storage]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.9.6.6
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "default", "--password", "${CLICKHOUSE_PASSWORD}", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks: [storage]
+
+networks:
+  proxy:
+  storage:
+    internal: true
+
+volumes:
+  postgres_data:
+  clickhouse_data:

@@ -33,21 +33,20 @@ else:
     FastAPI = Any
 
 
-def _deprioritize_script_dir_in_sys_path() -> None:
+def _drop_script_dir_from_sys_path() -> None:
     """Stop ``litellm/proxy`` modules from shadowing installed packages.
 
     Running this file as a script puts its own directory at ``sys.path[0]``, so
     ``import a2a`` resolves to ``litellm/proxy/a2a`` instead of the ``a2a`` SDK
-    and A2A agent calls fail. The entry is moved to the end rather than dropped,
-    because the sibling-import fallbacks in this module (``from proxy_server
-    import ...``) still need it. No-op under the ``litellm`` console script.
+    and ``proxy_server`` resolves to a second copy of
+    ``litellm.proxy.proxy_server``. No-op under the ``litellm`` console script.
     """
     script_dir: Final = os.path.dirname(os.path.abspath(__file__))
     if sys.path and os.path.abspath(sys.path[0]) == script_dir:
-        sys.path.append(sys.path.pop(0))
+        sys.path.pop(0)
 
 
-_deprioritize_script_dir_in_sys_path()
+_drop_script_dir_from_sys_path()
 sys.path.append(os.getcwd())
 
 config_filename: Final = "litellm.secrets"
@@ -109,12 +108,14 @@ class DatabaseTimeoutSettings(BaseModel):
 
     database_statement_timeout: float | None = None
     database_lock_timeout: float | None = None
+    database_idle_in_transaction_session_timeout: float | None = None
 
 
 def _pg_options_with_timeouts(
     existing_options: str,
     statement_timeout: float | None,
     lock_timeout: float | None,
+    idle_in_transaction_session_timeout: float | None = None,
 ) -> str:
     """Return the Postgres ``options`` value carrying the configured timeouts.
 
@@ -144,6 +145,7 @@ def _pg_options_with_timeouts(
         for name, seconds in (
             ("statement_timeout", statement_timeout),
             ("lock_timeout", lock_timeout),
+            ("idle_in_transaction_session_timeout", idle_in_transaction_session_timeout),
         )
         if seconds is not None and not re.search(rf"(?:-c\s*|--){re.escape(name)}=", existing_options)
     )
@@ -210,6 +212,25 @@ class ProxyInitializationHelpers:
         print("\nLiteLLM: Health Testing models in config")
         response: Final = httpx.get(url=f"http://{host}:{port}/health")
         print(json.dumps(response.json(), indent=4))
+
+    @staticmethod
+    def _run_config_validation(config: str | None) -> None:
+        if config is None:
+            raise click.UsageError("--validate_config requires --config <path>")
+        import asyncio
+
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        async def _load() -> int:
+            _, model_list, _ = await ProxyConfig().load_config(router=None, config_file_path=config)
+            return len(model_list)
+
+        try:
+            model_count: Final = asyncio.run(_load())
+        except Exception as error:
+            click.echo(f"LiteLLM: config validation failed: {error}", err=True)
+            raise click.exceptions.Exit(1) from error
+        click.echo(f"LiteLLM: config OK ({model_count} models)")
 
     @staticmethod
     def _run_test_chat_completion(
@@ -881,12 +902,18 @@ class ProxyInitializationHelpers:
     default=False,
     help="Use prisma db push instead of prisma migrate for database schema updates",
 )
-@click.option("--local", is_flag=True, default=False, help="for local debugging")
+@click.option("--local", is_flag=True, default=False, help="no-op, kept for backwards compatibility")
 @click.option(
     "--skip_server_startup",
     is_flag=True,
     default=False,
     help="Skip starting the server after setup (useful for migrations only)",
+)
+@click.option(
+    "--validate_config",
+    is_flag=True,
+    default=False,
+    help="Load and validate the config file (including mcp_servers) without starting the server, then exit. Exit code 1 on any config error.",
 )
 @click.option(
     "--keepalive_timeout",
@@ -942,8 +969,11 @@ class ProxyInitializationHelpers:
     "--enforce_prisma_migration_check",
     is_flag=True,
     default=False,
-    help="Exit with error if database migration fails on startup.",
-    envvar="ENFORCE_PRISMA_MIGRATION_CHECK",
+    hidden=True,
+    help=(
+        "Deprecated and ignored: the proxy always exits when database setup fails at "
+        "startup. It is still accepted so existing commands keep working."
+    ),
 )
 @click.option(
     "--use_v2_migration_resolver",
@@ -1028,6 +1058,7 @@ def run_server(
     log_config,
     use_prisma_db_push: bool,
     skip_server_startup,
+    validate_config: bool,
     keepalive_timeout,
     timeout_worker_healthcheck,
     max_requests_before_restart,
@@ -1058,38 +1089,27 @@ def run_server(
         return
 
     args: Final = locals()
-    if local:
-        from proxy_server import (
+    try:
+        from litellm.proxy.proxy_server import (
             KeyManagementSettings,
             ProxyConfig,
             app,
             save_worker_config,
         )
-    else:
-        try:
-            from .proxy_server import (
-                KeyManagementSettings,
-                ProxyConfig,
-                app,
-                save_worker_config,
-            )
-        except ModuleNotFoundError as e:
-            raise ModuleNotFoundError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`")
-        except ImportError as e:
-            if "litellm[proxy]" in str(e):
-                # user is missing a proxy dependency, ask them to pip install litellm[proxy]
-                raise e
-            else:
-                # this is just a local/relative import error, user git cloned litellm
-                from proxy_server import (
-                    KeyManagementSettings,
-                    ProxyConfig,
-                    app,
-                    save_worker_config,
-                )
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(f"Missing dependency {e}. Run `pip install 'litellm[proxy]'`") from e
     if version is True:
         ProxyInitializationHelpers._echo_litellm_version()
         return
+    if validate_config is True:
+        ProxyInitializationHelpers._run_config_validation(config)
+        return
+    if enforce_prisma_migration_check:
+        print(
+            "\033[1;33mLiteLLM Proxy: --enforce_prisma_migration_check is "
+            "deprecated and has no effect, because the proxy always exits "
+            "when database setup fails at startup. You can safely remove it.\033[0m"
+        )
     if model and "ollama" in model and api_base is None:
         ProxyInitializationHelpers._run_ollama_serve()
     if health is True:
@@ -1143,6 +1163,7 @@ def run_server(
         db_extra_connection_params: dict | None = None
         db_statement_timeout: float | None = None
         db_lock_timeout: float | None = None
+        db_idle_in_transaction_timeout: float | None = None
         general_settings = {}
         ### GET DB TOKEN FOR RDS IAM / AZURE ENTRA AUTH ###
 
@@ -1253,6 +1274,7 @@ def run_server(
             db_timeouts: Final = DatabaseTimeoutSettings.model_validate(general_settings)
             db_statement_timeout = db_timeouts.database_statement_timeout
             db_lock_timeout = db_timeouts.database_lock_timeout
+            db_idle_in_transaction_timeout = db_timeouts.database_idle_in_transaction_session_timeout
             if database_url and database_url.startswith("os.environ/"):
                 original_dir: Final = os.getcwd()
                 # set the working directory to where this script is
@@ -1283,8 +1305,10 @@ def run_server(
 
         if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
             from litellm.proxy.db.db_url_settings import (
+                DISABLE_PREPARED_STATEMENTS_ENV_VAR,
                 add_missing_query_params,
                 idle_lifetime_params,
+                postgres_connection_budget_message,
                 reader_shareable_params,
                 translate_libpq_ssl_params,
                 unsupported_db_scheme,
@@ -1305,12 +1329,16 @@ def run_server(
                     sys.exit(1)
             from litellm.secret_managers.main import get_secret
 
+            env_disable_prepared_statements: Final = token_auth_flag_enabled(
+                os.getenv(DISABLE_PREPARED_STATEMENTS_ENV_VAR), env_var=DISABLE_PREPARED_STATEMENTS_ENV_VAR
+            )
+            disable_prepared_statements: Final = db_disable_prepared_statements or env_disable_prepared_statements
             connection_url_params: Final = _build_db_connection_url_params(
                 connection_limit=db_connection_pool_limit,
                 pool_timeout=db_connection_timeout,
                 connect_timeout=db_connect_timeout,
                 socket_timeout=db_socket_timeout,
-                disable_prepared_statements=db_disable_prepared_statements,
+                disable_prepared_statements=disable_prepared_statements,
                 extra_params=db_extra_connection_params,
             )
             lifetime_params: Final = idle_lifetime_params(general_settings.get("database_max_idle_connection_lifetime"))
@@ -1321,6 +1349,7 @@ def run_server(
                     _url_query_value(resolved_url, "options"),
                     db_statement_timeout,
                     db_lock_timeout,
+                    db_idle_in_transaction_timeout,
                 )
                 writer_url: Final = (
                     _with_query_value(resolved_url, "options", pg_options)
@@ -1351,6 +1380,7 @@ def run_server(
                     _url_query_value(read_replica_url, "options"),
                     db_statement_timeout,
                     db_lock_timeout,
+                    db_idle_in_transaction_timeout,
                 )
                 os.environ["DATABASE_URL_READ_REPLICA"] = translate_libpq_ssl_params(
                     add_missing_query_params(
@@ -1363,6 +1393,19 @@ def run_server(
                         lifetime_params,
                     )
                 )
+            print(
+                postgres_connection_budget_message(
+                    writer_limit=_url_query_value(os.getenv("DATABASE_URL"), "connection_limit")
+                    or f"{db_connection_pool_limit}",
+                    reader_limit=(
+                        _url_query_value(os.getenv("DATABASE_URL_READ_REPLICA"), "connection_limit")
+                        or f"{db_connection_pool_limit}"
+                    )
+                    if read_replica_url
+                    else None,
+                    num_workers=f"{1 if run_hypercorn else num_workers}",
+                )
+            )
             from litellm_proxy_extras.prisma_toolchain import prisma_cli_available
 
             is_prisma_runnable: Final = prisma_cli_available()
@@ -1397,10 +1440,15 @@ def run_server(
                             "LiteLLM versions contend for the same DB.\033[0m"
                         )
                     try:
-                        setup_ok: Final = PrismaManager.setup_database(
+                        migrated: Final = PrismaManager.setup_database(
                             use_migrate=not use_prisma_db_push,
                             use_v2_resolver=use_v2_resolver,
                         )
+                        setup_ok: Final = migrated and (
+                            not skip_server_startup or PrismaManager.build_request_log_indexes()
+                        )
+                        if migrated and not skip_server_startup:
+                            PrismaManager.start_request_log_index_build()
                     except RuntimeError as e:
                         # Raised on unrecoverable migration errors: the v2
                         # resolver's non-idempotent failures and permission
@@ -1413,22 +1461,18 @@ def run_server(
                         )
                         sys.exit(2)
                     if not setup_ok:
-                        if enforce_prisma_migration_check:
-                            print(
-                                "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
-                                "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
-                            )
-                            sys.exit(1)
-                        else:
-                            print(
-                                "\033[1;33mLiteLLM Proxy: Database migration failed but continuing startup. "
-                                "Set --enforce_prisma_migration_check or ENFORCE_PRISMA_MIGRATION_CHECK=true to exit on failure.\033[0m"
-                            )
+                        print(
+                            "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
+                            "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
+                        )
+                        sys.exit(1)
             else:
                 print(
-                    "Unable to connect to DB. DATABASE_URL found in environment, but the prisma CLI is neither on "
-                    "PATH nor importable as a package."
+                    "\033[1;31mLiteLLM Proxy: a database URL is set but the prisma CLI is neither on PATH nor importable "
+                    "as a package, so the database cannot be set up. Install it with `pip install 'litellm[extra_proxy]'` "
+                    "or run a shipped LiteLLM image.\033[0m"
                 )
+                sys.exit(1)
         pgbouncer_settings: Final = PgBouncerSettings()
         upstream_database_url: Final = os.getenv("DATABASE_URL")
         if pgbouncer_settings.enabled and upstream_database_url is not None:
