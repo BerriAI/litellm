@@ -101,8 +101,8 @@ async def test_anthropic_messages_with_all_beta_headers(model_name, provider_nam
 @pytest.mark.parametrize(
     "model_name,provider_name",
     [
-        ("bedrock-claude-opus-4.5", "bedrock"),
-        ("bedrock-converse-claude-sonnet-4.5", "bedrock_converse"),
+        ("bedrock-claude-fable-5.1", "bedrock"),
+        ("bedrock-converse-claude-fable-5.1", "bedrock_converse"),
     ],
 )
 async def test_bedrock_invoke_messages_with_all_beta_headers(model_name, provider_name):

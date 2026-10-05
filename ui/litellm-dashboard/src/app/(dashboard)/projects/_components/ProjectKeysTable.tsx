@@ -8,16 +8,16 @@ import { KeyResponse } from "@/components/key_team_helpers/key_list";
 import { DataTable } from "@/components/shared/DataTable";
 
 import { getProjectKeysTableColumns } from "./ProjectKeysTableColumns";
+import { PROJECT_KEYS_PAGE_SIZE_OPTIONS } from "./useProjectsUrlState";
 
 interface ProjectKeysTableProps {
   keys: KeyResponse[];
   totalCount: number;
   isLoading: boolean;
+  isError?: boolean;
   pagination: PaginationState;
   onPaginationChange: OnChangeFn<PaginationState>;
 }
-
-const PAGE_SIZE_OPTIONS = [5, 10, 25];
 
 function EmptyState() {
   return (
@@ -35,6 +35,7 @@ export function ProjectKeysTable({
   keys,
   totalCount,
   isLoading,
+  isError = false,
   pagination,
   onPaginationChange,
 }: ProjectKeysTableProps) {
@@ -49,8 +50,9 @@ export function ProjectKeysTable({
       pagination={pagination}
       onPaginationChange={onPaginationChange}
       rowCount={totalCount}
-      pageSizeOptions={PAGE_SIZE_OPTIONS}
+      pageSizeOptions={PROJECT_KEYS_PAGE_SIZE_OPTIONS}
       isLoading={isLoading}
+      isError={isError}
       loadingMessage="Loading keys…"
       noDataMessage={<EmptyState />}
       size="compact"

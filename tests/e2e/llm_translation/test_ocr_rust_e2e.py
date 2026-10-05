@@ -11,19 +11,31 @@ well-formed OCR document comes back. Per the e2e hard-fail contract, a case
 fails when no proxy answers and also fails once a request reaches it: the proxy
 fetches each provider's referenced secrets, so a
 missing credential surfaces as a live provider error rather than silent green.
+
+The provider keys are shared with other pipelines, so a provider's rate limit can
+hold across the bounded retries. The case then accepts the gateway's faithful relay
+of that 429 (throttling_error, code 429) as its second expected outcome; any other
+non-success still fails at once.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Final, Protocol
 
 import pytest
 from e2e_config import unique_marker
-from e2e_http import assert_client_error, unwrap
-from endpoints_client import EndpointsClient
+from e2e_http import (
+    PROVIDER_RATE_LIMIT_ATTEMPTS,
+    RateLimitedError,
+    Success,
+    assert_client_error,
+    relayed_provider_rate_limit,
+    tolerate_provider_rate_limit,
+)
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, OcrBody, OcrDocument, OcrResponse
+from proxy_client import ProxyClient
 from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
@@ -107,6 +119,14 @@ class VertexOcr:
 
 
 @dataclass(frozen=True, slots=True)
+class CohereOcr:
+    model: str = "cohere/parse-v5.0"
+
+    def litellm_params(self) -> LiteLLMParamsBody:
+        return LiteLLMParamsBody(model=self.model, api_key="os.environ/COHERE_API_KEY")
+
+
+@dataclass(frozen=True, slots=True)
 class _OcrCase:
     suffix: str
     provider: OcrProvider
@@ -138,6 +158,30 @@ RUST_OCR_CASES: tuple[_OcrCase, ...] = (
 
 _CASE_IDS = tuple(case.suffix for case in RUST_OCR_CASES)
 
+PDF_TEXT: Final = "test pdf file"
+IMAGE_TEXT: Final = "litellm"
+PDF_DOCUMENT: Final = OcrDocument(type="document_url", document_url=TEST_PDF_URL)
+IMAGE_DOCUMENT: Final = OcrDocument(type="image_url", image_url=TEST_IMAGE_URL)
+
+
+@dataclass(frozen=True, slots=True)
+class _OcrContentCase:
+    suffix: str
+    provider: OcrProvider
+    document: OcrDocument
+    expected_text: str
+
+
+OCR_CONTENT_CASES: Final = (
+    _OcrContentCase("mistral-pdf", MistralOcr(), PDF_DOCUMENT, PDF_TEXT),
+    _OcrContentCase("mistral-image", MistralOcr(), IMAGE_DOCUMENT, IMAGE_TEXT),
+    _OcrContentCase("azure-ai-image", AzureAiOcr("azure_ai/mistral-document-ai-2512"), IMAGE_DOCUMENT, IMAGE_TEXT),
+    _OcrContentCase(
+        "vertex-mistral-image", VertexOcr("vertex_ai/mistral-ocr-2505", "us-central1"), IMAGE_DOCUMENT, IMAGE_TEXT
+    ),
+    _OcrContentCase("cohere-image", CohereOcr(), IMAGE_DOCUMENT, IMAGE_TEXT),
+)
+
 
 def _assert_ocr_document(response: OcrResponse) -> None:
     assert response.object == "ocr", f"expected object='ocr', got {response.object!r}"
@@ -146,32 +190,73 @@ def _assert_ocr_document(response: OcrResponse) -> None:
     assert response.pages[0].markdown is not None, "first page has no markdown"
 
 
+def _assert_provider_rate_limit_relayed(model: str, outcome: RateLimitedError) -> None:
+    detail: Final = relayed_provider_rate_limit(outcome)
+    assert detail is not None, f"{model}: the 429 is the gateway's own, not the provider's: {outcome.body}"
+    assert (detail.type, detail.code) == ("throttling_error", "429"), f"{model}: provider 429 relayed as {detail!r}"
+    print(
+        f"{model}: the provider's rate limit held across {PROVIDER_RATE_LIMIT_ATTEMPTS} attempts; "
+        f"the gateway relayed it as {detail.type} {detail.code}",
+        flush=True,
+    )
+
+
 class TestRustOcrGateway:
     @pytest.mark.parametrize("case", RUST_OCR_CASES, ids=_CASE_IDS)
-    def test_rust_ocr_response(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager, case: _OcrCase
-    ) -> None:
+    def test_rust_ocr_response(self, proxy: ProxyClient, resources: ResourceManager, case: _OcrCase) -> None:
         model = f"rust-ocr-{case.suffix}-{unique_marker()}"
-        model_id = endpoints_client.create_model(model, case.provider.litellm_params())
-        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        model_id = proxy.create_model(model, case.provider.litellm_params())
+        resources.defer(lambda: proxy.delete_model(model_id))
         key = resources.key()
 
-        response = unwrap(endpoints_client.proxy.ocr(key, OcrBody(model=model, document=case.document)))
-        _assert_ocr_document(response)
+        match tolerate_provider_rate_limit(lambda: proxy.ocr(key, OcrBody(model=model, document=case.document))):
+            case Success(data=response):
+                _assert_ocr_document(response)
+            case RateLimitedError() as outcome:
+                _assert_provider_rate_limit_relayed(model, outcome)
+            case outcome:
+                pytest.fail(f"{model}: {outcome!r}")
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/ocr 500s (aocr TypeError) on missing document instead of 400")
     @pytest.mark.covers("llm.ocr.openai.input_validation.nonstream.works")
-    def test_missing_document_returns_error(
-        self, endpoints_client: EndpointsClient, resources: ResourceManager
-    ) -> None:
+    def test_missing_document_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model = f"rust-ocr-val-{unique_marker()}"
-        model_id = endpoints_client.create_model(model, MistralOcr().litellm_params())
-        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        model_id = proxy.create_model(model, MistralOcr().litellm_params())
+        resources.defer(lambda: proxy.delete_model(model_id))
         key = resources.key()
-        result = endpoints_client.proxy.transport.send(
+        result = proxy.transport.send(
             "/v1/ocr",
-            headers=endpoints_client.proxy.transport.bearer(key),
+            headers=proxy.transport.bearer(key),
             json=_OptionalOcrBody(model=model),
         )
         assert_client_error(result, "ocr missing document")
 
+
+class TestOcrDocumentContent:
+    @pytest.mark.parametrize("case", OCR_CONTENT_CASES, ids=tuple(case.suffix for case in OCR_CONTENT_CASES))
+    def test_ocr_reads_the_document_and_bills_its_pages(
+        self, proxy: ProxyClient, resources: ResourceManager, case: _OcrContentCase
+    ) -> None:
+        model = f"ocr-content-{case.suffix}-{unique_marker()}"
+        model_id = proxy.create_model(model, case.provider.litellm_params())
+        resources.defer(lambda: proxy.delete_model(model_id))
+
+        result = proxy.transport.send(
+            "/v1/ocr",
+            headers=proxy.transport.bearer(resources.key()),
+            json=OcrBody(model=model, document=case.document),
+        )
+        assert result.status_code == 200, f"{model}: /v1/ocr failed with {result.status_code}: {result.body[:300]}"
+        response = OcrResponse.model_validate_json(result.body)
+        assert response.object == "ocr", f"expected object='ocr', got {response.object!r}"
+        assert [page.index for page in response.pages] == list(range(len(response.pages))), (
+            f"page indexes are not contiguous from 0: {[page.index for page in response.pages]}"
+        )
+        text = " ".join(" ".join(page.markdown for page in response.pages).split()).lower()
+        assert case.expected_text in text, f"{model}: OCR text lost the document content: {text[:300]!r}"
+        assert response.usage_info is not None and response.usage_info.pages_processed == len(response.pages), (
+            f"usage_info.pages_processed disagrees with the returned pages: {response.usage_info!r}"
+        )
+        assert result.response_cost is not None and result.response_cost > 0, (
+            f"{model}: OCR call was not costed: x-litellm-response-cost={result.response_cost!r}"
+        )

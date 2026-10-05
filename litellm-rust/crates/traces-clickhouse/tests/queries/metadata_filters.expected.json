@@ -1,0 +1,30 @@
+{
+  "admin": [
+    {
+      "team": "team-a",
+      "api_key": "key-a",
+      "request_id": "request-a",
+      "spend": 0.5,
+      "priority": "high"
+    }
+  ],
+  "team": [
+    {
+      "team": "team-a",
+      "api_key": "key-a",
+      "request_id": "request-a",
+      "spend": 0.5,
+      "priority": "high"
+    }
+  ],
+  "key": [
+    {
+      "team": "team-a",
+      "api_key": "key-a",
+      "request_id": "request-a",
+      "spend": 0.5,
+      "priority": "high"
+    }
+  ],
+  "other_team": []
+}

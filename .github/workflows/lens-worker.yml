@@ -1,0 +1,73 @@
+name: Lens Worker Image
+
+on:
+  pull_request:
+    branches: [main, litellm_oss_branch, "litellm_**"]
+    paths:
+      - deploy/lens/**
+      - litellm/proxy/lens/**
+      - .github/workflows/lens-worker.yml
+  push:
+    branches: [main]
+    paths:
+      - deploy/lens/**
+      - litellm/proxy/lens/**
+      - .github/workflows/lens-worker.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lens-worker-image:
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Build Lens worker
+        run: docker build --build-arg LITELLM_RELEASE_TAG=sha-${{ github.sha }} -f deploy/lens/Dockerfile -t lens-worker:${{ github.sha }} .
+      - name: Reject custom builds without a matching release tag
+        run: |
+          if docker build --progress plain -f deploy/lens/Dockerfile -t lens-worker:unversioned . > missing-tag.log 2>&1; then
+            echo "::error::An unversioned worker build unexpectedly succeeded"
+            exit 1
+          fi
+          grep -F 'LITELLM_RELEASE_TAG: Pass --build-arg LITELLM_RELEASE_TAG matching the gateway' missing-tag.log
+      - name: Verify standalone imports with a read-only filesystem
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL --tmpfs /tmp:rw,noexec,nosuid,size=1g \
+            --security-opt no-new-privileges --entrypoint python \
+            lens-worker:${{ github.sha }} -c '
+          import os
+          import lens.worker
+          from lens.trace_store import trace_store
+          assert os.getuid() == 65532
+          with trace_store() as store:
+              assert store.count() == 0
+          '
+      - name: Verify recovery after temporary storage fills
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64k --security-opt no-new-privileges \
+            -v "$PWD/tests/proxy_behavior/lens/worker_storage_smoke.py:/app/storage_smoke.py:ro" \
+            --entrypoint python lens-worker:${{ github.sha }} /app/storage_smoke.py
+      - name: Publish versioned Lens worker
+        if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm' && github.ref == 'refs/heads/main'
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+          IMAGE: ghcr.io/berriai/litellm-lens-worker-dev:sha-${{ github.sha }}
+        run: |
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+          docker tag lens-worker:${{ github.sha }} "$IMAGE"
+          docker push "$IMAGE"
+          printf 'Lens worker image: `%s`\n' "$IMAGE" >> "$GITHUB_STEP_SUMMARY"

@@ -3,7 +3,7 @@ Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
 
 from collections.abc import AsyncIterator, Coroutine, Iterator
-from typing import Any, Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -25,6 +25,9 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ModelResponse, ModelResponseStream, ServerToolUse
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 GROQ_COMPOUND_MODELS: Final = frozenset({"compound", "compound-mini"})
 
@@ -268,7 +271,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         if not any(tool.get("type") == "browser_search" for tool in optional_params.get("tools") or ()):
             optional_params = self._add_tools_to_optional_params(
                 optional_params=optional_params,
-                tools=[{"type": "browser_search"}],  # mutable-ok: request tools must be json dicts in a list
+                tools=[{"type": "browser_search"}],
             )
 
         return optional_params
@@ -283,7 +286,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

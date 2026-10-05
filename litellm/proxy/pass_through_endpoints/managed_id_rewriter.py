@@ -49,6 +49,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.managed_resources.isolation import (
     build_owner_filter,
     can_access_resource,
+    resolve_resource_owner_id,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
@@ -80,9 +81,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.proxy.utils import PrismaClient
 
-_RowT = TypeVar(
-    "_RowT", bound=ManagedResourceRow
-)  # rebind-ok: TypeVar declarations must stay bare assignments for pyright
+_RowT = TypeVar("_RowT", bound=ManagedResourceRow)
 
 # ---------------------------------------------------------------------------
 # Field map
@@ -189,10 +188,9 @@ _OBJECT_PREFIXES: Final[frozenset[str]] = frozenset({"batch_", "resp_"})
 _MAX_BODY_REWRITE_DEPTH: Final = 64
 
 # Caps the distinct raw-provider-id guard lookups issued per request. A raw
-# file-id guard is an unindexed array-containment scan over
-# LiteLLM_ManagedFileTable (flat_model_file_ids has no index), so a body packed
-# with id-shaped strings could otherwise amplify one request into thousands of
-# full-table scans. Legitimate callers reference managed IDs (resolved via an
+# file-id guard is an array-containment lookup over LiteLLM_ManagedFileTable,
+# so a body packed with id-shaped strings could otherwise amplify one request
+# into thousands of lookups. Legitimate callers reference managed IDs (resolved via an
 # indexed lookup, never the guard), so guarding more raw ids than this only
 # happens under abuse; the request is rejected rather than skipping the guard.
 _MAX_RAW_ID_GUARD_LOOKUPS: Final = 100
@@ -686,7 +684,7 @@ async def _mint_or_reuse_object(
                     "file_object": json.dumps(body_snapshot),
                     "model_object_id": namespaced_model_object_id,
                     "file_purpose": file_purpose,
-                    "created_by": user_api_key_dict.user_id,
+                    "created_by": resolve_resource_owner_id(user_api_key_dict),
                     "team_id": user_api_key_dict.team_id,
                     "updated_by": user_api_key_dict.user_id,
                 },
@@ -997,9 +995,7 @@ async def _build_list_where_with_cursor(
     params: Final = query_params or {}
     after_id: Final[str | None] = params.get("after")
     before_id: Final[str | None] = params.get("before")
-    where: PrismaWhere = dict(
-        owner_filter
-    )  # rebind-ok: narrowed with the cursor boundary when a valid cursor row exists
+    where: PrismaWhere = dict(owner_filter)
     fetch_order: SortOrder = "desc"  # rebind-ok: flipped to asc when paging backwards from a before cursor
 
     cursor_id: Final = after_id or before_id

@@ -1,5 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { valueFormatter, valueFormatterSpend } from "./value_formatters";
+import { averageResponseTimeMs, formatResponseTime, valueFormatter, valueFormatterSpend } from "./value_formatters";
+
+describe("averageResponseTimeMs", () => {
+  it("divides the summed duration by the number of timed requests", () => {
+    expect(averageResponseTimeMs(6000, 4)).toBe(1500);
+    expect(averageResponseTimeMs(0, 3)).toBe(0);
+  });
+
+  it("returns null instead of dividing by zero when nothing was timed", () => {
+    expect(averageResponseTimeMs(0, 0)).toBeNull();
+    expect(averageResponseTimeMs(1200, 0)).toBeNull();
+  });
+});
+
+describe("formatResponseTime", () => {
+  it("shows sub-second durations in whole milliseconds", () => {
+    expect(formatResponseTime(0)).toBe("0ms");
+    expect(formatResponseTime(412.6)).toBe("413ms");
+    expect(formatResponseTime(999)).toBe("999ms");
+  });
+
+  it("shows durations of a second or more in seconds with two decimals", () => {
+    expect(formatResponseTime(1000)).toBe("1.00s");
+    expect(formatResponseTime(1500)).toBe("1.50s");
+    expect(formatResponseTime(12345)).toBe("12.35s");
+  });
+
+  it("shows a dash when there is no average to display", () => {
+    expect(formatResponseTime(null)).toBe("-");
+    expect(formatResponseTime(undefined)).toBe("-");
+  });
+});
 
 describe("valueFormatter", () => {
   it("should format numbers >= 1,000,000 as millions with 2 decimal places", () => {

@@ -13,6 +13,12 @@ ToolInputPolicy = Literal["trusted", "untrusted", "blocked"]
 ToolOutputPolicy = Literal["trusted", "untrusted"]
 
 
+class ToolDiscoveryUser(BaseModel):
+    user_id: str
+    user_email: str | None = None
+    user_alias: str | None = None
+
+
 class LiteLLM_ToolTableRow(BaseModel):
     tool_id: str
     tool_name: str
@@ -25,6 +31,7 @@ class LiteLLM_ToolTableRow(BaseModel):
     team_id: str | None = None
     key_alias: str | None = None
     user_agent: str | None = None
+    user: ToolDiscoveryUser | None = None
     last_used_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

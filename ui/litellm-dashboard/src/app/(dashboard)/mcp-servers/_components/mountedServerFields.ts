@@ -24,6 +24,7 @@ const OAUTH_M2M_CREDENTIALS = [
   "token_endpoint_auth_method",
   "scopes",
   "upstream_resource",
+  "upstream_token_header",
 ] as const;
 
 const OAUTH_INTERACTIVE_CREDENTIALS = [
@@ -32,6 +33,7 @@ const OAUTH_INTERACTIVE_CREDENTIALS = [
   "scopes",
   "upstream_resource",
   "token_endpoint_auth_method",
+  "upstream_token_header",
 ] as const;
 
 const OAUTH_INTERACTIVE_ROOT = [
@@ -44,6 +46,7 @@ const OAUTH_INTERACTIVE_ROOT = [
 ] as const;
 
 const ID_JAG_CREDENTIALS = [
+  "upstream_token_header",
   "id_jag_resource_token_endpoint",
   "client_id",
   "client_secret",
@@ -100,7 +103,7 @@ const authSubtreeCredentials = ({ authType, oauthFlowType }: AuthSubtreeGates): 
     ];
   }
   if (authType === AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE) {
-    return [...authValue, "client_id", "client_secret", "scopes"];
+    return [...authValue, "client_id", "client_secret", "scopes", "upstream_token_header"];
   }
   if (authType === AUTH_TYPE.OAUTH2_ID_JAG) {
     return [...authValue, ...ID_JAG_CREDENTIALS];

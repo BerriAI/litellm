@@ -90,21 +90,19 @@ beforeEach(() => {
 
 describe("CompareUI", () => {
   it("should render", () => {
-    const { getByTestId } = render(<CompareUI accessToken="test-token" disabledPersonalKeyCreation={false} />);
-    expect(getByTestId("comparison-panel-1")).toBeInTheDocument();
-    expect(getByTestId("comparison-panel-2")).toBeInTheDocument();
-    expect(getByTestId("message-input")).toBeInTheDocument();
+    render(<CompareUI accessToken="test-token" disabledPersonalKeyCreation={false} />);
+    expect(screen.getByTestId("comparison-panel-1")).toBeInTheDocument();
+    expect(screen.getByTestId("comparison-panel-2")).toBeInTheDocument();
+    expect(screen.getByTestId("message-input")).toBeInTheDocument();
   });
 
   it("adds a comparison when Add Comparison button is clicked", async () => {
     const user = userEvent.setup();
-    const { container, getByTestId } = render(
-      <CompareUI accessToken="test-token" disabledPersonalKeyCreation={false} />,
-    );
+    const { container } = render(<CompareUI accessToken="test-token" disabledPersonalKeyCreation={false} />);
 
     // Verify initial state: 2 comparison panels
-    expect(getByTestId("comparison-panel-1")).toBeInTheDocument();
-    expect(getByTestId("comparison-panel-2")).toBeInTheDocument();
+    expect(screen.getByTestId("comparison-panel-1")).toBeInTheDocument();
+    expect(screen.getByTestId("comparison-panel-2")).toBeInTheDocument();
     let comparisonPanels = container.querySelectorAll('[data-testid^="comparison-panel-"]');
     expect(comparisonPanels).toHaveLength(2);
 
@@ -117,15 +115,13 @@ describe("CompareUI", () => {
     });
 
     // Verify the original 2 panels are still there
-    expect(getByTestId("comparison-panel-1")).toBeInTheDocument();
-    expect(getByTestId("comparison-panel-2")).toBeInTheDocument();
+    expect(screen.getByTestId("comparison-panel-1")).toBeInTheDocument();
+    expect(screen.getByTestId("comparison-panel-2")).toBeInTheDocument();
   });
 
   it("should handle image upload and send message with attachment", async () => {
     const user = userEvent.setup();
-    const { getByTestId, queryByTestId } = render(
-      <CompareUI accessToken="test-token" disabledPersonalKeyCreation={false} />,
-    );
+    render(<CompareUI accessToken="test-token" disabledPersonalKeyCreation={false} />);
 
     const file = new File(["test content"], "test-image.png", { type: "image/png" });
 
@@ -138,13 +134,13 @@ describe("CompareUI", () => {
     }
 
     await waitFor(() => {
-      expect(getByTestId("has-attachment")).toBeInTheDocument();
+      expect(screen.getByTestId("has-attachment")).toBeInTheDocument();
     });
 
-    const textarea = getByTestId("message-textarea");
+    const textarea = screen.getByTestId("message-textarea");
     fireEvent.change(textarea, { target: { value: "Describe this image" } });
 
-    const sendButton = getByTestId("send-button");
+    const sendButton = screen.getByTestId("send-button");
     expect(sendButton).toBeEnabled();
     await user.click(sendButton);
 

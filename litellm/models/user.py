@@ -7,7 +7,7 @@ Canonical definition for ``litellm_usertable``. Re-exported from
 
 from datetime import datetime
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
@@ -24,6 +24,8 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     organization_id: str | None = None
     object_permission_id: str | None = None
     password: str | None = Field(default=None, exclude=True)
+    password_reset_required: bool | None = None
+    last_breach_check_at: datetime | None = None
     teams: list[str] = []
     user_role: str | None = None
     max_budget: float | None = None
@@ -67,3 +69,11 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
         if not self.models:
             return True
         return model_name in self.models
+
+
+class SCIMPlaceholder(BaseModel):
+    """A user row keyed by a value that names another account by SSO identity or email."""
+
+    placeholder_user_id: str
+    resolved_user_ids: tuple[str, ...]
+    team_ids: tuple[str, ...]

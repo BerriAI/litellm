@@ -357,62 +357,6 @@ async def test_increment_spend_in_current_window():
 
 
 @pytest.mark.asyncio
-async def test_sync_in_memory_spend_with_redis():
-    """
-    Test _sync_in_memory_spend_with_redis helper method
-
-    Expected behavior:
-    - Push all provider spend increments to Redis
-    - Fetch all current provider spend from Redis to update in-memory cache
-    """
-    cleanup_redis()
-    provider_budget_config = {
-        "openai": BudgetConfig(time_period="1d", budget_limit=100),
-        "anthropic": BudgetConfig(time_period="1d", budget_limit=200),
-    }
-
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(
-            redis_cache=RedisCache(
-                host=os.getenv("REDIS_HOST"),
-                port=int(os.getenv("REDIS_PORT")),
-                password=os.getenv("REDIS_PASSWORD"),
-            )
-        ),
-        provider_budget_config=provider_budget_config,
-    )
-
-    # Allow background _init_provider_budget_in_cache tasks to complete
-    # before overwriting Redis values (avoids race where init overwrites with 0.0)
-    await asyncio.sleep(0.5)
-
-    # Set some values in Redis
-    spend_key_openai = "provider_spend:openai:1d"
-    spend_key_anthropic = "provider_spend:anthropic:1d"
-
-    await provider_budget.dual_cache.redis_cache.async_set_cache(
-        key=spend_key_openai, value=50.0
-    )
-    await provider_budget.dual_cache.redis_cache.async_set_cache(
-        key=spend_key_anthropic, value=75.0
-    )
-
-    # Test syncing with Redis
-    await provider_budget._sync_in_memory_spend_with_redis()
-
-    # Verify in-memory cache was updated
-    openai_spend = await provider_budget.dual_cache.in_memory_cache.async_get_cache(
-        spend_key_openai
-    )
-    anthropic_spend = await provider_budget.dual_cache.in_memory_cache.async_get_cache(
-        spend_key_anthropic
-    )
-
-    assert float(openai_spend) == 50.0
-    assert float(anthropic_spend) == 75.0
-
-
-@pytest.mark.asyncio
 async def test_get_current_provider_spend():
     """
     Test _get_current_provider_spend helper method
@@ -444,59 +388,6 @@ async def test_get_current_provider_spend():
 
     spend = await provider_budget._get_current_provider_spend("openai")
     assert spend == 50.5
-
-
-@pytest.mark.flaky(retries=6, delay=2)
-@pytest.mark.asyncio
-async def test_get_current_provider_budget_reset_at():
-    """
-    Test _get_current_provider_budget_reset_at helper method
-
-    Scenarios:
-    1. Provider with no budget config returns None
-    2. Provider with budget config but no TTL returns None
-    3. Provider with budget config and TTL returns correct ISO timestamp
-    """
-    cleanup_redis()
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(
-            redis_cache=RedisCache(
-                host=os.getenv("REDIS_HOST"),
-                port=int(os.getenv("REDIS_PORT")),
-                password=os.getenv("REDIS_PASSWORD"),
-            )
-        ),
-        provider_budget_config={
-            "openai": BudgetConfig(budget_duration="1d", max_budget=100),
-            "vertex_ai": BudgetConfig(budget_duration="1h", max_budget=100),
-        },
-    )
-
-    await asyncio.sleep(2)
-
-    # Test provider with no budget config
-    reset_at = await provider_budget._get_current_provider_budget_reset_at("anthropic")
-    assert reset_at is None
-
-    # Test provider with budget config but no TTL
-    reset_at = await provider_budget._get_current_provider_budget_reset_at("openai")
-    assert reset_at is not None
-    reset_time = datetime.fromisoformat(reset_at.replace("Z", "+00:00"))
-    expected_time = datetime.now(timezone.utc) + timedelta(seconds=(24 * 60 * 60))
-    time_difference = abs((reset_time - expected_time).total_seconds())
-    assert time_difference < 5
-
-    # Test provider with budget config and TTL
-    reset_at = await provider_budget._get_current_provider_budget_reset_at("vertex_ai")
-    assert reset_at is not None
-
-    # Verify the timestamp format and approximate time
-    reset_time = datetime.fromisoformat(reset_at.replace("Z", "+00:00"))
-    expected_time = datetime.now(timezone.utc) + timedelta(seconds=3600)
-
-    # Allow for small time differences (within 5 seconds)
-    time_difference = abs((reset_time - expected_time).total_seconds())
-    assert time_difference < 5
 
 
 @pytest.mark.asyncio

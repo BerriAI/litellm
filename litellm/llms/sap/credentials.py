@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -33,8 +34,8 @@ def _get_home() -> str:
     return os.getenv(HOME_PATH_ENV_VAR, DEFAULT_HOME_PATH)
 
 
-def _get_nested(d: dict[str, Any] | str, path: Sequence[str]) -> Any:
-    cur: Any = d
+def _get_nested(d: object, path: Sequence[str]) -> object:
+    cur: object = d
     if isinstance(cur, str):
         # This shouldn't happen if service keys are pre-parsed correctly
         try:
@@ -54,7 +55,7 @@ def _get_nested(d: dict[str, Any] | str, path: Sequence[str]) -> Any:
     return cur
 
 
-def _load_json_env(var_name: str) -> dict[str, Any] | None:
+def _load_json_env(var_name: str) -> dict[str, object] | None:
     raw: Final = os.environ.get(var_name)
     if not raw:
         return None
@@ -64,7 +65,7 @@ def _load_json_env(var_name: str) -> dict[str, Any] | None:
         return None
 
 
-def _str_or_none(value) -> str | None:
+def _str_or_none(value: object) -> str | None:
     try:
         return str(value) if value is not None else None
     except Exception:
@@ -124,7 +125,7 @@ CREDENTIAL_VALUES: Final[list[CredentialsValue]] = [
 ]
 
 
-def init_conf(profile: str | None = None) -> dict[str, Any]:
+def init_conf(profile: str | None = None) -> dict[str, object]:
     """
     Loads config JSON from:
       1) $AICORE_CONFIG if set, otherwise
@@ -191,7 +192,7 @@ def resolve_resource_group(sources: list[Source]) -> str | None:
 
 def _parse_service_key_once(
     service_key: str | dict | None,
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     """
     Pre-parse service_key if it's a string to avoid repeated JSON parsing.
 
@@ -348,8 +349,33 @@ def validate_credentials(
         )
 
 
+class _TokenBody(TypedDict):
+    """Decoded body of the SAP AI Core OAuth2 token response."""
+
+    access_token: ReadOnly[str]
+    expires_in: ReadOnly[NotRequired[int]]
+
+
+class _TokenResponse(Protocol):
+    """The token endpoint's HTTP response, read for the decoded token body it carries."""
+
+    def json(self) -> _TokenBody: ...
+
+
+def _bearer_token_and_expiry(response: _TokenResponse) -> tuple[str, datetime]:
+    """Read a token response into the Authorization header value and the token's absolute expiry."""
+    payload: Final = response.json()
+    expires_in: Final = int(payload.get("expires_in", 3600))
+    access_token: Final = payload["access_token"]
+    return f"Bearer {access_token}", datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+
 def _request_token(
-    client_id: str, auth_url: str, timeout: float, cert_pair=None, client_secret=None
+    client_id: str,
+    auth_url: str,
+    timeout: float,
+    cert_pair: tuple[str, str] | None = None,
+    client_secret: str | None = None,
 ) -> tuple[str, datetime]:
     data: Final = {"grant_type": "client_credentials", "client_id": client_id}
     if client_secret:
@@ -361,15 +387,10 @@ def _request_token(
             with httpx.Client(cert=cert_pair) as raw_client:
                 handler = HTTPHandler(client=raw_client)
                 resp = handler.post(auth_url, data=data, timeout=timeout)
-                payload = resp.json()
-        else:
-            handler = _get_httpx_client()
-            resp = handler.post(auth_url, data=data, timeout=timeout)
-            payload = resp.json()
-        access_token: Final = payload["access_token"]
-        expires_in: Final = int(payload.get("expires_in", 3600))
-        expiry_date: Final = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-        return f"Bearer {access_token}", expiry_date
+                return _bearer_token_and_expiry(resp)
+        handler = _get_httpx_client()
+        resp = handler.post(auth_url, data=data, timeout=timeout)
+        return _bearer_token_and_expiry(resp)
     except Exception as e:
         msg: Final = resp.text if resp is not None else getattr(e, "text", str(e))
         raise RuntimeError(f"Token request failed: {msg}") from e

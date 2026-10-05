@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import CoordinationRedisTypeSelector from "./CoordinationRedisTypeSelector";
 import { COORDINATION_REDIS_TYPE_DESCRIPTIONS } from "./coordinationRedisFields";
+import { chooseSelectOption } from "../../../../../../tests/test-utils";
 
 describe("CoordinationRedisTypeSelector", () => {
   it("labels the control and shows the current selection", () => {
@@ -36,8 +37,7 @@ describe("CoordinationRedisTypeSelector", () => {
     const user = userEvent.setup();
     renderWithProviders(<CoordinationRedisTypeSelector redisType="node" onTypeChange={onTypeChange} />);
 
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("Cluster"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "Cluster");
 
     expect(onTypeChange).toHaveBeenCalledTimes(1);
     expect(onTypeChange.mock.calls[0][0]).toBe("cluster");

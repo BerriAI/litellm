@@ -1,0 +1,379 @@
+"""
+Tests for managed files access control in batch polling context.
+
+Regression test for: batch polling job running as default_user_id gets 403
+when trying to access managed files created by a real user.
+
+The fix (Option C) makes check_batch_cost call litellm.afile_content directly
+with deployment credentials, bypassing the managed files access-control hooks.
+"""
+
+import base64
+import pytest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from fastapi import HTTPException
+
+from litellm.caching.dual_cache import DualCache
+from litellm.proxy._types import CallTypes, UserAPIKeyAuth
+from litellm.types.utils import LiteLLMBatch
+
+
+def _make_user_api_key_dict(user_id: str) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id=user_id,
+        parent_otel_span=None,
+    )
+
+
+def _make_unified_file_id() -> str:
+    """Create a base64-encoded unified file ID that passes _is_base64_encoded_unified_file_id."""
+    raw = "litellm_proxy:application/octet-stream;unified_id,test-123;target_model_names,azure-gpt-4"
+    return base64.b64encode(raw.encode()).decode()
+
+
+def _make_managed_files_instance(
+    file_created_by: str,
+    unified_file_id: str,
+    file_team_id=None,
+):
+    """Create a _PROXY_LiteLLMManagedFiles with a mocked DB that returns a file owned by file_created_by."""
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    mock_db_record = MagicMock()
+    mock_db_record.created_by = file_created_by
+    mock_db_record.team_id = file_team_id
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(
+        return_value=mock_db_record
+    )
+
+    instance = _PROXY_LiteLLMManagedFiles(
+        internal_usage_cache=MagicMock(),
+        prisma_client=mock_prisma,
+    )
+    return instance
+
+
+# --- Access control unit tests (document existing behavior) ---
+
+
+@pytest.mark.asyncio
+async def test_should_allow_file_owner_access():
+    """File owner can access their own file — baseline sanity check."""
+    unified_file_id = _make_unified_file_id()
+    managed_files = _make_managed_files_instance(
+        file_created_by="user-A",
+        unified_file_id=unified_file_id,
+    )
+    user = _make_user_api_key_dict("user-A")
+    data = {"file_id": unified_file_id}
+
+    result = await managed_files.check_managed_file_id_access(data, user)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_should_block_different_user_access():
+    """A different regular user cannot access another user's file — correct behavior."""
+    unified_file_id = _make_unified_file_id()
+    managed_files = _make_managed_files_instance(
+        file_created_by="user-A",
+        unified_file_id=unified_file_id,
+    )
+    user = _make_user_api_key_dict("user-B")
+    data = {"file_id": unified_file_id}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await managed_files.check_managed_file_id_access(data, user)
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_should_block_default_user_id_access():
+    """
+    default_user_id is correctly blocked by the access check.
+    This documents the existing behavior that the Option C fix works around.
+    """
+    unified_file_id = _make_unified_file_id()
+    managed_files = _make_managed_files_instance(
+        file_created_by="user-A",
+        unified_file_id=unified_file_id,
+    )
+    system_user = _make_user_api_key_dict("default_user_id")
+    data = {"file_id": unified_file_id}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await managed_files.check_managed_file_id_access(data, system_user)
+    assert exc_info.value.status_code == 403
+
+
+# --- Service-account isolation: created_by/team_id checks ---
+
+
+@pytest.mark.asyncio
+async def test_keyless_caller_cannot_access_keyless_file():
+    """A file created by a key without a user_id used to be accessible by
+    any other keyless caller because `None == None` was True."""
+    unified_file_id = _make_unified_file_id()
+    managed_files = _make_managed_files_instance(
+        file_created_by=None,
+        file_team_id=None,
+        unified_file_id=unified_file_id,
+    )
+    keyless = UserAPIKeyAuth(api_key="sk-test", parent_otel_span=None)
+    data = {"file_id": unified_file_id}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await managed_files.check_managed_file_id_access(data, keyless)
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_service_account_can_access_team_file():
+    unified_file_id = _make_unified_file_id()
+    managed_files = _make_managed_files_instance(
+        file_created_by=None,
+        file_team_id="team-eng",
+        unified_file_id=unified_file_id,
+    )
+    sa = UserAPIKeyAuth(api_key="sk-svc", team_id="team-eng", parent_otel_span=None)
+    data = {"file_id": unified_file_id}
+
+    assert await managed_files.check_managed_file_id_access(data, sa) is True
+
+
+@pytest.mark.asyncio
+async def test_service_account_blocked_from_other_team_file():
+    unified_file_id = _make_unified_file_id()
+    managed_files = _make_managed_files_instance(
+        file_created_by=None,
+        file_team_id="team-sales",
+        unified_file_id=unified_file_id,
+    )
+    sa = UserAPIKeyAuth(api_key="sk-svc", team_id="team-eng", parent_otel_span=None)
+    data = {"file_id": unified_file_id}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await managed_files.check_managed_file_id_access(data, sa)
+    assert exc_info.value.status_code == 403
+
+
+# --- Keyless key must not be locked out of the batch it created ---
+
+
+def _make_unified_batch_id() -> str:
+    raw = "litellm_proxy;model_id:my-model-id;llm_batch_id:batch_raw_123"
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _make_managed_files_instance_with_object_store():
+    """Managed-files hook backed by an in-memory stand-in for the managed
+    object table, so create and retrieve exercise the same stored row."""
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    store = {}
+
+    async def upsert(where, data):
+        store[where["unified_object_id"]] = SimpleNamespace(**data["create"])
+
+    async def find_first(where):
+        return store.get(where["unified_object_id"])
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedobjecttable.upsert = AsyncMock(side_effect=upsert)
+    mock_prisma.db.litellm_managedobjecttable.find_first = AsyncMock(
+        side_effect=find_first
+    )
+
+    return (
+        _PROXY_LiteLLMManagedFiles(
+            internal_usage_cache=DualCache(),
+            prisma_client=mock_prisma,
+        ),
+        store,
+    )
+
+
+async def _store_batch(managed_files, unified_batch_id: str, creator: UserAPIKeyAuth):
+    await managed_files.store_unified_object_id(
+        unified_object_id=unified_batch_id,
+        file_object=LiteLLMBatch(
+            id="batch_raw_123",
+            completion_window="24h",
+            created_at=0,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-1",
+            object="batch",
+            status="validating",
+        ),
+        litellm_parent_otel_span=None,
+        model_object_id="batch_raw_123",
+        file_purpose="batch",
+        user_api_key_dict=creator,
+    )
+
+
+@pytest.mark.asyncio
+async def test_keyless_key_can_retrieve_the_batch_it_created():
+    """Regression: a key with no user_id and no team_id (what `/key/generate`
+    by a proxy admin and service-account keys produce) stamped
+    `created_by=None` and was then denied its own managed batch with
+    "User None does not have access"."""
+    unified_batch_id = _make_unified_batch_id()
+    managed_files, store = _make_managed_files_instance_with_object_store()
+    keyless = UserAPIKeyAuth(api_key="sk-keyless", parent_otel_span=None)
+
+    await _store_batch(managed_files, unified_batch_id, keyless)
+    assert store[unified_batch_id].created_by == f"key:{keyless.token}"
+
+    data = {"batch_id": unified_batch_id}
+    await managed_files.async_pre_call_hook(
+        user_api_key_dict=keyless,
+        cache=DualCache(),
+        data=data,
+        call_type=CallTypes.aretrieve_batch.value,
+    )
+    assert data["batch_id"] == "batch_raw_123"
+    assert data["model"] == "my-model-id"
+
+
+@pytest.mark.asyncio
+async def test_other_keyless_key_still_denied_the_batch():
+    unified_batch_id = _make_unified_batch_id()
+    managed_files, _ = _make_managed_files_instance_with_object_store()
+
+    await _store_batch(
+        managed_files,
+        unified_batch_id,
+        UserAPIKeyAuth(api_key="sk-creator", parent_otel_span=None),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await managed_files.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-other", parent_otel_span=None),
+            cache=DualCache(),
+            data={"batch_id": unified_batch_id},
+            call_type=CallTypes.aretrieve_batch.value,
+        )
+    assert exc_info.value.status_code == 403
+
+
+# --- Option C fix test: check_batch_cost bypasses managed files hook ---
+
+
+@pytest.mark.asyncio
+async def test_check_batch_cost_should_call_afile_content_directly_with_credentials():
+    """
+    check_batch_cost should call litellm.afile_content directly with deployment
+    credentials, bypassing managed_files_obj.afile_content and its access-control
+    hooks. This avoids the 403 that occurs when the background job runs as
+    default_user_id.
+    """
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+
+    # Build a unified object ID in the expected format:
+    # litellm_proxy;model_id:{};llm_batch_id:{};llm_output_file_id:{}
+    unified_raw = "litellm_proxy;model_id:model-deploy-xyz;llm_batch_id:batch-123;llm_output_file_id:file-raw-output"
+    unified_object_id = base64.b64encode(unified_raw.encode()).decode()
+
+    # Mock a pending job from the DB
+    mock_job = MagicMock()
+    mock_job.unified_object_id = unified_object_id
+    mock_job.created_by = "user-A"
+    mock_job.id = "job-1"
+    mock_job.team_id = None
+
+    # Mock prisma
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_managedobjecttable.find_many = AsyncMock(
+        return_value=[mock_job]
+    )
+    mock_prisma.db.litellm_managedobjecttable.update = AsyncMock()
+    mock_prisma.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
+
+    # Mock proxy_logging_obj — should NOT be called for file content
+    mock_proxy_logging = MagicMock()
+    mock_managed_files_hook = MagicMock()
+    mock_managed_files_hook.afile_content = AsyncMock()
+    mock_managed_files_hook.store_unified_file_id = AsyncMock()
+    mock_managed_files_hook.get_unified_output_file_id.return_value = (
+        "bGl0ZWxsbV9wcm94eTo6bWFuYWdlZA=="
+    )
+    mock_proxy_logging.get_proxy_hook = MagicMock(return_value=mock_managed_files_hook)
+
+    # Mock the batch response (completed, with output file)
+    from litellm.types.utils import LiteLLMBatch
+
+    batch_response = LiteLLMBatch(
+        id="batch-123",
+        completion_window="24h",
+        created_at=1700000000,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-input",
+        object="batch",
+        status="completed",
+        output_file_id="file-raw-output",
+    )
+
+    # Mock router
+    mock_router = MagicMock()
+    mock_router.aretrieve_batch = AsyncMock(return_value=batch_response)
+    mock_router.get_deployment_credentials_with_provider = MagicMock(
+        return_value={
+            "api_key": "test-key",
+            "api_base": "https://test.azure.com/",
+            "custom_llm_provider": "azure",
+        }
+    )
+
+    mock_deployment = MagicMock()
+    mock_deployment.litellm_params.custom_llm_provider = "azure"
+    mock_deployment.litellm_params.model = "azure/gpt-4"
+    mock_router.get_deployment = MagicMock(return_value=mock_deployment)
+
+    checker = CheckBatchCost(
+        proxy_logging_obj=mock_proxy_logging,
+        prisma_client=mock_prisma,
+        llm_router=mock_router,
+    )
+
+    mock_file_content = MagicMock()
+    mock_file_content.content = b'{"id":"req-1","response":{"status_code":200,"body":{"id":"cmpl-1","object":"chat.completion","created":1700000000,"model":"gpt-4","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}}}\n'
+
+    with patch(
+        "litellm.files.main.afile_content",
+        new_callable=AsyncMock,
+        return_value=mock_file_content,
+    ) as mock_direct_afile_content:
+        await checker.check_batch_cost()
+
+        # afile_content should be called directly (not through managed_files_obj)
+        mock_direct_afile_content.assert_called_once()
+        call_kwargs = mock_direct_afile_content.call_args.kwargs
+
+        assert call_kwargs.get("api_key") == "test-key", (
+            f"afile_content should receive api_key from deployment credentials. "
+            f"Got: {call_kwargs}"
+        )
+
+        # managed_files_obj.afile_content should NOT have been called
+        mock_managed_files_hook.afile_content.assert_not_called()
+
+        # Verify the DB update writes batch_processed, status, and file_object
+        mock_prisma.db.litellm_managedobjecttable.update.assert_called_once()
+        update_call_kwargs = (
+            mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs
+        )
+        assert update_call_kwargs["data"]["batch_processed"] is True
+        assert update_call_kwargs["data"]["status"] == "complete"
+        assert (
+            "file_object" in update_call_kwargs["data"]
+        ), "file_object must be written to DB so list_batches reads updated status"

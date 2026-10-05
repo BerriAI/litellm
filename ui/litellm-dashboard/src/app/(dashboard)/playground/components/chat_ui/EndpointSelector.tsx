@@ -3,8 +3,8 @@ import React from "react";
 import { ENDPOINT_OPTIONS } from "./chatConstants";
 
 interface EndpointSelectorProps {
-  endpointType: string; // Accept string to avoid type conflicts
-  onEndpointChange: (value: string) => void;
+  endpointType: string | null;
+  onEndpointChange: (value: string | null) => void;
   className?: string;
 }
 

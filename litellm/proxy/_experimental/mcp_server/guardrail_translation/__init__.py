@@ -13,6 +13,7 @@ from litellm.types.utils import CallTypes
 
 guardrail_translation_mappings: Final = {
     CallTypes.call_mcp_tool: MCPGuardrailTranslationHandler,
+    CallTypes.list_mcp_tools: MCPGuardrailTranslationHandler,
 }
 
 __all__ = ["MCPGuardrailTranslationHandler", "guardrail_translation_mappings"]

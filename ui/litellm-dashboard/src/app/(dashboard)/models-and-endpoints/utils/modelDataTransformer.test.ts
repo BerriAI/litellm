@@ -101,6 +101,53 @@ describe("transformModelData", () => {
     expect(result.data[0].output_cost).toBeNull();
   });
 
+  it("keeps per-second pricing and resolution tiers for video models priced per second", () => {
+    const rawData = {
+      data: [
+        {
+          model_name: "veo-3.1-fast",
+          litellm_params: { model: "vertex_ai/veo-3.1-fast-generate-001" },
+          model_info: {
+            input_cost_per_token: 0,
+            output_cost_per_token: 0,
+            output_cost_per_second: 0.1,
+            output_cost_per_second_1080p: 0.12,
+            output_cost_per_second_4k: 0.3,
+          },
+        },
+        {
+          model_name: "gpt-4",
+          litellm_params: { model: "gpt-4" },
+          model_info: { input_cost_per_token: 0.0000015, output_cost_per_token: 0.000002 },
+        },
+      ],
+    };
+
+    const result = transformModelData(rawData, mockGetProviderFromModel);
+
+    expect(result.data[0].output_cost_per_second).toBe(0.1);
+    expect(result.data[0].output_cost_per_second_tiers).toEqual([
+      { resolution: "1080p", cost: 0.12 },
+      { resolution: "4k", cost: 0.3 },
+    ]);
+    expect(result.data[1].output_cost_per_second).toBeNull();
+    expect(result.data[1].output_cost_per_second_tiers).toEqual([]);
+  });
+
+  it("prefers a per-second override from litellm_params over model_info", () => {
+    const rawData = {
+      data: [
+        {
+          model_name: "veo-3.1",
+          litellm_params: { model: "vertex_ai/veo-3.1-generate-001", output_cost_per_second: 0.5 },
+          model_info: { output_cost_per_second: 0.4 },
+        },
+      ],
+    };
+
+    expect(transformModelData(rawData, mockGetProviderFromModel).data[0].output_cost_per_second).toBe(0.5);
+  });
+
   it("should handle missing model_info", () => {
     const rawData = {
       data: [

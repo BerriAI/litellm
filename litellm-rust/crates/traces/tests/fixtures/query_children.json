@@ -1,0 +1,85 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "fixture"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "fixture"
+          },
+          "spans": [
+            {
+              "traceId": "01010101010101010101010101010101",
+              "spanId": "0202020202020202",
+              "parentSpanId": "0101010101010101",
+              "name": "completion",
+              "kind": 1,
+              "startTimeUnixNano": "1735689600100000000",
+              "endTimeUnixNano": "1735689600600000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "chat"
+                  }
+                },
+                {
+                  "key": "gen_ai.response.id",
+                  "value": {
+                    "stringValue": "response-shared"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "stringValue": "12"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "stringValue": "6"
+                  }
+                }
+              ],
+              "status": {
+                "code": 1,
+                "message": ""
+              }
+            },
+            {
+              "traceId": "01010101010101010101010101010101",
+              "spanId": "0303030303030303",
+              "parentSpanId": "0101010101010101",
+              "name": "lookup",
+              "kind": 1,
+              "startTimeUnixNano": "1735689600700000000",
+              "endTimeUnixNano": "1735689600800000000",
+              "attributes": [
+                {
+                  "key": "gen_ai.operation.name",
+                  "value": {
+                    "stringValue": "execute_tool"
+                  }
+                }
+              ],
+              "status": {
+                "code": 2,
+                "message": "lookup timed out"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

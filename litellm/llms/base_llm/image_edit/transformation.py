@@ -1,5 +1,6 @@
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -101,6 +102,24 @@ class BaseImageEditConfig(ABC):
         headers: dict,
     ) -> tuple[dict, RequestFiles]:
         pass
+
+    async def async_transform_image_edit_request(
+        self,
+        model: str,
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+        headers: Mapping[str, str],
+    ) -> tuple[dict, RequestFiles]:
+        return self.transform_image_edit_request(
+            model=model,
+            prompt=prompt,
+            image=image,
+            image_edit_optional_request_params=dict(image_edit_optional_request_params),
+            litellm_params=litellm_params,
+            headers=dict(headers),
+        )
 
     def finalize_image_edit_request_data(self, data: dict, resolved_request_url: str) -> dict:
         """

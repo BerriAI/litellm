@@ -6,7 +6,7 @@ from .conftest import create_scratch_team
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-# POST /team/block + /team/unblock. The handler gate is _verify_team_access
+# POST /team/block + /team/unblock. The handler gate is TeamAccess.allows
 # (proxy admin / team admin / org admin), but the management-route gate fronts
 # it: the request carries the team's organization_id so an org admin of that
 # org clears the gate's org-scoped branch. A team admin is an INTERNAL_USER

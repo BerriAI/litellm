@@ -36,6 +36,7 @@ DRIVER_MODELS: tuple[tuple[str, str, str], ...] = (
     ("claude-haiku-4-5", "anthropic/claude-haiku-4-5", "ANTHROPIC_API_KEY"),
     ("openai-text-embedding-3-small", "openai/text-embedding-3-small", "OPENAI_API_KEY"),
     ("openai-responses-codex", "openai/gpt-5.3-codex", "OPENAI_API_KEY"),
+    ("openai-gpt-4o-mini", "openai/gpt-4o-mini", "OPENAI_API_KEY"),
 )
 
 

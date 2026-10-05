@@ -3,13 +3,15 @@
  *
  */
 
+import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { Plus, Wallet } from "lucide-react";
 import React, { useCallback, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { prism } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
-import { PageHeader } from "@/components/shared/PageHeader";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
+import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
@@ -78,35 +80,30 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   };
 
   return (
-    <main className="flex h-full flex-col p-8">
-      <Tabs defaultValue="budgets" className="min-h-0 flex-1 gap-6">
-        <PageHeader
-          icon={<Wallet />}
-          title="Budgets"
-          subtitle="Spend, TPM and RPM limits you can assign to customers."
-          primaryAction={
-            canModify ? (
-              <Button onClick={() => setIsCreateModelVisible(true)}>
-                <Plus className="size-4" />
-                Create Budget
-              </Button>
-            ) : undefined
-          }
-          tabs={({ leadingControls }) => (
-            <TabsList
-              variant="line"
-              className="gap-0 p-0 [&>[data-slot=tabs-trigger]+[data-slot=tabs-trigger]]:ml-[22px]"
-            >
-              {leadingControls}
-              <TabsTrigger value="budgets" className="flex-none px-0 py-[7px] data-active:font-semibold">
-                Budgets
-              </TabsTrigger>
-              <TabsTrigger value="examples" className="flex-none px-0 py-[7px] data-active:font-semibold">
-                Examples
-              </TabsTrigger>
-            </TabsList>
-          )}
-        />
+    <Page className="h-full">
+      <PageTabs defaultValue="budgets">
+        <PageHeader>
+          <PageHeaderTitle>
+            <Wallet />
+            Budgets
+          </PageHeaderTitle>
+          <PageHeaderDescription>Spend, TPM and RPM limits you can assign to customers.</PageHeaderDescription>
+          <PageHeaderControls>
+            <PageTabsList>
+              {canModify && (
+                <>
+                  <Button onClick={() => setIsCreateModelVisible(true)}>
+                    <Plus className="size-4" />
+                    Create Budget
+                  </Button>
+                  <ToolbarSeparator className="mx-0 h-6" />
+                </>
+              )}
+              <PageTabsTrigger value="budgets">Budgets</PageTabsTrigger>
+              <PageTabsTrigger value="examples">Examples</PageTabsTrigger>
+            </PageTabsList>
+          </PageHeaderControls>
+        </PageHeader>
         <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col" keepMounted>
           <div className="flex min-h-0 flex-1 flex-col">
             <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />
@@ -133,6 +130,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                 { label: "Max Budget", value: selectedBudget?.max_budget },
                 { label: "TPM", value: selectedBudget?.tpm_limit },
                 { label: "RPM", value: selectedBudget?.rpm_limit },
+                { label: "TPD (batch)", value: selectedBudget?.tpd_limit },
               ]}
               onCancel={handleDeleteCancel}
               onOk={handleDeleteConfirm}
@@ -173,8 +171,8 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
             </Tabs>
           </div>
         </TabsContent>
-      </Tabs>
-    </main>
+      </PageTabs>
+    </Page>
   );
 };
 

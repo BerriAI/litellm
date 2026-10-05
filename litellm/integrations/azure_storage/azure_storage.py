@@ -1,8 +1,11 @@
 import asyncio
 import os
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
+from functools import cache
 from typing import Final
+from urllib.parse import unquote
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -19,21 +22,55 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.secret_managers.get_azure_ad_token_provider import (
+    get_azure_ad_token_provider,
+)
+from litellm.types.secret_managers.get_azure_ad_token_provider import (
+    AzureCredentialType,
+)
 from litellm.types.utils import StandardLoggingPayload
+
+AZURE_STORAGE_TOKEN_SCOPE: Final = "https://storage.azure.com/.default"
+_ADLS_SAFE_NAME: Final = str.maketrans("/", "_", "=")
+_DOT_OR_EMPTY_SEGMENTS: Final = frozenset(("", ".", ".."))
+
+
+def adls_safe_file_name(payload_id: str | None) -> str:
+    """A Responses API id is base64 behind `resp_`, and the Data Lake service rejects its `=` padding and `/`, so
+    that name drops the padding and maps `/` to `_`. Standard base64 has no `_` and its padding is fixed by the
+    length, so those ids stay distinct. Every other id, including a caller's `x-litellm-call-id`, is used as is
+    unless it has an empty, `.` or `..` path segment, which gets the same rewrite so the file keeps its own name in
+    the log directory"""
+    name: Final = payload_id or str(uuid.uuid4())
+    if not name.startswith("resp_") and _DOT_OR_EMPTY_SEGMENTS.isdisjoint(unquote(name).split("/")):
+        return f"{name}.json"
+    return f"{name.translate(_ADLS_SAFE_NAME)}.json"
+
+
+@cache
+def _cached_credential_chain_token_provider() -> Callable[[], str]:
+    return get_azure_ad_token_provider(
+        azure_scope=AZURE_STORAGE_TOKEN_SCOPE,
+        azure_credential=AzureCredentialType.DeploymentIdentityCredential,
+    )
 
 
 class AzureBlobStorageLogger(CustomBatchLogger):
     def __init__(
         self,
+        build_credential_chain_token_provider: Callable[
+            [], Callable[[], str]
+        ] = _cached_credential_chain_token_provider,
+        clock: Callable[[], float] = time.time,
         **kwargs,
     ):
         try:
             verbose_logger.debug("AzureBlobStorageLogger: in init azure blob storage logger")
 
             # Env Variables used for Azure Storage Authentication
-            self.tenant_id = os.getenv("AZURE_STORAGE_TENANT_ID")
-            self.client_id = os.getenv("AZURE_STORAGE_CLIENT_ID")
-            self.client_secret = os.getenv("AZURE_STORAGE_CLIENT_SECRET")
+            self.tenant_id = os.getenv("AZURE_STORAGE_TENANT_ID") or None
+            self.client_id = os.getenv("AZURE_STORAGE_CLIENT_ID") or None
+            self.client_secret = os.getenv("AZURE_STORAGE_CLIENT_SECRET") or None
             self.azure_storage_account_key: str | None = os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
 
             # Required Env Variables for Azure Storage
@@ -48,6 +85,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self.azure_storage_endpoint_suffix: str = (
                 os.getenv("AZURE_STORAGE_ENDPOINT_SUFFIX") or AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX
             )
+            self._clock: Callable[[], float] = clock
             self._service_client = None
             # Time that the azure service client expires, in order to reset the connection pool and keep it fresh
             self._service_client_timeout: float | None = None
@@ -55,6 +93,9 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             # Internal variables used for Token based authentication
             self.azure_auth_token: str | None = None  # the Azure AD token to use for Azure Storage API requests
             self.token_expiry: datetime | None = None  # the expiry time of the currentAzure AD token
+            self._build_credential_chain_token_provider: Callable[[], Callable[[], str]] = (
+                build_credential_chain_token_provider
+            )
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
@@ -158,7 +199,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
                 json_payload: Final = safe_dumps(payload) + "\n"  # Add newline for each log entry
                 payload_bytes: Final = json_payload.encode("utf-8")
-                filename: Final = f"{payload.get('id') or str(uuid.uuid4())}.json"
+                filename: Final = adls_safe_file_name(payload.get("id"))
                 base_url = f"{self.azure_storage_dfs_endpoint}/{self.azure_storage_file_system}/{filename}"
 
                 # Execute the 3-step upload process
@@ -231,10 +272,15 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         """
         Wrapper to set self.azure_auth_token to a valid Azure AD token, refreshing if necessary
 
-        Refreshes the token when:
-        - Token is expired
-        - Token is not set
+        Without a service principal configured, the credential chain provider is read every
+        time; it caches internally and refreshes against the token's real expiry. The read runs
+        in a worker thread because the chain walk (IMDS probe, CLI subprocess) is blocking
         """
+        if self.tenant_id is None and self.client_id is None and self.client_secret is None:
+            token_provider: Final = self._build_credential_chain_token_provider()
+            self.azure_auth_token = await asyncio.to_thread(token_provider)
+            return
+
         # Check if token needs refresh
         if self._azure_ad_token_is_expired() or self.azure_auth_token is None:
             verbose_logger.debug("Azure AD token needs refresh")
@@ -273,13 +319,9 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             tenant_id=tenant_id,
             client_id=client_id,
             client_secret=client_secret,
-            scope="https://storage.azure.com/.default",
+            scope=AZURE_STORAGE_TOKEN_SCOPE,
         )
-        token: Final = token_provider()
-
-        verbose_logger.debug("azure auth token %s", token)
-
-        return token
+        return token_provider()
 
     def _azure_ad_token_is_expired(self):
         """
@@ -306,7 +348,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         from azure.storage.filedatalake.aio import DataLakeServiceClient
 
         # expire old clients to recover from connection issues
-        if self._service_client_timeout and self._service_client and self._service_client_timeout > time.time():
+        if self._service_client_timeout and self._service_client and self._service_client_timeout <= self._clock():
             await self._service_client.close()
             self._service_client = None
         if not self._service_client:
@@ -314,7 +356,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 account_url=self.azure_storage_dfs_endpoint,
                 credential=self.azure_storage_account_key,
             )
-            self._service_client_timeout = time.time() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+            self._service_client_timeout = self._clock() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
         return self._service_client
 
     async def upload_to_azure_data_lake_with_azure_account_key(self, payload: StandardLoggingPayload):
@@ -343,7 +385,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 verbose_logger.debug("Created directory: %s", today)
 
             # Create a file client
-            file_name: Final = f"{payload.get('id') or str(uuid.uuid4())}.json"
+            file_name: Final = adls_safe_file_name(payload.get("id"))
             file_client: Final = directory_client.get_file_client(file_name)
 
             # Create the file

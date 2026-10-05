@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 
 export const accessGroupCreateSchema = z.object({
   name: z.string().refine((value) => value.trim() !== "", "Please enter the access group name"),

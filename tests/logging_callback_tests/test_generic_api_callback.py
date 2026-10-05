@@ -10,6 +10,7 @@ import httpx
 import json
 import logging
 import time
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -98,8 +99,15 @@ async def test_generic_api_callback():
     assert isinstance(actual_request, list), "Request body should be a list"
     assert len(actual_request) > 0, "Request body list should not be empty"
 
-    # Validate the first payload item
-    payload_item: StandardLoggingPayload = StandardLoggingPayload(**actual_request[0])
+    this_test_messages: Final = [{"role": "user", "content": "Hello, world!"}]
+    mine: Final = [
+        item for item in actual_request if item.get("messages") == this_test_messages
+    ]
+    assert (
+        len(mine) == 1
+    ), f"Expected this test's single call in the batch, got {len(mine)} of {len(actual_request)}"
+
+    payload_item: StandardLoggingPayload = StandardLoggingPayload(**mine[0])
     print("##########\n")
     print(json.dumps(payload_item, indent=4))
     print("##########\n")
@@ -448,11 +456,17 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
     assert isinstance(ndjson_data, str), "Data should be a string for NDJSON"
 
     lines = ndjson_data.strip().split("\n")
-    assert len(lines) == 2, f"Expected 2 lines of NDJSON, got {len(lines)}"
+    records: Final = [json.loads(line) for line in lines]
 
-    # Each line should be valid JSON
-    for line in lines:
-        json.loads(line)  # Will raise if invalid JSON
+    this_test_messages: Final = [
+        [{"role": "user", "content": f"Test {i}"}] for i in range(2)
+    ]
+    mine: Final = [
+        record for record in records if record.get("messages") in this_test_messages
+    ]
+    assert (
+        len(mine) == 2
+    ), f"Expected this test's 2 calls as NDJSON lines, got {len(mine)} of {len(records)}"
 
 
 @pytest.mark.asyncio

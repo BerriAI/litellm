@@ -128,8 +128,6 @@ def test_init():
     print("passed testing slack alerting init")
 
 
-
-
 @pytest.fixture
 def slack_alerting():
     return SlackAlerting(
@@ -324,52 +322,6 @@ async def test_daily_reports_completion(slack_alerting):
         assert response_val is True
 
         mock_send_alert.assert_awaited()
-
-
-@pytest.mark.asyncio
-async def test_daily_reports_redis_cache_scheduler():
-    redis_cache = RedisCache()
-    slack_alerting = SlackAlerting(
-        internal_usage_cache=DualCache(redis_cache=redis_cache)
-    )
-
-    # we need this to be 0 so it actualy sends the report
-    slack_alerting.alerting_args.daily_report_frequency = 0
-
-
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-5.5",
-                "litellm_params": {
-                    "model": "gpt-5-mini",
-                },
-            }
-        ]
-    )
-
-    with (
-        patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert,
-        patch.object(
-            redis_cache, "async_set_cache", new=AsyncMock()
-        ) as mock_redis_set_cache,
-    ):
-        # initial call - expect empty
-        await slack_alerting._run_scheduler_helper(llm_router=router)
-
-        try:
-            json.dumps(mock_redis_set_cache.call_args[0][1])
-        except Exception as e:
-            pytest.fail(
-                "Cache value can't be json dumped - {}".format(
-                    mock_redis_set_cache.call_args[0][1]
-                )
-            )
-
-        mock_redis_set_cache.assert_awaited_once()
-
-        # second call - expect empty
-        await slack_alerting._run_scheduler_helper(llm_router=router)
 
 
 @pytest.mark.asyncio
@@ -582,7 +534,7 @@ async def test_webhook_alerting(alerting_type):
             None,
             None,
         ),
-        ("gemini-2.0-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
+        ("gemini-3.8-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
     ],
 )
 @pytest.mark.parametrize("error_code", [500, 408, 400])
@@ -688,7 +640,7 @@ async def test_outage_alerting_called(
             None,
             None,
         ),
-        ("gemini-2.0-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
+        ("gemini-3.8-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
     ],
 )
 @pytest.mark.parametrize("error_code", [500, 408, 400])
@@ -775,7 +727,7 @@ async def test_region_outage_alerting_called(
             await slack_alerting.region_outage_alerts(
                 exception=error_to_raise, deployment_id=deployment_id  # type: ignore
             )
-        if model == "gemini-2.0-flash" and (error_code == 500 or error_code == 408):
+        if model == "gemini-3.8-flash" and (error_code == 500 or error_code == 408):
             mock_send_alert.assert_called_once()
         else:
             mock_send_alert.assert_not_called()

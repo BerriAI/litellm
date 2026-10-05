@@ -42,7 +42,7 @@ case "$subject" in
         ;;
 esac
 
-ALLOWED_TYPES="feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
+ALLOWED_TYPES="feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|security"
 # Description must not start with an uppercase letter — kept in sync with the
 # subjectPattern in .github/workflows/conventional-commits.yml so the local
 # hook is the strictly tighter of the two gates. (Without this guard, a commit
@@ -61,7 +61,7 @@ cat >&2 <<EOF
   Expected: <type>(<scope>)!: <description>
             (description must start with a lowercase letter)
 
-  Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+  Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert, security
   Examples:
     feat(router): add weighted round-robin strategy
     fix(bedrock): decouple STS region from aws_region_name

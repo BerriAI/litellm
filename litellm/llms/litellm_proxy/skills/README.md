@@ -369,7 +369,7 @@ model LiteLLM_SkillsTable {
 Run the tests:
 
 ```bash
-pytest tests/proxy_unit_tests/test_skills_db.py -v
+pytest tests/unit/skills/test_skills_db.py -v
 ```
 
 Tests cover:

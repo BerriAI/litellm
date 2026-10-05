@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from "react";
-import type { ColumnDef } from "@tanstack/react-table";
+import React, { useState, useEffect, useCallback } from "react";
+import type { ColumnDef, OnChangeFn, PaginationState } from "@tanstack/react-table";
 import { BarChart } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
-import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { perUserAnalyticsCall } from "./networking";
 
@@ -42,39 +41,41 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
     total_pages: 0,
   });
 
-  const [currentPage, setCurrentPage] = useState(1);
+  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 50 });
+  const [pagedTags, setPagedTags] = useState(selectedTags);
 
-  const fetchPerUserData = async () => {
-    if (!accessToken) return;
-
-    try {
-      const response = await perUserAnalyticsCall(
-        accessToken,
-        currentPage,
-        50,
-        selectedTags.length > 0 ? selectedTags : undefined,
-      );
-      setPerUserData(response);
-    } catch (error) {
-      console.error("Failed to fetch per-user data:", error);
-    }
-  };
+  if (pagedTags !== selectedTags) {
+    setPagedTags(selectedTags);
+    setPagination((prev) => (prev.pageIndex === 0 ? prev : { ...prev, pageIndex: 0 }));
+  }
 
   useEffect(() => {
-    fetchPerUserData();
-  }, [accessToken, selectedTags, currentPage]);
+    if (!accessToken) return;
 
-  const handleNextPage = () => {
-    if (currentPage < perUserData.total_pages) {
-      setCurrentPage(currentPage + 1);
-    }
-  };
+    let stale = false;
+    perUserAnalyticsCall(
+      accessToken,
+      pagination.pageIndex + 1,
+      pagination.pageSize,
+      pagedTags.length > 0 ? pagedTags : undefined,
+    )
+      .then((response) => {
+        if (stale) return;
+        setPerUserData(response);
+      })
+      .catch((error) => console.error("Failed to fetch per-user data:", error));
 
-  const handlePrevPage = () => {
-    if (currentPage > 1) {
-      setCurrentPage(currentPage - 1);
-    }
-  };
+    return () => {
+      stale = true;
+    };
+  }, [accessToken, pagedTags, pagination]);
+
+  const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>((updaterOrValue) => {
+    setPagination((prev) => {
+      const next = typeof updaterOrValue === "function" ? updaterOrValue(prev) : updaterOrValue;
+      return next.pageSize === prev.pageSize ? next : { pageIndex: 0, pageSize: next.pageSize };
+    });
+  }, []);
 
   const columns: ColumnDef<PerUserMetrics>[] = [
     {
@@ -137,30 +138,15 @@ const PerUserUsage: React.FC<PerUserUsageProps> = ({ accessToken, selectedTags, 
         <TabsContent value="details" keepMounted>
           <DataTable
             columns={columns}
-            data={perUserData.results.slice(0, 10)}
+            data={perUserData.results}
             getRowId={(row) => row.user_id}
+            paginationMode="server"
+            pagination={pagination}
+            onPaginationChange={handlePaginationChange}
+            rowCount={perUserData.total_count}
             noDataMessage="No per-user usage data"
             size="compact"
           />
-
-          {perUserData.results.length > 10 && (
-            <div className="mt-4 flex justify-between items-center">
-              <p className="text-sm text-muted-foreground">Showing 10 of {perUserData.total_count} results</p>
-              <div className="flex gap-2">
-                <Button size="sm" variant="secondary" onClick={handlePrevPage} disabled={currentPage === 1}>
-                  Previous
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={handleNextPage}
-                  disabled={currentPage >= perUserData.total_pages}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
-          )}
         </TabsContent>
 
         {/* Tab 2: Usage Distribution Histogram */}

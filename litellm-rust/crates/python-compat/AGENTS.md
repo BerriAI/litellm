@@ -1,0 +1,23 @@
+- Pure Python *data formats* in Rust, for state Python LiteLLM writes and Rust must read or write byte-compatibly
+  - No PyO3, no live objects: truthiness, `__str__`, descriptors of real Python objects belong to `python-bridge`'s coercion layer
+  - Format *choices* stay with callers: the `{timestamp, response}` envelope, diskcache modes, and the cache-key recipe live in the cache crates and only call into this crate
+- Intended users
+  - `cache-response` codec: reading `str(dict)` values Python's sync Redis path writes (`literal_eval`)
+  - `cache-disk`: diskcache's pickled values (`pickle`), falsy-is-miss (`truthy`)
+  - Cache-key derivation: sha256 over `str(value)` must match Python byte for byte (`repr::to_str`)
+  - Byte-identical writes where Python compares raw values (`json::dumps`, `repr`)
+- Relation to [`py_literal`](https://docs.rs/py_literal/latest/py_literal/): replaced, do not reintroduce
+  - Its pest grammar backtracks: parse time doubles per nested `[`/`{` (105 ms at depth 16); ours is linear (19 µs at depth 128)
+  - Its formatter is not `repr` (`2e-1`, always single quotes, escapes non-ASCII); it also lost `-0.0`, `(1+2j)`, `set()`
+  - `cache-response` and `cache-disk` still depend on it; migrate them here
+- Relation to [`serde-pickle`](https://docs.rs/serde-pickle/latest/serde_pickle/): the pickle codec, used only through its serde interface
+  - Never `serde_pickle::Value`: its `BTreeMap` dicts reorder keys
+  - Accepted limits: ints beyond i64, `tuple`/`set`/`frozenset` decode as lists, class references (`GLOBAL`/`REDUCE`) fail; writes protocol 3
+- Every behavior is pinned by CPython output, not by reasoning; everything under `generated/` is script output, never hand-edited
+  - Regenerate `generated/values.json` with `scripts/generate_fixtures.py`; add a corpus row before changing behavior
+  - Divergences go in `KNOWN` in `tests/fixtures.rs` with a reason; an entry that starts matching fails until deleted
+  - Regenerate `generated/nonprintable.rs` with `scripts/generate_nonprintable.py` when the target Python's Unicode version changes
+  - `scripts/verify_rust_pickles.py` checks CPython reads Rust pickles, with class resolution disabled; CI does not run Python
+- Decoders recurse, so they reject nesting beyond `MAX_DEPTH` for stack safety: deliberately stricter than CPython, whose parser takes ~200 levels and whose unpickler has no limit (pinned as `nested_150`)
+  - Formatters (`repr`, `json`) are unbounded; values from the decoders are already capped, a hand-built `Value` is the caller's responsibility
+  - `literal_eval` must stay linear in depth: `tests/limits.rs` times the deepest parse, `benches/formats.rs` measures the curve but is manual, since CI runs no Rust bench

@@ -9,6 +9,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Field, FieldGroup, FieldTitle } from "@/components/ui/field";
 import { AGENT_FORM_CONFIG, SKILL_FIELD_CONFIG } from "./agent_config";
 import CostConfigFields, { COST_FIELD_NAMES } from "./cost_config_fields";
+import KillSwitchFormFields from "./KillSwitchFormFields";
+import { KILL_SWITCH_PANEL_KEY } from "./kill_switch_config";
 import {
   AgentFormField,
   AgentFormPanel,
@@ -30,6 +32,7 @@ export const A2A_PANEL_FIELD_NAMES: Readonly<Record<string, readonly string[]>> 
   [AGENT_FORM_CONFIG.cost.key]: COST_FIELD_NAMES,
   [AGENT_FORM_CONFIG.litellm.key]: namesOf(AGENT_FORM_CONFIG.litellm.fields),
   [AUTH_HEADERS_PANEL_KEY]: ["static_headers", "extra_headers"],
+  [KILL_SWITCH_PANEL_KEY]: ["kill_switch"],
 };
 
 export const unmountedA2AFieldNames = (mountedPanels: readonly string[]): readonly string[] =>
@@ -392,6 +395,12 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ panels, showAgentName
                 />
               )}
             </AgentFormField>
+          </AgentFormPanel>
+        )}
+
+        {shouldShow(KILL_SWITCH_PANEL_KEY) && (
+          <AgentFormPanel panelKey={KILL_SWITCH_PANEL_KEY} title="Kill Switch" panels={panels}>
+            <KillSwitchFormFields />
           </AgentFormPanel>
         )}
       </div>

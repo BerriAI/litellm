@@ -4,10 +4,78 @@ Now supports selecting a tag via `config["tag"]`; falls back to branch ("main").
 """
 
 import base64
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, Protocol, TypedDict
 from urllib.parse import quote
 
+from typing_extensions import ReadOnly
+
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+
+class GitLabFilePayload(TypedDict, total=False):
+    """A repository-files API entry."""
+
+    content: ReadOnly[str]
+    encoding: ReadOnly[str]
+
+
+class GitLabTreeEntry(TypedDict, total=False):
+    """A repository-tree API entry."""
+
+    path: ReadOnly[str]
+    type: ReadOnly[str]
+
+
+class GitLabBranch(TypedDict, total=False):
+    """A repository-branches API entry."""
+
+    name: ReadOnly[str]
+    type: ReadOnly[str]
+
+
+class GitLabFileMetadata(TypedDict):
+    """The response headers a raw file request exposes as metadata."""
+
+    content_type: ReadOnly[str | None]
+    content_length: ReadOnly[str | None]
+    last_modified: ReadOnly[str | None]
+
+
+class _FileJsonResponse(Protocol):
+    def json(self) -> GitLabFilePayload: ...
+
+
+class _TreeJsonResponse(Protocol):
+    def json(self) -> Sequence[GitLabTreeEntry] | None: ...
+
+
+class _ProjectJsonResponse(Protocol):
+    def json(self) -> Mapping[str, object]: ...
+
+
+class _BranchesJsonResponse(Protocol):
+    def json(self) -> Sequence[GitLabBranch] | None: ...
+
+
+def _file_payload(resp: _FileJsonResponse) -> GitLabFilePayload:
+    """The JSON body of a repository-files response."""
+    return resp.json()
+
+
+def _tree_entries(resp: _TreeJsonResponse) -> Sequence[GitLabTreeEntry]:
+    """The entries of a repository-tree response."""
+    return resp.json() or []
+
+
+def _project_info(resp: _ProjectJsonResponse) -> Mapping[str, object]:
+    """The JSON body of a project response."""
+    return resp.json()
+
+
+def _branch_entries(resp: _BranchesJsonResponse) -> Sequence[GitLabBranch] | None:
+    """The JSON body of a repository-branches response."""
+    return resp.json()
 
 
 class GitLabClient:
@@ -42,12 +110,12 @@ class GitLabClient:
 
         self.project: str | int = project
         self.access_token: str = str(access_token)
-        self.auth_method = config.get("auth_method", "token")  # 'token' or 'oauth'
+        self.auth_method: str = config.get("auth_method", "token")  # 'token' or 'oauth'
         self.branch = config.get("branch", None)
         if not self.branch:
             self.branch = "main"
         self.tag = config.get("tag")
-        self.base_url = config.get("base_url", "https://gitlab.com/api/v4")
+        self.base_url: str = config.get("base_url", "https://gitlab.com/api/v4")
 
         if not all([self.project, self.access_token]):
             raise ValueError("project and access_token are required")
@@ -159,7 +227,7 @@ class GitLabClient:
             if resp.status_code == 404:
                 return None
             resp.raise_for_status()
-            data: Final = resp.json()
+            data: Final = _file_payload(resp)
             content: Final = data.get("content")
             encoding: Final = data.get("encoding", "")
             if content and encoding == "base64":
@@ -208,7 +276,7 @@ class GitLabClient:
                 return []
             resp.raise_for_status()
 
-            data: Final = resp.json() or []
+            data: Final = _tree_entries(resp)
             files: Final[list[str]] = []
             for item in data:
                 if item.get("type") == "blob":
@@ -229,13 +297,13 @@ class GitLabClient:
                 raise Exception("Authentication failed. Check your GitLab token and auth_method.")
             raise Exception(f"Failed to list files in '{directory_path}': {e}")
 
-    def get_repository_info(self) -> dict[str, Any]:
+    def get_repository_info(self) -> Mapping[str, object]:
         """Get information about the project/repository."""
         url: Final = f"{self.base_url}/projects/{self._project_enc}"
         try:
             resp: Final = self.http_handler.get(url, headers=self.headers)
             resp.raise_for_status()
-            return resp.json()
+            return _project_info(resp)
         except Exception as e:
             raise Exception(f"Failed to get repository info: {e}")
 
@@ -247,18 +315,18 @@ class GitLabClient:
         except Exception:
             return False
 
-    def get_branches(self) -> list[dict[str, Any]]:
+    def get_branches(self) -> list[GitLabBranch]:
         """Get list of branches in the repository."""
         url: Final = f"{self.base_url}/projects/{self._project_enc}/repository/branches"
         try:
             resp: Final = self.http_handler.get(url, headers=self.headers)
             resp.raise_for_status()
-            data: Final = resp.json()
+            data: Final = _branch_entries(resp)
             return data if isinstance(data, list) else []
         except Exception as e:
             raise Exception(f"Failed to get branches: {e}")
 
-    def get_file_metadata(self, file_path: str, *, ref: str | None = None) -> dict[str, Any] | None:
+    def get_file_metadata(self, file_path: str, *, ref: str | None = None) -> GitLabFileMetadata | None:
         """
         Get minimal metadata about a file via RAW endpoint headers at a given ref.
 

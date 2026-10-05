@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
@@ -32,6 +33,7 @@ from litellm.proxy.auth.resolvers.models import (
     UserIdentity,
 )
 from litellm.proxy.auth.roles import TeamRole, map_role, team_role
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -99,6 +101,7 @@ class IdentityStore:
             raise PrincipalMissingSourceKeyError()
         return principal.source_key
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def _resolve_key(self, hashed_token: str) -> UserAPIKeyAuth:
         if self._prisma is None:
             raise NoDatabaseConnectionError()

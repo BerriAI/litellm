@@ -5,17 +5,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isAutoRouterDeployment,
   selectAutoRouterModelGroups,
-  selectPlainModelGroups,
+  selectPlainChatModelGroups,
   useAllProxyModels,
   useAutoRouterModelGroups,
   useAutoRouters,
   useInfiniteModelInfo,
   useModelHub,
   useModelsInfo,
+  usePlainChatModelGroups,
   useSelectedTeamModels,
   useUserModels,
   type AllProxyModelsResponse,
   type AutoRouterCandidateDeployment,
+  type AutoRouterDeployment,
   type PaginatedModelInfoResponse,
   type ProxyModel,
 } from "./useModels";
@@ -118,6 +120,9 @@ describe("useModelsInfo", () => {
       // exclude_auto_routers defaults off: only the Models + Endpoints table opts in, so
       // every other consumer of this hook keeps seeing auto-routers.
       false,
+      undefined,
+      undefined,
+      false,
     );
     expect(modelInfoCall).toHaveBeenCalledTimes(1);
   });
@@ -144,6 +149,9 @@ describe("useModelsInfo", () => {
       undefined,
       // exclude_auto_routers defaults off: only the Models + Endpoints table opts in, so
       // every other consumer of this hook keeps seeing auto-routers.
+      false,
+      undefined,
+      undefined,
       false,
     );
   });
@@ -978,29 +986,45 @@ describe("selectAutoRouterModelGroups", () => {
   });
 });
 
-describe("selectPlainModelGroups", () => {
-  it("keeps only non-auto-router model groups", () => {
-    const deployments: AutoRouterCandidateDeployment[] = [
-      { model_name: "smart-router", litellm_params: { model: "auto_router/complexity_router" } },
-      { model_name: "claude-haiku", litellm_params: { model: "anthropic/claude-haiku-4-5" } },
-      { model_name: "claude-sonnet", litellm_params: { model: "anthropic/claude-sonnet-4-5" } },
-      { model_name: "cheap-router", litellm_params: { model: "auto_router/adaptive_router" } },
+describe("selectPlainChatModelGroups", () => {
+  it("keeps chat-capable groups when mode metadata is absent or any sibling is compatible", () => {
+    const deployments: AutoRouterDeployment[] = [
+      { model_name: "no-info" },
+      { model_name: "null-info", model_info: null },
+      { model_name: "empty-info", model_info: {} },
+      { model_name: "missing-mode", model_info: { db_model: false } },
+      { model_name: "null-mode", model_info: { mode: null } },
+      { model_name: "empty-mode", model_info: { mode: "" } },
+      { model_name: "chat", model_info: { mode: "chat", db_model: true } },
+      { model_name: "completion", model_info: { mode: "completion" } },
+      { model_name: "chat-and-missing", model_info: { mode: "chat" } },
+      { model_name: "chat-and-missing" },
+      { model_name: "chat-then-embedding", model_info: { mode: "chat" } },
+      { model_name: "chat-then-embedding", model_info: { mode: "embedding" } },
+      { model_name: "embedding-then-chat", model_info: { mode: "embedding" } },
+      { model_name: "embedding-then-chat", model_info: { mode: "chat" } },
+      { model_name: "embedding-only", model_info: { mode: "embedding" } },
+      { model_name: "speech-only", model_info: { mode: "speech" } },
+      { model_name: "shared-router", litellm_params: { model: "openai/gpt-4o" } },
+      { model_name: "shared-router", litellm_params: { model: "auto_router/complexity_router" } },
+      { model_name: "", model_info: { mode: "chat" } },
     ];
 
-    expect(selectPlainModelGroups(deployments)).toEqual(new Set(["claude-haiku", "claude-sonnet"]));
-  });
-
-  it("drops a group name that also fronts an auto-router deployment", () => {
-    const deployments: AutoRouterCandidateDeployment[] = [
-      { model_name: "shared-name", litellm_params: { model: "auto_router/complexity_router" } },
-      { model_name: "shared-name", litellm_params: { model: "anthropic/claude-sonnet-4-5" } },
-    ];
-
-    expect(selectPlainModelGroups(deployments)).toEqual(new Set());
-  });
-
-  it("drops deployments that have no public model_name", () => {
-    expect(selectPlainModelGroups([{ model_name: "", litellm_params: { model: "openai/gpt-4o" } }])).toEqual(new Set());
+    expect(selectPlainChatModelGroups(deployments)).toEqual(
+      new Set([
+        "no-info",
+        "null-info",
+        "empty-info",
+        "missing-mode",
+        "null-mode",
+        "empty-mode",
+        "chat",
+        "completion",
+        "chat-and-missing",
+        "chat-then-embedding",
+        "embedding-then-chat",
+      ]),
+    );
   });
 });
 
@@ -1095,6 +1119,47 @@ describe("useAutoRouterModelGroups", () => {
     expect(result.current.has("late-router")).toBe(true);
     expect(modelInfoCall).toHaveBeenCalledTimes(3);
     expect(modelInfoCall).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", 3, 1000);
+  });
+
+  it("uses every page for configured chat groups and keeps custom deployments without mode metadata", async () => {
+    (modelInfoCall as any).mockImplementation((_t: string, _u: string, _r: string, page: number) =>
+      Promise.resolve(
+        page === 1
+          ? {
+              data: [
+                { model_name: "configured-chat", model_info: { mode: "chat" } },
+                { model_name: "embedding-only", model_info: { mode: "embedding" } },
+              ],
+              total_pages: 2,
+            }
+          : {
+              data: [
+                { model_name: "custom-no-mode", model_info: { db_model: true } },
+                { model_name: "speech-only", model_info: { mode: "speech" } },
+              ],
+              total_pages: 2,
+            },
+      ),
+    );
+
+    const { result } = renderHook(() => usePlainChatModelGroups(), { wrapper });
+
+    await waitFor(() => expect(result.current.size).toBe(2));
+    expect(result.current).toEqual(new Set(["configured-chat", "custom-no-mode"]));
+    expect(modelInfoCall).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns an empty chat group set while loading and after failure", async () => {
+    (modelInfoCall as any).mockReturnValueOnce(new Promise(() => {}));
+    const loading = renderHook(() => usePlainChatModelGroups(), { wrapper });
+    expect(loading.result.current).toEqual(new Set());
+    loading.unmount();
+
+    queryClient.clear();
+    (modelInfoCall as any).mockRejectedValueOnce(new Error("boom"));
+    const failed = renderHook(() => usePlainChatModelGroups(), { wrapper });
+    await waitFor(() => expect(modelInfoCall).toHaveBeenCalledTimes(2));
+    expect(failed.result.current).toEqual(new Set());
   });
 
   it("returns an empty set before the model list resolves", () => {

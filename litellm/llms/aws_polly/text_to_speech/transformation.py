@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
 
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -19,6 +20,7 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 else:
     LiteLLMLoggingObj = Any
@@ -74,15 +76,15 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
-        extra_headers: dict[str, Any] | None,
-        base_llm_http_handler: Any,
+        extra_headers: dict[str, object] | None,
+        base_llm_http_handler: "BaseLLMHTTPHandler",
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> Union[
         "HttpxBinaryResponseContent",
-        Coroutine[Any, Any, "HttpxBinaryResponseContent"],
+        Coroutine[object, object, "HttpxBinaryResponseContent"],
     ]:
         """
         Dispatch method to handle AWS Polly TTS requests
@@ -238,7 +240,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             return api_base.rstrip("/") + "/v1/speech"
 
         aws_region_name: Final = litellm_params.get("aws_region_name", self.DEFAULT_REGION)
-        return f"https://polly.{aws_region_name}.amazonaws.com/v1/speech"
+        return f"https://polly.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/v1/speech"
 
     def is_ssml_input(self, input: str) -> bool:
         """
@@ -250,7 +252,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
 
     def _sign_polly_request(
         self,
-        request_body: dict[str, Any],
+        request_body: dict[str, object],
         endpoint_url: str,
         litellm_params: dict,
     ) -> tuple[dict[str, str], str]:
@@ -336,7 +338,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         engine: Final = optional_params.get("engine", self.DEFAULT_ENGINE)
 
         # Build request body
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "Engine": engine,
             "OutputFormat": output_format,
             "Text": input,

@@ -11,4 +11,5 @@ class UiDiscoveryEndpoints(BaseModel):
     sso_configured: bool
     hide_default_credentials_hint: bool = False
     is_control_plane: bool = False
+    mcp_stdio_enabled: bool = False
     workers: list[WorkerRegistryEntry] = []

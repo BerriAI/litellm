@@ -2,10 +2,14 @@
 Type definitions for WebSearch Interception integration.
 """
 
-from typing import Literal, TypedDict
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, TypeAlias, TypedDict
 
 from pydantic import BaseModel
 from typing_extensions import ReadOnly
+
+if TYPE_CHECKING:
+    from litellm.llms.base_llm.search.transformation import SearchResponse
 
 
 class AnthropicSearchQuery(BaseModel):
@@ -25,6 +29,47 @@ class AnthropicServerToolUseBlock(BaseModel):
     id: str
     name: Literal["web_search"] = "web_search"
     input: AnthropicSearchQuery
+
+
+class RichWebSearchInput(TypedDict, total=False):
+    """
+    Optional richer search shape a model may emit alongside ``query``.
+
+    Collected from the intercepted tool call and forwarded only to search
+    providers whose config reports ``supports_rich_search_input()``; every
+    other provider keeps receiving the single ``query`` string.
+    """
+
+    objective: ReadOnly[str]
+    """Natural-language description of the goal behind the search."""
+
+    search_queries: ReadOnly[list[str]]  # mutable-ok: forwarded verbatim as litellm.asearch's list[str] query argument
+    """Two to five short keyword queries covering different angles."""
+
+
+WebSearchToolResultErrorCode: TypeAlias = Literal[
+    "invalid_tool_input",
+    "unavailable",
+    "max_uses_exceeded",
+    "too_many_requests",
+    "query_too_long",
+    "request_too_large",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class SearchSucceeded:
+    text: str
+    response: "SearchResponse | None"
+
+
+@dataclass(frozen=True, slots=True)
+class SearchFailed:
+    error_code: WebSearchToolResultErrorCode
+    message: str
+
+
+SearchOutcome: TypeAlias = SearchSucceeded | SearchFailed
 
 
 class WebSearchInterceptionConfig(TypedDict, total=False):

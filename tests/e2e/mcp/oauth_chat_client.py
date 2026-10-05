@@ -18,20 +18,30 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 from urllib.parse import parse_qsl
 
 import httpx
+import httpx2
 import pytest
+from e2e_config import PROXY_BASE_URL, REQUEST_TIMEOUT
+from e2e_http import AuthHeaders, NoBody, unwrap
+from idp import Identity
 from mcp import ClientSession
 from mcp.client.auth import OAuthClientProvider
 from mcp.client.streamable_http import streamable_http_client
-from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
-
-from e2e_config import PROXY_BASE_URL, REQUEST_TIMEOUT
+from mcp.shared.auth import AuthorizationCodeResult, OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
+from mcp.types import TextContent
+from models import (
+    ChatBody,
+    ChatResponse,
+    McpOauthUserCredentialStatus,
+    McpServerCreateBody,
+    McpServerInfo,
+    McpServerUserCredentialListResponse,
+    McpServerUserCredentialRow,
+)
 from proxy_client import ProxyClient
-from e2e_http import AuthHeaders, NoBody, unwrap
-from models import ChatBody, ChatResponse, McpServerCreateBody, McpServerInfo
 
 if TYPE_CHECKING:
     from playwright.async_api import Route
@@ -44,8 +54,8 @@ OAUTH_CLIENT_REDIRECT_URI = "http://127.0.0.1:53682/e2e/callback"
 BROWSER_CONSENT_TIMEOUT = 60.0
 
 
-def _mcp_url(alias: str) -> str:
-    return f"{PROXY_BASE_URL}/{alias}/mcp"
+def _mcp_url(alias: str, base_url: str = PROXY_BASE_URL) -> str:
+    return f"{base_url.rstrip('/')}/{alias}/mcp"
 
 
 class InMemoryTokenStorage:
@@ -69,7 +79,13 @@ class InMemoryTokenStorage:
         self._client_info = client_info
 
 
-async def _browser_follow_authorize(start_url: str, storage_state_path: str) -> tuple[str, str | None]:
+async def _browser_follow_authorize(
+    start_url: str,
+    storage_state_path: str,
+    identity: Identity | None = None,
+    server_alias: str | None = None,
+    allow_upstream_consent: bool = True,
+) -> tuple[str, str | None]:
     """Play the browser's role for a real upstream whose authorize endpoint
     serves an interactive consent page (Linear). A headless Chromium primed
     with a human's saved Linear session opens the gateway authorize URL and
@@ -85,10 +101,13 @@ async def _browser_follow_authorize(start_url: str, storage_state_path: str) -> 
 
     def _note_request(request: object) -> None:
         url = getattr(request, "url", "")
+        host = httpx.URL(url).host
+        if not allow_upstream_consent and (host == "linear.app" or host.endswith(".linear.app")):
+            captured["upstream_consent"] = "seen"
         if url.startswith(OAUTH_CLIENT_REDIRECT_URI) and "url" not in captured:
             captured["url"] = url
 
-    async def _swallow_redirect(route: "Route") -> None:
+    async def _swallow_redirect(route: Route) -> None:
         await route.fulfill(status=200, content_type="text/plain", body="ok")
 
     async with async_playwright() as playwright:
@@ -96,7 +115,7 @@ async def _browser_follow_authorize(start_url: str, storage_state_path: str) -> 
         context = await browser.new_context(storage_state=storage_state_path)
         await context.route(re.compile(re.escape(OAUTH_CLIENT_REDIRECT_URI) + r".*"), _swallow_redirect)
         page = await context.new_page()
-        page.on("request", _note_request)
+        context.on("request", _note_request)
         page.on("framenavigated", lambda frame: trail.append(frame.url.split("?", 1)[0]))
         await page.goto(start_url, wait_until="domcontentloaded")
         deadline = time.monotonic() + BROWSER_CONSENT_TIMEOUT
@@ -105,8 +124,29 @@ async def _browser_follow_authorize(start_url: str, storage_state_path: str) -> 
                 await page.wait_for_load_state("networkidle", timeout=8000)
             except Exception:  # noqa: BLE001 - a busy consent page never idles; fall through and try to advance it
                 pass
-            if "url" in captured:
+            if "upstream_consent" in captured or "url" in captured:
                 break
+            if await page.locator("#username").count() and identity is not None:
+                await page.locator("#username").fill(identity.username)
+                await page.locator("#password").fill(identity.password)
+                await page.locator("#kc-login").click()
+                continue
+            if "/ui/connect" in page.url and server_alias is not None:
+                card = page.locator("div.cursor-pointer").filter(has=page.get_by_text(server_alias, exact=True))
+                if await card.count() != 1:
+                    await asyncio.sleep(0.5)
+                    continue
+                connect = card.get_by_text("Connect", exact=True)
+                if await connect.count():
+                    await connect.click()
+                    continue
+                if not await card.locator("svg.text-success").count():
+                    await asyncio.sleep(0.5)
+                    continue
+                finish = page.get_by_role("button", name="Finish connecting", exact=True)
+                if await finish.count() and await finish.is_enabled():
+                    await finish.click()
+                    continue
             control = page.locator(
                 'button[name="action"][value="approve"], button:has-text("Authorize"), '
                 'button:has-text("Allow"), button:has-text("@"), a:has-text("@")'
@@ -118,31 +158,48 @@ async def _browser_follow_authorize(start_url: str, storage_state_path: str) -> 
         final_url = page.url
         await browser.close()
 
+    # A redirect chain can finish inside goto/networkidle before the loop checks the page.
+    assert "upstream_consent" not in captured, "cold reconnect required upstream consent"
     landing = captured.get("url")
     assert landing is not None, (
         f"consent flow never reached {OAUTH_CLIENT_REDIRECT_URI}; "
         f"final={final_url.split('?', 1)[0]!r}; trail={trail[-6:]}"
     )
     params = dict(parse_qsl(httpx.URL(landing).query.decode()))
-    assert "code" in params, f"client redirect_uri carried no code: {landing}"
+    assert "code" in params, "client redirect_uri carried no authorization code"
     return params["code"], params.get("state")
 
 
-def _oauth_provider(url: str, storage: InMemoryTokenStorage, storage_state_path: str) -> OAuthClientProvider:
+def _oauth_provider(
+    url: str,
+    storage: InMemoryTokenStorage,
+    storage_state_path: str | None,
+    identity: Identity | None = None,
+    server_alias: str | None = None,
+    allow_upstream_consent: bool = True,
+) -> OAuthClientProvider:
     """The SDK's real OAuth machinery (RFC 9728/8414 discovery, RFC 7591 DCR,
     PKCE, token exchange) with the browser leg driven by Playwright against the
     upstream's consent screen."""
     code_holder: dict[str, str | None] = {}  # mutable-ok: hand-off between the two SDK callbacks
 
-    async def redirect_handler(authorize_url: str) -> None:
-        code, state = await _browser_follow_authorize(authorize_url, storage_state_path)
+    async def _reject_redirect(_: str) -> None:
+        raise AssertionError("gateway demanded a fresh upstream consent; stored per-user token was not reused")
+
+    async def _follow_redirect(authorize_url: str) -> None:
+        assert storage_state_path is not None
+        code, state = await _browser_follow_authorize(
+            authorize_url, storage_state_path, identity, server_alias, allow_upstream_consent
+        )
         code_holder["code"] = code
         code_holder["state"] = state
 
-    async def callback_handler() -> tuple[str, str | None]:
+    redirect_handler: Final = _reject_redirect if storage_state_path is None else _follow_redirect
+
+    async def callback_handler() -> AuthorizationCodeResult:
         code = code_holder.get("code")
         assert code is not None, "callback_handler ran before the authorize redirect completed"
-        return code, code_holder.get("state")
+        return AuthorizationCodeResult(code=code, state=code_holder.get("state"))
 
     return OAuthClientProvider(
         server_url=url,
@@ -161,30 +218,51 @@ def _oauth_provider(url: str, storage: InMemoryTokenStorage, storage_state_path:
     )
 
 
-class _HeaderInjectingTransport(httpx.AsyncBaseTransport):
+class _HeaderInjectingTransport(httpx2.AsyncBaseTransport):
     """Adds the caller's LiteLLM key header to every outgoing SDK request
     (discovery, DCR, token exchange), so the gateway resolves which user to
     store the upstream token for from the key on the token exchange, exactly
     like a production MCP host configured with a LiteLLM key header."""
 
-    def __init__(self, inner: httpx.AsyncBaseTransport, headers: dict[str, str]) -> None:
+    def __init__(self, inner: httpx2.AsyncBaseTransport, headers: dict[str, str], gateway_url: str) -> None:
         self._inner = inner
         self._headers = headers
+        self._gateway_url = httpx2.URL(gateway_url)
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        for name, value in self._headers.items():
-            if name not in request.headers:
-                request.headers[name] = value
+    @staticmethod
+    def _port(url: httpx2.URL) -> int | None:
+        if url.port is not None:
+            return url.port
+        return {"http": 80, "https": 443}.get(url.scheme)
+
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        same_origin: Final = (
+            request.url.scheme == self._gateway_url.scheme
+            and request.url.host == self._gateway_url.host
+            and self._port(request.url) == self._port(self._gateway_url)
+        )
+        if same_origin:
+            for name, value in self._headers.items():
+                if name not in request.headers:
+                    request.headers[name] = value
+        else:
+            for name, value in self._headers.items():
+                if request.headers.get(name) == value:
+                    del request.headers[name]
         return await self._inner.handle_async_request(request)
 
+    async def aclose(self) -> None:
+        await self._inner.aclose()
 
-def _oauth_http_client(headers: dict[str, str], auth: OAuthClientProvider) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        headers=headers,
+
+def _oauth_http_client(
+    headers: dict[str, str], auth: OAuthClientProvider, gateway_url: str = PROXY_BASE_URL
+) -> httpx2.AsyncClient:
+    return httpx2.AsyncClient(
         auth=auth,
-        timeout=httpx.Timeout(REQUEST_TIMEOUT),
+        timeout=httpx2.Timeout(REQUEST_TIMEOUT),
         follow_redirects=True,
-        transport=_HeaderInjectingTransport(httpx.AsyncHTTPTransport(), headers),
+        transport=_HeaderInjectingTransport(httpx2.AsyncHTTPTransport(), headers, gateway_url),
     )
 
 
@@ -192,11 +270,48 @@ async def _seed_via_dance(
     url: str, headers: dict[str, str], storage: InMemoryTokenStorage, storage_state_path: str
 ) -> tuple[str, ...]:
     async with _oauth_http_client(headers, _oauth_provider(url, storage, storage_state_path)) as http_client:
-        async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+        async with streamable_http_client(url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 listed = await session.list_tools()
                 return tuple(sorted(tool.name for tool in listed.tools))
+
+
+@dataclass(frozen=True, slots=True)
+class OauthToolRun:
+    tools: tuple[str, ...]
+    is_error: bool
+    text: str
+
+
+async def _list_and_call(
+    url: str,
+    headers: dict[str, str],
+    storage: InMemoryTokenStorage,
+    storage_state_path: str | None,
+    tool: str,
+    arguments: dict[str, str],
+    gateway_url: str = PROXY_BASE_URL,
+    identity: Identity | None = None,
+    server_alias: str | None = None,
+    allow_upstream_consent: bool = True,
+) -> OauthToolRun:
+    async with _oauth_http_client(
+        headers,
+        _oauth_provider(url, storage, storage_state_path, identity, server_alias, allow_upstream_consent),
+        gateway_url,
+    ) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                listed: Final = await session.list_tools()
+                result: Final = await session.call_tool(tool, arguments)
+                text: Final = "".join(content.text for content in result.content if isinstance(content, TextContent))
+                return OauthToolRun(
+                    tools=tuple(sorted(tool_item.name for tool_item in listed.tools)),
+                    is_error=result.is_error,
+                    text=text,
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +365,53 @@ class ChatMcpClient:
         pytest.fail(
             f"authorize dance for {alias!r} never completed within {self.proxy.poll_timeout}s; "
             f"last error: {last_error!r}"
+        )
+
+    def list_and_call(
+        self,
+        alias: str,
+        headers: dict[str, str],
+        storage: InMemoryTokenStorage,
+        storage_state_path: str | None,
+        tool: str,
+        arguments: dict[str, str],
+        base_url: str = PROXY_BASE_URL,
+        identity: Identity | None = None,
+        allow_upstream_consent: bool = True,
+    ) -> OauthToolRun:
+        return asyncio.run(
+            _list_and_call(
+                f"{base_url.rstrip('/')}/mcp" if identity is not None else _mcp_url(alias, base_url),
+                headers,
+                storage,
+                storage_state_path,
+                tool,
+                arguments,
+                base_url,
+                identity,
+                alias,
+                allow_upstream_consent,
+            )
+        )
+
+    def server_user_credentials(self, server_id: str) -> tuple[McpServerUserCredentialRow, ...]:
+        return unwrap(
+            self.proxy.transport.get(
+                f"/v1/mcp/server/{server_id}/user-credentials",
+                headers=self.proxy.transport.master,
+                params=NoBody(),
+                response_type=McpServerUserCredentialListResponse,
+            )
+        ).root
+
+    def revoke_user_token(self, server_id: str, headers: AuthHeaders) -> None:
+        _ = unwrap(
+            self.proxy.transport.delete(
+                f"/v1/mcp/server/{server_id}/oauth-user-credential",
+                headers=headers,
+                json=NoBody(),
+                response_type=McpOauthUserCredentialStatus,
+            )
         )
 
     def chat_with_mcp(self, headers: AuthHeaders, body: ChatBody) -> ChatResponse:

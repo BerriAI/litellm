@@ -8,7 +8,7 @@ import {
   type FieldValues,
   type UseFormGetValues,
 } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { TeamMetadataField } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
 import { FormField } from "@/components/shared/form/FormField";
@@ -56,7 +56,7 @@ export function metadataObjectToPairs(
   excludedKeys: ReadonlySet<string> = new Set(),
 ): MetadataPair[] {
   return Object.entries(metadata ?? {})
-    .filter(([key]) => !excludedKeys.has(key))
+    .filter(([key]) => key !== "" && !excludedKeys.has(key))
     .map(([key, value]) => ({ key, value: formatMetadataValue(value) }));
 }
 

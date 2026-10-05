@@ -2,7 +2,7 @@
 
 import React from "react";
 import { FormProvider, useFormContext, useWatch, type UseFormReturn } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { ssoProviderLogoMap, ssoProviderDisplayNames } from "../constants";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { FieldGroup } from "@/components/ui/field";
@@ -303,7 +303,7 @@ const SSOProviderField = ({ field }: { field: SSOProviderConfig["fields"][number
 
   if (field.type === "checkbox") {
     return (
-      <FormField control={control} name={field.name} label={field.label}>
+      <FormField control={control} name={field.name} label={field.label} orientation="horizontal">
         {({ value, onChange, onBlur, id, ...rest }) => (
           <Checkbox
             id={id}
@@ -413,7 +413,7 @@ export const MappingToggleField = ({
   const { control } = useFormContext<SSOSettingsFormValues>();
 
   return (
-    <FormField control={control} name={name} label={label}>
+    <FormField control={control} name={name} label={label} orientation="horizontal">
       {({ value, onChange, onBlur, id, ...rest }) => (
         <Checkbox
           id={id}

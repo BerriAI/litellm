@@ -11,6 +11,9 @@ func resourceLiteLLMModel() *schema.Resource {
 		Read:   resourceLiteLLMModelRead,
 		Update: resourceLiteLLMModelUpdate,
 		Delete: resourceLiteLLMModelDelete,
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 
 		Schema: map[string]*schema.Schema{
 			"model_name": {
@@ -89,6 +92,11 @@ func resourceLiteLLMModel() *schema.Resource {
 			"team_id": {
 				Type:     schema.TypeString,
 				Optional: true,
+			},
+			"display_name": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Human-readable name returned as display_name by /v1/models, shown in client model pickers instead of model_name",
 			},
 			"mode": {
 				Type:     schema.TypeString,

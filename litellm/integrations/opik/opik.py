@@ -4,8 +4,11 @@ Opik Logger that logs LLM events to an Opik server
 
 import asyncio
 import traceback
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Final
+
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -23,7 +26,7 @@ except Exception:
     opik_client = None
 
 
-def _should_skip_event(kwargs: dict[str, Any]) -> bool:
+def _should_skip_event(kwargs: Mapping[str, object]) -> bool:
     """Check if event should be skipped due to missing standard_logging_object."""
     if kwargs.get("standard_logging_object") is None:
         verbose_logger.debug("OpikLogger skipping event; no standard_logging_object found")
@@ -31,12 +34,24 @@ def _should_skip_event(kwargs: dict[str, Any]) -> bool:
     return False
 
 
+class _OpikLoggerKwargs(TypedDict, total=False):
+    """Constructor options accepted by ``OpikLogger``."""
+
+    project_name: ReadOnly[str | None]
+    url: ReadOnly[str | None]
+    api_key: ReadOnly[str | None]
+    workspace: ReadOnly[str | None]
+    batch_size: ReadOnly[int | None]
+    flush_interval: ReadOnly[int | None]
+    max_queue_size: ReadOnly[int | None]
+
+
 class OpikLogger(CustomBatchLogger):
     """
     Opik Logger for logging events to an Opik Server
     """
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Unpack[_OpikLoggerKwargs]) -> None:
         self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
         self.sync_httpx_client = _get_httpx_client()
 
@@ -95,7 +110,7 @@ class OpikLogger(CustomBatchLogger):
 
     async def async_log_success_event(
         self,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, object],
         response_obj: Any,
         start_time: datetime,
         end_time: datetime,
@@ -163,7 +178,7 @@ class OpikLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("OpikLogger failed to log success event - %s\n%s", e, traceback.format_exc())
 
-    def _sync_send(self, url: str, headers: dict[str, str], batch: dict[str, Any]) -> None:
+    def _sync_send(self, url: str, headers: dict[str, str], batch: dict[str, object]) -> None:
         try:
             response: Final = self.sync_httpx_client.post(
                 url=url,
@@ -178,7 +193,7 @@ class OpikLogger(CustomBatchLogger):
 
     def log_success_event(
         self,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, object],
         response_obj: Any,
         start_time: datetime,
         end_time: datetime,
@@ -247,7 +262,7 @@ class OpikLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("OpikLogger failed to log success event - %s\n%s", e, traceback.format_exc())
 
-    async def _submit_batch(self, url: str, headers: dict[str, str], batch: dict[str, Any]) -> None:
+    async def _submit_batch(self, url: str, headers: dict[str, str], batch: dict[str, object]) -> None:
         try:
             response: Final = await self.async_httpx_client.post(
                 url=url,
