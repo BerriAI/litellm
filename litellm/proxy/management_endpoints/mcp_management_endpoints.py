@@ -533,6 +533,8 @@ if MCP_AVAILABLE:
         except Exception as e:
             verbose_proxy_logger.debug("Failed to write temporary MCP server to Redis cache: %s", e)
 
+    _CACHED_VALUE: Final = TypeAdapter(object)
+
     @with_service_target(MCP_SERVERS_TARGET)
     async def _get_temporary_mcp_server_from_redis(
         server_id: str,
@@ -550,8 +552,8 @@ if MCP_AVAILABLE:
             return None
 
         try:
-            cached_server: Final = await cache_backend.async_get_cache(
-                key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}"
+            cached_server: Final = _CACHED_VALUE.validate_python(
+                await cache_backend.async_get_cache(key=f"{TEMPORARY_MCP_SERVER_REDIS_KEY_PREFIX}:{server_id}")
             )
         except Exception as e:
             verbose_proxy_logger.debug("Failed reading temporary MCP server from Redis cache: %s", e)
