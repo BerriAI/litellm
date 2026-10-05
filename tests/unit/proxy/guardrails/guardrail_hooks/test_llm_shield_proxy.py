@@ -31,6 +31,7 @@ from litellm.types.utils import (
     StreamingChoices,
     TextChoices,
     TextCompletionResponse,
+    Usage,
 )
 
 
@@ -1936,3 +1937,32 @@ class TestProxyWiring:
 
         assert reply.choices[0].message.content == "Repeat alice@example.com"
         assert cache.cache_dict == {}, "the redacted request's reply must not be cached"
+
+
+class TestStreamUsage:
+    @pytest.mark.asyncio
+    async def test_trailing_flush_does_not_repeat_usage(self):
+        """With n>=2 and include_usage, the last chunk carries usage; a flush copied from it must not.
+
+        Any consumer that sums usage chunks would otherwise count the request twice.
+        """
+        guardrail, _ = _shielded({"[EMAIL_1]": "a@example.com"})
+        both = ModelResponseStream(
+            choices=[
+                StreamingChoices(index=0, delta=Delta(content="Mail [EMAI")),
+                StreamingChoices(index=1, delta=Delta(content="Call [EMAI")),
+            ]
+        )
+        usage_chunk = ModelResponseStream(
+            choices=[StreamingChoices(index=1, delta=Delta(content=None))],
+            usage=Usage(prompt_tokens=5, completion_tokens=7, total_tokens=12),
+        )
+
+        out = await _restore_stream(guardrail, [both, usage_chunk])
+
+        with_usage = [chunk for chunk in out if getattr(chunk, "usage", None) is not None]
+        assert with_usage == [out[1]], "only the provider's own usage chunk carries usage"
+        flushed = out[2:]
+        assert flushed, "the held-back text is flushed at end of stream"
+        assert sorted(chunk.choices[0].index for chunk in flushed) == [0, 1]
+        assert [chunk.choices[0].delta.content for chunk in flushed] == ["[EMAI", "[EMAI"]

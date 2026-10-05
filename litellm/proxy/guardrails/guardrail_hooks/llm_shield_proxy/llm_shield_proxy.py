@@ -568,7 +568,7 @@ def _read_list(holder: object, name: str) -> Sequence[object]:
     return tuple(_as_array(value) or ())
 
 
-def _write_field(holder: object, name: str, value: str) -> None:
+def _write_field(holder: object, name: str, value: object) -> None:
     """Writes one string field back into a dict or an object. Pairs with _read_field."""
     if isinstance(holder, dict):
         holder[name] = value
@@ -1600,16 +1600,18 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             chunk = self._chunk_for_choice(last_chunk, choice_index)
             if chunk is None:
                 continue
-            if isinstance(chunk.choices[0], TextChoices):
-                chunk.choices[0].text = text
+            choice: object = chunk.choices[0]
+            delta = _read_field(choice, "delta")
+            if isinstance(choice, TextChoices):
+                choice.text = text
             elif tool_index is None:
-                chunk.choices[0].delta.content = text
+                _write_field(delta, "content", text)
             else:
                 # The copy carried this chunk's own content and tool calls, both already
                 # delivered. Replace rather than append, and drop the content, or the
                 # client sees them twice.
-                chunk.choices[0].delta.content = None
-                chunk.choices[0].delta.tool_calls = _continuation_delta(tool_index, text)
+                _write_field(delta, "content", None)
+                _write_field(delta, "tool_calls", _continuation_delta(tool_index, text))
             yield chunk
 
     @staticmethod
@@ -1632,6 +1634,11 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         # The terminal signal, if there was one, already went out with the real chunk.
         kept.finish_reason = None
         chunk.choices = [kept]
+        # So did the usage, which `stream_options.include_usage` puts on that last chunk. A
+        # client that sums usage across chunks would count the request twice; a mid-stream
+        # chunk carries no `usage` attribute at all, so the copy drops it.
+        if hasattr(chunk, "usage"):
+            del chunk.usage
         return chunk
 
     async def _stream_step(self, text: str, carry: str, final: bool, session_id: str) -> tuple[str, str]:
