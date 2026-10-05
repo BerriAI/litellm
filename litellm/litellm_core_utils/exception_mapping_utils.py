@@ -4,7 +4,7 @@ import re
 import traceback
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, Optional, Protocol, cast
+from typing import Final, Protocol, cast
 
 import httpx
 
@@ -419,9 +419,13 @@ def _map_openai_exception(
             request=_request,
             litellm_debug_info=extra_information,
         )
-    def _extract_status_code() -> Optional[int]:
+
+    def _extract_status_code() -> int | None:
         try:
-            if hasattr(original_exception, "status_code") and getattr(original_exception, "status_code", None) is not None:
+            if (
+                hasattr(original_exception, "status_code")
+                and getattr(original_exception, "status_code", None) is not None
+            ):
                 return int(original_exception.status_code)
             elif (
                 hasattr(original_exception, "response")
