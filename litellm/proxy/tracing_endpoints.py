@@ -49,6 +49,10 @@ router = APIRouter(tags=["agent tracing"])
 MS_PER_DAY: Final = 24 * 60 * 60 * 1000
 
 
+def current_time_ms() -> int:
+    return int(time.time() * 1000)
+
+
 @dataclass(frozen=True, slots=True)
 class TraceAccessContext:
     receiver: TraceReceiver | None
@@ -183,11 +187,11 @@ def read_failure(error: TraceChanged | ValueError | OverflowError | RuntimeError
 @router.get("/v1/traces", response_model=TracePage)
 async def list_agent_traces(
     context: Annotated[TraceAccessContext, Depends(provide_trace_access)],
+    now_ms: Annotated[int, Depends(current_time_ms)],
     start_ms: Annotated[int | None, Query(description="Window start, unix ms. Default: 24h ago")] = None,
     end_ms: Annotated[int | None, Query(description="Window end, unix ms. Default: now")] = None,
     cursor: Annotated[str | None, Query(max_length=512)] = None,
 ) -> TracePage:
-    now_ms: Final = int(time.time() * 1000)
     try:
         tracing, scope = context.reader()
         return await tracing.list_traces(
