@@ -492,7 +492,7 @@ it("keeps trace quick filters in links and clears them when leaving demo data", 
   const table = await screen.findByRole("table", { name: "Agent runs" });
   await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(4));
   await user.click(screen.getByRole("combobox", { name: "Filter traces by status" }));
-  await user.click(screen.getByRole("option", { name: "No errors" }));
+  await user.click(await screen.findByRole("option", { name: "No errors" }));
   await expectUrl(onUrlUpdate, (url) => expect(url.get("status")).toBe("ok"));
   expect(await within(table).findByText("Can I return my headphones?")).toBeVisible();
   expect(within(table).queryByText("Where is order #1042?")).not.toBeInTheDocument();
