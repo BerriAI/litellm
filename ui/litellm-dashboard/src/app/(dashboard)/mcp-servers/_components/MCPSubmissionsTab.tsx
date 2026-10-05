@@ -142,9 +142,10 @@ type SubmissionRulesPanelProps = {
   onChange: (fields: string[]) => void;
   onSave: () => Promise<void>;
   isSaving: boolean;
+  disabled: boolean;
 };
 
-function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: SubmissionRulesPanelProps) {
+function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving, disabled }: SubmissionRulesPanelProps) {
   const [expanded, setExpanded] = useState(false);
   const activeLabels = MCP_REQUIRED_FIELD_DEFS.filter((f) => requiredFields.includes(f.key));
 
@@ -215,6 +216,7 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
                           type="checkbox"
                           checked={active}
                           onChange={() => toggle(field.key)}
+                          disabled={disabled}
                           className="mt-0.5 h-4 w-4 rounded-sm border-border text-info focus:ring-ring cursor-pointer"
                         />
                         <div>
@@ -233,7 +235,7 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
           <div className="mt-5 flex items-center gap-3">
             <button
               type="button"
-              disabled={isSaving}
+              disabled={isSaving || disabled}
               onClick={async () => {
                 await onSave();
                 setExpanded(false);
@@ -561,6 +563,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
         onChange={setRequiredFields}
         onSave={handleSaveRules}
         isSaving={isSavingRules}
+        disabled={isLoading}
       />
 
       <div className="grid grid-cols-4 gap-4 mb-6">
