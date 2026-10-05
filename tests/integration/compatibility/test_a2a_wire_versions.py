@@ -410,6 +410,7 @@ def test_a2a_send_forwards_configured_headers_and_minted_identity_but_never_spoo
             f"x-a2a-{marker}-authorization": "Bearer agent-token",
             f"x-a2a-{marker}-x-tenant": "tenant-1",
             f"x-a2a-{marker}-x-litellm-team-id": "spoofed-team",
+            f"x-a2a-{identity}-x-region": "eu-1",
             "x-a2a-other-agent-authorization": "Bearer leak",
             "X-LiteLLM-User-Id": "spoofed-user",
             "X-LiteLLM-Team-Id": "spoofed-team",
@@ -435,12 +436,21 @@ def test_a2a_send_forwards_configured_headers_and_minted_identity_but_never_spoo
                 "authorization": "Bearer server-token",
                 "x-api-key": "client-secret",
                 "x-tenant": "tenant-1",
+                "x-region": "eu-1",
                 "x-litellm-agent-id": identity,
                 "x-litellm-trace-id": forwarded.get("x-litellm-trace-id", "<missing>"),
                 "x-litellm-user-id": user,
                 **({} if team_header is None else {"x-litellm-team-id": team_header}),
             }
             assert forwarded == expected, post.headers
+            body = json.loads(post.body)
+            assert str(uuid.UUID(body["id"])) == body["id"], post.body
+            assert body == {
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "method": "message/send",
+                "params": {"configuration": {"blocking": True}, "message": _MESSAGE_V03},
+            }, post.body
             assert forwarded["x-litellm-trace-id"] != "<missing>", post.headers
             assert all(key not in value and gateway.key not in value for value in post.headers.values()), post.headers
 
@@ -451,14 +461,24 @@ def test_a2a_card_routes_front_the_agent_with_the_proxy_url_and_sdk_clients_call
 ) -> None:
     marker: Final = "a2acard" + uuid.uuid4().hex
 
+    def upstream_card() -> dict[str, JsonValue]:
+        return {
+            **_peer_card(wire.url, marker, version),
+            "supportedInterfaces": [{"url": wire.url + "/", "protocolBinding": "JSONRPC", "protocolVersion": version}],
+        }
+
     def upstream(request: Request) -> Reply:
         if request.method == "GET":
-            return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
-        return _message_reply(json.loads(request.body), "via proxy")
+            return Reply(body=json.dumps(upstream_card()).encode())
+        body: Final = json.loads(request.body)
+        if version == "0.3":
+            return _message_reply(body, "via proxy")
+        message: Final = {"messageId": "peer-message", "role": "ROLE_AGENT", "parts": [{"text": "via proxy"}]}
+        return Reply(body=json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": {"message": message}}).encode())
 
     with wire_server(upstream) as wire, gateway.scenario() as scenario:
         identity: Final = _register_agent(
-            gateway, scenario, {"agent_name": marker, "agent_card_params": _peer_card(wire.url, marker, version)}
+            gateway, scenario, {"agent_name": marker, "agent_card_params": upstream_card()}
         )
         proxy_url: Final = f"{_proxy_base(gateway)}/a2a/{identity}"
         cards: Final = tuple(
@@ -493,7 +513,36 @@ def test_a2a_card_routes_front_the_agent_with_the_proxy_url_and_sdk_clients_call
         posts: Final = tuple(item for item in wire.drain() if item.method == "POST")
         assert len(posts) == 1, posts
         assert posts[0].headers["x-litellm-agent-id"] == identity, posts[0].headers
-        assert json.loads(posts[0].body)["params"]["message"]["parts"] == [{"kind": "text", "text": "ping"}], posts
+        forwarded: Final = json.loads(posts[0].body)
+        assert str(uuid.UUID(forwarded["id"])) == forwarded["id"], posts[0].body
+        assert (
+            forwarded
+            == {
+                "0.3": {
+                    "jsonrpc": "2.0",
+                    "id": forwarded["id"],
+                    "method": "message/send",
+                    "params": {
+                        "configuration": {"blocking": True},
+                        "message": {
+                            "kind": "message",
+                            "messageId": marker + "-in",
+                            "role": "user",
+                            "parts": [{"kind": "text", "text": "ping"}],
+                        },
+                    },
+                },
+                "1.0": {
+                    "jsonrpc": "2.0",
+                    "id": forwarded["id"],
+                    "method": "SendMessage",
+                    "params": {
+                        "configuration": {},
+                        "message": {"messageId": marker + "-in", "role": "ROLE_USER", "parts": [{"text": "ping"}]},
+                    },
+                },
+            }[version]
+        ), posts[0].body
 
 
 def test_a2a_message_send_aliases_and_agent_name_reach_the_same_agent_with_the_same_conversion(
@@ -591,10 +640,14 @@ def test_a2a_task_methods_pass_through_verbatim_and_push_callbacks_are_validated
                 "add the host to `user_url_allowed_hosts` in litellm_settings.",
             ),
         ):
-            rejected = call(
-                "tasks/pushNotificationConfig/set", {"taskId": "t1", "pushNotificationConfig": {"url": callback}}
-            )
-            assert (rejected.status_code, rejected.json()) == (400, {"detail": detail}), rejected.text
+            for params in (
+                {"taskId": "t1", "pushNotificationConfig": {"url": callback}},
+                {"taskId": "t1", "url": callback},
+            ):
+                rejected = call("tasks/pushNotificationConfig/set", params)
+                assert (rejected.status_code, rejected.json()) == (400, {"detail": detail}), (
+                    f"{params}: {rejected.text}"
+                )
         assert tuple(item for item in wire.drain() if item.method == "POST") == ()
 
         public: Final = {"taskId": "t1", "pushNotificationConfig": {"url": "https://1.1.1.1/callback"}}
@@ -613,3 +666,145 @@ def test_a2a_task_methods_pass_through_verbatim_and_push_callbacks_are_validated
         assert tuple(json.loads(item.body)["method"] for item in wire.drain() if item.method == "POST") == (
             "agent/getAuthenticatedExtendedCard",
         )
+
+
+def _v1_card(url: str, name: str) -> dict[str, JsonValue]:
+    return {
+        **_peer_card(url, name, "1.0"),
+        "supportedInterfaces": [{"url": url + "/", "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
+    }
+
+
+def test_a2a_v1_task_methods_and_extended_card_lower_to_0_3_upstream_and_answer_in_1_0(gateway: Gateway) -> None:
+    marker: Final = "a2atask10" + uuid.uuid4().hex
+
+    def upstream(request: Request) -> Reply:
+        if request.method == "GET":
+            return Reply(body=json.dumps(_v1_card(wire.url, marker)).encode())
+        body: Final = json.loads(request.body)
+        results: Final[dict[str, JsonValue]] = {
+            "tasks/get": {"kind": "task", "id": "t1", "contextId": "c1", "status": {"state": "working"}},
+            "tasks/cancel": {"kind": "task", "id": "t1", "contextId": "c1", "status": {"state": "canceled"}},
+            "tasks/pushNotificationConfig/set": {
+                "taskId": "t1",
+                "pushNotificationConfig": {"id": "c1", "url": "https://1.1.1.1/callback"},
+            },
+            "agent/getAuthenticatedExtendedCard": _v1_card(wire.url, marker),
+        }
+        return Reply(body=json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": results[body["method"]]}).encode())
+
+    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+        identity: Final = _register_agent(
+            gateway, scenario, {"agent_name": marker, "agent_card_params": _v1_card(wire.url, marker)}
+        )
+        proxy_url: Final = f"{_proxy_base(gateway)}/a2a/{identity}"
+
+        def call(method: str, params: dict[str, JsonValue]) -> httpx.Response:
+            return gateway.client.post(
+                f"/a2a/{identity}",
+                headers={"Authorization": f"Bearer {gateway.key}", "a2a-version": "1.0"},
+                json={"jsonrpc": "2.0", "id": marker + method, "method": method, "params": params},
+            )
+
+        def forwarded() -> tuple[JsonValue, ...]:
+            return tuple(json.loads(item.body) for item in wire.drain() if item.method == "POST")
+
+        for method, canonical, state, params in (
+            ("GetTask", "tasks/get", "TASK_STATE_WORKING", {"id": "t1", "historyLength": 2}),
+            ("CancelTask", "tasks/cancel", "TASK_STATE_CANCELED", {"id": "t1"}),
+        ):
+            response = call(method, params)
+            assert response.status_code == 200, response.text
+            assert response.json() == {
+                "jsonrpc": "2.0",
+                "id": marker + method,
+                "result": {"id": "t1", "contextId": "c1", "status": {"state": state}},
+            }, response.text
+            assert forwarded() == ({"jsonrpc": "2.0", "id": marker + method, "method": canonical, "params": params},)
+
+        for params in (
+            {"parent": "tasks/t1", "configId": "c1", "config": {"url": "http://169.254.169.254/latest/meta-data/"}},
+            {"taskId": "t1", "url": "http://169.254.169.254/latest/meta-data/"},
+        ):
+            rejected = call("CreateTaskPushNotificationConfig", params)
+            assert (rejected.status_code, rejected.json()) == (
+                400,
+                {"detail": "Push notification URL must use HTTPS"},
+            ), f"{params}: {rejected.text}"
+        assert forwarded() == ()
+
+        accepted: Final = call(
+            "CreateTaskPushNotificationConfig",
+            {"parent": "tasks/t1", "configId": "c1", "config": {"url": "https://1.1.1.1/callback"}},
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert forwarded() == (
+            {
+                "jsonrpc": "2.0",
+                "id": marker + "CreateTaskPushNotificationConfig",
+                "method": "tasks/pushNotificationConfig/set",
+                "params": {"taskId": "t1", "pushNotificationConfig": {"id": "c1", "url": "https://1.1.1.1/callback"}},
+            },
+        )
+
+        extended: Final = call("GetExtendedAgentCard", {})
+        assert extended.status_code == 200, extended.text
+        assert extended.json() == {
+            "jsonrpc": "2.0",
+            "id": marker + "GetExtendedAgentCard",
+            "result": {
+                **_v1_card(wire.url, marker),
+                "url": proxy_url,
+                "supportedInterfaces": [{"url": proxy_url, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}],
+            },
+        }, extended.text
+        assert wire.url not in extended.text, extended.text
+        assert forwarded() == (
+            {
+                "jsonrpc": "2.0",
+                "id": marker + "GetExtendedAgentCard",
+                "method": "agent/getAuthenticatedExtendedCard",
+                "params": {},
+            },
+        )
+
+
+def test_a2a_v1_push_config_envelope_sent_to_a_0_3_agent_has_its_callback_validated_before_forwarding(
+    gateway: Gateway,
+) -> None:
+    pytest.skip(
+        "BUG: CreateTaskPushNotificationConfig {parent, configId, config: {url: http://169.254.169.254/...}} with "
+        "a2a-version 1.0 to an agent pinned to 0.3 returns 200 and forwards the callback unvalidated, because "
+        "validation reads only params.url and pushNotificationConfig.url and 0.3-pinned params are never lowered"
+    )
+    marker: Final = "a2apush03" + uuid.uuid4().hex
+
+    def upstream(request: Request) -> Reply:
+        if request.method == "GET":
+            return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
+        body: Final = json.loads(request.body)
+        return Reply(body=json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": body["params"]}).encode())
+
+    with wire_server(upstream) as wire, gateway.scenario() as scenario:
+        identity: Final = _register_agent(
+            gateway, scenario, {"agent_name": marker, "agent_card_params": _peer_card(wire.url, marker)}
+        )
+        rejected: Final = gateway.client.post(
+            f"/a2a/{identity}",
+            headers={"Authorization": f"Bearer {gateway.key}", "a2a-version": "1.0"},
+            json={
+                "jsonrpc": "2.0",
+                "id": marker,
+                "method": "CreateTaskPushNotificationConfig",
+                "params": {
+                    "parent": "tasks/t1",
+                    "configId": "c1",
+                    "config": {"url": "http://169.254.169.254/latest/meta-data/"},
+                },
+            },
+        )
+        assert (rejected.status_code, rejected.json()) == (
+            400,
+            {"detail": "Push notification URL must use HTTPS"},
+        ), rejected.text
+        assert tuple(item for item in wire.drain() if item.method == "POST") == ()

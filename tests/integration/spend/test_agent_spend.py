@@ -3,6 +3,7 @@ import uuid
 from hashlib import sha256
 from typing import Final
 
+import pytest
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
@@ -24,6 +25,11 @@ class _Activity(BaseModel):
     results: tuple[_ActivityDay, ...]
 
 
+_CALL_TYPES: Final = {"message/send": "asend_message", "message/stream": "asend_message_streaming"}
+_PER_TOKEN: Final[dict[str, JsonValue]] = {"input_cost_per_token": 0.125, "output_cost_per_token": 0.5}
+_PER_TOKEN_COST: Final = 1 * 0.125 + 2 * 0.5
+
+
 def _peer_card(url: str, name: str) -> dict[str, JsonValue]:
     return {
         "protocolVersion": "0.3",
@@ -38,52 +44,61 @@ def _peer_card(url: str, name: str) -> dict[str, JsonValue]:
     }
 
 
-def test_a2a_send_and_stream_bill_cost_per_query_to_the_agent_the_key_and_daily_agent_activity(
-    gateway: Gateway,
+def _upstream_reply(body: dict[str, JsonValue]) -> Reply:
+    if body["method"] == "message/stream":
+        events: Final = (
+            {
+                "kind": "artifact-update",
+                "taskId": "t1",
+                "contextId": "c1",
+                "artifact": {"artifactId": "a1", "parts": [{"kind": "text", "text": "billed"}]},
+            },
+            {
+                "kind": "status-update",
+                "taskId": "t1",
+                "contextId": "c1",
+                "status": {"state": "completed"},
+                "final": True,
+            },
+        )
+        return Reply(
+            content_type="text/event-stream",
+            chunks=tuple(
+                f"data: {json.dumps({'jsonrpc': '2.0', 'id': body['id'], 'result': event})}\n\n".encode()
+                for event in events
+            ),
+        )
+    return Reply(
+        body=json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": body["id"],
+                "result": {
+                    "kind": "message",
+                    "role": "agent",
+                    "messageId": "peer-message",
+                    "parts": [{"kind": "text", "text": "billed"}],
+                },
+            }
+        ).encode()
+    )
+
+
+def _assert_a2a_calls_are_billed(
+    gateway: Gateway, pricing: dict[str, JsonValue], cost: float, methods: tuple[str, ...]
 ) -> None:
     marker: Final = "a2aspend" + uuid.uuid4().hex[:12]
 
     def upstream(request: Request) -> Reply:
         if request.method == "GET":
             return Reply(body=json.dumps(_peer_card(wire.url, marker)).encode())
-        body: Final = json.loads(request.body)
-        if body["method"] == "message/stream":
-            event: Final = {
-                "jsonrpc": "2.0",
-                "id": body["id"],
-                "result": {
-                    "kind": "status-update",
-                    "taskId": "t1",
-                    "contextId": "c1",
-                    "status": {"state": "completed"},
-                    "final": True,
-                },
-            }
-            return Reply(content_type="text/event-stream", chunks=(f"data: {json.dumps(event)}\n\n".encode(),))
-        return Reply(
-            body=json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": body["id"],
-                    "result": {
-                        "kind": "message",
-                        "role": "agent",
-                        "messageId": "peer-message",
-                        "parts": [{"kind": "text", "text": "billed"}],
-                    },
-                }
-            ).encode()
-        )
+        return _upstream_reply(json.loads(request.body))
 
     with wire_server(upstream) as wire, gateway.scenario() as scenario:
         created: Final = gateway.request(
             "POST",
             "/v1/agents",
-            {
-                "agent_name": marker,
-                "agent_card_params": _peer_card(wire.url, marker),
-                "litellm_params": {"cost_per_query": 0.25},
-            },
+            {"agent_name": marker, "agent_card_params": _peer_card(wire.url, marker), "litellm_params": pricing},
         )
         assert created.status_code == 200, created.text
         agent: Final = created.json()["agent_id"]
@@ -102,28 +117,33 @@ def test_a2a_send_and_stream_bill_cost_per_query_to_the_agent_the_key_and_daily_
             "messageId": marker + "-in",
             "parts": [{"kind": "text", "text": "ping"}],
         }
-        sent: Final = gateway.client.post(
-            f"/a2a/{agent}",
-            headers={"Authorization": f"Bearer {key}"},
-            json={"jsonrpc": "2.0", "id": marker + "-send", "method": "message/send", "params": {"message": message}},
-        )
-        assert sent.status_code == 200, sent.text
-        assert sent.json()["result"]["parts"] == [{"kind": "text", "text": "billed"}], sent.text
-        with gateway.client.stream(
-            "POST",
-            f"/a2a/{agent}",
-            headers={"Authorization": f"Bearer {key}", "Accept": "text/event-stream"},
-            json={
+        for method in methods:
+            payload = {"jsonrpc": "2.0", "id": f"{marker}-{method}", "method": method, "params": {"message": message}}
+            if method == "message/send":
+                sent = gateway.client.post(f"/a2a/{agent}", headers={"Authorization": f"Bearer {key}"}, json=payload)
+                assert sent.status_code == 200, sent.text
+                assert sent.json()["result"]["parts"] == [{"kind": "text", "text": "billed"}], sent.text
+                continue
+            with gateway.client.stream(
+                "POST",
+                f"/a2a/{agent}",
+                headers={"Authorization": f"Bearer {key}", "Accept": "text/event-stream"},
+                json=payload,
+            ) as streamed:
+                text = streamed.read().decode()
+                assert streamed.status_code == 200, text
+            assert text.startswith("data: ") and '"state": "completed"' in text, text
+        forwarded: Final = tuple(json.loads(item.body) for item in wire.drain() if item.method == "POST")
+        assert forwarded == tuple(
+            {
                 "jsonrpc": "2.0",
-                "id": marker + "-stream",
-                "method": "message/stream",
-                "params": {"message": message},
-            },
-        ) as streamed:
-            body: Final = streamed.read().decode()
-            assert streamed.status_code == 200, body
-        assert body.startswith("data: ") and '"state": "completed"' in body, body
-        assert len(tuple(item for item in wire.drain() if item.method == "POST")) == 2
+                "id": forwarded[index]["id"] if index < len(forwarded) else "<none>",
+                "method": method,
+                "params": {"configuration": {"blocking": True}, "message": message},
+            }
+            for index, method in enumerate(methods)
+        ), forwarded
+        assert all(str(uuid.UUID(item["id"])) == item["id"] for item in forwarded), forwarded
 
         logs: Final = eventually(
             lambda: read_rows(
@@ -132,35 +152,30 @@ def test_a2a_send_and_stream_bill_cost_per_query_to_the_agent_the_key_and_daily_
                 "WHERE api_key=%s ORDER BY request_id",
                 (digest,),
             ),
-            lambda rows: len(rows) == 2,
+            lambda rows: len(rows) == len(methods),
             seconds=60,
         )
         assert [{name: value for name, value in row.items() if name != "day"} for row in logs] == [
             {
-                "request_id": marker + "-send",
+                "request_id": f"{marker}-{method}",
                 "agent_id": agent,
-                "spend": 0.25,
+                "spend": cost,
                 "api_key": digest,
-                "call_type": "asend_message",
-            },
-            {
-                "request_id": marker + "-stream",
-                "agent_id": agent,
-                "spend": 0.25,
-                "api_key": digest,
-                "call_type": "asend_message_streaming",
-            },
+                "call_type": _CALL_TYPES[method],
+            }
+            for method in sorted(methods)
         ], logs
+        total: Final = cost * len(methods)
         assert eventually(
             lambda: read_rows('SELECT spend FROM "LiteLLM_AgentsTable" WHERE agent_id=%s', (agent,)),
-            lambda rows: rows == [{"spend": 0.5}],
+            lambda rows: rows == [{"spend": total}],
             seconds=60,
-        ) == [{"spend": 0.5}]
+        ) == [{"spend": total}]
         assert eventually(
             lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)),
-            lambda rows: rows == [{"spend": 0.5}],
+            lambda rows: rows == [{"spend": total}],
             seconds=60,
-        ) == [{"spend": 0.5}]
+        ) == [{"spend": total}]
         requests_per_day: Final = {
             day: sum(1 for row in logs if row["day"] == day) for day in sorted({str(row["day"]) for row in logs})
         }
@@ -171,7 +186,7 @@ def test_a2a_send_and_stream_bill_cost_per_query_to_the_agent_the_key_and_daily_
                 "ORDER BY date",
                 (agent,),
             ),
-            lambda rows: sum(int(str(row["api_requests"])) for row in rows) == 2,
+            lambda rows: sum(int(str(row["api_requests"])) for row in rows) == len(methods),
             seconds=90,
         )
         assert daily == [
@@ -179,7 +194,7 @@ def test_a2a_send_and_stream_bill_cost_per_query_to_the_agent_the_key_and_daily_
                 "agent_id": agent,
                 "date": day,
                 "api_key": digest,
-                "spend": 0.25 * count,
+                "spend": cost * count,
                 "api_requests": str(count),
                 "successful_requests": str(count),
             }
@@ -193,10 +208,29 @@ def test_a2a_send_and_stream_bill_cost_per_query_to_the_agent_the_key_and_daily_
         assert activity.status_code == 200, activity.text
         days: Final = _Activity.model_validate_json(activity.content).results
         assert [(day.date, day.metrics) for day in days] == [
-            (day, _ActivityMetrics(spend=0.25 * count, api_requests=count, successful_requests=count))
+            (day, _ActivityMetrics(spend=cost * count, api_requests=count, successful_requests=count))
             for day, count in sorted(requests_per_day.items(), reverse=True)
         ], activity.text
         assert [
             result["breakdown"]["models"][f"a2a_agent/{marker}"]["api_key_breakdown"][digest]["metrics"]["spend"]
             for result in activity.json()["results"]
-        ] == [0.25 * count for _, count in sorted(requests_per_day.items(), reverse=True)], activity.text
+        ] == [cost * count for _, count in sorted(requests_per_day.items(), reverse=True)], activity.text
+
+
+def test_a2a_send_and_stream_bill_cost_per_query_to_the_agent_the_key_and_daily_agent_activity(
+    gateway: Gateway,
+) -> None:
+    _assert_a2a_calls_are_billed(gateway, {"cost_per_query": 0.25}, 0.25, ("message/send", "message/stream"))
+
+
+def test_a2a_send_bills_input_and_output_tokens_at_the_agent_per_token_prices(gateway: Gateway) -> None:
+    _assert_a2a_calls_are_billed(gateway, _PER_TOKEN, _PER_TOKEN_COST, ("message/send",))
+
+
+def test_a2a_stream_bills_input_and_output_tokens_at_the_agent_per_token_prices(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: message/stream to an agent priced with input_cost_per_token/output_cost_per_token logs spend 0.0 "
+        "with prompt_tokens 0 and completion_tokens 0, because A2AStreamingIterator reads text from the request "
+        "Part RootModels without dumping them and ignores artifact-update text, while message/send bills 1.125"
+    )
+    _assert_a2a_calls_are_billed(gateway, _PER_TOKEN, _PER_TOKEN_COST, ("message/stream",))

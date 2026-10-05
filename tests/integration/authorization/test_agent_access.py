@@ -3,7 +3,7 @@ import uuid
 from typing import Final
 
 from integration._support.client import Gateway, Scenario
-from integration._support.database import read_rows
+from integration._support.database import read_rows, write_rows
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -90,6 +90,10 @@ def test_agent_permissions_on_keys_teams_and_access_groups_gate_a2a_send_and_car
             )
 
         scenario.cleanups.callback(delete_group)
+        tag: Final = marker + "-tag"
+        write_rows(
+            'UPDATE "LiteLLM_AgentsTable" SET agent_access_groups = ARRAY[%s] WHERE agent_id = %s', (tag, allowed)
+        )
         callers: Final = {
             "key grant": scenario.key(object_permission={"agents": [allowed]}),
             "team grant": scenario.key(team_id=scenario.team(object_permission={"agents": [allowed]})),
@@ -98,26 +102,18 @@ def test_agent_permissions_on_keys_teams_and_access_groups_gate_a2a_send_and_car
                 object_permission={"agents": [allowed]},
             ),
             "access group": scenario.key(access_group_ids=[group_id]),
+            "declared agent access group": scenario.key(object_permission={"agent_access_groups": [tag]}),
         }
+        message: Final = {
+            "kind": "message",
+            "role": "user",
+            "messageId": marker + "-in",
+            "parts": [{"kind": "text", "text": "ping"}],
+        }
+        payload: Final = {"jsonrpc": "2.0", "id": marker, "method": "message/send", "params": {"message": message}}
 
         def send(key: str, identity: str) -> tuple[int, str]:
-            response = gateway.client.post(
-                f"/a2a/{identity}",
-                headers={"Authorization": f"Bearer {key}"},
-                json={
-                    "jsonrpc": "2.0",
-                    "id": marker,
-                    "method": "message/send",
-                    "params": {
-                        "message": {
-                            "kind": "message",
-                            "role": "user",
-                            "messageId": marker + "-in",
-                            "parts": [{"kind": "text", "text": "ping"}],
-                        }
-                    },
-                },
-            )
+            response = gateway.client.post(f"/a2a/{identity}", headers={"Authorization": f"Bearer {key}"}, json=payload)
             return response.status_code, response.text
 
         def card(key: str, identity: str) -> tuple[int, str]:
@@ -141,7 +137,16 @@ def test_agent_permissions_on_keys_teams_and_access_groups_gate_a2a_send_and_car
             )
             status, text = card(key, allowed)
             assert status == 200 and json.loads(text)["url"].endswith(f"/a2a/{allowed}"), f"{label}: {text}"
-            assert len(tuple(item for item in wire.drain() if item.method == "POST")) == 1, label
+            forwarded = tuple(json.loads(item.body) for item in wire.drain() if item.method == "POST")
+            assert forwarded == (
+                {
+                    "jsonrpc": "2.0",
+                    "id": forwarded[0]["id"] if forwarded else "<none>",
+                    "method": "message/send",
+                    "params": {"configuration": {"blocking": True}, "message": message},
+                },
+            ), label
+            assert forwarded[0]["id"] != marker and str(uuid.UUID(forwarded[0]["id"])) == forwarded[0]["id"], label
 
         emptied: Final = gateway.request("PUT", f"/v1/access_group/{group_id}", {"access_agent_ids": []})
         assert emptied.status_code == 200, emptied.text
