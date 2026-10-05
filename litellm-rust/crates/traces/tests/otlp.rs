@@ -101,11 +101,11 @@ fn span() -> opentelemetry_proto::tonic::trace::v1::Span {
 fn standard_json_and_protobuf_preserve_the_same_identifiers(
     span: opentelemetry_proto::tonic::trace::v1::Span,
 ) {
-    use prost::Message;
     use opentelemetry_proto::tonic::{
         common::v1::{AnyValue, KeyValue, any_value::Value as AnyValueKind},
         trace::v1::span::Event,
     };
+    use prost::Message;
     let span = Span {
         events: vec![Event {
             time_unix_nano: 1_234_567_890,
