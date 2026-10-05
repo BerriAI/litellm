@@ -902,11 +902,7 @@ async def test_transcription_session_captures_usage_and_skips_response_create():
 
 
 @pytest.mark.asyncio
-async def test_non_transcription_completed_event_still_triggers_response_create():
-    """
-    Regression guard: a normal (non-transcription) session with no guardrails must
-    keep triggering response.create on a completed transcription event.
-    """
+async def test_transcription_without_guardrails_does_not_create_response():
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
 
@@ -931,7 +927,58 @@ async def test_non_transcription_completed_event_still_triggers_response_create(
 
     assert streaming._is_transcription_session is False
     sent_to_backend = [json.loads(c.args[0]) for c in backend_ws.send.call_args_list if c.args]
-    assert any(e.get("type") == "response.create" for e in sent_to_backend)
+    assert sent_to_backend == []
+    client_ws.send_text.assert_any_call(completed.decode())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_path", [False, True])
+@pytest.mark.parametrize(
+    "event_hook,expected_responses",
+    [
+        (None, 0),
+        (GuardrailEventHooks.pre_call, 0),
+        (GuardrailEventHooks.post_call, 0),
+        (GuardrailEventHooks.realtime_input_transcription, 1),
+    ],
+)
+async def test_transcription_resumes_only_audio_guardrail_responses(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_path: bool,
+    event_hook: GuardrailEventHooks | None,
+    expected_responses: int,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail(event_hook)] if event_hook else [])
+    event: Final = json.loads(_make_transcript_event("one two three four"))
+    client_ws: Final = MagicMock(send_text=AsyncMock())
+    backend_ws: Final = MagicMock(send=AsyncMock())
+    provider_config: Final = MagicMock()
+    provider_config.transform_realtime_response.return_value = {
+        "response": event,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_delta_chunks": None,
+        "current_conversation_id": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+        "session_configuration_request": None,
+    }
+    provider_config.transform_realtime_request.side_effect = lambda message, model, session: [message]
+    provider_config.is_setup_message.return_value = False
+    provider_config.is_content_message.return_value = False
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, MagicMock(), provider_config=provider_config if provider_path else None
+    )
+
+    if provider_path:
+        await streaming._handle_provider_config_message(json.dumps(event))
+    else:
+        await streaming._handle_raw_backend_message(event, json.dumps(event))
+
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert sent == [{"type": "response.create"}] * expected_responses
+    assert [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list] == [event]
+    assert streaming.input_messages == [{"role": "user", "content": "one two three four"}]
 
 
 def test_client_session_update_marks_transcription_session():
@@ -2864,18 +2911,16 @@ async def test_deferred_setup_clear_drops_appends_when_buffered():
     assert streaming._pending_messages_until_setup == [new_audio]
 
 
-def _transcription_guardrail():
-    """A minimal real CustomGuardrail registered for the realtime transcript hook."""
-    from litellm.integrations.custom_guardrail import CustomGuardrail
-    from litellm.types.guardrails import GuardrailEventHooks
-
+def _transcription_guardrail(
+    event_hook: GuardrailEventHooks = GuardrailEventHooks.realtime_input_transcription,
+) -> CustomGuardrail:
     class _TranscriptionGuardrail(CustomGuardrail):
         async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
             return inputs
 
     return _TranscriptionGuardrail(
         guardrail_name="test_transcription_guard",
-        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        event_hook=event_hook,
         default_on=True,
     )
 
