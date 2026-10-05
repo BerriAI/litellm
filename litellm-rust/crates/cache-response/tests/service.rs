@@ -10,7 +10,7 @@ use litellm_cache::ExactCacheContext;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
     CacheEntry, CacheKeyInput, ResponseCache, ResponseCacheConfig, ResponseCacheRequest,
-    ResponseCacheService,
+    ResponseCacheService, cache_key,
 };
 use rstest::rstest;
 use serde_json::json;
@@ -68,6 +68,22 @@ async fn service_honors_per_call_expiry_and_freshness() {
             .await
             .unwrap(),
         None
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn default_key_resolution_preserves_the_native_cache_key() {
+    let cache: Arc<dyn ResponseCacheService> = Arc::new(ResponseCache::new(Arc::new(
+        InMemoryCache::<CacheEntry>::default(),
+    )));
+    let request = ResponseCacheRequest::new(CacheKeyInput {
+        namespace: Some("namespace".into()),
+        ..Default::default()
+    });
+    assert_eq!(
+        cache.resolve_key(&request).await.unwrap(),
+        cache_key(&request.key)
     );
 }
 
@@ -182,4 +198,88 @@ fn envelopes_require_a_matching_surface_and_version(
     let envelope: litellm_cache_response::ResponseEnvelope<u32> =
         serde_json::from_value(json!({"version":version,"surface":surface,"output":7})).unwrap();
     assert_eq!(envelope.decode("messages"), expected);
+}
+
+#[rstest]
+fn policy_does_not_change_logical_identity() {
+    use litellm_cache_response::{CacheKeyContext, CacheOptions, CachePolicy, CacheScope};
+    let input = CacheKeyInput::from_parameters(json!({"model":"deployment", "input":"hello"}));
+    let baseline = CacheOptions {
+        key_context: CacheKeyContext {
+            model_group: Some("logical".into()),
+            ..Default::default()
+        },
+        ..CacheOptions::new(CacheScope::Shared)
+    };
+    let controlled = CacheOptions {
+        policy: CachePolicy {
+            ttl: Some(Duration::from_secs(9)),
+            max_age: Some(Duration::from_secs(3)),
+            no_cache: true,
+            no_store: true,
+            caching: Some(false),
+        },
+        ..baseline.clone()
+    }
+    .request_with_key("test", "responses", input.clone());
+    let original = baseline.request_with_key("test", "responses", input);
+    assert_eq!(cache_key(&original.key), cache_key(&controlled.key));
+    assert_eq!(controlled.context.ttl, Some(Duration::from_secs(9)));
+    assert_eq!(controlled.max_age, Some(Duration::from_secs(3)));
+    assert!(!controlled.controls.reads());
+    assert!(!controlled.controls.writes());
+}
+
+#[rstest]
+fn preset_keys_keep_isolated_callers_separate() {
+    use litellm_cache_response::{CacheOptions, CacheScope};
+    let input = CacheKeyInput {
+        preset: Some("explicit".into()),
+        ..Default::default()
+    };
+    let first = CacheOptions::new(CacheScope::Isolated("first".into())).request_with_key(
+        "test",
+        "responses",
+        input.clone(),
+    );
+    let second = CacheOptions::new(CacheScope::Isolated("second".into())).request_with_key(
+        "test",
+        "responses",
+        input.clone(),
+    );
+    let shared = CacheOptions::new(CacheScope::Shared).request_with_key("test", "responses", input);
+    assert_ne!(cache_key(&first.key), cache_key(&second.key));
+    assert_eq!(cache_key(&shared.key), "explicit");
+}
+
+#[rstest]
+fn retained_logical_parameters_override_provider_transformation() {
+    use litellm_cache_response::{CacheKeyContext, CacheOptions, CacheScope};
+    let logical = CacheKeyInput::from_parameters(json!({"model":"requested", "max_tokens":32}));
+    let context = CacheKeyContext {
+        model_group: Some("logical-group".into()),
+        ..Default::default()
+    };
+    let expected = CacheOptions {
+        key_context: context.clone(),
+        ..CacheOptions::new(CacheScope::Shared)
+    }
+    .request_with_key("test", "chat_completions", logical.clone());
+    let options = CacheOptions {
+        key_input: Some(logical),
+        key_context: context,
+        ..CacheOptions::new(CacheScope::Shared)
+    };
+    let first = options.clone().request_with_key(
+        "test",
+        "chat_completions",
+        CacheKeyInput::from_parameters(json!({"model":"deployment-a", "max_new_tokens":32})),
+    );
+    let second = options.request_with_key(
+        "test",
+        "chat_completions",
+        CacheKeyInput::from_parameters(json!({"model":"deployment-b", "max_new_tokens":64})),
+    );
+    assert_eq!(cache_key(&first.key), cache_key(&expected.key));
+    assert_eq!(cache_key(&second.key), cache_key(&expected.key));
 }

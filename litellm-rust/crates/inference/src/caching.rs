@@ -8,8 +8,8 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_response::{
-    CacheOptions, CachePolicy, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
-    ScopedCache, cache_key,
+    CacheKeyField, CacheKeyInput, CacheOptions, CachePolicy, ResponseCacheRequest,
+    ResponseCacheService, ResponseEnvelope, ScopedCache,
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
@@ -32,24 +32,89 @@ pub trait Cachable: Protocol<Error = RouteError> {
     }
 }
 
+pub trait CacheKeyProjection {
+    fn cache_key_input(&self) -> Result<CacheKeyInput, RouteError>;
+}
+
+impl CacheKeyProjection for crate::chat_completions::types::ChatCompletionsRequest<'_> {
+    fn cache_key_input(&self) -> Result<CacheKeyInput, RouteError> {
+        Ok(CacheKeyInput::from_parameters(Value::Object(
+            self.optional_params
+                .clone()
+                .into_iter()
+                .chain([
+                    ("model".into(), Value::String(self.model.into())),
+                    ("messages".into(), self.messages.clone()),
+                ])
+                .collect(),
+        )))
+    }
+}
+
+impl CacheKeyProjection for crate::responses::types::ResponsesCall {
+    fn cache_key_input(&self) -> Result<CacheKeyInput, RouteError> {
+        Ok(CacheKeyInput::from_parameters(Value::Object(
+            self.optional_params
+                .clone()
+                .into_iter()
+                .chain([
+                    ("model".into(), Value::String(self.model.clone())),
+                    ("input".into(), self.input.clone()),
+                ])
+                .collect(),
+        )))
+    }
+}
+
+impl CacheKeyProjection for crate::messages::MessagesCall {
+    fn cache_key_input(&self) -> Result<CacheKeyInput, RouteError> {
+        serde_json::to_value(&self.body)
+            .map(CacheKeyInput::from_parameters)
+            .map_err(|error| RouteError::InvalidRequest(error.to_string().into()))
+    }
+}
+
 pub struct CacheRequest {
     pub identity: ProviderIdentity,
-    pub input: Value,
+    pub input: CacheKeyInput,
 }
 
 impl CacheRequest {
-    pub fn from_wire(identity: ProviderIdentity, wire: Option<&WireRequest>) -> Self {
+    pub(crate) fn from_logical(
+        identity: ProviderIdentity,
+        input: CacheKeyInput,
+        original: Option<&WireRequest>,
+        wire: &WireRequest,
+    ) -> Self {
+        let Some(original) = original else {
+            return Self { identity, input };
+        };
+        let transport = serde_json::json!({ "provider": identity.provider, "url": wire.url, "headers": wire.headers });
+        let changes = (original.url != wire.url || original.headers != wire.headers || original.body != wire.body)
+            .then(|| serde_json::json!({ "url": wire.url, "headers": wire.headers, "body": wire.body }));
         Self {
-            input: wire.map_or(Value::Null, |wire| {
-                serde_json::json!({
-                    "provider": identity.provider,
-                    "model": identity.model,
-                    "url": wire.url,
-                    "headers": wire.headers,
-                    "body": wire.body,
-                })
-            }),
             identity,
+            input: CacheKeyInput {
+                fields: input
+                    .fields
+                    .into_iter()
+                    .chain([
+                        CacheKeyField {
+                            name: "transport".into(),
+                            value: Some(transport.to_string()),
+                            api_parameter: true,
+                            internal_parameter: true,
+                        },
+                        CacheKeyField {
+                            name: "wire_changes".into(),
+                            value: changes.map(|value| value.to_string()),
+                            api_parameter: true,
+                            internal_parameter: true,
+                        },
+                    ])
+                    .collect(),
+                ..input
+            },
         }
     }
 }
@@ -71,10 +136,11 @@ pub enum CachedOutput<R> {
 struct CacheSession {
     service: Arc<dyn ResponseCacheService>,
     request: ResponseCacheRequest,
+    key: String,
 }
 
 impl CacheSession {
-    fn prepare<P: Cachable>(
+    async fn prepare<P: Cachable>(
         service: Option<Arc<dyn ResponseCacheService>>,
         options: Option<CacheOptions>,
         request: &CacheRequest,
@@ -82,8 +148,41 @@ impl CacheSession {
         let options = options.filter(|options| options.policy.enabled())?;
         let service = service?;
         let input = request.input.clone();
-        let request = options.request(&service.config().namespace, P::SURFACE, input);
-        Some(Self { service, request })
+        let request = options.request_with_key(&service.config().namespace, P::SURFACE, input);
+        Self::resolve(service, request).await
+    }
+
+    async fn resolve(
+        service: Arc<dyn ResponseCacheService>,
+        request: ResponseCacheRequest,
+    ) -> Option<Self> {
+        let key = match service.resolve_key(&request).await {
+            Ok(key) => key,
+            Err(_) => {
+                tracing::warn!("response cache lookup failed");
+                return None;
+            }
+        };
+        let ResponseCacheRequest {
+            key: input,
+            controls,
+            context,
+            max_age,
+        } = request;
+        let request = ResponseCacheRequest {
+            key: CacheKeyInput {
+                preset: Some(key.clone()),
+                ..input
+            },
+            controls,
+            context,
+            max_age,
+        };
+        Some(Self {
+            service,
+            request,
+            key,
+        })
     }
 
     async fn lookup<P: Cachable>(&self) -> Option<CachedOutput<P::Response>>
@@ -155,10 +254,10 @@ where
 {
     let identity = request.identity.clone();
     crate::diagnostic::provider(&identity.model, &identity.provider);
-    let session = CacheSession::prepare::<P>(cache, options, &request);
+    let session = CacheSession::prepare::<P>(cache, options, &request).await;
     let hit = match &session {
         Some(session) => session.lookup::<P>().await.and_then(|entry| match entry {
-            CachedOutput::Response(response) => Some((response, cache_key(&session.request.key))),
+            CachedOutput::Response(response) => Some((response, session.key.clone())),
             CachedOutput::Stream(_) => None,
         }),
         None => None,
@@ -199,7 +298,7 @@ where
 {
     let identity = request.identity.clone();
     crate::diagnostic::provider(&identity.model, &identity.provider);
-    let session = CacheSession::prepare::<P>(cache, options, &request);
+    let session = CacheSession::prepare::<P>(cache, options, &request).await;
     let cache = CallCache::<P> {
         session,
         protocol: PhantomData,
@@ -227,27 +326,20 @@ pub struct CallCache<P> {
 }
 
 impl<P: StreamCachable> CallCache<P> {
-    pub fn from_wire(
+    pub(crate) async fn prepare(
         cache: Option<&ScopedCache>,
         policy: CachePolicy,
-        identity: &ProviderIdentity,
-        wire: &WireRequest,
+        input: CacheKeyInput,
     ) -> Self {
-        let session = cache.and_then(|cache| {
-            if !policy.enabled() {
-                return None;
+        let session = match cache.filter(|_| policy.enabled()) {
+            Some(cache) => {
+                let options = cache.options(Some(policy));
+                let request =
+                    options.request_with_key(&cache.service.config().namespace, P::SURFACE, input);
+                CacheSession::resolve(cache.service.clone(), request).await
             }
-            let options = cache.options(Some(policy));
-            let request = CacheRequest::from_wire(identity.clone(), Some(wire));
-            Some(CacheSession {
-                request: options.request(
-                    &cache.service.config().namespace,
-                    P::SURFACE,
-                    request.input,
-                ),
-                service: cache.service.clone(),
-            })
-        });
+            None => None,
+        };
         Self {
             session,
             protocol: PhantomData,
@@ -266,7 +358,7 @@ impl<P: StreamCachable> CallCache<P> {
         Some((
             output,
             ResultSource::Cache {
-                key: cache_key(&session.request.key),
+                key: session.key.clone(),
             },
         ))
     }

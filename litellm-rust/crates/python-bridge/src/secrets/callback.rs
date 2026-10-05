@@ -251,7 +251,9 @@ class Logger:
 logging = types.ModuleType('litellm._logging')
 logging.verbose_logger = Logger()
 sys.modules.setdefault('litellm', types.ModuleType('litellm'))
-sys.modules.setdefault('litellm._logging', logging)
+module = sys.modules.get('litellm._logging')
+if module is None or not hasattr(module.verbose_logger, 'calls'):
+    sys.modules['litellm._logging'] = logging
 ",
             None,
             None,

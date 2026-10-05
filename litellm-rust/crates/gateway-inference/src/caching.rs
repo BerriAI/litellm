@@ -45,14 +45,14 @@ pub(crate) fn prepare(
             ttl: controls.ttl.map(duration).transpose()?,
             max_age: controls.max_age.map(duration).transpose()?,
         },
-        scope: CacheScope::Isolated(
+        ..CacheOptions::new(CacheScope::Isolated(
             serde_json::json!([
                 caller.principal().authority(),
                 caller.principal().subject(),
                 caller.authentication().credential_id
             ])
             .to_string(),
-        ),
+        ))
     };
     Ok((
         body.into_iter()

@@ -14,33 +14,34 @@ use super::{
 pub(super) async fn execute(
     http: &litellm_http::Client,
     auth: &litellm_auth::AuthServices,
-    request: ProviderResponsesRequest,
+    request: (
+        ProviderResponsesRequest,
+        litellm_cache_response::CacheKeyInput,
+    ),
     cache: Option<litellm_cache_response::ScopedCache>,
     cache_options: Option<litellm_cache_response::CachePolicy>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<ResponsesOutput, Error> {
+    let (request, cache_input) = request;
     let authenticated = resolve_auth(auth, request.environment, &|_| None).await?;
     let identity = litellm_host::interceptors::ProviderIdentity {
         model: request.context.model.clone(),
         provider: request.context.custom_llm_provider.clone(),
     };
-    let wire = interceptors
-        .before_provider_request(
-            WireRequest {
-                url: request.url,
-                headers: authenticated.headers,
-                body: request.body,
-            },
-            request.context,
-        )
-        .await?;
     let cache = cache.filter(|_| authenticated.signer.is_none());
-    let cache_request = litellm_inference::caching::CacheRequest::from_wire(
-        identity,
-        cache.as_ref().map(|_| &wire),
-    );
-    litellm_inference::caching::execute_streaming::<super::route::Responses, _, _>(
+    let outbound = WireRequest {
+        url: request.url,
+        headers: authenticated.headers,
+        body: request.body,
+    };
+    let original = cache.as_ref().map(|_| outbound.clone());
+    let wire = interceptors
+        .before_provider_request(outbound, request.context)
+        .await?;
+    let cache_request =
+        crate::caching::CacheRequest::from_logical(identity, cache_input, original.as_ref(), &wire);
+    crate::caching::execute_streaming::<super::route::Responses, _, _>(
         cache_request,
         cache.as_ref().map(|cache| cache.service.clone()),
         cache.as_ref().map(|cache| cache.options(cache_options)),

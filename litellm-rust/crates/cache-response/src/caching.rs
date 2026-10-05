@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -30,7 +30,48 @@ pub struct CacheKeyInput {
     pub include_provider_parameters: bool,
 }
 
-#[derive(Default)]
+impl CacheKeyInput {
+    pub fn from_parameters(parameters: Value) -> Self {
+        let fields = match canonical(parameters) {
+            Value::Object(fields) => fields
+                .into_iter()
+                .map(|(name, value)| CacheKeyField {
+                    name,
+                    value: (!value.is_null()).then(|| value.to_string()),
+                    api_parameter: true,
+                    internal_parameter: false,
+                })
+                .collect(),
+            value => vec![CacheKeyField {
+                name: "request".into(),
+                value: Some(value.to_string()),
+                api_parameter: true,
+                internal_parameter: false,
+            }],
+        };
+        Self {
+            fields,
+            ..Self::default()
+        }
+    }
+}
+
+fn canonical(value: Value) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .map(|(name, value)| (name, canonical(value)))
+                .collect::<BTreeMap<_, _>>()
+                .into_iter()
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.into_iter().map(canonical).collect()),
+        value => value,
+    }
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct CacheKeyContext {
     pub model_group: Option<String>,
     pub caching_groups: Vec<(Vec<String>, String)>,
@@ -41,30 +82,47 @@ pub struct CacheKeyContext {
 }
 
 impl CacheKeyContext {
-    pub fn apply(self, input: &mut CacheKeyInput) {
-        let group = self.model_group.as_ref().and_then(|model| {
-            self.caching_groups
-                .iter()
-                .find(|(models, _)| models.contains(model))
-        });
-        for field in &mut input.fields {
-            match field.name.as_str() {
-                "model" => {
-                    field.value = group
-                        .map(|(_, formatted)| formatted.clone())
-                        .or_else(|| self.model_group.clone())
-                        .or_else(|| field.value.take())
-                }
-                "file" => {
-                    field.value = self
-                        .file_checksum
-                        .clone()
-                        .or_else(|| self.file_object_name.clone())
-                        .or_else(|| self.metadata_file_name.clone())
-                        .or_else(|| self.parameters_file_name.clone())
-                }
-                _ => {}
-            }
+    pub fn apply(&self, input: &mut CacheKeyInput) {
+        *input = self.project(input.clone());
+    }
+
+    pub fn project(&self, input: CacheKeyInput) -> CacheKeyInput {
+        let group = self
+            .model_group
+            .as_ref()
+            .filter(|value| !value.is_empty())
+            .and_then(|model| {
+                self.caching_groups
+                    .iter()
+                    .find(|(models, _)| models.contains(model))
+            });
+
+        CacheKeyInput {
+            fields: input
+                .fields
+                .into_iter()
+                .map(|field| {
+                    let value = match field.name.as_str() {
+                        "model" => group
+                            .map(|(_, formatted)| formatted.clone())
+                            .or_else(|| self.model_group.clone().filter(|value| !value.is_empty()))
+                            .or(field.value),
+                        "file" => [
+                            &self.file_checksum,
+                            &self.file_object_name,
+                            &self.metadata_file_name,
+                            &self.parameters_file_name,
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .find(|value| !value.is_empty())
+                        .cloned(),
+                        _ => field.value,
+                    };
+                    CacheKeyField { value, ..field }
+                })
+                .collect(),
+            ..input
         }
     }
 }

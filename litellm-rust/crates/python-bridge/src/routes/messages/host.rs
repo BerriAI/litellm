@@ -1,4 +1,4 @@
-use crate::cache::{CacheCall, Cached, PythonCache, Selection};
+use crate::cache::{CacheCall, PythonCache, PythonCacheConfig, PythonCached};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
@@ -227,17 +227,21 @@ impl MessagesPythonHost {
 }
 
 impl PythonBinding for MessagesPythonHost {
-    type Protocol = Cached<Messages>;
+    type Protocol = PythonCached<Messages>;
     type Failure = PyErr;
 
     fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<(MessagesCall, Selection), InvokeError<Error>> {
-        let selection =
-            crate::cache::configure(&mut self.cache, py, arguments, "anthropic_messages")
-                .map_err(InvokeError::Python)?;
+    ) -> Result<(MessagesCall, Option<PythonCacheConfig>), InvokeError<Error>> {
+        let selection = crate::cache::configure_python_cache::<Messages>(
+            &mut self.cache,
+            py,
+            arguments,
+            "anthropic_messages",
+        )
+        .map_err(InvokeError::Python)?;
         self.projection(py, arguments)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
             .map_err(InvokeError::Native)
@@ -284,7 +288,7 @@ impl PythonBinding for MessagesPythonHost {
     }
 }
 
-impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
+impl PythonHostCalls<PythonCached<Messages>> for MessagesPythonHost {
     fn handle_host_call(
         &mut self,
         py: Python<'_>,

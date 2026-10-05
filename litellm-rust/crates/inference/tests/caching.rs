@@ -12,7 +12,14 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheOptions, CachePolicy, CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService,
+    CacheKeyContext, CacheKeyInput, CacheOptions, CachePolicy, CacheScope, ResponseCache,
+    ResponseCacheConfig, ResponseCacheService, ResponseEnvelope,
+};
+use litellm_core::{
+    RouteError,
+    caching::{Cachable, CacheRequest, StreamCachable, execute_streaming, execute_unary},
+    messages::route::Messages,
+    responses::route::Responses,
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
@@ -52,7 +59,7 @@ impl StreamCachable for TestRoute {
     fn replay(data: Bytes) -> Option<OutputOf<Self>> {
         Some(CallOutput::Stream {
             head: (),
-            chunks: stream::iter([Ok(data)]).boxed(),
+            chunks: stream::iter(litellm_framer::sse::RawBlocks::new(data).map(Ok)).boxed(),
         })
     }
     fn bytes(chunk: &Bytes) -> &[u8] {
@@ -66,7 +73,7 @@ fn cache_request(input: Value) -> CacheRequest {
             model: "test-model".into(),
             provider: "test-provider".into(),
         },
-        input,
+        input: CacheKeyInput::from_parameters(input),
     }
 }
 
@@ -227,6 +234,138 @@ async fn consume(output: OutputOf<TestRoute>) -> Result<Vec<u8>, RouteError> {
         .await
 }
 
+async fn collect_stream_chunks(output: OutputOf<TestRoute>) -> Vec<Bytes> {
+    let CallOutput::Stream { chunks, .. } = output else {
+        panic!("expected a stream");
+    };
+    chunks.try_collect().await.unwrap()
+}
+
+#[rstest]
+#[tokio::test]
+async fn messages_and_responses_replay_one_chunk_per_sse_event() {
+    let data = Bytes::from_static(
+        b"data: {\"type\":\"content_block_delta\",\"text\":\"hello\"}\n\ndata: {\"type\":\"message_stop\"}\n\n",
+    );
+    let expected = vec![
+        Bytes::from_static(b"data: {\"type\":\"content_block_delta\",\"text\":\"hello\"}\n\n"),
+        Bytes::from_static(b"data: {\"type\":\"message_stop\"}\n\n"),
+    ];
+
+    let CallOutput::Stream {
+        chunks: messages_chunks,
+        ..
+    } = <Messages as StreamCachable>::replay(data.clone()).unwrap()
+    else {
+        panic!("expected a Messages stream");
+    };
+    assert_eq!(
+        messages_chunks.try_collect::<Vec<_>>().await.unwrap(),
+        expected
+    );
+
+    let CallOutput::Stream {
+        chunks: responses_chunks,
+        ..
+    } = <Responses as StreamCachable>::replay(data).unwrap()
+    else {
+        panic!("expected a Responses stream");
+    };
+    assert_eq!(
+        responses_chunks.try_collect::<Vec<_>>().await.unwrap(),
+        expected
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn cached_stream_replay_yields_one_chunk_per_event(cache: Arc<dyn ResponseCacheService>) {
+    let calls = AtomicUsize::new(0);
+    let first = b"data: {\"type\":\"content_block_delta\",\"text\":\"hello\"}\n\n";
+    let terminal = b"data: {\"type\":\"message_stop\"}\n\n";
+    let text = [first.as_slice(), terminal.as_slice()].concat();
+    let text = std::str::from_utf8(&text).unwrap();
+
+    assert_eq!(
+        consume(streamed(&cache, &calls, text, false).await)
+            .await
+            .unwrap(),
+        text.as_bytes()
+    );
+    assert_eq!(
+        collect_stream_chunks(streamed(&cache, &calls, text, false).await).await,
+        vec![Bytes::from_static(first), Bytes::from_static(terminal)]
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn cached_stream_replay_preserves_utf8_split_across_provider_chunks(
+    cache: Arc<dyn ResponseCacheService>,
+) {
+    let calls = AtomicUsize::new(0);
+    let first = "data: {\"type\":\"content_block_delta\",\"text\":\"é🙂\"}\n\n".as_bytes();
+    let terminal = b"data: {\"type\":\"message_stop\"}\n\n";
+    let text = [first, terminal].concat();
+    let text = std::str::from_utf8(&text).unwrap();
+
+    assert_eq!(
+        consume(streamed(&cache, &calls, text, false).await)
+            .await
+            .unwrap(),
+        text.as_bytes()
+    );
+    let chunks = collect_stream_chunks(streamed(&cache, &calls, text, false).await).await;
+    assert_eq!(
+        chunks,
+        vec![Bytes::copy_from_slice(first), Bytes::from_static(terminal)]
+    );
+    assert_eq!(
+        chunks
+            .iter()
+            .flat_map(|chunk| chunk.iter())
+            .copied()
+            .collect::<Vec<_>>(),
+        text.as_bytes()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn dropping_cached_replay_after_first_event_polls_no_more_chunks(
+    cache: Arc<dyn ResponseCacheService>,
+) {
+    let calls = AtomicUsize::new(0);
+    let first = b"data: {\"type\":\"content_block_delta\",\"text\":\"first\"}\n\n";
+    let terminal = b"data: {\"type\":\"message_stop\"}\n\n";
+    let text = [first.as_slice(), terminal.as_slice()].concat();
+    let text = std::str::from_utf8(&text).unwrap();
+    let _stored = consume(streamed(&cache, &calls, text, false).await)
+        .await
+        .unwrap();
+    let CallOutput::Stream { chunks, .. } = streamed(&cache, &calls, text, false).await else {
+        panic!("expected a stream");
+    };
+    let polled = Arc::new(AtomicUsize::new(0));
+    let count = polled.clone();
+    let mut chunks = chunks
+        .map(move |chunk| {
+            count.fetch_add(1, Ordering::SeqCst);
+            chunk
+        })
+        .boxed();
+
+    assert_eq!(
+        chunks.next().await.unwrap().unwrap(),
+        Bytes::from_static(first)
+    );
+    drop(chunks);
+    assert_eq!(polled.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
 #[rstest]
 #[case::complete("data: {\"type\":\"message_stop\"}\n\n", false, true)]
 #[case::truncated("data: {\"type\":\"content_block_delta\"}\n\n", false, false)]
@@ -372,6 +511,70 @@ impl ResponseCacheService for InvalidEntryCache {
     }
 }
 
+struct ResolveFailureCache {
+    config: ResponseCacheConfig,
+    lookups: AtomicUsize,
+    stores: AtomicUsize,
+}
+
+impl ResponseCacheService for ResolveFailureCache {
+    fn config(&self) -> &ResponseCacheConfig {
+        &self.config
+    }
+
+    fn resolve_key<'a>(
+        &'a self,
+        _: &'a litellm_cache_response::ResponseCacheRequest,
+    ) -> futures_util::future::BoxFuture<'a, Result<String, litellm_cache::Error>> {
+        Box::pin(async { Err(litellm_cache::Error::Unavailable) })
+    }
+
+    fn lookup<'a>(
+        &'a self,
+        _: &'a litellm_cache_response::ResponseCacheRequest,
+        _: Duration,
+    ) -> futures_util::future::BoxFuture<'a, Result<Option<Value>, litellm_cache::Error>> {
+        self.lookups.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(None) })
+    }
+
+    fn store<'a>(
+        &'a self,
+        _: &'a litellm_cache_response::ResponseCacheRequest,
+        _: Value,
+        _: Duration,
+    ) -> futures_util::future::BoxFuture<'a, Result<(), litellm_cache::Error>> {
+        self.stores.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn key_resolution_failure_skips_cache_and_runs_provider() {
+    let cache = Arc::new(ResolveFailureCache {
+        config: ResponseCacheConfig {
+            namespace: "test".into(),
+            max_entry_bytes: 4096,
+        },
+        lookups: AtomicUsize::new(0),
+        stores: AtomicUsize::new(0),
+    });
+    let service: Arc<dyn ResponseCacheService> = cache.clone();
+    let calls = AtomicUsize::new(0);
+    let response = call(
+        &service,
+        Some(CacheOptions::new(CacheScope::Shared)),
+        &calls,
+        json!({}),
+    )
+    .await;
+    assert_eq!(response["call"], json!(0));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(cache.lookups.load(Ordering::SeqCst), 0);
+    assert_eq!(cache.stores.load(Ordering::SeqCst), 0);
+}
+
 #[rstest]
 #[case::legacy(json!({"unexpected":"old-format"}))]
 #[case::wrong_version(json!({"version":2,"surface":"test","output":{"kind":"Response","value":{"call":100}}}))]
@@ -400,6 +603,104 @@ async fn an_invalid_cached_envelope_is_replaced_by_a_provider_result(#[case] poi
     .await;
     assert_eq!(first, second);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[rstest]
+#[case::chat_completion(json!({"kind":"Response","value":{"id":"chat-1","model":"test","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2}}}))]
+#[case::wrong_envelope(json!({"kind":"Stream","value":"data: [DONE]\n\n"}))]
+#[tokio::test]
+async fn responses_refetches_instead_of_deserializing_another_api_response(
+    #[case] poisoned: Value,
+) {
+    use litellm_core::responses::route::Responses;
+    use litellm_llms_types::formats::responses::ResponsesApiResponse;
+
+    let cache: Arc<dyn ResponseCacheService> = Arc::new(InvalidEntryCache(
+        ResponseCache::new(Arc::new(InMemoryCache::default())),
+        serde_json::to_value(ResponseEnvelope::new("responses", poisoned)).unwrap(),
+    ));
+    let calls = AtomicUsize::new(0);
+    for _ in 0..2 {
+        let response = execute_unary::<Responses, _, _>(
+            cache_request(json!({"input":"hello"})),
+            Some(cache.clone()),
+            Some(CacheOptions::new(CacheScope::Shared)),
+            &(),
+            None,
+            || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(ResponsesApiResponse {
+                    id: "fresh-response".into(),
+                    model: "test".into(),
+                    output: vec![
+                        json!({"type":"message","content":[{"type":"output_text","text":"fresh"}]}),
+                    ],
+                    extra: [("status".into(), json!("completed"))]
+                        .into_iter()
+                        .collect(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.id, "fresh-response");
+        assert_eq!(response.output[0]["content"][0]["text"], "fresh");
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[rstest]
+#[case::system("system", json!("answer ALPHA"), json!("answer BETA"))]
+#[case::stop_sequences("stop_sequences", json!(["STOP"]), json!(["END"]))]
+#[case::top_k("top_k", json!(5), json!(10))]
+#[case::tools("tools", json!([{"name":"a","input_schema":{"type":"object"}}]), json!([{"name":"b","input_schema":{"type":"object"}}]))]
+#[case::tool_choice("tool_choice", json!({"type":"auto"}), json!({"type":"none"}))]
+#[tokio::test]
+async fn messages_cache_identity_includes_provider_native_parameters(
+    cache: Arc<dyn ResponseCacheService>,
+    #[case] field: &str,
+    #[case] original: Value,
+    #[case] changed: Value,
+) {
+    use litellm_core::messages::route::Messages;
+    use litellm_llms_types::formats::messages::MessagesResponse;
+
+    let calls = AtomicUsize::new(0);
+    for (value, expected_call) in [(original.clone(), 0), (changed, 1), (original, 0)] {
+        let response =
+            execute_unary::<Messages, _, _>(
+                CacheRequest {
+                    identity: ProviderIdentity {
+                        model: "test".into(),
+                        provider: "anthropic".into(),
+                    },
+                    input: CacheKeyInput::from_parameters(json!({
+                        "model":"test", "messages":[{"role":"user","content":"hello"}],
+                        "max_tokens":32, (field):value
+                    })),
+                },
+                Some(cache.clone()),
+                Some(CacheOptions::new(CacheScope::Shared)),
+                &(),
+                None,
+                || async {
+                    let call = calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(Box::new(serde_json::from_value::<MessagesResponse>(json!({
+                    "id":call.to_string(), "type":"message", "role":"assistant", "model":"test",
+                    "content":[{"type":"text","text":format!("answer {call}")}],
+                    "stop_reason":"end_turn", "stop_sequence":null
+                })).unwrap()))
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.id, expected_call.to_string());
+        assert_eq!(
+            response.content[0]["text"],
+            format!("answer {expected_call}")
+        );
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
 struct UnavailableCache;
@@ -728,4 +1029,433 @@ async fn namespaces_and_surfaces_isolate_entries_on_shared_storage() {
         different_surface
     );
     assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+
+#[rstest]
+#[case::completed("completed", 1)]
+#[case::incomplete("incomplete", 2)]
+#[tokio::test]
+async fn responses_cache_only_reuses_completed_responses(
+    cache: Arc<dyn ResponseCacheService>,
+    #[case] status: &str,
+    #[case] expected_calls: usize,
+) {
+    use litellm_core::responses::route::Responses;
+    use litellm_llms_types::formats::responses::ResponsesApiResponse;
+
+    let calls = AtomicUsize::new(0);
+    for _ in 0..2 {
+        let response = execute_unary::<Responses, _, _>(
+            cache_request(json!({"input":"hello"})),
+            Some(cache.clone()),
+            Some(CacheOptions::new(CacheScope::Shared)),
+            &(),
+            None,
+            || async {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                Ok(ResponsesApiResponse {
+                    id: call.to_string(),
+                    model: "test".into(),
+                    output: Vec::new(),
+                    extra: [("status".into(), json!(status))].into_iter().collect(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.extra.get("status"), Some(&json!(status)));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), expected_calls);
+}
+
+mod support;
+use support::traces;
+
+#[rstest]
+#[case::without_cache(false)]
+#[case::with_cache(true)]
+#[tokio::test]
+async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
+    cache: Arc<dyn ResponseCacheService>,
+    #[case] caching: bool,
+    traces: support::TraceCapture,
+) {
+    use litellm_cache_response::ScopedCache;
+    use litellm_core::chat_completions::types::ChatCompletionsRequest;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+    let upstream = MockServer::start().await;
+    let body = json!({"id":"msg-test","type":"message","role":"assistant","model":"cache-test-model",
+        "content":[{"type":"text","text":"cached answer"}],"stop_reason":"end_turn",
+        "stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}});
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .expect(if caching { 1 } else { 2 })
+        .mount(&upstream)
+        .await;
+    let route = support::chat_completions_route();
+    let route = if caching {
+        route.with_cache(ScopedCache::new(cache, CacheScope::Shared))
+    } else {
+        route
+    };
+    let (observer, mut events) = observation_channel(NonZeroUsize::new(16).unwrap());
+    let base = upstream.uri();
+    for _ in 0..2 {
+        let response = traces
+            .logger()
+            .instrument(route.execute(
+                ChatCompletionsRequest {
+                    model: "anthropic/cache-test-model",
+                    messages: json!([{"role":"user","content":"hello"}]),
+                    optional_params: [("max_tokens".into(), json!(16))].into_iter().collect(),
+                    api_key: Some("test-key"),
+                    api_base: Some(&base),
+                    custom_llm_provider: None,
+                    extra_headers: None,
+                    timeout: None,
+                },
+                &(),
+                Some(observer.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(response).unwrap()["usage"]["total_tokens"],
+            15
+        );
+    }
+    let facts: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            CallEvent::Execution(ExecutionEvent::ResultReady { facts }) => Some(facts),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(facts.len(), 2);
+    assert_eq!(
+        facts[0].provider,
+        ProviderIdentity {
+            model: "cache-test-model".into(),
+            provider: "anthropic".into()
+        }
+    );
+    assert_eq!(facts[1].provider, facts[0].provider);
+    assert_eq!(facts[0].source, ResultSource::Provider);
+    match &facts[1].source {
+        ResultSource::Provider => assert!(!caching),
+        ResultSource::Cache { key } => {
+            assert!(caching);
+            assert!(!key.is_empty());
+        }
+    }
+    let summaries = traces.summaries("litellm.route");
+    assert_eq!(summaries.len(), 2);
+    for summary in summaries {
+        assert_eq!(summary["provider"], "anthropic");
+        assert_eq!(summary["resolved_model"], "cache-test-model");
+        assert_eq!(summary["outcome"], "success");
+    }
+    upstream.verify().await;
+}
+
+struct ChangingSecrets {
+    revision: AtomicUsize,
+    endpoints: [String; 2],
+    change_credentials: bool,
+}
+
+impl litellm_secrets::source::SecretSource for ChangingSecrets {
+    fn get_secret_str<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> futures_util::future::BoxFuture<
+        'a,
+        Result<Option<litellm_secrets::SecretValue>, litellm_secrets::Error>,
+    > {
+        Box::pin(async move {
+            let revision = self.revision.load(Ordering::SeqCst);
+            let value = if name.ends_with("_API_KEY") {
+                Some(format!(
+                    "key-{}",
+                    if self.change_credentials { revision } else { 0 }
+                ))
+            } else if name.ends_with("_API_BASE") {
+                Some(self.endpoints[revision].clone())
+            } else {
+                None
+            };
+            Ok(value.map(litellm_secrets::SecretValue::new))
+        })
+    }
+}
+
+#[derive(Default)]
+struct ChangingHooks {
+    calls: AtomicUsize,
+    rewrite: bool,
+    facts: std::sync::Mutex<Vec<ExecutionFacts>>,
+}
+
+impl Interceptors<RouteError> for ChangingHooks {
+    async fn before_provider_request(
+        &self,
+        mut wire: WireRequest,
+        _: RequestContext,
+    ) -> Result<WireRequest, RouteError> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.rewrite {
+            wire.body["temperature"] = json!(if call < 2 { 0.1 } else { 0.8 });
+        }
+        Ok(wire)
+    }
+
+    async fn after_provider_response(&self, _: RawResponse) -> Result<(), RouteError> {
+        Ok(())
+    }
+
+    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), RouteError> {
+        self.facts.lock().unwrap().push(facts);
+        Ok(())
+    }
+}
+
+#[rstest]
+#[case::chat_model_group("chat", "model_group")]
+#[case::messages_model_group("messages", "model_group")]
+#[case::responses_model_group("responses", "model_group")]
+#[case::chat_credentials("chat", "credentials")]
+#[case::chat_endpoint("chat", "endpoint")]
+#[case::chat_callback("chat", "callback")]
+#[case::messages_credentials("messages", "credentials")]
+#[case::messages_endpoint("messages", "endpoint")]
+#[case::messages_callback("messages", "callback")]
+#[case::responses_credentials("responses", "credentials")]
+#[case::responses_endpoint("responses", "endpoint")]
+#[case::responses_callback("responses", "callback")]
+#[tokio::test]
+async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
+    cache: Arc<dyn ResponseCacheService>,
+    #[case] surface: &str,
+    #[case] change: &str,
+) {
+    use litellm_cache_response::ScopedCache;
+    use litellm_core::{
+        chat_completions::{ChatCompletionsRoute, types::ChatCompletionsRequest},
+        messages::MessagesCall,
+        responses::types::ResponsesCall,
+    };
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+    let first = MockServer::start().await;
+    let second = MockServer::start().await;
+    let response = if surface == "responses" {
+        json!({"id":"response-test", "model":"test", "output":[], "status":"completed"})
+    } else {
+        json!({"id":"message-test", "type":"message", "role":"assistant", "model":"test",
+            "content":[{"type":"text", "text":"answer"}], "stop_reason":"end_turn", "stop_sequence":null,
+            "usage":{"input_tokens":3,"output_tokens":2}})
+    };
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response.clone()))
+        .expect(if matches!(change, "endpoint" | "model_group") {
+            1
+        } else {
+            2
+        })
+        .mount(&first)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(response))
+        .expect(if change == "endpoint" { 1 } else { 0 })
+        .mount(&second)
+        .await;
+    let secrets = Arc::new(ChangingSecrets {
+        revision: AtomicUsize::new(0),
+        endpoints: [
+            first.uri(),
+            if change == "endpoint" {
+                second.uri()
+            } else {
+                first.uri()
+            },
+        ],
+        change_credentials: change == "credentials",
+    });
+    let hooks = ChangingHooks {
+        rewrite: change == "callback",
+        ..Default::default()
+    };
+    for call in 0..4 {
+        secrets
+            .revision
+            .store(usize::from(call >= 2), Ordering::SeqCst);
+        let cache = ScopedCache {
+            key_context: CacheKeyContext {
+                model_group: (change == "model_group").then(|| "logical-group".into()),
+                ..Default::default()
+            },
+            ..ScopedCache::new(cache.clone(), CacheScope::Shared)
+        };
+        let model = if change == "model_group" && call >= 2 {
+            "cache-alternate-model"
+        } else {
+            "cache-test-model"
+        };
+        match surface {
+            "chat" => {
+                ChatCompletionsRoute::new(
+                    litellm_http::Client::plain_for_test(),
+                    Arc::new(Default::default()),
+                    secrets.clone(),
+                )
+                .with_cache(cache)
+                .execute(
+                    ChatCompletionsRequest {
+                        model: &format!("anthropic/{model}"),
+                        messages: json!([{"role":"user","content":"hello"}]),
+                        optional_params: [("max_tokens".into(), json!(32))].into_iter().collect(),
+                        api_key: None,
+                        api_base: None,
+                        custom_llm_provider: None,
+                        extra_headers: None,
+                        timeout: None,
+                    },
+                    &hooks,
+                    None,
+                )
+                .await
+                .unwrap();
+            }
+            "messages" => {
+                support::messages_route(secrets.clone()).with_cache(cache).execute(MessagesCall {
+                    body: serde_json::from_value(json!({"model":format!("anthropic/{model}"),"messages":[{"role":"user","content":"hello"}],"max_tokens":32})).unwrap(),
+                    api_key:None,api_base:None,custom_llm_provider:None,extra_headers:None,provider_specific_header:None,timeout:None,shaping:Default::default(),
+                }, &hooks, None).await.unwrap();
+            }
+            "responses" => {
+                support::responses_route(secrets.clone())
+                    .with_cache(cache)
+                    .execute(
+                        ResponsesCall {
+                            model: model.into(),
+                            input: json!("hello"),
+                            optional_params: Default::default(),
+                            api_key: None,
+                            api_base: None,
+                            custom_llm_provider: None,
+                            extra_headers: None,
+                            timeout: None,
+                        },
+                        &hooks,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!(hooks.calls.load(Ordering::SeqCst), 4);
+    {
+        let facts = hooks.facts.lock().unwrap();
+        assert_eq!(facts[0].source, ResultSource::Provider);
+        if change == "model_group" {
+            assert!(matches!(facts[2].source, ResultSource::Cache { .. }));
+        } else {
+            assert_eq!(facts[2].source, ResultSource::Provider);
+        }
+        let (ResultSource::Cache { key: first_key }, ResultSource::Cache { key: second_key }) =
+            (&facts[1].source, &facts[3].source)
+        else {
+            panic!("unchanged effective requests must hit the cache");
+        };
+        assert_eq!(first_key == second_key, change == "model_group");
+    }
+    let requests = first.received_requests().await.unwrap();
+    if change == "credentials" {
+        let header = if surface == "responses" {
+            "authorization"
+        } else {
+            "x-api-key"
+        };
+        assert_ne!(requests[0].headers[header], requests[1].headers[header]);
+    }
+    if change == "callback" {
+        assert_eq!(
+            serde_json::from_slice::<Value>(&requests[0].body).unwrap()["temperature"],
+            0.1
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&requests[1].body).unwrap()["temperature"],
+            0.8
+        );
+    }
+    first.verify().await;
+    second.verify().await;
+}
+
+#[rstest]
+#[tokio::test]
+async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheService>) {
+    use litellm_cache_response::ScopedCache;
+    use litellm_core::chat_completions::types::ChatCompletionsRequest;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "output":{"message":{"role":"assistant","content":[{"text":"answer"}]}},
+            "stopReason":"end_turn", "usage":{"inputTokens":3,"outputTokens":2,"totalTokens":5}
+        })))
+        .expect(2)
+        .mount(&upstream)
+        .await;
+    let route =
+        support::chat_completions_route().with_cache(ScopedCache::new(cache, CacheScope::Shared));
+    let hooks = ChangingHooks::default();
+    for _ in 0..2 {
+        let response = route.execute(ChatCompletionsRequest {
+            model:"bedrock/anthropic.cache-test-model",
+            messages:json!([{"role":"user","content":"hello"}]),
+            optional_params:json!({"aws_access_key_id":"test-access","aws_secret_access_key":"test-secret","aws_region_name":"eu-west-1"}).as_object().unwrap().clone(),
+            api_key:None,api_base:Some(&upstream.uri()),custom_llm_provider:None,extra_headers:None,timeout:None,
+        }, &hooks, None).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(response).unwrap()["usage"]["total_tokens"],
+            5
+        );
+    }
+    assert!(
+        hooks
+            .facts
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|facts| facts.source == ResultSource::Provider)
+    );
+    upstream.verify().await;
+}
+
+#[rstest]
+#[tokio::test]
+async fn logical_model_groups_distinguish_identical_provider_inputs(
+    cache: Arc<dyn ResponseCacheService>,
+) {
+    let calls = AtomicUsize::new(0);
+    let options = |group: &str| {
+        Some(CacheOptions {
+            key_context: CacheKeyContext {
+                model_group: Some(group.into()),
+                ..Default::default()
+            },
+            ..CacheOptions::new(CacheScope::Shared)
+        })
+    };
+    let request = json!({"model":"deployment", "messages":[{"role":"user", "content":"hello"}]});
+    let first = call(&cache, options("first"), &calls, request.clone()).await;
+    let second = call(&cache, options("second"), &calls, request.clone()).await;
+    let replay = call(&cache, options("first"), &calls, request).await;
+    assert_ne!(first, second);
+    assert_eq!(first, replay);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }

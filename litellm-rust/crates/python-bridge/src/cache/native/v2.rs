@@ -12,9 +12,9 @@ use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::{RedisCache, RedisTopology};
 use litellm_cache_response::{
     CacheEntry, CacheKeyInput, ExactResponseCache, ResponseCache, ResponseCacheCodec,
-    ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
+    ResponseCacheConfig, ResponseCacheRequest,
 };
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use pyo3::{exceptions::PyValueError, prelude::*};
 
 #[pyclass(
     frozen,
@@ -22,7 +22,6 @@ use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
     module = "litellm.rust_bridge._native"
 )]
 pub(crate) struct NativeCacheHandle {
-    service: Arc<dyn ResponseCacheService>,
     backend: Arc<dyn ExactResponseCache>,
     storage: Storage,
     pid: u32,
@@ -71,7 +70,6 @@ impl NativeCacheHandle {
             },
         ));
         Ok(Self {
-            service: backend.clone(),
             backend,
             storage: Storage::Memory(storage),
             pid: std::process::id(),
@@ -112,7 +110,6 @@ impl NativeCacheHandle {
             },
         ));
         Ok(Self {
-            service: backend.clone(),
             backend,
             storage: Storage::Redis(storage),
             pid: std::process::id(),
@@ -257,89 +254,4 @@ fn duration(seconds: f64) -> PyResult<Duration> {
         .ok()
         .filter(|value| !value.is_zero())
         .ok_or_else(|| PyValueError::new_err("cache durations must be finite and positive"))
-}
-
-pub(in crate::cache) fn native_handle<'py>(
-    configured: &Bound<'py, PyAny>,
-) -> PyResult<Option<Bound<'py, PyAny>>> {
-    Ok(configured
-        .getattr_opt("cache")?
-        .map(|backend| backend.getattr_opt("native_handle"))
-        .transpose()?
-        .flatten()
-        .filter(|handle| handle.is_instance_of::<NativeCacheHandle>()))
-}
-
-pub(in crate::cache) fn configured(
-    configured: &Bound<'_, PyAny>,
-    kwargs: &Bound<'_, PyDict>,
-) -> PyResult<(
-    Option<Arc<dyn ResponseCacheService>>,
-    litellm_cache_response::CacheOptions,
-)> {
-    let handle = native_handle(configured)?.ok_or_else(|| {
-        pyo3::exceptions::PyRuntimeError::new_err(
-            "the configured cache changed to a Python cache after native admission",
-        )
-    })?;
-    let cache = handle.extract::<PyRef<'_, NativeCacheHandle>>()?;
-    cache.check_process()?;
-    let controls = kwargs.get_item("cache")?.filter(|value| !value.is_none());
-    let controls = controls
-        .as_ref()
-        .map(|value| value.cast::<PyDict>())
-        .transpose()?;
-    if let Some(controls) = controls {
-        for name in controls.keys() {
-            let name = name.extract::<String>()?;
-            if !matches!(
-                name.as_str(),
-                "no-cache" | "no-store" | "ttl" | "s-maxage" | "s-max-age" | "use-cache"
-            ) {
-                return Err(PyValueError::new_err(format!(
-                    "unsupported v2 cache control: {name}"
-                )));
-            }
-        }
-    }
-    let boolean = |name: &str| -> PyResult<bool> {
-        controls
-            .map(|values| values.get_item(name))
-            .transpose()?
-            .flatten()
-            .map(|value| value.extract())
-            .transpose()
-            .map(|value| value.unwrap_or(false))
-    };
-    let seconds = |name: &str| -> PyResult<Option<Duration>> {
-        controls
-            .map(|values| values.get_item(name))
-            .transpose()?
-            .flatten()
-            .map(|value| duration(value.extract()?))
-            .transpose()
-    };
-    Ok((
-        Some(cache.service.clone()),
-        litellm_cache_response::CacheOptions {
-            policy: litellm_cache_response::CachePolicy {
-                caching: kwargs
-                    .get_item("caching")?
-                    .filter(|value| !value.is_none())
-                    .map(|value| value.extract())
-                    .transpose()?,
-                no_cache: boolean("no-cache")?,
-                no_store: boolean("no-store")?,
-                ttl: seconds("ttl")?,
-                max_age: seconds("s-max-age")?.or(seconds("s-maxage")?),
-            },
-            scope: litellm_cache_response::CacheScope::Shared,
-        },
-    ))
-}
-
-fn now() -> Duration {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
 }

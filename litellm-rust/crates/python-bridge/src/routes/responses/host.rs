@@ -1,4 +1,4 @@
-use std::convert::Infallible;
+use crate::cache::{CacheCall, PythonCache, PythonCacheConfig, PythonCached};
 
 use super::super::inference::InferenceHost;
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
@@ -9,7 +9,21 @@ use pyo3::{
     types::PyDict,
 };
 
-pub(super) struct ResponsesPythonHost(pub InferenceHost);
+pub(super) struct ResponsesPythonHost {
+    host: InferenceHost,
+    cache: PythonCache,
+    call_type: &'static str,
+}
+
+impl ResponsesPythonHost {
+    pub(super) fn new(host: InferenceHost, asynchronous: bool, call_type: &'static str) -> Self {
+        Self {
+            host,
+            cache: PythonCache::new(asynchronous),
+            call_type,
+        }
+    }
+}
 
 pub(super) fn project(
     host: &InferenceHost,
@@ -51,15 +65,15 @@ pub(super) fn project(
 }
 
 impl PythonBinding for ResponsesPythonHost {
-    type Protocol = Responses;
+    type Protocol = PythonCached<Responses>;
     type Failure = PyErr;
 
     fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<ResponsesCall, InvokeError<Error>> {
-        let call = project(&self.0, py, arguments).map_err(InvokeError::Python)?;
+    ) -> Result<(ResponsesCall, Option<PythonCacheConfig>), InvokeError<Error>> {
+        let call = project(&self.host, py, arguments).map_err(InvokeError::Python)?;
         if call
             .optional_params
             .get("stream")
@@ -69,7 +83,14 @@ impl PythonBinding for ResponsesPythonHost {
                 "native Python responses streaming",
             )));
         }
-        Ok(call)
+        let cache = crate::cache::configure_python_cache::<Responses>(
+            &mut self.cache,
+            py,
+            arguments,
+            self.call_type,
+        )
+        .map_err(InvokeError::Python)?;
+        Ok((call, cache))
     }
 
     fn encode_response(
@@ -77,7 +98,7 @@ impl PythonBinding for ResponsesPythonHost {
         py: Python<'_>,
         response: <Responses as litellm_host::protocol::Protocol>::Response,
     ) -> PyResult<Py<PyAny>> {
-        self.0.response(py, &response)
+        self.host.response(py, &response)
     }
 
     fn encode_stream_head(
@@ -103,26 +124,48 @@ impl PythonBinding for ResponsesPythonHost {
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
-        self.0.error(py, error)
+        self.host.error(py, error)
     }
     fn host_error(error: &PyErr) -> Error {
         Error::InvalidRequest(error.to_string().into())
     }
 }
 
-impl PythonHostCalls<Responses> for ResponsesPythonHost {
+impl PythonHostCalls<PythonCached<Responses>> for ResponsesPythonHost {
     fn handle_host_call(
         &mut self,
-        _: Python<'_>,
-        op: Infallible,
+        py: Python<'_>,
+        op: CacheCall,
     ) -> Result<(), InvokeError<Error>> {
-        match op {}
+        self.cache
+            .begin(py, op)
+            .map(|_| ())
+            .map_err(InvokeError::Python)
+    }
+
+    fn begin_host_call(
+        &mut self,
+        py: Python<'_>,
+        op: CacheCall,
+    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+        self.cache.begin(py, op).map_err(InvokeError::Python)
+    }
+
+    fn resume_host_call(
+        &mut self,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+        self.cache.resume(py, result).map_err(InvokeError::Python)
     }
 }
 
 impl PythonOwned for ResponsesPythonHost {
-    fn close(&mut self, _: Python<'_>) {}
+    fn close(&mut self, _: Python<'_>) {
+        self.cache.close();
+    }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.0.request)
+        visit.call(&self.host.request)?;
+        self.cache.traverse(visit)
     }
 }

@@ -64,7 +64,9 @@ impl litellm_inference::caching::StreamCachable for Responses {
             head: ResponsesStreamHead {
                 headers: Vec::new(),
             },
-            chunks: Box::pin(futures_util::stream::iter([Ok(data)])),
+            chunks: Box::pin(futures_util::stream::iter(
+                litellm_framer::sse::RawBlocks::new(data).map(Ok),
+            )),
         })
     }
 

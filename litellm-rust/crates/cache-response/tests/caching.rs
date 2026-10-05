@@ -172,3 +172,51 @@ fn cache_controls_honor_default_modes_and_directives(
     assert_eq!(controls.writes(), writes);
     assert_eq!(should_use_cache(controls), reads || writes);
 }
+
+#[rstest]
+fn selected_parameters_use_json_value_encoding() {
+    let input = CacheKeyInput::from_parameters(serde_json::json!({
+        "model": "logical",
+        "messages": [{"role": "user", "content": "hello"}],
+        "temperature": 0.5,
+        "stream": false,
+        "max_tokens": null,
+    }));
+    assert_eq!(cache_key(&input), hash(
+        br#"messages: [{"content":"hello","role":"user"}]model: "logical"stream: falsetemperature: 0.5"#
+    ));
+}
+
+#[rstest]
+fn parameter_keys_ignore_nested_object_order() {
+    let first: serde_json::Value = serde_json::from_str(
+        r#"{"model":"logical","messages":[{"role":"user","content":{"text":"hello","detail":1}}]}"#,
+    )
+    .unwrap();
+    let second: serde_json::Value = serde_json::from_str(
+        r#"{"messages":[{"content":{"detail":1,"text":"hello"},"role":"user"}],"model":"logical"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        cache_key(&CacheKeyInput::from_parameters(first)),
+        cache_key(&CacheKeyInput::from_parameters(second)),
+    );
+}
+
+#[rstest]
+#[case::boolean(serde_json::json!(false), serde_json::json!("false"))]
+#[case::number(serde_json::json!(1), serde_json::json!("1"))]
+#[case::array_order(serde_json::json!([1, 2]), serde_json::json!([2, 1]))]
+fn parameter_keys_preserve_value_identity(
+    #[case] first: serde_json::Value,
+    #[case] second: serde_json::Value,
+) {
+    assert_ne!(
+        cache_key(&CacheKeyInput::from_parameters(
+            serde_json::json!({"input": first})
+        )),
+        cache_key(&CacheKeyInput::from_parameters(
+            serde_json::json!({"input": second})
+        )),
+    );
+}

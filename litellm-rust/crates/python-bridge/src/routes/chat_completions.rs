@@ -147,7 +147,6 @@ fn run_public(
     } else {
         "completion"
     };
-    crate::cache::admit_native(py, &kwargs, cache_call_type)?;
     let (arguments, hooks) = crate::routes::call_hooks(
         py,
         LoggingOperation::Completion,
@@ -166,18 +165,45 @@ fn run_public(
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );
-            let (cache, cache_options) =
-                crate::cache::configured_native(py, arguments, cache_call_type)?;
-            let route = match cache {
-                Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
-                    cache,
-                    litellm_cache_response::CacheScope::Shared,
-                )),
-                None => route,
-            };
-            Ok(route.machine(request, cache_options.policy))
+            Ok(litellm_host::call::hosted_call(
+                request,
+                None,
+                move |(call, config): (
+                    litellm_core::chat_completions::types::ChatCompletionsCall,
+                    Option<crate::cache::PythonCacheConfig>,
+                ),
+                      services,
+                      interceptors,
+                      observers| async move {
+                    let (cache, options) = config.map(|config| config.attach(services)).unzip();
+                    let route = match cache {
+                        Some(cache) => route.with_cache(cache),
+                        None => route,
+                    };
+                    route
+                        .execute(
+                            litellm_core::chat_completions::types::ChatCompletionsRequest {
+                                model: &call.model,
+                                messages: call.messages,
+                                optional_params: call.optional_params,
+                                api_key: call.api_key.as_deref(),
+                                api_base: call.api_base.as_deref(),
+                                custom_llm_provider: call.custom_llm_provider.as_deref(),
+                                extra_headers: call.extra_headers,
+                                timeout: call.timeout,
+                            },
+                            &interceptors,
+                            litellm_core::CallOptions {
+                                cache: options.map(|options| options.policy),
+                                observers,
+                            },
+                        )
+                        .await
+                        .map(litellm_host::call::CallOutput::Complete)
+                },
+            ))
         },
-        host::ChatCompletionsPythonHost(host),
+        host::ChatCompletionsPythonHost::new(host, asynchronous, cache_call_type),
         hooks,
         asynchronous,
     )

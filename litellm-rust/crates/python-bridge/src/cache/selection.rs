@@ -1,18 +1,18 @@
-use super::{native, python};
+use super::{key::project_key, python};
 use litellm_cache_response::{
-    CacheOptions, CachePolicy, CacheScope, ResponseCacheService, ScopedCache,
+    CacheKeyContext, CacheOptions, CachePolicy, CacheScope, ResponseCacheConfig, ScopedCache,
 };
+use litellm_core::caching::Cachable;
 use litellm_host::{
     machine::{HostServices, MachineFault},
     protocol::Protocol,
 };
 use pyo3::{prelude::*, types::PyDict};
-use std::sync::Arc;
 
-pub(crate) struct Cached<P>(std::marker::PhantomData<P>);
+pub(crate) struct PythonCached<P>(std::marker::PhantomData<P>);
 
-impl<P: Protocol> Protocol for Cached<P> {
-    type Request = (P::Request, Selection);
+impl<P: Protocol> Protocol for PythonCached<P> {
+    type Request = (P::Request, Option<PythonCacheConfig>);
     type Response = P::Response;
     type Error = P::Error;
     type HostCall = python::CacheCall;
@@ -20,128 +20,95 @@ impl<P: Protocol> Protocol for Cached<P> {
     type StreamHead = P::StreamHead;
 }
 
-enum Backend {
-    Disabled,
-    Native(Arc<dyn ResponseCacheService>),
-    Python { namespace: String },
-}
-
-pub(crate) struct Selection {
-    backend: Backend,
+pub(crate) struct PythonCacheConfig {
     options: CacheOptions,
+    surface: &'static str,
+    config: ResponseCacheConfig,
 }
 
-impl Selection {
+impl PythonCacheConfig {
     pub(crate) fn attach<P: Protocol<HostCall = python::CacheCall>>(
         self,
         services: HostServices<P>,
-    ) -> (Option<ScopedCache>, CacheOptions)
+    ) -> (ScopedCache, CacheOptions)
     where
         P::Error: From<MachineFault>,
     {
-        let service = match self.backend {
-            Backend::Disabled => None,
-            Backend::Native(service) => Some(service),
-            Backend::Python { namespace } => Some(python::service(services, namespace)),
-        };
         (
-            service.map(|service| ScopedCache::new(service, CacheScope::Shared)),
+            ScopedCache::new(
+                python::service(services, self.surface, self.config),
+                CacheScope::Shared,
+            )
+            .with_key_input(
+                self.options.key_input.clone(),
+                self.options.key_context.clone(),
+            ),
             self.options,
         )
     }
 }
 
+#[derive(Clone, Copy)]
+enum CacheRule {
+    Configured,
+    RequestAllowsCaching,
+    SupportsCallType,
+    PythonPolicyAllowsCaching,
+}
+
+const CACHE_RULES: [CacheRule; 4] = [
+    CacheRule::Configured,
+    CacheRule::RequestAllowsCaching,
+    CacheRule::SupportsCallType,
+    CacheRule::PythonPolicyAllowsCaching,
+];
+
+impl CacheRule {
+    fn allows(
+        self,
+        cache: &Bound<'_, PyAny>,
+        arguments: &Bound<'_, PyDict>,
+        call_type: &str,
+    ) -> PyResult<bool> {
+        match self {
+            Self::Configured => Ok(!cache.is_none()),
+            Self::RequestAllowsCaching => Ok(!arguments
+                .get_item("caching")?
+                .is_some_and(|value| value.is(pyo3::types::PyBool::new(cache.py(), false)))),
+            Self::SupportsCallType => {
+                let supported = cache.getattr("supported_call_types")?;
+                Ok(!supported.is_none() && supported.contains(call_type)?)
+            }
+            Self::PythonPolicyAllowsCaching => cache
+                .call_method("should_use_cache", (), Some(arguments))?
+                .extract::<bool>(),
+        }
+    }
+}
+
 fn selected_cache<'py>(
-    py: Python<'py>,
-    kwargs: &Bound<'py, PyDict>,
+    cache: Bound<'py, PyAny>,
+    arguments: &Bound<'py, PyDict>,
     call_type: &str,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let configured = py.import("litellm")?.getattr("cache")?;
-    if configured.is_none()
-        || kwargs
-            .get_item("caching")?
-            .is_some_and(|value| value.is(pyo3::types::PyBool::new(py, false)))
-    {
-        return Ok(None);
-    }
-    let supported = configured.getattr("supported_call_types")?;
-    if supported.is_none() || !supported.contains(call_type)? {
-        return Ok(None);
-    }
-    Ok(Some(configured))
+    let allowed = CACHE_RULES
+        .into_iter()
+        .try_fold(true, |allowed, rule| -> PyResult<bool> {
+            Ok(allowed && rule.allows(&cache, arguments, call_type)?)
+        })?;
+    Ok(allowed.then_some(cache))
 }
 
-pub(crate) fn admit_native(
-    py: Python<'_>,
-    kwargs: &Bound<'_, PyDict>,
-    call_type: &str,
-) -> PyResult<()> {
-    if let Some(configured) = selected_cache(py, kwargs, call_type)?
-        && native::v2::native_handle(&configured)?.is_none()
-    {
-        return Err(crate::errors::RustBridgeDeclined::new_err(
-            "the configured cache requires Python inference",
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn configured_native(
-    py: Python<'_>,
-    kwargs: &Bound<'_, PyDict>,
-    call_type: &str,
-) -> PyResult<(
-    Option<Arc<dyn ResponseCacheService>>,
-    litellm_cache_response::CacheOptions,
-)> {
-    let Some(configured) = selected_cache(py, kwargs, call_type)? else {
-        return Ok((
-            None,
-            litellm_cache_response::CacheOptions::new(litellm_cache_response::CacheScope::Shared),
-        ));
-    };
-    native_configuration(&configured, kwargs)
-}
-
-fn native_configuration(
-    configured: &Bound<'_, PyAny>,
-    kwargs: &Bound<'_, PyDict>,
-) -> PyResult<(Option<Arc<dyn ResponseCacheService>>, CacheOptions)> {
-    if !configured
-        .call_method("should_use_cache", (), Some(kwargs))?
-        .extract::<bool>()?
-    {
-        return Ok((
-            None,
-            litellm_cache_response::CacheOptions::new(litellm_cache_response::CacheScope::Shared),
-        ));
-    }
-    native::v2::configured(configured, kwargs)
-}
-
-pub(crate) fn configure(
-    python: &mut python::PythonCache,
+pub(crate) fn configure_python_cache<P: Cachable>(
+    host: &mut python::PythonCache,
     py: Python<'_>,
     arguments: &Bound<'_, PyDict>,
     call_type: &str,
-) -> PyResult<Selection> {
-    let selected = selected_cache(py, arguments, call_type)?;
-    let Some(cache) = selected else {
-        return Ok(Selection {
-            backend: Backend::Disabled,
-            options: CacheOptions::new(CacheScope::Shared),
-        });
+) -> PyResult<Option<PythonCacheConfig>> {
+    let configured = py.import("litellm")?.getattr("cache")?;
+    let Some(cache) = selected_cache(configured, arguments, call_type)? else {
+        return Ok(None);
     };
-    if native::v2::native_handle(&cache)?.is_some() {
-        let (native, options) = native_configuration(&cache, arguments)?;
-        return Ok(Selection {
-            backend: native.map_or(Backend::Disabled, Backend::Native),
-            options,
-        });
-    }
-    let enabled = cache
-        .call_method("should_use_cache", (), Some(arguments))?
-        .extract::<bool>()?;
     let controls = arguments
         .get_item("cache")?
         .filter(|value| !value.is_none());
@@ -155,12 +122,21 @@ pub(crate) fn configure(
             .transpose()
             .map(|value| value.unwrap_or(false))
     };
+    let (key_input, key_context) = match project_key(py, arguments) {
+        Ok((input, context)) => (Some(input), context),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyException>(py) => {
+            (None, CacheKeyContext::default())
+        }
+        Err(error) => return Err(error),
+    };
     let options = CacheOptions {
         policy: CachePolicy {
             no_cache: boolean("no-cache")?,
             no_store: boolean("no-store")?,
             ..CachePolicy::default()
         },
+        key_input,
+        key_context,
         ..CacheOptions::new(CacheScope::Shared)
     };
     let namespace = cache
@@ -169,13 +145,139 @@ pub(crate) fn configure(
         .map(|value| value.extract())
         .transpose()?
         .unwrap_or_default();
-    python.bind(cache, arguments);
-    Ok(Selection {
-        backend: if enabled {
-            Backend::Python { namespace }
-        } else {
-            Backend::Disabled
-        },
+    host.bind(cache, arguments);
+    Ok(Some(PythonCacheConfig {
         options,
-    })
+        surface: P::SURFACE,
+        config: ResponseCacheConfig {
+            namespace,
+            ..ResponseCacheConfig::default()
+        },
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::{fixture, rstest};
+    use std::ffi::CString;
+
+    #[fixture]
+    fn selection_cache() -> Py<PyModule> {
+        Python::initialize();
+        Python::attach(|py| {
+            PyModule::from_code(
+                py,
+                c"class SelectionCache:
+    def __init__(self, supported=('completion',), default_on=True, fail_at=None):
+        self.supported = supported
+        self.default_on = default_on
+        self.fail_at = fail_at
+        self.calls = ()
+        self.error = ValueError('cache selection failed')
+
+    @property
+    def supported_call_types(self):
+        self.calls += ('supported',)
+        if self.fail_at == 'supported':
+            raise self.error
+        return self.supported
+
+    def should_use_cache(self, **kwargs):
+        self.calls += ('policy',)
+        if self.fail_at == 'policy':
+            raise self.error
+        return self.default_on or kwargs.get('cache', {}).get('use-cache') is True
+",
+                c"cache_selection_test.py",
+                c"cache_selection_test",
+            )
+            .unwrap()
+            .unbind()
+        })
+    }
+
+    #[rstest]
+    #[case::unconfigured("None", "{}", false, vec![])]
+    #[case::unconfigured_with_opt_in("None", "{'caching': True}", false, vec![])]
+    #[case::request_disabled(
+        "SelectionCache(fail_at='supported')", "{'caching': False}", false, vec![]
+    )]
+    #[case::unsupported(
+        "SelectionCache(supported=('embedding',), fail_at='policy')",
+        "{}", false, vec!["supported"]
+    )]
+    #[case::empty_supported("SelectionCache(supported=())", "{}", false, vec!["supported"])]
+    #[case::missing_supported("SelectionCache(supported=None)", "{}", false, vec!["supported"])]
+    #[case::default_on("SelectionCache()", "{}", true, vec!["supported", "policy"])]
+    #[case::default_off(
+        "SelectionCache(default_on=False)", "{}", false, vec!["supported", "policy"]
+    )]
+    #[case::caching_flag_does_not_opt_in(
+        "SelectionCache(default_on=False)", "{'caching': True}", false,
+        vec!["supported", "policy"]
+    )]
+    #[case::explicit_opt_in(
+        "SelectionCache(default_on=False)", "{'cache': {'use-cache': True}}", true,
+        vec!["supported", "policy"]
+    )]
+    #[case::request_disabled_with_opt_in(
+        "SelectionCache(fail_at='supported')",
+        "{'caching': False, 'cache': {'use-cache': True}}", false, vec![]
+    )]
+    fn selection_short_circuits_python_checks(
+        selection_cache: Py<PyModule>,
+        #[case] cache_expression: &str,
+        #[case] arguments_expression: &str,
+        #[case] expected_selected: bool,
+        #[case] expected_calls: Vec<&str>,
+    ) {
+        Python::attach(|py| {
+            let globals = selection_cache.bind(py).dict();
+            let cache = py
+                .eval(
+                    &CString::new(cache_expression).unwrap(),
+                    Some(&globals),
+                    None,
+                )
+                .unwrap();
+            let arguments = py
+                .eval(&CString::new(arguments_expression).unwrap(), None, None)
+                .unwrap()
+                .cast_into::<PyDict>()
+                .unwrap();
+            let selected = selected_cache(cache.clone(), &arguments, "completion").unwrap();
+            assert_eq!(selected.is_some(), expected_selected);
+            if let Some(selected) = selected {
+                assert!(selected.is(&cache));
+            }
+            let calls: Vec<String> = if cache.is_none() {
+                Vec::new()
+            } else {
+                cache.getattr("calls").unwrap().extract().unwrap()
+            };
+            assert_eq!(calls, expected_calls);
+        });
+    }
+
+    #[rstest]
+    #[case::supported("supported", vec!["supported"])]
+    #[case::policy("policy", vec!["supported", "policy"])]
+    fn selection_preserves_python_errors(
+        selection_cache: Py<PyModule>,
+        #[case] fail_at: &str,
+        #[case] expected_calls: Vec<&str>,
+    ) {
+        Python::attach(|py| {
+            let arguments = PyDict::new(py);
+            let constructor = selection_cache.bind(py).getattr("SelectionCache").unwrap();
+            let options = PyDict::new(py);
+            options.set_item("fail_at", fail_at).unwrap();
+            let cache = constructor.call((), Some(&options)).unwrap();
+            let error = selected_cache(cache.clone(), &arguments, "completion").unwrap_err();
+            assert!(error.value(py).is(cache.getattr("error").unwrap()));
+            let calls: Vec<String> = cache.getattr("calls").unwrap().extract().unwrap();
+            assert_eq!(calls, expected_calls);
+        });
+    }
 }

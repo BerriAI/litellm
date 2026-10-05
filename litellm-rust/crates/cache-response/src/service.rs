@@ -4,7 +4,8 @@ use litellm_cache::{BaseCache, Error, ExactCacheContext};
 use serde_json::Value;
 
 use crate::{
-    CacheControls, CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheRequest,
+    CacheControls, CacheEntry, CacheKeyContext, CacheKeyField, CacheKeyInput, ResponseCache,
+    ResponseCacheRequest, cache_key,
 };
 
 type CacheFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -26,6 +27,10 @@ impl Default for ResponseCacheConfig {
 
 pub trait ResponseCacheService: Send + Sync {
     fn config(&self) -> &ResponseCacheConfig;
+
+    fn resolve_key<'a>(&'a self, request: &'a ResponseCacheRequest) -> CacheFuture<'a, String> {
+        Box::pin(async move { Ok(cache_key(&request.key)) })
+    }
 
     fn lookup<'a>(
         &'a self,
@@ -92,6 +97,8 @@ impl CachePolicy {
 pub struct CacheOptions {
     pub policy: CachePolicy,
     pub scope: CacheScope,
+    pub key_context: CacheKeyContext,
+    pub key_input: Option<CacheKeyInput>,
 }
 
 impl CacheOptions {
@@ -99,32 +106,84 @@ impl CacheOptions {
         Self {
             policy: CachePolicy::default(),
             scope,
+            key_context: CacheKeyContext::default(),
+            key_input: None,
         }
     }
 
-    pub fn request(self, namespace: &str, surface: &str, mut input: Value) -> ResponseCacheRequest {
-        input.sort_all_objects();
+    pub fn request(self, namespace: &str, surface: &str, input: Value) -> ResponseCacheRequest {
+        self.request_with_key(namespace, surface, CacheKeyInput::from_parameters(input))
+    }
+
+    pub fn request_with_key(
+        self,
+        namespace: &str,
+        surface: &str,
+        input: CacheKeyInput,
+    ) -> ResponseCacheRequest {
+        let fields = input
+            .fields
+            .iter()
+            .filter(|field| field.name == "wire_changes" && field.internal_parameter)
+            .cloned();
+        let selected = match self.key_input {
+            Some(selected) => CacheKeyInput {
+                fields: selected.fields.into_iter().chain(fields).collect(),
+                ..selected
+            },
+            None => input,
+        };
+        let sharing_group = self
+            .key_context
+            .model_group
+            .as_ref()
+            .is_some_and(|group| !group.is_empty());
+        let input = self.key_context.project(CacheKeyInput {
+            fields: selected
+                .fields
+                .into_iter()
+                .filter(|field| {
+                    field.name != "transport" || !field.internal_parameter || !sharing_group
+                })
+                .collect(),
+            ..selected
+        });
+        let isolated = matches!(self.scope, CacheScope::Isolated(_));
+        let fields = match input.preset.as_ref().filter(|_| isolated) {
+            Some(preset) => vec![CacheKeyField {
+                name: "preset".into(),
+                value: Some(preset.clone()),
+                api_parameter: true,
+                internal_parameter: false,
+            }],
+            None => input.fields,
+        };
         let scope = match self.scope {
             CacheScope::Shared => String::new(),
             CacheScope::Isolated(scope) => serde_json::json!(["isolated", scope]).to_string(),
         };
         ResponseCacheRequest {
             key: CacheKeyInput {
-                namespace: Some(format!("{namespace}:inference-v2")),
-                fields: [
-                    ("surface", surface.to_owned()),
-                    ("scope", scope),
-                    ("request", input.to_string()),
-                ]
-                .into_iter()
-                .map(|(name, value)| CacheKeyField {
-                    name: name.into(),
-                    value: Some(value),
-                    api_parameter: true,
-                    internal_parameter: false,
-                })
-                .collect(),
-                ..Default::default()
+                namespace: Some(format!(
+                    "{}:inference-v2",
+                    input
+                        .namespace
+                        .as_deref()
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or(namespace)
+                )),
+                preset: input.preset.filter(|_| !isolated),
+                include_provider_parameters: input.include_provider_parameters,
+                fields: [("surface", surface.to_owned()), ("scope", scope)]
+                    .into_iter()
+                    .map(|(name, value)| CacheKeyField {
+                        name: name.into(),
+                        value: Some(value),
+                        api_parameter: true,
+                        internal_parameter: false,
+                    })
+                    .chain(fields)
+                    .collect(),
             },
             controls: CacheControls {
                 configured: true,
@@ -169,17 +228,38 @@ impl<T> ResponseEnvelope<T> {
 pub struct ScopedCache {
     pub service: std::sync::Arc<dyn ResponseCacheService>,
     pub scope: CacheScope,
+    pub key_context: CacheKeyContext,
+    pub key_input: Option<CacheKeyInput>,
 }
 
 impl ScopedCache {
     pub fn new(service: std::sync::Arc<dyn ResponseCacheService>, scope: CacheScope) -> Self {
-        Self { service, scope }
+        Self {
+            service,
+            scope,
+            key_context: CacheKeyContext::default(),
+            key_input: None,
+        }
+    }
+
+    pub fn with_key_input(
+        self,
+        key_input: Option<CacheKeyInput>,
+        key_context: CacheKeyContext,
+    ) -> Self {
+        Self {
+            key_input,
+            key_context,
+            ..self
+        }
     }
 
     pub fn options(&self, policy: Option<CachePolicy>) -> CacheOptions {
         CacheOptions {
             policy: policy.unwrap_or_default(),
             scope: self.scope.clone(),
+            key_context: self.key_context.clone(),
+            key_input: self.key_input.clone(),
         }
     }
 }

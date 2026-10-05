@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import datetime
 import threading
 import time
 from dataclasses import dataclass
@@ -23,6 +24,8 @@ class HookEvent:
     loop: asyncio.AbstractEventLoop | None
     kwargs: object
     response: object
+    start_time: datetime.datetime | None
+    end_time: datetime.datetime | None
 
 
 class RecordingLogger(CustomLogger):
@@ -40,7 +43,14 @@ class RecordingLogger(CustomLogger):
     def names(self) -> tuple[str, ...]:
         return tuple(event.name for event in self.events)
 
-    def _record(self, name: str, kwargs: object = None, response: object = None) -> None:
+    def _record(
+        self,
+        name: str,
+        kwargs: object = None,
+        response: object = None,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+    ) -> None:
         details: Final = kwargs if isinstance(kwargs, dict) else {}
         try:
             snapshot: Final = copy.deepcopy(details)
@@ -59,6 +69,8 @@ class RecordingLogger(CustomLogger):
             loop=loop,
             kwargs=snapshot,
             response=response,
+            start_time=start_time,
+            end_time=end_time,
         )
         with self._condition:
             self._events.append(event)
@@ -85,16 +97,16 @@ class RecordingLogger(CustomLogger):
         self._record("log_pre_api_call", kwargs)
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self._record("log_success_event", kwargs, response_obj)
+        self._record("log_success_event", kwargs, response_obj, start_time, end_time)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self._record("async_log_success_event", kwargs, response_obj)
+        self._record("async_log_success_event", kwargs, response_obj, start_time, end_time)
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        self._record("log_failure_event", kwargs, response_obj)
+        self._record("log_failure_event", kwargs, response_obj, start_time, end_time)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        self._record("async_log_failure_event", kwargs, response_obj)
+        self._record("async_log_failure_event", kwargs, response_obj, start_time, end_time)
 
     def logging_hook(self, kwargs, result, call_type):
         self._record("logging_hook", kwargs, result)

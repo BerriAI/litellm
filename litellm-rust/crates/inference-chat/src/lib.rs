@@ -6,13 +6,19 @@ mod common_utils;
 pub mod constants;
 pub(crate) mod handler;
 mod prepare;
-use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
-use prepare::{prepare_provider_request, resolve_request};
 
 use litellm_auth::AuthServices;
 use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 use types::ChatCompletionsRequest;
+
+use litellm_auth::AuthServices;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
+use litellm_secrets::source::SecretSource;
+
+use crate::caching::CacheKeyProjection;
+use crate::chat_completions::types::ChatCompletionsRequest;
+use prepare::{prepare_provider_request, resolve_request};
 
 #[derive(Clone)]
 pub struct ChatCompletionsRoute {
@@ -72,6 +78,12 @@ impl ChatCompletionsRoute {
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
+        let cache_input = self
+            .cache
+            .as_ref()
+            .map(|_| request.cache_key_input())
+            .transpose()?
+            .unwrap_or_default();
         let resolved = resolve_request(request)?;
         let snapshot = self
             .secrets
@@ -83,7 +95,7 @@ impl ChatCompletionsRoute {
             Box::pin(handler::execute(
                 &self.http,
                 &self.auth,
-                prepared,
+                (prepared, cache_input),
                 self.cache.clone(),
                 cache_options,
                 interceptors,
