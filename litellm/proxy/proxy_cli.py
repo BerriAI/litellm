@@ -1484,17 +1484,17 @@ def run_server(
 
         os.environ["NUM_WORKERS"] = str(num_workers)
 
+        # Skip server startup if requested (after all setup is done)
+        if skip_server_startup:
+            print("LiteLLM: Setup complete. Skipping server startup as requested.")
+            return
+
         # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
         prometheus_multiproc_dir: Final = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
             num_workers=num_workers,
             litellm_settings=litellm_settings if config else None,
             prometheus_metrics_port=prometheus_metrics_port,
         )
-
-        # Skip server startup if requested (after all setup is done)
-        if skip_server_startup:
-            print("LiteLLM: Setup complete. Skipping server startup as requested.")
-            return
 
         if prometheus_metrics_port is not None and prometheus_multiproc_dir is not None:
             from litellm.proxy.prometheus_metrics_server import MetricsServerStartupError, start_metrics_server_process
