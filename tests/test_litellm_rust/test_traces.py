@@ -300,7 +300,7 @@ async def test_insert_validates_values_without_pydantic_copy(recording_server: R
         ("internal_user", None, 403),
     ),
 )
-def test_trace_sql_endpoint_enforces_ownership_and_preserves_clickhouse_envelope(
+def test_trace_sql_endpoint_returns_data_only_and_enforces_ownership(
     recording_server: RecordingServer, role: str, user_id: str | None, expected_status: int
 ) -> None:
     from fastapi import FastAPI
@@ -316,6 +316,7 @@ def test_trace_sql_endpoint_enforces_ownership_and_preserves_clickhouse_envelope
         "data": [{"answer": 42}],
         "rows": 1,
         "statistics": {"elapsed": 0.01, "rows_read": 1, "bytes_read": 1},
+        "rows_before_limit_at_least": 1,
     }
     recording_server.expected_requests = 12 if expected_status == 200 else 0
     if expected_status == 200:
@@ -339,7 +340,7 @@ def test_trace_sql_endpoint_enforces_ownership_and_preserves_clickhouse_envelope
         if expected_status == 403:
             assert result.json() == {"detail": "Not allowed to view logs"}
             return
-        assert result.json() == envelope
+        assert result.json() == {"data": envelope["data"]}
         assert recording_server.requests[-1].raw_body == b"SELECT 42 AS answer"
         assert client.post("/v1/traces/query", json={"sql": "  "}).status_code == 400
         assert client.post("/v1/traces/query", json={}).status_code == 422
@@ -428,6 +429,7 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
         "data": [{"answer": 42}],
         "rows": 1,
         "statistics": {"elapsed": 0.01, "rows_read": 1, "bytes_read": 1},
+        "rows_before_limit_at_least": 1,
     }
     recording_server.enqueue(ResponseSpec(body=envelope))
     storage: Final = ClickHouseStorage(TraceStorageConfig(recording_server.base_url, "trace_test"))
@@ -441,7 +443,7 @@ def test_trace_sql_endpoint_distinguishes_query_errors_from_reader_failures(
         assert failed.status_code == expected_status, failed.text
         recovered: Final = client.post("/v1/traces/query", json={"sql": "SELECT 42 AS answer"})
         assert recovered.status_code == 200, recovered.text
-        assert recovered.json() == envelope
+        assert recovered.json() == {"data": envelope["data"]}
     assert recording_server.requests[-2].raw_body == b"SELEC 42"
 
 

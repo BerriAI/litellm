@@ -1,11 +1,10 @@
-from collections.abc import Mapping
 from typing import Final
 
 import pytest
-from pydantic import JsonValue, ValidationError
+from pydantic import ValidationError
 
 from litellm.rust_bridge.trace.generated.models import LensContentParams
-from litellm.rust_bridge.trace.queries import LENS_CONTENT, LENS_EVIDENCE, TraceSQLResponse
+from litellm.rust_bridge.trace.queries import LENS_CONTENT, LENS_EVIDENCE
 
 
 @pytest.mark.parametrize("offset", (-1, 2**32))
@@ -48,18 +47,6 @@ def test_named_query_rejects_rows_missing_required_result_fields() -> None:
     with pytest.raises(ValidationError) as error:
         LENS_CONTENT.response.validate_json('{"data":[{"span_id":"span","name":"name"}]}')
     assert error.value.error_count() == 4
-
-
-def test_sql_envelope_preserves_nested_data_large_integer_strings_and_extra_fields() -> None:
-    envelope: Final[Mapping[str, JsonValue]] = {
-        "meta": [{"name": "count", "type": "UInt64", "comment": "label"}],
-        "data": [{"count": "9007199254740993", "nested": [True, None, {"value": 2}]}],
-        "rows": "1",
-        "statistics": {"elapsed": 0.01, "rows_read": "1", "bytes_read": "8", "extra_stat": 4},
-        "totals": {"count": "9007199254740993"},
-    }
-    result: Final = TraceSQLResponse.model_validate(envelope)
-    assert result.model_dump(mode="json", exclude_unset=True) == envelope
 
 
 @pytest.mark.parametrize("count", (0, "9007199254740993", 2**64 - 1))

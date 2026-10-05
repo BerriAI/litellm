@@ -17,6 +17,7 @@ from litellm.rust_bridge.trace.generated.models import (
     LensSampleParams,
     PartRow,
 )
+from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
 from litellm.rust_bridge.trace.generated.types import ReadQueryName
 from litellm.rust_bridge.trace.queries import (
     LENS_AGENTS,
@@ -24,6 +25,7 @@ from litellm.rust_bridge.trace.queries import (
     LENS_CONTENT,
     LENS_EVIDENCE,
     LENS_SAMPLE,
+    ClickHouseSQLEnvelope,
     ParamsT,
     ReadQuery,
     RowT,
@@ -38,7 +40,6 @@ from .generated.types import (
     TracePage,
     TraceScope,
 )
-from .queries import TraceSQLResponse
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +100,7 @@ class NativeTraces(Protocol):
 
 
 QUERY_PARAMETERS: Final = TypeAdapter(dict[str, str | int | float | list[str]])
-_SQL_RESPONSE: Final = TypeAdapter(TraceSQLResponse)
+_SQL_ENVELOPE: Final = TypeAdapter(ClickHouseSQLEnvelope)
 _HELP_RESPONSE: Final = TypeAdapter(TraceQueryHelp)
 _TRACE_PAGE: Final = TypeAdapter(TracePage)
 _TRACE: Final[TypeAdapter[Trace | None]] = TypeAdapter(Trace | None)
@@ -219,7 +220,8 @@ class ClickHouseStorage:
 
     async def query_sql(self, sql: str, scope: QueryScope, secret: str) -> TraceSQLResponse:
         result: Final = await self._native.query_sql(sql, scope, secret)
-        return _decode_query_response(_SQL_RESPONSE, result)
+        envelope: Final = _decode_query_response(_SQL_ENVELOPE, result)
+        return TraceSQLResponse(data=envelope.data)
 
     async def query_help(self, scope: QueryScope, secret: str) -> TraceQueryHelp:
         result: Final = await self._native.query_help(scope, secret)

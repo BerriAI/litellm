@@ -11,7 +11,7 @@ import pytest
 from prisma import Json, Prisma
 from pydantic import InstanceOf, TypeAdapter
 
-from litellm.rust_bridge.trace.queries import TraceSQLResponse
+from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
 from litellm.rust_bridge.trace.storage import Tenant, span_rows
 from litellm.tracing.types import SpendLogRecord
 from scripts.seed_tracing_fixtures import (
@@ -205,13 +205,8 @@ async def test_first_copy_stamps_the_authenticated_tenant_and_writes_both_stores
     pattern: Final = response_pattern(tuple(chain.from_iterable(rows for _, rows in fixtures)))
     replays: Final = fixture_replays(TRACE_FIXTURES, 1_800_000_000_000, "first", pattern)
     storage: Final = AsyncMock(spec=ClickHouseStorage)
-    storage.query_sql.return_value = TraceSQLResponse.model_validate(
-        {
-            "meta": (),
-            "data": [{"team_id": "local-team", "api_key": "local-hash", "user": "admin"}],
-            "rows": 1,
-            "statistics": {"elapsed": 0, "rows_read": 1, "bytes_read": 1},
-        }
+    storage.query_sql.return_value = TraceSQLResponse(
+        data=({"team_id": "local-team", "api_key": "local-hash", "user": "admin"},)
     )
     database: Final = AsyncMock(spec=Prisma, litellm_spendlogs=AsyncMock())
     client: Final = AsyncMock(spec=httpx.AsyncClient)
