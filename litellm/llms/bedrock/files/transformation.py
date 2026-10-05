@@ -58,7 +58,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     PathLike,
 )
-from litellm.types.utils import ExtractedFileData, LlmProviders, SpecialEnums, is_litellm_owned_kwarg
+from litellm.types.utils import CallTypes, ExtractedFileData, LlmProviders, SpecialEnums, is_litellm_owned_kwarg
 from litellm.utils import get_llm_provider, get_optional_params
 
 from ..base_aws_llm import BaseAWSLLM
@@ -129,6 +129,16 @@ class _OpenAIBatchRecord(TypedDict, total=False):
 class _BedrockBatchRecord(TypedDict):
     recordId: ReadOnly[str]
     modelInput: ReadOnly[Mapping[str, object]]
+
+
+_RECORD_KIND_CALL_TYPES: Final = MappingProxyType(
+    {
+        BedrockBatchRecordKind.CHAT: CallTypes.acompletion,
+        BedrockBatchRecordKind.TEXT_COMPLETION: CallTypes.atext_completion,
+        BedrockBatchRecordKind.RESPONSES: CallTypes.aresponses,
+        BedrockBatchRecordKind.EMBEDDING: CallTypes.aembedding,
+    }
+)
 
 
 class _S3UploadResponse(TypedDict, total=False):
@@ -572,7 +582,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     OPENAI_RESPONSES_URL = "/v1/responses"
 
     @staticmethod
-    def _classify_batch_record(openai_jsonl_record: _OpenAIBatchRecord) -> BedrockBatchRecordKind:
+    def _classify_batch_record(openai_jsonl_record: Mapping[str, object]) -> BedrockBatchRecordKind:
         """
         Decide which OpenAI endpoint shape an OpenAI batch JSONL line carries.
 
@@ -612,6 +622,10 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if "input" in body:
             return BedrockBatchRecordKind.EMBEDDING
         return BedrockBatchRecordKind.CHAT
+
+    @staticmethod
+    def batch_record_call_type(openai_jsonl_record: Mapping[str, object]) -> CallTypes:
+        return _RECORD_KIND_CALL_TYPES[BedrockFilesConfig._classify_batch_record(openai_jsonl_record)]
 
     # Identifier for the Bedrock Titan v2 InvokeModel body schema as stored
     # in `model_prices_and_context_window.json`. Centralized so future

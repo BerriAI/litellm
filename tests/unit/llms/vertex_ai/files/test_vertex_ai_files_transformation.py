@@ -7,6 +7,7 @@ import json
 import urllib.parse
 from collections.abc import Mapping
 from types import MappingProxyType
+from typing import Final
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -18,7 +19,9 @@ from litellm.llms.vertex_ai.files.transformation import (
     _get_litellm_batch_custom_id_from_labels,
     _openai_batch_jsonl_entry_to_vertex_rows,
     _sanitize_gcp_label_value,
+    batch_record_call_type,
 )
+from litellm.types.utils import CallTypes
 from litellm.types.llms.openai import OpenAIFileObject, HttpxBinaryResponseContent
 from openai.types.file_deleted import FileDeleted
 
@@ -1921,3 +1924,26 @@ class TestVertexEmbeddingsBatchOutputTranslation:
         content = json.dumps(legacy_row).encode("utf-8")
 
         assert config._try_transform_vertex_batch_output_to_openai(content) == content
+
+
+@pytest.mark.parametrize(
+    ("url", "body", "call_type"),
+    [
+        ("/v1/embeddings", {"model": "text-embedding-005", "input": "hello"}, CallTypes.aembedding),
+        (
+            "/v1/chat/completions",
+            {"model": "gemini-2.5-flash", "messages": [{"role": "user", "content": "hello"}]},
+            CallTypes.acompletion,
+        ),
+        ("/v1/responses", {"model": "gemini-2.5-flash", "input": "hello"}, CallTypes.acompletion),
+    ],
+    ids=["embeddings", "chat", "responses_bridged_to_chat"],
+)
+def test_a_batch_record_runs_as_chat_exactly_when_vertex_builds_a_chat_request(
+    url: str, body: Mapping[str, object], call_type: CallTypes
+):
+    entry: Final = {"custom_id": "r-1", "method": "POST", "url": url, "body": body}
+    (row, *_) = _wrap_entries([entry])
+
+    assert batch_record_call_type(entry) is call_type
+    assert ("contents" in row["request"]) is (call_type is CallTypes.acompletion)
