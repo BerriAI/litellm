@@ -9,7 +9,7 @@ from typing import Final
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from .analysis import AnalysisResponseError, analyze_sample, validation_details
+from .analysis import AnalysisResponseError, AnalyzeSample, analyze_sample, validation_details
 from .models import Claim, Coverage, ExecutionContent, ModelRequest, ModelResult, Progress, Result, Sample
 from .release import PROTOCOL_VERSION, release_tag
 
@@ -87,10 +87,12 @@ class LensWorker:
         client: httpx.AsyncClient,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         heartbeat_wait: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        analysis: AnalyzeSample = analyze_sample,
     ) -> None:
         self.client: Final = client
         self.sleep: Final = sleep
         self.heartbeat_wait: Final = heartbeat_wait
+        self.analysis: Final = analysis
 
     async def model_request(self, path: str, body: ModelRequest, attempt: int = 0) -> ModelResult:
         try:
@@ -191,7 +193,7 @@ class LensWorker:
             data: Final = await self.client.get(prefix + "/sample")
             data.raise_for_status()
             sample: Final = Sample.model_validate(data.json())
-            result: Final = await analyze_sample(claim, sample, read, model, progress)
+            result: Final = await self.analysis(claim, sample, read, model, progress)
             saved: Final = await self.client.post(prefix + "/result", json=result.model_dump(mode="json"))
             saved.raise_for_status()
 
