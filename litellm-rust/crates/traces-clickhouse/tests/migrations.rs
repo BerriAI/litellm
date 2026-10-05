@@ -264,6 +264,31 @@ async fn schema_supports_span_rollups_and_spend_joins(
 }
 
 #[rstest]
+#[case::quoted_versions("output_format_json_quote_64bit_integers=1")]
+#[case::asynchronous_inserts(
+    "async_insert=1&wait_for_async_insert=0&async_insert_busy_timeout_ms=20000"
+)]
+#[tokio::test]
+async fn schema_setup_records_migrations_synchronously_with_configured_settings(
+    #[future(awt)] database: TestResult<ClickHouseDatabase>,
+    #[case] settings: &str,
+) -> TestResult {
+    let database = database?;
+    let writer = Connection::writer(&format!("{}?{settings}", database.url))?;
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        migration_versions()
+    );
+    ensure_schema(&database.client, &writer, "trace_test", 7).await?;
+    assert_eq!(
+        migration_ledger_versions(&database).await?,
+        migration_versions()
+    );
+    Ok(())
+}
+
+#[rstest]
 #[tokio::test]
 async fn changed_migration_is_rejected(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,

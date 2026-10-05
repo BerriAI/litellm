@@ -5,3 +5,5 @@
 The crate has no trace tables, OTLP types, or named trace queries. `litellm-traces-clickhouse` supplies those rules and uses this storage for both trace rows and spend rows
 
 It also applies embedded migrations through the `schema_migrations` ledger
+
+Startup migrations must be replay-safe schema changes. Backfills belong in coordinated jobs outside proxy startup

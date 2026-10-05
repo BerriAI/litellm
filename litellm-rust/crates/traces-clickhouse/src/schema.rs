@@ -9,13 +9,8 @@ use super::{Connection, Error};
 const SCHEMA_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 const MIGRATIONS: &[Migration] = litellm_migrate::migrate!("migrations");
-const RETENTION: [(&str, &str); 3] = [
-    ("otel_traces", "toDateTime(Timestamp)"),
-    ("agent_traces_by_key", "toDateTime(StartTs)"),
-    ("spend_logs", "toDateTime(start_time)"),
-];
 
-pub fn schema_statements(database: &str, retention_days: u32) -> Result<Vec<String>, Error> {
+fn validate_schema(database: &str, retention_days: u32) -> Result<(), Error> {
     if database.is_empty()
         || !database
             .bytes()
@@ -24,15 +19,26 @@ pub fn schema_statements(database: &str, retention_days: u32) -> Result<Vec<Stri
     {
         return Err(Error::InvalidSchema);
     }
+    Ok(())
+}
+
+fn render(migration: &Migration, database: &str, retention_days: u32) -> String {
+    migration
+        .sql
+        .replace("{database}", database)
+        .replace("{retention_days}", &retention_days.to_string())
+}
+
+pub fn schema_statements(database: &str, retention_days: u32) -> Result<Vec<String>, Error> {
+    validate_schema(database, retention_days)?;
     let database = format!("`{database}`");
     Ok(
         std::iter::once(format!("CREATE DATABASE IF NOT EXISTS {database}"))
-            .chain(MIGRATIONS.iter().map(|migration| {
-                migration
-                    .sql
-                    .replace("{database}", &database)
-                    .replace("{retention_days}", &retention_days.to_string())
-            }))
+            .chain(
+                MIGRATIONS
+                    .iter()
+                    .map(|migration| render(migration, &database, retention_days)),
+            )
             .collect(),
     )
 }
@@ -60,29 +66,25 @@ async fn ensure_schema_with_timeout(
     retention_days: u32,
     request_timeout: Duration,
 ) -> Result<(), Error> {
-    schema_statements(database, retention_days)?;
+    validate_schema(database, retention_days)?;
     let quoted_database = format!("`{database}`");
     apply_migrations(
         client,
         connection,
         database,
         MIGRATIONS,
-        |migration| {
-            migration
-                .sql
-                .replace("{database}", &quoted_database)
-                .replace("{retention_days}", &retention_days.to_string())
-        },
+        |migration| render(migration, &quoted_database, retention_days),
         request_timeout,
     )
     .await?;
-    for (table, expression) in RETENTION {
+    for migration in MIGRATIONS
+        .iter()
+        .filter(|migration| migration.sql.contains("{retention_days}"))
+    {
         execute_statement(
             client,
             connection,
-            &format!(
-                "ALTER TABLE {quoted_database}.{table} MODIFY TTL {expression} + INTERVAL {retention_days} DAY"
-            ),
+            &render(migration, &quoted_database, retention_days),
             request_timeout,
         )
         .await?;

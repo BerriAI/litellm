@@ -174,7 +174,7 @@ async def test_schema_setup_uses_configured_retention(recording_server: Recordin
         request.raw_body for request in recording_server.requests if b"MODIFY TTL" in request.raw_body
     )
     assert all(b"INTERVAL 7 DAY" in statement for statement in ttl_statements)
-    assert tuple(request.raw_body for request in recording_server.requests[-3:]) == (
+    assert tuple(request.raw_body.strip() for request in recording_server.requests[-3:]) == (
         b"ALTER TABLE `trace_test`.otel_traces MODIFY TTL toDateTime(Timestamp) + INTERVAL 7 DAY",
         b"ALTER TABLE `trace_test`.agent_traces_by_key MODIFY TTL toDateTime(StartTs) + INTERVAL 7 DAY",
         b"ALTER TABLE `trace_test`.spend_logs MODIFY TTL toDateTime(start_time) + INTERVAL 7 DAY",
@@ -186,7 +186,7 @@ async def test_schema_setup_uses_writer_credentials_and_rejects_failed_statement
     recording_server: RecordingServer,
 ) -> None:
     recording_server.expected_requests = 2
-    recording_server.enqueue(ResponseSpec(body=""))
+    recording_server.enqueue(ResponseSpec(body=b""))
     recording_server.enqueue(ResponseSpec(status=403, body="denied"))
     writer_url: Final = recording_server.base_url.replace("http://", "http://writer:p%40ss%2Fword%25@")
     storage: Final = _native_storage("trace_test", writer_url + "?database=wrong&readonly=1", 7)
