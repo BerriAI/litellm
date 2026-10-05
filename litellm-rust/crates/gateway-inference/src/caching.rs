@@ -101,11 +101,22 @@ impl litellm_host::interceptors::Interceptors<litellm_inference::RouteError> for
 
 impl CacheHeaders {
     pub(crate) fn apply(&self, mut response: axum::response::Response) -> axum::response::Response {
-        if let Some(key) = self.0.get()
-            && let Ok(value) = axum::http::HeaderValue::from_str(key)
-        {
+        if let Some(value) = self.value() {
             response.headers_mut().insert("x-litellm-cache-key", value);
         }
         response
+    }
+
+    #[cfg(feature = "switchyard")]
+    pub(crate) fn headers(&self) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        if let Some(value) = self.value() {
+            headers.insert("x-litellm-cache-key", value);
+        }
+        headers
+    }
+
+    fn value(&self) -> Option<axum::http::HeaderValue> {
+        axum::http::HeaderValue::from_str(self.0.get()?).ok()
     }
 }

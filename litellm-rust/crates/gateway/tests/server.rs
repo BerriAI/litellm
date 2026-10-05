@@ -33,6 +33,32 @@ fn inference() -> Arc<Gateway> {
     litellm_gateway::build_inference(&Config::from_yaml("model_list: []").unwrap()).unwrap()
 }
 
+#[cfg(feature = "switchyard")]
+#[rstest]
+fn validates_only_winning_switchyard_models() {
+    let config = Config::from_yaml(
+        r#"
+model_list:
+  - model_name: coding-router
+    litellm_params:
+      model: switchyard/algorithm
+      switchyard_config: { type: passthrough, target: missing }
+"#,
+    )
+    .unwrap();
+    assert!(litellm_gateway::build_inference(&config).is_err());
+
+    let config = Config::from_yaml(
+        r#"
+model_list:
+  - { model_name: coding-router, litellm_params: { model: switchyard/algorithm, switchyard_config: { type: passthrough, target: missing } } }
+  - { model_name: coding-router, litellm_params: { model: openai/model } }
+"#,
+    )
+    .unwrap();
+    assert!(litellm_gateway::build_inference(&config).is_ok());
+}
+
 #[rstest]
 #[case::authorized("/v1/messages", Some("Bearer gateway-key"), Some("gateway-key"), 400)]
 #[case::missing_token("/v1/messages", None, Some("gateway-key"), 401)]

@@ -209,9 +209,9 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.91"
+version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae36dc4177970ef04fde5178d3e2429882def40e57a451f919c098f72baa6cec"
+checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2111,6 +2111,16 @@ dependencies = [
 
 [[package]]
 name = "fraction"
+version = "0.15.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e076045bb43dac435333ed5f04caf35c7463631d0dae2deb2638d94dd0a5b872"
+dependencies = [
+ "lazy_static",
+ "num",
+]
+
+[[package]]
+name = "fraction"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e246562084dde8ebbcc943b261c406ce4f68e5032ec28029a251a47d6a295500"
@@ -2657,9 +2667,9 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hermit-abi"
-version = "0.5.3"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
+checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
 name = "hex"
@@ -3237,6 +3247,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonptr"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72c22d99362c7aac7d77efab6b49c2181674b165d7e6e7c755b3432ded64bf51"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "jsonschema"
+version = "0.49.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59ec8a241beed129f06114aa68007e905ca350e7baeb6e17a7631bb7978d91b2"
+dependencies = [
+ "ahash",
+ "bytecount",
+ "data-encoding",
+ "email_address",
+ "fancy-regex 0.19.2",
+ "fraction 0.15.4",
+ "getrandom 0.3.4",
+ "idna",
+ "itoa",
+ "jsonschema-regex 0.49.9",
+ "jsonschema-value 0.49.9",
+ "num-cmp",
+ "num-traits",
+ "percent-encoding",
+ "referencing 0.49.9",
+ "regex",
+ "serde",
+ "serde_json",
+ "strum",
+ "unicode-general-category",
+ "uuid-simd",
+]
+
+[[package]]
 name = "jsonschema"
 version = "0.55.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3247,21 +3296,30 @@ dependencies = [
  "data-encoding",
  "email_address",
  "fancy-regex 0.19.2",
- "fraction",
+ "fraction 0.17.0",
  "getrandom 0.3.4",
  "itoa",
- "jsonschema-regex",
- "jsonschema-value",
+ "jsonschema-regex 0.55.1",
+ "jsonschema-value 0.55.1",
  "num-cmp",
  "num-traits",
  "percent-encoding",
- "referencing",
+ "referencing 0.55.1",
  "regex",
  "serde",
  "serde_json",
  "strum",
  "unicode-general-category",
  "uuid-simd",
+]
+
+[[package]]
+name = "jsonschema-regex"
+version = "0.49.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91994f45017ed5e66aa8e59b8415f4cb033a6380d7200387b7cf117595fbdf85"
+dependencies = [
+ "regex-syntax",
 ]
 
 [[package]]
@@ -3275,13 +3333,27 @@ dependencies = [
 
 [[package]]
 name = "jsonschema-value"
+version = "0.49.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ec7637f83e510868ae6ed625f7ebfbbde4554ee8ce49854caa5126a8b9b9ecb"
+dependencies = [
+ "ahash",
+ "bytecount",
+ "fraction 0.15.4",
+ "num-cmp",
+ "num-traits",
+ "serde_json",
+]
+
+[[package]]
+name = "jsonschema-value"
 version = "0.55.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0230ac05e09c6111e96c147b75c390579f5cbd45654b980c68ac60fe17b3f129"
 dependencies = [
  "ahash",
  "bytecount",
- "fraction",
+ "fraction 0.17.0",
  "getrandom 0.3.4",
  "num-cmp",
  "num-traits",
@@ -3783,6 +3855,7 @@ dependencies = [
 name = "litellm-gateway-inference"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "bytes",
@@ -3790,6 +3863,7 @@ dependencies = [
  "litellm-auth",
  "litellm-cache-memory",
  "litellm-cache-response",
+ "litellm-config",
  "litellm-gateway-auth",
  "litellm-host",
  "litellm-host-http",
@@ -3807,6 +3881,11 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "switchyard-libsy",
+ "switchyard-llm-client",
+ "switchyard-protocol",
+ "switchyard-runner",
+ "switchyard-translation",
  "thiserror 2.0.19",
  "tokio",
  "tower",
@@ -4189,7 +4268,7 @@ name = "litellm-model-catalog"
 version = "0.1.0"
 dependencies = [
  "indexmap 2.14.0",
- "jsonschema",
+ "jsonschema 0.55.1",
  "litellm-llms-types",
  "rstest",
  "schemars 1.2.2",
@@ -4502,7 +4581,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
- "toml",
+ "toml 0.9.12+spec-1.1.0",
  "zip",
 ]
 
@@ -5260,9 +5339,9 @@ checksum = "3d20d5497ef88037a52ff98267d066e7f11fcc5e99bbfbd58a42336193aacec3"
 
 [[package]]
 name = "portable-atomic-util"
-version = "0.2.8"
+version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10ab3eb7f3becc3a1cbc4f2c6f20267996cfc1a6467a873763411b136a122715"
+checksum = "c2a106d1259c23fac8e543272398ae0e3c0b8d33c88ed73d0cc71b0f1d902618"
 dependencies = [
  "portable-atomic",
 ]
@@ -5803,6 +5882,23 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "referencing"
+version = "0.49.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6efa2154ea6f5ce0fdecdd2a8d18f2fa1a39a8fbba91564f555a592e4dce8278"
+dependencies = [
+ "ahash",
+ "fluent-uri",
+ "getrandom 0.3.4",
+ "hashbrown 0.17.1",
+ "itoa",
+ "micromap",
+ "parking_lot",
+ "percent-encoding",
+ "serde_json",
 ]
 
 [[package]]
@@ -7027,6 +7123,103 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "switchyard-libsy"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0646b0891f703d91ba97492d1d0527a7fdeb7b0269c53757e7b9388953550c16"
+dependencies = [
+ "async-trait",
+ "futures",
+ "http 1.4.2",
+ "jsonptr",
+ "jsonschema 0.49.9",
+ "opentelemetry 0.32.0",
+ "parking_lot",
+ "rand 0.10.2",
+ "regex",
+ "serde",
+ "serde_json",
+ "switchyard-protocol",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-opentelemetry",
+ "uuid",
+]
+
+[[package]]
+name = "switchyard-llm-client"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c07bffb8f677431f9530fc8335140134a743d3e1618c595cfd6953ed3b009360"
+dependencies = [
+ "async-trait",
+ "futures",
+ "futures-util",
+ "http 1.4.2",
+ "httpdate",
+ "opentelemetry 0.32.0",
+ "parking_lot",
+ "reqwest 0.13.5",
+ "serde_json",
+ "switchyard-libsy",
+ "switchyard-protocol",
+ "switchyard-translation",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry",
+]
+
+[[package]]
+name = "switchyard-protocol"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c49a9e7884e7f50669250463a58a21bc79084adb87ef03647cbe7ba5c3b22ee"
+dependencies = [
+ "async-trait",
+ "futures",
+ "http 1.4.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "switchyard-runner"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cbaeff25e505e0b5f06beec4dd6a6db58d844b0c08c80bc9e5c4f0f8e6c7079"
+dependencies = [
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "strum_macros",
+ "switchyard-libsy",
+ "switchyard-llm-client",
+ "switchyard-protocol",
+ "thiserror 2.0.19",
+ "toml 1.1.6+spec-1.1.0",
+ "tracing",
+]
+
+[[package]]
+name = "switchyard-translation"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "629f9c47cb198da7e92569384fec4da8486852c38a7af922e0c9d6b62ed74fa1"
+dependencies = [
+ "async-stream",
+ "base64 0.22.1",
+ "futures",
+ "serde",
+ "serde_json",
+ "switchyard-protocol",
+ "thiserror 2.0.19",
+ "tracing",
+]
+
+[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7339,6 +7532,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2 0.6.5",
@@ -7431,6 +7625,21 @@ dependencies = [
  "toml_parser",
  "toml_writer",
  "winnow 0.7.15",
+]
+
+[[package]]
+name = "toml"
+version = "1.1.6+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a"
+dependencies = [
+ "indexmap 2.14.0",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime 1.1.1+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow 1.0.4",
 ]
 
 [[package]]
@@ -7703,15 +7912,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-log"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
+dependencies = [
+ "log",
+ "once_cell",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-opentelemetry"
 version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adbc64cba7137545b8044cb1fe9814f7aacf3c6b5f9b45be8bb5db538befdb26"
 dependencies = [
  "js-sys",
- "opentelemetry",
+ "opentelemetry 0.32.0",
  "tracing",
  "tracing-core",
+ "tracing-log",
  "tracing-subscriber",
  "web-time",
 ]

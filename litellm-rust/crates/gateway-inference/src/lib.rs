@@ -11,6 +11,8 @@ pub mod messages;
 mod ocr;
 mod request;
 mod responses;
+#[cfg(feature = "switchyard")]
+mod switchyard;
 
 use std::sync::Arc;
 
@@ -26,11 +28,15 @@ use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
 pub use error::Error;
+#[cfg(feature = "switchyard")]
+pub use error::SwitchyardConfigError;
 pub use litellm_router::{Deployment, Router as ModelRouter};
 pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    #[cfg(feature = "switchyard")]
+    switchyard_routes: switchyard::Routes,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
     pub messages: MessagesRoute,
@@ -60,6 +66,8 @@ impl Gateway {
         let auth = resources.auth.clone();
         Ok(Self {
             cache: None,
+            #[cfg(feature = "switchyard")]
+            switchyard_routes: switchyard::Routes::default(),
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),
                 auth.clone(),
@@ -85,6 +93,17 @@ impl Gateway {
             resources,
             http,
         })
+    }
+
+    /// Configure Switchyard virtual models from LiteLLM's model list.
+    #[cfg(feature = "switchyard")]
+    pub fn with_switchyard_models(
+        mut self,
+        models: &[litellm_config::Model],
+    ) -> Result<Self, SwitchyardConfigError> {
+        self.switchyard_routes =
+            switchyard::Routes::from_models(models, Arc::new(self.models.clone()))?;
+        Ok(self)
     }
 }
 
