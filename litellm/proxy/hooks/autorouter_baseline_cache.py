@@ -5,7 +5,7 @@ import hashlib
 import json
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -88,6 +88,7 @@ class BaselineCacheContext:
     estimated_request: PreparedCacheRequest | None = None
     estimated: bool = False
     invalidated: str | None = None
+    finalization: asyncio.Task[CapturedBaselineObservation] | None = field(default=None, repr=False, compare=False)
 
 
 class _Metadata(BaseModel):
@@ -330,11 +331,14 @@ async def invalidate_baseline_cache(logging_obj: Logging, reason: str, *, comple
 
 async def finalize_baseline_cache(logging_obj: Logging, response_obj: object) -> None:
     context: Final = logging_obj.baseline_cache_context
-    if context is None:
+    if context is None or logging_obj.baseline_observation is not None:
         return
+    task: Final = context.finalization or asyncio.create_task(_capture(context, logging_obj, response_obj))
+    active: Final = context if context.finalization is not None else replace(context, finalization=task)
+    logging_obj.baseline_cache_context = active
     try:
-        capture: Final = await _capture(context, logging_obj, response_obj)
-        if logging_obj.baseline_cache_context is context:
+        capture: Final = await asyncio.shield(task)
+        if logging_obj.baseline_cache_context is active:
             logging_obj.baseline_observation = capture  # rebind-ok: attach only to the captured request owner
     except Exception:  # noqa: BLE001  # observation failures must preserve inference and billing
         await invalidate_baseline_cache(logging_obj, "observation_unavailable")

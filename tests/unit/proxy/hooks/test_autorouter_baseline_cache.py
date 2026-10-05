@@ -536,14 +536,17 @@ async def test_estimated_capture_defers_token_counting_until_completion_off_even
     await collector.async_pre_call_deployment_hook(request, CallTypes.acompletion)
     assert logging.baseline_cache_context is not None
     assert threads.empty()
-    await finalize_baseline_cache(
-        logging, ModelResponse(usage=Usage(prompt_tokens=5000, completion_tokens=1, total_tokens=5001))
-    )
+    response: Final = ModelResponse(usage=Usage(prompt_tokens=5000, completion_tokens=1, total_tokens=5001))
+    await asyncio.gather(*(finalize_baseline_cache(logging, response) for _ in range(3)))
     assert not threads.empty()
-    assert all(threads.get_nowait() != get_ident() for _ in range(threads.qsize()))
+    counted: Final = tuple(threads.get_nowait() for _ in range(threads.qsize()))
+    assert len(counted) == 4
+    assert all(thread != get_ident() for thread in counted)
     captured: Final = logging.baseline_observation
     assert captured is not None and captured.observation.plan is not None
     assert captured.observation.plan.total_tokens == 5000
+    await finalize_baseline_cache(logging, response)
+    assert logging.baseline_observation is captured and threads.empty()
 
 
 async def test_estimator_capacity_remains_bounded_when_caller_is_cancelled() -> None:
