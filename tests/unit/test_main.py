@@ -3330,6 +3330,26 @@ def test_stream_chunk_builder_text_completion_keeps_finish_reason_and_provider_u
     assert response.usage.prompt_tokens_details.cached_tokens == 4
 
 
+def test_stream_chunk_builder_rebuilds_dict_text_completion_chunks():
+    from litellm.types.utils import TextChoices
+
+    def chunk(choices, **extra):
+        return {"id": "cmpl-1", "object": "text_completion", "created": 1, "model": "my-model", "choices": choices, **extra}
+
+    chunks = [
+        chunk([TextChoices(text="Hello", index=0)]),
+        chunk([TextChoices(text=" world", index=0, finish_reason="stop")]),
+        chunk([], usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}),
+    ]
+
+    response = litellm.stream_chunk_builder(chunks)
+
+    assert response.id == "cmpl-1"
+    assert response.choices[0].text == "Hello world"
+    assert response.choices[0].finish_reason == "stop"
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (3, 2, 5)
+
+
 def test_stream_chunk_builder_text_completion_survives_uncountable_prompt():
     from litellm.main import stream_chunk_builder_text_completion
     from litellm.types.utils import TextCompletionResponse

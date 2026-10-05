@@ -9045,7 +9045,10 @@ def stream_chunk_builder(
         if first_chunk_with_choices is not None and isinstance(
             first_chunk_with_choices["choices"][0], litellm.utils.TextChoices
         ):  # route to the text completion logic
-            return stream_chunk_builder_text_completion(chunks=chunks, messages=messages)
+            text_chunks: Final = tuple(
+                c if isinstance(c, TextCompletionResponse) else TextCompletionResponse(**c) for c in chunks
+            )
+            return stream_chunk_builder_text_completion(chunks=text_chunks, messages=messages)
 
         model: Final = chunks[0]["model"]
         # Initialize the response dictionary
