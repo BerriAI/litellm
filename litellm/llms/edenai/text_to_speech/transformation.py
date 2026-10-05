@@ -23,7 +23,7 @@ _SUPPORTED_PARAMS: Final = ("voice", "response_format", "speed", "instructions")
 
 class EdenAITextToSpeechConfig(BaseTextToSpeechConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited contract
-        return list(_SUPPORTED_PARAMS)  # mutable-ok: inherited contract
+        return list(_SUPPORTED_PARAMS)
 
     def map_openai_params(
         self,
@@ -62,9 +62,7 @@ class EdenAITextToSpeechConfig(BaseTextToSpeechConfig):
         headers: dict[str, object],  # mutable-ok: inherited contract
     ) -> TextToSpeechRequestData:
         fields: Final = (("model", model), ("input", input), ("voice", voice), *optional_params.items())
-        return TextToSpeechRequestData(
-            dict_body={key: value for key, value in fields if value is not None}  # mutable-ok: TypedDict field
-        )
+        return TextToSpeechRequestData(dict_body={key: value for key, value in fields if value is not None})
 
     def transform_text_to_speech_response(
         self,

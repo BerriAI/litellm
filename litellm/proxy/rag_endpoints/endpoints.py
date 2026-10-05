@@ -618,11 +618,11 @@ async def rag_ingest(
             raise HTTPException(status_code=400, detail={"error": str(e)})
 
         managed_store: Final = resolved_stores.get(request_vector_store_config.get("vector_store_id"))
-        merged_vector_store_config: Final = {  # mutable-ok: ingestion classes mutate it when loading credentials
+        merged_vector_store_config: Final = {
             **_caller_vector_store_options(request_vector_store_config, managed_store),
             **_managed_store_overrides(managed_store),
         }
-        merged_ingest_options: Final = {  # mutable-ok: litellm.aingest takes a plain dict payload
+        merged_ingest_options: Final = {
             **ingest_options,
             "vector_store": merged_vector_store_config,
         }
@@ -631,7 +631,7 @@ async def rag_ingest(
         if provider_error is not None:
             raise HTTPException(
                 status_code=400,
-                detail={"error": provider_error},  # mutable-ok: FastAPI serializes the detail as JSON
+                detail={"error": provider_error},
             )
 
         # Add litellm data

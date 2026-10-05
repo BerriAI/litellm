@@ -17,7 +17,7 @@ This pattern can be replicated for other message formats (e.g., Anthropic).
 import json
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
@@ -54,6 +54,7 @@ from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Choices,
+    Delta,
     GenericGuardrailAPIInputs,
     ModelResponse,
     ModelResponseStream,
@@ -247,8 +248,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 texts_to_check=texts,
                 images_to_check=images,
                 tool_calls_to_check=tool_calls,
-                text_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
-                tool_call_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
+                text_task_mappings=[],
+                tool_call_task_mappings=[],
             )
         if texts or tool_calls:
             return "no scannable content after message scoping"
@@ -695,7 +696,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 cast(
                     ModelResponse,
                     stream_chunk_builder(
-                        chunks=[  # mutable-ok: callee takes a list
+                        chunks=[
                             OpenAIChatCompletionsHandler._narrowed_to_choice(response, index)
                             for response in responses_so_far
                         ],
@@ -706,7 +707,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             for index in choice_indices
         )
         (_, base_response), *_ = rebuilt_by_index
-        stitched_choices: Final = [  # mutable-ok: choices is a List field; a tuple there breaks model_dump round-trips
+        stitched_choices: Final = [
             rebuilt.choices[0].model_copy(update=MappingProxyType({"index": index}))
             for index, rebuilt in rebuilt_by_index
         ]
@@ -714,7 +715,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     @staticmethod
     def _narrowed_to_choice(response: "ModelResponseStream", index: int) -> "ModelResponseStream":
-        narrowed: Final = [choice for choice in response.choices if choice.index == index]  # mutable-ok: List field
+        narrowed: Final = [choice for choice in response.choices if choice.index == index]
         return response.model_copy(update=MappingProxyType({"choices": narrowed}))
 
     def build_stream_error_items(
@@ -836,6 +837,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             stream_ended=stream_ended,
             tool_calls_in_flight=bool(tool_call_fingerprints) and not stream_ended,
         )
+
+    def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
+        released_key: Final = self.get_streaming_scan_key(responses_so_far)
+        if released_key is None or not released_key.tool_calls_in_flight:
+            return tuple(responses_so_far)
+        terminator: Final = ModelResponseStream(
+            choices=[
+                StreamingChoices(index=index, delta=Delta(), finish_reason="tool_calls")
+                for index in _choice_indices_with_tool_calls(responses_so_far)
+            ]
+        )
+        return (*responses_so_far, terminator)
 
     @staticmethod
     def _streamed_tool_call_fingerprints(responses_so_far: Sequence[object]) -> tuple[str, ...]:
@@ -1115,8 +1128,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             return
         await self._apply_guardrail_responses_to_output_streaming(
             responses=responses_so_far,
-            guardrailed_texts=list(rewrites_by_choice.values()),  # mutable-ok: callee takes lists
-            task_mappings=[(index, None) for index in rewrites_by_choice],  # mutable-ok: callee takes lists
+            guardrailed_texts=list(rewrites_by_choice.values()),
+            task_mappings=[(index, None) for index in rewrites_by_choice],
         )
 
     @staticmethod
@@ -1386,6 +1399,20 @@ def _streamed_delta_tool_calls(delta: object) -> tuple[object, ...]:
     function_call: Final = stream_item_field(delta, "function_call")
     legacy: Final = () if function_call is None else (function_call,)
     return stream_item_items(delta, "tool_calls") + legacy
+
+
+def _released_choices(responses_so_far: Sequence[object]) -> Iterator[object]:
+    for chunk in responses_so_far:
+        yield from _stream_chunk_choices(chunk)
+
+
+def _choice_indices_with_tool_calls(responses_so_far: Sequence[object]) -> tuple[int, ...]:
+    indices: Final = (
+        index if isinstance(index := stream_item_field(choice, "index"), int) else 0
+        for choice in _released_choices(responses_so_far)
+        if _streamed_delta_tool_calls(stream_item_field(choice, "delta"))
+    )
+    return tuple(dict.fromkeys(indices))
 
 
 def _blocked_stream_identity(

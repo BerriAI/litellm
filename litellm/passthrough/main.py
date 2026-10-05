@@ -540,7 +540,9 @@ def llm_passthrough_route(
     )
 
     ## IS STREAMING REQUEST
-    _streaming_request_data: dict = data if isinstance(data, dict) else (json if isinstance(json, dict) else {})
+    _streaming_request_data: Final[dict[str, object]] = (
+        data if isinstance(data, dict) else (json if isinstance(json, dict) else {})
+    )
     is_streaming_request: Final = provider_config.is_streaming_request(
         endpoint=endpoint,
         request_data=_streaming_request_data,
