@@ -196,12 +196,16 @@ def test_migration_entrypoint_adds_the_gin_index_and_the_upgraded_proxy_maps_man
                 database_url=database_url,
             ) == [{"flat_model_file_ids": [provider_file_id]}]
             assert _listed_ids(upgraded, store, model) == (managed,)
-            if replica_environment:
-                assert {"usename": urlsplit(replica_environment["DATABASE_URL_READ_REPLICA"]).username} in read_rows(
+            connected_roles: Final = {
+                string_value(row["usename"])
+                for row in read_rows(
                     "SELECT DISTINCT usename FROM pg_stat_activity WHERE datname = current_database()",
                     (),
                     database_url=database_url,
                 )
+            }
+            expected_roles: Final = {urlsplit(url).username for url in (database_url, *replica_environment.values())}
+            assert expected_roles <= connected_roles, "every configured proxy role must hold a scratch connection"
 
 
 def test_db_push_creates_a_valid_gin_index_on_the_flat_provider_file_ids(gateway: Gateway) -> None:
