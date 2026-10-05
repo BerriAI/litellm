@@ -366,24 +366,27 @@ def _s3_backend() -> Callable[[Request], Reply]:
     return respond
 
 
+def _bedrock_model(scenario: Scenario, wire: Wire) -> str:
+    return scenario.model(
+        model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
+        api_key=None,
+        api_base=None,
+        aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
+        aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        aws_region_name="us-east-1",
+        s3_bucket_name=BUCKET,
+        s3_endpoint_url=wire.url,
+    )
+
+
 @pytest.mark.parametrize("scheme", ["s3", "gs"], ids=["s3-uri", "gs-uri"])
-def test_non_admin_cannot_delete_a_raw_cloud_storage_uri_but_admin_can(gateway: Gateway, scheme: str) -> None:
+def test_non_admin_cannot_delete_a_raw_cloud_storage_uri(gateway: Gateway, scheme: str) -> None:
     with wire_server(_s3_backend()) as wire, gateway.scenario() as scenario:
-        model: Final = scenario.model(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            api_key=None,
-            api_base=None,
-            aws_access_key_id="AKIAIOSFODNN7EXAMPLE",
-            aws_secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-            aws_region_name="us-east-1",
-            s3_bucket_name=BUCKET,
-            s3_endpoint_url=wire.url,
-        )
+        model: Final = _bedrock_model(scenario, wire)
         _wait_until_every_worker_serves(gateway, model)
         caller_user: Final = scenario.user(user_role="internal_user")
         caller_key: Final = scenario.key(user_id=caller_user, models=[model])
         object_uri: Final = f"{scheme}://{BUCKET}/litellm-bedrock-files-obj.jsonl"
-        encoded_path: Final = "/v1/files/" + quote(object_uri, safe="")
         provider_path: Final = "/bedrock/v1/files/" + quote(object_uri, safe="")
 
         denied: Final = gateway.request("DELETE", provider_path, key=caller_key, params={"model": model})
@@ -396,13 +399,20 @@ def test_non_admin_cannot_delete_a_raw_cloud_storage_uri_but_admin_can(gateway: 
             "non-admin cloud-storage delete reached the storage backend"
         )
 
-        if scheme == "s3":
-            deleted: Final = gateway.request("DELETE", encoded_path, params={"model": model})
-            assert deleted.status_code == 200, deleted.text
-            parsed: Final = _FileDeleted.model_validate_json(deleted.content)
-            assert parsed.deleted is True and parsed.id == object_uri, deleted.text
-            (request,) = _drained_other_than_model_list_probes(wire)
-            assert request.method == "DELETE" and request.target == f"/{BUCKET}/litellm-bedrock-files-obj.jsonl", (
-                request.target
-            )
-            assert request.headers["authorization"].startswith("AWS4-HMAC-SHA256 "), request.headers
+
+def test_proxy_admin_deletes_a_raw_s3_uri_with_one_signed_delete(gateway: Gateway) -> None:
+    with wire_server(_s3_backend()) as wire, gateway.scenario() as scenario:
+        model: Final = _bedrock_model(scenario, wire)
+        _wait_until_every_worker_serves(gateway, model)
+        object_uri: Final = f"s3://{BUCKET}/litellm-bedrock-files-obj.jsonl"
+        encoded_path: Final = "/v1/files/" + quote(object_uri, safe="")
+
+        deleted: Final = gateway.request("DELETE", encoded_path, params={"model": model})
+        assert deleted.status_code == 200, deleted.text
+        parsed: Final = _FileDeleted.model_validate_json(deleted.content)
+        assert parsed.deleted is True and parsed.id == object_uri, deleted.text
+        (request,) = _drained_other_than_model_list_probes(wire)
+        assert request.method == "DELETE" and request.target == f"/{BUCKET}/litellm-bedrock-files-obj.jsonl", (
+            request.target
+        )
+        assert request.headers["authorization"].startswith("AWS4-HMAC-SHA256 "), request.headers
