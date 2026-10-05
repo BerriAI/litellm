@@ -11,17 +11,26 @@ const localServerUrl = process.env.MOCK_LLM_URL ?? "http://127.0.0.1:8090/v1";
 
 let submittedServerName = "";
 let submittedKeyToken = "";
+let rulesSnapshotTaken = false;
+let previousRules: unknown = null;
 
 test.afterEach(async ({ page }) => {
-  try {
-    await page.request.post(`${rootPath()}/config/field/delete`, {
-      headers: {
-        Authorization: `Bearer ${masterKey()}`,
-        "Content-Type": "application/json",
-      },
-      data: { field_name: "mcp_required_fields", config_type: "general_settings" },
-    });
-  } catch {}
+  if (rulesSnapshotTaken) {
+    try {
+      const headers = { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" };
+      if (Array.isArray(previousRules)) {
+        await page.request.post(`${rootPath()}/config/field/update`, {
+          headers,
+          data: { field_name: "mcp_required_fields", field_value: previousRules, config_type: "general_settings" },
+        });
+      } else {
+        await page.request.post(`${rootPath()}/config/field/delete`, {
+          headers,
+          data: { field_name: "mcp_required_fields", config_type: "general_settings" },
+        });
+      }
+    } catch {}
+  }
 
   if (submittedServerName) {
     try {
@@ -40,6 +49,11 @@ test.afterEach(async ({ page }) => {
       });
     } catch {}
   }
+
+  rulesSnapshotTaken = false;
+  previousRules = null;
+  submittedServerName = "";
+  submittedKeyToken = "";
 });
 
 test("Submission Rules panel shows saved rules, preloads the editor, and save keeps existing rules", async ({ page }) => {
@@ -47,6 +61,15 @@ test("Submission Rules panel shows saved rules, preloads the editor, and save ke
     Authorization: `Bearer ${masterKey()}`,
     "Content-Type": "application/json",
   };
+  const settingsResponse = await page.request.get(`${rootPath()}/config/list?config_type=general_settings`, {
+    headers: adminHeaders,
+  });
+  expect(settingsResponse.status(), await settingsResponse.text()).toBe(200);
+  const settings = (await settingsResponse.json()) as { field_name?: string; field_value?: unknown; stored_in_db?: boolean }[];
+  const rulesRow = settings.find((row) => row.field_name === "mcp_required_fields");
+  previousRules = rulesRow?.stored_in_db === true ? (rulesRow.field_value ?? null) : null;
+  rulesSnapshotTaken = true;
+
   const rulesResponse = await page.request.post(`${rootPath()}/config/field/update`, {
     headers: adminHeaders,
     data: {
