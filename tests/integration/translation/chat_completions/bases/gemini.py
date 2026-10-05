@@ -3,14 +3,14 @@ from unittest.mock import ANY
 
 from integration.translation.case import TranslationTestCase
 
-GEMINI_3_5_FLASH_THOUGHT_SIGNATURE: Final = "EtoCCtcCAWkUfRMHqpSzR/FxDYsPJ3NrP1y/mmdCBSDswOdgEoQtZiCJw6qGdrpDDog3bPQS5h72gTN8xFOZ22i9+54pMd+ni6os31/fl2RG7p1s0OtG1D6lnsA9VG6RuaDk5jZHsMQRGBescw3oKaz7YMpGYpe/o4ZemK1zVQ4j7xcGm1MslA4kd7uBDtXWkuGK8S71j8/8DfoBXCZxGTnOBC279dUVKs6IwqEDSW7NwMHIX3koqbhH9VacvtbPuE6/gre0568cSb7RVaMTLC5Gvrpbf1ikskjfmU611G9Ap1H37zU8LBET1+NXb/tBBzbyEYyCoN6PlQn7y20OrtQKulGaxHXk6GBJPKt9D+suW8DQre/X9qKX8DrxmBs8m9UtCdRa+7qGGE4k9c00UujLSxMqper/jshxSSYVPvCubk6vP7BTrqxeD/cJizst1reEKveOFxfozpXptw=="
+GEMINI_3_5_FLASH_THOUGHT_SIGNATURE: Final = "ErkECrYEAWkUfRORlQ5j/gkLmyx08FVeIMgg57FJXrjcLwBlt9iuELI6Uc5h+NR/Vm+gEsbdZ5mgFTmKjPF9K/eft8IlXMKm6odJjQOgOYsbt2JHzANo0bpfTmlA6fIi0G2zLbvBVASA6Bdxu1aPQuO4voioQRwm2vomRxH1YbWp8sKXk0DBVbefosldrL0zLJFsi5dFYCtPvw0n9olPVgptHzEdiyXqG+63aPxTooARRQutUH0XWAKR0V+P7qWPt55QKlLaKQqKeBndg9JrEplJihg1sp++y+NAi18fsqXteUS2zIeDtdePGM/GS5oVibwE25zJoziPRdtJhGasFSaA7a3znhW9PF0pBIPAIRPKE4NsQ0FRhpy7ksIXY+0uJ4N+WPPejrtKK6z5x+P0tFkFP0ZNNPM8FZbir1ncVhVxkZS/wWmhc/8TZoRA9ghlTpYhHJ+C4fRVqQqnyRR3SDpVTzB4/sCjBlb434dTH0U3jB4h6V9b/Zx4k4pwUwZTNr2FfgOt2bR7u05DOa+H73OzsNG6zBnMYgBndQdRgk58+l4+UcZdpGKB0lkbHdfD2bminBypEmeJKNRpuc7Smuu0YxcZiY03tzzhHdrUmItqC39OEr2CzRcT9DjFpiWydo3ej9ZkEXeyxoMCckpMmGWh6xbjAnX9gkrPFmUE2rJqblDJWa51i6u/p9Y6ciCq6j4lAy9eBfULIRGQt9pKOXagltOnX0vR0MTDYgWe4dVDSzCI1TV7X/SQYjo="
 
 GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/chat/completions",
     litellm_request={
         "model": "gemini/gemini-3.5-flash",
-        "max_tokens": 64,
+        "max_tokens": 1024,
         "messages": [
             {"role": "system", "content": "You are a terse assistant."},
             {"role": "user", "content": "Say hello."},
@@ -21,7 +21,7 @@ GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
     expected_provider_headers={"content-type": "application/json", "x-goog-api-key": "synthetic-gemini-key"},
     expected_provider_request={
         "contents": [{"parts": [{"text": "Say hello."}], "role": "user"}],
-        "generationConfig": {"max_output_tokens": 64, "temperature": 1.0},
+        "generationConfig": {"max_output_tokens": 1024, "temperature": 1.0},
         "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
     },
     mock_provider_response={
@@ -38,16 +38,16 @@ GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
         "usageMetadata": {
             "promptTokenCount": 10,
             "candidatesTokenCount": 2,
-            "totalTokenCount": 69,
+            "totalTokenCount": 137,
             "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 10}],
-            "thoughtsTokenCount": 57,
+            "thoughtsTokenCount": 125,
             "serviceTier": "standard",
         },
         "modelVersion": "gemini-3.5-flash",
-        "responseId": "ufDDaqOmFKbVz7IP3oauwAs",
+        "responseId": "4hjEav32Mt6P6dkPn5iDqAg",
     },
     expected_litellm_response={
-        "id": "ufDDaqOmFKbVz7IP3oauwAs",
+        "id": "4hjEav32Mt6P6dkPn5iDqAg",
         "created": ANY,
         "model": "gemini/gemini-3.5-flash",
         "object": "chat.completion",
@@ -66,10 +66,10 @@ GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
             }
         ],
         "usage": {
-            "completion_tokens": 59,
+            "completion_tokens": 127,
             "prompt_tokens": 10,
-            "total_tokens": 69,
-            "completion_tokens_details": {"reasoning_tokens": 57, "text_tokens": 2},
+            "total_tokens": 137,
+            "completion_tokens_details": {"reasoning_tokens": 125, "text_tokens": 2},
             "prompt_tokens_details": {"text_tokens": 10},
         },
         "vertex_ai_grounding_metadata": [],
@@ -79,14 +79,14 @@ GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
     },
 )
 
-GEMINI_3_8_FLASH_THOUGHT_SIGNATURE: Final = "ErYCCrMCAWkUfRN74uA0tYzcgDRg2KSNtSWJy7TymH5/2gchou/ba9aek5JSdNv8pm61HLRFDIM1O1EtldG5hWEET+ngNsd9KqwLbWOzKyT7elyGQ+dznt8qA26HP82TCdVFFyknWVQaQLEnhv7ATTTjJTJoydSd60Nm3PjNELQr+MP1pZ6O9VjUrmJe8b/SaEe5MJy7mzqtVeXqFjiVpaf/Xr4VNWYKupd8ycrbXMZbjhclNwAINZXdfrJfA0aU1Xsg7+pQ9OeV1gg3HdzLTYd6TD+dP+uyQc6yp2IJ9Hd/1EZMOZiC77O6IIUQYff7AUtq6RPAyVMuMcGdp6lvMRVS1545dbXPSsQDN5dJVmMY36jEmouydsfuem39EvvCnmbqV/N/4za3IzTggtZ3hgoN7u3RaF2VAw=="
+GEMINI_3_8_FLASH_THOUGHT_SIGNATURE: Final = "EtsDCtgDAWkUfRODYoLRWC+DajYQxOvsLgPh0m8j4NTnd7BflzgPBKFfPW+PU1XsMQuEzviI1qk5mYI0qCfOQNf84PAXXvFA5hMYl+YObaND4G+ZtCdYcolFVfPJQqgK6Kpv20n9hZfLt5JzOS2+HRCLZaokIsZFadN++wqEeEkWQhnKdLGH1lM0fn8Fj/pYq95YLGnB90B8Oaj4qyG6ost2dzRAeAzFSXAko1mD/IgsDrDhEumngCqotdAbPW4jUGYOGDpoXLrBzQZvGa9blRC3ep6NLT0EYMnXImLFoZaLLIBMzVDsmmL0qOg4Gu+uNJlY6cDmtqRgkrcvuvGhh8+lrjUMJVigSsTAoKsTnT3OyCqdNqa+R2aD4WTl1uBFyGY7yXpZ9skQPkV210QNOylZ6exaMA51+W/mohL5j5+OJX7xtVfRIpjp4e0PLkEPxnuviX6OU4ykWZSSiztSXzogbrmnwP7faclRXTXHE5pFlM8y7gDJ9NEwxd5vvIMLdaK2dRWBNtvjI3Cj56sLKygH/j0mQSnt3PonE6Jv6XMJDPbuIzsjzX8t/j3u6WP0bVGnifNNEfIqt6YcKgeWlUTnabRGkWg/fBSyYbiTTEIGhketv57hA9oH7jJZbw=="
 
 GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/chat/completions",
     litellm_request={
         "model": "gemini/gemini-3.8-flash",
-        "max_tokens": 64,
+        "max_tokens": 1024,
         "messages": [
             {"role": "system", "content": "You are a terse assistant."},
             {"role": "user", "content": "Say hello."},
@@ -97,7 +97,7 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
     expected_provider_headers={"content-type": "application/json", "x-goog-api-key": "synthetic-gemini-key"},
     expected_provider_request={
         "contents": [{"parts": [{"text": "Say hello."}], "role": "user"}],
-        "generationConfig": {"max_output_tokens": 64, "temperature": 1.0},
+        "generationConfig": {"max_output_tokens": 1024, "temperature": 1.0},
         "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
     },
     mock_provider_response={
@@ -107,29 +107,29 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
                     "parts": [{"text": "Hello.", "thoughtSignature": GEMINI_3_8_FLASH_THOUGHT_SIGNATURE}],
                     "role": "model",
                 },
-                "finishReason": "MAX_TOKENS",
+                "finishReason": "STOP",
                 "index": 0,
             }
         ],
         "usageMetadata": {
             "promptTokenCount": 10,
             "candidatesTokenCount": 2,
-            "totalTokenCount": 70,
+            "totalTokenCount": 120,
             "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 10}],
-            "thoughtsTokenCount": 58,
+            "thoughtsTokenCount": 108,
             "serviceTier": "standard",
         },
         "modelVersion": "gemini-3.8-flash",
-        "responseId": "xfDDasyUFMjSjMcPgvOm6Ag",
+        "responseId": "5BjEaunaCtadz7IP-8WKsAk",
     },
     expected_litellm_response={
-        "id": "xfDDasyUFMjSjMcPgvOm6Ag",
+        "id": "5BjEaunaCtadz7IP-8WKsAk",
         "created": ANY,
         "model": "gemini/gemini-3.8-flash",
         "object": "chat.completion",
         "choices": [
             {
-                "finish_reason": "length",
+                "finish_reason": "stop",
                 "index": 0,
                 "message": {
                     "content": "Hello.",
@@ -138,14 +138,14 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
                     "thinking_blocks": [],
                     "provider_specific_fields": {"thought_signatures": [GEMINI_3_8_FLASH_THOUGHT_SIGNATURE]},
                 },
-                "provider_specific_fields": {"native_finish_reason": "MAX_TOKENS"},
+                "provider_specific_fields": {"native_finish_reason": "STOP"},
             }
         ],
         "usage": {
-            "completion_tokens": 60,
+            "completion_tokens": 110,
             "prompt_tokens": 10,
-            "total_tokens": 70,
-            "completion_tokens_details": {"reasoning_tokens": 58, "text_tokens": 2},
+            "total_tokens": 120,
+            "completion_tokens_details": {"reasoning_tokens": 108, "text_tokens": 2},
             "prompt_tokens_details": {"text_tokens": 10},
         },
         "vertex_ai_grounding_metadata": [],
@@ -155,14 +155,14 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
     },
 )
 
-GEMINI_3_1_PRO_PREVIEW_THOUGHT_SIGNATURE: Final = "Er0CCroCAWkUfRMMekmx87raUurCnsdbgsVPmIhNFn3Hq6GgkQe+Iq+i1Xj4ST0AU7AawXJvPCqaK0lRTyo1ilHyHJLoUS7a7iOScwHRPoa3L8gnjqJNA+H370nCZq4rOOqa7tIjWo+rsCIy1FUHZKnKjsHvK6nJ9h4mlX8YulO4mK48ox/ZsULbiAZq0uZIssxWAkfzof9Gypmzk/7JIEp9rK3uqWIxTG4BIDKUphNKeti0S68CFrDvm9UEomk+3uCxqvvZmLp9L1OvTcOWb697Yub7pqr7063tzVhLbZilwQovwcJ7vJ+jPBOj2dp5cWBROBtOKKhLKy4I38/9zp03oxg0puNuLUcNtIiNeYkkB8AA9XPQpZ/Xldrbj/cSgVn8A2f55ihglV6Y1yLrM5KVzIVt0nwt5jpw9+qt2pg="
+GEMINI_3_1_PRO_PREVIEW_THOUGHT_SIGNATURE: Final = "Ev8DCvwDAWkUfRMrwgm49bezSdfm90OeW6KeR4kKqExF8s+EorBlW6NWc6XLqdQ2dA5xZ4p0CPNrjuxemR5dt9ch3qMTSgIHTcKKAnxJ0eqsjR61EJWFP4JNdigiymymc7UNs/zLZer+qPH2XQLD9r85O3NVBeupYk6xy6395CZYygF9oVJD3WNXwlefvThnvH/3rDsnO0FBfcrvxRHiSVTD1Moe+uTVV2w3vKKSCxUb64w5lquEjFx+AO/jiJIc3McPvAOvUr0I/2fMCWLcO7Y5sV6zuN8qpaQKitC/Ev09cl3SAbKzwjO3gBgYVmF5PcPY5HT8S3bwCez2aOgX7BCN+FItlZ4wMsZStLIY38XMQtbibVRHmiufN86IMkoD8Yxb1lnK7aaS+anSPkn4M4zkkiwAUdjt14k6JvMBk9J4duvTHLP0BiSaLLkTe6Ufj9cRMxZKCP0ew4DiLMwejuQoSpC4aLP1gmli4eOUcyq/g2/o0kByY8Fl2vb54eiXADp4fhhIEAZFe4J/0x29ZZVKx8KEInDahP7tslzwah3PWfX/K1jXzqX93mo4a/0Ec1bM/sqwiEWSHNhrPpyXcTkmWQ1Bot+PTARnzAjeXvoTR5sajbNKj1SdCC0RY7zb8OqGZHDQxgNw7ghTjYMTdBJsdCMQfnl3dvqmw6zM/aplZg=="
 
 GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/chat/completions",
     litellm_request={
         "model": "gemini/gemini-3.1-pro-preview",
-        "max_tokens": 64,
+        "max_tokens": 1024,
         "messages": [
             {"role": "system", "content": "You are a terse assistant."},
             {"role": "user", "content": "Say hello."},
@@ -173,7 +173,7 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
     expected_provider_headers={"content-type": "application/json", "x-goog-api-key": "synthetic-gemini-key"},
     expected_provider_request={
         "contents": [{"parts": [{"text": "Say hello."}], "role": "user"}],
-        "generationConfig": {"max_output_tokens": 64, "temperature": 1.0},
+        "generationConfig": {"max_output_tokens": 1024, "temperature": 1.0},
         "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
     },
     mock_provider_response={
@@ -190,16 +190,16 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
         "usageMetadata": {
             "promptTokenCount": 10,
             "candidatesTokenCount": 2,
-            "totalTokenCount": 69,
+            "totalTokenCount": 115,
             "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 10}],
-            "thoughtsTokenCount": 57,
+            "thoughtsTokenCount": 103,
             "serviceTier": "standard",
         },
         "modelVersion": "gemini-3.1-pro-preview",
-        "responseId": "zPDDar31L57VjMcPpcO-0Ag",
+        "responseId": "5RjEaqfwC7XYqtsPp6TuoAY",
     },
     expected_litellm_response={
-        "id": "zPDDar31L57VjMcPpcO-0Ag",
+        "id": "5RjEaqfwC7XYqtsPp6TuoAY",
         "created": ANY,
         "model": "gemini/gemini-3.1-pro-preview",
         "object": "chat.completion",
@@ -218,10 +218,10 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
             }
         ],
         "usage": {
-            "completion_tokens": 59,
+            "completion_tokens": 105,
             "prompt_tokens": 10,
-            "total_tokens": 69,
-            "completion_tokens_details": {"reasoning_tokens": 57, "text_tokens": 2},
+            "total_tokens": 115,
+            "completion_tokens_details": {"reasoning_tokens": 103, "text_tokens": 2},
             "prompt_tokens_details": {"text_tokens": 10},
         },
         "vertex_ai_grounding_metadata": [],
