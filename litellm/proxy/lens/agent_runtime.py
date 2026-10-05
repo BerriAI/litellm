@@ -156,6 +156,11 @@ async def run_agent(
         {
             "stage": stage,
             "task": task,
+            "response_instructions": (
+                "Return one JSON object matching response_schema. To continue, use tools and/or checkpoint "
+                "with result=null. To finish, put the complete final output inside result, with tools=[] and "
+                "checkpoint=null. Final-output fields belong inside result, never at the top level."
+            ),
             "tool_instructions": (
                 "Tools remain available throughout the task. Read retrieves complete original spans or sessions. "
                 "When initial_evidence is present, it already contains the complete stored original content of "

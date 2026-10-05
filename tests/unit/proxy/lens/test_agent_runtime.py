@@ -3,6 +3,7 @@ from queue import SimpleQueue
 from typing import Final
 
 import pytest
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.lens.agent_runtime import (
     AgentTurn,
@@ -52,6 +53,61 @@ class CompactedPrompt(CheckpointPrompt):
 class PythonError(Record):
     request: PythonRequest
     error: str
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enable_python", (False, True))
+async def test_bare_final_response_is_repaired_with_the_complete_turn_schema_and_can_reread_evidence(
+    enable_python: bool,
+) -> None:
+    from litellm.proxy.lens.agent_review import review_context
+
+    part: Final = TracePart(
+        execution_id="run", span_id="tool", name="tool", kind="tool", content="Original timeout evidence"
+    )
+    session: Final = SessionContent(execution=execution("run"), parts=(part,), partial=False)
+    expected: Final = Extraction(
+        observations=(
+            Observation(
+                check_id="retries",
+                summary="Tool timed out",
+                evidence=(Evidence(execution_id="run", span_id="tool", quote=part.content),),
+            ),
+        ),
+        reasoning="The original tool result records the timeout",
+    )
+    response_schema: Final = PythonAgentTurn[Extraction] if enable_python else AgentTurn[Extraction]
+    turns: Final = iter(range(4))
+
+    async def model(request: ModelRequest) -> ModelResult:
+        turn: Final = next(turns)
+        if turn == 1:
+            assert part.content in request.messages[-1].content
+            return ModelResult(content=expected.model_dump_json(), cost=0)
+        if turn == 2:
+            correction: Final = TypeAdapter(dict[str, JsonValue]).validate_json(request.messages[-1].content)
+            assert correction["response_schema"] == response_schema.model_json_schema()
+            assert part.content not in request.messages[-1].content
+        if turn == 3:
+            assert EvidenceReply.model_validate_json(
+                ToolReply.model_validate_json(request.messages[-1].content).tool_results[0]
+            ).parts == (part,)
+            return ModelResult(content=response_schema(result=expected).model_dump_json(), cost=0)
+        return ModelResult(
+            content=response_schema(tools=(EvidenceRequest(action="read", execution_id="run"),)).model_dump_json(),
+            cost=0,
+        )
+
+    result: Final = await review_context(
+        Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=()),
+        session,
+        EvidenceWorkspace(sessions=(session,)),
+        model,
+        enable_python=enable_python,
+    )
+    assert result.observations == expected.observations
+    assert result.parts == (part.model_copy(update={"truncated": True}),)
+    assert next(turns, None) is None
 
 
 @pytest.mark.asyncio
