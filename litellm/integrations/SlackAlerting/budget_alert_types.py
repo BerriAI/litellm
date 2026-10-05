@@ -63,6 +63,8 @@ class TokenBudgetAlert(BaseBudgetAlertType):
         return "Key Budget: "
 
     def get_id(self, user_info: CallInfo) -> str:
+        if user_info.event_group == Litellm_EntityType.TEAM_MEMBER:
+            return f"team_member:{user_info.user_id}:{user_info.team_id}"
         return user_info.token or "default_id"
 
 

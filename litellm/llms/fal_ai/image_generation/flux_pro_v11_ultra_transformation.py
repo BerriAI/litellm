@@ -1,20 +1,23 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
-from litellm.types.utils import ImageObject, ImageResponse
+from litellm.types.utils import ImageResponse
 
-from .transformation import FalAIBaseConfig
+from .transformation import FalAIBaseConfig, fal_images_to_image_objects
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
@@ -194,7 +197,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -229,33 +232,17 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         if not model_response.data:
             model_response.data = []
 
-        # Handle Flux Pro v1.1-ultra response format
-        images: Final = response_data.get("images", [])
-        if isinstance(images, list):
-            for image_data in images:
-                if isinstance(image_data, dict):
-                    model_response.data.append(
-                        ImageObject(
-                            url=image_data.get("url", None),
-                            b64_json=None,  # Flux Pro returns URLs only
-                        )
-                    )
-                elif isinstance(image_data, str):
-                    # If images is just a list of URLs
-                    model_response.data.append(
-                        ImageObject(
-                            url=image_data,
-                            b64_json=None,
-                        )
-                    )
+        response_object: Final = _JSON_OBJECT.validate_python(response_data)
+        images: Final = response_object.get("images", [])
+        model_response.data.extend(fal_images_to_image_objects(images))
 
         # Add additional metadata from Flux Pro response
         if hasattr(model_response, "_hidden_params"):
-            if "seed" in response_data:
-                model_response._hidden_params["seed"] = response_data["seed"]
-            if "timings" in response_data:
-                model_response._hidden_params["timings"] = response_data["timings"]
-            if "has_nsfw_concepts" in response_data:
-                model_response._hidden_params["has_nsfw_concepts"] = response_data["has_nsfw_concepts"]
+            if "seed" in response_object:
+                model_response._hidden_params["seed"] = response_object["seed"]
+            if "timings" in response_object:
+                model_response._hidden_params["timings"] = response_object["timings"]
+            if "has_nsfw_concepts" in response_object:
+                model_response._hidden_params["has_nsfw_concepts"] = response_object["has_nsfw_concepts"]
 
         return model_response

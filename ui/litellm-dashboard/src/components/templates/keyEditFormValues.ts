@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
@@ -22,11 +22,13 @@ export interface KeyEditFormValues {
   models?: string[];
   allowed_routes?: string;
   max_budget?: number | string | null;
+  soft_budget?: number | string | null;
   budget_duration?: string | null;
   tpm_limit?: number | string | null;
   tpm_limit_type?: string | null;
   rpm_limit?: number | string | null;
   rpm_limit_type?: string | null;
+  tpd_limit?: number | string | null;
   throttle_on_budget_exceeded?: boolean;
   enable_prompt_caching?: boolean;
   max_parallel_requests?: number | string | null;
@@ -45,8 +47,10 @@ export interface KeyEditFormValues {
   mcp_servers_and_groups?: McpServersAndGroups;
   mcp_tool_permissions?: Record<string, string[]>;
   agents_and_groups?: AgentsAndGroups;
+  skills?: string[];
   organization_id?: string | null;
   team_id?: string | null;
+  project_id?: string | null;
   logging_settings?: unknown[];
   metadata?: string;
   duration?: string | null;
@@ -67,11 +71,14 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
   allowed_routes:
     Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0 ? keyData.allowed_routes.join(", ") : "",
   max_budget: keyData.max_budget,
+  soft_budget:
+    (keyData.litellm_budget_table as { soft_budget?: number | null } | null | undefined)?.soft_budget ?? null,
   budget_duration: canonicalBudgetDuration(keyData.budget_duration),
   tpm_limit: keyData.tpm_limit,
   tpm_limit_type: (keyData as { tpm_limit_type?: string | null }).tpm_limit_type ?? null,
   rpm_limit: keyData.rpm_limit,
   rpm_limit_type: (keyData as { rpm_limit_type?: string | null }).rpm_limit_type ?? null,
+  tpd_limit: keyData.tpd_limit,
   throttle_on_budget_exceeded: Boolean(readMetadata(keyData, "throttle_on_budget_exceeded")),
   enable_prompt_caching: Boolean(readMetadata(keyData, "enable_prompt_caching")),
   max_parallel_requests: keyData.max_parallel_requests,
@@ -99,8 +106,10 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
     agents: keyData.object_permission?.agents || [],
     accessGroups: keyData.object_permission?.agent_access_groups || [],
   },
+  skills: keyData.object_permission?.skills || [],
   organization_id: keyData.organization_id,
   team_id: keyData.team_id,
+  project_id: keyData.project_id,
   logging_settings: extractLoggingSettings(keyData.metadata),
   metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
   duration: (keyData as { duration?: string }).duration ?? "",
@@ -113,46 +122,52 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
 });
 
 export const keyEditFormSchema = z.object({
-  key_alias: z.custom<string | undefined>(),
-  models: z.custom<string[] | undefined>(),
-  allowed_routes: z.custom<string | undefined>(),
-  max_budget: z.custom<number | string | null | undefined>(),
-  budget_duration: z.custom<string | null | undefined>(),
-  tpm_limit: z.custom<number | string | null | undefined>(),
-  tpm_limit_type: z.custom<string | null | undefined>(),
-  rpm_limit: z.custom<number | string | null | undefined>(),
-  rpm_limit_type: z.custom<string | null | undefined>(),
-  throttle_on_budget_exceeded: z.custom<boolean | undefined>(),
-  enable_prompt_caching: z.custom<boolean | undefined>(),
-  max_parallel_requests: z.custom<number | string | null | undefined>(),
-  model_tpm_limit: z.custom<string | undefined>(),
-  model_rpm_limit: z.custom<string | undefined>(),
+  key_alias: z.custom<string | undefined>().optional(),
+  models: z.custom<string[] | undefined>().optional(),
+  allowed_routes: z.custom<string | undefined>().optional(),
+  max_budget: z.custom<number | string | null | undefined>().optional(),
+  soft_budget: z.custom<number | string | null | undefined>().optional(),
+  budget_duration: z.custom<string | null | undefined>().optional(),
+  tpm_limit: z.custom<number | string | null | undefined>().optional(),
+  tpm_limit_type: z.custom<string | null | undefined>().optional(),
+  rpm_limit: z.custom<number | string | null | undefined>().optional(),
+  rpm_limit_type: z.custom<string | null | undefined>().optional(),
+  tpd_limit: z.custom<number | string | null | undefined>().optional(),
+  throttle_on_budget_exceeded: z.custom<boolean | undefined>().optional(),
+  enable_prompt_caching: z.custom<boolean | undefined>().optional(),
+  max_parallel_requests: z.custom<number | string | null | undefined>().optional(),
+  model_tpm_limit: z.custom<string | undefined>().optional(),
+  model_rpm_limit: z.custom<string | undefined>().optional(),
   default_estimated_output_tokens: z
     .custom<number | string | null | undefined>()
-    .refine(estimateChecks.positive.isValid, estimateChecks.positive.message),
+    .refine(estimateChecks.positive.isValid, estimateChecks.positive.message)
+    .optional(),
   default_estimated_output_tokens_per_model: z
     .custom<string | undefined>()
-    .refine(estimateChecks.perModel.isValid, estimateChecks.perModel.message),
-  guardrails: z.custom<string[] | undefined>(),
-  disable_global_guardrails: z.custom<boolean | undefined>(),
-  policies: z.custom<string[] | undefined>(),
-  tags: z.custom<string[] | undefined>(),
-  prompts: z.custom<string[] | undefined>(),
-  access_group_ids: z.custom<string[] | undefined>(),
-  allowed_passthrough_routes: z.custom<string[] | undefined>(),
-  vector_stores: z.custom<string[] | undefined>(),
-  mcp_servers_and_groups: z.custom<McpServersAndGroups | undefined>(),
-  mcp_tool_permissions: z.custom<Record<string, string[]> | undefined>(),
-  agents_and_groups: z.custom<AgentsAndGroups | undefined>(),
-  organization_id: z.custom<string | null | undefined>(),
-  team_id: z.custom<string | null | undefined>(),
-  logging_settings: z.custom<unknown[] | undefined>(),
-  metadata: z.custom<string | undefined>(),
-  duration: z.custom<string | null | undefined>(),
-  token: z.custom<string | undefined>(),
-  disabled_callbacks: z.custom<string[] | undefined>(),
-  auto_rotate: z.custom<boolean | undefined>(),
-  rotation_interval: z.custom<string | undefined>(),
+    .refine(estimateChecks.perModel.isValid, estimateChecks.perModel.message)
+    .optional(),
+  guardrails: z.custom<string[] | undefined>().optional(),
+  disable_global_guardrails: z.custom<boolean | undefined>().optional(),
+  policies: z.custom<string[] | undefined>().optional(),
+  tags: z.custom<string[] | undefined>().optional(),
+  prompts: z.custom<string[] | undefined>().optional(),
+  access_group_ids: z.custom<string[] | undefined>().optional(),
+  allowed_passthrough_routes: z.custom<string[] | undefined>().optional(),
+  vector_stores: z.custom<string[] | undefined>().optional(),
+  mcp_servers_and_groups: z.custom<McpServersAndGroups | undefined>().optional(),
+  mcp_tool_permissions: z.custom<Record<string, string[]> | undefined>().optional(),
+  agents_and_groups: z.custom<AgentsAndGroups | undefined>().optional(),
+  skills: z.custom<string[] | undefined>().optional(),
+  organization_id: z.custom<string | null | undefined>().optional(),
+  team_id: z.custom<string | null | undefined>().optional(),
+  project_id: z.string().nullable().optional(),
+  logging_settings: z.custom<unknown[] | undefined>().optional(),
+  metadata: z.custom<string | undefined>().optional(),
+  duration: z.custom<string | null | undefined>().optional(),
+  token: z.custom<string | undefined>().optional(),
+  disabled_callbacks: z.custom<string[] | undefined>().optional(),
+  auto_rotate: z.custom<boolean | undefined>().optional(),
+  rotation_interval: z.custom<string | undefined>().optional(),
 });
 
 export interface MountedFieldGates {
@@ -168,11 +183,13 @@ export const toSubmittedValues = (
   models: values.models,
   allowed_routes: values.allowed_routes,
   max_budget: values.max_budget,
+  soft_budget: values.soft_budget,
   budget_duration: values.budget_duration,
   tpm_limit: values.tpm_limit,
   tpm_limit_type: values.tpm_limit_type,
   rpm_limit: values.rpm_limit,
   rpm_limit_type: values.rpm_limit_type,
+  tpd_limit: values.tpd_limit,
   throttle_on_budget_exceeded: values.throttle_on_budget_exceeded,
   enable_prompt_caching: values.enable_prompt_caching,
   max_parallel_requests: values.max_parallel_requests,
@@ -191,6 +208,7 @@ export const toSubmittedValues = (
   mcp_servers_and_groups: values.mcp_servers_and_groups,
   mcp_tool_permissions: values.mcp_tool_permissions,
   agents_and_groups: values.agents_and_groups,
+  skills: values.skills,
   organization_id: values.organization_id,
   team_id: values.team_id,
   logging_settings: values.logging_settings,

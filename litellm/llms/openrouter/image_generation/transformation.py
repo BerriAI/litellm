@@ -27,9 +27,11 @@ Response format:
 }
 """
 
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -50,11 +52,15 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_STR: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
 
 
 class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
@@ -319,7 +325,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -356,15 +362,16 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             model_response.data = []
 
         try:
-            choices: Final = response_json.get("choices", [])
+            response_object: Final = _JSON_DICT.validate_python(response_json)
+            choices: Final = _JSON_OBJECTS.validate_python(response_object.get("choices", []))
 
             for choice in choices:
-                message = choice.get("message", {})
-                images = message.get("images", [])
+                message = _JSON_OBJECT.validate_python(choice.get("message", {}))
+                images = _JSON_OBJECTS.validate_python(message.get("images", []))
 
                 for image_data in images:
-                    image_url_obj = image_data.get("image_url", {})
-                    image_url = image_url_obj.get("url")
+                    image_url_obj = _JSON_OBJECT.validate_python(image_data.get("image_url", {}))
+                    image_url = _STR.validate_python(image_url_obj.get("url") or "")
 
                     if image_url:
                         if image_url.startswith("data:"):
@@ -390,7 +397,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                             )
 
             # Extract and set usage and cost information
-            self._set_usage_and_cost(model_response, response_json, model)
+            self._set_usage_and_cost(model_response, response_object, model)
 
             return model_response
 

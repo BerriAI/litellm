@@ -540,7 +540,7 @@ async def get_all_access_groups_from_db(
     deployments: Final = await ModelRepository(prisma_client).table.find_many()
 
     # Build access group map
-    access_group_map: Final[dict[str, dict[str, Any]]] = {}
+    model_names_by_group: Final[dict[str, list[str]]] = {}
 
     for deployment in deployments:
         model_info = deployment.model_info or {}
@@ -550,25 +550,20 @@ async def get_all_access_groups_from_db(
         model_name = deployment.model_name
 
         for access_group in access_groups:
-            if access_group not in access_group_map:
-                access_group_map[access_group] = {
-                    "model_names": set(),
-                    "deployment_count": 0,
-                }
+            if access_group not in model_names_by_group:
+                model_names_by_group[access_group] = []
 
-            access_group_map[access_group]["model_names"].add(model_name)
-            access_group_map[access_group]["deployment_count"] += 1
+            model_names_by_group[access_group].append(model_name)
 
     # Convert to AccessGroupInfo objects
-    result: Final = {}
-    for access_group, data in access_group_map.items():
-        result[access_group] = AccessGroupInfo(
+    return {
+        access_group: AccessGroupInfo(
             access_group=access_group,
-            model_names=sorted(list(data["model_names"])),
-            deployment_count=data["deployment_count"],
+            model_names=sorted(frozenset(model_names)),
+            deployment_count=len(model_names),
         )
-
-    return result
+        for access_group, model_names in model_names_by_group.items()
+    }
 
 
 @router.post(

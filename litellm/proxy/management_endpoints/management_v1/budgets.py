@@ -58,6 +58,7 @@ class BudgetListItem(BaseModel):
     soft_budget: float | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    tpd_limit: int | None = None
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None
     created_at: datetime
@@ -84,8 +85,7 @@ class PrismaBudgetListExecutor:
     async def count(self, where: tuple[Predicate, ...]) -> int:
         clauses, params = where_sql(where)
         sql: Final = f"SELECT COUNT(*) AS count FROM {BUDGET_TABLE}" + (f" WHERE {clauses}" if clauses else "")
-        rows: Final = await self.prisma_client.db.query_raw(sql, *params)
-        counted: Final = _ROW_COUNTS.validate_python(rows)
+        counted: Final = _ROW_COUNTS.validate_python(await self.prisma_client.db.query_raw(sql, *params))
         return counted[0].count if counted else 0
 
     async def find_many(self, plan: QueryPlan) -> Sequence[BudgetListItem]:
@@ -96,8 +96,7 @@ class PrismaBudgetListExecutor:
             + f" ORDER BY {order_by_sql(plan.order)}"
             + f" LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
         )
-        rows: Final = await self.prisma_client.db.query_raw(sql, *params, plan.take, plan.skip)
-        return _BUDGET_ROWS.validate_python(rows)
+        return _BUDGET_ROWS.validate_python(await self.prisma_client.db.query_raw(sql, *params, plan.take, plan.skip))
 
 
 def _serialize(row: BudgetListItem) -> BudgetListItem:
@@ -114,7 +113,7 @@ def _scope(caller: UserAPIKeyAuth) -> Scope:
 # budget_duration is deliberately absent from `sortable`: the column holds strings
 # like "7d" and "30d", so a lexicographic ORDER BY puts "30d" ahead of "7d".
 BUDGET_FILTERS: Final[Mapping[str, FilterSpec]] = MappingProxyType(
-    {  # mutable-ok: an immutable mapping has no literal form; MappingProxyType freezes this one and it never escapes
+    {
         "budget_duration": FilterSpec(type=str, ops=frozenset(("in", "is_null"))),
         "max_budget": FilterSpec(type=float, ops=frozenset(("gte", "lte", "is_null"))),
         "created_at": FilterSpec(type=datetime, ops=frozenset(("gte", "lte"))),
@@ -123,7 +122,7 @@ BUDGET_FILTERS: Final[Mapping[str, FilterSpec]] = MappingProxyType(
 
 BUDGETS_LIST_SPEC: Final[ListSpec[BudgetListItem, BudgetListItem]] = ListSpec(
     resource="budgets",
-    sortable=frozenset(("budget_id", "max_budget", "tpm_limit", "rpm_limit", "created_at")),
+    sortable=frozenset(("budget_id", "max_budget", "tpm_limit", "rpm_limit", "tpd_limit", "created_at")),
     searchable=frozenset(("budget_id",)),
     filters=BUDGET_FILTERS,
     default_sort=(SortKey(field="created_at", descending=True),),
@@ -154,7 +153,7 @@ async def list_budgets(
     way to page, sort or filter it.
 
     `sort` takes a comma-separated list of `budget_id`, `max_budget`, `tpm_limit`,
-    `rpm_limit` or `created_at`, each optionally prefixed with `-` for descending,
+    `rpm_limit`, `tpd_limit` or `created_at`, each optionally prefixed with `-` for descending,
     and defaults to `-created_at`. `budget_id` is appended to every sort as the
     tiebreaker. `q` is a case-insensitive substring match on `budget_id`.
     `page_size` defaults to 50 and is capped at 100. Filters are
