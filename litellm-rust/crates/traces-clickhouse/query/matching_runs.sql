@@ -1,12 +1,12 @@
 run_keys AS (
     SELECT TeamId, ApiKeyHash, TraceId
-    FROM owned_runs
-    WHERE ReceivedMs <= {as_of_ms:UInt64}
+    FROM owned_core
+    WHERE EngineReceivedMs <= {as_of_ms:UInt64}
       AND (({trace_id:String} != '' AND TraceId = {trace_id:String})
         OR ({trace_ref:String} != '' AND TraceRef = {trace_ref:String})
         OR ({trace_id:String} = '' AND {trace_ref:String} = ''
-            AND StartHour >= toStartOfHour(fromUnixTimestamp64Milli({range_start_ms:Int64}, 'UTC'))
-            AND StartHour < fromUnixTimestamp64Milli({range_end_ms:Int64}, 'UTC')
+            AND Timestamp >= fromUnixTimestamp64Milli({range_start_ms:Int64})
+            AND Timestamp < fromUnixTimestamp64Milli({range_end_ms:Int64})
             AND (empty({trace_refs:Array(String)}) OR TraceRef IN {trace_refs:Array(String)})))
     GROUP BY TeamId, ApiKeyHash, TraceId
 ),
@@ -22,35 +22,42 @@ run_attributes AS (
       AND (TeamId, ApiKeyHash, TraceId) IN run_keys
     GROUP BY TeamId, ApiKeyHash, TraceId
 ),
+run_spans AS (
+    SELECT * FROM spans_core
+    WHERE EngineReceivedMs <= {as_of_ms:UInt64}
+      AND TraceId IN (SELECT TraceId FROM run_keys)
+      AND (TeamId, ApiKeyHash, TraceId) IN run_keys
+    ORDER BY Timestamp, EngineReceivedMs, StatusMessage, Duration, StatusCode
+    LIMIT 1 BY TeamId, ApiKeyHash, TraceId, SpanId
+),
 runs AS (
 SELECT TraceId AS trace_id,
        any(TraceRef) AS trace_ref,
        if(uniqExact(UserId) = 1, any(UserId), '') AS user_id,
        TeamId AS team_id, ApiKeyHash AS api_key_hash,
-       argMinMerge(Name) AS name,
-       argMinMerge(Service) AS service,
-       argMinMerge(RootInput) AS root_input,
-       if(root_input != '', root_input, argMinMerge(AgentInput)) AS input_preview,
-       argMinMerge(RootStatus) AS status,
-       toUnixTimestamp64Milli(min(StartTs)) AS start_ms,
-       toUInt64(greatest(toUnixTimestamp64Nano(max(EndTs)) - toUnixTimestamp64Nano(min(StartTs)), 0)) AS duration_ns,
-       sum(SpanCount) AS span_count,
-       sum(AgentSpans) AS agent_invocations,
-       sum(LlmSpans) AS llm_calls,
-       sum(ToolSpans) AS tool_calls,
+       argMin(CAST(SpanName, 'String'), (toUInt8(ParentSpanId != ''), Timestamp, SpanId)) AS name,
+       argMin(CAST(ServiceName, 'String'), (Timestamp, SpanId)) AS service,
+       argMin(InputPreview, (toUInt8(ParentSpanId != ''), Timestamp, SpanId)) AS root_input,
+       if(root_input != '', root_input,
+          argMinIf(InputPreview, (Timestamp, SpanId), InputPreview != '' AND ObservationType IN ('agent', 'llm'))) AS input_preview,
+       argMin(CAST(StatusCode, 'String'), (toUInt8(ParentSpanId != ''), Timestamp, SpanId)) AS status,
+       toUnixTimestamp64Milli(min(Timestamp)) AS start_ms,
+       toUInt64(greatest(toUnixTimestamp64Nano(max(Timestamp + toIntervalNanosecond(Duration))) - toUnixTimestamp64Nano(min(Timestamp)), 0)) AS duration_ns,
+       count() AS span_count,
+       countIf(ObservationType = 'agent') AS agent_invocations,
+       countIf(ObservationType = 'llm') AS llm_calls,
+       countIf(ObservationType = 'tool') AS tool_calls,
        sum(InputTokens) AS input_tokens, sum(OutputTokens) AS output_tokens,
-       groupUniqArrayArray(Models) AS models,
-       sum(ErrorSpans) AS error_count,
-       arraySort(groupUniqArrayArray(AgentLabels)) AS search_agents,
+       groupUniqArrayIf(CAST(Model, 'String'), Model != '') AS models,
+       countIf(StatusCode = 'STATUS_CODE_ERROR') AS error_count,
+       arraySort(groupUniqArrayIf(if(AgentName = '', CAST(SpanName, 'String'), CAST(AgentName, 'String')),
+                                  AgentName != '' OR ObservationType = 'agent')) AS search_agents,
        multiIf(status = 'STATUS_CODE_OK', 'ok', status = 'STATUS_CODE_ERROR', 'error', 'unset') AS search_root_status,
        if(error_count > 0, 'true', 'false') AS search_has_error,
-       length(groupUniqArrayArray(AgentIdentities)) AS agent_count,
-       arraySort(groupUniqArrayArray(Frameworks)) AS frameworks,
+       uniqExactIf(if(AgentName = '', CAST(SpanName, 'String'), CAST(AgentName, 'String')), ObservationType = 'agent') AS agent_count,
+       arraySort(groupUniqArrayIf(CAST(Framework, 'String'), Framework != '')) AS frameworks,
        any(run_attributes.matched_attributes) AS matched_attributes
-FROM trace_rollup
+FROM run_spans
 LEFT JOIN run_attributes USING (TeamId, ApiKeyHash, TraceId)
-WHERE ReceivedMs <= {as_of_ms:UInt64}
-  AND StartHour >= toStartOfHour(fromUnixTimestamp64Milli({rollups_from_ms:Int64}, 'UTC'))
-  AND (TeamId, ApiKeyHash, TraceId) IN run_keys
 GROUP BY TeamId, ApiKeyHash, TraceId
 HAVING

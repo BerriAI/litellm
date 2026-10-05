@@ -2,10 +2,10 @@
    AND (({trace_id:String} != '' AND trace_id = {trace_id:String})
     OR ({trace_ref:String} != '' AND trace_ref = {trace_ref:String})
     OR ({trace_id:String} = '' AND {trace_ref:String} = ''
-        AND min(StartTs) >= fromUnixTimestamp64Milli({start_ms:Int64})
-        AND min(StartTs) < fromUnixTimestamp64Milli({end_ms:Int64})
-        AND min(StartTs) >= fromUnixTimestamp64Milli({range_start_ms:Int64})
-        AND min(StartTs) < fromUnixTimestamp64Milli({range_end_ms:Int64})
+        AND min(Timestamp) >= fromUnixTimestamp64Milli({start_ms:Int64})
+        AND min(Timestamp) < fromUnixTimestamp64Milli({end_ms:Int64})
+        AND min(Timestamp) >= fromUnixTimestamp64Milli({range_start_ms:Int64})
+        AND min(Timestamp) < fromUnixTimestamp64Milli({range_end_ms:Int64})
         AND arrayAll(t -> trace_id ILIKE t OR input_preview ILIKE t OR name ILIKE t, {text:Array(String)})
         AND arrayAll((f, p, m) -> (m = 'exclude') != multiIf(
                 f = 'name', name ILIKE p,

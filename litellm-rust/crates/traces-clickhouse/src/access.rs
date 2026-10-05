@@ -7,7 +7,7 @@ macro_rules! owned_by {
     (otel_traces) => {
         "({access_all:UInt8} = 1 OR ({access_user:String} != '' AND UserId = {access_user:String}) OR has({access_teams:Array(String)}, TeamId))"
     };
-    (trace_rollup) => {
+    (spans_core) => {
         "({access_all:UInt8} = 1 OR ({access_user:String} != '' AND UserId = {access_user:String}) OR has({access_teams:Array(String)}, TeamId))"
     };
     (spend_logs) => {
@@ -15,24 +15,24 @@ macro_rules! owned_by {
     };
 }
 
-/// Rollup rows of one run merge in the background, so a user-owned row can belong to a run that
-/// other users also wrote to. Trusted reads see a run only if every row they finalize allows it;
-/// a row policy cannot express this.
+/// A user-owned span can belong to a run that other users also wrote to. Trusted reads see a run
+/// only if every span they summarize allows it; a row policy cannot express this.
 macro_rules! owns_run {
     () => {
         "({access_all:UInt8} = 1 OR has({access_teams:Array(String)}, TeamId) OR ({access_user:String} != '' AND groupUniqArray(UserId) = [{access_user:String}]))"
     };
 }
 
-/// Prefixes a read with the rows its caller may see: `owned_spans`, `owned_runs` and
-/// `owned_calls`. `owned_runs` holds the rollup rows that can belong to a visible run; a read that
-/// finalizes runs must reread all their rows and keep a run only if it satisfies `owns_run!`.
+/// Prefixes a read with the rows its caller may see: `owned_spans`, `owned_core` and
+/// `owned_calls`. `owned_core` holds the narrow span rows that can belong to a visible run; a read
+/// that summarizes runs must read all their rows and keep a run only if it satisfies `owns_run!`.
 macro_rules! owned {
     ($($sql:expr),+ $(,)?) => {
         concat!(
             "WITH owned_spans AS (SELECT * FROM otel_traces WHERE ",
             $crate::access::owned_by!(otel_traces),
-            "),\nowned_runs AS (SELECT * FROM trace_rollup WHERE ({access_all:UInt8} = 1 OR has({access_teams:Array(String)}, TeamId) OR ({access_user:String} != '' AND UserId = {access_user:String}))",
+            "),\nowned_core AS (SELECT * FROM spans_core WHERE ",
+            $crate::access::owned_by!(spans_core),
             "),\nowned_calls AS (SELECT * FROM spend_logs FINAL WHERE ",
             $crate::access::owned_by!(spend_logs),
             ")",
@@ -76,7 +76,7 @@ pub(crate) fn predicate(scope: &QueryScope, table: TraceTable) -> String {
     }
     let template = match table {
         TraceTable::OtelTraces => owned_by!(otel_traces),
-        TraceTable::TraceRollup => owned_by!(trace_rollup),
+        TraceTable::SpansCore => owned_by!(spans_core),
         TraceTable::SpendLogs => owned_by!(spend_logs),
     };
     let AccessParams {

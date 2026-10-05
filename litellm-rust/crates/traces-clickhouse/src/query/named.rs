@@ -81,15 +81,6 @@ impl From<&RunSearch> for SearchColumns {
     }
 }
 
-/// A run's rollup rows sit in the hours its spans started, so a run that began before a range
-/// shows up as one starting inside it. Reading a day of earlier rollups finds its true start
-/// unless its spans paused for longer than that.
-const ROLLUP_LOOKBACK_MS: i64 = 24 * 60 * 60 * 1000;
-
-fn rollups_from(start_ms: i64) -> i64 {
-    start_ms.saturating_sub(ROLLUP_LOOKBACK_MS).max(0)
-}
-
 #[derive(Clone, Debug, Serialize)]
 struct RunsFilter {
     trace_id: String,
@@ -99,7 +90,6 @@ struct RunsFilter {
     end_ms: i64,
     range_start_ms: i64,
     range_end_ms: i64,
-    rollups_from_ms: i64,
     #[serde(flatten)]
     search: SearchColumns,
     trace_refs: Vec<String>,
@@ -115,7 +105,6 @@ impl Default for RunsFilter {
             end_ms: 0,
             range_start_ms: 0,
             range_end_ms: 0,
-            rollups_from_ms: 0,
             search: SearchColumns::default(),
             trace_refs: Vec::new(),
         }
@@ -132,7 +121,6 @@ impl From<&RunFilter> for RunsFilter {
             end_ms: filter.end_ms,
             range_start_ms: filter.start_ms,
             range_end_ms: filter.end_ms,
-            rollups_from_ms: rollups_from(filter.start_ms),
             search: (&filter.search).into(),
             trace_refs: filter.trace_refs.clone(),
         }
@@ -190,7 +178,6 @@ impl RunsParams {
             filter: RunsFilter {
                 range_start_ms: range.start,
                 range_end_ms: range.end,
-                rollups_from_ms: rollups_from(range.start),
                 ..self.filter.clone()
             },
             limit,

@@ -47909,7 +47909,7 @@ export interface components {
             name: components["schemas"]["TraceQueryTableName"];
         };
         /** @enum {string} */
-        TraceQueryTableName: "traces" | "spans" | "calls" | "otel_traces" | "trace_rollup" | "spend_logs";
+        TraceQueryTableName: "traces" | "spans" | "calls" | "otel_traces" | "spans_core" | "spend_logs";
         TraceQueryWindow: {
             /** Format: uint64 */
             as_of_ms: number;

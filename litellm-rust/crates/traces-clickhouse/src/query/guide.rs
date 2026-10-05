@@ -46,7 +46,7 @@ use crate::{Error, NormalizedFieldDefinition, query_access::ReaderLimits};
     "literal_keys",
     "time_units",
     "spend_totals",
-    "trace_rollups",
+    "spans_core",
     "sampling",
 ])]
 pub(super) struct QueryGuide<'a> {
@@ -134,7 +134,7 @@ impl QueryGuide<'_> {
             render(&self.as_spend_totals())?,
             render(&self.as_missing_spend())?,
             render(&self.as_partial_spend())?,
-            render(&self.as_trace_rollups())?,
+            render(&self.as_spans_core())?,
             render(&self.as_sampling())?,
         ])
     }

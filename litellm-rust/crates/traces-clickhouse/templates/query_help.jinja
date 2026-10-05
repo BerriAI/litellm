@@ -1,7 +1,7 @@
 {% block live_schema -%}
 Use traces for canonical trace metrics, spans for one earliest copy of each span, and calls for replacement-deduplicated spend records
 traces.id is the canonical trace ID used by the curated API; join spans with traces.id = spans.trace_ref
-otel_traces, trace_rollup and spend_logs are physical diagnostic tables. Repeated exports can inflate raw span and rollup counts
+otel_traces, spans_core and spend_logs are physical diagnostic tables. Repeated exports can inflate their raw counts
 {% for table in tables -%}
 {{ table.name }}
 {% for column in table.columns -%}
@@ -207,11 +207,11 @@ Recorded spend by trace totals only requests whose spend_logs.trace_id is popula
 calls collapses spend replacement rows before totals. Shared response IDs and multiple spans can multiply costs in joins; require one call match per response ID and ownership before aggregating. Missing IDs or costs leave totals unknown
 {%- endblock %}
 
-{% block trace_rollups -%}
-spans selects one copy per team_id, api_key_hash, trace_id and span_id, ordered by source Timestamp, EngineReceivedMs, StatusMessage, Duration and StatusCode, before filtering status. traces summarizes trace_rollup, which applies the same rule within each insert, so a span exported again in a later batch with different content counts twice
+{% block spans_core -%}
+spans and traces select one copy per team_id, api_key_hash, trace_id and span_id, ordered by source Timestamp, EngineReceivedMs, StatusMessage, Duration and StatusCode, before filtering status or summarizing
 traces.root_status is the earliest physical root's status, or the earliest span's status when no root exists. has_error reports any canonical span error
 agent_span_count, llm_span_count and tool_span_count count normalized span types; agent_label_count counts distinct agent_names. span_input_tokens and span_output_tokens sum canonical span tokens. Curated trace summaries resolve graph wrappers and active calls, so their enriched invocation and token totals can differ
-The diagnostic trace_rollup table holds partial rows per trace, user and start hour. Group by TeamId, ApiKeyHash and TraceId, finalize Name, Service, RootInput, AgentInput and RootStatus with argMinMerge, and aggregate the other columns with their declared functions
+The diagnostic spans_core table holds one narrow row per exported span without input, output or attributes, keyed by TeamId, start hour, ApiKeyHash, TraceId and SpanId. traces summarizes it; read otel_traces or spans for payloads
 {%- endblock %}
 
 {% block sampling -%}

@@ -64,7 +64,7 @@ impl ClickHouseTraces {
     }
 
     /// Reads runs by start time from the window edge the order starts at, over ranges that double
-    /// until the page fills, so a page scans the rollups of about as many runs as it returns.
+    /// until the page fills, so a page scans the spans of about as many runs as it returns.
     async fn runs_by_start(
         &self,
         params: &RunsParams,

@@ -1014,7 +1014,7 @@
           "spans",
           "calls",
           "otel_traces",
-          "trace_rollup",
+          "spans_core",
           "spend_logs"
         ],
         "type": "string"

@@ -122,7 +122,7 @@ async fn mutation_rows(database: &ClickHouseDatabase) -> TestResult<u64> {
 
 #[rstest]
 #[tokio::test]
-async fn schema_supports_span_rollups_and_spend_joins(
+async fn schema_supports_trace_summaries_and_spend_joins(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
@@ -185,13 +185,25 @@ async fn schema_supports_span_rollups_and_spend_joins(
     );
     let body = read_json(
         &database,
-        "SELECT toUInt32(sum(SpanCount)) AS spans, toUInt32(sum(InputTokens)) AS tokens \
-         FROM trace_test.trace_rollup WHERE TeamId = 'team-1' AND TraceId = 'trace-1'",
+        "SELECT toUInt32(span_count) AS spans, toUInt32(span_input_tokens) AS tokens \
+         FROM trace_test.traces WHERE team_id = 'team-1' AND trace_id = 'trace-1'",
     )
     .await?;
     assert_eq!(
         body["data"],
         serde_json::json!([{"spans": 1, "tokens": 12}])
+    );
+    let ledger = read_json(
+        &database,
+        "SELECT toUInt32(count()) AS applied, toUInt32(uniqExact(version)) AS versions \
+         FROM trace_test.schema_migrations",
+    )
+    .await?;
+    let files = std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"))?.count();
+    assert_eq!(
+        ledger["data"],
+        serde_json::json!([{"applied": files, "versions": files}]),
+        "each migration is recorded once even though the schema was ensured twice"
     );
     Ok(())
 }
@@ -311,7 +323,7 @@ async fn insert_rejects_unknown_columns_even_if_url_requests_skipping_them(
 
 #[rstest]
 #[tokio::test]
-async fn retried_trace_insert_does_not_inflate_rollup(
+async fn retried_trace_insert_does_not_inflate_span_rows(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
@@ -334,11 +346,12 @@ async fn retried_trace_insert_does_not_inflate_rollup(
     }
     let counts = read_json(
         &database,
-        "SELECT toUInt32(sum(SpanCount)) AS spans, toUInt32(sum(InputTokens)) AS tokens \
-         FROM trace_test.trace_rollup WHERE TraceId = 'retried-trace'",
+        "SELECT toUInt32(span_count) AS spans, toUInt32(span_input_tokens) AS tokens \
+         FROM trace_test.traces WHERE trace_id = 'retried-trace'",
     )
     .await?;
     assert_eq!(table_rows(&database, "otel_traces").await?, 1);
+    assert_eq!(table_rows(&database, "spans_core").await?, 1);
     assert_eq!(counts["data"][0]["spans"], 1);
     assert_eq!(counts["data"][0]["tokens"], 7);
     Ok(())
@@ -346,7 +359,7 @@ async fn retried_trace_insert_does_not_inflate_rollup(
 
 #[rstest]
 #[tokio::test]
-async fn keyed_rollup_keeps_same_trace_ids_separate_by_api_key(
+async fn keyed_summaries_keep_same_trace_ids_separate_by_api_key(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
@@ -366,12 +379,10 @@ async fn keyed_rollup_keeps_same_trace_ids_separate_by_api_key(
         }))?,
     ];
     insert_rows(&database, "otel_traces", rows).await?;
-    execute_write(&database, "OPTIMIZE TABLE trace_test.trace_rollup FINAL").await?;
     let rows = read_json(
         &database,
-        "SELECT ApiKeyHash, argMinMerge(RootInput) AS RootInput \
-         FROM trace_test.trace_rollup WHERE TraceId = 'shared-id' \
-         GROUP BY ApiKeyHash ORDER BY ApiKeyHash",
+        "SELECT api_key_hash AS ApiKeyHash, input_preview AS RootInput \
+         FROM trace_test.traces WHERE trace_id = 'shared-id' ORDER BY api_key_hash",
     )
     .await?;
     assert_eq!(
@@ -547,7 +558,7 @@ async fn listed_agent_names_preserve_scope_and_cursor(
 
 #[rstest]
 #[tokio::test]
-async fn rollup_finalizes_a_run_across_days_when_its_root_arrives_last(
+async fn a_run_is_summarized_across_days_when_its_root_arrives_last(
     #[future(awt)] database: TestResult<ClickHouseDatabase>,
 ) -> TestResult {
     let database = database?;
@@ -572,19 +583,17 @@ async fn rollup_finalizes_a_run_across_days_when_its_root_arrives_last(
     }))?;
     insert_rows(&database, "otel_traces", vec![child]).await?;
     insert_rows(&database, "otel_traces", vec![root]).await?;
-    execute_write(&database, "OPTIMIZE TABLE trace_test.trace_rollup FINAL").await?;
     let response = read_json(
         &database,
-        "SELECT argMinMerge(Name) AS Name, argMinMerge(RootInput) AS RootInput, \
-         argMinMerge(RootStatus) AS RootStatus, sum(SpanCount) AS SpanCount \
-         FROM trace_test.trace_rollup GROUP BY TeamId, ApiKeyHash, TraceId",
+        "SELECT name AS Name, input_preview AS RootInput, root_status AS RootStatus, \
+         toUInt32(span_count) AS SpanCount FROM trace_test.traces",
     )
     .await?;
     assert_eq!(
         response["data"],
         serde_json::json!([{
             "Name": "root", "RootInput": "root input",
-            "RootStatus": "STATUS_CODE_ERROR", "SpanCount": 2
+            "RootStatus": "error", "SpanCount": 2
         }])
     );
     let connection = Connection::configured(&database.url, "trace_test", "default", "")?;
@@ -687,8 +696,8 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
         tables["data"],
         serde_json::json!([
             {"name": "otel_traces"},
-            {"name": "spend_logs"},
-            {"name": "trace_rollup"}
+            {"name": "spans_core"},
+            {"name": "spend_logs"}
         ])
     );
     let old_time = time::OffsetDateTime::now_utc() - time::Duration::days(20);
@@ -705,7 +714,7 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
     }))?;
     insert_rows(&database, "otel_traces", vec![span]).await?;
     insert_rows(&database, "spend_logs", vec![spend]).await?;
-    assert_eq!(table_rows(&database, "trace_rollup").await?, 1);
+    assert_eq!(table_rows(&database, "spans_core").await?, 1);
     ensure_schema(&database.client, &writer, "trace_test", 14).await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
@@ -728,10 +737,10 @@ async fn retention_changes_materialize_existing_rows_and_remain_idempotent(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     execute_write(&database, "OPTIMIZE TABLE trace_test.otel_traces FINAL").await?;
-    execute_write(&database, "OPTIMIZE TABLE trace_test.trace_rollup FINAL").await?;
+    execute_write(&database, "OPTIMIZE TABLE trace_test.spans_core FINAL").await?;
     execute_write(&database, "OPTIMIZE TABLE trace_test.spend_logs FINAL").await?;
     assert_eq!(table_rows(&database, "otel_traces").await?, 0);
-    assert_eq!(table_rows(&database, "trace_rollup").await?, 0);
+    assert_eq!(table_rows(&database, "spans_core").await?, 0);
     assert_eq!(table_rows(&database, "spend_logs").await?, 0);
     let mutation_count = mutation_rows(&database).await?;
     ensure_schema(&database.client, &writer, "trace_test", 14).await?;
@@ -1062,7 +1071,7 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         "spans",
         "calls",
         "otel_traces",
-        "trace_rollup",
+        "spans_core",
         "spend_logs",
     ] {
         execute_write(
@@ -1149,7 +1158,7 @@ async fn query_help_discovers_live_schema_and_runs_its_examples(
         "spans",
         "calls",
         "otel_traces",
-        "trace_rollup",
+        "spans_core",
         "spend_logs",
     ] {
         let described = read_json(&database, &format!("DESCRIBE TABLE {table}")).await?;
@@ -1346,7 +1355,7 @@ async fn query_help_preserves_schema_and_guide_when_discovery_hits_reader_limits
         "spans",
         "calls",
         "otel_traces",
-        "trace_rollup",
+        "spans_core",
         "spend_logs",
     ] {
         execute_write(

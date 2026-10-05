@@ -705,7 +705,7 @@ async fn listed_runs_name_the_agent_they_matched_even_when_resolution_is_limited
     }
     assert_eq!(
         limited, 1,
-        "the oversized span should leave exactly one run on its rollup summary"
+        "the oversized span should leave exactly one run in its summary"
     );
     Ok(())
 }
@@ -750,7 +750,7 @@ async fn listing_runs_skips_out_of_window_span_rows(
     };
     let listed = store.runs(&QueryScope::All, &query).await?;
     assert_eq!(listed.len(), 4);
-    let list_read = rows_read_by(&fixture, "FROM owned_runs").await?;
+    let list_read = rows_read_by(&fixture, "FROM owned_core").await?;
     let reader = reader();
     let id = &listed[0].trace_ref;
     let metadata = reader
@@ -763,9 +763,9 @@ async fn listing_runs_skips_out_of_window_span_rows(
         .await?
         .unwrap();
     assert_eq!(spans.data.len() as u64, metadata.summary.span_count);
-    let budget = 4 * table_rows(&fixture, "trace_rollup").await?
+    let budget = 4 * table_rows(&fixture, "spans_core").await?
         + 3 * runs().iter().flat_map(rows).count() as u64;
-    let read = rows_read_by(&fixture, "FROM owned_runs").await?;
+    let read = rows_read_by(&fixture, "FROM owned_core").await?;
     for (operation, read) in [("list", list_read), ("canonical ID lookup", read)] {
         assert!(
             read <= budget,

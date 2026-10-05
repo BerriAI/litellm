@@ -785,7 +785,7 @@ async fn gateway_ids_resolve_through_detail_and_batch_reads_with_legacy_fallback
 
 #[rstest]
 #[tokio::test]
-async fn a_run_shared_with_another_user_stays_hidden_before_its_rollup_rows_merge(
+async fn a_run_shared_with_another_user_stays_hidden_across_insert_batches(
     #[future(awt)] migrated_database: TestResult<SeededDatabase>,
 ) -> TestResult {
     let fixture = migrated_database?;

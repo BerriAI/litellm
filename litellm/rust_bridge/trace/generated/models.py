@@ -6,7 +6,7 @@ from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
-TraceQueryTableName: TypeAlias = Literal["traces", "spans", "calls", "otel_traces", "trace_rollup", "spend_logs"]
+TraceQueryTableName: TypeAlias = Literal["traces", "spans", "calls", "otel_traces", "spans_core", "spend_logs"]
 
 
 class TraceSQLColumn(BaseModel):

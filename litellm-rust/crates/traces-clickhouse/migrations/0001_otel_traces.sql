@@ -31,7 +31,6 @@ CREATE TABLE IF NOT EXISTS {database}.otel_traces
                            SpanAttributes['gen_ai.operation.name'] = 'execute_tool', 'tool',
                            'chain'),
     AgentName          LowCardinality(String) DEFAULT SpanAttributes['gen_ai.agent.name'],
-    Framework          LowCardinality(String) DEFAULT '',
     LiteLLMRequestId   String DEFAULT SpanAttributes['gen_ai.response.id'],
     Model              LowCardinality(String) DEFAULT SpanAttributes['gen_ai.request.model'],
     InputTokens        UInt32 DEFAULT toUInt32OrZero(SpanAttributes['gen_ai.usage.input_tokens']),
