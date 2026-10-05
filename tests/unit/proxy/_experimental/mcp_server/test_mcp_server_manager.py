@@ -18952,3 +18952,41 @@ async def test_failed_aggregate_continuation_preserves_only_delivered_tool_metad
     for server in servers:
         assert manager.get_listed_tool(server, "first", identity) == first
         assert manager.get_listed_tool(server, "unseen", identity) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("can_seal", [False, True])
+async def test_aggregate_publishes_complete_bare_routes_only_after_delivering_a_page(monkeypatch, can_seal):
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import ListToolsResult, PaginatedRequestParams
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import catalog, operations
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    if can_seal:
+        monkeypatch.setenv("LITELLM_SALT_KEY", "delivered-page-test")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    tool = MCPTool(name="first", input_schema={"type": "object"})
+    servers = [MCPServer(server_id=name, name=name, transport=MCPTransport.http) for name in ("alpha", "beta")]
+    manager = MCPServerManager()
+    manager.registry = {server.server_id: server for server in servers}
+    clients = {server.server_id: AsyncMock() for server in servers}
+    for name, client in clients.items():
+        client._last_initialize_instructions = None
+        client.list_tools_page.return_value = ListToolsResult(tools=[tool], next_cursor="next" if name == "beta" else None)
+
+    async def create_client(server, **kwargs):
+        return clients[server.server_id]
+
+    manager._create_mcp_client = create_client
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    context = operations.prepare_context(UserAPIKeyAuth(api_key="owned-caller", user_id="alice"))
+    listing = catalog.aggregate_gateway_tools(context, PaginatedRequestParams(), servers, {}, record_listing=True)
+    if can_seal:
+        assert (await listing).next_cursor
+        assert manager._get_mcp_server_from_tool_name("first").server_id == "alpha"
+    else:
+        with pytest.raises(MCPError, match="LITELLM_SALT_KEY"):
+            await listing
+        assert manager._get_mcp_server_from_tool_name("first") is None

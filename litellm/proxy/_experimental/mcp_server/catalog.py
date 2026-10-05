@@ -858,6 +858,7 @@ async def get_filtered_server_tools(
                 params=params,
                 catalog_auth_header=catalog_auth_header,
                 record_listing=False,
+                listing_updates=listing_updates,
             )
         tools: Final = page.tools
         filtered_tools = filter_tools_by_allowed_tools(tools, server)

@@ -24,7 +24,7 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from itertools import chain, groupby
@@ -4304,6 +4304,7 @@ class MCPServerManager:
         params: PaginatedRequestParams | None = None,
         catalog_auth_header: str | dict[str, str] | None | EllipsisType = ...,
         record_listing: bool = False,
+        listing_updates: ExitStack | None = None,
     ) -> ListToolsResult:
         from litellm.proxy._experimental.mcp_server.tool_registry import (
             global_mcp_tool_registry,
@@ -4452,6 +4453,7 @@ class MCPServerManager:
                 server,
                 add_prefix=add_prefix,
                 register_bare_names=params is None or (params.cursor is None and not page.next_cursor),
+                listing_updates=listing_updates,
             )
             self._record_listed_tools(
                 server, guarded_tools, listed_caller, listed_generation, record_listing=record_listing
@@ -5588,6 +5590,7 @@ class MCPServerManager:
         add_prefix: bool = True,
         *,
         register_bare_names: bool = True,
+        listing_updates: ExitStack | None = None,
     ) -> list[MCPTool]:
         """
         Create prefixed tools and update tool mapping.
@@ -5600,6 +5603,10 @@ class MCPServerManager:
             List of tools with prefixed names
         """
         from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        if register_bare_names and listing_updates is not None:
+            listing_updates.callback(self._create_prefixed_tools, tools, server, add_prefix=add_prefix)
+            register_bare_names = False
 
         prefixed_tools: Final = []
         prefix: Final = get_server_prefix(server)
