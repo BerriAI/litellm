@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { numberOrNull } from "@/lib/forms/numberOrNull";
 
 export const TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING = "team_admin_editable_team_fields";
 
@@ -56,12 +57,6 @@ export const teamAdminFieldLabel = (field: string): string => TEAM_ADMIN_FIELD_L
 export type TeamAdminSettingsValues = { readonly [F in TeamAdminSettingsField]?: string | number | null };
 
 export type TeamAdminSettingsChanges = { readonly [F in TeamAdminSettingsField]?: number | null };
-
-const numberOrNull = (value: string | number | null | undefined): number | null => {
-  if (value === null || value === undefined || String(value).trim() === "") return null;
-  const parsed = Number(value);
-  return Number.isNaN(parsed) ? null : parsed;
-};
 
 export const teamAdminSettingsChanges = (
   values: TeamAdminSettingsValues,

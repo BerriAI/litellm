@@ -2118,6 +2118,43 @@ describe("TeamInfoView - which team member fields reach the update payload depen
     expect(JSON.parse(JSON.stringify(payload))).not.toHaveProperty("team_member_budget_duration");
   });
 
+  it("sends a null team_member_budget when Default Budget is cleared, instead of a $0 cap", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    fireEvent.change(await screen.findByLabelText("Default Budget (USD)"), { target: { value: "" } });
+    const payload = await save(user);
+
+    expect(JSON.parse(JSON.stringify(payload))).toMatchObject({
+      team_member_budget: null,
+      team_member_tpm_limit: 11,
+      team_member_rpm_limit: 22,
+    });
+  });
+
+  it("keeps a member default with no dollar cap uncapped when Team Member Settings is saved", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user, { max_budget: null, budget_duration: "30d", tpm_limit: null, rpm_limit: 60 });
+
+    await user.click(screen.getByText("Team Member Settings"));
+    await screen.findByLabelText("Default Budget (USD)");
+    const payload = await save(user);
+
+    expect(JSON.parse(JSON.stringify(payload))).toMatchObject({ team_member_budget: null, team_member_rpm_limit: 60 });
+  });
+
+  it("sends a typed Default Budget as a number", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(screen.getByText("Team Member Settings"));
+    fireEvent.change(await screen.findByLabelText("Default Budget (USD)"), { target: { value: "12.5" } });
+    const payload = await save(user);
+
+    expect(payload.team_member_budget).toBe(12.5);
+  });
+
   it("omits object_permission.search_tools while Search Tool Settings is closed", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
@@ -2456,7 +2493,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(networking.teamUpdateCall).not.toHaveBeenCalled();
   });
 
-  it("carries every typed value to the update payload at the type and shape antd sends today", async () => {
+  it("carries every typed value to the update payload, with numeric fields as numbers", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);
 
@@ -2479,8 +2516,8 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     const payload = await save(user);
 
     expect(payload.team_alias).toBe("Renamed Team");
-    expect(payload.soft_budget).toBe("9.5");
-    expect(payload.tpm_limit).toBe("555");
+    expect(payload.soft_budget).toBe(9.5);
+    expect(payload.tpm_limit).toBe(555);
     expect((payload.metadata as Record<string, unknown>).soft_budget_alerting_emails).toStrictEqual([
       "a@test.com",
       "b@test.com",
