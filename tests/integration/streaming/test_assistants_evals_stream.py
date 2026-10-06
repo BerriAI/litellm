@@ -296,7 +296,7 @@ _THREAD: Final[dict[str, JsonValue]] = {
     "object": "thread",
     "created_at": 1700000000,
     "metadata": {},
-    "tool_resources": None,
+    "tool_resources": {"code_interpreter": {"file_ids": ["file-abc"]}},
 }
 _HELD_FRAME: Final = b":" + b"x" * 4_000_000 + b"\n\n"
 

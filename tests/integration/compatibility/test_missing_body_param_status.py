@@ -1632,7 +1632,10 @@ def test_upstream_pause_and_worker_kill_preserve_required_body_status(
 
 
 def test_eval_create_and_run_forward_client_metadata(gateway: Gateway) -> None:
-    pytest.skip("BUG: evals.create and evals.runs.create drop the client metadata upstream")
+    pytest.skip(
+        "BUG: evals.create and evals.runs.create drop the client metadata upstream, "
+        "and the run response model is overwritten with the routing alias"
+    )
 
     def respond(request: Request) -> Reply:
         if request.method == "POST" and request.target == "/v1/evals":
