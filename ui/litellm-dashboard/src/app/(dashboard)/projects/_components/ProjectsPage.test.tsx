@@ -15,6 +15,16 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: () => mockUseTeams(),
 }));
 
+const mockUseAuthorized = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => mockUseAuthorized(),
+}));
+
+const mockUseUISettings = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: () => mockUseUISettings(),
+}));
+
 // Stub modals and the detail page to keep tests focused on the list page
 vi.mock("./ProjectModals/CreateProjectModal", () => ({
   CreateProjectModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="create-modal" /> : null),
@@ -76,6 +86,8 @@ describe("ProjectsPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseTeams.mockReturnValue({ data: [], isLoading: false });
+    mockUseAuthorized.mockReturnValue({ userId: "admin-user", userRole: "Admin", isViewOnly: false });
+    mockUseUISettings.mockReturnValue({ data: { values: {} } });
   });
 
   it("should render the Projects heading", () => {
@@ -90,6 +102,41 @@ describe("ProjectsPage", () => {
     mockUseProjects.mockReturnValue({ data: [], isLoading: false });
     renderWithProviders(<ProjectsPage />);
     expect(screen.getByRole("button", { name: /create project/i })).toBeInTheDocument();
+  });
+
+  it.each([
+    { who: "a proxy admin without the setting", role: "Admin", isViewOnly: false, fields: [], visible: true },
+    { who: "a proxy admin viewer", role: "Admin", isViewOnly: true, fields: ["projects"], visible: false },
+    { who: "a team admin without the setting", role: "Internal User", isViewOnly: false, fields: [], visible: false },
+    {
+      who: "a team admin when the setting grants projects",
+      role: "Internal User",
+      isViewOnly: false,
+      fields: ["projects"],
+      visible: true,
+    },
+  ])("should gate 'Create Project' for $who", ({ role, isViewOnly, fields, visible }) => {
+    mockUseAuthorized.mockReturnValue({ userId: "team-admin", userRole: role, isViewOnly });
+    mockUseUISettings.mockReturnValue({ data: { values: { team_admin_editable_team_fields: fields } } });
+    mockUseTeams.mockReturnValue({
+      data: [{ team_id: "team-1", members_with_roles: [{ user_id: "team-admin", role: "admin" }] }],
+      isLoading: false,
+    });
+    mockUseProjects.mockReturnValue({ data: [], isLoading: false });
+    renderWithProviders(<ProjectsPage />);
+    expect(screen.queryByRole("button", { name: /create project/i }) !== null).toBe(visible);
+  });
+
+  it("should hide 'Create Project' from a team member who administers no team even when the setting grants projects", () => {
+    mockUseAuthorized.mockReturnValue({ userId: "member", userRole: "Internal User", isViewOnly: false });
+    mockUseUISettings.mockReturnValue({ data: { values: { team_admin_editable_team_fields: ["projects"] } } });
+    mockUseTeams.mockReturnValue({
+      data: [{ team_id: "team-1", members_with_roles: [{ user_id: "member", role: "user" }] }],
+      isLoading: false,
+    });
+    mockUseProjects.mockReturnValue({ data: [], isLoading: false });
+    renderWithProviders(<ProjectsPage />);
+    expect(screen.queryByRole("button", { name: /create project/i })).not.toBeInTheDocument();
   });
 
   it("should render the projects table", () => {
