@@ -99,7 +99,12 @@ const SITUATIONS: Record<RunSituation, SituationView> = {
     headline: ({ runs }) => `Cancelled after reviewing ${runs}`,
     body: "error",
   },
-  partial: { status: "Partial results", tone: "warning", headline: completed, body: "partial" },
+  partial: {
+    status: "Partial results",
+    tone: "warning",
+    headline: (known) => (known.found ? completed(known) : `Stopped after reviewing ${known.runs}`),
+    body: "partial",
+  },
   unknown: { status: "Completed", tone: "success", headline: ({ runs }) => `Reviewed ${runs}`, body: null },
   issues: { status: "Completed", tone: "success", headline: completed, body: null },
   watching: { status: "Completed", tone: "success", headline: completed, body: null },

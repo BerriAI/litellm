@@ -821,29 +821,36 @@ it("shows the actual saved failure and run context without opening backend logs"
   expect(failure.queryByText(/find the error in proxy and worker logs/)).not.toBeInTheDocument();
 });
 
-it("keeps partial findings visible and shows how many analysis tasks failed", async () => {
-  testQueryClient.clear();
-  const job = {
-    ...lens.jobs[0],
-    error: "Result validation failed after 3 retries",
-    findings: [issue],
-    coverage: { ...lens.jobs[0].coverage, screened: 2, investigated: 1, failed_tasks: 1 },
-  };
-  proxy.get.mockImplementation(async (path) => {
-    if (path === "/lens") return { lenses: [{ ...lens, jobs: [job] }], workers: [], tracing_enabled: true };
-    if (path === "/lens/lens/runs") return [job];
-    return { data: [] };
-  });
-  renderWithProviders(<InvestigationsView readOnly />);
-  expect(await screen.findByText("Partial results")).toBeVisible();
-  expect(screen.getByText("1 of 3 analysis tasks failed. Valid results are preserved.")).toBeVisible();
-  expect(screen.getByRole("button", { name: new RegExp(issue.title) })).toBeVisible();
-  expect(screen.queryByText("This investigation did not finish")).not.toBeInTheDocument();
-  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  expect(screen.getByLabelText("Investigation error")).not.toBeVisible();
-  fireEvent.click(screen.getByText("Run details", { selector: "summary" }));
-  expect(screen.getByLabelText("Investigation error")).toBeVisible();
-});
+it.each([true, false])(
+  "keeps completed results visible when later analysis fails (findings=%s)",
+  async (hasFindings) => {
+    testQueryClient.clear();
+    const job = {
+      ...lens.jobs[0],
+      error: "Result validation failed after 3 retries",
+      findings: hasFindings ? [issue] : [],
+      coverage: { ...lens.jobs[0].coverage, screened: 2, investigated: 1, failed_tasks: 1 },
+    };
+    proxy.get.mockImplementation(async (path) => {
+      if (path === "/lens") return { lenses: [{ ...lens, jobs: [job] }], workers: [], tracing_enabled: true };
+      if (path === "/lens/lens/runs") return [job];
+      return { data: [] };
+    });
+    renderWithProviders(<InvestigationsView readOnly />);
+    expect(await screen.findByText("Partial results")).toBeVisible();
+    expect(screen.getByText("1 of 3 analysis tasks failed. Valid results are preserved.")).toBeVisible();
+    if (hasFindings) {
+      expect(screen.getByRole("button", { name: new RegExp(issue.title) })).toBeVisible();
+    } else {
+      expect(screen.getByRole("heading", { name: "Stopped after reviewing 2 runs" })).toBeVisible();
+    }
+    expect(screen.queryByText("This investigation did not finish")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Investigation error")).not.toBeVisible();
+    fireEvent.click(screen.getByText("Run details", { selector: "summary" }));
+    expect(screen.getByLabelText("Investigation error")).toBeVisible();
+  },
+);
 
 it("sends the report's Review issues action to the open issues of that run", async () => {
   window.history.replaceState({}, "", "/lens/?lens=lens&kind=pattern&finding_status=resolved");

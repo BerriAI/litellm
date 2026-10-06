@@ -1,4 +1,4 @@
-import { budgetReached, isPartial } from "./status";
+import { isPartial } from "./status";
 import type { Finding, Job, Lens } from "./types";
 
 export interface SituationInput {
@@ -34,7 +34,7 @@ const RULES: readonly (readonly [RunSituation, (input: SituationInput) => boolea
   ["never", ({ job }) => !job],
   ["queued", ({ job }) => job?.status === "queued"],
   ["running", ({ job }) => job?.status === "running"],
-  ["budget", ({ job, lens }) => failed(job) && (budgetReached(lens) || /budget reached/i.test(job?.error ?? ""))],
+  ["budget", ({ job }) => failed(job) && /budget reached/i.test(job?.error ?? "")],
   ["offline", ({ job, connected }) => failed(job) && !connected],
   ["failed", ({ job }) => failed(job)],
   ["cancelled", ({ job }) => job?.status === "cancelled"],

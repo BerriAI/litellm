@@ -1288,7 +1288,7 @@ async def test_cancelled_reuse_reports_only_recorded_reviews(completed: int) -> 
 
 
 @pytest.mark.asyncio
-async def test_final_consolidation_failure_preserves_verified_findings_for_retry() -> None:
+async def test_final_consolidation_failure_does_not_publish_unreconciled_findings() -> None:
     from litellm.proxy.lens.context_pipeline import consolidate_findings
     from tests.unit.proxy.lens.test_state import finding
 
@@ -1299,5 +1299,5 @@ async def test_final_consolidation_failure_preserves_verified_findings_for_retry
         raise AnalysisResponseError("Analysis budget is unavailable")
 
     result: Final = await consolidate_findings(drafts, claim, unavailable)
-    assert result.findings == drafts
+    assert result.findings == ()
     assert result.error == "Finding consolidation is incomplete: Analysis budget is unavailable"

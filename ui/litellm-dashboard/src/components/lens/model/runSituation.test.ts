@@ -98,7 +98,7 @@ describe("runSituation", () => {
     ["never", input({ job: undefined }), "run"],
     ["queued", input({ jobPatch: { status: "queued" } }), "stop"],
     ["running", input({ jobPatch: { status: "running" } }), "stop"],
-    ["budget", input({ jobPatch: failed, lens: { ...lens, spent: 20 } }), "raiseBudget"],
+    ["failed", input({ jobPatch: failed, lens: { ...lens, spent: 20 } }), "retry"],
     ["budget", input({ jobPatch: { ...failed, error: "Monthly lens budget reached" } }), "raiseBudget"],
     ["offline", input({ jobPatch: failed, connected: false }), "connectWorker"],
     ["failed", input({ jobPatch: failed }), "retry"],
@@ -123,5 +123,16 @@ describe("runSituation", () => {
     expect(runSituation(input({ jobPatch: failed, lens: { ...lens, spent: 99, budget_month: "1999-01" } }))).toBe(
       "failed",
     );
+  });
+
+  it("keeps the recorded budget failure after the limit increases", () => {
+    expect(
+      runSituation(
+        input({
+          jobPatch: { ...failed, error: "Monthly lens budget reached" },
+          lens: { ...lens, settings: { ...settings, monthly_budget: 100 } },
+        }),
+      ),
+    ).toBe("budget");
   });
 });

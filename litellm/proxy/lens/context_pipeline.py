@@ -475,7 +475,7 @@ async def analyze_context(
     if not investigation_error:
         await progress("Consolidating findings across runs", investigating)
     consolidated: Final = (
-        CandidateInvestigation(findings=drafts, error=investigation_error)
+        CandidateInvestigation(error=investigation_error)
         if investigation_error
         else await consolidate_findings(drafts, claim, limited)
     )
@@ -521,4 +521,4 @@ async def consolidate_findings(
     try:
         return CandidateInvestigation(findings=await reconcile_findings(drafts, claim.findings, model))
     except (AnalysisResponseError, AnalysisStopped) as error:
-        return CandidateInvestigation(findings=drafts, error=f"Finding consolidation is incomplete: {error}")
+        return CandidateInvestigation(error=f"Finding consolidation is incomplete: {error}")
