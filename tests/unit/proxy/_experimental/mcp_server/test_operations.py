@@ -778,3 +778,97 @@ async def test_list_mcp_tools_records_the_catalog_only_when_asked(
             manager._drop_listed_tools(server.server_id)
     assert [tool.name for tool in listing.tools] == ["listing-slot-echo"]
     assert (listed is not None) is recorded
+
+def _mcp_server(*, server_id: str, name: str, alias: str | None = None) -> MCPServer:
+    return MCPServer(
+        server_id=server_id,
+        name=name,
+        alias=alias,
+        server_name=name,
+        url="http://localhost:1/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+    )
+
+
+class TestResolveRequestedServer:
+    """A tool call must be scoped by server-side state, not by the global
+    tool_name -> server mapping, which is last-writer-wins across callers
+    (BerriAI/litellm#44831)."""
+
+    def test_path_scope_resolves_server_when_no_server_id(self):
+        alpha: Final = _mcp_server(server_id="id-alpha", name="alpha")
+        beta: Final = _mcp_server(server_id="id-beta", name="beta")
+        token = operations._mcp_gateway_server_name.set("alpha")
+        try:
+            resolved = operations.resolve_requested_server(
+                requested_server_id=None,
+                allowed_mcp_servers=[alpha, beta],
+            )
+        finally:
+            operations._mcp_gateway_server_name.reset(token)
+        assert resolved is alpha
+
+    def test_path_scope_matches_alias(self):
+        alpha: Final = _mcp_server(server_id="id-alpha", name="alpha-internal", alias="alpha")
+        token = operations._mcp_gateway_server_name.set("alpha")
+        try:
+            resolved = operations.resolve_requested_server(
+                requested_server_id=None,
+                allowed_mcp_servers=[alpha],
+            )
+        finally:
+            operations._mcp_gateway_server_name.reset(token)
+        assert resolved is alpha
+
+    def test_path_scope_picks_the_path_server_when_two_share_a_tool(self):
+        # The collision case: both servers expose the same tool name, so the
+        # global mapping points at whichever listed last. The path must win.
+        alpha: Final = _mcp_server(server_id="id-alpha", name="alpha")
+        beta: Final = _mcp_server(server_id="id-beta", name="beta")
+        token = operations._mcp_gateway_server_name.set("beta")
+        try:
+            resolved = operations.resolve_requested_server(
+                requested_server_id=None,
+                allowed_mcp_servers=[alpha, beta],
+            )
+        finally:
+            operations._mcp_gateway_server_name.reset(token)
+        assert resolved is beta
+
+    def test_path_scope_cannot_reach_a_server_the_key_lacks(self):
+        # Rejected path: the scope names a real server that is not in the key's
+        # allowed set, so it must not resolve. A path may narrow, never widen.
+        allowed: Final = _mcp_server(server_id="id-alpha", name="alpha")
+        token = operations._mcp_gateway_server_name.set("forbidden")
+        try:
+            resolved = operations.resolve_requested_server(
+                requested_server_id=None,
+                allowed_mcp_servers=[allowed],
+            )
+        finally:
+            operations._mcp_gateway_server_name.reset(token)
+        assert resolved is None
+
+    def test_server_id_wins_over_path_scope(self):
+        alpha: Final = _mcp_server(server_id="id-alpha", name="alpha")
+        beta: Final = _mcp_server(server_id="id-beta", name="beta")
+        token = operations._mcp_gateway_server_name.set("alpha")
+        try:
+            resolved = operations.resolve_requested_server(
+                requested_server_id="id-beta",
+                allowed_mcp_servers=[alpha, beta],
+            )
+        finally:
+            operations._mcp_gateway_server_name.reset(token)
+        assert resolved is beta
+
+    def test_no_scope_and_no_server_id_resolves_nothing(self):
+        alpha: Final = _mcp_server(server_id="id-alpha", name="alpha")
+        assert (
+            operations.resolve_requested_server(
+                requested_server_id=None,
+                allowed_mcp_servers=[alpha],
+            )
+            is None
+        )

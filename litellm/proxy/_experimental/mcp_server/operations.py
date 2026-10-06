@@ -80,6 +80,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     classify_list_exception,
     outcome_wire_value,
 )
+from litellm.proxy._experimental.mcp_server.mcp_context import _mcp_gateway_server_name
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     ListedToolsCaller,
     MCPServerManager,
@@ -1873,6 +1874,52 @@ async def execute_mcp_tool(
     return await GatewayOperations().execute(operation, context)
 
 
+def resolve_requested_server(
+    *,
+    requested_server_id: str | None,
+    allowed_mcp_servers: list[MCPServer],
+) -> MCPServer | None:
+    """Resolve the server a tool call is scoped to, from server-side state only.
+
+    ``requested_server_id`` (REST) wins, then the single-server path recorded in
+    ``_mcp_gateway_server_name``. Both are set server-side, never from a
+    client-supplied header, so either may be treated as authoritative for routing.
+
+    This matters because the fallback is the process-wide tool_name -> server
+    mapping, which is empty until some caller has listed the server and is
+    overwritten by whichever server listed last: without a scope, one caller's
+    tools/list decides how another caller's tools/call resolves.
+
+    Both lookups stay inside ``allowed_mcp_servers``, so neither a path nor a
+    server_id can widen what the key may reach.
+    """
+    if requested_server_id:
+        by_id: Final = next(
+            (server for server in allowed_mcp_servers if server.server_id == requested_server_id),
+            None,
+        )
+        if by_id is not None:
+            return by_id
+
+    scoped_server_name: Final[str | None] = _mcp_gateway_server_name.get()
+    if not scoped_server_name:
+        return None
+
+    normalized_scoped_name: Final[str] = normalize_server_name(scoped_server_name)
+    return next(
+        (
+            server
+            for server in allowed_mcp_servers
+            if any(
+                normalize_server_name(identifier) == normalized_scoped_name
+                for identifier in (server.alias, server.server_name, server.name)
+                if identifier
+            )
+        ),
+        None,
+    )
+
+
 async def _execute_mcp_tool(
     name: str,
     arguments: dict[str, object],
@@ -1920,12 +1967,10 @@ async def _execute_mcp_tool(
     # Remove prefix from tool name for logging and processing
     original_tool_name, server_name = split_server_prefix_from_name(name)
 
-    requested_server: MCPServer | None = None
-    if requested_server_id:
-        requested_server = next(
-            (s for s in allowed_mcp_servers if s.server_id == requested_server_id),
-            None,
-        )
+    requested_server: MCPServer | None = resolve_requested_server(
+        requested_server_id=requested_server_id,
+        allowed_mcp_servers=allowed_mcp_servers,
+    )
 
     name_is_prefixed = False
     if requested_server is not None and MCP_TOOL_PREFIX_SEPARATOR in name:
