@@ -32,6 +32,13 @@ class DataForSEOSearchConfig(BaseSearchConfig):
     def ui_friendly_name() -> str:
         return "DataForSEO"
 
+    def domain_filter_params(self) -> frozenset[str]:
+        return frozenset(("search_domain_filter", "domain", "target"))
+
+    def max_search_domain_filter_entries(self) -> int | None:
+        # `domain` takes a single domain
+        return 1
+
     def get_http_method(self) -> Literal["GET", "POST"]:
         """
         DataForSEO uses POST requests with JSON body.

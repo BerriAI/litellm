@@ -62,6 +62,13 @@ class GooglePSESearchConfig(BaseSearchConfig):
     def ui_friendly_name() -> str:
         return "Google PSE"
 
+    def domain_filter_params(self) -> frozenset[str]:
+        return frozenset(("search_domain_filter", "siteSearch", "siteSearchFilter"))
+
+    def max_search_domain_filter_entries(self) -> int | None:
+        # `siteSearch` takes a single domain
+        return 1
+
     def get_http_method(self) -> Literal["GET", "POST"]:
         """
         Google PSE uses GET requests with query parameters.
