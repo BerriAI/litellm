@@ -133,3 +133,17 @@ it("stacks a quote's original step over the finding and keeps the feedback draft
   expect(url.get("evidence")).toBe(traceOf("trace-2"));
   expect(url.get("evidence_span")).toBe("step-b");
 });
+
+it("shows contributing investigation runs and every affected trace, including older traces without retained quotes", async () => {
+  const traceId = btoa(JSON.stringify(["traces", "", "older-trace", ""]));
+  const current: Finding = {
+    ...finding,
+    occurrences: [traceId],
+    investigation_runs: ["first-investigation-run", "second-investigation-run"],
+  };
+  renderWithLens(<Harness current={current} onReview={vi.fn()} />);
+  expect(screen.getByText("Found across 2 investigation runs")).toBeInTheDocument();
+  expect(screen.getByText(/1 affected trace/)).toBeInTheDocument();
+  fireEvent.click(screen.getByText("older-trace"));
+  expect(screen.getByRole("button", { name: "Open original trace" })).toBeInTheDocument();
+});

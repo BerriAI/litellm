@@ -109,6 +109,24 @@ class Evidence(Record):
     role: Literal["support", "counterexample"] = "support"
 
 
+class Observation(Record):
+    check_id: str
+    kind: Literal["issue", "pattern"] = "issue"
+    summary: str
+    evidence: tuple[Evidence, ...] = ()
+
+
+class Extraction(Record):
+    observations: tuple[Observation, ...] = ()
+    cannot_assess: bool = False
+    reasoning: str = Field(default="", max_length=800)
+
+
+class ReviewVersion(Record):
+    execution_id: str
+    content_version: str
+
+
 class AgentTestCase(Record):
     input: str = Field(min_length=1)
     expected: str = Field(min_length=1)
@@ -132,6 +150,8 @@ class FindingDraft(Record):
     brief: IssueBrief | None = None
     evidence: tuple[Evidence, ...] = Field(min_length=1)
     existing_finding_id: str | None = None
+    check_ids: tuple[str, ...] = ()
+    merged_finding_ids: tuple[str, ...] = ()
 
 
 class Finding(FindingDraft):
@@ -142,6 +162,7 @@ class Finding(FindingDraft):
     last_seen: datetime
     occurrences: tuple[str, ...] = ()
     revision: int
+    investigation_runs: tuple[str, ...] = ()
 
 
 class Coverage(Record):
@@ -156,6 +177,8 @@ class Coverage(Record):
     partial: int = 0
     unassessable: int = 0
     failed_tasks: int = Field(default=0, ge=0)
+    reused: int = Field(default=0, ge=0)
+    reusable: int = Field(default=0, ge=0)
 
 
 class Execution(Record):
@@ -294,6 +317,11 @@ class Review(Record):
     duration_ms: int = Field(ge=0)
     at: datetime
     tool_calls: tuple[ToolCount, ...] = ()
+    extraction: Extraction | None = None
+    content_version: str = ""
+    reused: bool = False
+    consolidated: bool = False
+    partial: bool = False
 
 
 class ReviewPage(Record):
@@ -333,6 +361,15 @@ class Job(Record):
     reading: tuple[InFlight, ...] = ()
     activities: tuple[Activity, ...] = ()
     trigger: Literal["schedule", "manual"] = "schedule"
+    review_versions: tuple[ReviewVersion, ...] = ()
+
+
+class BudgetReservation(Record):
+    id: str
+    job_id: str
+    amount: float = Field(ge=0, allow_inf_nan=False)
+    month: str
+    expires_at: datetime | None = None
 
 
 class Lens(Record):
@@ -348,6 +385,8 @@ class Lens(Record):
     findings: tuple[Finding, ...] = ()
     budget_month: str
     spent: float = 0
+    reservations: tuple[BudgetReservation, ...] = ()
+    criteria_updated_at: datetime | None = None
 
 
 class Worker(Record):
@@ -407,6 +446,7 @@ class Claim(Record):
     lens_id: str
     job: Job
     findings: tuple[Finding, ...]
+    reviews: tuple[Review, ...] | None = None
 
 
 class Progress(Record):
@@ -422,6 +462,7 @@ class Result(Record):
     findings: tuple[FindingDraft, ...] = ()
     coverage: Coverage
     error: str = Field(default="")
+    review_versions: tuple[ReviewVersion, ...] = ()
 
 
 class ModelMessage(Record):

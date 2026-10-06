@@ -28,6 +28,33 @@ from tests.unit.proxy.lens.test_state import NOW, finding, issue_brief, lens
 
 
 @pytest.mark.asyncio
+async def test_failed_parallel_batch_yields_completed_work_without_starting_queued_work() -> None:
+    from litellm.proxy.lens.analysis import concurrent_results
+
+    ready: Final = asyncio.Event()
+    entered: Final = SimpleQueue[str]()
+    completed: Final = SimpleQueue[str]()
+
+    async def operation(item: str) -> str:
+        entered.put(item)
+        if entered.qsize() == 2:
+            ready.set()
+        await ready.wait()
+        if item == "failed":
+            raise ValueError("Terminal request failure")
+        return item
+
+    async def consume() -> None:
+        async for value in concurrent_results(("finished", "failed", "queued"), operation, concurrency=2):
+            completed.put(value)
+
+    with pytest.raises(ValueError, match="Terminal request failure"):
+        await consume()
+    assert completed.get_nowait() == "finished" and completed.empty()
+    assert tuple(entered.get_nowait() for _ in range(entered.qsize())) == ("finished", "failed")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ("complete", "cancel", "failure"))
 async def test_parallel_review_shares_one_model_limit_and_cleans_up(outcome: str) -> None:
     from litellm.proxy.lens.analysis import ANALYSIS_CONCURRENCY, analyze_sample

@@ -20,7 +20,16 @@ const priorityColors = { high: "bg-destructive", medium: "bg-warning", low: "bg-
 function emptyFindingTitle(active: boolean, scanned: boolean, status?: string) {
   if (status === "failed" || status === "cancelled") return "No findings from this run";
   if (active) return "Your findings will appear here";
+  if (status === "completed") return "No matching findings from this run";
   return scanned ? "No matching findings" : "Ready for the first analysis";
+}
+
+function emptyFindingDescription(active: boolean, job?: Job) {
+  if (active) return "Lens is reviewing the selected activity.";
+  if (job?.status === "completed" && (job.coverage.reused ?? 0) > 0) {
+    return "Previously reviewed traces were reused. Choose All accumulated findings to see earlier findings.";
+  }
+  return "Findings reflect the runs analyzed, not a guarantee about all activity.";
 }
 
 export interface FindingsTabProps {
@@ -37,7 +46,7 @@ export function FindingsTab({ lens, job, findings, children }: FindingsTabProps)
   const active = activeJob(lens.jobs) !== undefined;
   const openCount = (of: Finding["kind"]) => findings.filter((f) => f.kind === of && f.status === "open").length;
   const visible = sortedFindings(findings.filter((f) => (status === "all" || f.status === status) && f.kind === kind));
-  const picked = findings.find((f) => f.id === findingId);
+  const picked = findings.find((f) => f.id === findingId || f.merged_finding_ids?.includes(findingId ?? ""));
   const selected: OwnedFinding | null = picked ? { lens, finding: picked } : null;
   return (
     <Inspector.Root
@@ -96,7 +105,8 @@ export function FindingsTab({ lens, job, findings, children }: FindingsTabProps)
                 <p className="text-sm font-medium">{f.title}</p>
                 <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{f.description}</p>
                 <p className="mt-2 text-xs text-muted-foreground">
-                  {f.occurrences?.length ?? 0} linked {f.occurrences?.length === 1 ? "run" : "runs"} ·{" "}
+                  {f.occurrences?.length ?? 0} affected {f.occurrences?.length === 1 ? "trace" : "traces"} ·{" "}
+                  {(f.investigation_runs?.length ?? 0) > 1 && `${f.investigation_runs.length} investigation runs · `}
                   {f.kind === "issue" ? `${f.priority} priority` : "Pattern"}
                 </p>
               </div>
@@ -107,11 +117,7 @@ export function FindingsTab({ lens, job, findings, children }: FindingsTabProps)
             <div className="px-6 py-14 text-center">
               <CheckCircle2 className="mx-auto mb-3 size-5 text-muted-foreground" />
               <p className="text-sm font-medium">{emptyFindingTitle(active, !!lens.last_scan_at, job?.status)}</p>
-              <p className="mt-2 text-xs text-muted-foreground">
-                {active
-                  ? "Lens is reviewing the selected activity."
-                  : "Findings reflect the runs analyzed, not a guarantee about all activity."}
-              </p>
+              <p className="mt-2 text-xs text-muted-foreground">{emptyFindingDescription(active, job)}</p>
             </div>
           )}
         </div>
