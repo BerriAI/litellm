@@ -116,11 +116,12 @@ function LoadedRun({
   };
   const refreshRun = () =>
     readManually(async () => {
-      await traceQuery.refetch();
+      const refreshed = await traceQuery.refetch();
+      const contentRef = refreshed.data?.pages[0].summary.trace_ref ?? traceRef;
       await Promise.all(
         ["agentTraceSpan", "agentTraceContents"].map((kind) =>
           queryClient.invalidateQueries({
-            queryKey: [kind, traceId, traceRef],
+            queryKey: [kind, traceId, contentRef],
             predicate: (query) => query.queryKey.at(-1) === accessToken,
           }),
         ),
