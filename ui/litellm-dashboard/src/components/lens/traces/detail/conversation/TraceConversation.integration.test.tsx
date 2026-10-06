@@ -46,6 +46,27 @@ describe("TraceConversation", () => {
       .mockImplementation(async (_token, _trace, id) => (id === "root" ? rootDetail : { ...toolDetail, span_id: id }));
   });
 
+  it.each([false, true])("refreshes unchanged spans without hiding loaded content on failure (%s)", async (failed) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Conversation" }));
+    expect(await screen.findByText("The release is ready")).toBeVisible();
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) => {
+      if (failed) throw new Error("content refresh failed");
+      return id === "root" ? { ...rootDetail, output: "Updated final answer" } : toolDetail;
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh run" }));
+    if (failed) {
+      expect(await screen.findAllByRole("button", { name: "Retry step" })).toHaveLength(2);
+      expect(screen.getByText("The release is ready")).toBeVisible();
+    } else {
+      expect(await screen.findByText("Updated final answer")).toBeVisible();
+      expect(screen.queryByText("The release is ready")).not.toBeInTheDocument();
+    }
+  });
+
   it("switches to a readable transcript and opens the exact tool step from it", async () => {
     const user = userEvent.setup();
     renderWithProviders(

@@ -114,7 +114,14 @@ function LoadedRun({
     setManualRead(true);
     void read().finally(() => setManualRead(false));
   };
-  const refreshRun = () => readManually(() => traceQuery.refetch());
+  const refreshRun = () =>
+    readManually(async () => {
+      await traceQuery.refetch();
+      await queryClient.invalidateQueries({
+        queryKey: ["agentTraceSpan", traceId, traceRef],
+        predicate: (query) => query.queryKey.at(-1) === accessToken,
+      });
+    });
   const toggleLive = () => {
     if (live && !manualRead && !traceQuery.isFetchingNextPage) {
       void queryClient.cancelQueries({ queryKey, exact: true });
