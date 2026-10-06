@@ -47,7 +47,7 @@ impl OcrRoute {
         interceptors: &impl Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<LiteLLMOcrResponse, Error> {
-        crate::diagnostic::unary(async {
+        litellm_inference::diagnostic::unary(async {
             let caller_document = matches!(&request.document, OcrDocumentInput::Document(_));
             let prepared = prepare_request_document(request).await?;
             let execute: futures_util::future::BoxFuture<'_, Result<LiteLLMOcrResponse, Error>> =

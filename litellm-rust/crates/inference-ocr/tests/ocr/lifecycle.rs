@@ -9,7 +9,7 @@ use litellm_host::{
     interceptors::{RequestContext, WireRequest},
     lifecycle::CallEvent,
 };
-use litellm_inference::ocr::{
+use litellm_inference_ocr::{
     route::{Ocr, OcrCall, OcrOp},
     types::OcrDocumentInput,
 };
