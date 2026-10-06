@@ -18747,3 +18747,60 @@ async def test_empty_access_group_scope_cannot_inherit_unrelated_server(
     )
     if declared:
         assert access.scope == "scoped"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("issuer_parameter_supported", [False, True])
+@pytest.mark.parametrize("anchored", [False, True])
+async def test_catalog_accepts_discovered_issuer_response_support(
+    monkeypatch: pytest.MonkeyPatch, issuer_parameter_supported: bool, anchored: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="discovered-issuer", name="discovered_issuer", transport=MCPTransport.http,
+        url="https://resource.example/mcp", auth_type=MCPAuth.oauth2,
+        issuer="https://issuer.example" if anchored else None, issuer_is_anchored=anchored,
+    )
+    manager.registry = {server.server_id: server}
+    manager._set_oauth_discovery_deferred(server.server_id, True)
+    metadata: Final = MCPOAuthMetadata(
+        discovered_issuer="https://issuer.example",
+        authorization_url="https://issuer.example/authorize", token_url="https://issuer.example/token",
+        authorization_response_iss_parameter_supported=issuer_parameter_supported,
+    )
+    discovery: Final = AsyncMock(return_value=metadata)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(manager, "_discover_oauth_metadata_for_server", discovery)
+    async with manager.catalog.operation():
+        resolved: Final = await manager.ensure_oauth_metadata_discovered(server)
+        repeated: Final = await manager.ensure_oauth_metadata_discovered(server)
+    assert resolved.issuer == "https://issuer.example"
+    assert resolved.authorization_response_iss_parameter_supported is issuer_parameter_supported
+    assert repeated == resolved
+    assert manager.registry[server.server_id] == resolved
+    discovery.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_catalog_rejects_a_changed_anchored_issuer_during_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="anchored-issuer", name="anchored_issuer", transport=MCPTransport.http,
+        url="https://resource.example/mcp", auth_type=MCPAuth.oauth2,
+        issuer="https://original.example", issuer_is_anchored=True,
+    )
+    manager.registry = {server.server_id: server}
+    discovery: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(manager, "_discover_oauth_metadata_for_server", discovery)
+    async with manager.catalog.operation():
+        manager.registry[server.server_id] = server.model_copy(update={"issuer": "https://replacement.example"})
+        with pytest.raises(HTTPException) as rejected:
+            await manager.ensure_oauth_metadata_discovered(server)
+    assert rejected.value.status_code == 503
+    discovery.assert_not_awaited()

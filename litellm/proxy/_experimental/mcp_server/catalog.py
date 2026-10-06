@@ -51,7 +51,16 @@ def _configuration_identity(server: MCPServer) -> str:
     return json.dumps(
         server.model_dump(
             mode="json",
-            exclude=frozenset(("short_prefix", "scopes", "authorization_url", "token_url", "registration_url"))
+            exclude=frozenset(
+                (
+                    "short_prefix",
+                    "scopes",
+                    "authorization_url",
+                    "token_url",
+                    "registration_url",
+                    "authorization_response_iss_parameter_supported",
+                )
+            )
             | (frozenset() if server.issuer_is_anchored else frozenset(("issuer",))),
         ),
         sort_keys=True,
