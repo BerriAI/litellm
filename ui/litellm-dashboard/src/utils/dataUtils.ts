@@ -92,6 +92,7 @@ export const copyToClipboard = async (
 // Fallback method using document.execCommand (deprecated but widely supported)
 const fallbackCopyToClipboard = (text: string, messageText: string): boolean => {
   try {
+    const previouslyFocused = document.activeElement;
     const textArea = document.createElement("textarea");
     textArea.value = text;
 
@@ -107,6 +108,7 @@ const fallbackCopyToClipboard = (text: string, messageText: string): boolean => 
 
     const successful = document.execCommand("copy");
     document.body.removeChild(textArea);
+    if (previouslyFocused instanceof HTMLElement) previouslyFocused.focus();
 
     if (successful) {
       toast.success(messageText);

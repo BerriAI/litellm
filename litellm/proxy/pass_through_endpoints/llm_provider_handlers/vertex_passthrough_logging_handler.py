@@ -1,12 +1,12 @@
 import asyncio
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -39,6 +39,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
     ModelResponse,
+    ModelResponseStream,
     SpecialEnums,
     StandardPassThroughResponseObject,
     TextCompletionResponse,
@@ -55,6 +56,7 @@ else:
 
 _VERTEX_INTERACTIONS_PATH: Final = re.compile(r"/projects/[^/]+/locations/[^/]+/interactions/?$")
 _INTERACTIONS_RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def _interactions_model(
@@ -99,7 +101,7 @@ class VertexPassthroughLoggingHandler:
         litellm_model_response: Final = ModelResponse(
             model=model,
             usage=InteractionsUsageObjectTransformation.transform_interactions_usage_object(
-                cast(Mapping[str, Any], usage_object)
+                _JSON_OBJECT.validate_python(usage_object)
             ),
         )
         logging_obj.custom_llm_provider = custom_llm_provider
@@ -349,7 +351,7 @@ class VertexPassthroughLoggingHandler:
 
         model: Final = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
-        _json_response: Final[dict[str, object]] = httpx_response.json()
+        _json_response: Final = _JSON_OBJECT.validate_python(httpx_response.json())
 
         litellm_prediction_response: ModelResponse | EmbeddingResponse | ImageResponse = ModelResponse()
         if VertexPassthroughLoggingHandler._is_audio_predict_response(
@@ -450,7 +452,7 @@ class VertexPassthroughLoggingHandler:
         standard_pass_through_response_object: Final[StandardPassThroughResponseObject] = {
             "response": json_response,
         }
-        return {  # mutable-ok: passthrough logging contract requires a concrete result dictionary
+        return {
             "result": standard_pass_through_response_object,
             "kwargs": kwargs,
         }
@@ -628,7 +630,7 @@ class VertexPassthroughLoggingHandler:
                 sync_stream=False,
                 logging_obj=litellm_logging_obj,
             )
-            chunk_parsing_logic: Any = vertex_iterator._common_chunk_parsing_logic
+            chunk_parsing_logic: Callable[..., ModelResponseStream | None] = vertex_iterator._common_chunk_parsing_logic
             parsed_chunks = [chunk_parsing_logic(chunk) for chunk in all_chunks]
         elif "rawPredict" in url_route or "streamRawPredict" in url_route:
             from litellm.llms.anthropic.chat.handler import ModelResponseIterator

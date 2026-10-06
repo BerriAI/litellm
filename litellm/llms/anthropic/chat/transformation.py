@@ -3,7 +3,7 @@ import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -296,6 +296,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
+    _workload_identity_eligible: ClassVar[bool] = True
+
     max_tokens: int | None = None
     stop_sequences: list | None = None
     temperature: int | None = None
@@ -314,7 +316,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         metadata: dict | None = None,
         system: str | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -1978,9 +1980,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # system message stays in the conversation: hoisting it rewrites the cached
         # prefix and re-bills the whole history at cache-write pricing (#36559).
         leading_system_run, later_messages = split_leading_system_run(messages)
-        anthropic_system_message_list: Final = self.translate_system_message(
-            messages=list(leading_system_run)  # mutable-ok: translate_system_message pops from the list it is given
-        )
+        anthropic_system_message_list: Final = self.translate_system_message(messages=list(leading_system_run))
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
             optional_params["system"] = anthropic_system_message_list
@@ -1994,7 +1994,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         try:
             anthropic_messages = anthropic_messages_pt(
                 model=model,
-                messages=list(conversation),  # mutable-ok: anthropic_messages_pt rewrites entries in place
+                messages=list(conversation),
                 llm_provider=self._resolved_provider,
             )
         except Exception as e:
@@ -2108,7 +2108,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params.pop("output_config", None)
                 data.pop("output_config", None)
                 return
-            format_only: Final = {"format": preserved_format}  # mutable-ok: json body
+            format_only: Final = {"format": preserved_format}
             optional_params["output_config"] = format_only  # rebind-ok: out-param store
             data["output_config"] = format_only  # rebind-ok: out-param store
             return
@@ -2515,7 +2515,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> list[object]:
         content: Final = completion_response.get("content")
         blocks: Final = content if isinstance(content, Sequence) else ()
-        inputs: Final = {  # mutable-ok: indexes provider server inputs
+        inputs: Final = {
             call_id: tool_input
             for block in blocks
             if isinstance(block, Mapping)
@@ -2524,10 +2524,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             and isinstance((call_id := block.get("id")), str)
             and isinstance((tool_input := block.get("input")), Mapping)
         }
-        return [  # mutable-ok: provider-neutral response items
+        return [
             build_web_search_call(
                 tool_id=tool_use_id,
-                tool_input=inputs.get(tool_use_id, {}),  # mutable-ok: empty provider input
+                tool_input=inputs.get(tool_use_id, {}),
                 result=result,
             )
             for result in web_search_results

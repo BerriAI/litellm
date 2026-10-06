@@ -339,6 +339,13 @@ def get_or_create_metadata_bucket(
     return metadata_key, metadata_bucket
 
 
+def proxy_stamped_used_client_oauth_token(metadata: object, litellm_params: Mapping[str, object] | None) -> object:
+    litellm_metadata: Final = litellm_params.get("litellm_metadata") if litellm_params is not None else None
+    if isinstance(litellm_metadata, Mapping) and "used_client_oauth_token" in litellm_metadata:
+        return litellm_metadata["used_client_oauth_token"]
+    return metadata.get("used_client_oauth_token") if isinstance(metadata, Mapping) else None
+
+
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
@@ -579,7 +586,7 @@ def independent_snapshot(
     """
     sanitized: Final = {
         key: (
-            {  # mutable-ok: same request-payload shape as data
+            {
                 inner_key: ("placeholder" if inner_key == "litellm_parent_otel_span" else inner_value)
                 for inner_key, inner_value in value.items()
             }
@@ -601,15 +608,13 @@ def independent_snapshot(
             and isinstance(original_value, dict)
             and "litellm_parent_otel_span" in original_value
         ):
-            return {  # mutable-ok: same request-payload shape as data
+            return {
                 **copied_value,
                 "litellm_parent_otel_span": original_value["litellm_parent_otel_span"],
             }
         return copied_value
 
-    return {  # mutable-ok: same request-payload shape as data
-        key: _copied_value(key, value) for key, value in sanitized.items()
-    }
+    return {key: _copied_value(key, value) for key, value in sanitized.items()}
 
 
 def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
@@ -720,7 +725,7 @@ def redact_nested_match_and_regex_keys(
     if payload is None or isinstance(payload, str):
         return payload
     try:
-        redacted: Final[dict | list[Any] | str | None] = copy.deepcopy(payload)
+        redacted: Final[dict | list[object] | str | None] = copy.deepcopy(payload)
     except Exception:
         return payload
 

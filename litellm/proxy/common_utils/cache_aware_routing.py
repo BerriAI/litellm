@@ -8,7 +8,7 @@ from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
@@ -17,6 +17,7 @@ from litellm.llms.anthropic.cache_aware_routing import AnthropicCacheRouting, To
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import Deployment, PreRoutingHookResponse
 from litellm.types.utils import StandardLoggingRoutingDecision
 
@@ -45,14 +46,14 @@ _CLASSIFIED_CAUSES: Final = frozenset(
 )
 
 
-class _ProxyRequest(BaseModel):
+class _ProxyRequest(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True)
     url: str
     body: Mapping[str, JsonValue]
     headers: Mapping[str, str]
 
 
-class _CallerSettings(BaseModel):
+class _CallerSettings(LiteLLMBaseModel):
     config: Mapping[str, object] | None = None
 
 
@@ -123,7 +124,7 @@ async def _available(
             await router.async_get_healthy_deployments(  # pyright: ignore[reportUnknownMemberType]  # legacy router results are validated at this boundary
                 model=candidate.model,
                 messages=_MESSAGES.validate_python(messages) if messages else None,  # pyright: ignore[reportArgumentType]  # router annotations predate structured native messages
-                request_kwargs=dict(request_kwargs),  # mutable-ok: Router's filtering API accepts a request dictionary
+                request_kwargs=dict(request_kwargs),
             )
         )
     except Exception:  # noqa: BLE001  # an unavailable optional candidate must not fail the originally selected route

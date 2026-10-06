@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -47,6 +48,8 @@ if TYPE_CHECKING:
 else:
     PassThroughEndpointLogging = Any
     EndpointType = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class AnthropicPassthroughLoggingHandler:
@@ -343,10 +346,8 @@ class AnthropicPassthroughLoggingHandler:
                 if not line.startswith("data:"):
                     continue
                 try:
-                    data = json.loads(line[len("data:") :].strip())
+                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
                 except (json.JSONDecodeError, ValueError):
-                    continue
-                if not isinstance(data, dict):
                     continue
                 etype = data.get("type")
                 if etype == "message_delta":

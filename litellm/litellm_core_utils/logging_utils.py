@@ -50,7 +50,7 @@ _DATA_URI_RE: Final = re.compile(r"data:([^;]+);base64,([A-Za-z0-9+/=]+)")
 _MAX_TRUNCATION_DEPTH: Final = 20
 
 
-def _base64_data_uri_replacer(match: re.Match) -> str:
+def _base64_data_uri_replacer(match: re.Match[str]) -> str:
     """Replace a single base64 data-URI match with a size placeholder if too long."""
     mime_type: Final = match.group(1)
     payload: Final = match.group(2)
@@ -312,7 +312,7 @@ def _set_duration_in_model_call_details(
 def speech_request_body(model: str, voice: str, optional_params: Mapping[str, object]) -> Mapping[str, object]:
     """Speech request body for telemetry, without the caller headers the provider SDKs
     take as request kwargs rather than body fields."""
-    return {  # mutable-ok: loggers isinstance-check the request body as a dict
+    return {
         "model": model,
         "voice": voice,
         **{key: value for key, value in optional_params.items() if key != "extra_headers"},

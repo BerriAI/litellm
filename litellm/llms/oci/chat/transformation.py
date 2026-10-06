@@ -197,7 +197,7 @@ def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> Non
 
     if vendor == OCIVendors.COHERE:
         # OCI Cohere has no JSON_SCHEMA type; a schema rides on JSON_OBJECT.
-        payload: Final[dict[str, Any]] = {"type": "JSON_OBJECT"}
+        payload: Final[dict[str, object]] = {"type": "JSON_OBJECT"}
         if json_schema is not None and json_schema.get("schema") is not None:
             payload["schema"] = json_schema["schema"]
         selected_params["responseFormat"] = payload
@@ -212,7 +212,7 @@ def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> Non
         # OCI's ResponseJsonSchema accepts only name/description/schema/isStrict.
         # OpenAI sends `strict` instead of `isStrict`; forwarding it (or any
         # other extra key) makes OCI reject the whole request with HTTP 400.
-        oci_schema: Final[dict[str, Any]] = {"name": json_schema.get("name") or "response"}
+        oci_schema: Final[dict[str, object]] = {"name": json_schema.get("name") or "response"}
         if json_schema.get("description") is not None:
             oci_schema["description"] = json_schema["description"]
         if json_schema.get("schema") is not None:
@@ -644,6 +644,7 @@ class OCIChatConfig(BaseConfig):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "OCIStreamWrapper":
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -685,6 +686,7 @@ class OCIChatConfig(BaseConfig):
         signed_json_body: bytes | None = None,
         *,
         litellm_params: Mapping[str, object],
+        timeout: float | httpx.Timeout | None = None,
     ) -> "OCIStreamWrapper":
         if client is None or isinstance(client, HTTPHandler):
             client = get_async_httpx_client(llm_provider=LlmProviders.OCI, params={})
