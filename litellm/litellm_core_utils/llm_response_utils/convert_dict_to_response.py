@@ -94,7 +94,6 @@ def safe_convert_created_field(created_value: object) -> int:
         try:
             return int(float(created_value))
         except (ValueError, TypeError):
-            # Fallback to current time if conversion fails
             return int(time.time())
     return int(time.time())
 

@@ -652,15 +652,15 @@ def _get_exact_count_function(
     Get the function to count tokens based on the model and custom tokenizer."""
     from litellm.utils import select_tokenizer
 
-    if not custom_tokenizer and model is None:
+    if model is not None or custom_tokenizer is not None:
+        tokenizer_json: Final = custom_tokenizer if custom_tokenizer else select_tokenizer(model)
+    else:
         default_encoding: Final = get_default_encoding()
 
         def encode_length(text: str) -> int:
             return _encoding_count(default_encoding, text)
 
         return _get_tiktoken_count_function(encode_length)
-
-    tokenizer_json: Final = custom_tokenizer if custom_tokenizer else select_tokenizer(model)
     if tokenizer_json["type"] == "huggingface_tokenizer":
         tokenizer: Final[HuggingFace] = tokenizer_json["tokenizer"]
 

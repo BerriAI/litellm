@@ -452,16 +452,15 @@ async def _fetch_batch_managed_file_content(
                        Required for Azure and other providers that need authentication
     """
     from litellm.files.main import afile_content
+    from litellm.files.types import FileContentCallOptions, FileContentRequestKwargs
 
-    # Build kwargs for afile_content with credentials from litellm_params
-    file_content_kwargs: Final[dict[str, object]] = {
-        "file_id": _provider_output_file_id(file_id),
-        "custom_llm_provider": custom_llm_provider,
-    }
-
-    # Extract and add credentials for file access
+    provider_output_file_id: Final = _provider_output_file_id(file_id)
     credentials: Final = extract_file_access_credentials(litellm_params)
-    file_content_kwargs.update(credentials)
+    file_content_kwargs: Final[FileContentRequestKwargs] = {
+        "file_id": provider_output_file_id,
+        "custom_llm_provider": custom_llm_provider,
+        **cast(FileContentCallOptions, credentials),
+    }
 
     _file_content: Final = await afile_content(**file_content_kwargs)
     return _file_content.content
@@ -641,15 +640,16 @@ def count_entry_tokens(
     model_name: str | None = None,
 ) -> int:
     """Token-count a single batch input entry's body (chat / text / embedding)."""
-    body: Final = entry.get("body")
-    if not isinstance(body, Mapping):
+    body_value: Final = entry.get("body")
+    if not isinstance(body_value, Mapping):
         return 0
+    body: Final = cast(Mapping[str, object], body_value)
     model_value: Final = body.get("model", model_name or "")
     model: Final = model_value if isinstance(model_value, str) else model_name or ""
 
     messages: Final = body.get("messages")
     if isinstance(messages, list) and messages:
-        return token_counter(model=model, messages=messages)
+        return token_counter(model=model, messages=cast(list[dict[str, object]], messages))
 
     prompt: Final = body.get("prompt")
     if prompt:

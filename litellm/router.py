@@ -10641,7 +10641,9 @@ class Router:
             deployment_owner_team_id: Final = deployment_model_info.team_id
             return deployment_owner_team_id is None or deployment_owner_team_id == team_id
         model_info_value: Final = model.get("model_info")
-        mapping_owner_team_id: Final = model_info_value.get("team_id") if isinstance(model_info_value, Mapping) else None
+        mapping_owner_team_id: Final = (
+            model_info_value.get("team_id") if isinstance(model_info_value, Mapping) else None
+        )
         return mapping_owner_team_id is None or mapping_owner_team_id == team_id
 
     _deployment_usable_by_team = deployment_usable_by_team

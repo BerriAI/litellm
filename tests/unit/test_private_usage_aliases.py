@@ -59,7 +59,6 @@ ALIAS_CASES: Final = (
     ("litellm._lazy_imports", "", "_get_token_counter_new", "get_token_counter_new", False),
     ("litellm._logging", "SecretRedactionFilter", "_formatter", "formatter", True),
     ("litellm._logging", "", "_ENABLE_SECRET_REDACTION", "ENABLE_SECRET_REDACTION", False),
-    ("litellm._logging", "", "_get_uvicorn_json_log_config", "get_uvicorn_json_log_config", False),
     ("litellm._logging", "", "_is_debugging_on", "is_debugging_on", False),
     ("litellm._logging", "", "_redact_string", "redact_string", False),
     ("litellm._logging", "", "_turn_on_debug", "turn_on_debug", False),

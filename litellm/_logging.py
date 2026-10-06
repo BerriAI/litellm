@@ -1014,7 +1014,7 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
         lg.propagate = False  # prevent bubbling to parent/root
 
 
-def get_uvicorn_json_log_config() -> dict[str, object]:
+def _get_uvicorn_json_log_config():
     """
     Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
 
@@ -1072,9 +1072,6 @@ def get_uvicorn_json_log_config() -> dict[str, object]:
     }
 
     return log_config
-
-
-_get_uvicorn_json_log_config = get_uvicorn_json_log_config
 
 
 def turn_on_json():

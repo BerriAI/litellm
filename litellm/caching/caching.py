@@ -16,7 +16,7 @@ import traceback
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from enum import Enum
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, cast
 
 from pydantic import BaseModel
 
@@ -469,10 +469,9 @@ class Cache:
         1. optional params like max_tokens, get transformed for bedrock -> max_new_tokens
         2. avoid doing duplicate / repeated work
         """
-        litellm_params: Final = kwargs.get("litellm_params")
-        if isinstance(litellm_params, Mapping):
-            preset_cache_key: Final = litellm_params.get("preset_cache_key")
-            return preset_cache_key if isinstance(preset_cache_key, str) else None
+        if "litellm_params" in kwargs:
+            litellm_params: Final = cast(Mapping[str, object], kwargs["litellm_params"])
+            return cast(str | None, litellm_params.get("preset_cache_key", None))
         return None
 
     _get_preset_cache_key_from_kwargs = get_preset_cache_key_from_kwargs

@@ -21,6 +21,7 @@ from httpx import Response
 from pydantic import BaseModel, JsonValue
 
 import litellm
+from litellm import custom_logger_compatible_callbacks_literal
 from litellm._internal_context import post_response_phase
 from litellm._logging import (
     is_debugging_on,
@@ -4544,10 +4545,10 @@ def set_callbacks(
 
 
 def _init_custom_logger_compatible_class(
-    logging_integration: str,
+    logging_integration: custom_logger_compatible_callbacks_literal,
     internal_usage_cache: DualCache | None,
     llm_router: object,
-    custom_logger_init_args: dict[str, object] | None = None,
+    custom_logger_init_args: dict[str, object] | None = {},
 ) -> CustomLogger | None:
     """
     Initialize a custom logger compatible class
@@ -4655,7 +4656,9 @@ def _init_custom_logger_compatible_class(
                 )
 
                 return DataDogHandler.get_datadog_logger_for_request(
-                    standard_callback_dynamic_params=custom_logger_init_args_value,
+                    standard_callback_dynamic_params=cast(
+                        StandardCallbackDynamicParams, custom_logger_init_args_value
+                    ),
                     in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                 )
 
@@ -5097,7 +5100,7 @@ def _init_custom_logger_compatible_class(
             for callback in in_memory_loggers:
                 if isinstance(callback, pagerduty_loggers.pagerduty):
                     return callback
-            pagerduty_logger: Final = pagerduty_loggers.pagerduty(**custom_logger_init_args)
+            pagerduty_logger: Final = pagerduty_loggers.pagerduty(**custom_logger_init_args_value)
             in_memory_loggers.append(pagerduty_logger)
             return pagerduty_logger
         elif logging_integration == "anthropic_cache_control_hook":
@@ -5216,7 +5219,9 @@ def _init_custom_logger_compatible_class(
                 )
 
                 return NewRelicHandler.get_newrelic_logger_for_request(
-                    standard_callback_dynamic_params=custom_logger_init_args_value,
+                    standard_callback_dynamic_params=cast(
+                        StandardCallbackDynamicParams, custom_logger_init_args_value
+                    ),
                     in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
                 )
 

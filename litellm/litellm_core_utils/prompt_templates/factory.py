@@ -6,10 +6,10 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Container, Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Final, TypeAlias, TypedDict, TypeGuard, cast, overload
+from typing import Any, Final, TypeAlias, TypedDict, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from pydantic import BaseModel
@@ -5186,10 +5186,6 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
 
 
 # Function call template
-def _is_message_content_list(value: object) -> TypeGuard[list[object]]:
-    return isinstance(value, list)
-
-
 def function_call_prompt(
     messages: list[dict[str, object]],
     functions: list[object],
@@ -5200,17 +5196,15 @@ def function_call_prompt(
 
     function_added_to_prompt = False
     for message in messages:
-        role = message.get("role")
-        if not isinstance(role, str) or "system" not in role:
+        role: Final = cast(Container[object], message["role"])
+        if "system" not in role:
             continue
 
-        content = message.get("content")
+        content: Final = message["content"]
         if isinstance(content, str):
             message["content"] = f"{content} {function_prompt}"
-        elif _is_message_content_list(content):
-            content.append({"type": "text", "text": f""" {function_prompt}"""})
         else:
-            raise TypeError("Message content must be a string or a list")
+            cast(list[object], content).append({"type": "text", "text": f""" {function_prompt}"""})
         function_added_to_prompt = True
 
     if function_added_to_prompt is False:

@@ -117,10 +117,9 @@ def ensure_extra_body_is_safe(extra_body: dict[str, object] | None) -> dict[str,
     """
     if extra_body is None:
         return None
-
     metadata: Final = extra_body.get("metadata")
     if isinstance(metadata, dict) and all(isinstance(key, str) for key in metadata):
-        typed_metadata: Final[dict[str, object]] = cast(  # cast-ok: user-supplied metadata is runtime-checked
+        typed_metadata: Final[dict[str, object]] = cast(
             dict[str, object], metadata
         )
         if "prompt" not in typed_metadata:

@@ -20,11 +20,6 @@ if TYPE_CHECKING:
 
 _CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
 
-
-def _as_otel_span(value: object) -> Span | None:
-    return cast(Span | None, value)  # cast-ok: OpenTelemetry spans enter through untyped request metadata
-
-
 def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
 
@@ -432,15 +427,15 @@ def get_parent_otel_span_from_kwargs(
     try:
         if kwargs is None:
             return None
-        metadata: Final = kwargs.get("metadata")
-        if isinstance(metadata, Mapping) and "litellm_parent_otel_span" in metadata:
-            return _as_otel_span(metadata["litellm_parent_otel_span"])
+        metadata_value: Final = kwargs.get("metadata")
+        if isinstance(metadata_value, Mapping) and "litellm_parent_otel_span" in metadata_value:
+            return cast(Span | None, metadata_value["litellm_parent_otel_span"])
         litellm_params: Final = kwargs.get("litellm_params")
         if isinstance(litellm_params, Mapping):
-            litellm_metadata: Final = litellm_params.get("metadata")
-            if isinstance(litellm_metadata, Mapping) and "litellm_parent_otel_span" in litellm_metadata:
-                return _as_otel_span(litellm_metadata["litellm_parent_otel_span"])
-        return _as_otel_span(kwargs.get("litellm_parent_otel_span"))
+            litellm_metadata_value: Final = litellm_params.get("metadata")
+            if isinstance(litellm_metadata_value, Mapping) and "litellm_parent_otel_span" in litellm_metadata_value:
+                return cast(Span | None, litellm_metadata_value["litellm_parent_otel_span"])
+        return cast(Span | None, kwargs.get("litellm_parent_otel_span"))
     except Exception as e:
         verbose_logger.exception("Error in get_parent_otel_span_from_kwargs: " + str(e))
         return None
