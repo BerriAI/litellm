@@ -501,3 +501,36 @@ it("keeps trace quick filters in links and clears them when leaving demo data", 
   await user.click(screen.getByRole("switch", { name: "Demo data" }));
   await expectUrl(onUrlUpdate, (url) => expect([...url.keys()]).toEqual(["tab"]));
 });
+
+describe("Lens for a team member", () => {
+  const serveEmptyTraces = () =>
+    network.mockImplementation(async (input) => {
+      const path = requestPath(input);
+      if (path === "/v1/traces") return Response.json({ data: [], next_cursor: null });
+      if (path === "/lens") return Response.json({ lenses: [], workers: [], tracing_enabled: true });
+      return Response.json({ data: [], traces: false, requests: false });
+    });
+
+  it("explains team-scoped visibility instead of the administrator setup when no traces are visible", async () => {
+    const user = userEvent.setup();
+    serveEmptyTraces();
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Internal User" readOnly={false} />);
+    const notice = await screen.findByRole("region", { name: "No traces visible" });
+    expect(within(notice).getByRole("heading", { name: "No traces are visible to you yet" })).toBeVisible();
+    expect(notice).toHaveTextContent("/spend/logs");
+    expect(screen.queryByRole("region", { name: "Get started with Lens" })).not.toBeInTheDocument();
+    await user.click(within(notice).getByRole("button", { name: "Set up tracing" }));
+    expect(await screen.findByRole("heading", { name: "Connect your agent" })).toBeVisible();
+    expect(screen.getByText(/ask a proxy admin for one/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Generate tracing key" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "← Back to traces" }));
+    expect(await screen.findByRole("heading", { name: "No traces are visible to you yet" })).toBeVisible();
+  });
+
+  it("keeps the administrator setup for admin-tier viewers with no traces", async () => {
+    serveEmptyTraces();
+    renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin Viewer" readOnly />);
+    expect(await screen.findByRole("region", { name: "Get started with Lens" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "No traces visible" })).not.toBeInTheDocument();
+  });
+});

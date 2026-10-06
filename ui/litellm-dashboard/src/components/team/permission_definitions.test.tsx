@@ -78,6 +78,7 @@ describe("permission_definitions", () => {
     it("should include spend logs permission", () => {
       expect(PERMISSION_DESCRIPTIONS["/spend/logs"]).toBeDefined();
       expect(PERMISSION_DESCRIPTIONS["/spend/logs"]).toContain("spend logs");
+      expect(PERMISSION_DESCRIPTIONS["/spend/logs"]).toContain("agent traces");
     });
   });
 

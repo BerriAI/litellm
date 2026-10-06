@@ -1,9 +1,9 @@
 "use client";
 
 import moment from "moment";
-import { RefreshCw } from "lucide-react";
+import { ArrowUpRight, RefreshCw } from "lucide-react";
 import { traceAgentNames } from "../utils";
-import { useMemo, useState } from "react";
+import { type ComponentProps, type ReactElement, useMemo, useState } from "react";
 
 import { filterRuns } from "./runSearch/runQuery";
 import { RunsToolbar } from "./runSearch/RunsToolbar";
@@ -25,6 +25,7 @@ import { useTracesLive } from "../api";
 import { type AgentTracesResult, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
 
 const DRAWER_WIDTH_KEY = "litellm.agentTraces.drawerWidth";
+const TRACE_ACCESS_DOCS_URL = "https://docs.litellm.ai/docs/proxy/lens/api#trace-access";
 
 const filterByWindow = (runs: TraceSummary[], range: TimeWindow): TraceSummary[] =>
   runs.filter((run) => {
@@ -41,6 +42,8 @@ interface AgentTracesSectionProps {
   readOnly?: boolean;
   canMintTracingKey?: boolean;
   canViewFindings?: boolean;
+  /** Admin-tier viewers read every trace; everyone else reads their own keys' traces plus permitted teams' traces. */
+  canViewAllTraces?: boolean;
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -79,6 +82,7 @@ export function AgentTracesSection({
   readOnly = false,
   canMintTracingKey = false,
   canViewFindings,
+  canViewAllTraces = true,
 }: AgentTracesSectionProps) {
   const live = useTracesLive();
   const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
@@ -133,22 +137,9 @@ export function AgentTracesSection({
 
   if (setup.disabledDetail != null) return <TracingSetupCard detail={setup.disabledDetail} {...setupProps} />;
   // Onboarding only on the first, default view; an empty range the user picked keeps its controls.
-  if (checkHistory && !history.error && history.data === false)
-    return <TracingSetupCard detail={null} {...setupProps} />;
-  if (showSetup) {
-    return (
-      <div>
-        <button
-          type="button"
-          onClick={() => setShowSetup(false)}
-          className="mb-3 text-sm text-muted-foreground hover:text-foreground"
-        >
-          ← Back to traces
-        </button>
-        <TracingSetupCard detail={null} connected {...setupProps} />
-      </div>
-    );
-  }
+  const noTracesYet = checkHistory && !history.error && history.data === false;
+  const beforeRuns = viewBeforeRuns({ noTracesYet, canViewAllTraces, showSetup }, setShowSetup, setupProps);
+  if (beforeRuns) return beforeRuns;
 
   return (
     <Inspector.Root
@@ -228,6 +219,31 @@ export function AgentTracesSection({
   );
 }
 
+/** What a viewer sees instead of the runs table: the admin onboarding, the setup card, or the member hint. */
+function viewBeforeRuns(
+  { noTracesYet, canViewAllTraces, showSetup }: { noTracesYet: boolean; canViewAllTraces: boolean; showSetup: boolean },
+  setShowSetup: (show: boolean) => void,
+  setupProps: Omit<ComponentProps<typeof TracingSetupCard>, "detail" | "connected">,
+): ReactElement | null {
+  if (noTracesYet && canViewAllTraces) return <TracingSetupCard detail={null} {...setupProps} />;
+  if (showSetup) {
+    return (
+      <div>
+        <button
+          type="button"
+          onClick={() => setShowSetup(false)}
+          className="mb-3 text-sm text-muted-foreground hover:text-foreground"
+        >
+          ← Back to traces
+        </button>
+        <TracingSetupCard detail={null} connected={!noTracesYet} {...setupProps} />
+      </div>
+    );
+  }
+  if (noTracesYet) return <NoVisibleTraces onSetUpTracing={() => setShowSetup(true)} />;
+  return null;
+}
+
 function TracesReceived({ received }: { received: boolean }) {
   if (!received) return null;
   return (
@@ -253,6 +269,31 @@ function TraceFooter({ runs, hasMore }: { runs: readonly TraceSummary[]; hasMore
       {runs.length} {runs.length === 1 ? "run" : "runs"}
       {hasMore ? " loaded" : ""}
     </footer>
+  );
+}
+
+function NoVisibleTraces({ onSetUpTracing }: { onSetUpTracing: () => void }) {
+  return (
+    <section aria-label="No traces visible" className="w-full max-w-3xl pb-8">
+      <h2 className="text-xl font-semibold tracking-tight">No traces are visible to you yet</h2>
+      <p className="mt-2 text-sm leading-6 text-muted-foreground">
+        You can see traces sent with your own keys. Your teams’ traces appear once an admin grants the team the{" "}
+        <code className="text-xs">/spend/logs</code> member permission (Teams, Member Permissions tab).
+      </p>
+      <div className="mt-4 flex flex-wrap items-center gap-4">
+        <Button variant="outline" onClick={onSetUpTracing}>
+          Set up tracing
+        </Button>
+        <a
+          className="inline-flex items-center gap-1 text-sm underline underline-offset-4"
+          href={TRACE_ACCESS_DOCS_URL}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Who can see which traces <ArrowUpRight aria-hidden="true" className="size-3.5" />
+        </a>
+      </div>
+    </section>
   );
 }
 

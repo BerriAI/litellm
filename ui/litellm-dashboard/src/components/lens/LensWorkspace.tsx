@@ -195,6 +195,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                     readOnly={readOnly}
                     canMintTracingKey={isAdmin}
                     canViewFindings={canViewInvestigations}
+                    canViewAllTraces={canViewInvestigations}
                   />
                 </TabsContent>
                 <TabsContent value="findings" className={PANEL}>
@@ -253,6 +254,6 @@ function needsSetup(
   if (location.requested) return true;
   const selected = location.tab === "traces" ? location.trace : location.lensId || location.dialog || location.issueKey;
   if (!state.missingTraces || selected) return false;
-  if (location.tab === "traces") return true;
+  if (location.tab === "traces") return location.canViewInvestigations || !state.tracingEnabled;
   return location.canViewInvestigations && !state.hasInvestigations && !state.hasRecordedActivity;
 }

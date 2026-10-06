@@ -182,6 +182,22 @@ describe("AgentTracesSection", () => {
     expect(card).not.toHaveTextContent("store: clickhouse");
   });
 
+  it("tells a team-scoped viewer why nothing is visible and still offers setup with their own key", async () => {
+    vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), data: [] });
+    renderWithProviders(
+      <AgentTracesSection accessToken="sk-test" isActive range={ROLLING_DAY} canViewAllTraces={false} />,
+    );
+    const notice = await screen.findByRole("region", { name: "No traces visible" });
+    expect(within(notice).getByRole("heading", { name: "No traces are visible to you yet" })).toBeVisible();
+    expect(notice).toHaveTextContent("/spend/logs");
+    expect(screen.queryByTestId("tracing-setup-card")).not.toBeInTheDocument();
+    fireEvent.click(within(notice).getByRole("button", { name: "Set up tracing" }));
+    expect(await screen.findByRole("heading", { name: "Connect your agent" })).toBeVisible();
+    expect(screen.getByText("Waiting for your first trace")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "← Back to traces" }));
+    expect(await screen.findByRole("region", { name: "No traces visible" })).toBeVisible();
+  });
+
   it("keeps the trace list available when traces exist outside the current time window", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue({ ...(traceList as TracePage), data: [] });
     vi.mocked(apiClient.get).mockResolvedValue(traceList);
