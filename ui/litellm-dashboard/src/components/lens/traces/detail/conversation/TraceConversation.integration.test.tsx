@@ -48,6 +48,10 @@ describe("TraceConversation", () => {
 
   it.each([false, true])("refreshes unchanged spans without hiding loaded content on failure (%s)", async (failed) => {
     const user = userEvent.setup();
+    vi.mocked(agentTraceCall).mockResolvedValue({
+      ...trace,
+      summary: { ...trace.summary, trace_ref: "resolved-reference" },
+    });
     renderWithProviders(
       <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
     );
