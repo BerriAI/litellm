@@ -659,9 +659,7 @@ def convert_to_model_response_object(
                     # to support 'json_schema' logic on older models
                     json_mode_content_str: str | None = tool_calls[0]["function"].get("arguments")
                     if json_mode_content_str is not None:
-                        message = litellm.Message(
-                            content=json_mode_content_str,
-                        )
+                        message = litellm.Message(content=json_mode_content_str)
                         finish_reason = "stop"
                 if message is None:
                     # Preserve provider_specific_fields if already present
