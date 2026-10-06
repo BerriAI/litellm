@@ -12,9 +12,10 @@ import type { Span } from "../../types";
 import { useSpanRequestLog } from "../useSpanRequestLog";
 
 const UNMATCHED_REASON: Record<Exclude<NonNullable<Span["spend_match"]>, "matched">, string> = {
-  no_call_id: "This step records no gen_ai.response.id or litellm.call_id",
-  no_spend_log: "No spend log carries this step's id",
-  ambiguous: "More than one spend log carries this step's id",
+  no_call_id: "This step records no usable call identifier or transport context",
+  no_spend_log: "No matching spend log belongs to this run",
+  incomplete_evidence: "This step does not account for every request in the call",
+  ambiguous: "Recorded identifiers do not select one compatible spend log",
 };
 
 const LENS_TRACE = { label: "Lens trace", icon: <Aperture aria-hidden /> };

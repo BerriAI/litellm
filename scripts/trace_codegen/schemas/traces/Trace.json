@@ -207,7 +207,8 @@
         "matched",
         "no_call_id",
         "no_spend_log",
-        "ambiguous"
+        "ambiguous",
+        "incomplete_evidence"
       ],
       "type": "string"
     },

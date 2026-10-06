@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
@@ -10,7 +10,7 @@ use crate::{
 
 use super::{
     graph::Graph,
-    spend::{self, Requests},
+    spend::{self, Ownership, Requests, SpendEvidence},
 };
 
 pub(super) fn agent_label(row: &TraceSpansRow) -> &str {
@@ -23,7 +23,8 @@ pub(super) fn agent_label(row: &TraceSpansRow) -> &str {
 
 pub(super) struct Resolution<'a> {
     pub(super) graph: Graph<'a>,
-    spend: Vec<&'a SpendRow>,
+    ownership: Ownership<'a>,
+    spend: &'a [SpendRow],
     types: HashMap<&'a str, ObservationType>,
     tool_failures: HashMap<&'a str, &'a TraceSpansRow>,
     pub(super) model_calls: Vec<usize>,
@@ -48,10 +49,14 @@ impl<'a> Resolution<'a> {
                         .any(|descendant| types[graph.id(descendant)] == ObservationType::Llm)
             })
             .collect();
-        let team_id = rows.first().map_or("", |row| row.team_id.as_str());
         let resolution = Self {
+            ownership: Ownership {
+                team_id: &rows[0].team_id,
+                api_key_hash: &rows[0].api_key_hash,
+                user_id: &rows[0].user_id,
+            },
             graph,
-            spend: spend.iter().filter(|row| row.team_id == team_id).collect(),
+            spend,
             types,
             tool_failures: rows
                 .iter()
@@ -69,7 +74,7 @@ impl<'a> Resolution<'a> {
         let call_matches = resolution
             .model_calls
             .iter()
-            .map(|call| (*call, resolution.match_call(*call)))
+            .map(|call| (*call, resolution.resolve_call_match(*call)))
             .collect();
         Self {
             call_matches,
@@ -123,12 +128,12 @@ impl<'a> Resolution<'a> {
             .map_or("", |agent| agent_label(self.row(agent)))
     }
 
-    pub(super) fn requests(&self, index: usize) -> Option<Requests<'a>> {
-        spend::match_ids(&[spend::call_ids(self.row(index))], &self.spend).0
+    pub(super) fn requests(&self, index: usize) -> SpendEvidence<'a> {
+        spend::requests(self.row(index), &self.ownership, self.spend)
     }
 
-    pub(super) fn call_match(&self, index: usize) -> Option<&CallMatch<'a>> {
-        self.call_matches.get(&index)
+    pub(super) fn call_match(&self, call: usize) -> Option<&CallMatch<'a>> {
+        self.call_matches.get(&call)
     }
 
     pub(super) fn call_requests(&self, call: usize) -> Option<Requests<'a>> {
@@ -136,11 +141,15 @@ impl<'a> Resolution<'a> {
             .and_then(|(requests, _)| requests.clone())
     }
 
-    fn match_call(&self, call: usize) -> CallMatch<'a> {
-        spend::match_ids(&self.call_ids(call), &self.spend)
+    fn resolve_call_match(&self, call: usize) -> CallMatch<'a> {
+        if let Some(requests) = self.resolve_call_requests(call) {
+            return (Some(requests), SpendMatch::Matched);
+        }
+        let evidence = self.requests(call);
+        (None, evidence.unmatched_reason())
     }
 
-    fn call_ids(&self, call: usize) -> Vec<BTreeSet<CallKey>> {
+    fn resolve_call_requests(&self, call: usize) -> Option<Requests<'a>> {
         let wrappers = self.graph.ancestors(call).into_iter().filter(|ancestor| {
             self.kind(*ancestor) == ObservationType::Llm
                 && self
@@ -152,10 +161,84 @@ impl<'a> Resolution<'a> {
                             || self.kind(descendant) != ObservationType::Llm
                     })
         });
-        std::iter::once(call)
+        let sources: Vec<_> = std::iter::once(call)
             .chain(wrappers)
-            .chain(self.graph.descendants(call))
-            .map(|source| spend::call_ids(self.row(source)))
+            .map(|source| self.requests(source))
+            .collect();
+        let transports: Vec<_> = self
+            .transports(call)
+            .into_iter()
+            .map(|transport| self.requests(transport))
+            .collect();
+        let transport_requests: Option<Vec<Requests<'a>>> = (!transports.is_empty())
+            .then(|| {
+                transports
+                    .iter()
+                    .map(SpendEvidence::complete_requests)
+                    .collect()
+            })
+            .flatten();
+        let selected: Requests<'a> = transport_requests
+            .map(|requests| requests.into_iter().flatten().collect())
+            .into_iter()
+            .chain(sources.iter().filter_map(SpendEvidence::complete_requests))
+            .find(|selected| {
+                sources
+                    .iter()
+                    .chain(&transports)
+                    .all(|source| source.agrees_with(selected))
+            })?;
+        Some(
+            selected
+                .into_iter()
+                .map(|request| (request.identity(), request))
+                .collect::<IndexMap<_, _>>()
+                .into_values()
+                .collect(),
+        )
+    }
+
+    fn transports(&self, call: usize) -> Vec<usize> {
+        let is_transport = |index: &usize| {
+            self.row(*index)
+                .call_keys
+                .iter()
+                .any(|key| matches!(key, CallKey::Transport | CallKey::GatewayAttempt))
+        };
+        let nested: Vec<usize> = self
+            .graph
+            .descendants(call)
+            .into_iter()
+            .filter(is_transport)
+            .collect();
+        let Some(parent) = self.graph.parent(call).filter(|_| nested.is_empty()) else {
+            return nested;
+        };
+        let siblings = self.graph.children(parent);
+        let lone_call = siblings
+            .iter()
+            .filter(|sibling| self.kind(**sibling) == ObservationType::Llm)
+            .count()
+            == 1;
+        if !lone_call {
+            return nested;
+        }
+        let call_row = self.row(call);
+        let call_start_ns = i128::from(call_row.start_ns);
+        let call_end_ns = call_start_ns + i128::from(call_row.duration_ns);
+        siblings
+            .into_iter()
+            .filter(|sibling| {
+                self.row(*sibling)
+                    .call_keys
+                    .contains(&CallKey::GatewayAttempt)
+            })
+            .filter(|sibling| {
+                let transport = self.row(*sibling);
+                let transport_start_ns = i128::from(transport.start_ns);
+                let transport_end_ns = transport_start_ns + i128::from(transport.duration_ns);
+                transport_start_ns >= call_start_ns && transport_end_ns <= call_end_ns
+            })
             .collect()
     }
 

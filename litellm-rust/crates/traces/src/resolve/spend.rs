@@ -3,162 +3,318 @@ use std::collections::BTreeSet;
 use indexmap::IndexMap;
 
 use crate::{
-    CallEvidence, CallKey, SpendMatch,
+    CallEvidence, CallEvidenceKind, CallKey, SpendMatch,
     query::named::{SpendByResponseIdsRow as SpendRow, TraceSpansRow},
 };
 
+/// The spend records to fetch for a set of spans.
 #[derive(Debug, Default, PartialEq)]
 pub struct SpendLookup {
     pub response_ids: Vec<String>,
-    pub call_ids: Vec<String>,
+    pub request_ids: Vec<String>,
+    pub provider_request_ids: Vec<String>,
+    /// Traces whose transport spans LiteLLM logged by `traceparent`.
+    pub trace_ids: Vec<String>,
 }
 
 impl SpendLookup {
     pub fn new(rows: &[TraceSpansRow]) -> Self {
-        let keys: BTreeSet<CallKey> = rows.iter().flat_map(CallEvidence::row_keys).collect();
-        let ids = |pick: fn(&CallKey) -> Option<&String>| {
-            keys.iter()
-                .filter_map(pick)
-                .filter(|id| !id.is_empty())
-                .cloned()
-                .collect()
+        let evidence: Vec<_> = rows
+            .iter()
+            .map(|row| (row, CallEvidence::row_keys(row)))
+            .collect();
+        let keys = || {
+            evidence
+                .iter()
+                .flat_map(|(row, calls)| calls.iter().map(move |key| (*row, key)))
         };
+        let sorted = |values: BTreeSet<String>| values.into_iter().collect();
         Self {
-            response_ids: ids(|key| match key {
-                CallKey::ProviderResponse(id) => Some(id),
-                _ => None,
-            }),
-            call_ids: ids(|key| match key {
-                CallKey::LiteLlmRequest(id) => Some(id),
-                _ => None,
-            }),
+            response_ids: sorted(
+                keys()
+                    .filter_map(|(_, key)| match key {
+                        CallKey::ProviderResponse(id) => Some(id.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            request_ids: sorted(
+                keys()
+                    .filter_map(|(_, key)| match key {
+                        CallKey::LiteLlmRequest(id) => Some(id.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            provider_request_ids: sorted(
+                keys()
+                    .filter_map(|(_, key)| match key {
+                        CallKey::ProviderRequest(id) => Some(id.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            trace_ids: sorted(
+                keys()
+                    .filter_map(|(row, key)| match key {
+                        CallKey::Transport | CallKey::GatewayAttempt
+                            if !row.transport_trace_id().is_empty() =>
+                        {
+                            Some(row.transport_trace_id().to_owned())
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            ),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.response_ids.is_empty() && self.call_ids.is_empty()
+        self.response_ids.is_empty()
+            && self.request_ids.is_empty()
+            && self.provider_request_ids.is_empty()
+            && self.trace_ids.is_empty()
     }
 }
 
-fn assigned_id(key: &CallKey) -> bool {
-    match key {
-        CallKey::ProviderResponse(id) | CallKey::LiteLlmRequest(id) => !id.is_empty(),
-        CallKey::Transport | CallKey::GatewayAttempt => false,
-    }
+/// Who a trace's spend records must belong to.
+pub(super) struct Ownership<'a> {
+    pub(super) team_id: &'a str,
+    pub(super) api_key_hash: &'a str,
+    pub(super) user_id: &'a str,
 }
 
-fn names(key: &CallKey, spend: &SpendRow) -> bool {
-    match key {
-        CallKey::ProviderResponse(id) => {
-            spend.response_id == *id || spend.upstream_response_id == *id
-        }
-        CallKey::LiteLlmRequest(id) => {
-            spend.litellm_call_id == *id
-                || (spend.litellm_call_id.is_empty() && spend.request_id == *id)
-        }
-        CallKey::Transport | CallKey::GatewayAttempt => false,
+impl Ownership<'_> {
+    fn owns(&self, spend: &SpendRow) -> bool {
+        spend.team_id == self.team_id
+            && ((!self.user_id.is_empty() && spend.user == self.user_id)
+                || (!self.api_key_hash.is_empty() && spend.api_key == self.api_key_hash))
     }
 }
 
 pub(super) type Requests<'a> = Vec<&'a SpendRow>;
 
-pub(super) fn unique<'a>(requests: impl IntoIterator<Item = &'a SpendRow>) -> Requests<'a> {
-    requests
-        .into_iter()
-        .map(|request| (request.identity(), request))
-        .collect::<IndexMap<_, _>>()
-        .into_values()
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+enum KeyFamily {
+    GatewayCall,
+    ProviderResponse,
+    ProviderRequest,
+    Transport,
+}
+
+fn key_family(key: &CallKey) -> KeyFamily {
+    match key {
+        CallKey::LiteLlmRequest(_) => KeyFamily::GatewayCall,
+        CallKey::ProviderResponse(_) => KeyFamily::ProviderResponse,
+        CallKey::ProviderRequest(_) => KeyFamily::ProviderRequest,
+        CallKey::Transport | CallKey::GatewayAttempt => KeyFamily::Transport,
+    }
+}
+
+pub(super) enum KeyMatch<'a> {
+    Missing,
+    Conflicting,
+    Unique(&'a SpendRow),
+    Ambiguous(Requests<'a>),
+}
+
+impl<'a> KeyMatch<'a> {
+    fn new(requests: Requests<'a>) -> Self {
+        match requests.as_slice() {
+            [] => Self::Missing,
+            [request] => Self::Unique(request),
+            _ => Self::Ambiguous(requests),
+        }
+    }
+
+    fn unique(&self) -> Option<&'a SpendRow> {
+        match self {
+            Self::Unique(request) => Some(request),
+            Self::Missing | Self::Conflicting | Self::Ambiguous(_) => None,
+        }
+    }
+
+    fn agrees_with(&self, selected: &[&SpendRow]) -> bool {
+        match self {
+            Self::Missing | Self::Conflicting => false,
+            Self::Unique(request) => selected
+                .iter()
+                .any(|row| row.identity() == request.identity()),
+            Self::Ambiguous(requests) => {
+                requests
+                    .iter()
+                    .filter(|request| {
+                        selected
+                            .iter()
+                            .any(|row| row.identity() == request.identity())
+                    })
+                    .count()
+                    == 1
+            }
+        }
+    }
+}
+
+pub(super) enum SpendEvidence<'a> {
+    Unknown,
+    Partial(Vec<KeyMatch<'a>>),
+    Complete(Vec<KeyMatch<'a>>),
+}
+
+impl<'a> SpendEvidence<'a> {
+    pub(super) fn unmatched_reason(&self) -> SpendMatch {
+        match self {
+            Self::Unknown => SpendMatch::NoCallId,
+            Self::Partial(_) => SpendMatch::IncompleteEvidence,
+            Self::Complete(matches) if matches.is_empty() => SpendMatch::NoCallId,
+            Self::Complete(matches)
+                if matches.iter().any(|evidence| {
+                    matches!(evidence, KeyMatch::Conflicting | KeyMatch::Ambiguous(_))
+                }) =>
+            {
+                SpendMatch::Ambiguous
+            }
+            Self::Complete(matches)
+                if matches
+                    .iter()
+                    .any(|evidence| matches!(evidence, KeyMatch::Missing)) =>
+            {
+                SpendMatch::NoSpendLog
+            }
+            Self::Complete(_) => SpendMatch::Ambiguous,
+        }
+    }
+
+    pub(super) fn complete_requests(&self) -> Option<Requests<'a>> {
+        match self {
+            Self::Complete(matches) if !matches.is_empty() => {
+                let requests: Requests<'a> = matches
+                    .iter()
+                    .filter_map(KeyMatch::unique)
+                    .map(|request| (request.identity(), request))
+                    .collect::<IndexMap<_, _>>()
+                    .into_values()
+                    .collect();
+                matches
+                    .iter()
+                    .all(|matched| matched.agrees_with(&requests))
+                    .then_some(requests)
+            }
+            Self::Unknown | Self::Partial(_) | Self::Complete(_) => None,
+        }
+    }
+
+    pub(super) fn agrees_with(&self, selected: &[&SpendRow]) -> bool {
+        match self {
+            Self::Unknown => true,
+            Self::Partial(matches) | Self::Complete(matches) => matches
+                .iter()
+                .all(|evidence| evidence.agrees_with(selected)),
+        }
+    }
+}
+
+fn matches<'a>(
+    ownership: &Ownership<'_>,
+    spend_rows: &'a [SpendRow],
+    key: &CallKey,
+    row: &TraceSpansRow,
+) -> IndexMap<(&'a str, i64, &'a str), &'a SpendRow> {
+    let matches = |spend: &SpendRow| match key {
+        CallKey::ProviderResponse(id) => {
+            !id.is_empty() && (spend.response_id == *id || spend.upstream_response_id == *id)
+        }
+        CallKey::ProviderRequest(id) => !id.is_empty() && spend.provider_request_id == *id,
+        CallKey::LiteLlmRequest(id) => {
+            !id.is_empty()
+                && (spend.litellm_call_id == *id
+                    || (spend.litellm_call_id.is_empty() && spend.request_id == *id))
+        }
+        CallKey::Transport | CallKey::GatewayAttempt => {
+            !row.transport_trace_id().is_empty()
+                && !row.span_id.is_empty()
+                && spend.trace_id == row.transport_trace_id()
+                && spend.span_id == row.span_id
+        }
+    };
+    spend_rows
+        .iter()
+        .filter(|spend| ownership.owns(spend) && matches(spend))
+        .map(|spend| (spend.identity(), spend))
         .collect()
 }
 
-pub(super) fn call_ids(row: &TraceSpansRow) -> BTreeSet<CallKey> {
-    CallEvidence::from_row(row)
+pub(super) fn requests<'a>(
+    row: &TraceSpansRow,
+    ownership: &Ownership<'_>,
+    spend_rows: &'a [SpendRow],
+) -> SpendEvidence<'a> {
+    let evidence = CallEvidence::from_row(row);
+    let keyed: Vec<(&CallKey, Requests<'a>)> = evidence
         .key_set()
         .into_iter()
         .flatten()
-        .filter(|key| assigned_id(key))
-        .cloned()
-        .collect()
-}
-
-enum SpanLog<'a> {
-    NoLog,
-    Logs(Requests<'a>),
-    Ambiguous,
-}
-
-fn contains(rows: &[&SpendRow], row: &SpendRow) -> bool {
-    rows.iter().any(|other| other.identity() == row.identity())
-}
-
-fn span_log<'a>(ids: &BTreeSet<CallKey>, spend_rows: &[&'a SpendRow]) -> SpanLog<'a> {
-    let named: Vec<(&CallKey, Requests<'a>)> = ids
-        .iter()
-        .map(|id| {
+        .map(|key| {
             (
-                id,
-                unique(spend_rows.iter().copied().filter(|spend| names(id, spend))),
+                key,
+                matches(ownership, spend_rows, key, row)
+                    .into_values()
+                    .collect(),
             )
         })
-        .filter(|(_, rows)| !rows.is_empty())
         .collect();
-    if named.is_empty() {
-        return SpanLog::NoLog;
-    }
-    let of_kind = |responses: bool| {
-        unique(
-            named
+    let anchored: Vec<&SpendRow> = keyed
+        .iter()
+        .filter(|(key, _)| !matches!(key, CallKey::LiteLlmRequest(_)))
+        .flat_map(|(_, requests)| requests.iter().copied())
+        .collect();
+    let legacy_rows = !anchored.is_empty()
+        && anchored
+            .iter()
+            .all(|request| request.litellm_call_id.is_empty());
+    let aliases: Vec<_> = keyed
+        .into_iter()
+        .filter(|(key, requests)| {
+            !(legacy_rows && requests.is_empty() && matches!(key, CallKey::LiteLlmRequest(_)))
+        })
+        .collect();
+    let families: BTreeSet<_> = aliases.iter().map(|(key, _)| key_family(key)).collect();
+    let compatible_rows: Vec<BTreeSet<_>> = families
+        .into_iter()
+        .map(|family| {
+            aliases
                 .iter()
-                .filter(|(id, _)| matches!(id, CallKey::ProviderResponse(_)) == responses)
-                .flat_map(|(_, rows)| rows.iter().copied()),
-        )
-    };
-    let (responses, calls) = (of_kind(true), of_kind(false));
-    let logs: Requests<'a> = match (responses.is_empty(), calls.is_empty()) {
-        (false, false) => responses
-            .into_iter()
-            .filter(|row| contains(&calls, row))
-            .collect(),
-        (true, _) => calls,
-        (false, true) => responses,
-    };
-    let each_id_names_one = named
-        .iter()
-        .all(|(_, rows)| rows.iter().filter(|row| contains(&logs, row)).count() == 1);
-    if logs.is_empty() || !each_id_names_one {
-        SpanLog::Ambiguous
-    } else {
-        SpanLog::Logs(logs)
-    }
-}
-
-pub(super) fn match_ids<'a>(
-    span_ids: &[BTreeSet<CallKey>],
-    spend_rows: &[&'a SpendRow],
-) -> (Option<Requests<'a>>, SpendMatch) {
-    let logs: Vec<SpanLog<'a>> = span_ids
-        .iter()
-        .filter(|ids| !ids.is_empty())
-        .map(|ids| span_log(ids, spend_rows))
+                .filter(|(key, _)| key_family(key) == family)
+                .flat_map(|(_, requests)| requests.iter().map(|request| request.identity()))
+                .collect()
+        })
         .collect();
-    if logs.is_empty() {
-        return (None, SpendMatch::NoCallId);
+    let matches = aliases
+        .into_iter()
+        .map(|(_, requests)| {
+            let had_candidates = !requests.is_empty();
+            let matched = KeyMatch::new(
+                requests
+                    .into_iter()
+                    .filter(|request| {
+                        compatible_rows
+                            .iter()
+                            .all(|family| family.contains(&request.identity()))
+                    })
+                    .collect(),
+            );
+            if had_candidates && matches!(matched, KeyMatch::Missing) {
+                KeyMatch::Conflicting
+            } else {
+                matched
+            }
+        })
+        .collect();
+    match evidence.kind() {
+        CallEvidenceKind::Complete => SpendEvidence::Complete(matches),
+        CallEvidenceKind::Partial => SpendEvidence::Partial(matches),
+        CallEvidenceKind::Unknown => SpendEvidence::Unknown,
     }
-    if logs.iter().any(|log| matches!(log, SpanLog::Ambiguous)) {
-        return (None, SpendMatch::Ambiguous);
-    }
-    let matched = unique(
-        logs.iter()
-            .flat_map(|log| match log {
-                SpanLog::Logs(rows) => rows.as_slice(),
-                SpanLog::NoLog | SpanLog::Ambiguous => &[],
-            })
-            .copied(),
-    );
-    if matched.is_empty() {
-        return (None, SpendMatch::NoSpendLog);
-    }
-    (Some(matched), SpendMatch::Matched)
 }
 
 pub(super) fn request_cost(requests: &[&SpendRow]) -> Option<f64> {
@@ -167,6 +323,15 @@ pub(super) fn request_cost(requests: &[&SpendRow]) -> Option<f64> {
         let sum = total + cost;
         sum.is_finite().then_some(sum)
     })
+}
+
+pub(super) fn unique<'a>(requests: impl IntoIterator<Item = &'a SpendRow>) -> Requests<'a> {
+    requests
+        .into_iter()
+        .map(|request| (request.identity(), request))
+        .collect::<IndexMap<_, _>>()
+        .into_values()
+        .collect()
 }
 
 pub(super) struct Priced {

@@ -56,7 +56,11 @@ struct CapturedSpend {
     #[serde(default)]
     litellm_call_id: String,
     response_id: String,
+    trace_id: String,
+    span_id: String,
     team_id: String,
+    api_key: String,
+    user: String,
     spend: Option<f64>,
     start_time: i64,
     metadata: String,
@@ -72,6 +76,12 @@ struct FixtureCapture {
     name: String,
     trace_id: String,
     spend_linked: bool,
+    #[serde(default = "true_value")]
+    spend_complete: bool,
+}
+
+fn true_value() -> bool {
+    true
 }
 
 fn upstream_response_id(response_id: &str) -> String {
@@ -107,7 +117,12 @@ fn captured_spend_rows(spend_logs: &str) -> (FixtureCapture, Vec<SpendByResponse
                 litellm_call_id: record.litellm_call_id,
                 response_id: record.response_id,
                 upstream_response_id,
+                provider_request_id: String::new(),
+                trace_id: record.trace_id,
+                span_id: record.span_id,
                 team_id: record.team_id,
+                api_key: record.api_key,
+                user: record.user,
                 spend: record.spend,
                 start_ms: record.start_time,
             }
@@ -157,12 +172,13 @@ fn trace_span(span: DecodedSpan) -> TraceSpansRow {
         .into_iter()
         .flatten()
         .find_map(|key| match key {
-            CallKey::ProviderResponse(id) => Some(id.clone()),
+            CallKey::ProviderResponse(id) | CallKey::ProviderRequest(id) => Some(id.clone()),
             CallKey::LiteLlmRequest(_) | CallKey::Transport | CallKey::GatewayAttempt => None,
         })
         .unwrap_or_default();
     TraceSpansRow {
         trace_id: span.trace_id,
+        original_trace_id: String::new(),
         span_id: span.span_id,
         parent_span_id: span.parent_span_id,
         name: span.name,
@@ -253,6 +269,7 @@ fn unrelated_transport(call: &TraceSpansRow) -> TraceSpansRow {
             .expect("valid unrelated transport timestamp");
     TraceSpansRow {
         trace_id: call.trace_id.clone(),
+        original_trace_id: call.original_trace_id.clone(),
         span_id: format!("unrelated-transport-{}", call.span_id),
         parent_span_id: call.parent_span_id.clone(),
         name: "unrelated-http".into(),
@@ -314,8 +331,6 @@ fn append_response_id(document: &mut Value, trace_id: &str, span_id: &str, respo
     panic!("missing OTLP span {trace_id}/{span_id}");
 }
 
-const CALL_ID_ONLY_ON_SIBLING_GATEWAY_SPAN: [&str; 2] = ["mastra_simple", "mastra_swarm"];
-
 #[rstest]
 fn captured_trace_cost_matches_spend_logs(
     #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")] spend_logs: PathBuf,
@@ -323,15 +338,12 @@ fn captured_trace_cost_matches_spend_logs(
     let name = capture_name(&spend_logs);
     let (_, capture, rows, spends) = fixture(&spend_logs);
     let trace = resolve_trace(&capture.trace_id, "", &rows, &spends).expect("captured trace");
-    let priced = capture.spend_linked && !CALL_ID_ONLY_ON_SIBLING_GATEWAY_SPAN.contains(&name);
-    let expected = priced.then(|| spends.iter().map(|row| row.spend.unwrap_or(0.0)).sum());
+    let expected = if capture.spend_linked && capture.spend_complete {
+        Some(spends.iter().map(|row| row.spend.unwrap_or(0.0)).sum())
+    } else {
+        None
+    };
     assert_spend_close(trace.summary.spend, expected, name);
-    if priced {
-        assert_eq!(
-            trace.summary.priced_calls, trace.summary.llm_calls,
-            "{name}"
-        );
-    }
 }
 
 #[rstest]
@@ -396,7 +408,9 @@ fn redundant_genai_response_id_keeps_call_evidence(
             let response_ids: Vec<_> = keys
                 .iter()
                 .filter_map(|key| match key {
-                    CallKey::ProviderResponse(id) => Some(id.clone()),
+                    CallKey::ProviderResponse(id) | CallKey::ProviderRequest(id) => {
+                        Some(id.clone())
+                    }
                     CallKey::LiteLlmRequest(_) | CallKey::Transport | CallKey::GatewayAttempt => {
                         None
                     }

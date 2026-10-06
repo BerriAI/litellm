@@ -49,6 +49,7 @@ pub enum SpendMatch {
     NoCallId,
     NoSpendLog,
     Ambiguous,
+    IncompleteEvidence,
 }
 
 /// One distinct agent in a trace: 200 invocations of `researcher` are one node.

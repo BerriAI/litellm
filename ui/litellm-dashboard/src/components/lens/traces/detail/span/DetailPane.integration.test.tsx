@@ -293,8 +293,9 @@ describe("DetailPane", () => {
   });
 
   it.each([
-    { spend_match: "no_call_id" as const, reason: "This step records no gen_ai.response.id or litellm.call_id" },
-    { spend_match: "no_spend_log" as const, reason: "No spend log carries this step's id" },
+    { spend_match: "no_call_id" as const, reason: "This step records no usable call identifier or transport context" },
+    { spend_match: "no_spend_log" as const, reason: "No matching spend log belongs to this run" },
+    { spend_match: "incomplete_evidence" as const, reason: "This step does not account for every request in the call" },
   ])("says why an unpriced LLM step has no cost ($spend_match)", async ({ spend_match, reason }) => {
     const user = userEvent.setup();
     const unpriced: SpanFields = { ...llmFields, spend: null, spend_log_request_id: null, spend_match };

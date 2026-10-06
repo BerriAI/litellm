@@ -1,6 +1,7 @@
 """Tests for litellm_core_utils.core_helpers module."""
 
 import logging
+from typing import Final
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_provider_response_headers_from_hidden_params,
     map_finish_reason,
     normalize_drop_params,
+    process_response_headers,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
     set_provider_response_headers_in_hidden_params,
@@ -23,6 +25,14 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import ImageResponse, TranscriptionResponse
+
+
+@pytest.mark.parametrize("header", ("request-id", "x-request-id", "llm_provider-request-id"))
+def test_native_request_id_survives_stream_header_processing(header: str) -> None:
+    processed: Final = process_response_headers(httpx.Headers({header: "req_native"}))
+
+    assert processed["request-id"] == "req_native"
+    assert processed[header if header.startswith("llm_provider-") else "llm_provider-" + header] == "req_native"
 
 
 class TestBudgetReservationBinding:

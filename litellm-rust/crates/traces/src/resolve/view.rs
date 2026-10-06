@@ -23,9 +23,10 @@ fn optional(value: &str) -> Option<String> {
 fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span {
     let row = resolution.row(index);
     let status = resolution.status_source(index);
-    let (requests, spend_match) = match resolution.call_match(index) {
-        Some((requests, matched)) => (requests.clone(), Some(*matched)),
-        None => (resolution.requests(index), None),
+    let (requests, spend_match) = if let Some((requests, matched)) = resolution.call_match(index) {
+        (requests.clone(), Some(*matched))
+    } else {
+        (resolution.requests(index).complete_requests(), None)
     };
     let spend = requests
         .as_ref()

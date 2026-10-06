@@ -601,7 +601,7 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
 
 #[rstest]
 #[tokio::test]
-async fn assigned_call_ids_join_spend_from_the_trace_team_through_detail_and_batch_reads(
+async fn assigned_call_ids_require_shared_ownership_through_detail_and_batch_reads(
     #[future(awt)] migrated_database: TestResult<SeededDatabase>,
 ) -> TestResult {
     let fixture = migrated_database?;
@@ -621,7 +621,7 @@ async fn assigned_call_ids_join_spend_from_the_trace_team_through_detail_and_bat
             "provider_response:other-key",
             "team-a",
             "key-b",
-            Some(0.25),
+            None,
         ),
         (
             "foreign-team",
@@ -635,7 +635,7 @@ async fn assigned_call_ids_join_spend_from_the_trace_team_through_detail_and_bat
             "litellm_request:call-id-other-key",
             "team-a",
             "key-b",
-            Some(0.25),
+            None,
         ),
         (
             "call-id-foreign-team",
@@ -719,5 +719,120 @@ async fn assigned_call_ids_join_spend_from_the_trace_team_through_detail_and_bat
         assert_eq!(summary.spend, expected, "{id}");
         assert_eq!(summary.priced_calls, u64::from(expected.is_some()), "{id}");
     }
+    Ok(())
+}
+
+#[rstest]
+#[case::provider_request(true)]
+#[case::transport(false)]
+#[tokio::test]
+async fn native_cost_correlation_survives_session_grouping_and_excludes_other_owners(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] response_header: bool,
+    #[values(false, true)] grouped: bool,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let client = &fixture.database.client;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let trace_id = if grouped {
+        "grouped-trace"
+    } else {
+        "original-trace"
+    };
+    let start_ms = 1_790_000_000_000_i64;
+    let keys = if response_header {
+        vec!["provider_response:req_native"]
+    } else {
+        Vec::new()
+    };
+    insert_rows(
+        client,
+        &writer,
+        DATABASE,
+        InsertTable::OtelTraces,
+        vec![BTreeMap::from([
+            ("Timestamp".into(), json!(start_ms * 1_000_000)),
+            ("TraceId".into(), json!(trace_id)),
+            ("SpanId".into(), json!("native-call")),
+            ("SpanName".into(), json!("claude_code.llm_request")),
+            ("ObservationType".into(), json!("llm")),
+            ("Framework".into(), json!("claude-code")),
+            ("TeamId".into(), json!("team-a")),
+            ("ApiKeyHash".into(), json!("key-a")),
+            ("CallKeys".into(), json!(keys)),
+            (
+                "CallEvidence".into(),
+                json!(if response_header {
+                    "complete"
+                } else {
+                    "unknown"
+                }),
+            ),
+            (
+                "SpanAttributes".into(),
+                json!({"lens.original_trace_id": if grouped { "original-trace" } else { "" }}),
+            ),
+        ])],
+    )
+    .await?;
+    insert_rows(
+        client,
+        &writer,
+        DATABASE,
+        InsertTable::SpendLogs,
+        ["key-a", "key-b"]
+            .into_iter()
+            .map(|key| {
+                BTreeMap::from([
+                    ("request_id".into(), json!(format!("log-{key}"))),
+                    ("response_id".into(), json!("msg_native")),
+                    ("provider_request_id".into(), json!("req_native")),
+                    (
+                        "trace_id".into(),
+                        json!(if response_header {
+                            ""
+                        } else {
+                            "original-trace"
+                        }),
+                    ),
+                    (
+                        "span_id".into(),
+                        json!(if response_header { "" } else { "native-call" }),
+                    ),
+                    ("team_id".into(), json!("team-a")),
+                    ("api_key".into(), json!(key)),
+                    ("start_time".into(), json!(start_ms)),
+                    ("end_time".into(), json!(start_ms + 1)),
+                    ("spend".into(), json!(0.25)),
+                ])
+            })
+            .collect(),
+    )
+    .await?;
+    let connection = fixture
+        .readers
+        .connection(client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let (reader, store) = make_reader(client, connection);
+    let access = ReadAccessParams {
+        all_teams: true,
+        user_id: String::new(),
+        team_ids: Vec::new(),
+    };
+    let page = reader
+        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .await?;
+    assert_eq!(page.data.len(), 1);
+    let summary = &page.data[0];
+    let detail = reader
+        .get_trace(&store, &access, trace_id, &summary.trace_ref)
+        .await?
+        .ok_or("missing trace")?;
+    assert_eq!((summary.spend, summary.priced_calls), (Some(0.25), 1));
+    assert_eq!(detail.summary.spend, summary.spend);
+    assert_eq!(
+        detail.spans[0].spend_log_request_id.as_deref(),
+        Some("log-key-a")
+    );
     Ok(())
 }
