@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import httpx
 import pytest
-from integration._support.client import Gateway, eventually, object_value, string_value
+from integration._support.client import Gateway, object_value, string_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
 from integration._support.tls import write_self_signed_cert
@@ -444,14 +444,16 @@ def test_vault_partial_update_keeps_omitted_fields_encrypts_and_drives_secret_re
     def provider(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/chat/completions"
-        assert request.headers["authorization"] == f"Bearer {provider_secret}", (
-            "Provider request did not use the Vault-resolved secret"
-        )
         body: Final = _JSON_OBJECT.validate_json(request.body)
         messages: Final = body["messages"]
         assert isinstance(messages, list)
         message: Final = object_value(messages[0])
         marker: Final = string_value(message["content"])
+        if marker == "after-delete":
+            return _completion(marker)
+        assert request.headers["authorization"] == f"Bearer {provider_secret}", (
+            "Provider request did not use the Vault-resolved secret"
+        )
         assert marker in {marker_one, marker_two}, request.body
         return _completion(marker)
 
@@ -569,6 +571,7 @@ def test_vault_partial_update_keeps_omitted_fields_encrypts_and_drives_secret_re
                     "message": "Hashicorp Vault configuration deleted successfully",
                     "status": "success",
                 }, deleted.text
+                vault_wire.drain()
                 assert (
                     read_rows(
                         'SELECT config_type FROM "LiteLLM_ConfigOverrides" WHERE config_type = %s',
@@ -601,20 +604,24 @@ def test_vault_partial_update_keeps_omitted_fields_encrypts_and_drives_secret_re
                     )
                 }, empty_readback.text
                 model_after_delete: Final = scenario.model(
-                    api_key="os.environ/secret-after-delete",
+                    api_key="os.environ/LITELLM_MASTER_KEY",
                     api_base=provider_wire.url + "/v1",
                 )
-                assert model_after_delete
-                test_secret_names: Final = frozenset(
-                    {"secret-one", "secret-two", "secret-after-delete"}
+                response_after_delete: Final = candidate.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {
+                        "model": model_after_delete,
+                        "messages": [{"role": "user", "content": "after-delete"}],
+                    },
                 )
-                after_delete_vault_requests: Final = tuple(
-                    (request.method, request.target)
-                    for request in vault_wire.drain()
-                    if request.target.rsplit("/", 1)[-1] in test_secret_names
+                assert response_after_delete.status_code == 200, response_after_delete.text
+                assert response_after_delete.json()["choices"][0]["message"]["content"] == "after-delete", (
+                    response_after_delete.text
                 )
-                assert after_delete_vault_requests == ()
-                assert first_secret_reads + second_secret_reads + after_delete_vault_requests == (
+                after_delete_requests: Final = vault_wire.drain()
+                assert after_delete_requests == (), after_delete_requests
+                assert first_secret_reads + second_secret_reads == (
                     ("GET", path_one),
                     ("GET", path_two),
                 )
@@ -834,13 +841,15 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
     def provider(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/chat/completions"
-        assert request.headers["authorization"] == f"Bearer {provider_secret}", (
-            "Provider request did not use the Vault-resolved secret"
-        )
         body: Final = _JSON_OBJECT.validate_json(request.body)
         messages: Final = body["messages"]
         assert isinstance(messages, list)
         marker: Final = string_value(object_value(messages[0])["content"])
+        if marker == "after-delete":
+            return _completion(marker)
+        assert request.headers["authorization"] == f"Bearer {provider_secret}", (
+            "Provider request did not use the Vault-resolved secret"
+        )
         assert marker in {marker_a, marker_b}, request.body
         return _completion(marker)
 
@@ -988,6 +997,7 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
                     "message": "Hashicorp Vault configuration deleted successfully",
                     "status": "success",
                 }, deleted.text
+                vault_wire.drain()
                 assert (
                     read_rows(
                         'SELECT config_type FROM "LiteLLM_ConfigOverrides" WHERE config_type = %s',
@@ -996,24 +1006,28 @@ def test_vault_approle_and_cert_logins_use_login_namespace_and_drive_secret_read
                     )
                     == []
                 )
-                eventually(
-                    lambda: vault_wire.drain(),
-                    lambda requests: all(
-                        request.target not in approle_targets for request in requests
-                    ),
-                    seconds=10,
-                )
                 model_after_delete: Final = scenario.model(
-                    api_key="os.environ/secret-never-read",
+                    api_key="os.environ/LITELLM_MASTER_KEY",
                     api_base=provider_wire.url + "/v1",
                 )
-                assert model_after_delete
-                assert tuple(
-                    request for request in vault_wire.drain() if request.target in approle_targets
-                ) == ()
+                response_after_delete: Final = candidate.request(
+                    "POST",
+                    "/v1/chat/completions",
+                    {
+                        "model": model_after_delete,
+                        "messages": [{"role": "user", "content": "after-delete"}],
+                    },
+                )
+                assert response_after_delete.status_code == 200, response_after_delete.text
+                assert response_after_delete.json()["choices"][0]["message"]["content"] == "after-delete", (
+                    response_after_delete.text
+                )
+                after_delete_requests: Final = vault_wire.drain()
+                assert after_delete_requests == (), after_delete_requests
 
             provider_requests: Final = provider_wire.drain()
             assert tuple((request.method, request.target) for request in provider_requests) == (
+                ("POST", "/v1/chat/completions"),
                 ("POST", "/v1/chat/completions"),
                 ("POST", "/v1/chat/completions"),
             ), provider_requests
