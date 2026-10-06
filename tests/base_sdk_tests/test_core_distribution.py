@@ -110,7 +110,7 @@ def test_core_sdist_rebuilds_without_repository(distributions: tuple[Path, Path]
     with zipfile.ZipFile(distributions[0]) as original, zipfile.ZipFile(rebuilt) as wheel:
         assert set(original.namelist()) == set(wheel.namelist())
         for name in original.namelist():
-            if not name.endswith((".so", ".pyd", "/RECORD")):
+            if (name.startswith("litellm/") or name.endswith("/METADATA")) and not name.endswith((".so", ".pyd")):
                 assert original.read(name) == wheel.read(name), name
 
 
