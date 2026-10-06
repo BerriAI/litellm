@@ -6,6 +6,7 @@ from typing import Final
 
 import pytest
 
+from litellm.proxy.lens.release import PROTOCOL_VERSION
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import owned_proxy
@@ -71,7 +72,7 @@ def test_lens_bills_selected_key_and_rechecks_its_permissions(
                 pool.map(
                     lambda _: isolated.request(
                         "POST",
-                        "/lens/worker/claim?protocol_version=4&worker_release=" + RELEASE_TAG,
+                        f"/lens/worker/claim?protocol_version={PROTOCOL_VERSION}&worker_release={RELEASE_TAG}",
                         {},
                         key=worker_key,
                     ),
@@ -206,7 +207,7 @@ def test_worker_spend_logs_do_not_expose_investigation_content(
         scenario.cleanups.callback(delete_lens, lens_id)
         worker_token: Final = string_value(worker["token"])
         claim: Final = isolated.post(
-            "/lens/worker/claim?protocol_version=4&worker_release=" + RELEASE_TAG, {}, key=worker_token
+            f"/lens/worker/claim?protocol_version={PROTOCOL_VERSION}&worker_release={RELEASE_TAG}", {}, key=worker_token
         )
         job_id: Final = string_value(object_value(claim["job"])["id"])
         result: Final = isolated.post(
