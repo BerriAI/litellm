@@ -1,7 +1,6 @@
 import copy
 import os
 import types
-from collections.abc import Mapping
 from typing import Final
 
 from openai.types.image import Image
@@ -53,7 +52,7 @@ class AmazonStabilityConfig:
         width: int | None = None,
         height: int | None = None,
     ) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

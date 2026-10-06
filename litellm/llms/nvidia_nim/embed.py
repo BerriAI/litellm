@@ -9,7 +9,6 @@ API calling is done using the OpenAI SDK with an api_base
 """
 
 import types
-from collections.abc import Mapping
 from typing import Final
 
 
@@ -33,7 +32,7 @@ class NvidiaNimEmbeddingConfig:
         input_type: str | None = None,
         truncate: str | None = None,
     ) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

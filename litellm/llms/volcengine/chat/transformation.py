@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from typing import Final
 
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
@@ -35,7 +34,7 @@ class VolcEngineChatConfig(OpenAILikeChatConfig):
         top_p: int | None = None,
         response_format: dict | None = None,
     ) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

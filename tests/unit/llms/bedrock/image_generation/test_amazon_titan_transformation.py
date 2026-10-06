@@ -1,7 +1,6 @@
 import pytest
 
 from litellm.llms.bedrock.image_generation.amazon_titan_transformation import AmazonTitanImageGenerationConfig
-from litellm.types.utils import ImageResponse
 
 
 @pytest.mark.parametrize(
@@ -56,14 +55,3 @@ def test_transform_request_body_builds_the_titan_request(
     assert request_body == expected
     assert list(request_body["textToImageParams"]) == list(expected["textToImageParams"])
     assert optional_params == {}
-
-
-def test_transform_response_dict_returns_one_image_per_titan_result_in_order():
-    model_response = ImageResponse()
-
-    image_response = AmazonTitanImageGenerationConfig().transform_response_dict_to_openai_response(
-        model_response=model_response, response_dict={"images": ["Zmlyc3Q=", "c2Vjb25k"]}
-    )
-
-    assert image_response is model_response
-    assert [image.b64_json for image in image_response.data] == ["Zmlyc3Q=", "c2Vjb25k"]

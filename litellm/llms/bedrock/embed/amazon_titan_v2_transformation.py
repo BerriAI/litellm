@@ -32,7 +32,7 @@ class AmazonTitanV2Config:
     dimensions: int | None = None
 
     def __init__(self, normalize: bool | None = None, dimensions: int | None = None) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

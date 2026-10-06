@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from typing import Final
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -39,7 +38,7 @@ class BasetenConfig(OpenAIGPTConfig):
         frequency_penalty: int | None = None,
         stream_options: dict | None = None,
     ) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

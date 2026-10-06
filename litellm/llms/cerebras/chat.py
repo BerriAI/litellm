@@ -4,7 +4,6 @@ Cerebras Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
-from collections.abc import Mapping
 from typing import Final
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -42,7 +41,7 @@ class CerebrasConfig(OpenAIGPTConfig):
         user: str | None = None,
         reasoning_effort: str | None = None,
     ) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

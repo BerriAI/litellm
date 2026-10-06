@@ -1,5 +1,5 @@
 import types
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -45,7 +45,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         self,
         max_tokens: int | None = None,
     ) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key == "max_tokens" and value is None:
                 value = self.max_tokens

@@ -1,7 +1,7 @@
 import json
 import time
 import types
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import Final
 
 import httpx
@@ -140,7 +140,7 @@ class AlephAlphaConfig:
         contextual_control_threshold: int | None = None,
         control_log_additive: bool | None = None,
     ) -> None:
-        locals_: Final[Mapping[str, object]] = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
