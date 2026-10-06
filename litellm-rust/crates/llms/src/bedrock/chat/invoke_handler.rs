@@ -1,11 +1,11 @@
 use base64::Engine;
 use bytes::Buf;
 use futures_util::{Stream, StreamExt};
-use litellm_framing::{
+use litellm_framer::{
     aws_event_stream::{AwsEventStreamCodec, Message},
     frames,
 };
-use litellm_types::messages::streaming::MessagesStreamEvent;
+use litellm_llms_types::formats::messages::streaming::MessagesStreamEvent;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -103,7 +103,7 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
     use bytes::Bytes;
     use futures_util::TryStreamExt;
-    use litellm_types::messages::streaming::MessagesContentBlockDelta;
+    use litellm_llms_types::formats::messages::streaming::MessagesContentBlockDelta;
 
     use super::*;
     use crate::base_llm::messages::streaming::anthropic_sse_event_stream;

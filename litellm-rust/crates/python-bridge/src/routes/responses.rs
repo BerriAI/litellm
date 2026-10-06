@@ -20,7 +20,7 @@ fn run_public(
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     use super::inference::InferenceHost;
-    use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
+    use litellm_callbacks_legacy_python::LoggingOperation;
     let host = InferenceHost::new(
         request.clone().unbind(),
         "litellm.rust_bridge.responses.route_host",
@@ -33,51 +33,73 @@ fn run_public(
     {
         return Err(RustBridgeDeclined::new_err(reason));
     }
-    let admission = host::project(&host, py, &kwargs)?;
-    if admission
-        .custom_llm_provider
+    let model = host
+        .argument(py, &kwargs, "model")?
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("model is required"))?
+        .extract::<String>()?;
+    let provider = host
+        .argument(py, &kwargs, "custom_llm_provider")?
+        .map(|value| value.extract::<String>())
+        .transpose()?;
+    if provider
         .as_deref()
         .is_some_and(|provider| provider != "openai")
-        || admission
-            .model
+        || model
             .strip_prefix("openai/")
-            .unwrap_or(&admission.model)
+            .unwrap_or(&model)
             .contains('/')
     {
         return Err(RustBridgeDeclined::new_err(
             "native HTTP responses provider",
         ));
     }
-    if admission
-        .optional_params
-        .get("stream")
-        .is_some_and(|value| value == &serde_json::Value::Bool(true))
+    if host
+        .argument(py, &kwargs, "stream")?
+        .map(|value| litellm_host_python::from_py::<Value>(&value))
+        .transpose()?
+        .is_some_and(|value| value == Value::Bool(true))
     {
         return Err(RustBridgeDeclined::new_err(
             "native Python responses streaming",
         ));
     }
-    let route = litellm_core::responses::ResponsesRoute::new(
-        crate::http::provider_client(py, &kwargs, asynchronous)?
-            .map_err(crate::http::client_error)?,
-        crate::http::resources().auth.clone(),
-        crate::secrets::source(py)?,
-    );
-    run_legacy_call(
+    let cache_call_type = if asynchronous {
+        "aresponses"
+    } else {
+        "responses"
+    };
+    crate::cache::admit_native(py, &kwargs, cache_call_type)?;
+    let (arguments, hooks) = crate::routes::call_hooks(
         py,
-        LegacySurface {
-            call_type: if asynchronous {
-                "aresponses"
-            } else {
-                "responses"
-            },
-            input_description: "Responses",
-            stream: None,
+        LoggingOperation::Responses,
+        &request,
+        &args,
+        &kwargs,
+        asynchronous,
+    )?;
+    crate::routes::run_public_call(
+        py,
+        arguments,
+        move |py, arguments, request| {
+            let route = litellm_core::responses::ResponsesRoute::new(
+                crate::http::provider_client(py, arguments, asynchronous)?
+                    .map_err(crate::http::client_error)?,
+                crate::http::resources().auth.clone(),
+                crate::secrets::source(py)?,
+            );
+            let (cache, cache_options) =
+                crate::cache::configured_native(py, arguments, cache_call_type)?;
+            let route = match cache {
+                Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
+                    cache,
+                    litellm_cache_response::CacheScope::Shared,
+                )),
+                None => route,
+            };
+            Ok(route.machine(request, cache_options.policy))
         },
-        PublicCall::capture(&request, &args, &kwargs)?,
-        move |request| crate::logger::LoggedMachine::new(route.machine(request)),
         host::ResponsesPythonHost(host),
-        crate::preflight::sdk_preflight,
+        hooks,
         asynchronous,
     )
 }
@@ -120,7 +142,7 @@ impl ResponsesWebSocketConnection {
     ) -> PyResult<Bound<'py, PyAny>> {
         let headers = marshal_headers(headers)?;
         let timeout = optional_timeout(timeout_seconds);
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
                 .map_err(route_error_to_pyerr)?;
@@ -130,21 +152,21 @@ impl ResponsesWebSocketConnection {
 
     fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             inner.send_text(text).await.map_err(route_error_to_pyerr)
         })
     }
 
     fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             inner.recv_text().await.map_err(route_error_to_pyerr)
         })
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        crate::logger::run_async_value(py, async move {
+        crate::execution::run_async_value(py, async move {
             inner.close().await.map_err(route_error_to_pyerr)
         })
     }

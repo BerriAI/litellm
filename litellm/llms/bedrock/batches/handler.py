@@ -1,6 +1,6 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, Literal
 
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Metadata as OpenAIBatchMetadata
@@ -17,7 +17,12 @@ if TYPE_CHECKING:
 # AWS Bedrock model-invocation-job statuses → OpenAI Batch statuses.
 # Mirrors the mapping used by `BedrockBatchesConfig.transform_create_batch_response`
 # so create / retrieve return consistent statuses.
-_BEDROCK_MIJ_STATUS_TO_OPENAI: Final = {
+_BEDROCK_MIJ_STATUS_TO_OPENAI: Final[
+    Mapping[
+        str,
+        Literal["validating", "failed", "in_progress", "finalizing", "completed", "expired", "cancelling", "cancelled"],
+    ]
+] = {
     "Submitted": "validating",
     "Validating": "validating",
     "Scheduled": "validating",
@@ -92,7 +97,7 @@ def _record_counts_from_response(response: Mapping[str, object]) -> BatchRequest
     )
 
 
-def _to_epoch(value: Any) -> int | None:
+def _to_epoch(value: object) -> int | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -349,10 +354,7 @@ class BedrockBatchesHandler:
             )
 
         bedrock_status: Final = str(response.get("status", ""))
-        openai_status: Final = cast(
-            Any,
-            _BEDROCK_MIJ_STATUS_TO_OPENAI.get(bedrock_status, "in_progress"),
-        )
+        openai_status: Final = _BEDROCK_MIJ_STATUS_TO_OPENAI.get(bedrock_status, "in_progress")
 
         input_uri: Final = response.get("inputDataConfig", {}).get("s3InputDataConfig", {}).get("s3Uri", "")
         output_prefix: Final = response.get("outputDataConfig", {}).get("s3OutputDataConfig", {}).get("s3Uri", "")

@@ -209,6 +209,11 @@ describe("provider_info_helpers", () => {
       const { logo } = getProviderLogoAndName("openai");
       expect(logo).toContain("openai_small");
     });
+
+    it("should resolve the Tencent provider to its bundled logo", () => {
+      const { logo } = getProviderLogoAndName("tencent");
+      expect(logo).toContain("tencent");
+    });
   });
 
   describe("getPlaceholder", () => {
@@ -307,6 +312,10 @@ describe("provider_info_helpers", () => {
 
     it("should return a chatgpt/ placeholder for the CHATGPT dropdown key", () => {
       expect(getPlaceholder("CHATGPT")).toBe("chatgpt/gpt-5.4");
+    });
+
+    it("should return a tencent/ placeholder for the Tencent provider", () => {
+      expect(getPlaceholder(Providers.Tencent)).toBe("tencent/deepseek-v4-pro");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {

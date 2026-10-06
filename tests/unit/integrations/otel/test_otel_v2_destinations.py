@@ -1,9 +1,11 @@
 """Key/team OTLP destinations override the operator's exporters for that backend."""
 
+import asyncio
 import contextvars
 import time
 from base64 import b64encode
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from functools import reduce
 from types import MappingProxyType
 
@@ -514,6 +516,53 @@ class TestFanOut:
         for child in ("auth /v1/chat/completions", "chat gpt-4"):
             assert by_name[child].parent.span_id == root.context.span_id
 
+    def test_excluded_services_drop_only_the_datastore_spans_at_the_tenant(self):
+        """The exclusion is per ``db.system.*`` value: a span naming an excluded
+        datastore never reaches the tenant, while every span of the request's
+        own work (root, auth, guardrail, model) still does, and the operator's
+        own exporter keeps the full tree."""
+        dest_exporter, operator_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(operator_exporter))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter),
+                excluded_db_systems=frozenset({"redis", "postgresql"}),
+            )
+        )
+        tracer = get_tracer(provider, "litellm")
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                with tracer.start_as_current_span("auth /v1/chat/completions"):
+                    pass
+                with tracer.start_as_current_span("execute_guardrail pii"):
+                    pass
+                with tracer.start_as_current_span("redis async_get_cache") as redis_span:
+                    redis_span.set_attribute("db.system.name", "redis")
+                with tracer.start_as_current_span("batch_write_to_db _PROXY_track_cost_callback") as spend_span:
+                    spend_span.set_attribute("db.system", "postgresql")
+                with tracer.start_as_current_span("chat gpt-4"):
+                    pass
+
+        in_fresh_context(run)
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == {
+            "POST /v1/chat/completions",
+            "auth /v1/chat/completions",
+            "execute_guardrail pii",
+            "chat gpt-4",
+        }
+        assert {s.name for s in operator_exporter.get_finished_spans()} == {
+            "POST /v1/chat/completions",
+            "auth /v1/chat/completions",
+            "execute_guardrail pii",
+            "redis async_get_cache",
+            "batch_write_to_db _PROXY_track_cost_callback",
+            "chat gpt-4",
+        }
+
     def test_a_team_naming_two_backends_gets_the_trace_at_both(self):
         """The fan-out rides one provider, so it cannot skip a destination on the
         grounds that some other backend owns it: nothing else would deliver it."""
@@ -1021,6 +1070,103 @@ class TestProviderWiring:
 
         assert kinds(published).count("TenantFanOutSpanProcessor") == 1
         assert "TenantFanOutSpanProcessor" not in kinds(other)
+
+    @staticmethod
+    def _fan_out_of(logger: OpenTelemetryV2) -> TenantFanOutSpanProcessor:
+        return next(
+            processor
+            for processor in logger._tracer_provider._active_span_processor._span_processors
+            if isinstance(processor, TenantFanOutSpanProcessor)
+        )
+
+    def test_callback_settings_excluded_services_win_over_the_published_preset_env_config(self, monkeypatch):
+        """A preset builds its config env-only, so the fan-out must read
+        ``callback_settings.otel.excluded_services`` itself rather than the
+        published logger's config, or the env value would win."""
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": {"excluded_services": ["postgres"]}}, raising=False)
+        preset = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["redis"]),
+            callback_name="langfuse_otel",
+        )
+
+        publish_global_otel_v2_provider([], lambda _p: None, registered=preset)
+
+        assert self._fan_out_of(preset)._excluded_db_systems == frozenset({"postgresql"})
+
+    def test_callback_settings_excluded_services_apply_even_when_other_otel_env_vars_are_malformed(self, monkeypatch):
+        """Reading the setting must not rebuild the whole settings model, or an unrelated bad env
+        value the operator overrode in config would stop publication before the fan-out is attached"""
+        preset = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")]),
+            callback_name="langfuse_otel",
+        )
+        monkeypatch.setenv("LITELLM_OTEL_LEGACY_COMPAT", "not-a-bool")
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": {"excluded_services": ["postgres"]}}, raising=False)
+
+        publish_global_otel_v2_provider([], lambda _p: None, registered=preset)
+
+        assert self._fan_out_of(preset)._excluded_db_systems == frozenset({"postgresql"})
+
+    def test_excluded_services_fall_back_to_the_published_logger_config_without_callback_settings(self, monkeypatch):
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": {"exporter": "in_memory"}}, raising=False)
+        preset = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["redis"]),
+            callback_name="langfuse_otel",
+        )
+
+        publish_global_otel_v2_provider([], lambda _p: None, registered=preset)
+
+        assert self._fan_out_of(preset)._excluded_db_systems == frozenset({"redis"})
+
+    @pytest.mark.parametrize(
+        "otel", [None, True, "on", "", []], ids=["null", "true", "on", "empty_string", "empty_list"]
+    )
+    def test_a_non_mapping_otel_block_falls_back_to_the_published_logger_config(self, monkeypatch, otel):
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": otel}, raising=False)
+        preset = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["redis"]),
+            callback_name="langfuse_otel",
+        )
+
+        publish_global_otel_v2_provider([], lambda _p: None, registered=preset)
+
+        assert self._fan_out_of(preset)._excluded_db_systems == frozenset({"redis"})
+
+    def test_otel_after_a_preset_reuses_it_and_still_takes_callback_settings_exclusions(self, monkeypatch):
+        """``callbacks: [langfuse_otel, otel]`` keeps one v2 logger, exactly as
+        before ``excluded_services`` existed, and the exclusion still comes from
+        ``callback_settings.otel`` rather than the preset's env-only config."""
+        from litellm.litellm_core_utils import litellm_logging as logging_module
+
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+        monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "redis")
+        is_otel_v2_enabled.cache_clear()
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": {"excluded_services": ["postgres"]}}, raising=False)
+        try:
+
+            def init(name: str) -> CustomLogger | None:
+                return logging_module._init_custom_logger_compatible_class(
+                    logging_integration=name,  # pyright: ignore[reportArgumentType]  # test passes a literal callback name
+                    internal_usage_cache=None,
+                    llm_router=None,
+                    custom_logger_init_args={},
+                )
+
+            preset = init("langfuse_otel")
+            otel_cb = init("otel")
+
+            assert isinstance(preset, OpenTelemetryV2)
+            assert otel_cb is preset
+            v2_loggers = [cb for cb in logging_module._in_memory_loggers if isinstance(cb, OpenTelemetryV2)]
+            assert v2_loggers == [preset], v2_loggers
+            publish_global_otel_v2_provider(logging_module._in_memory_loggers, lambda _p: None, registered=preset)
+            assert self._fan_out_of(preset)._excluded_db_systems == frozenset({"postgresql"})
+        finally:
+            logging_module._in_memory_loggers.clear()
+            is_otel_v2_enabled.cache_clear()
 
     @pytest.mark.parametrize("canonical", ["langfuse_otel", "arize"])
     def test_publishing_tells_the_fan_out_about_every_v2_loggers_account(self, monkeypatch, canonical):
@@ -1920,6 +2066,28 @@ def credential_less_proxy(monkeypatch) -> None:
         langfuse_preset()
 
 
+def _closed_chat_call_kwargs() -> dict[str, object]:
+    """The callback kwargs of one completed chat call, as both an operator and a destination logger see them."""
+    payload = {
+        "call_type": "acompletion",
+        "custom_llm_provider": "openai",
+        "model": "gpt-4o",
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+        "stream": False,
+        "response": {"id": "resp_1", "model": "gpt-4o", "choices": [{"finish_reason": "stop"}]},
+        "metadata": {"team_id": "t1", "user_api_key_hash": "hsh"},
+        "status": "success",
+        "litellm_call_id": "call_dup_1",
+    }
+    return {
+        "standard_logging_object": payload,
+        "litellm_params": {"metadata": {}},
+        "api_call_start_time": datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc),
+    }
+
+
 class TestPresetDegradation:
     def test_a_credential_less_langfuse_exports_nowhere_instead_of_to_the_console(self, monkeypatch, capfd):
         """``_normalize`` folds a console exporter in for an empty list, which would
@@ -2128,28 +2296,78 @@ class TestPresetDegradation:
 
         assert logger is None
 
-    def test_a_credentialed_logger_beside_another_v2_logger_keeps_every_exporter(self, monkeypatch):
-        """Only a degraded preset gives the collector up; an operator who configured
-        both the backend and the collector still exports to both, as on base."""
+    @pytest.mark.parametrize("anchored", [True, False])
+    def test_a_logger_built_beside_another_v2_logger_keeps_only_its_backends_exporter(self, monkeypatch, anchored):
+        """Operator credentials for the backend do not make the collector safe to copy: the
+        registered logger already exports every call there, so a copy of ``chat`` riding the
+        preset's base exporters lands in the operator's sink a second time. A key's ``logging``
+        entry reaches this builder as a plain dynamic callback too, with no destination anchored."""
         from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
 
-        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-1")
-        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-1")
-        monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        for name in ("ARIZE_SPACE_KEY", "ARIZE_ENDPOINT", "ARIZE_HTTP_ENDPOINT", "ARIZE_PROJECT_NAME"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-operator")
+        monkeypatch.setenv("ARIZE_API_KEY", "ak-operator")
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.local:4318")
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
-        collector_logger = build_otel_v2_logger(OpenTelemetryV2Config(exporter="in_memory"))
+        operator_exporter = InMemorySpanExporter()
+        operator_cfg = OpenTelemetryV2Config(exporter="in_memory")
+        operator = build_otel_v2_logger(
+            operator_cfg, tracer_provider=otel_providers.build_tracer_provider(operator_cfg, exporter=operator_exporter)
+        )
+
+        def run():
+            if anchored:
+                set_request_destinations(
+                    (
+                        OtelDestination(
+                            endpoint="https://otlp.arize.com/v1", headers={"space_id": "t"}, callback_name="arize"
+                        ),
+                    )
+                )
+            return _maybe_construct_otel_v2("arize", [operator])
 
         is_otel_v2_enabled.cache_clear()
-        logger = in_fresh_context(_maybe_construct_otel_v2, "langfuse_otel", [collector_logger])
+        tenant = in_fresh_context(run)
         is_otel_v2_enabled.cache_clear()
 
-        assert logger is not None
-        assert [spec.endpoint for spec in logger.config.exporters] == [
-            "http://collector.local:4318",
-            "https://cloud.langfuse.com/api/public/otel",
-        ]
-        assert all(spec.headers for spec in logger.config.exporters if spec.requires_headers)
+        assert tenant is not None
+        assert [spec.owner for spec in tenant.config.exporters] == [ExporterOwner.ARIZE_AX]
+        assert "http://collector.local:4318" not in {spec.endpoint for spec in tenant.config.exporters}
+
+        tenant_exporter = InMemorySpanExporter()
+        tenant_twin = build_otel_v2_logger(
+            tenant.config,
+            callback_name="arize",
+            tracer_provider=otel_providers.build_tracer_provider(tenant.config, exporter=tenant_exporter),
+        )
+        kwargs = _closed_chat_call_kwargs()
+        operator.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+        asyncio.run(operator.async_log_success_event(kwargs, None, None, None))
+        asyncio.run(tenant_twin.async_log_success_event(kwargs, None, None, None))
+        assert [span.name for span in operator_exporter.get_finished_spans()] == ["chat gpt-4o"]
+        assert [span.name for span in tenant_exporter.get_finished_spans()] == ["chat gpt-4o"]
+
+    def test_a_preset_that_owns_no_exporter_keeps_the_collector_it_was_built_on(self, monkeypatch):
+        """Langtrace is a mapper over the operator's own OTLP collector and contributes no exporter
+        of its own, so filtering to owned exporters would register it with nowhere to deliver."""
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector.local:4318")
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        operator_cfg = OpenTelemetryV2Config(exporter="in_memory")
+        operator = build_otel_v2_logger(
+            operator_cfg,
+            tracer_provider=otel_providers.build_tracer_provider(operator_cfg, exporter=InMemorySpanExporter()),
+        )
+
+        is_otel_v2_enabled.cache_clear()
+        langtrace = in_fresh_context(lambda: _maybe_construct_otel_v2("langtrace", [operator]))
+        is_otel_v2_enabled.cache_clear()
+
+        assert langtrace is not None
+        assert "langtrace" in langtrace.config.mapper_names
+        assert "http://collector.local:4318" in {spec.endpoint for spec in langtrace.config.exporters}
 
 
 class TestContextIsolation:
@@ -2714,8 +2932,8 @@ class TestEvictionSafety:
         import threading
 
         from litellm.integrations.otel.plumbing.providers import (
-            _DrainPool,
             _MAX_CACHED_DESTINATION_PROCESSORS,
+            _DrainPool,
         )
 
         class GatedDrain(_DrainPool):

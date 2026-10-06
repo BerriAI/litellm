@@ -5,11 +5,12 @@ from types import MappingProxyType
 from typing import Annotated, Final, TypeAlias
 
 import httpx
-from pydantic import BaseModel, BeforeValidator, ConfigDict
+from pydantic import BeforeValidator, ConfigDict
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.utils import _add_path_to_api_base  # pyright: ignore[reportPrivateUsage]  # shared provider URL helper
 
 MODEL_INFO_REFRESH_SECONDS: Final = 300
@@ -25,7 +26,7 @@ def _positive_limit(value: object) -> int | None:
 _TokenLimit: TypeAlias = Annotated[int | None, BeforeValidator(_positive_limit)]
 
 
-class _ModelCard(BaseModel):
+class _ModelCard(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: str
@@ -51,7 +52,7 @@ class _ModelCard(BaseModel):
         )
 
 
-class _ModelList(BaseModel):
+class _ModelList(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     data: tuple[_ModelCard, ...] = ()
@@ -76,7 +77,7 @@ async def get_openai_compatible_model_info(
     try:
         response: Final = await client.get(
             url=url,
-            headers=dict(headers),  # mutable-ok: AsyncHTTPHandler requires a concrete dict
+            headers=dict(headers),
             timeout=httpx.Timeout(5.0),
             follow_redirects=False,
             max_response_bytes=2 * 1024 * 1024,
