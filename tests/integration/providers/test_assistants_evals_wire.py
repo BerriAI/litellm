@@ -133,8 +133,7 @@ def test_create_thread_forwards_sdk_body(gateway: Gateway, tmp_path: Path, prefi
                         ("POST", "/v1/threads")
                     ], failure_text
                     assert json.loads(failed_requests[0].body) == _THREAD_REQUEST, failure_text
-                    assert error.response.status_code == 200, failure_text
-                    raise
+                    pytest.fail(f"SDK thread creation failed with HTTP {error.response.status_code}: {failure_text}")
             assert raw.status_code == 200, raw.http_response.text
             requests: Final = wire.drain()
             assert [(request.method, request.target) for request in requests] == [("POST", "/v1/threads")], (
@@ -208,8 +207,7 @@ def test_run_forwards_every_sdk_field(gateway: Gateway, tmp_path: Path, prefix: 
                         ("POST", "/v1/threads/thread_abc/runs")
                     ], failure_text
                     assert json.loads(failed_requests[0].body) == _RUN_REQUEST, failure_text
-                    assert error.response.status_code == 200, failure_text
-                    raise
+                    pytest.fail(f"SDK run creation failed with HTTP {error.response.status_code}: {failure_text}")
             assert raw.status_code == 200, raw.http_response.text
             requests: Final = wire.drain()
             assert [(request.method, request.target) for request in requests] == [

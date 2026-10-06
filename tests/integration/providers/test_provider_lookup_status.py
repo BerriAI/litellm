@@ -218,8 +218,7 @@ def test_eval_update_forwards_only_client_fields(gateway: Gateway) -> None:
                 assert json.loads(failed_requests[0].body) == {"name": "renamed", "metadata": {"team": "search"}}, (
                     failure_text
                 )
-                assert error.response.status_code == 200, failure_text
-                raise
+                pytest.fail(f"SDK Eval update failed with HTTP {error.response.status_code}: {failure_text}")
         assert raw.status_code == 200, raw.http_response.text
         requests: Final = wire.drain()
         assert [(request.method, request.target) for request in requests] == [("POST", "/v1/evals/eval_abc")], (
@@ -253,8 +252,7 @@ def test_eval_run_cancel_uses_sdk_path(gateway: Gateway) -> None:
                 assert [(request.method, request.target) for request in failed_requests] == [
                     ("POST", "/v1/evals/eval_abc/runs/run_abc")
                 ], failure_text
-                assert error.response.status_code == 200, failure_text
-                raise
+                pytest.fail(f"SDK Eval run cancellation failed with HTTP {error.response.status_code}: {failure_text}")
         assert raw.status_code == 200, raw.http_response.text
         requests: Final = wire.drain()
         assert [(request.method, request.target) for request in requests] == [
@@ -291,8 +289,7 @@ def test_eval_routes_normalize_v1_api_base(gateway: Gateway, suffix: str) -> Non
                 assert [(request.method, request.target) for request in failed_requests] == [("POST", "/v1/evals")], (
                     failure_text
                 )
-                assert error.response.status_code == 200, failure_text
-                raise
+                pytest.fail(f"SDK Eval creation failed with HTTP {error.response.status_code}: {failure_text}")
             list_raw: Final = client.evals.with_raw_response.list(limit=2, extra_query={"model": alias})
             run_raw: Final = client.evals.runs.with_raw_response.create(
                 "eval_abc",

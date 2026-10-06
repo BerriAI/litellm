@@ -1671,8 +1671,7 @@ def test_eval_create_and_run_forward_client_metadata(gateway: Gateway) -> None:
                     ("POST", "/v1/evals")
                 ], create_error_text
                 assert json.loads(create_failed_requests[0].body) == _EVAL_CREATE_REQUEST, create_error_text
-                assert error.response.status_code == 200, create_error_text
-                raise
+                pytest.fail(f"SDK Eval creation failed with HTTP {error.response.status_code}: {create_error_text}")
             try:
                 run_raw: Final = client.evals.runs.with_raw_response.create(
                     "eval_abc",
@@ -1690,8 +1689,7 @@ def test_eval_create_and_run_forward_client_metadata(gateway: Gateway) -> None:
                 ], run_error_text
                 assert json.loads(run_failed_requests[0].body) == _EVAL_CREATE_REQUEST, run_error_text
                 assert json.loads(run_failed_requests[1].body) == _EVAL_RUN_REQUEST, run_error_text
-                assert error.response.status_code == 200, run_error_text
-                raise
+                pytest.fail(f"SDK Eval run creation failed with HTTP {error.response.status_code}: {run_error_text}")
         response_text: Final = "\n".join((create_raw.http_response.text, run_raw.http_response.text))
         requests: Final = wire.drain()
         assert [(request.method, request.target) for request in requests] == [
