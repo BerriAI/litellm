@@ -1843,7 +1843,12 @@ class BedrockEventStreamDecoderBase:
     """
 
     def __init__(self):
-        from botocore.parsers import EventStreamJSONParser
+        try:
+            from botocore.parsers import EventStreamJSONParser
+        except ModuleNotFoundError as error:
+            if error.name != "botocore":
+                raise
+            raise ImportError("Bedrock event decoding requires boto3. Run 'pip install boto3'.") from error
 
         self.parser = EventStreamJSONParser()
 

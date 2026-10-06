@@ -8,6 +8,7 @@ import re
 import urllib.parse
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from threading import Lock
@@ -42,6 +43,14 @@ if TYPE_CHECKING:
 else:
     Credentials = Any
     AWSPreparedRequest = Any
+
+
+@dataclass(frozen=True)
+class BearerPreparedRequest:
+    method: str
+    url: str
+    headers: Mapping[str, str]
+    body: bytes
 
 
 # Real AWS region names are lowercase letters, digits, and hyphens
@@ -1561,10 +1570,6 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         Returns:
             Credentials: Boto3 credentials object
         """
-        try:
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
         aws_region_name: Final = self._get_aws_region_name(optional_params, model)
         optional_params.pop("aws_region_name", None)
         auth_params: Final = pop_aws_auth_params(optional_params)
@@ -1594,23 +1599,27 @@ class BaseAWSLLM(SignsRequestsWithAWS):
         headers: dict,
         api_key: str | None = None,
         supports_bearer_token: bool = True,
-    ) -> AWSPreparedRequest:
+    ) -> AWSPreparedRequest | BearerPreparedRequest:
         aws_bearer_token: Final = bedrock_bearer_token(api_key) if supports_bearer_token else None
 
         if aws_bearer_token is not None:
-            try:
-                from botocore.awsrequest import AWSRequest
-            except ImportError:
-                raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
             headers["Authorization"] = f"Bearer {aws_bearer_token}"
-            request = AWSRequest(method="POST", url=endpoint_url, data=data, headers=headers)
+            bearer_request: Final = httpx.Request("POST", endpoint_url, content=data, headers=headers)
+            return BearerPreparedRequest(
+                method="POST",
+                url=str(bearer_request.url),
+                headers=bearer_request.headers,
+                body=bearer_request.content,
+            )
         else:
             try:
                 from botocore.auth import SigV4Auth
                 from botocore.awsrequest import AWSRequest
                 from botocore.exceptions import NoCredentialsError
-            except ImportError:
-                raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+            except ModuleNotFoundError as error:
+                if error.name not in {"boto3", "botocore"}:
+                    raise
+                raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.") from error
 
             if credentials is None:
                 raise NoCredentialsError()
@@ -1707,8 +1716,10 @@ class BaseAWSLLM(SignsRequestsWithAWS):
             from botocore.auth import SigV4Auth
             from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        except ModuleNotFoundError as error:
+            if error.name not in {"boto3", "botocore"}:
+                raise
+            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.") from error
 
         auth_params: Final = AwsAuthParams.model_validate(optional_params)
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
@@ -1757,8 +1768,10 @@ def sign_aws_json_post(
     try:
         from botocore.auth import SigV4Auth
         from botocore.awsrequest import AWSRequest
-    except ImportError:
-        raise ImportError(f"Missing boto3 to call {service_name}. Run 'pip install boto3'.")
+    except ModuleNotFoundError as error:
+        if error.name not in {"boto3", "botocore"}:
+            raise
+        raise ImportError(f"Missing boto3 to call {service_name}. Run 'pip install boto3'.") from error
 
     aws_request: Final = AWSRequest(method="POST", url=url, data=body, headers=headers)
     SigV4Auth(get_credentials(), service_name, aws_region_name).add_auth(aws_request)
