@@ -26,6 +26,18 @@ _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-
 # Binary bodies (e.g. OTLP trace exports on POST /v1/traces) are not JSON: arbitrary bytes used to
 # hit the JSON surrogate-repair path and fail auth with a 400. JSON under these types still parses.
 _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
+_OBJECT_ONLY_JSON_ROUTES: Final[frozenset[str]] = frozenset(
+    {
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/engines/{model:path}/chat/completions",
+        "/openai/deployments/{model:path}/chat/completions",
+        "/v1/responses",
+        "/responses",
+        "/openai/v1/responses",
+        "/v1/messages",
+    }
+)
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 
@@ -283,6 +295,16 @@ async def _read_request_body(request: Request | None) -> dict:
                             param="request_body",
                             code=status.HTTP_400_BAD_REQUEST,
                         )
+
+        matched_route: Final = request.scope.get("route")
+        route_path: Final = getattr(matched_route, "path", None) or request.scope.get("path", "")
+        if route_path in _OBJECT_ONLY_JSON_ROUTES and not isinstance(parsed_body, dict):
+            raise ProxyException(
+                message="Invalid JSON payload: request body must be a JSON object",
+                type="invalid_request_error",
+                param="request_body",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Cache the parsed result
         _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
