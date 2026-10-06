@@ -54,13 +54,15 @@ pub(super) async fn execute(
         headers: authenticated.headers,
         body,
     };
-    let cache = cache.filter(|_| authenticated.signer.is_none());
+    let cache = cache
+        .filter(|_| authenticated.signer.is_none())
+        .map(|cache| cache.guard(&outbound));
     let wire = interceptors
         .before_provider_request(outbound, context)
         .await?;
     litellm_inference::caching::execute_unary::<super::route::ChatCompletions, _, _>(
         identity,
-        cache,
+        cache.and_then(|cache| cache.confirm(&wire)),
         interceptors,
         observers,
         || async move {

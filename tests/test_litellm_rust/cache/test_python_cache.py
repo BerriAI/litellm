@@ -386,6 +386,88 @@ async def test_v2_default_off_requires_opt_in_even_for_existing_entries(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "stream"),
+    (
+        ("chat", False),
+        ("messages", False),
+        ("responses", False),
+        ("messages", True),
+    ),
+)
+@pytest.mark.parametrize("legacy", (False, True))
+@pytest.mark.parametrize("rewrite", ("body", "headers"))
+async def test_cache_bypasses_outbound_callback_rewrites(
+    recording_server: RecordingServer,
+    route: Literal["chat", "messages", "responses"],
+    stream: bool,
+    legacy: bool,
+    rewrite: Literal["body", "headers"],
+) -> None:
+    from tests.test_litellm_rust.support.requests import request_body, request_headers
+
+    token_parameter: Final = "max_output_tokens" if route == "responses" else "max_tokens"
+
+    class Rewrite(RecordingLogger):
+        revision: int | None = None
+
+        def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
+            if self.revision is not None:
+                if rewrite == "body":
+                    request_body(kwargs)[token_parameter] = self.revision
+                else:
+                    request_headers(kwargs)["x-cache-test-revision"] = str(self.revision)
+            super().log_pre_api_call(model, messages, kwargs)
+
+    logger: Final = Rewrite()
+    litellm.cache = Cache() if legacy else _v2.Cache.memory()
+    recording_server.expected_requests = 4
+    options: Final = {
+        "callbacks": [logger],
+        "stream": stream,
+        "cache_key": "callback-cache-key",
+    }
+    first: Final = await invoke(route, recording_server, options)
+    if stream:
+        await collect(first)
+    first_hit: Final = await invoke(route, recording_server, options)
+    if stream:
+        await collect(first_hit)
+    assert isinstance(cache_key(first_hit), str)
+    assert len(recording_server.requests) == 1
+    logger.revision = 31
+    changed: Final = await invoke(route, recording_server, options)
+    if stream:
+        await collect(changed)
+    assert cache_key(changed) is None
+    assert len(recording_server.requests) == 2
+    litellm.cache.cache.flush_cache()
+    repeated: Final = await invoke(route, recording_server, options)
+    if stream:
+        await collect(repeated)
+    assert cache_key(repeated) is None
+    assert len(recording_server.requests) == 3
+    for request in recording_server.requests[1:]:
+        if rewrite == "body":
+            body: Final = TypeAdapter(dict[str, object]).validate_python(request.body)
+            assert body[token_parameter] == logger.revision
+        else:
+            assert request.headers["x-cache-test-revision"] == str(logger.revision)
+    logger.revision = None
+    restored: Final = await invoke(route, recording_server, options)
+    if stream:
+        await collect(restored)
+    assert cache_key(restored) is None
+    assert len(recording_server.requests) == 4
+    restored_hit: Final = await invoke(route, recording_server, options)
+    if stream:
+        await collect(restored_hit)
+    assert cache_key(restored_hit) == cache_key(first_hit)
+    assert len(recording_server.requests) == 4
+    assert logger.names.count("log_pre_api_call") == 6
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_lookup", (False, True))
 @pytest.mark.parametrize("route", ("chat", "messages", "responses"))
 async def test_python_cache_operations_stay_in_the_rust_callers_task(

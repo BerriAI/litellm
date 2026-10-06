@@ -79,5 +79,5 @@
   - native gateway accounting belongs to gateway dependencies, independently of `host-python`
   - response-cache services expose no coordination counters or reservation APIs; a shared Redis deployment does not make response storage and accounting coordination the same dependency
 - Cache lookup follows provider preparation, credential resolution, and the request interceptor
-  - keys describe the caller request
+  - keys describe the caller request; request rewrites bypass caching
   - signed requests bypass caching until the signing identity has a stable cache representation
