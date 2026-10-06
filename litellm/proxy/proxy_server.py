@@ -9565,6 +9565,14 @@ def _fast_serialize_simple_model_response_stream(
     ):
         return None
 
+    # Fields set on the chunk outside its schema (e.g. by a streaming iterator
+    # hook) live in ``model_extra``. The payload below only writes
+    # ``service_tier``, so any other extra would be silently dropped here
+    # while the canonical serializer keeps it.
+    model_extra: Final = getattr(chunk, "model_extra", None)
+    if model_extra and any(key != "service_tier" for key in model_extra):
+        return None
+
     choices: Final = getattr(chunk, "choices", None)
     if not isinstance(choices, list) or len(choices) != 1:
         return None
