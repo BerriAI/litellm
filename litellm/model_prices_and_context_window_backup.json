@@ -22865,6 +22865,14 @@
             "notes": "Nimble Search API pay-as-you-go list price: $5 per 1,000 searches, up to 100 results per search. Volume plans price differently."
         }
     },
+    "keenable/search": {
+        "input_cost_per_query": 0.004,
+        "litellm_provider": "keenable",
+        "mode": "search",
+        "metadata": {
+            "notes": "Keenable pay-as-you-go list price: $4 per 1,000 requests, after a free allowance of 100,000 requests a month per organization. Keyless requests to /v1/search/public are free and rate limited per IP."
+        }
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
