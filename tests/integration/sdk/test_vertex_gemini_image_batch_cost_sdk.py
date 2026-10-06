@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import textwrap
+import threading
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
 
 import pytest
-from integration._support.https_redirect import redirect_https_host
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -33,6 +37,69 @@ _IMAGE_PART: Final = {
 }
 
 
+def _pipe(source: socket.socket, destination: socket.socket) -> None:
+    try:
+        for payload in iter(lambda: source.recv(65536), b""):
+            destination.sendall(payload)
+    except OSError:
+        return
+    finally:
+        try:
+            destination.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+
+
+@contextmanager
+def _redirect_https_host(host: str, port: int, *, to_port: int) -> Generator[str, None, None]:
+    """Yields an HTTPS_PROXY url that sends host:port to 127.0.0.1:to_port and refuses anything else."""
+    authority: Final = f"{host}:{port}"
+
+    class _RedirectHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        timeout = 30
+
+        def do_CONNECT(self) -> None:
+            if self.path != authority:
+                self.send_error(403)
+                return
+
+            self.send_response(200, "Connection Established")
+            self.end_headers()
+            try:
+                with socket.create_connection(("127.0.0.1", to_port), timeout=10) as upstream:
+                    client_to_upstream: Final = threading.Thread(
+                        target=_pipe, args=(self.connection, upstream), daemon=True
+                    )
+                    upstream_to_client: Final = threading.Thread(
+                        target=_pipe, args=(upstream, self.connection), daemon=True
+                    )
+                    client_to_upstream.start()
+                    upstream_to_client.start()
+                    client_to_upstream.join(timeout=30)
+                    upstream_to_client.join(timeout=30)
+            except OSError:
+                return
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    class _RedirectProxy(ThreadingHTTPServer):
+        daemon_threads = True
+        request_queue_size = 16
+
+    with _RedirectProxy(("127.0.0.1", 0), _RedirectHandler) as server:
+        thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_port}"
+        finally:
+            server.shutdown()
+            thread.join(timeout=6)
+            assert not thread.is_alive(), "CONNECT tunnel server survived cleanup"
+            server.server_close()
+
+
 @dataclass(frozen=True, slots=True)
 class _BatchScenario:
     name: str
@@ -43,7 +110,7 @@ class _BatchScenario:
     thoughts_tokens: int
     expected_prompt_cost: float
     expected_completion_cost: float
-    omit_image_batch_rate: bool = False
+    use_explicit_image_batch_rate_override: bool = False
 
 
 _SCENARIOS: Final = (
@@ -108,15 +175,15 @@ _SCENARIOS: Final = (
         expected_completion_cost=0.0183,
     ),
     _BatchScenario(
-        name="batch_image_rate_falls_back_to_half_standard",
+        name="batch_image_rate_uses_explicit_override",
         prompt_tokens=100,
         prompt_details=(("TEXT", 100),),
         candidate_tokens=1120,
         candidate_details=(("IMAGE", 1120),),
         thoughts_tokens=0,
         expected_prompt_cost=0.000075,
-        expected_completion_cost=0.0168,
-        omit_image_batch_rate=True,
+        expected_completion_cost=0.0224,
+        use_explicit_image_batch_rate_override=True,
     ),
 )
 
@@ -161,41 +228,19 @@ _SDK_SCRIPT: Final = textwrap.dedent(
             )
 
     async def main() -> None:
-        pricing: Final[ModelInfo] = (
-            {
-                "max_tokens": 65536,
-                "max_input_tokens": 1048576,
-                "max_output_tokens": 65536,
-                "input_cost_per_token": 1.5e-6,
-                "output_cost_per_token": 7.5e-6,
-                "input_cost_per_token_batches": 7.5e-7,
-                "output_cost_per_token_batches": 3.75e-6,
-                "output_cost_per_image_token": 3e-5,
-                "output_cost_per_image_token_batches": 1.5e-5,
-                "output_cost_per_reasoning_token": 7.5e-6,
-                "litellm_provider": "vertex_ai-language-models",
-                "mode": "chat",
-            }
-            if os.environ["OMIT_IMAGE_BATCH_RATE"] == "0"
-            else {
-                "max_tokens": 65536,
-                "max_input_tokens": 1048576,
-                "max_output_tokens": 65536,
-                "input_cost_per_token": 1.5e-6,
-                "output_cost_per_token": 7.5e-6,
-                "input_cost_per_token_batches": 7.5e-7,
-                "output_cost_per_token_batches": 3.75e-6,
-                "output_cost_per_image_token": 3e-5,
-                "output_cost_per_reasoning_token": 7.5e-6,
-                "litellm_provider": "vertex_ai-language-models",
-                "mode": "chat",
-            }
+        has_explicit_image_batch_rate_override: Final = (
+            os.environ["USE_EXPLICIT_IMAGE_BATCH_RATE_OVERRIDE"] == "1"
         )
+        if has_explicit_image_batch_rate_override:
+            pricing: Final[ModelInfo] = {
+                **litellm.model_cost["vertex_ai/gemini-nano-banana-2.1"],
+                "output_cost_per_image_token_batches": 2e-5,
+            }
+            litellm.register_model({f"vertex_ai/{model}": pricing}, persist_across_reloads=False)
         litellm.user_url_validation = False
         litellm.disable_vertex_batch_output_transformation = os.environ["TRANSFORM_OUTPUT"] != "1"
-        litellm.register_model({model: pricing}, persist_across_reloads=False)
         info: Final = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
-        assert info["key"] == model, info
+        assert info["key"] == f"vertex_ai/{model}", info
         assert info["litellm_provider"] == "vertex_ai-language-models", info
         print(
             "REGISTRY:"
@@ -320,7 +365,9 @@ def _subprocess_environment(
         "VERTEX_API_BASE": api.url,
         "VERTEX_CREDENTIALS": credentials,
         "VERTEX_PROJECT": _PROJECT,
-        "OMIT_IMAGE_BATCH_RATE": "1" if scenario.omit_image_batch_rate else "0",
+        "USE_EXPLICIT_IMAGE_BATCH_RATE_OVERRIDE": (
+            "1" if scenario.use_explicit_image_batch_rate_override else "0"
+        ),
         "TRANSFORM_OUTPUT": "1" if transform_output else "0",
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
         "PYTHONPATH": python_path,
@@ -341,7 +388,7 @@ def test_aretrieve_batch_costs_native_gemini_image_tokens(
         with wire_server(_gcs_reply(row), tls=tls) as gcs:
             gcs_port: Final = urlsplit(gcs.url).port
             assert gcs_port is not None
-            with redirect_https_host("storage.googleapis.com", 443, to_port=gcs_port) as proxy_url:
+            with _redirect_https_host("storage.googleapis.com", 443, to_port=gcs_port) as proxy_url:
                 environment: Final = _subprocess_environment(
                     api, certificate, credentials, proxy_url, scenario, transform_output
                 )
@@ -365,7 +412,10 @@ def test_aretrieve_batch_costs_native_gemini_image_tokens(
                     for line in outcome.stdout.splitlines()
                     if line.startswith(_CALLBACK_PREFIX)
                 )
-                assert registry_events == ({"key": _MODEL, "provider": "vertex_ai-language-models"},), outcome.stdout
+                expected_registry_key: Final = f"vertex_ai/{_MODEL}"
+                assert registry_events == (
+                    {"key": expected_registry_key, "provider": "vertex_ai-language-models"},
+                ), outcome.stdout
                 assert len(callback_events) == 1, (outcome.stdout, outcome.stderr)
                 event: Final = callback_events[0]
                 assert event["response_cost"] == pytest.approx(
