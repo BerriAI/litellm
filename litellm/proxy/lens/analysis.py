@@ -140,6 +140,10 @@ class AnalysisResponseError(ValueError):
     pass
 
 
+class AnalysisStopped(ValueError):
+    pass
+
+
 class AnalysisContextExceeded(AnalysisResponseError):
     def __init__(self, request: ModelRequest) -> None:
         self.request: Final = request
@@ -263,11 +267,11 @@ async def concurrent_results(
         while pending:
             done, waiting = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
             pending = frozenset((*waiting, *done))
-            for task in done:
+            for task in sorted(done, key=lambda task: task.cancelled() or task.exception() is not None):
                 yield await task
                 pending = pending - frozenset((task,))
-                for _, item in islice(remaining, 1):
-                    pending = pending | frozenset((asyncio.create_task(operate(item)),))
+            for _, item in islice(remaining, len(done)):
+                pending = pending | frozenset((asyncio.create_task(operate(item)),))
     finally:
         for task in pending:
             task.cancel()
@@ -1043,7 +1047,7 @@ async def examine_executions(
     progress: ReportProgress,
     *,
     extractor: ExtractExecution = extract,
-) -> AsyncIterator[Examined]:
+) -> AsyncGenerator[Examined, None]:
     reading: tuple[InFlight, ...] = ()  # rebind-ok: the in-flight set changes as each read starts and finishes
     screened = 0  # rebind-ok: counts finished reads for progress
     reused = 0  # rebind-ok: counts reported reused reviews independently of the reuse plan

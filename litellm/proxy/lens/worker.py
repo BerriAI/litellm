@@ -9,7 +9,7 @@ from typing import Final
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-from .analysis import AnalysisResponseError, AnalyzeSample, validation_details
+from .analysis import AnalysisResponseError, AnalysisStopped, AnalyzeSample, validation_details
 from .context_pipeline import analyze_sample
 from .models import (
     Activity,
@@ -66,7 +66,7 @@ def retry_delay(error: httpx.TransportError | httpx.HTTPStatusError, attempt: in
 
 
 def failure_message(error: Exception) -> str:
-    if isinstance(error, AnalysisResponseError):
+    if isinstance(error, (AnalysisResponseError, AnalysisStopped)):
         return str(error)
     if isinstance(error, ValidationError):
         return f"Invalid {error.title} response (ValidationError):\n{validation_details(error)}"
@@ -154,6 +154,12 @@ class LensWorker:
     async def serve(self, slots: int, poll_seconds: float) -> None:
         await asyncio.gather(*(self.slot(poll_seconds) for _ in range(slots)))
 
+    async def analysis_model_request(self, path: str, body: ModelRequest) -> ModelResult:
+        try:
+            return await self.model_request(path, body)
+        except httpx.HTTPError as error:
+            raise AnalysisStopped(failure_message(error)) from error
+
     async def slot(self, poll_seconds: float) -> None:
         while True:
             try:
@@ -195,7 +201,7 @@ class LensWorker:
         prefix: Final = f"/lens/worker/{claim.lens_id}/{claim.job.id}"
 
         async def model(body: ModelRequest) -> ModelResult:
-            return await self.model_request(prefix + "/model", body)
+            return await self.analysis_model_request(prefix + "/model", body)
 
         async def read(execution_id: str, cursor: str, offset: int) -> ExecutionContent:
             result: Final = await self.client.get(

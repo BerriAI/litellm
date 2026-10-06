@@ -65,12 +65,11 @@ interface SituationView {
   readonly body: "progress" | "error" | "partial" | null;
 }
 
-const completed = ({ found, runs, reused }: Facts) =>
-  found
-    ? `Found ${found} across ${runs}`
-    : reused
-      ? `Reused ${plural(reused, "review")} with no new findings`
-      : `Nothing found across ${runs}`;
+const completed = ({ found, runs, reused }: Facts) => {
+  if (found) return `Found ${found} across ${runs}`;
+  if (reused) return `Reused ${plural(reused, "review")} with no new findings`;
+  return `Nothing found across ${runs}`;
+};
 
 const SITUATIONS: Record<RunSituation, SituationView> = {
   never: { status: "Not run yet", tone: "muted", headline: () => "Run it to get the first report", body: null },

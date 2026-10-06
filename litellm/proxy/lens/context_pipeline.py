@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from dataclasses import replace
 from itertools import chain
@@ -12,6 +13,7 @@ from .agent_workspace import EvidenceReadError, EvidenceWorkspace, ReviewRecord,
 from .analysis import (
     AnalysisContextExceeded,
     AnalysisResponseError,
+    AnalysisStopped,
     Candidate,
     Clusters,
     Examined,
@@ -233,6 +235,17 @@ async def investigate_context_candidate(
         return CandidateInvestigation(error=str(error))
 
 
+async def collect_reviews(reviews: AsyncGenerator[Examined, None]) -> tuple[tuple[Examined, ...], str]:
+    completed: tuple[Examined, ...] = ()  # rebind-ok: retain completed reviews if a later model call stops
+    try:
+        async with aclosing(reviews):
+            async for review in reviews:
+                completed = (*completed, review)
+    except AnalysisStopped as error:
+        return completed, str(error)
+    return completed, ""
+
+
 async def analyze_context(
     claim: Claim,
     sample: Sample,
@@ -337,14 +350,11 @@ async def analyze_context(
                     tool_calls=activity.activity.tool_calls,
                 )
 
-    completed_reviews: Final = tuple(
-        [
-            review
-            async for review in examine_executions(claim, sample, read, limited, planned_progress, extractor=extract)
-        ]
+    completed_reviews, review_error = await collect_reviews(
+        examine_executions(claim, sample, read, limited, planned_progress, extractor=extract)
     )
     indexed: Final = MappingProxyType({review.execution.id: review for review in completed_reviews})
-    examined: Final = tuple(indexed[execution.id] for execution in sample.executions)
+    examined: Final = tuple(indexed[execution.id] for execution in sample.executions if execution.id in indexed)
     coverage: Final = base.model_copy(
         update=MappingProxyType(
             {
@@ -383,13 +393,19 @@ async def analyze_context(
         )
 
     assessments: Final = tuple(assessment(review) for review in examined)
-    if not pending:
+    if review_error or not pending:
         return Result(
             coverage=coverage,
             assessments=assessments,
-            review_versions=versions,
+            review_versions=() if review_error else versions,
             error="\n\n".join(
-                dict.fromkeys((*(review.error for review in examined if review.error), *sorted(workspace.read_errors)))
+                dict.fromkeys(
+                    (
+                        *((review_error,) if review_error else ()),
+                        *(review.error for review in examined if review.error),
+                        *sorted(workspace.read_errors),
+                    )
+                )
             ),
         )
     records: Final = tuple(
@@ -406,9 +422,12 @@ async def analyze_context(
     batches: Final = observation_batches(pending)
     grouping: Final = coverage.model_copy(update=MappingProxyType({"grouping_batches": len(batches)}))
     await progress("Grouping observations", grouping)
-    clusters: Final = await parallel_cluster_batches(
-        batches, limited, progress, grouping, claim.job.settings.concurrency
-    )
+    try:
+        clusters: Final = await parallel_cluster_batches(
+            batches, limited, progress, grouping, claim.job.settings.concurrency
+        )
+    except AnalysisStopped as error:
+        return Result(coverage=grouping, assessments=assessments, error=str(error))
     investigating: Final = grouping.model_copy(
         update=MappingProxyType({"grouped_batches": len(batches), "candidates": len(clusters.candidates)})
     )
@@ -429,27 +448,36 @@ async def analyze_context(
     await progress("Checking original evidence", investigating)
     completed: Final = iter(range(1, len(clusters.candidates) + 1))
     investigated: tuple[tuple[int, CandidateInvestigation], ...] = ()  # rebind-ok: collect candidate results by index
-    async with aclosing(
-        concurrent_results(tuple(enumerate(clusters.candidates)), investigate, claim.job.settings.concurrency)
-    ) as results:
-        async for result in results:
-            investigated = (*investigated, result)
-            await progress(
-                "Checking original evidence",
-                investigating.model_copy(
-                    update=MappingProxyType(
-                        {
-                            "investigated": next(completed),
-                            "inconclusive": sum(not item.findings for _, item in investigated),
-                            "failed_tasks": coverage.failed_tasks + sum(bool(item.error) for _, item in investigated),
-                        }
-                    )
-                ),
-            )
+    investigation_error = ""  # rebind-ok: retain verified findings when another candidate cannot finish
+    try:
+        async with aclosing(
+            concurrent_results(tuple(enumerate(clusters.candidates)), investigate, claim.job.settings.concurrency)
+        ) as results:
+            async for result in results:
+                investigated = (*investigated, result)
+                await progress(
+                    "Checking original evidence",
+                    investigating.model_copy(
+                        update=MappingProxyType(
+                            {
+                                "investigated": next(completed),
+                                "inconclusive": sum(not item.findings for _, item in investigated),
+                                "failed_tasks": coverage.failed_tasks
+                                + sum(bool(item.error) for _, item in investigated),
+                            }
+                        )
+                    ),
+                )
+    except AnalysisStopped as error:
+        investigation_error = str(error)
     ordered: Final = tuple(item for _, item in sorted(investigated))
-    await progress("Consolidating findings across runs", investigating)
-    consolidated: Final = await consolidate_findings(
-        tuple(chain.from_iterable(item.findings for item in ordered)), claim, limited
+    drafts: Final = tuple(chain.from_iterable(item.findings for item in ordered))
+    if not investigation_error:
+        await progress("Consolidating findings across runs", investigating)
+    consolidated: Final = (
+        CandidateInvestigation(findings=drafts, error=investigation_error)
+        if investigation_error
+        else await consolidate_findings(drafts, claim, limited)
     )
     unfinished: Final = frozenset(
         chain.from_iterable(
@@ -461,7 +489,9 @@ async def analyze_context(
     return Result(
         findings=consolidated.findings,
         assessments=assessments,
-        review_versions=tuple(version for version in versions if version.execution_id not in unfinished),
+        review_versions=()
+        if consolidated.error
+        else tuple(version for version in versions if version.execution_id not in unfinished),
         error="\n\n".join(
             dict.fromkeys(
                 (
@@ -490,5 +520,5 @@ async def consolidate_findings(
 ) -> CandidateInvestigation:
     try:
         return CandidateInvestigation(findings=await reconcile_findings(drafts, claim.findings, model))
-    except AnalysisResponseError as error:
+    except (AnalysisResponseError, AnalysisStopped) as error:
         return CandidateInvestigation(findings=drafts, error=f"Finding consolidation is incomplete: {error}")

@@ -304,10 +304,153 @@ async def test_model_failure_stops_remaining_traces_without_discarding_completed
     assert saved.review.extraction is not None and saved.review.content_version
     assert checkpoints.empty()
     stopped: Final = results.get_nowait()
-    assert stopped.error and stopped.assessments == () and stopped.findings == ()
+    assert stopped.error and stopped.findings == ()
+    assert tuple((item.execution_id, item.cannot_assess) for item in stopped.assessments) == (("healthy", False),)
+    assert stopped.coverage.screened == 1 and stopped.coverage.unassessable == 0
+    assert stopped.review_versions == ()
     assert "private provider diagnostics" not in stopped.error
     assert requests.qsize() == 2 + (MODEL_RETRIES if failure in (503, "timeout") else 0)
     assert results.empty()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ("cluster", "investigate", "consolidate"))
+async def test_model_failure_preserves_completed_assessments_and_findings_without_further_calls(stage: str) -> None:
+    from litellm.proxy.lens.agent_review import Findings
+    from litellm.proxy.lens.analysis import Candidate, Clusters
+    from litellm.proxy.lens.models import Evidence, FindingDraft, Observation
+    from tests.unit.proxy.lens.test_agent_runtime import InitialPrompt
+    from tests.unit.proxy.lens.test_context_pipeline import AssignedSession, GroupPrompt
+    from tests.unit.proxy.lens.test_state import issue_brief
+
+    initial: Final = lens()
+    configured: Final = initial.model_copy(update={"settings": initial.settings.model_copy(update={"concurrency": 1})})
+    claim: Final = Claim(lens_id="lens", job=queue_job(configured, NOW, "job").jobs[0], findings=())
+    executions: Final = tuple(
+        Execution(
+            id=identity,
+            source="traces",
+            trace_id=identity,
+            team_id="",
+            name=identity,
+            start_time="",
+            span_count=1,
+            root_seen=True,
+        )
+        for identity in ("first", "second")
+    )
+    failed: Final = asyncio.Event()
+    investigated: Final = SimpleQueue[str]()
+    saved: Final = SimpleQueue[Result]()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        match request.url.path.rsplit("/", 1)[-1]:
+            case "claim":
+                return httpx.Response(200, json=claim.model_dump(mode="json"))
+            case "reviews":
+                return httpx.Response(200, json=[])
+            case "sample":
+                return httpx.Response(200, json=Sample(executions=executions, eligible=2).model_dump(mode="json"))
+            case "content":
+                identity: Final = request.url.params["execution_id"]
+                return httpx.Response(
+                    200,
+                    json=ExecutionContent(
+                        execution=next(item for item in executions if item.id == identity),
+                        parts=(
+                            TracePart(
+                                execution_id=identity, span_id="span", name="tool", kind="tool", content="timeout"
+                            ),
+                        ),
+                    ).model_dump(mode="json"),
+                )
+            case "model":
+                assert not failed.is_set(), "A terminal model error must stop further model calls"
+                body: Final = ModelRequest.model_validate_json(request.content)
+                consolidation: Final = '"FindingGroups"' in body.prompt
+                if (stage == "consolidate" and consolidation) or (
+                    stage == body.purpose and (stage != "investigate" or investigated.qsize() == 1)
+                ):
+                    failed.set()
+                    return httpx.Response(402, text="private provider diagnostics")
+                if body.purpose == "cluster":
+                    groups: Final = GroupPrompt.model_validate_json(body.prompt)
+                    return httpx.Response(
+                        200,
+                        json=ModelResult(
+                            content=Clusters(candidates=groups.candidates).model_dump_json(),
+                            cost=0.01,
+                        ).model_dump(),
+                    )
+                payload: Final = InitialPrompt.model_validate_json(body.messages[1].content)
+                if body.purpose == "extract":
+                    assigned: Final = AssignedSession.model_validate_json(payload.supplied).execution
+                    return httpx.Response(
+                        200,
+                        json=ModelResult(
+                            content=AgentTurn[Extraction](
+                                result=Extraction(
+                                    observations=(
+                                        Observation(
+                                            check_id="retries",
+                                            summary=assigned.name,
+                                            evidence=(
+                                                Evidence(execution_id=assigned.id, span_id="span", quote="timeout"),
+                                            ),
+                                        ),
+                                    ),
+                                )
+                            ).model_dump_json(),
+                            cost=0.01,
+                        ).model_dump(),
+                    )
+                candidate: Final = Candidate.model_validate_json(payload.supplied)
+                investigated.put(candidate.title)
+                return httpx.Response(
+                    200,
+                    json=ModelResult(
+                        content=AgentTurn[Findings](
+                            result=Findings(
+                                findings=(
+                                    FindingDraft(
+                                        title=candidate.title,
+                                        description="A recorded operation timed out",
+                                        check_id="retries",
+                                        brief=issue_brief("The operation timed out"),
+                                        evidence=(
+                                            Evidence(
+                                                execution_id=candidate.execution_ids[0], span_id="span", quote="timeout"
+                                            ),
+                                        ),
+                                    ),
+                                )
+                            )
+                        ).model_dump_json(),
+                        cost=0.01,
+                    ).model_dump(),
+                )
+            case "progress":
+                return httpx.Response(200, json=True)
+            case "result":
+                saved.put(Result.model_validate_json(request.content))
+                return httpx.Response(200, json=True)
+            case _:
+                pytest.fail(f"Unexpected request: {request.url.path}")
+
+    async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
+        assert await LensWorker(client).run_once()
+    result: Final = saved.get_nowait()
+    assert failed.is_set() and "HTTP 402" in result.error and "private" not in result.error
+    assert tuple((item.execution_id, item.issue_checks) for item in result.assessments) == (
+        ("first", ("retries",)),
+        ("second", ("retries",)),
+    )
+    expected: Final = {"cluster": (), "investigate": ("first",), "consolidate": ("first", "second")}[stage]
+    assert tuple(finding.evidence[0].execution_id for finding in result.findings) == expected
+    assert result.coverage.screened == 2 and result.coverage.unassessable == 0
+    assert result.coverage.investigated == len(expected)
+    assert result.review_versions == ()
+    assert saved.empty()
 
 
 @pytest.mark.parametrize("status", (400, 401, 402, 403, 404, 409, 429, 503))
