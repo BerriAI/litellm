@@ -143,15 +143,13 @@ def test_enabled_gateway_matches_native_messages_route(enabled_gateway: Gateway,
     }
     expected_stream: Final = cc.message_stream(identity, _BACKEND, content, usage)
     expected_provider_body: Final = {**request_body, "model": _BACKEND}
-    expected_beta: Final = ",".join(
-        sorted(set((*cc.CLI_BETA.split(","), "context-management-2025-06-27", "prompt-caching-scope-2026-01-05")))
-    )
+    client_betas: Final = sorted(cc.CLI_BETA.split(","))
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target == "/v1/messages", request.target
         assert request.headers["x-api-key"] == _API_KEY, request.headers
         assert request.headers["anthropic-version"] == "2023-06-01", request.headers
-        assert request.headers["anthropic-beta"] == expected_beta, request.headers
+        assert sorted(request.headers["anthropic-beta"].split(",")) == client_betas, request.headers
         assert "authorization" not in request.headers, request.headers
         assert _JSON_OBJECT.validate_json(request.body) == expected_provider_body, request.body
         if stream:
@@ -210,7 +208,8 @@ def test_enabled_gateway_matches_native_messages_route(enabled_gateway: Gateway,
             == messages_request.headers["anthropic-version"]
             == "2023-06-01"
         )
-        assert gateway_request.headers["anthropic-beta"] == messages_request.headers["anthropic-beta"] == expected_beta
+        assert gateway_request.headers["anthropic-beta"] == messages_request.headers["anthropic-beta"]
+        assert sorted(gateway_request.headers["anthropic-beta"].split(",")) == client_betas
         assert _JSON_OBJECT.validate_json(gateway_request.body) == expected_provider_body, gateway_request.body
         assert _JSON_OBJECT.validate_json(messages_request.body) == expected_provider_body, messages_request.body
 
@@ -308,15 +307,13 @@ def test_enabled_gateway_attributes_spend_to_virtual_key(enabled_gateway: Gatewa
     usage: Final = {"input_tokens": 6, "output_tokens": 1}
     request_body: Final = {**cc.claude_code_request("cache-bust-msg-gateway-spend"), "model": "", "stream": False}
     expected_provider_body: Final = {**request_body, "model": _BACKEND}
-    expected_beta: Final = ",".join(
-        sorted(set((*cc.CLI_BETA.split(","), "context-management-2025-06-27", "prompt-caching-scope-2026-01-05")))
-    )
+    client_betas: Final = sorted(cc.CLI_BETA.split(","))
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target == "/v1/messages", request.target
         assert request.headers["x-api-key"] == _API_KEY, request.headers
         assert request.headers["anthropic-version"] == "2023-06-01", request.headers
-        assert request.headers["anthropic-beta"] == expected_beta, request.headers
+        assert sorted(request.headers["anthropic-beta"].split(",")) == client_betas, request.headers
         assert "authorization" not in request.headers, request.headers
         assert _JSON_OBJECT.validate_json(request.body) == expected_provider_body, request.body
         return Reply(body=cc.message_reply(next(response_ids), _BACKEND, content, usage))

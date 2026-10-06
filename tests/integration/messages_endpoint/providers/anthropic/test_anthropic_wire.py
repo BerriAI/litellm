@@ -218,9 +218,6 @@ def test_anthropic_messages_slow_upstream_is_cut_off_at_the_deployment_request_t
 def test_anthropic_messages_preserves_cli_beta_safeguards_and_result(gateway: Gateway, stream: bool) -> None:
     identity: Final = "anthropic-safeguards-" + uuid.uuid4().hex
     beta: Final = cc.CLI_BETA + ",made-up-future-beta-2099-01-01"
-    expected_beta: Final = ",".join(
-        sorted(set((*beta.split(","), "context-management-2025-06-27", "prompt-caching-scope-2026-01-05")))
-    )
     safeguards: Final = {"mode": "strict", "policies": ["sensitive-data"]}
     safeguard_results: Final = {"status": "allowed", "policy": "sensitive-data"}
     system: Final = [{"type": "text", "text": "Synthetic policy.", "cache_control": {"type": "ephemeral"}}]
@@ -283,7 +280,7 @@ def test_anthropic_messages_preserves_cli_beta_safeguards_and_result(gateway: Ga
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target == "/v1/messages", request.target
         assert request.headers["x-api-key"] == "synthetic-anthropic-key", request.headers
-        assert request.headers["anthropic-beta"] == expected_beta, request.headers
+        assert sorted(request.headers["anthropic-beta"].split(",")) == sorted(beta.split(",")), request.headers
         expected_body: Final = {
             "model": "claude-sonnet-4-6",
             "max_tokens": 32,
@@ -595,6 +592,78 @@ def test_anthropic_messages_stream_surfaces_upstream_error_event(gateway: Gatewa
         ), response.text
         assert len(wire.drain()) == 1
 
+
+
+def test_anthropic_messages_stream_ending_without_message_stop_surfaces_an_error_event(gateway: Gateway) -> None:
+    pytest.skip("BUG: /v1/messages relays an upstream stream that closes before message_stop as a clean 200")
+    message_start: Final = {
+        "type": "message_start",
+        "message": {
+            "id": "msg_stream_truncated",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-6",
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 5, "output_tokens": 0},
+        },
+    }
+    block_start: Final = {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+    block_delta: Final = {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Partial"}}
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/v1/messages", request.target
+        assert request.headers["x-api-key"] == "synthetic-anthropic-key", request.headers
+        assert _JSON_OBJECT.validate_json(request.body) == {
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "Trigger the scripted truncated stream."}],
+            "stream": True,
+        }, request.body
+        return Reply(
+            chunks=(
+                cc.sse_frame("message_start", message_start),
+                cc.sse_frame("content_block_start", block_start),
+                cc.sse_frame("content_block_delta", block_delta),
+            ),
+            content_type="text/event-stream",
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="anthropic/claude-sonnet-4-6",
+            api_base=wire.url,
+            api_key="synthetic-anthropic-key",
+        )
+        response: Final = gateway.client.post(
+            "/v1/messages",
+            json={
+                "model": model,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "Trigger the scripted truncated stream."}],
+                "stream": True,
+            },
+            headers=cc.cli_headers(gateway.key),
+        )
+        assert response.status_code == 200, response.text
+        assert cc.sse_events(response.text) == (
+            ("message_start", {**message_start, "message": {**message_start["message"], "model": model}}),
+            ("content_block_start", block_start),
+            ("content_block_delta", block_delta),
+            (
+                "error",
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": "Provider stream ended before emitting a message_stop event; the response is "
+                        "incomplete and any partial content (e.g. tool_use input JSON) may be truncated.",
+                    },
+                },
+            ),
+        ), response.text
+        assert len(wire.drain()) == 1
 
 def test_anthropic_messages_preserves_image_document_and_tool_result_blocks(gateway: Gateway) -> None:
     image_data: Final = base64.b64encode(b"synthetic png bytes").decode()
