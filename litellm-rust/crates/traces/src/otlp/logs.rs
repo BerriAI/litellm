@@ -12,18 +12,20 @@ use crate::{
     normalize::{CLAUDE_CODE_EVENTS_SCOPE, visible_claude_response},
 };
 
-fn text<'a>(attributes: &'a [KeyValue], key: &str) -> &'a str {
+fn value<'a>(attributes: &'a [KeyValue], key: &str) -> Option<&'a Value> {
     attributes
         .iter()
         .rev()
         .find(|entry| entry.key == key)
         .and_then(|entry| entry.value.as_ref())
         .and_then(|value| value.value.as_ref())
-        .and_then(|value| match value {
-            Value::StringValue(text) => Some(text.as_str()),
-            _ => None,
-        })
-        .unwrap_or_default()
+}
+
+fn text<'a>(attributes: &'a [KeyValue], key: &str) -> &'a str {
+    match value(attributes, key) {
+        Some(Value::StringValue(text)) => text,
+        _ => "",
+    }
 }
 
 fn message(record: LogRecord) -> Span {
@@ -40,11 +42,19 @@ fn message(record: LogRecord) -> Span {
     let uuid = text(&record.attributes, "message.uuid");
     if uuid.is_empty() {
         hash.update(timestamp.to_be_bytes());
-        hash.update(text(&record.attributes, "event.sequence"));
+        match value(&record.attributes, "event.sequence") {
+            Some(Value::IntValue(sequence)) => hash.update(sequence.to_string()),
+            _ => hash.update(text(&record.attributes, "event.sequence")),
+        }
         hash.update(text(&record.attributes, "response"));
     } else {
         hash.update(uuid);
     }
+    let failed = match value(&record.attributes, "success") {
+        Some(Value::BoolValue(success)) => !success,
+        Some(Value::StringValue(success)) => success == "false",
+        _ => false,
+    };
     Span {
         trace_id: record.trace_id,
         span_id: hash.finalize()[..8].to_vec(),
@@ -53,12 +63,12 @@ fn message(record: LogRecord) -> Span {
         kind: 1,
         start_time_unix_nano: timestamp,
         end_time_unix_nano: timestamp,
-        status: (text(&record.attributes, "event.name") == "tool_result"
-            && text(&record.attributes, "success") == "false")
-            .then(|| Status {
+        status: (text(&record.attributes, "event.name") == "tool_result" && failed).then(|| {
+            Status {
                 code: 2,
                 message: text(&record.attributes, "error").to_owned(),
-            }),
+            }
+        }),
         attributes: record.attributes,
         ..Span::default()
     }

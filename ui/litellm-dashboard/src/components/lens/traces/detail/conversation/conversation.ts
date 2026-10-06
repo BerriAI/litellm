@@ -129,7 +129,8 @@ function messageTime(span: Span, steps: readonly Span[], details: ReadonlyMap<st
   const source = attributes["query_source"];
   const matches = steps.filter((candidate) => {
     const recorded = details.get(candidate.span_id)?.attributes["query_source_safe"];
-    const sameSource = recorded === source || (recorded === "agent" && source?.startsWith("agent:"));
+    const unnamedAgent = recorded === "agent" && source?.startsWith("agent:");
+    const sameSource = recorded === source || recorded === source?.replace(/^agent:/, "agent.") || unnamedAgent;
     const sameRequest = candidate.parent_span_id === span.parent_span_id && candidate.model === span.model;
     const matchingCall = candidate.type === "llm" && sameRequest && sameSource;
     return matchingCall && Math.abs(candidate.start_offset_ms + candidate.duration_ms - span.start_offset_ms) < 2;
@@ -207,6 +208,18 @@ function isNativeAgent(span: Span): boolean {
   return span.framework === "claude-code" && span.type === "tool" && ["Agent", "Task"].includes(span.name);
 }
 
+function conversationBranch(span: Span, byId: ReadonlyMap<string, Span>): string {
+  if (span.type === "agent" || span.parent_span_id === null) return span.span_id;
+  let parent = span.parent_span_id ? byId.get(span.parent_span_id) : undefined;
+  const visited = new Set<string>();
+  while (parent && !visited.has(parent.span_id)) {
+    visited.add(parent.span_id);
+    if (parent.type === "agent" || isNativeAgent(parent)) return parent.span_id;
+    parent = parent.parent_span_id ? byId.get(parent.parent_span_id) : undefined;
+  }
+  return span.parent_span_id ?? span.span_id;
+}
+
 function agentIdentity(span: Span, details: ReadonlyMap<string, SpanDetail>): string {
   return isNativeAgent(span) ? span.span_id : details.get(span.span_id)?.attributes["gen_ai.agent.id"] || span.span_id;
 }
@@ -247,17 +260,7 @@ export function buildConversation(
   const pendingCalls = new Map<string, TraceToolCall[]>();
   const items: ConversationItem[] = [];
   const events = conversationEvents(conversationSteps(spans), byId, details, complete);
-  const branch = (span: Span): string => {
-    if (span.type === "agent" || span.parent_span_id === null) return span.span_id;
-    let parent = span.parent_span_id ? byId.get(span.parent_span_id) : undefined;
-    const visited = new Set<string>();
-    while (parent && !visited.has(parent.span_id)) {
-      visited.add(parent.span_id);
-      if (parent.type === "agent" || isNativeAgent(parent)) return parent.span_id;
-      parent = parent.parent_span_id ? byId.get(parent.parent_span_id) : undefined;
-    }
-    return span.parent_span_id ?? span.span_id;
-  };
+  const branch = (span: Span): string => conversationBranch(span, byId);
   for (const event of events) {
     const { span } = event;
     if (isClaudeSupplement(span)) continue;
@@ -351,18 +354,29 @@ export type ConversationGroup =
   | { kind: "item"; item: ConversationItem }
   | { kind: "branch"; id: string; name: string; children: ConversationGroup[] };
 
-export function groupConversation(items: readonly ConversationItem[]): ConversationGroup[] {
+export function groupConversation(items: readonly ConversationItem[], spans: readonly Span[]): ConversationGroup[] {
+  const byId = new Map(spans.map((span) => [span.span_id, span]));
   const parentById = new Map(
-    items.filter((item) => item.branchId).map((item) => [item.branchId!, item.parentBranchId]),
+    conversationSteps(spans).flatMap((span) => {
+      const branch = byId.get(conversationBranch(span, byId));
+      if (!branch) return [];
+      const parent = branch.parent_span_id ? byId.get(branch.parent_span_id) : undefined;
+      return [[branch.span_id, parent ? conversationBranch(parent, byId) : undefined] as const];
+    }),
   );
-  const roots = new Set(items.filter((item) => !item.parentBranchId).map((item) => item.branchId));
+  const roots = new Set(
+    [...parentById].flatMap(([id, parent]) => {
+      if (!parent) return [id];
+      return parentById.has(parent) ? [] : [parent];
+    }),
+  );
   const directBranch = (item: ConversationItem, parent?: string): string | undefined => {
     let id = item.branchId;
     const visited = new Set<string>();
     while (id && !visited.has(id)) {
       visited.add(id);
       const ancestor = parentById.get(id);
-      if (parent ? ancestor === parent : roots.has(ancestor)) return id;
+      if (parent ? ancestor === parent : ancestor !== undefined && roots.has(ancestor)) return id;
       id = ancestor;
     }
     return undefined;
@@ -375,15 +389,14 @@ export function groupConversation(items: readonly ConversationItem[]): Conversat
       if (!id || seen.has(id) || ancestors.has(id)) return [];
       seen.add(id);
       const first = items.find((candidate) => candidate.branchId === id);
-      return [
-        { kind: "branch", id, name: first?.agentName || "Subagent", children: build(id, new Set([...ancestors, id])) },
-      ];
+      const name = first?.agentName || byId.get(id)?.name || "Subagent";
+      return [{ kind: "branch", id, name, children: build(id, new Set([...ancestors, id])) }];
     });
   };
   return build();
 }
 
-export function conversationWarnings(details: ReadonlyMap<string, SpanDetail>): string[] {
+export function conversationWarnings(details: ReadonlyMap<string, SpanDetail>, complete: boolean): string[] {
   const warnings = [
     ...claudeCaptureWarnings(details),
     ...[...details.values()].flatMap((detail) =>
@@ -391,6 +404,7 @@ export function conversationWarnings(details: ReadonlyMap<string, SpanDetail>): 
     ),
   ];
   if (
+    complete &&
     ![...details.values()].some((detail) => detail.attributes["event.name"] === "assistant_response") &&
     [...details.values()].some(
       (detail) =>

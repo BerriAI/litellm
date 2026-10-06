@@ -108,17 +108,6 @@ fn tool_output(attributes: &BTreeMap<String, String>, events: &[DecodedEvent]) -
         .to_owned()
 }
 
-fn prompt_message(prompt: &str) -> Value {
-    if prompt.trim_start().starts_with("<task-notification>")
-        && prompt.contains("</task-notification>")
-        && let Some((_, tail)) = prompt.split_once("<summary>")
-        && let Some((summary, _)) = tail.split_once("</summary>")
-    {
-        return json!({"role": "system", "content": summary});
-    }
-    json!({"role": "user", "content": prompt})
-}
-
 fn context_message(context: &str) -> Value {
     let (role, content) = match split_header(context) {
         Some(("USER" | "USER PROMPT", body)) => ("user", body),
@@ -126,11 +115,7 @@ fn context_message(context: &str) -> Value {
         Some((header, body)) if header.starts_with("TOOL RESULT") => ("tool", body),
         _ => ("user", context),
     };
-    if role == "user" {
-        prompt_message(content)
-    } else {
-        json!({"role": role, "content": content})
-    }
+    json!({"role": role, "content": content})
 }
 
 fn user_prompt(attributes: &BTreeMap<String, String>) -> String {
@@ -138,7 +123,7 @@ fn user_prompt(attributes: &BTreeMap<String, String>) -> String {
     if prompt.is_empty() {
         String::new()
     } else {
-        json!([prompt_message(prompt)]).to_string()
+        json!([{"role": "user", "content": prompt}]).to_string()
     }
 }
 

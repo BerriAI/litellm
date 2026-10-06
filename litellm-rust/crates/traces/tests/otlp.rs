@@ -1514,6 +1514,94 @@ fn native_assistant_logs_preserve_visible_messages_without_counting_model_calls(
 }
 
 #[rstest]
+#[case::json(true)]
+#[case::protobuf(false)]
+fn simultaneous_native_tool_logs_keep_distinct_sequence_ids(#[case] json: bool) {
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value::Value};
+    use prost::Message;
+    let mut request = log_request("repl_main_thread");
+    let template = request.resource_logs[0].scope_logs[0].log_records[0].clone();
+    request.resource_logs[0].scope_logs[0].log_records = [1, 2]
+        .into_iter()
+        .map(|sequence| {
+            let mut record = template.clone();
+            record.attributes = [
+                ("event.name", Value::StringValue("tool_result".into())),
+                ("event.sequence", Value::IntValue(sequence)),
+                (
+                    "tool_use_id",
+                    Value::StringValue(format!("call-{sequence}")),
+                ),
+            ]
+            .into_iter()
+            .map(|(key, value)| KeyValue {
+                key: key.into(),
+                value: Some(AnyValue { value: Some(value) }),
+                ..Default::default()
+            })
+            .collect();
+            record
+        })
+        .collect();
+    let bytes = if json {
+        serde_json::to_vec(&request).unwrap()
+    } else {
+        request.encode_to_vec()
+    };
+    let content_type = json.then_some("application/json");
+    let spans = litellm_traces::decode_otlp_logs(&bytes, content_type).unwrap();
+    assert_eq!(spans.len(), 2);
+    assert_ne!(spans[0].span_id, spans[1].span_id);
+    let replayed = litellm_traces::decode_otlp_logs(&bytes, content_type).unwrap();
+    assert_eq!(spans[0].span_id, replayed[0].span_id);
+    assert_eq!(spans[1].span_id, replayed[1].span_id);
+}
+
+#[rstest]
+#[case::boolean_failure(false, true)]
+#[case::boolean_success(true, true)]
+#[case::string_failure(false, false)]
+#[case::string_success(true, false)]
+fn native_tool_log_status_accepts_boolean_and_string_values(
+    #[case] success: bool,
+    #[case] typed: bool,
+) {
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value::Value};
+    use prost::Message;
+    let mut request = log_request("repl_main_thread");
+    request.resource_logs[0].scope_logs[0].log_records[0].attributes = [
+        ("event.name", Value::StringValue("tool_result".into())),
+        ("error", Value::StringValue("Command failed".into())),
+        (
+            "success",
+            if typed {
+                Value::BoolValue(success)
+            } else {
+                Value::StringValue(success.to_string())
+            },
+        ),
+    ]
+    .into_iter()
+    .map(|(key, value)| KeyValue {
+        key: key.into(),
+        value: Some(AnyValue { value: Some(value) }),
+        ..Default::default()
+    })
+    .collect();
+    let binary = litellm_traces::decode_otlp_logs(&request.encode_to_vec(), None).unwrap();
+    let json = litellm_traces::decode_otlp_logs(
+        &serde_json::to_vec(&request).unwrap(),
+        Some("application/json"),
+    )
+    .unwrap();
+    assert_eq!(binary[0].status_code == "STATUS_CODE_ERROR", !success);
+    assert_eq!(json[0].status_code, binary[0].status_code);
+    if !success {
+        assert_eq!(binary[0].status_message, "Command failed");
+    }
+}
+
+#[rstest]
 fn session_capture_joins_native_logs_and_traces_across_turns_without_changing_span_parents() {
     use opentelemetry_proto::tonic::{
         common::v1::{AnyValue, KeyValue, any_value::Value},

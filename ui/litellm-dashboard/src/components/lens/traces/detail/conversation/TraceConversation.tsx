@@ -55,7 +55,7 @@ export function TraceConversation({
   );
   const complete = loadedCount === steps.length;
   const items = buildConversation(trace.spans, details, complete);
-  const warnings = conversationWarnings(details);
+  const warnings = conversationWarnings(details, complete && !trace.next_cursor);
   const multipleAgents = new Set(items.map((item) => item.agentId).filter(Boolean)).size > 1;
   const inlineErrorIds = new Set(items.filter((item) => item.showError).map((item) => item.span.span_id));
   const rootErrors = trace.spans.filter((span) => {
@@ -73,7 +73,11 @@ export function TraceConversation({
             {warning}
           </p>
         ))}
-        <ConversationGroups groups={groupConversation(items)} multipleAgents={multipleAgents} onOpenStep={onOpenStep} />
+        <ConversationGroups
+          groups={groupConversation(items, trace.spans)}
+          multipleAgents={multipleAgents}
+          onOpenStep={onOpenStep}
+        />
         {queries.map(
           (query, index) =>
             query.isError && (

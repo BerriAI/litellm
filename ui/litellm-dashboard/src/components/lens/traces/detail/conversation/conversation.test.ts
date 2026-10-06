@@ -396,11 +396,49 @@ describe("coding sessions", () => {
     expect(new Set(items.filter((item) => !item.parentBranchId).map((item) => item.agentId))).toEqual(
       new Set(["main-session"]),
     );
-    const groups = groupConversation(items);
+    const groups = groupConversation(items, [root, resumed, child, nested]);
     const branch = groups.find((group) => group.kind === "branch");
     expect(branch).toMatchObject({ kind: "branch", id: "child", name: "reader" });
     if (branch?.kind === "branch")
       expect(branch.children.some((group) => group.kind === "branch" && group.id === "nested")).toBe(true);
+  });
+
+  it("shows child conversations when their parent has no recorded messages", () => {
+    const child = { ...root, span_id: "child", parent_span_id: root.span_id, start_offset_ms: 1, name: "reader" };
+    const details = new Map([
+      [root.span_id, detail(root.span_id, [], [])],
+      [child.span_id, detail(child.span_id, "Read the file", "File contents")],
+    ]);
+    const groups = groupConversation(buildConversation([root, child], details, true), [root, child]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ kind: "branch", id: "child", name: "reader" });
+    if (groups[0].kind === "branch") {
+      expect(groups[0].children.flatMap((group) => (group.kind === "item" ? group.item.messages : []))).toEqual([
+        { role: "user", content: "Read the file" },
+        { role: "assistant", content: "File contents" },
+      ]);
+    }
+  });
+
+  it("retains silent intermediate agents in nested branches", () => {
+    const child = { ...root, span_id: "child", parent_span_id: root.span_id, start_offset_ms: 1, name: "reader" };
+    const nested = { ...child, span_id: "nested", parent_span_id: child.span_id, start_offset_ms: 2, name: "checker" };
+    const spans = [root, child, nested];
+    const details = new Map([
+      [root.span_id, detail(root.span_id, [user], [])],
+      [child.span_id, detail(child.span_id, [], [])],
+      [nested.span_id, detail(nested.span_id, "Check the result", "Checked")],
+    ]);
+    const expectedBranch = {
+      kind: "branch",
+      id: child.span_id,
+      name: "reader",
+      children: [expect.objectContaining({ kind: "branch", id: nested.span_id, name: "checker" })],
+    };
+    expect(groupConversation(buildConversation(spans, details, true), spans)).toEqual([
+      expect.objectContaining({ kind: "item" }),
+      expect.objectContaining(expectedBranch),
+    ]);
   });
 
   it("folds native Claude Agent descendants and omits auxiliary suggestions", () => {
@@ -451,7 +489,7 @@ describe("coding sessions", () => {
     ]);
     const items = buildConversation([root, agent, execution, response, suggestion], details, true);
     expect(items.flatMap((item) => item.messages).map((message) => message.content)).not.toContain("HIDDEN SUGGESTION");
-    expect(groupConversation(items)).toContainEqual(
+    expect(groupConversation(items, [root, agent, execution, response, suggestion])).toContainEqual(
       expect.objectContaining({ kind: "branch", id: "agent-tool", name: "Reader" }),
     );
     expect(items.find((item) => item.span.span_id === response.span_id)?.agentId).toBe("agent-tool");
@@ -520,11 +558,17 @@ describe("coding sessions", () => {
             },
           ],
         ]),
+        true,
       ),
     ).toEqual(["Export truncated"]);
   });
 
-  it("positions streamed commentary before tools when the native completion identifies one request", () => {
+  it.each([
+    { recorded: "repl_main_thread", source: "repl_main_thread" },
+    { recorded: "agent", source: "agent:builtin:general-purpose" },
+    { recorded: "agent.builtin:general-purpose", source: "agent:builtin:general-purpose" },
+    { recorded: "agent.custom:reader", source: "agent:custom:reader" },
+  ])("positions $source commentary before tools with native source $recorded", ({ recorded, source }) => {
     const llm = {
       ...root,
       span_id: "llm",
@@ -542,7 +586,7 @@ describe("coding sessions", () => {
         llm.span_id,
         {
           ...detail(llm.span_id, [], []),
-          attributes: { query_source_safe: "repl_main_thread", first_content_ms: "2" },
+          attributes: { query_source_safe: recorded, first_content_ms: "2" },
         },
       ],
       [tool.span_id, detail(tool.span_id, {}, "File contents")],
@@ -550,7 +594,7 @@ describe("coding sessions", () => {
         response.span_id,
         {
           ...detail(response.span_id, [], "Checking"),
-          attributes: { "event.name": "assistant_response", query_source: "repl_main_thread" },
+          attributes: { "event.name": "assistant_response", query_source: source },
         },
       ],
     ]);
@@ -565,8 +609,9 @@ describe("coding sessions", () => {
     const details = new Map([
       ["llm", { ...detail("llm", [], []), output: "", attributes: { "span.type": "llm_request" } }],
     ]);
-    expect(conversationWarnings(details)).toHaveLength(1);
+    expect(conversationWarnings(details, false)).toEqual([]);
+    expect(conversationWarnings(details, true)).toHaveLength(1);
     details.set("reply", { ...detail("reply", [], "Hello"), attributes: { "event.name": "assistant_response" } });
-    expect(conversationWarnings(details)).toEqual([]);
+    expect(conversationWarnings(details, true)).toEqual([]);
   });
 });
