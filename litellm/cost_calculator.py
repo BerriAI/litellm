@@ -721,6 +721,7 @@ def cost_per_token(
             usage=usage_block,
             response_time_ms=response_time_ms,
             service_tier=service_tier,
+            request_model=request_model,
         )
     elif custom_llm_provider == "gemini":
         return gemini_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
@@ -1814,6 +1815,7 @@ def completion_cost(
                     data_residency=data_residency,
                     vertex_location=vertex_location,
                     response=completion_response,
+                    request_model=request_model_for_cost if custom_llm_provider == "azure" else None,
                     custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                 )
 
