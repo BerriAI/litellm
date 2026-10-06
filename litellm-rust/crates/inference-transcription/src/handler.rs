@@ -6,8 +6,7 @@ use serde_json::Value;
 
 use super::Error;
 use crate::{
-    audio_transcription::types::ProviderAudioTranscriptionRequest,
-    constants::AUDIO_TRANSCRIPTION_TIMEOUT_SECS,
+    constants::AUDIO_TRANSCRIPTION_TIMEOUT_SECS, types::ProviderAudioTranscriptionRequest,
 };
 
 pub async fn execute_audio_transcription_provider_call(
@@ -17,7 +16,7 @@ pub async fn execute_audio_transcription_provider_call(
 ) -> Result<Value, Error> {
     let env_lookup = |key: &str| request.secrets.get(key);
     let authenticated = resolve_auth(auth, request.environment.clone(), &env_lookup).await?;
-    let outbound = crate::outbound::outbound_request(
+    let outbound = litellm_inference::outbound::outbound_request(
         authenticated,
         request.url.clone(),
         &request.body,
@@ -27,7 +26,7 @@ pub async fn execute_audio_transcription_provider_call(
                 .unwrap_or(Duration::from_secs(AUDIO_TRANSCRIPTION_TIMEOUT_SECS)),
         ),
     )?;
-    let response = crate::outbound::send(outbound, http)
+    let response = litellm_inference::outbound::send(outbound, http)
         .await
         .map_err(|error| {
             Error::Transport(litellm_http::transport::Error::Network(error.to_string()))

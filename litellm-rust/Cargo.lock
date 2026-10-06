@@ -3836,6 +3836,7 @@ dependencies = [
  "litellm-host-http",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-router",
@@ -4040,6 +4041,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-inference-transcription"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-auth",
+ "litellm-core-utils",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-llms",
+ "litellm-secrets",
+ "litellm-tracing",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-llms"
 version = "0.1.0"
 dependencies = [
@@ -4122,6 +4142,7 @@ dependencies = [
  "litellm-host-python",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
  "litellm-secrets",

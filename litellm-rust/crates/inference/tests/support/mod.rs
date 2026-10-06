@@ -48,16 +48,6 @@ pub fn responses_route(
     )
 }
 
-pub fn audio_transcription_route() -> litellm_inference::audio_transcription::AudioTranscriptionRoute
-{
-    let resources = resources();
-    litellm_inference::audio_transcription::AudioTranscriptionRoute::new(
-        provider_http(&resources, &http_config()),
-        resources.auth,
-        no_secrets(),
-    )
-}
-
 pub fn build_ocr_route(
     resources: &litellm_inference::resources::CoreResources,
     config: &HttpClientConfig,

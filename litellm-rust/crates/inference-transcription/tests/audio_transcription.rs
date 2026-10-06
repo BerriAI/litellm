@@ -1,4 +1,4 @@
-use litellm_inference::audio_transcription::{Error, types::AudioTranscriptionRequest};
+use litellm_inference_transcription::{Error, types::AudioTranscriptionRequest};
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
 use wiremock::ResponseTemplate;

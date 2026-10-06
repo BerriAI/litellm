@@ -9,7 +9,5 @@ pub(crate) const MESSAGES_TIMEOUT_SECS: u64 = 600;
 /// seconds. Mirrors the Python chat completions default.
 pub(crate) const CHAT_COMPLETIONS_TIMEOUT_SECS: u64 = 600;
 
-pub(crate) const AUDIO_TRANSCRIPTION_TIMEOUT_SECS: u64 = 600;
-
 /// `object` field every non-streaming chat completion response carries.
 pub const CHAT_COMPLETION_OBJECT: &str = "chat.completion";
