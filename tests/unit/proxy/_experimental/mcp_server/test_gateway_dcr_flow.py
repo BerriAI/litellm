@@ -712,6 +712,27 @@ async def test_single_use_guard_fails_closed_when_redis_errors():
     assert await guard.claim("jti-fault", 60) == "unavailable"  # fail closed, not a fallback count of 1
 
 
+@pytest.mark.asyncio
+async def test_single_use_guard_peek_fails_closed_when_redis_errors():
+    """The peek that gates a refresh on its chain's revocation marker must read the Redis client
+    itself: the cache wrapper's get swallows a fault into ``None``, which would make a revoked chain
+    look unclaimed for exactly as long as Redis is down."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import _SingleUseGuard
+
+    cache = DualCache()
+    cache.redis_cache = MagicMock()
+    cache.redis_cache.async_get_cache = AsyncMock(return_value=None)
+    cache.redis_cache.init_async_client.return_value.get = AsyncMock(side_effect=ConnectionError("redis down"))
+
+    guard = _SingleUseGuard(cache)
+    assert await guard.peek("family-fault") == "unavailable"
+
+    cache.redis_cache.init_async_client.return_value.get = AsyncMock(return_value=b"1")
+    assert await guard.peek("family-fault") == "claimed"
+
+
 LOOPBACK_REDIRECT_URI = "http://localhost:3118/callback"
 
 
@@ -1850,13 +1871,14 @@ async def test_revoke_burns_the_refresh_token_and_answers_200_for_dead_or_unknow
     assert garbage.status_code == 200
 
 
-def _redis_that(async_increment):
+def _redis_that(async_increment, get=None):
     from unittest.mock import AsyncMock, MagicMock
 
     cache = DualCache()
     cache.redis_cache = MagicMock()
     cache.redis_cache.async_increment = async_increment
-    cache.redis_cache.async_get_cache = AsyncMock(return_value=None)
+    cache.redis_cache.init_async_client.return_value.get = get or AsyncMock(return_value=None)
+    cache.redis_cache.async_get_cache = AsyncMock(side_effect=AssertionError("peek must read the client, not the wrapper"))
     cache.async_increment_cache = AsyncMock(side_effect=AssertionError("must not fall back to in-memory"))
     return cache
 
@@ -1938,6 +1960,36 @@ async def test_refresh_answers_503_without_burning_the_token_while_redis_is_down
     )
     assert replayed.status_code == 400
     assert json.loads(replayed.body)["error"] == "invalid_grant"
+
+
+@pytest.mark.asyncio
+async def test_refresh_of_a_rotated_token_answers_503_before_minting_while_redis_cannot_be_read():
+    """A rotated token's chain marker is read before anything is minted or claimed; a Redis read fault
+    is a 503, never a pass: the token stays unburned and unminted until Redis answers."""
+    from unittest.mock import AsyncMock
+
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    issued = DualCache()
+    payload = json.loads(
+        (await _redeem_native(await _native_code(client_id, cache=issued), client_id, _Minter(), cache=issued)).body
+    )
+    rotated = json.loads(
+        (await _refresh_native(payload["refresh_token"], client_id, _Minter(), _redis_that(AsyncMock(return_value=1)))).body
+    )["refresh_token"]
+
+    minter = _Minter()
+    claim = AsyncMock(return_value=1)
+    unreadable = await _refresh_native(
+        rotated, client_id, minter, _redis_that(claim, get=AsyncMock(side_effect=ConnectionError("redis down")))
+    )
+    assert unreadable.status_code == 503
+    assert json.loads(unreadable.body)["error"] == "temporarily_unavailable"
+    assert minter.calls == []
+    assert claim.await_count == 0
+
+    readable = await _refresh_native(rotated, client_id, _Minter(), _redis_that(AsyncMock(return_value=1)))
+    assert readable.status_code == 200
+    assert json.loads(readable.body)["refresh_token"] != rotated
 
 
 @pytest.mark.asyncio
@@ -2195,6 +2247,21 @@ async def test_introspect_fails_closed_on_dead_user_and_503s_on_outage():
 
     status, body = await _introspect(minted.token.get_secret_value(), master_key=None)
     assert (status, body["error"]) == (500, "server_error")
+
+
+@pytest.mark.asyncio
+async def test_introspect_503s_while_the_single_use_record_cannot_be_read():
+    """A token whose chain may have been revoked is never reported active on a Redis read fault."""
+    from unittest.mock import AsyncMock
+
+    keys, now, principal = _introspection_fixtures()
+    minted = mint_session_refresh_token(principal, keys, now)
+    unreadable = _redis_that(AsyncMock(return_value=1), get=AsyncMock(side_effect=ConnectionError("redis down")))
+    status, body = await _introspect(minted.token.get_secret_value(), cache=unreadable)
+    assert (status, body["error"]) == (503, "temporarily_unavailable")
+
+    status, body = await _introspect(minted.token.get_secret_value(), cache=_redis_that(AsyncMock(return_value=1)))
+    assert (status, body["active"]) == (200, True)
 
 
 @pytest.mark.asyncio

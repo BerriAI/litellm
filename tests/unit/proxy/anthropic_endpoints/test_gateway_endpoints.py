@@ -94,7 +94,18 @@ class _SharedRedisFake:
         return incremented
 
     async def async_get_cache(self, key: str, **kwargs: object) -> object:
-        return self.counters.get(key, self.values.get(key))
+        return self.values.get(key)
+
+    def init_async_client(self) -> "_SharedRedisClientFake":
+        return _SharedRedisClientFake(self)
+
+
+class _SharedRedisClientFake:
+    def __init__(self, store: _SharedRedisFake) -> None:
+        self._store = store
+
+    async def get(self, key: str) -> object:
+        return self._store.counters.get(key, self._store.values.get(key))
 
 
 def _replica(redis: _SharedRedisFake) -> DualCache:

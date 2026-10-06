@@ -1091,13 +1091,15 @@ class _SingleUseGuard:
     async def peek(self, key: str) -> Literal["unclaimed", "claimed", "unavailable"]:
         """Read-only view of a single-use marker, resolved against the same shared authority as
         :meth:`claim` so introspection observes exactly the record redemption and revocation wrote.
-        A backend fault is ``"unavailable"`` (fail closed) rather than a guess either way."""
+        A backend fault is ``"unavailable"`` (fail closed) rather than a guess either way, which is why
+        the read goes to the Redis client itself: the cache wrapper's ``async_get_cache`` turns a fault
+        into ``None``, and ``None`` here would pass as unclaimed."""
         from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # circular import at module load
 
         redis_cache: Final = redis_usage_cache or getattr(self._cache, "redis_cache", None)
         if redis_cache is not None:
             try:
-                value = await redis_cache.async_get_cache(key)
+                value = await redis_cache.init_async_client().get(key)
             except Exception as e:  # noqa: BLE001  # ANY Redis fault fails the read closed
                 verbose_logger.warning("mcp gateway single-use peek: shared cache backend unavailable: %s", e)
                 return "unavailable"
