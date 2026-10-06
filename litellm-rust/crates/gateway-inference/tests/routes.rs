@@ -9,10 +9,8 @@ use axum::{
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
 };
-use litellm_inference::{
-    chat_completions::{ChatCompletionsRoute, types::ChatCompletionsRequest},
-    resources::CoreResources,
-};
+use litellm_inference::resources::CoreResources;
+use litellm_inference_chat::{ChatCompletionsRoute, types::ChatCompletionsRequest};
 use rstest::rstest;
 use serde_json::{Value, json};
 use tower::ServiceExt;

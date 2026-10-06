@@ -8,31 +8,19 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use litellm_http::HttpClientConfig;
-use litellm_secrets::source::SecretSource;
+use litellm_inference::test_support::{http_config, no_secrets, provider_http, resources};
 use serde_json::Value;
 use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
 
 /// A port nothing listens on, for calls that must fail before any request is sent.
 pub const UNREACHABLE_BASE: &str = "http://127.0.0.1:1";
 
-pub fn build_ocr_route(
-    resources: &litellm_inference::resources::CoreResources,
-    config: &HttpClientConfig,
-    url_policy: litellm_http::media::UrlPolicy,
-    settings: litellm_llms::base_llm::ocr::settings::OcrSettings,
-    secrets: Arc<dyn SecretSource>,
-) -> litellm_inference::ocr::OcrRoute {
-    litellm_inference::ocr::OcrRoute::new(
-        litellm_llms::base_llm::ocr::handler::OcrClient::new(
-            &resources.pool,
-            config,
-            url_policy,
-            resources.auth.clone(),
-            settings,
-            secrets,
-        )
-        .unwrap(),
+pub fn chat_completions_route() -> litellm_inference_chat::ChatCompletionsRoute {
+    let resources = resources();
+    litellm_inference_chat::ChatCompletionsRoute::new(
+        provider_http(&resources, &http_config()),
+        resources.auth,
+        no_secrets(),
     )
 }
 

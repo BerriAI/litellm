@@ -12,10 +12,7 @@ use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use serde_json::Value;
 
 use super::Error;
-use crate::{
-    chat_completions::types::ProviderChatCompletionsRequest,
-    constants::CHAT_COMPLETIONS_TIMEOUT_SECS,
-};
+use crate::{constants::CHAT_COMPLETIONS_TIMEOUT_SECS, types::ProviderChatCompletionsRequest};
 
 pub(super) async fn execute(
     http: &Client,
@@ -61,9 +58,11 @@ pub(super) async fn execute(
         )
         .await?;
     let cache = cache.filter(|_| authenticated.signer.is_none());
-    let cache_request =
-        crate::caching::CacheRequest::from_wire(identity, cache.as_ref().map(|_| &wire));
-    crate::caching::execute_unary::<super::route::ChatCompletions, _, _>(
+    let cache_request = litellm_inference::caching::CacheRequest::from_wire(
+        identity,
+        cache.as_ref().map(|_| &wire),
+    );
+    litellm_inference::caching::execute_unary::<super::route::ChatCompletions, _, _>(
         cache_request,
         cache.as_ref().map(|cache| cache.service.clone()),
         cache.as_ref().map(|cache| cache.options(cache_options)),
@@ -80,16 +79,18 @@ pub(super) async fn execute(
                 timeout,
             )?;
 
-            let response = crate::outbound::send(outbound, http).await.map_err(|err| {
-                // Failing to establish the connection means the request never went out,
-                // so the host can still serve it. Everything else here, a timeout
-                // above all, may have reached the provider and been answered.
-                if err.is_connect() || err.is_builder() {
-                    Error::Transport(litellm_http::transport::Error::Connect(err.to_string()))
-                } else {
-                    Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
-                }
-            })?;
+            let response = litellm_inference::outbound::send(outbound, http)
+                .await
+                .map_err(|err| {
+                    // Failing to establish the connection means the request never went out,
+                    // so the host can still serve it. Everything else here, a timeout
+                    // above all, may have reached the provider and been answered.
+                    if err.is_connect() || err.is_builder() {
+                        Error::Transport(litellm_http::transport::Error::Connect(err.to_string()))
+                    } else {
+                        Error::Transport(litellm_http::transport::Error::Network(err.to_string()))
+                    }
+                })?;
 
             let status = response.status();
             let text = response.text().await.map_err(|err| {
@@ -151,7 +152,7 @@ pub(super) fn outbound_request(
     body: &Value,
     timeout: Option<Duration>,
 ) -> Result<OutboundRequest, Error> {
-    crate::outbound::outbound_request(
+    litellm_inference::outbound::outbound_request(
         authenticated,
         url,
         body,
@@ -176,7 +177,7 @@ mod tests {
     use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::any};
 
     use super::*;
-    use crate::chat_completions::{
+    use crate::{
         prepare::{prepare_provider_request, resolve_request},
         types::ChatCompletionsRequest,
     };
