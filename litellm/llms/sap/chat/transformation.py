@@ -91,7 +91,7 @@ def _fold_message_cache_control(
 
 
 def _message_role_mapping(role: str) -> type[ChatMessage]:  # returns the SAP message model class, not an instance
-    return {  # mutable-ok: ephemeral dispatch dict; not stored
+    return {
         "user": SAPUserMessage,
         "assistant": SAPAssistantMessage,
         "tool": SAPToolChatMessage,
