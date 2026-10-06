@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 import pytest
 import yaml
-from integration._support.client import Gateway, eventually, gateway_from_environment
+from integration._support.client import Gateway, eventually, gateway_from_environment, object_value, string_value
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import OpenAI
@@ -121,8 +121,24 @@ def _config(wire: Wire, litellm_settings: dict[str, JsonValue]) -> dict[str, Jso
     }
 
 
-def _decoded(unified_id: str) -> str:
-    return base64.urlsafe_b64decode(unified_id + "=" * (-len(unified_id) % 4)).decode()
+def _unified_job_id(model_id: str, job_id: str) -> str:
+    return (
+        base64.urlsafe_b64encode(f"litellm_proxy;model_id:{model_id};generic_response_id:{job_id}".encode())
+        .decode()
+        .rstrip("=")
+    )
+
+
+def _deployment_id(proxy: Gateway) -> str:
+    listed: Final = proxy.get("/v1/model/info")["data"]
+    assert isinstance(listed, list), listed
+    ids: Final = [
+        string_value(object_value(object_value(entry)["model_info"])["id"])
+        for entry in listed
+        if object_value(entry)["model_name"] == MANAGED_MODEL
+    ]
+    assert len(ids) == 1, listed
+    return ids[0]
 
 
 def _targets(requests: tuple[Request, ...]) -> list[tuple[str, str, str]]:
@@ -134,10 +150,14 @@ class Rig:
     proxy: Gateway
     wire: Wire
     owner: str
+    owner_user: str
     intruder: str
     intruder_user: str
     managed_file: str
     managed_job: str
+    created_text: str
+    deployment_id: str
+    provider_job: str
 
     def sdk(self, key: str) -> OpenAI:
         return OpenAI(base_url=f"{str(self.proxy.client.base_url).rstrip('/')}/v1", api_key=key, max_retries=0)
@@ -152,7 +172,9 @@ def _rig(directory: Path, litellm_settings: dict[str, JsonValue], file_id: str, 
             eventually(
                 lambda: _targets(wire.drain()), lambda seen: seen == [("GET", "/v1/models", f"Bearer {DEPLOYMENT_KEY}")]
             )
-            owner: Final = scenario.key(user_id=scenario.user())
+            deployment_id: Final = _deployment_id(proxy)
+            owner_user: Final = scenario.user()
+            owner: Final = scenario.key(user_id=owner_user)
             intruder_user: Final = scenario.user()
             intruder: Final = scenario.key(user_id=intruder_user)
             with OpenAI(
@@ -168,16 +190,23 @@ def _rig(directory: Path, litellm_settings: dict[str, JsonValue], file_id: str, 
                 created: Final = client.fine_tuning.jobs.with_raw_response.create(
                     model=MANAGED_MODEL, training_file=managed_file
                 )
-                assert created.status_code == 200, created.text
-            managed_job: Final = Job.model_validate_json(created.text).id
-            assert re.fullmatch(
-                rf"litellm_proxy;model_id:[0-9a-f]{{64}};generic_response_id:{job_id}", _decoded(managed_job)
-            ), created.text
             assert _targets(wire.drain()) == [
                 ("POST", "/v1/files", f"Bearer {DEPLOYMENT_KEY}"),
                 ("POST", "/v1/fine_tuning/jobs", f"Bearer {DEPLOYMENT_KEY}"),
             ]
-            yield Rig(proxy, wire, owner, intruder, intruder_user, managed_file, managed_job)
+            yield Rig(
+                proxy,
+                wire,
+                owner,
+                owner_user,
+                intruder,
+                intruder_user,
+                managed_file,
+                Job.model_validate_json(created.text).id,
+                created.text,
+                deployment_id,
+                job_id,
+            )
             assert wire.drain() == ()
 
 
@@ -202,6 +231,17 @@ def _refused(response: httpx.Response, wire: Wire, detail: str) -> None:
     assert response.status_code == 403, response.text
     assert ProxyError.model_validate_json(response.text).error["message"] == detail, response.text
     assert reached == []
+
+
+@pytest.mark.parametrize("fixture", ["rig", "default_rig"])
+def test_owner_create_returns_the_unified_job_id(fixture: str, request: pytest.FixtureRequest) -> None:
+    built: Final[Rig] = request.getfixturevalue(fixture)
+    assert Job.model_validate_json(built.created_text) == Job(
+        id=_unified_job_id(built.deployment_id, built.provider_job),
+        object="fine_tuning.job",
+        status="validating_files",
+        model="gpt-4.1",
+    ), built.created_text
 
 
 def test_another_key_cannot_create_with_or_cancel_the_owners_managed_ids(rig: Rig) -> None:
@@ -272,6 +312,26 @@ def test_raw_provider_ids_are_refused_when_managed_files_are_required(
         f"Use the LiteLLM managed {kind} id returned when the {kind} was created."
     ), response.text
     assert reached == []
+
+
+def test_keys_granted_the_retrieve_route_get_the_owner_check_and_the_decoded_job_id(rig: Rig) -> None:
+    with rig.proxy.scenario() as scenario:
+        owner: Final = scenario.key(user_id=rig.owner_user, allowed_routes=["/v1/fine_tuning/jobs"])
+        intruder: Final = scenario.key(user_id=rig.intruder_user, allowed_routes=["/v1/fine_tuning/jobs"])
+        _refused(
+            rig.proxy.request("GET", f"/v1/fine_tuning/jobs/{rig.managed_job}", key=intruder),
+            rig.wire,
+            "The caller does not have access to this managed fine-tuning job id.",
+        )
+        with rig.sdk(owner) as client:
+            retrieved: Final = client.fine_tuning.jobs.with_raw_response.retrieve(rig.managed_job)
+        assert [(r.method, r.target, r.headers["authorization"], r.body) for r in rig.wire.drain()] == [
+            ("GET", f"/v1/fine_tuning/jobs/{PROVIDER_JOB}", f"Bearer {DEPLOYMENT_KEY}", b"")
+        ]
+        assert retrieved.status_code == 200, retrieved.text
+        assert Job.model_validate_json(retrieved.text) == Job(
+            id=rig.managed_job, object="fine_tuning.job", status="running", model="gpt-4.1"
+        ), retrieved.text
 
 
 def test_owner_retrieve_reaches_the_provider_with_the_decoded_job_id(rig: Rig) -> None:
