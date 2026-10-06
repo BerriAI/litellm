@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 
 class SpendLogRecord(TypedDict):
@@ -8,6 +8,7 @@ class SpendLogRecord(TypedDict):
 
     request_id: ReadOnly[str]
     response_id: ReadOnly[str]
+    provider_request_id: NotRequired[ReadOnly[str]]
     litellm_call_id: ReadOnly[str]
     call_type: ReadOnly[str]
     api_key: ReadOnly[str]
