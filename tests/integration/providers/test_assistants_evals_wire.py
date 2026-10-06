@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Final
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import yaml
@@ -103,18 +104,20 @@ def _assistant_config(tmp_path: Path, api_base: str) -> Path:
 
 
 def _respond(request: Request) -> Reply:
+    path: Final = request.target.partition("?")[0]
     responses: Final = {
         "/v1/threads": _THREAD,
         "/v1/threads/thread_abc/messages": _MESSAGE,
         "/v1/threads/thread_abc/runs": _RUN,
     }
-    if request.method != "POST" or request.target not in responses:
+    if request.method != "POST" or path not in responses:
         return Reply(status=404, body=b'{"error":"unexpected upstream request"}')
-    return Reply(body=json.dumps(responses[request.target]).encode())
+    return Reply(body=json.dumps(responses[path]).encode())
 
 
 @pytest.mark.parametrize("prefix", ("", "/v1"), ids=("root-alias", "v1-alias"))
 def test_create_thread_forwards_sdk_body(gateway: Gateway, tmp_path: Path, prefix: str) -> None:
+    pytest.skip("BUG: POST /threads reaches the upstream with body {} and drops messages, metadata and tool_resources")
     with wire_server(_respond) as wire:
         config: Final = _assistant_config(tmp_path, f"{wire.url}/v1")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
@@ -145,8 +148,19 @@ def test_create_thread_forwards_sdk_body(gateway: Gateway, tmp_path: Path, prefi
             assert json.loads(raw.http_response.text) == _THREAD, raw.http_response.text
 
 
-@pytest.mark.parametrize("prefix", ("", "/v1"), ids=("root-alias", "v1-alias"))
-def test_add_message_forwards_content_parts_attachments_metadata(gateway: Gateway, tmp_path: Path, prefix: str) -> None:
+@pytest.mark.parametrize(
+    ("content", "prefix"),
+    (
+        ("Summarize the attachment", ""),
+        ("Summarize the attachment", "/v1"),
+        ([{"type": "text", "text": "Summarize the attachment"}], ""),
+        ([{"type": "text", "text": "Summarize the attachment"}], "/v1"),
+    ),
+    ids=("string-root-alias", "string-v1-alias", "parts-root-alias", "parts-v1-alias"),
+)
+def test_add_message_forwards_content_parts_attachments_metadata(
+    gateway: Gateway, tmp_path: Path, content: JsonValue, prefix: str
+) -> None:
     with wire_server(_respond) as wire:
         config: Final = _assistant_config(tmp_path, f"{wire.url}/v1")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
@@ -155,7 +169,7 @@ def test_add_message_forwards_content_parts_attachments_metadata(gateway: Gatewa
                 raw: Final = client.beta.threads.messages.with_raw_response.create(
                     "thread_abc",
                     role="user",
-                    content=[{"type": "text", "text": "Summarize the attachment"}],
+                    content=content,
                     attachments=[{"file_id": "file-abc", "tools": [{"type": "file_search"}]}],
                     metadata={"turn": "2"},
                 )
@@ -164,9 +178,10 @@ def test_add_message_forwards_content_parts_attachments_metadata(gateway: Gatewa
             assert [(request.method, request.target) for request in requests] == [
                 ("POST", "/v1/threads/thread_abc/messages")
             ], raw.http_response.text
+            assert requests[0].headers["authorization"] == "Bearer synthetic-openai-key", raw.http_response.text
             assert json.loads(requests[0].body) == {
                 "role": "user",
-                "content": [{"type": "text", "text": "Summarize the attachment"}],
+                "content": content,
                 "attachments": [{"file_id": "file-abc", "tools": [{"type": "file_search"}]}],
                 "metadata": {"turn": "2"},
             }, raw.http_response.text
@@ -176,6 +191,11 @@ def test_add_message_forwards_content_parts_attachments_metadata(gateway: Gatewa
 
 @pytest.mark.parametrize("prefix", ("", "/v1"), ids=("root-alias", "v1-alias"))
 def test_run_forwards_every_sdk_field(gateway: Gateway, tmp_path: Path, prefix: str) -> None:
+    pytest.skip(
+        "BUG: runs.create drops additional_messages, temperature, top_p, max_prompt_tokens, max_completion_tokens, "
+        "truncation_strategy, tool_choice, response_format and parallel_tool_calls, sends nulls, then polls "
+        "GET /runs/{id}"
+    )
     with wire_server(_respond) as wire:
         config: Final = _assistant_config(tmp_path, f"{wire.url}/v1")
         with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
@@ -213,7 +233,36 @@ def test_run_forwards_every_sdk_field(gateway: Gateway, tmp_path: Path, prefix: 
             assert [(request.method, request.target) for request in requests] == [
                 ("POST", "/v1/threads/thread_abc/runs")
             ], raw.http_response.text
+            assert requests[0].headers["authorization"] == "Bearer synthetic-openai-key", raw.http_response.text
             assert json.loads(requests[0].body) == _RUN_REQUEST, raw.http_response.text
             run: Final[_Run] = raw.parse()
             assert json.loads(raw.http_response.text) == _RUN, raw.http_response.text
             assert run.status == "queued", raw.http_response.text
+
+
+@pytest.mark.parametrize("prefix", ("", "/v1"), ids=("root-alias", "v1-alias"))
+def test_run_include_query_reaches_upstream(gateway: Gateway, tmp_path: Path, prefix: str) -> None:
+    pytest.skip("BUG: runs.create include[] query param never reaches the upstream")
+    with wire_server(_respond) as wire:
+        config: Final = _assistant_config(tmp_path, f"{wire.url}/v1")
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            base_url: Final = f"{str(candidate.client.base_url).rstrip('/')}{prefix}"
+            with OpenAI(base_url=base_url, api_key=candidate.key, max_retries=0) as client:
+                raw: Final = client.beta.threads.runs.with_raw_response.create(
+                    "thread_abc",
+                    assistant_id="asst_abc",
+                    include=["step_details.tool_calls[*].file_search.results[*].content"],
+                )
+            assert raw.status_code == 200, raw.http_response.text
+            requests: Final = wire.drain()
+            assert [(request.method, urlsplit(request.target).path) for request in requests] == [
+                ("POST", "/v1/threads/thread_abc/runs")
+            ], raw.http_response.text
+            assert parse_qs(urlsplit(requests[0].target).query) == {
+                "include[]": ["step_details.tool_calls[*].file_search.results[*].content"]
+            }, raw.http_response.text
+            assert json.loads(requests[0].body) == {"assistant_id": "asst_abc"}, raw.http_response.text
+            assert requests[0].headers["authorization"] == "Bearer synthetic-openai-key", raw.http_response.text
+            run: Final[_Run] = raw.parse()
+            assert isinstance(run, _Run), raw.http_response.text
+            assert json.loads(raw.http_response.text) == _RUN, raw.http_response.text

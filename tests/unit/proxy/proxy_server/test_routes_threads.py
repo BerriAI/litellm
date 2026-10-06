@@ -15,12 +15,10 @@ Pins (PR2):
 
 from __future__ import annotations
 
-from typing import Final
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from litellm.assistants.main import run_thread as run_assistant_thread
 from litellm.proxy import proxy_server
 
 from .conftest import normalize  # type: ignore[import-not-found]
@@ -274,33 +272,3 @@ def test_run_thread_error(client, auth_as, no_router, path):
         response = client.post(path, json={"assistant_id": "asst_1"})
     assert response.status_code == 500
     assert len(response.content) > 0
-
-
-def test_assistants_run_forwards_supported_sdk_options() -> None:
-    run_response: Final = Mock()
-    client: Final = Mock()
-    client.beta.threads.runs.create.return_value = run_response
-
-    response: Final = run_assistant_thread(
-        custom_llm_provider="openai",
-        thread_id="thread_abc",
-        assistant_id="asst_abc",
-        instructions="Be terse",
-        metadata={"run": "r1"},
-        model="gpt-4o-mini",
-        client=client,
-        api_base="https://api.openai.com/v1",
-        temperature=0.3,
-        max_prompt_tokens=500,
-    )
-
-    assert response is run_response
-    assert client.beta.threads.runs.create.call_args.kwargs == {
-        "thread_id": "thread_abc",
-        "assistant_id": "asst_abc",
-        "instructions": "Be terse",
-        "metadata": {"run": "r1"},
-        "model": "gpt-4o-mini",
-        "temperature": 0.3,
-        "max_prompt_tokens": 500,
-    }

@@ -169,8 +169,6 @@ def create_eval(
         }
         if name is not None:
             create_request["name"] = name
-        if metadata is not None:
-            create_request["metadata"] = metadata
 
         # Merge extra_body if provided
         if extra_body:
@@ -685,8 +683,45 @@ def update_eval(
         if name is not None:
             update_request["name"] = name
 
+        # Filter metadata to exclude internal LiteLLM fields
         if metadata is not None:
-            update_request["metadata"] = metadata
+            # List of internal LiteLLM metadata keys that should NOT be sent to OpenAI
+            internal_keys: Final = {
+                "headers",
+                "requester_metadata",
+                "user_api_key_hash",
+                "user_api_key_alias",
+                "user_api_key_spend",
+                "user_api_key_max_budget",
+                "user_api_key_team_id",
+                "user_api_key_user_id",
+                "user_api_key_org_id",
+                "user_api_key_team_alias",
+                "user_api_key_end_user_id",
+                "user_api_key_user_email",
+                "user_api_key_request_route",
+                "user_api_key_budget_reset_at",
+                "user_api_key_auth_metadata",
+                "user_api_key",
+                "user_api_end_user_max_budget",
+                "user_api_key_auth",
+                "litellm_api_version",
+                "global_max_parallel_requests",
+                "user_api_key_team_max_budget",
+                "user_api_key_team_spend",
+                "user_api_key_model_max_budget",
+                "user_api_key_user_spend",
+                "user_api_key_user_max_budget",
+                "user_api_key_metadata",
+                "endpoint",
+                "litellm_parent_otel_span",
+                "requester_ip_address",
+                "user_agent",
+            }
+            # Only include user-provided metadata keys
+            filtered_metadata: Final = {k: v for k, v in metadata.items() if k not in internal_keys}
+            if filtered_metadata:  # Only add if there's user metadata
+                update_request["metadata"] = filtered_metadata
 
         # Merge extra_body if provided
         if extra_body:
@@ -1183,8 +1218,8 @@ def create_run(
         }
         if name is not None:
             create_request["name"] = name
-        if metadata is not None:
-            create_request["metadata"] = metadata
+        # if metadata is not None:
+        #     create_request["metadata"] = metadata
 
         # Merge extra_body if provided
         if extra_body:

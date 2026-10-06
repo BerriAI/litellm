@@ -1,7 +1,6 @@
 import time
 import types
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 import httpx
@@ -19,7 +18,6 @@ from openai._legacy_response import LegacyAPIResponse
 from openai._types import RequestOptions
 from openai.types import CreateEmbeddingResponse
 from openai.types.beta.assistant_deleted import AssistantDeleted
-from openai.types.beta.threads.run_create_params import RunCreateParamsBase
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import overload
@@ -65,16 +63,6 @@ from .workload_identity import resolve_openai_workload_identity_config
 
 openaiOSeriesConfig: Final = OpenAIOSeriesConfig()
 openAIGPT5Config: Final = OpenAIGPT5Config()
-
-
-def _present(**values: object) -> RunCreateParamsBase:
-    return cast(RunCreateParamsBase, {name: value for name, value in values.items() if value is not None})
-
-
-def _serialize_thread_tool_resources(tool_resources: BaseModel | None) -> object | None:
-    if tool_resources is None:
-        return None
-    return tool_resources.model_dump(mode="json")
 
 
 class MistralEmbeddingConfig:
@@ -2768,7 +2756,6 @@ class OpenAIAssistantsAPI(BaseLLM):
         organization: str | None,
         client: AsyncOpenAI | None,
         messages: Iterable[OpenAICreateThreadParamsMessage] | None,
-        tool_resources: OpenAICreateThreadParamsToolResources | None = None,
     ) -> Thread:
         openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
@@ -2784,8 +2771,6 @@ class OpenAIAssistantsAPI(BaseLLM):
             data["messages"] = messages
         if metadata is not None:
             data["metadata"] = metadata
-        if tool_resources is not None:
-            data["tool_resources"] = tool_resources
 
         message_thread: Final = await openai_client.beta.threads.create(**data)
 
@@ -2794,7 +2779,6 @@ class OpenAIAssistantsAPI(BaseLLM):
             created_at=message_thread.created_at,
             metadata=message_thread.metadata,
             object=message_thread.object,
-            tool_resources=_serialize_thread_tool_resources(message_thread.tool_resources),
         )
 
     # fmt: off
@@ -2811,7 +2795,6 @@ class OpenAIAssistantsAPI(BaseLLM):
         messages: Iterable[OpenAICreateThreadParamsMessage] | None,
         client: AsyncOpenAI | None,
         acreate_thread: Literal[True], 
-        tool_resources: OpenAICreateThreadParamsToolResources | None = None,
     ) -> Coroutine[None, None, Thread]:
         ...
 
@@ -2827,7 +2810,6 @@ class OpenAIAssistantsAPI(BaseLLM):
         messages: Iterable[OpenAICreateThreadParamsMessage] | None,
         client: OpenAI | None,
         acreate_thread: Literal[False] | None, 
-        tool_resources: OpenAICreateThreadParamsToolResources | None = None,
     ) -> Thread: 
         ...
 
@@ -2844,7 +2826,6 @@ class OpenAIAssistantsAPI(BaseLLM):
         messages: Iterable[OpenAICreateThreadParamsMessage] | None,
         client=None,
         acreate_thread=None,
-        tool_resources: OpenAICreateThreadParamsToolResources | None = None,
     ):
         """
         Here's an example:
@@ -2866,7 +2847,6 @@ class OpenAIAssistantsAPI(BaseLLM):
                 organization=organization,
                 client=client,
                 messages=messages,
-                tool_resources=tool_resources,
             )
         openai_client: Final = self.get_openai_client(
             api_key=api_key,
@@ -2882,8 +2862,6 @@ class OpenAIAssistantsAPI(BaseLLM):
             data["messages"] = messages
         if metadata is not None:
             data["metadata"] = metadata
-        if tool_resources is not None:
-            data["tool_resources"] = tool_resources
 
         message_thread: Final = openai_client.beta.threads.create(**data)
 
@@ -2892,7 +2870,6 @@ class OpenAIAssistantsAPI(BaseLLM):
             created_at=message_thread.created_at,
             metadata=message_thread.metadata,
             object=message_thread.object,
-            tool_resources=_serialize_thread_tool_resources(message_thread.tool_resources),
         )
 
     async def async_get_thread(
@@ -2921,7 +2898,6 @@ class OpenAIAssistantsAPI(BaseLLM):
             created_at=response.created_at,
             metadata=response.metadata,
             object=response.object,
-            tool_resources=_serialize_thread_tool_resources(response.tool_resources),
         )
 
     # fmt: off
@@ -2993,7 +2969,6 @@ class OpenAIAssistantsAPI(BaseLLM):
             created_at=response.created_at,
             metadata=response.metadata,
             object=response.object,
-            tool_resources=_serialize_thread_tool_resources(response.tool_resources),
         )
 
     def delete_thread(self):
@@ -3017,7 +2992,6 @@ class OpenAIAssistantsAPI(BaseLLM):
         max_retries: int | None,
         organization: str | None,
         client: AsyncOpenAI | None,
-        run_options: Mapping[str, object] = MappingProxyType({}),
     ) -> Run:
         openai_client: Final = self.async_get_openai_client(
             api_key=api_key,
@@ -3028,17 +3002,14 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        response: Final = await openai_client.beta.threads.runs.create(
+        response: Final = await openai_client.beta.threads.runs.create_and_poll(
             thread_id=thread_id,
-            **_present(
-                assistant_id=assistant_id,
-                additional_instructions=additional_instructions,
-                instructions=instructions,
-                metadata=metadata,
-                model=model,
-                tools=tools,
-                **run_options,
-            ),
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            tools=tools,
         )
 
         return response
@@ -3054,34 +3025,27 @@ class OpenAIAssistantsAPI(BaseLLM):
         model: str | None,
         tools: Iterable[AssistantToolParam] | None,
         event_handler: AssistantEventHandler | None,
-        run_options: Mapping[str, object] = MappingProxyType({}),
     ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
         runs_stream: Final = client.beta.threads.runs.stream
         if event_handler is not None:
             return runs_stream(
                 thread_id=thread_id,
-                **_present(
-                    assistant_id=assistant_id,
-                    additional_instructions=additional_instructions,
-                    instructions=instructions,
-                    metadata=metadata,
-                    model=model,
-                    tools=tools,
-                    **run_options,
-                ),
-                event_handler=event_handler,
-            )
-        return runs_stream(
-            thread_id=thread_id,
-            **_present(
                 assistant_id=assistant_id,
                 additional_instructions=additional_instructions,
                 instructions=instructions,
                 metadata=metadata,
                 model=model,
                 tools=tools,
-                **run_options,
-            ),
+                event_handler=event_handler,
+            )
+        return runs_stream(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            tools=tools,
         )
 
     def run_thread_stream(
@@ -3095,34 +3059,27 @@ class OpenAIAssistantsAPI(BaseLLM):
         model: str | None,
         tools: Iterable[AssistantToolParam] | None,
         event_handler: AssistantEventHandler | None,
-        run_options: Mapping[str, object] = MappingProxyType({}),
     ) -> AssistantStreamManager[AssistantEventHandler]:
         runs_stream: Final = client.beta.threads.runs.stream
         if event_handler is not None:
             return runs_stream(
                 thread_id=thread_id,
-                **_present(
-                    assistant_id=assistant_id,
-                    additional_instructions=additional_instructions,
-                    instructions=instructions,
-                    metadata=metadata,
-                    model=model,
-                    tools=tools,
-                    **run_options,
-                ),
-                event_handler=event_handler,
-            )
-        return runs_stream(
-            thread_id=thread_id,
-            **_present(
                 assistant_id=assistant_id,
                 additional_instructions=additional_instructions,
                 instructions=instructions,
                 metadata=metadata,
                 model=model,
                 tools=tools,
-                **run_options,
-            ),
+                event_handler=event_handler,
+            )
+        return runs_stream(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            tools=tools,
         )
 
     # fmt: off
@@ -3146,7 +3103,6 @@ class OpenAIAssistantsAPI(BaseLLM):
         client,
         arun_thread: Literal[True], 
         event_handler: AssistantEventHandler | None,
-        run_options: Mapping[str, object] = MappingProxyType({}),
     ) -> Coroutine[None, None, Run]:
         ...
 
@@ -3169,7 +3125,6 @@ class OpenAIAssistantsAPI(BaseLLM):
         client,
         arun_thread: Literal[False] | None, 
         event_handler: AssistantEventHandler | None,
-        run_options: Mapping[str, object] = MappingProxyType({}),
     ) -> Run: 
         ...
 
@@ -3193,7 +3148,6 @@ class OpenAIAssistantsAPI(BaseLLM):
         client=None,
         arun_thread=None,
         event_handler: AssistantEventHandler | None = None,
-        run_options: Mapping[str, object] = MappingProxyType({}),
     ):
         if arun_thread is not None and arun_thread is True:
             if stream is not None and stream is True:
@@ -3215,7 +3169,6 @@ class OpenAIAssistantsAPI(BaseLLM):
                     model=model,
                     tools=tools,
                     event_handler=event_handler,
-                    run_options=run_options,
                 )
             return self.arun_thread(
                 thread_id=thread_id,
@@ -3232,7 +3185,6 @@ class OpenAIAssistantsAPI(BaseLLM):
                 max_retries=max_retries,
                 organization=organization,
                 client=client,
-                run_options=run_options,
             )
         openai_client: Final = self.get_openai_client(
             api_key=api_key,
@@ -3254,20 +3206,16 @@ class OpenAIAssistantsAPI(BaseLLM):
                 model=model,
                 tools=tools,
                 event_handler=event_handler,
-                run_options=run_options,
             )
 
-        response: Final = openai_client.beta.threads.runs.create(
+        response: Final = openai_client.beta.threads.runs.create_and_poll(
             thread_id=thread_id,
-            **_present(
-                assistant_id=assistant_id,
-                additional_instructions=additional_instructions,
-                instructions=instructions,
-                metadata=metadata,
-                model=model,
-                tools=tools,
-                **run_options,
-            ),
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            tools=tools,
         )
 
         return response
