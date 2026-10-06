@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -48,7 +48,11 @@ function Stage({
 }) {
   const legacyReading = running && !activities.length && stageName === "Reading executions";
   const { stage, now, charMs } = useStage(reviews, reading, legacyReading, slots);
-  const listed = legacyReading ? releasedReviews(reviews, stage) : reviews;
+  const listed = useMemo(
+    () => (legacyReading ? releasedReviews(reviews, stage) : reviews),
+    [legacyReading, reviews, stage],
+  );
+  const groups = useMemo(() => conclusions(listed, checks), [listed, checks]);
   function currentWork() {
     if (!running) return null;
     if (activities.length) return <ActiveWork model={model} activities={activities} />;
@@ -61,7 +65,7 @@ function Stage({
       </p>
     );
   }
-  return <>{children(listed, conclusions(listed, checks), currentWork())}</>;
+  return <>{children(listed, groups, currentWork())}</>;
 }
 
 export function LiveDrawer({
