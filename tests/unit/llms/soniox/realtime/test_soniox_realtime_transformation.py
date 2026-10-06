@@ -323,6 +323,46 @@ def test_a_session_update_matching_the_started_stream_is_a_no_op():
     assert config.transform_realtime_request(_session_update({"format": {"type": "audio/pcm", "rate": 24_000}}), MODEL) == ()
 
 
+def _stream_started_at_16khz_in_french_without_vad() -> SonioxRealtimeConfig:
+    config = SonioxRealtimeConfig()
+    config.transform_realtime_request(
+        _session_update(
+            {"format": {"type": "audio/pcm", "rate": 16_000}, "transcription": {"language": "fr"}, "turn_detection": None}
+        ),
+        MODEL,
+    )
+    return config
+
+
+@pytest.mark.parametrize(
+    "follow_up",
+    [
+        {"transcription": {"language": "fr"}},
+        {"format": {"type": "audio/pcm", "rate": 16_000}},
+        {"turn_detection": None},
+    ],
+)
+def test_a_partial_follow_up_update_that_restates_the_stream_is_a_no_op(follow_up: dict[str, object]):
+    config = _stream_started_at_16khz_in_french_without_vad()
+
+    assert config.transform_realtime_request(_session_update(follow_up), MODEL) == ()
+
+
+@pytest.mark.parametrize(
+    "follow_up",
+    [
+        {"transcription": {"language": "de"}},
+        {"format": {"type": "audio/pcm", "rate": 24_000}},
+        {"turn_detection": {"type": "server_vad"}},
+    ],
+)
+def test_a_partial_follow_up_update_that_changes_a_sent_setting_is_rejected(follow_up: dict[str, object]):
+    config = _stream_started_at_16khz_in_french_without_vad()
+
+    with pytest.raises(SonioxProtocolError, match="once the stream has started"):
+        config.transform_realtime_request(_session_update(follow_up), MODEL)
+
+
 def test_session_created_event_advertises_the_deployment_model_for_cost_tracking():
     config = SonioxRealtimeConfig(options=SonioxRealtimeOptions(language_hints=("de",)))
 

@@ -137,6 +137,18 @@ def _session_created(session_id: str, start_request: SonioxStartRequest) -> Open
     return transcription_session_created_event(session)
 
 
+def _changes_started_stream(update: TranscriptionSessionUpdate, started: SonioxStartRequest) -> bool:
+    turn_detection_set: Final = update.turn_detection is not None or update.turn_detection_disabled
+    return (
+        (update.audio_format is not None and _sample_rate(update) != started.sample_rate)
+        or (
+            update.language is not None
+            and _language_hints(update.language, started.language_hints) != started.language_hints
+        )
+        or (turn_detection_set and update.turn_detection_disabled == started.enable_endpoint_detection)
+    )
+
+
 def build_soniox_realtime_url(api_base: str | None) -> str:
     if api_base is None:
         return DEFAULT_SONIOX_REALTIME_URL
@@ -389,12 +401,10 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
 
     def _start(self, model: str, update: TranscriptionSessionUpdate | None) -> tuple[str, ...]:
         started: Final = self._start_request
-        if started is not None and update is None:
-            return ()
-        start_request: Final = build_start_request(model, update, self._options)
         if started is not None:
-            if start_request != started:
+            if update is not None and _changes_started_stream(update, started):
                 raise SonioxProtocolError("Soniox realtime can't change the session once the stream has started")
             return ()
+        start_request: Final = build_start_request(model, update, self._options)
         self._start_request = start_request
         return (start_request.model_dump_json(exclude_none=True),)
