@@ -221,12 +221,74 @@ def test_access_group_assignment_grants_and_revokes_on_gateway_and_peer(
 
 
 @pytest.mark.parametrize("route_prefix", ("/v1/access_group", "/v1/unified_access_group"))
+def test_deleting_an_access_group_revokes_a_still_assigned_team_and_key(
+    gateway: Gateway, route_prefix: str
+) -> None:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
+        model: Final = scenario.model()
+        team_id: Final = scenario.team(models=["no-default-models"])
+        team_key: Final = scenario.key(team_id=team_id)
+        assigned_key: Final = scenario.key(models=["no-default-models"])
+        hashed_key: Final = sha256(assigned_key.encode()).hexdigest()
+        created: Final = gateway.request(
+            "POST",
+            route_prefix,
+            {
+                "access_group_name": f"integration-{uuid.uuid4().hex}",
+                "access_model_names": [model],
+                "assigned_team_ids": [team_id],
+                "assigned_key_ids": [hashed_key],
+            },
+        )
+        assert created.status_code == 201, created.text
+        access_group_id: Final = string_value(created.json()["access_group_id"])
+        scenario.cleanups.callback(gateway.request, "DELETE", f"{route_prefix}/{access_group_id}")
+        assert _group_row(access_group_id) == [{"assigned_team_ids": [team_id], "assigned_key_ids": [hashed_key]}]
+        assert _team_groups(team_id) == [{"access_group_ids": [access_group_id]}]
+        assert _key_groups(hashed_key) == [{"access_group_ids": [access_group_id]}]
+        _observed(upstream)
+
+        team_text: Final = f"delete warm team {uuid.uuid4().hex}"
+        team_response: Final = eventually(
+            lambda: _chat(gateway, model, team_key, team_text),
+            lambda response: response.status_code == 200,
+            seconds=30,
+        )
+        _assert_served(team_response)
+        key_text: Final = f"delete warm key {uuid.uuid4().hex}"
+        key_response: Final = eventually(
+            lambda: _chat(gateway, model, assigned_key, key_text),
+            lambda response: response.status_code == 200,
+            seconds=30,
+        )
+        _assert_served(key_response)
+        assert _observed(upstream) == [_observation(team_text), _observation(key_text)]
+
+        deleted: Final = gateway.request("DELETE", f"{route_prefix}/{access_group_id}")
+        assert deleted.status_code == 204, deleted.text
+        assert _group_row(access_group_id) == []
+        assert _team_groups(team_id) == [{"access_group_ids": []}]
+        assert _key_groups(hashed_key) == [{"access_group_ids": []}]
+        _observed(upstream)
+        denied_pairs: Final = (
+            (team_key, "team_model_access_denied"),
+            (assigned_key, "key_model_access_denied"),
+        )
+        for key, denied_type in denied_pairs:
+            _assert_denied(_chat(gateway, model, key, "deleted"), model, denied_type)
+        assert _observed(upstream) == []
+
+
+@pytest.mark.parametrize("route_prefix", ("/v1/access_group", "/v1/unified_access_group"))
 @pytest.mark.parametrize("revocation", ("team", "key", "delete"))
 def test_access_group_revocation_reaches_a_warmed_peer_before_the_cache_ttl(
     gateway: Gateway, peer: Gateway, route_prefix: str, revocation: str
 ) -> None:
     pytest.skip(
-        "BUG: access group PUT/DELETE revocation does not reach a warmed peer; the peer keeps serving the revoked model until its 60s in-memory cache TTL"
+        "BUG: warmed peer returns 200 instead of 403 after access-group revocation"
     )
     with (
         gateway.scenario() as scenario,
@@ -315,7 +377,7 @@ def test_access_group_revocation_reaches_a_warmed_peer_before_the_cache_ttl(
 
 
 def test_raw_key_in_assigned_key_ids_grants_the_same_access_as_the_hashed_key(gateway: Gateway) -> None:
-    pytest.skip("BUG: raw key in assigned_key_ids is stored as-is and grants nothing")
+    pytest.skip("BUG: raw assigned key does not populate access_group_ids for its hashed database key")
     with (
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,

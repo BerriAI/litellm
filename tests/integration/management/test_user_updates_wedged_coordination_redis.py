@@ -421,7 +421,7 @@ def _user_row(user_id: str) -> list[dict[str, JsonValue]]:
 
 def _partial_user_row(user_id: str) -> list[dict[str, JsonValue]]:
     return read_rows(
-        "SELECT models, max_budget, metadata, user_alias, rpm_limit, budget_duration "
+        "SELECT models, max_budget, metadata, user_alias, rpm_limit, budget_duration, spend "
         'FROM "LiteLLM_UserTable" WHERE user_id=%s',
         (user_id,),
     )
@@ -611,10 +611,12 @@ def test_partial_user_update_preserves_sibling_fields(gateway: Gateway) -> None:
                 "user_alias": "sibling-alias",
                 "rpm_limit": 123,
                 "budget_duration": "1d",
+                "spend": 0.25,
             },
         )
         assert initial.status_code == 200, initial.text
         before: Final = _partial_user_row(user_id)
+        assert float(str(before[0]["spend"])) == pytest.approx(0.25), before
         updated: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "tpm_limit": 1234})
         assert updated.status_code == 200, updated.text
         after: Final = _partial_user_row(user_id)
@@ -627,6 +629,8 @@ def test_partial_user_update_preserves_sibling_fields(gateway: Gateway) -> None:
         assert info["rpm_limit"] == 123, info
         assert info["budget_duration"] == "1d", info
         assert info["tpm_limit"] == 1234, info
+        assert float(str(info["spend"])) == pytest.approx(0.25), info
+        assert float(str(after[0]["spend"])) == pytest.approx(0.25), after
 
 
 def test_user_models_only_update_is_enforced_on_the_gateway(gateway: Gateway) -> None:
@@ -662,10 +666,7 @@ def test_user_models_only_update_is_enforced_on_the_gateway(gateway: Gateway) ->
 
 
 def test_user_models_update_without_metadata_propagates_to_gateway_and_peer(gateway: Gateway, peer: Gateway) -> None:
-    pytest.skip(
-        "BUG: a models-only /user/update does not broadcast a cache eviction, "
-        "so the peer keeps serving the user's old model set for the 60s management-object TTL"
-    )
+    pytest.skip("BUG: models-only /user/update leaves warmed peer serving the revoked model with 200")
     with (
         gateway.scenario() as scenario,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,

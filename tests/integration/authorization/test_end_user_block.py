@@ -18,6 +18,10 @@ class _BlockedCustomerInfo(BaseModel):
     blocked: bool
 
 
+class _BlockUsersResponse(BaseModel):
+    blocked_users: list[_BlockedCustomerInfo]
+
+
 def _blocked_row(user_id: str) -> list[dict[str, JsonValue]]:
     return read_rows('SELECT blocked FROM "LiteLLM_EndUserTable" WHERE user_id=%s', (user_id,))
 
@@ -128,14 +132,17 @@ def test_block_route_marks_the_customer_blocked_and_update_unblocks(gateway: Gat
         )
 
 
-@pytest.mark.parametrize("block_route", ("/customer/block", "/end_user/block"))
-def test_block_route_creates_and_blocks_an_unseen_customer(gateway: Gateway, block_route: str) -> None:
+def _assert_unseen_customer_is_blocked(gateway: Gateway, block_route: str) -> None:
     with gateway.scenario() as scenario:
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
         scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [end_user]})
 
         blocked: Final = gateway.request("POST", block_route, {"user_ids": [end_user]})
-        assert blocked.status_code in (200, 500), blocked.text
+        assert blocked.status_code == 200, blocked.text
+        blocked_response: Final = _BlockUsersResponse.model_validate_json(blocked.content)
+        assert blocked_response == _BlockUsersResponse(
+            blocked_users=[_BlockedCustomerInfo(user_id=end_user, blocked=True)]
+        )
         assert eventually(lambda: _blocked_row(end_user), lambda value: value == [{"blocked": True}], seconds=15) == [
             {"blocked": True}
         ]
@@ -151,6 +158,15 @@ def test_block_route_creates_and_blocks_an_unseen_customer(gateway: Gateway, blo
         info_after_update: Final = gateway.request("GET", "/customer/info", params={"end_user_id": end_user})
         assert info_after_update.status_code == 200, info_after_update.text
         assert _BlockedCustomerInfo.model_validate(info_after_update.json()).blocked is False
+
+
+def test_end_user_block_route_creates_and_blocks_an_unseen_customer(gateway: Gateway) -> None:
+    _assert_unseen_customer_is_blocked(gateway, "/end_user/block")
+
+
+def test_customer_block_route_creates_and_blocks_an_unseen_customer(gateway: Gateway) -> None:
+    pytest.skip("BUG: POST /customer/block for an unseen customer returns 500 instead of 200 BlockUsersResponse")
+    _assert_unseen_customer_is_blocked(gateway, "/customer/block")
 
 
 def test_listed_end_user_is_refused_and_unblock_restores_serving(gateway: Gateway, tmp_path: Path) -> None:
@@ -190,9 +206,7 @@ def test_listed_end_user_is_refused_and_unblock_restores_serving(gateway: Gatewa
 def test_blocked_end_user_is_refused_on_every_proxy_and_unblock_restores(
     gateway: Gateway, tmp_path: Path, block_route: str
 ) -> None:
-    pytest.skip(
-        "BUG: blocked_user_check hook captures prisma_client=None at startup so API-blocked customers are never refused"
-    )
+    pytest.skip("BUG: blocked end-user chat requests return HTTP 200 instead of HTTP 400")
     with (
         ExitStack() as stack,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
@@ -299,7 +313,7 @@ def test_unblock_route_requires_the_blocked_user_check_callback(gateway: Gateway
 
 
 def test_block_route_returns_the_blocked_records(gateway: Gateway) -> None:
-    pytest.skip("BUG: /customer/block returns 500 (response serialization) instead of 200 BlockUsersResponse")
+    pytest.skip("BUG: POST /customer/block returns 500 instead of 200 BlockUsersResponse")
     end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
     with gateway.scenario() as scenario:
         created: Final = gateway.request("POST", "/customer/new", {"user_id": end_user})
@@ -315,7 +329,7 @@ def test_block_route_returns_the_blocked_records(gateway: Gateway) -> None:
 
 
 def test_blocked_end_user_is_refused_without_the_callback(gateway: Gateway) -> None:
-    pytest.skip("BUG: blocked end user is still served 200 when the proxy runs without blocked_user_check")
+    pytest.skip("BUG: blocked end-user request without callback returns 200 instead of 400")
     with gateway.scenario() as scenario:
         end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
         created: Final = gateway.request("POST", "/customer/new", {"user_id": end_user, "blocked": True})
@@ -328,16 +342,13 @@ def test_blocked_end_user_is_refused_without_the_callback(gateway: Gateway) -> N
 
 
 def test_blocked_end_user_header_spelling_is_refused_with_the_callback(gateway: Gateway, tmp_path: Path) -> None:
-    pytest.skip("BUG: header x-litellm-end-user-id spelling bypasses the blocked_user_check hook")
+    pytest.skip("BUG: x-litellm-end-user-id request for a blocked customer returns 200 instead of 400")
+    end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
+    config: Final = _callback_config(tmp_path, blocked_user_list=[end_user])
     with (
         ExitStack() as stack,
         httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
     ):
-        config: Final = _callback_config(tmp_path)
-        cfg: Final = yaml.safe_load(config.read_text())
-        end_user: Final = f"integration-end-user-{uuid.uuid4().hex}"
-        cfg["litellm_settings"]["blocked_user_list"] = [end_user]
-        config.write_text(yaml.safe_dump(cfg))
         proxy: Final = stack.enter_context(owned_proxy(gateway, tmp_path / "listed", {}, config=config))
         with proxy.scenario() as scenario:
             created: Final = proxy.request("POST", "/customer/new", {"user_id": end_user, "max_budget": 100.0})

@@ -44,6 +44,17 @@ def _escalation_error(field: str) -> dict[str, JsonValue]:
     }
 
 
+def _role_change_error() -> dict[str, JsonValue]:
+    return {
+        "error": {
+            "message": "Only proxy admins can modify user roles.",
+            "type": "auth_error",
+            "param": "None",
+            "code": "403",
+        }
+    }
+
+
 def _ui_session_route_error(user_id: str) -> dict[str, JsonValue]:
     masked_user_id: Final = f"{user_id[:6]}{'*' * (len(user_id) - 8)}{user_id[-2:]}"
     return {
@@ -70,6 +81,75 @@ def test_internal_user_can_update_allowed_fields_on_own_record(gateway: Gateway)
         assert object_value(object_value(updated.json())["data"])["user_alias"] == alias
         assert _user_row(user_id)[0]["user_alias"] == alias
         assert _user_info(gateway, user_id).user_alias == alias
+
+
+@pytest.mark.parametrize("user_role", ("proxy_admin", "proxy_admin_viewer"))
+def test_internal_user_cannot_promote_own_role(gateway: Gateway, user_role: str) -> None:
+    with gateway.scenario() as scenario:
+        user_id: Final = scenario.user(user_role="internal_user", max_budget=10.0)
+        key: Final = scenario.key(user_id=user_id, allowed_routes=list(_SELF_SERVICE_ROUTES))
+        before_row: Final = _user_row(user_id)
+        before_info: Final = _user_info(gateway, user_id)
+
+        refused: Final = gateway.request(
+            "POST",
+            "/user/update",
+            {"user_id": user_id, "user_role": user_role},
+            key=key,
+        )
+        assert refused.status_code == 403, refused.text
+        assert refused.json() == _role_change_error(), refused.text
+        assert _user_row(user_id) == before_row
+        assert _user_info(gateway, user_id) == before_info
+
+
+def test_internal_user_can_update_allowed_fields_by_own_email(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        user_email: Final = f"integration-{uuid.uuid4().hex}@example.com"
+        user_id: Final = scenario.user(
+            user_email=user_email,
+            user_role="internal_user",
+            max_budget=10.0,
+        )
+        key: Final = scenario.key(user_id=user_id, allowed_routes=list(_SELF_SERVICE_ROUTES))
+        alias: Final = f"self-email-alias-{uuid.uuid4().hex}"
+
+        updated: Final = gateway.request(
+            "POST",
+            "/user/update",
+            {"user_email": user_email, "user_alias": alias},
+            key=key,
+        )
+        assert updated.status_code == 200, updated.text
+        updated_data: Final = object_value(object_value(updated.json())["data"])
+        assert updated_data["user_alias"] == alias
+        assert updated_data["user_id"] == user_id
+        assert _user_row(user_id)[0]["user_alias"] == alias
+        assert _user_info(gateway, user_id).user_alias == alias
+
+
+def test_internal_user_cannot_escalate_protected_fields_by_own_email(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        user_email: Final = f"integration-{uuid.uuid4().hex}@example.com"
+        user_id: Final = scenario.user(
+            user_email=user_email,
+            user_role="internal_user",
+            max_budget=10.0,
+        )
+        key: Final = scenario.key(user_id=user_id, allowed_routes=list(_SELF_SERVICE_ROUTES))
+        before_row: Final = _user_row(user_id)
+        before_info: Final = _user_info(gateway, user_id)
+
+        refused: Final = gateway.request(
+            "POST",
+            "/user/update",
+            {"user_email": user_email, "max_budget": 1000.0},
+            key=key,
+        )
+        assert refused.status_code == 403, refused.text
+        assert refused.json() == _escalation_error("max_budget"), refused.text
+        assert _user_row(user_id) == before_row
+        assert _user_info(gateway, user_id) == before_info
 
 
 @pytest.mark.parametrize(
