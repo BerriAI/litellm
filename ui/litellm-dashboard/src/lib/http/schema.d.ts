@@ -9436,24 +9436,26 @@ export interface paths {
         };
         /**
          * List Team Members
-         * @description One page of a team's members, with each member's spend in the team and the limits on their budget row.
+         * @description List a team's members one page at a time, with each member's spend and budget limits in the team.
          *
-         *     Readable by whoever can read `/team/info` for the team: proxy admins and admin viewers, a key issued to
-         *     the team, any member of the team, and admins of the team's organization. An unknown team is a 404.
+         *     Anyone who can read `/team/info` for the team can call this: proxy admins, admin viewers, the team's keys,
+         *     its members and its org admins. Anyone else gets a 403, and a team that does not exist is a 404.
          *
-         *     Members come in the order they joined unless `sort` names a comma-separated list of `user_alias`,
-         *     `user_email`, `user_id`, `role`, `spend`, `total_spend`, `max_budget_in_team` or `budget_reset_at`,
-         *     each optionally prefixed with `-` for descending. `q` is a case-insensitive substring match on
-         *     `user_id` or `user_email`, and `filter[role]=admin` or `filter[role][in]=admin,user` filters by role.
-         *     `page_size` defaults to 50 and is capped at 100. `meta.total_count` counts the members matching `q`
-         *     and the filters.
+         *     Query parameters, all optional:
+         *     - `q`: search by `user_id` or `user_email`. Matches any part of the value and ignores case
+         *     - `filter[role]`: `admin` or `user`. Use `filter[role][in]=admin,user` to match several roles
+         *     - `sort`: `user_alias`, `user_email`, `user_id`, `role`, `spend`, `total_spend`, `max_budget_in_team` or
+         *       `budget_reset_at`. Put `-` in front to sort descending. Defaults to the order members were added
+         *     - `page`: the page to return, starting at 1
+         *     - `page_size`: members per page. Defaults to 50, max 100
          *
-         *     `budget_source` is `custom` when the member has their own budget row, `team_default` when they follow
-         *     the team's member budget, and `none` when the team has no member budget.
+         *     `budget_source` says where a member's budget comes from:
+         *     - `custom`: the member has a budget of their own
+         *     - `team_default`: the member follows the team's member budget
+         *     - `none`: the team has no member budget
          *
-         *     Example curl:
          *     ```
-         *     curl --location --globoff 'http://0.0.0.0:4000/management/v1/teams/team-1/members?q=acme&filter[role]=admin&page_size=25'         --header 'Authorization: Bearer sk-1234'
+         *     curl --globoff 'http://0.0.0.0:4000/management/v1/teams/team-1/members?q=acme&filter[role]=admin' -H 'Authorization: Bearer sk-1234'
          *     ```
          */
         get: operations["list_team_members_management_v1_teams__team_id__members_get"];
