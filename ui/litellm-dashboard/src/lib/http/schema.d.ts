@@ -25785,6 +25785,8 @@ export interface components {
             name: string;
             /** Parent Agent */
             parent_agent: string | null;
+            /** Priced Calls */
+            priced_calls: number;
             /** Spend */
             spend: number | null;
             /** Tool Calls */
@@ -47214,6 +47216,8 @@ export interface components {
             name: string;
             /** Output Tokens */
             output_tokens: number;
+            /** Priced Calls */
+            priced_calls: number;
             /** Resolution Limited */
             resolution_limited?: boolean;
             /** Service */

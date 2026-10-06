@@ -59,6 +59,7 @@ class AgentNode(typing_extensions.TypedDict):
     tool_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
     duration_ms: ReadOnly[float]
     spend: ReadOnly[float | None]
+    priced_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
 
 
 SpanType: TypeAlias = Literal[
@@ -120,6 +121,7 @@ class TraceSummary(typing_extensions.TypedDict):
     output_tokens: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
     models: ReadOnly[tuple[str, ...]]
     spend: ReadOnly[float | None]
+    priced_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
 
 
 class Span(typing_extensions.TypedDict):
