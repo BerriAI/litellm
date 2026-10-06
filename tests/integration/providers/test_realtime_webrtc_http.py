@@ -427,7 +427,6 @@ def test_beta_transcription_session_token_replays_deployment_model_not_alias_at_
 
 
 def test_sdk_calls_create_redeems_token_with_raw_upstream_secret(gateway: Gateway) -> None:
-    # openai-python sends calls.create as multipart; the sdp and session parts are owned by the BUG-skipped test below
     raw: Final = _raw_secret()
     scenario_path: Final = f"/{uuid.uuid4().hex}"
     with (
