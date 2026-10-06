@@ -27,6 +27,9 @@ pub struct Span {
     pub agent: String,
     #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
     pub actor_id: Option<String>,
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub actor_unassigned: bool,
     #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
     pub parent_actor_id: Option<String>,
     pub framework: String,

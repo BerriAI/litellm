@@ -1674,3 +1674,29 @@ fn native_actor_identifiers_are_scoped_to_their_session() {
         trace.spans[1].parent_actor_id
     );
 }
+
+#[rstest]
+#[case::legacy("", "", false)]
+#[case::unconfirmed_child("session", "agent.builtin.reader", true)]
+fn unresolved_native_actors_are_distinguished_from_legacy_grouping(
+    #[case] session: &str,
+    #[case] source: &str,
+    #[case] unassigned: bool,
+    #[values("claude-code", "claude-agent-sdk")] framework: &str,
+) {
+    let span = TraceSpansRow {
+        framework: framework.into(),
+        session_id: session.into(),
+        query_source: source.into(),
+        ..row(
+            "reply",
+            "",
+            "claude_code.assistant_response",
+            "chain",
+            "reader",
+        )
+    };
+    let trace = resolve_trace("trace", "ref", &[span], &[]).unwrap();
+    assert_eq!(trace.spans[0].actor_id, None);
+    assert_eq!(trace.spans[0].actor_unassigned, unassigned);
+}

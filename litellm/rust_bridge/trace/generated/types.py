@@ -131,6 +131,7 @@ class Span(typing_extensions.TypedDict):
     type: ReadOnly[SpanType]
     agent: ReadOnly[str]
     actor_id: ReadOnly[NotRequired[str | None]]
+    actor_unassigned: ReadOnly[NotRequired[bool]]
     parent_actor_id: ReadOnly[NotRequired[str | None]]
     framework: ReadOnly[str]
     start_offset_ms: ReadOnly[float]

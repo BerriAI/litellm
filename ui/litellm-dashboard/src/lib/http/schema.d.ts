@@ -45081,6 +45081,8 @@ export interface components {
         Span: {
             /** Actor Id */
             actor_id?: string | null;
+            /** Actor Unassigned */
+            actor_unassigned?: boolean;
             /** Agent */
             agent: string;
             /** Duration Ms */

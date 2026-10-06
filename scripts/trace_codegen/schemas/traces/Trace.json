@@ -78,6 +78,11 @@
           ],
           "x-python-optional": true
         },
+        "actor_unassigned": {
+          "default": false,
+          "type": "boolean",
+          "x-python-optional": true
+        },
         "agent": {
           "type": "string"
         },
@@ -168,6 +173,7 @@
         "type",
         "agent",
         "actor_id",
+        "actor_unassigned",
         "parent_actor_id",
         "framework",
         "start_offset_ms",

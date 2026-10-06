@@ -30,6 +30,7 @@ fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span 
         name: row.name.clone(),
         kind: resolution.kind(index),
         actor_id: resolution.actors.owner(index).map(|actor| actor.id.clone()),
+        actor_unassigned: super::actors::native(row) && resolution.actors.owner(index).is_none(),
         parent_actor_id: resolution
             .actors
             .owner(index)

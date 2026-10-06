@@ -5,7 +5,7 @@ use crate::query::named::TraceSpansRow;
 use super::graph::Graph;
 
 pub(super) fn native(row: &TraceSpansRow) -> bool {
-    row.framework == "claude-code"
+    matches!(row.framework.as_str(), "claude-code" | "claude-agent-sdk")
         && (!row.session_id.is_empty() || !row.native_agent_id.is_empty())
 }
 

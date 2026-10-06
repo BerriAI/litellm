@@ -651,3 +651,44 @@ it("keeps explicit native actors separate across workflow branches and backgroun
     items.filter((item) => ["first", "resumed"].includes(item.span.span_id)).map((item) => item.agentName),
   ).toEqual(["general-purpose (1)", "general-purpose (1)"]);
 });
+
+it.each([false, true])("preserves legacy history while isolating unconfirmed actors (%s)", (unassigned) => {
+  const spans: Span[] = [
+    { ...root, framework: "claude-code", actor_id: null, actor_unassigned: false },
+    {
+      ...root,
+      span_id: "first",
+      type: "llm",
+      framework: "claude-code",
+      parent_span_id: root.span_id,
+      actor_id: null,
+      actor_unassigned: unassigned,
+      start_offset_ms: 1,
+    },
+    {
+      ...root,
+      span_id: "second",
+      type: "llm",
+      framework: "claude-code",
+      parent_span_id: root.span_id,
+      actor_id: null,
+      actor_unassigned: unassigned,
+      start_offset_ms: 2,
+    },
+  ];
+  const user = { role: "user", content: "Read this" };
+  const answer = { role: "assistant", content: "First answer" };
+  const details = new Map([
+    [root.span_id, detail(root.span_id, [], [])],
+    ["first", detail("first", [user], [answer])],
+    ["second", detail("second", [user, answer], [{ role: "assistant", content: "Second answer" }])],
+  ]);
+  const items = buildConversation(spans, details, true);
+  expect(items.map((item) => item.branchId)).toEqual(
+    unassigned ? ["unassigned:first", "unassigned:second"] : [root.span_id, root.span_id],
+  );
+  expect(items[1].messages.map((message) => message.content)).toEqual(
+    unassigned ? ["Read this", "First answer", "Second answer"] : ["Second answer"],
+  );
+  expect(items.every((item) => item.agentName === "Unassigned")).toBe(unassigned);
+});

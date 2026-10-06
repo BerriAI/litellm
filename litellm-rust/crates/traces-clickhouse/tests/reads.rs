@@ -812,3 +812,77 @@ async fn historical_native_actors_are_resolved_from_raw_attributes_with_tenant_i
     assert_eq!(nested.parent_actor_id, first.actor_id);
     Ok(())
 }
+
+#[rstest]
+#[case::claude_code("claude-code")]
+#[case::agent_sdk("claude-agent-sdk")]
+#[tokio::test]
+async fn native_list_counts_each_root_session_and_does_not_count_children_as_roots(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] framework: &str,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let client = &fixture.database.client;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let records = [
+        ("first", "session-a", "", "agent", "claude_code.interaction"),
+        (
+            "second",
+            "session-a",
+            "",
+            "agent",
+            "claude_code.interaction",
+        ),
+        ("pending", "session-b", "", "llm", "claude_code.llm_request"),
+        (
+            "child",
+            "session-a",
+            "child",
+            "agent",
+            "claude_code.interaction",
+        ),
+    ];
+    insert_rows(client, &writer, DATABASE, InsertTable::OtelTraces, records.into_iter().map(|(id, session, actor, kind, name)| BTreeMap::from([
+        ("Timestamp".into(), json!(1_790_000_000_000_000_000_i64)),
+        ("TraceId".into(), json!("mixed-sessions")),
+        ("SpanId".into(), json!(id)),
+        ("SpanName".into(), json!(name)),
+        ("ObservationType".into(), json!(kind)),
+        ("Framework".into(), json!(framework)),
+        ("AgentName".into(), json!("assistant")),
+        ("SpanAttributes".into(), json!({"session.id": session, "agent_id": actor, "query_source_safe": "sdk"})),
+        ("TeamId".into(), json!("team-a")),
+        ("ApiKeyHash".into(), json!("key-a")),
+    ])).collect()).await?;
+    let connection = fixture
+        .readers
+        .connection(client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let (reader, store) = make_reader(client, connection);
+    let access = ReadAccessParams {
+        all_teams: true,
+        user_id: String::new(),
+        team_ids: Vec::new(),
+    };
+    let listed = store
+        .list_runs(&litellm_traces::query::named::ListTracesParams {
+            access: access.clone(),
+            start_ms: 0,
+            end_ms: 2_000_000_000_000,
+            cursor_ms: 0,
+            cursor_trace_id: String::new(),
+            limit: 50,
+        })
+        .await?;
+    let summary = &listed[0];
+    let detail = reader
+        .get_trace(&store, &access, "mixed-sessions", &summary.trace_ref)
+        .await?
+        .ok_or("missing trace")?;
+    assert_eq!((summary.agent_count, summary.agent_invocations), (3, 4));
+    assert_eq!(
+        (detail.summary.agent_count, detail.summary.agent_invocations),
+        (3, 4)
+    );
+    Ok(())
+}
