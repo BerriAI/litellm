@@ -349,7 +349,7 @@ def test_redis_stopped_mid_burst_answers_every_request_and_never_pins_an_empty_a
                     **_overrides(),
                     "REDIS_HOST": store.host,
                     "REDIS_PORT": str(store.port),
-                    "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT": "5",
+                    "REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT": "0",
                 },
                 config=_config(tmp_path, fleet),
                 remove_environment=REMOVE_FROM_ENVIRONMENT,
