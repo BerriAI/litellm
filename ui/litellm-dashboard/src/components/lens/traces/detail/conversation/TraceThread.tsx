@@ -10,15 +10,21 @@ import type { Trace } from "../../types";
 import { fmtMs } from "../../utils";
 import { ErrorBlock } from "../content/SpanError";
 import { Markdown } from "../content/Markdown";
-import { buildConversation, groupConversation, pendingConversationBranches } from "./conversation";
-import { buildThread, threadDurationMs, type ThreadTurn, type ThreadWork } from "./thread";
 import {
-  ConversationGroups,
-  ConversationMessage,
-  ConversationStep,
-  type ConversationTracePaging,
-} from "./TraceConversation";
+  buildConversation,
+  conversationWarnings,
+  groupConversation,
+  pendingConversationBranches,
+} from "./conversation";
+import { ConversationMessage, ConversationStep, ConversationSteps } from "./ConversationParts";
+import { buildThread, threadDurationMs, type ThreadTurn, type ThreadWork } from "./thread";
 import { useConversationDetails } from "./useConversationDetails";
+
+export interface ConversationTracePaging {
+  loading: boolean;
+  failed: boolean;
+  loadMore: () => void;
+}
 
 const AUTO_LOAD_STEPS = 200;
 
@@ -36,6 +42,12 @@ export function TraceThread({ trace, accessToken, onOpenStep, paging }: TraceThr
   const groups = groupConversation(buildConversation(trace.spans, details, complete, pending), trace.spans);
   const turns = buildThread(groups);
   const traceComplete = complete && !trace.next_cursor;
+  const shownErrors = new Set(
+    turns.flatMap((turn) => (turn.replyItem?.showError ? [turn.replyItem.span.span_id] : [])),
+  );
+  const rootErrors = trace.spans.filter(
+    (span) => span.parent_span_id === null && span.status === "error" && !shownErrors.has(span.span_id),
+  );
   const busy = loading || Boolean(paging?.loading);
   const blocked = failed || Boolean(paging?.failed);
   const sourceRemaining = hasMore || Boolean(trace.next_cursor && paging);
@@ -59,6 +71,14 @@ export function TraceThread({ trace, accessToken, onOpenStep, paging }: TraceThr
   return (
     <section aria-label="Trace thread" className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto min-w-0 max-w-3xl space-y-8 px-3 py-4 sm:px-6 sm:py-6">
+        {rootErrors.map((span) => (
+          <ErrorBlock key={span.span_id} span={span} />
+        ))}
+        {conversationWarnings(details, traceComplete).map((warning) => (
+          <p key={warning} role="status" className="rounded-md border p-3 text-sm text-muted-foreground">
+            {warning}
+          </p>
+        ))}
         {turns.map((turn) => (
           <ThreadTurnView key={turn.id} turn={turn} onOpenStep={onOpenStep} />
         ))}
@@ -197,24 +217,12 @@ function Count({ icon: Icon, value, label }: { icon: typeof Wrench; value: numbe
 }
 
 function WorkItem({ work, onOpenStep }: { work: ThreadWork; onOpenStep: (id: string) => void }) {
-  if (work.kind === "step") return <ConversationStep item={work.item} multipleAgents={false} onOpenStep={onOpenStep} />;
+  if (work.kind === "step") return <ConversationStep item={work.item} onOpenStep={onOpenStep} />;
   return (
     <details className="min-w-0 rounded-md border p-3">
       <summary className="cursor-pointer text-sm font-medium">Subagent: {work.name}</summary>
       <div className="mt-4 min-w-0 space-y-5 border-l pl-3">
-        <ConversationGroups
-          groups={[...work.groups]}
-          multipleAgents={false}
-          onOpenStep={onOpenStep}
-          branchId={work.id}
-          name={work.name}
-          pages={new Map()}
-          sourceRemaining={false}
-          pendingBranches={new Set()}
-          disabled={false}
-          onLoadEntries={() => undefined}
-          complete
-        />
+        <ConversationSteps groups={work.groups} onOpenStep={onOpenStep} />
       </div>
     </details>
   );
