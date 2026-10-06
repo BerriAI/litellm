@@ -1,8 +1,9 @@
 //! The embedding and prompt contract every semantic backend shares.
 //!
 //! Python's semantic caches all read their prompt through `get_semantic_cache_prompt_from_messages`, and
-//! `RedisSemanticCache._get_prompt_from_kwargs` (inherited by Valkey) adds Responses API
-//! `input`. Qdrant reads messages only. Each backend picks one of the two extractors here.
+//! `RedisSemanticCache._get_prompt_from_kwargs` (inherited by Valkey) adds Responses API `input`
+//! through `get_semantic_cache_prompt_from_responses_input`. Qdrant reads messages only. Each
+//! backend picks one of the two extractors here.
 
 use std::{collections::HashMap, future::Future, io};
 
@@ -207,8 +208,9 @@ pub fn prompt_from_messages(context: &SemanticCacheContext) -> Option<String> {
     (!messages.is_empty()).then(|| str_from_messages(messages))
 }
 
-/// `RedisSemanticCache._get_prompt_from_kwargs`: chat messages first, then the text parts of a
-/// Responses API `input`. `None` when neither yields a prompt.
+/// `RedisSemanticCache._get_prompt_from_kwargs`: chat messages first, then
+/// `get_semantic_cache_prompt_from_responses_input` over a Responses API `input`. `None` when
+/// neither yields a prompt.
 pub fn prompt_from_context(context: &SemanticCacheContext) -> Option<String> {
     if let Some(messages) = context.messages.as_ref().and_then(Value::as_array)
         && !messages.is_empty()
