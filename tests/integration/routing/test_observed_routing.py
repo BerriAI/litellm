@@ -454,7 +454,13 @@ def test_health_routing_fallbacks_preserve_error_specific_targets_and_request_co
                 **({"stream": True} if stream_request else {}),
                 **(
                     {body_flag: True}
-                    if body_flag in ("disable_fallbacks", "mock_testing_context_fallbacks", "mock_testing_content_policy_fallbacks", "mock_testing_fallbacks")
+                    if body_flag
+                    in (
+                        "disable_fallbacks",
+                        "mock_testing_context_fallbacks",
+                        "mock_testing_content_policy_fallbacks",
+                        "mock_testing_fallbacks",
+                    )
                     else {}
                 ),
                 **(
