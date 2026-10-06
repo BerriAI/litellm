@@ -845,9 +845,7 @@ export const buildComplexityRouterConfig = ({
     ...(cacheAwareRoutingOutputTokens !== undefined && {
       cache_aware_routing_output_tokens: cacheAwareRoutingOutputTokens,
     }),
-    ...(cacheAwareRoutingTimeoutMs !== undefined && {
-      cache_aware_routing_timeout_ms: cacheAwareRoutingTimeoutMs,
-    }),
+    ...(cacheAwareRoutingTimeoutMs !== undefined && { cache_aware_routing_timeout_ms: cacheAwareRoutingTimeoutMs }),
     ...((forecast || enableContextWindowEscalation !== undefined) && {
       enable_context_window_escalation: enableContextWindowEscalation ?? false,
     }),
