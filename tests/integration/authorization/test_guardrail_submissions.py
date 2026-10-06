@@ -130,6 +130,10 @@ def _assert_submission_actions_are_forbidden(responses: tuple[httpx.Response, ..
     ) == (expected_error,) * 4, tuple(response.text for response in responses)
 
 
+def _mask_user_id(user_id: str) -> str:
+    return f"{user_id[:6]}{'*' * (len(user_id) - 8)}{user_id[-2:]}"
+
+
 def _register(
     gateway: Gateway,
     scenario_cleanups: ExitStack,
@@ -300,9 +304,32 @@ def test_non_admin_keys_scoped_to_the_submission_routes_get_403_from_the_admin_c
             gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/approve", key=plain_member_key),
             gateway.request("POST", f"/guardrails/submissions/{guardrail_id}/reject", key=plain_member_key),
         )
-        assert all(response.status_code in (401, 403) for response in plain_responses), tuple(
-            r.text for r in plain_responses
+        assert tuple(response.status_code for response in plain_responses) == (401, 401, 401, 401), tuple(
+            response.text for response in plain_responses
         )
+        expected_routes: Final = tuple(
+            f"/guardrails/submissions/{guardrail_id}/{action}" for action in ("approve", "reject", "approve", "reject")
+        )
+        expected_user_ids: Final = (team_admin, team_admin, member, member)
+        expected_plain_errors: Final = tuple(
+            _ErrorResponse(
+                error=_ProxyError(
+                    message=(
+                        "Authentication Error, Only proxy admin can be used to generate, delete, update info for "
+                        f"new keys/users/teams. Route={route}. Your role=internal_user. "
+                        f"Your user_id={_mask_user_id(user_id)}"
+                    ),
+                    type="auth_error",
+                    param="None",
+                    code="401",
+                )
+            )
+            for route, user_id in zip(expected_routes, expected_user_ids, strict=True)
+        )
+        parsed_plain_errors: Final = tuple(
+            _ErrorResponse.model_validate_json(response.content) for response in plain_responses
+        )
+        assert parsed_plain_errors == expected_plain_errors, tuple(response.text for response in plain_responses)
         _assert_submission_status(guardrail_id, "pending_review", team_id)
         assert guardrail.drain() == ()
         response: Final = _chat(gateway, model, registration_key, _PROMPT_PENDING, name)

@@ -2,7 +2,7 @@ import json
 import uuid
 from contextlib import ExitStack
 from hashlib import sha256
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
@@ -512,6 +512,130 @@ def test_policy_attachments_match_live_models_teams_keys_and_global_scope(gatewa
             _assert_provider_request(request, expected_text)
 
 
+@pytest.mark.parametrize(
+    ("model_priority", "global_priority"),
+    (
+        pytest.param(10, 20, id="model-priority-first"),
+        pytest.param(20, 10, id="global-priority-first"),
+    ),
+)
+def test_matching_model_and_global_attachments_apply_by_priority(
+    gateway: Gateway,
+    model_priority: int,
+    global_priority: int,
+) -> None:
+    with (
+        wire_server(lambda _request: Reply(body=json.dumps(_PROVIDER_RESPONSE).encode())) as provider,
+        wire_server(lambda _request: Reply(body=b'{"action":"NONE"}')) as model_guardrail,
+        wire_server(lambda _request: Reply(body=b'{"action":"NONE"}')) as global_guardrail,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        other_model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        key: Final = scenario.key(models=[model, other_model])
+        prefix: Final = f"attachment-{uuid.uuid4().hex}"
+        model_guardrail_key: Final = "synthetic-model-guardrail-key"
+        global_guardrail_key: Final = "synthetic-global-guardrail-key"
+        model_guardrail_name: Final = _create_guardrail(
+            gateway,
+            scenario.cleanups,
+            f"guardrail-model-{prefix}",
+            f"{model_guardrail.url}/beta/litellm_basic_guardrail_api",
+            model_guardrail_key,
+        )
+        global_guardrail_name: Final = _create_guardrail(
+            gateway,
+            scenario.cleanups,
+            f"guardrail-global-{prefix}",
+            f"{global_guardrail.url}/beta/litellm_basic_guardrail_api",
+            global_guardrail_key,
+        )
+        model_policy_name: Final = f"policy-model-{prefix}"
+        global_policy_name: Final = f"policy-global-{prefix}"
+        _create_policy(gateway, scenario.cleanups, model_policy_name, model_guardrail_name)
+        _create_policy(gateway, scenario.cleanups, global_policy_name, global_guardrail_name)
+        model_attachment_response: Final = gateway.request(
+            "POST",
+            "/policies/attachments",
+            {"policy_name": model_policy_name, "models": [model], "priority": model_priority},
+        )
+        assert model_attachment_response.status_code == 200, model_attachment_response.text
+        model_attachment: Final = _AttachmentResponse.model_validate_json(model_attachment_response.content)
+        scenario.cleanups.callback(_delete_attachment, gateway, model_attachment.attachment_id)
+        global_attachment_response: Final = gateway.request(
+            "POST",
+            "/policies/attachments",
+            {"policy_name": global_policy_name, "scope": "*", "priority": global_priority},
+        )
+        assert global_attachment_response.status_code == 200, global_attachment_response.text
+        global_attachment: Final = _AttachmentResponse.model_validate_json(global_attachment_response.content)
+        scenario.cleanups.callback(_delete_attachment, gateway, global_attachment.attachment_id)
+
+        expected_model_attachment: Final = {
+            "attachment_id": model_attachment.attachment_id,
+            "policy_name": model_policy_name,
+            "scope": None,
+            "teams": [],
+            "keys": [],
+            "models": [model],
+            "tags": [],
+            "priority": model_priority,
+            "default": False,
+        }
+        expected_global_attachment: Final = {
+            "attachment_id": global_attachment.attachment_id,
+            "policy_name": global_policy_name,
+            "scope": "*",
+            "teams": [],
+            "keys": [],
+            "models": [],
+            "tags": [],
+            "priority": global_priority,
+            "default": False,
+        }
+        assert model_attachment.model_dump() == expected_model_attachment, model_attachment_response.text
+        assert global_attachment.model_dump() == expected_global_attachment, global_attachment_response.text
+        for attachment_id, expected_attachment in (
+            (model_attachment.attachment_id, expected_model_attachment),
+            (global_attachment.attachment_id, expected_global_attachment),
+        ):
+            readback: Final = gateway.request("GET", f"/policies/attachments/{attachment_id}")
+            assert readback.status_code == 200, readback.text
+            assert _AttachmentResponse.model_validate_json(readback.content).model_dump() == expected_attachment, (
+                readback.text
+            )
+
+        expected_order: Final = (
+            (model_policy_name, global_policy_name)
+            if model_priority < global_priority
+            else (global_policy_name, model_policy_name)
+        )
+        matched: Final = _chat(gateway, model, key, _PROMPT)
+        assert matched.headers.get("x-litellm-applied-policies") == ",".join(expected_order), matched.text
+        matched_model_guardrail_requests: Final = model_guardrail.drain()
+        matched_global_guardrail_requests: Final = global_guardrail.drain()
+        assert len(matched_model_guardrail_requests) == 1
+        assert len(matched_global_guardrail_requests) == 1
+        _assert_guardrail_request(matched_model_guardrail_requests[0], _PROMPT, model, key, response=matched)
+        _assert_guardrail_request(matched_global_guardrail_requests[0], _PROMPT, model, key, response=matched)
+        assert matched_model_guardrail_requests[0].headers["x-api-key"] == model_guardrail_key
+        assert matched_global_guardrail_requests[0].headers["x-api-key"] == global_guardrail_key
+        matched_provider_requests: Final = provider.drain()
+        assert len(matched_provider_requests) == 1
+        _assert_provider_request(matched_provider_requests[0], _PROMPT)
+
+        unmatched: Final = _chat(gateway, other_model, key, _PROMPT)
+        assert unmatched.headers.get("x-litellm-applied-policies") == global_policy_name, unmatched.text
+        assert model_guardrail.drain() == ()
+        unmatched_global_guardrail_requests: Final = global_guardrail.drain()
+        assert len(unmatched_global_guardrail_requests) == 1
+        _assert_guardrail_request(unmatched_global_guardrail_requests[0], _PROMPT, other_model, key, response=unmatched)
+        assert unmatched_global_guardrail_requests[0].headers["x-api-key"] == global_guardrail_key
+        unmatched_provider_requests: Final = provider.drain()
+        assert len(unmatched_provider_requests) == 1
+        _assert_provider_request(unmatched_provider_requests[0], _PROMPT)
+
+
 def _delete_attachment(gateway: Gateway, attachment_id: str) -> None:
     deleted: Final = gateway.request("DELETE", f"/policies/attachments/{attachment_id}")
     assert deleted.status_code == 200, deleted.text
@@ -788,7 +912,18 @@ def test_policy_attachment_with_a_blocking_guardrail_stops_the_request_before_th
         _assert_provider_request(provider_requests[0], _PROMPT)
 
 
-def test_policy_attachment_tag_scope_matches_only_tagged_requests(gateway: Gateway) -> None:
+@pytest.mark.parametrize(
+    "tag_spelling",
+    (
+        pytest.param("metadata_tags", id="metadata_tags"),
+        pytest.param("header", id="header"),
+        pytest.param("top_level_tags", id="top_level_tags"),
+    ),
+)
+def test_policy_attachment_tag_scope_matches_only_tagged_requests(
+    gateway: Gateway,
+    tag_spelling: Literal["metadata_tags", "header", "top_level_tags"],
+) -> None:
     with (
         wire_server(lambda _request: Reply(body=json.dumps(_PROVIDER_RESPONSE).encode())) as provider,
         wire_server(
@@ -835,32 +970,42 @@ def test_policy_attachment_tag_scope_matches_only_tagged_requests(gateway: Gatew
         )
         assert rows == [{"policy_name": policy_name, "tags": [f"{prefix}-*"], "is_default": False}]
 
+        tag: Final = f"{prefix}-prod"
+        tagged_body: Final[dict[str, JsonValue]] = {
+            "model": model,
+            "messages": [{"role": "user", "content": _PROMPT}],
+            **({"metadata": {"tags": [tag]}} if tag_spelling == "metadata_tags" else {}),
+            **({"tags": [tag]} if tag_spelling == "top_level_tags" else {}),
+        }
         tagged: Final = gateway.request(
             "POST",
             "/v1/chat/completions",
-            {
-                "model": model,
-                "messages": [{"role": "user", "content": _PROMPT}],
-                "metadata": {"tags": [f"{prefix}-prod"]},
-            },
+            tagged_body,
             key=key,
+            headers={"x-litellm-tags": tag} if tag_spelling == "header" else None,
         )
         assert tagged.status_code == 200, tagged.text
         _ChatResponse.model_validate_json(tagged.content)
         assert tagged.headers.get("x-litellm-applied-policies") == policy_name, tagged.text
+        tagged_guardrail_requests: Final = guardrail.drain()
+        assert len(tagged_guardrail_requests) == 1
+        _assert_guardrail_request(tagged_guardrail_requests[0], _PROMPT, model, key, response=tagged)
+        tagged_provider_requests: Final = provider.drain()
+        assert len(tagged_provider_requests) == 1
+        assert [(request.method, request.target) for request in tagged_provider_requests] == [
+            ("POST", "/v1/chat/completions")
+        ]
+        _assert_provider_request(tagged_provider_requests[0], _MASKED)
+
         untagged: Final = _chat(gateway, model, key, _PROMPT)
         assert untagged.headers.get("x-litellm-applied-policies") is None, untagged.text
-
-        guardrail_requests: Final = guardrail.drain()
-        assert len(guardrail_requests) == 1
-        _assert_guardrail_request(guardrail_requests[0], _PROMPT, model, key, response=tagged)
-        provider_requests: Final = provider.drain()
-        assert [(request.method, request.target) for request in provider_requests] == [
-            ("POST", "/v1/chat/completions"),
-            ("POST", "/v1/chat/completions"),
+        assert guardrail.drain() == ()
+        untagged_provider_requests: Final = provider.drain()
+        assert len(untagged_provider_requests) == 1
+        assert [(request.method, request.target) for request in untagged_provider_requests] == [
+            ("POST", "/v1/chat/completions")
         ]
-        _assert_provider_request(provider_requests[0], _MASKED)
-        _assert_provider_request(provider_requests[1], _PROMPT)
+        _assert_provider_request(untagged_provider_requests[0], _PROMPT)
 
 
 def test_default_policy_attachment_applies_only_when_no_other_attachment_matches(gateway: Gateway) -> None:
