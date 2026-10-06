@@ -171,9 +171,13 @@ async def test_async_sse_wrapper_mid_stream_error_propagates_when_proxy_managed(
     )
 
     received = []
-    with pytest.raises(Exception, match="Server disconnected"):
+
+    async def _drain():
         async for chunk in wrapper.async_anthropic_sse_wrapper():
             received.append(chunk)
+
+    with pytest.raises(Exception, match="Server disconnected"):
+        await _drain()
 
     # message_start was delivered; no adapter-level error frame followed
     assert any(b"message_start" in chunk for chunk in received)
