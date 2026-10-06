@@ -391,7 +391,7 @@ describe("Lens interactive demo", () => {
     });
     expect(screen.getByRole("tab", { name: "Settings", selected: true })).toHaveAttribute("title", "Settings");
     const panel = within(screen.getByRole("region", { name: "Settings" }));
-    expect(await panel.findByRole("status")).toHaveTextContent("Tracing is not enabled");
+    expect(await panel.findByText("Tracing is not enabled")).toBeVisible();
     expect(panel.queryByRole("heading", { name: "Analysis worker" })).not.toBeInTheDocument();
   });
 
@@ -409,7 +409,12 @@ describe("Lens interactive demo", () => {
     await user.click(settings);
     await expectUrl(onUrlUpdate, (url) => expect(url.get("tab")).toBe("settings"));
     expect(screen.getByRole("region", { name: "Settings" })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Tracing status is unavailable");
     expect(screen.queryByRole("heading", { name: "Analysis worker" })).not.toBeInTheDocument();
+    const panel = within(screen.getByRole("region", { name: "Settings" }));
+    expect(panel.getByRole("link", { name: "Docs" })).toBeVisible();
+    await user.click(panel.getByRole("button", { name: "Connect an agent" }));
+    await expectUrl(onUrlUpdate, (url) => expect(url.get("tab")).toBe("traces"));
   });
 
   it("keeps Settings available when /lens fails", async () => {
@@ -424,6 +429,7 @@ describe("Lens interactive demo", () => {
     await waitFor(() => expect(testQueryClient.getQueryState(lensKeys.list("live-token"))?.status).toBe("error"));
     expect(screen.getByRole("tab", { name: "Settings", selected: true })).toHaveAttribute("title", "Settings");
     expect(screen.getByRole("region", { name: "Settings" })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Tracing status is unavailable");
     expect(screen.queryByRole("heading", { name: "Analysis worker" })).not.toBeInTheDocument();
   });
 
@@ -433,6 +439,7 @@ describe("Lens interactive demo", () => {
     });
     expect(screen.getByRole("tab", { name: "Settings", selected: true })).toHaveAttribute("title", "Settings");
     expect(screen.getByRole("region", { name: "Settings" })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Tracing status is unavailable");
     expect(screen.queryByRole("heading", { name: "Analysis worker" })).not.toBeInTheDocument();
     expect(network.mock.calls.some(([input]) => requestPath(input) === "/lens")).toBe(false);
   });
