@@ -2622,7 +2622,6 @@ def batch_cost_calculator(
             "output_cost_per_token",
         )
     ):
-        # Fill missing rates from the global table while preserving deployment-specific pricing.
         deployment_info: Final = model_info
         try:
             global_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
