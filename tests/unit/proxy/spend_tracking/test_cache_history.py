@@ -116,6 +116,72 @@ def test_unspecified_provider_lifetime_is_labeled_and_expires(seconds: int, expe
     assert estimates[0].usage.prompt_tokens_details.cache_creation_tokens == 8000 - expected_reads
 
 
+@pytest.mark.parametrize("explicit_ttl,seconds", (("5m", 300), ("1h", 3600)))
+@pytest.mark.parametrize("retention,lifetime", ((None, 1800), ("24h", 86400)))
+def test_mixed_lifetime_prefixes_reuse_and_expire_independently(
+    explicit_ttl: str, seconds: int, retention: str | None, lifetime: int
+) -> None:
+    request: Final = _request(
+        messages=[
+            {"role": "user", "content": _PROMPT, "cache_control": {"type": "ephemeral", "ttl": explicit_ttl}},
+            {"role": "assistant", "content": "OK"},
+            {"role": "user", "content": "A second reusable prefix. " * 200},
+        ],
+        prompt_cache_retention=retention,
+    )
+    first: Final = _observation(request)
+    assert first.plan is not None and len(first.plan.breakpoints) == 2
+    history, cold = advance_baseline_history(BaselineHistory(), (first,))
+    assert cold[0].usage is not None, cold[0].reason
+    assert cold[0].usage.prompt_tokens_details.cache_creation_tokens == 8000
+    for elapsed in (2, seconds, lifetime):
+        _, estimates = advance_baseline_history(history, (_observation(request, started=10000.0 + elapsed),))
+        usage: Final = estimates[0].usage
+        reads: Final = max(
+            (marker.prefix_tokens for marker in first.plan.breakpoints if elapsed < marker.ttl_seconds), default=0
+        )
+        assert usage is not None, estimates[0].reason
+        assert usage.prompt_tokens_details.cached_tokens == reads
+        assert usage.prompt_tokens_details.cache_creation_tokens == 8000 - reads
+        assert getattr(usage.prompt_tokens_details, "cache_creation_token_details", None) is None
+
+
+@pytest.mark.parametrize("ttl", ("5m", "1h"))
+def test_mixed_lifetime_growth_reuses_the_matching_shorter_prefix(ttl: str) -> None:
+    marked: Final = {"role": "user", "content": _PROMPT, "cache_control": {"type": "ephemeral", "ttl": ttl}}
+    request: Final = _request(messages=[marked, {"role": "user", "content": "first suffix " * 200}])
+    first: Final = _observation(request)
+    assert first.plan is not None
+    history, _ = advance_baseline_history(BaselineHistory(), (first,))
+    grown: Final = _observation(
+        _request(messages=[marked, {"role": "user", "content": "changed suffix " * 200}]), started=10002.0
+    )
+    _, estimates = advance_baseline_history(history, (grown,))
+    usage: Final = estimates[0].usage
+    assert usage is not None, estimates[0].reason
+    reads: Final = first.plan.breakpoints[0].prefix_tokens
+    assert usage.prompt_tokens_details.cached_tokens == reads
+    assert usage.prompt_tokens_details.cache_creation_tokens == 8000 - reads
+
+
+def test_scaled_prefix_counts_in_a_growing_conversation_do_not_invent_a_lifetime_change() -> None:
+    messages: Final = [
+        {"role": "user", "content": _PROMPT, "cache_control": {"type": "ephemeral", "ttl": "5m"}},
+        {"role": "user", "content": "A second prefix. " * 200},
+    ]
+    first: Final = _observation(_request(messages=messages))
+    history, _ = advance_baseline_history(BaselineHistory(), (first,))
+    grown: Final = _observation(
+        _request(messages=[*messages, {"role": "assistant", "content": "OK"}, {"role": "user", "content": "Next"}]),
+        started=10002.0,
+    )
+    _, estimates = advance_baseline_history(history, (grown,))
+    usage: Final = estimates[0].usage
+    assert usage is not None, estimates[0].reason
+    assert usage.prompt_tokens_details.cached_tokens == 8000
+    assert usage.prompt_tokens_details.cache_creation_tokens == 0
+
+
 @pytest.mark.parametrize(
     "changes",
     (

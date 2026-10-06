@@ -172,6 +172,37 @@ def test_invalid_usage_and_invalid_count_plan_cannot_seed_cache() -> None:
     assert _replay(_observation("bad", plan=broken))[0].usage is None
 
 
+@pytest.mark.parametrize("policy", ("anthropic", "estimated"))
+def test_duration_pricing_rejects_short_lived_prefix_before_long_lived_suffix(policy: str) -> None:
+    plan: Final = CountedPromptCachePlan(6200, (_marker("early", 300, 3000), _marker("last", 3600, 6000)))
+    observation: Final = _observation("invalid", plan=plan, cache_policy=policy, cache_write_pricing="duration")
+    history, estimates = advance_baseline_history(BaselineHistory(), (observation,))
+    assert estimates[0].usage is None and estimates[0].reason == "unsupported_cache_plan"
+    assert not history.entries
+
+
+def test_mixed_lifetime_lookback_preserves_a_compatible_native_hit() -> None:
+    marker: Final = _marker("prefix", 3600, 6000)
+    history: Final = BaselineHistory(
+        first_at=1.0,
+        last_at=10000.0,
+        equivalent=False,
+        uncertain_before=1.0,
+        entries=(CacheEntry(marker.fingerprint, marker.content_fingerprint, 6000, 3600, 10000.0, 13600.0),),
+    )
+    plan: Final = CountedPromptCachePlan(
+        7100, (_marker("grown", 3600, 6500, ("prefix",)), _marker("tail", 300, 7000, ("prefix",)))
+    )
+    _, estimates = advance_baseline_history(history, (_observation("next", 10001.0, plan=plan),))
+    usage: Final = estimates[0].usage
+    assert usage is not None, estimates[0].reason
+    assert usage.prompt_tokens_details.cached_tokens == 6000
+    assert usage.prompt_tokens_details.text_tokens == 100
+    assert usage.prompt_tokens_details.cache_creation_token_details == CacheCreationTokenDetails(
+        ephemeral_5m_input_tokens=500, ephemeral_1h_input_tokens=500
+    )
+
+
 def test_overlapping_uncertain_request_cannot_be_warmed_by_a_later_callback() -> None:
     uncertain: Final = _observation("incomplete", outcome="uncertain", available_at=10010.0)
     overlap: Final = _observation("overlap", 10001.0)

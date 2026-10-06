@@ -99,9 +99,11 @@ def _complete_usage(usage: Usage | None, policy: str = "anthropic") -> bool:
     )
 
 
-def _valid_plan(plan: CountedPromptCachePlan | None, policy: str = "anthropic") -> bool:
+def _valid_plan(observation: BaselineObservation) -> bool:
+    plan: Final = observation.plan
     if plan is None or plan.total_tokens < 0 or len(plan.breakpoints) > 4:
         return False
+    standard: Final = observation.cache_policy == "estimated" and observation.cache_write_pricing == "standard"
     return all(
         marker.fingerprint
         and marker.content_fingerprint
@@ -109,13 +111,13 @@ def _valid_plan(plan: CountedPromptCachePlan | None, policy: str = "anthropic") 
         and marker.content_fingerprint in marker.lookback_content_fingerprints
         and (
             0 < marker.ttl_seconds <= MAX_ESTIMATED_CACHE_TTL
-            if policy == "estimated"
+            if observation.cache_policy == "estimated"
             else marker.ttl_seconds in (300, 3600)
         )
         and 0 <= marker.prefix_tokens <= plan.total_tokens
         for marker in plan.breakpoints
     ) and all(
-        left.prefix_tokens <= right.prefix_tokens and left.ttl_seconds >= right.ttl_seconds
+        left.prefix_tokens <= right.prefix_tokens and (standard or left.ttl_seconds >= right.ttl_seconds)
         for left, right in zip(plan.breakpoints, plan.breakpoints[1:])
     )
 
@@ -142,10 +144,13 @@ def _matches(entry: CacheEntry, markers: tuple[CountedBreakpoint, ...], started:
 
 
 def _ambiguous(entry: CacheEntry, markers: tuple[CountedBreakpoint, ...], started: float) -> bool:
-    return entry.available_at <= started < entry.expires_at and any(
-        entry.content_fingerprint in marker.lookback_content_fingerprints
-        and (entry.uncertain or entry.ttl_seconds != marker.ttl_seconds)
-        for marker in markers
+    matching: Final = tuple(
+        marker for marker in markers if entry.content_fingerprint in marker.lookback_content_fingerprints
+    )
+    return (
+        entry.available_at <= started < entry.expires_at
+        and bool(matching)
+        and (entry.uncertain or all(entry.ttl_seconds != marker.ttl_seconds for marker in matching))
     )
 
 
@@ -196,7 +201,7 @@ def _estimate(history: BaselineHistory, observation: BaselineObservation, equiva
     if observation.started_at < history.blocked_until:
         return BaselineEstimate(observation.request_id, "concurrent_uncertainty")
     plan: Final = observation.plan
-    if not _valid_plan(plan, observation.cache_policy) or plan is None:
+    if not _valid_plan(observation) or plan is None:
         return BaselineEstimate(observation.request_id, observation.reason or "unsupported_cache_plan")
     markers: Final = _markers(observation)
     if any(_ambiguous(entry, markers, observation.started_at) for entry in history.entries):
@@ -251,7 +256,7 @@ def _writes(history: BaselineHistory, observation: BaselineObservation) -> tuple
         observation.outcome != "complete"
         or observation.started_at < history.blocked_until
         or not _complete_usage(observation.usage, observation.cache_policy)
-        or not _valid_plan(observation.plan, observation.cache_policy)
+        or not _valid_plan(observation)
     ):
         return ()
     markers: Final = _markers(observation)
@@ -354,9 +359,7 @@ def advance_baseline_history(
     )
     estimates: Final = tuple(_estimate(before, item, equivalent) for item in simultaneous)
     invalidated: Final = any(
-        item.outcome != "complete"
-        or not _complete_usage(item.usage, item.cache_policy)
-        or not _valid_plan(item.plan, item.cache_policy)
+        item.outcome != "complete" or not _complete_usage(item.usage, item.cache_policy) or not _valid_plan(item)
         for item in relevant
     )
     blocked: Final = max((history.blocked_until, *(item.available_at for item in relevant if invalidated)))
