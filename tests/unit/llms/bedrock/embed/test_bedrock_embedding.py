@@ -9,6 +9,7 @@ import httpx
 
 import litellm
 from litellm.llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
+from litellm.llms.bedrock.request_metadata import BEDROCK_REQUEST_METADATA_HEADER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
@@ -95,9 +96,7 @@ def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_re
         ("bedrock/amazon.titan-embed-text-v1", "text", titan_embedding_response),
     ],
 )
-def test_bedrock_embedding_with_env_variable_bearer_token(
-    model, input_type, embed_response
-):
+def test_bedrock_embedding_with_env_variable_bearer_token(model, input_type, embed_response):
     """Test embedding functionality with bearer token from environment variable"""
     client = HTTPHandler()
     test_api_key = "env-bearer-token-12345"
@@ -106,7 +105,6 @@ def test_bedrock_embedding_with_env_variable_bearer_token(
         patch.dict(os.environ, {"AWS_BEARER_TOKEN_BEDROCK": test_api_key}),
         patch.object(client, "post") as mock_post,
     ):
-
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.text = json.dumps(embed_response)
@@ -161,9 +159,7 @@ def test_bedrock_embedding_with_sigv4():
     """Test embedding falls back to SigV4 auth when no bearer token is provided"""
     model = "bedrock/amazon.titan-embed-text-v1"
 
-    with patch(
-        "litellm.llms.bedrock.embed.embedding.BedrockEmbedding.embeddings"
-    ) as mock_bedrock_embed:
+    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding.embeddings") as mock_bedrock_embed:
         mock_embedding_response = litellm.EmbeddingResponse()
         mock_embedding_response.data = [{"embedding": [0.1, 0.2, 0.3]}]
         mock_bedrock_embed.return_value = mock_embedding_response
@@ -260,9 +256,7 @@ def test_twelvelabs_input_type_parameter_mapping():
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/twelvelabs.marengo-embed-2-7-v1:0"
 
-    twelvelabs_response = {
-        "data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]
-    }
+    twelvelabs_response = {"data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]}
 
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
@@ -299,9 +293,7 @@ def test_twelvelabs_input_type_parameter_mapping_async_invoke():
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/async_invoke/twelvelabs.marengo-embed-2-7-v1:0"
 
-    async_invoke_response = {
-        "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456"
-    }
+    async_invoke_response = {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456"}
 
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
@@ -342,9 +334,7 @@ def test_twelvelabs_missing_input_type_error():
 
     # Test TwelveLabs model - should default to 'text' when input_type is missing
     twelvelabs_model = "bedrock/twelvelabs.marengo-embed-2-7-v1:0"
-    twelvelabs_response = {
-        "data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]
-    }
+    twelvelabs_response = {"data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]}
 
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
@@ -463,8 +453,7 @@ def test_bedrock_embedding_header_forwarding(model, embed_response):
                     or any(k.lower() == header_key.lower() for k in headers.keys())
                 )
                 assert header_found, (
-                    f"Header {header_key} should be in request headers. "
-                    f"Found headers: {list(headers.keys())}"
+                    f"Header {header_key} should be in request headers. Found headers: {list(headers.keys())}"
                 )
 
             print(f"✓ Test passed for {model}")
@@ -520,20 +509,14 @@ def test_bedrock_embedding_extra_headers_and_headers_merge():
 
             # Both sets of headers should be present
             # Note: AWS SigV4 signing may modify header names to lowercase
-            proxy_header_found = any(
-                k.lower() == "x-forwarded-header" for k in headers.keys()
-            )
+            proxy_header_found = any(k.lower() == "x-forwarded-header" for k in headers.keys())
             assert proxy_header_found, (
-                "Proxy forwarded header should be present. "
-                f"Found headers: {list(headers.keys())}"
+                f"Proxy forwarded header should be present. Found headers: {list(headers.keys())}"
             )
 
-            explicit_header_found = any(
-                k.lower() == "x-explicit-header" for k in headers.keys()
-            )
+            explicit_header_found = any(k.lower() == "x-explicit-header" for k in headers.keys())
             assert explicit_header_found, (
-                "Explicitly passed header should be present. "
-                f"Found headers: {list(headers.keys())}"
+                f"Explicitly passed header should be present. Found headers: {list(headers.keys())}"
             )
 
             print("✓ Both header sources correctly merged and forwarded")
@@ -661,12 +644,9 @@ def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_base():
             # Note: HeadersDict should be converted to regular dict, so headers should be accessible
             for header_key, header_value in custom_headers.items():
                 # Check if header exists (case-insensitive for HTTP headers)
-                header_found = any(
-                    k.lower() == header_key.lower() for k in headers.keys()
-                )
+                header_found = any(k.lower() == header_key.lower() for k in headers.keys())
                 assert header_found, (
-                    f"Custom header {header_key} should be in request headers. "
-                    f"Found headers: {list(headers.keys())}"
+                    f"Custom header {header_key} should be in request headers. Found headers: {list(headers.keys())}"
                 )
 
                 # Verify the value matches
@@ -677,30 +657,22 @@ def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_base():
                         break
 
                 assert header_value_found == header_value, (
-                    f"Header {header_key} should have value {header_value}, "
-                    f"but found {header_value_found}"
+                    f"Header {header_key} should have value {header_value}, but found {header_value_found}"
                 )
 
             # Verify AWS signature headers are also present
             assert "Authorization" in headers, "AWS signature should be present"
             assert "X-Amz-Date" in headers, "AWS date header should be present"
-            assert (
-                "X-Amz-Security-Token" in headers
-            ), "Session token header should be present"
-            assert (
-                headers["X-Amz-Security-Token"] == aws_session_token
-            ), "Session token should match the provided token"
+            assert "X-Amz-Security-Token" in headers, "Session token header should be present"
+            assert headers["X-Amz-Security-Token"] == aws_session_token, "Session token should match the provided token"
 
             # Verify the custom api_base was used
             called_url = call_kwargs.get("url", "")
             assert custom_api_base in str(called_url), (
-                f"Custom api_base {custom_api_base} should be used. "
-                f"Got URL: {called_url}"
+                f"Custom api_base {custom_api_base} should be used. Got URL: {called_url}"
             )
 
-            print(
-                "✓ Test passed: Custom headers forwarded with IAM role + custom api_base"
-            )
+            print("✓ Test passed: Custom headers forwarded with IAM role + custom api_base")
             print(
                 f"  Custom headers found: {[k for k in headers.keys() if k.lower().startswith('x-custom') or k.lower().startswith('x-forwarded')]}"
             )
@@ -709,9 +681,7 @@ def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_base():
             )
 
         except Exception as e:
-            pytest.fail(
-                f"Failed to forward headers with IAM role + custom api_base: {str(e)}"
-            )
+            pytest.fail(f"Failed to forward headers with IAM role + custom api_base: {str(e)}")
 
 
 @pytest.mark.asyncio
@@ -776,12 +746,9 @@ async def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_bas
             # Verify custom headers are present in the request
             for header_key, header_value in custom_headers.items():
                 # Check if header exists (case-insensitive for HTTP headers)
-                header_found = any(
-                    k.lower() == header_key.lower() for k in headers.keys()
-                )
+                header_found = any(k.lower() == header_key.lower() for k in headers.keys())
                 assert header_found, (
-                    f"Custom header {header_key} should be in request headers. "
-                    f"Found headers: {list(headers.keys())}"
+                    f"Custom header {header_key} should be in request headers. Found headers: {list(headers.keys())}"
                 )
 
                 # Verify the value matches
@@ -792,30 +759,22 @@ async def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_bas
                         break
 
                 assert header_value_found == header_value, (
-                    f"Header {header_key} should have value {header_value}, "
-                    f"but found {header_value_found}"
+                    f"Header {header_key} should have value {header_value}, but found {header_value_found}"
                 )
 
             # Verify AWS signature headers are also present
             assert "Authorization" in headers, "AWS signature should be present"
             assert "X-Amz-Date" in headers, "AWS date header should be present"
-            assert (
-                "X-Amz-Security-Token" in headers
-            ), "Session token header should be present"
-            assert (
-                headers["X-Amz-Security-Token"] == aws_session_token
-            ), "Session token should match the provided token"
+            assert "X-Amz-Security-Token" in headers, "Session token header should be present"
+            assert headers["X-Amz-Security-Token"] == aws_session_token, "Session token should match the provided token"
 
             # Verify the custom api_base was used
             called_url = call_kwargs.get("url", "")
             assert custom_api_base in str(called_url), (
-                f"Custom api_base {custom_api_base} should be used. "
-                f"Got URL: {called_url}"
+                f"Custom api_base {custom_api_base} should be used. Got URL: {called_url}"
             )
 
-            print(
-                "✓ Test passed (async): Custom headers forwarded with IAM role + custom api_base"
-            )
+            print("✓ Test passed (async): Custom headers forwarded with IAM role + custom api_base")
             print(
                 f"  Custom headers found: {[k for k in headers.keys() if k.lower().startswith('x-custom') or k.lower().startswith('x-forwarded')]}"
             )
@@ -824,9 +783,7 @@ async def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_bas
             )
 
         except Exception as e:
-            pytest.fail(
-                f"Failed to forward headers with IAM role + custom api_base (async): {str(e)}"
-            )
+            pytest.fail(f"Failed to forward headers with IAM role + custom api_base (async): {str(e)}")
 
 
 def test_titan_multimodal_embedding_image_cost_tracking():
@@ -955,9 +912,7 @@ def test_titan_image_embedding_cost_uses_per_image_rate():
         (["float", "int8"], ["float", "int8"]),
     ],
 )
-def test_bedrock_cohere_embedding_types_wrapped_as_list(
-    encoding_format, expected_embedding_types
-):
+def test_bedrock_cohere_embedding_types_wrapped_as_list(encoding_format, expected_embedding_types):
     """
     Bedrock Cohere expects `embedding_types` as a JSON array, not a raw string.
 
@@ -1159,6 +1114,8 @@ async def test_async_single_func_embeddings_signs_off_the_event_loop(monkeypatch
     assert response.data[0]["embedding"] == titan_embedding_response["embedding"]
     assert "Authorization" in client.post.call_args.kwargs["headers"]
     assert probe.served_during_refresh is True
+
+
 marengo_3_embedding_response = {"data": [{"embedding": [0.01 * i for i in range(512)]}]}
 MARENGO_3_DUCK = "data:image/png;base64,ZHVjaw=="
 
@@ -1223,7 +1180,9 @@ def test_marengo_3_embedding_sends_the_nested_payload_and_parses_512_dims(
         )
 
     assert json.loads(mock_post.call_args.kwargs["data"]) == expected_body
-    assert mock_post.call_args.kwargs["url"].endswith(f"/model/{model.removeprefix('bedrock/').replace(':', '%3A')}/invoke")
+    assert mock_post.call_args.kwargs["url"].endswith(
+        f"/model/{model.removeprefix('bedrock/').replace(':', '%3A')}/invoke"
+    )
     assert len(response.data[0]["embedding"]) == 512
     assert response.data[0]["embedding"][:2] == [0.0, 0.01]
     assert response.usage.prompt_tokens == 0
@@ -1297,7 +1256,10 @@ def test_marengo_usage_counts_text_requests_and_images_across_a_batch():
         batch_data=[
             {"inputType": "text", "text": {"inputText": "a duck"}},
             {"inputType": "image", "image": {"mediaSource": {"base64String": "ZHVjaw=="}}},
-            {"inputType": "multi_input", "multi_input": {"mediaSources": [{"name": "a", **duck}, {"name": "b", **duck}]}},
+            {
+                "inputType": "multi_input",
+                "multi_input": {"mediaSources": [{"name": "a", **duck}, {"name": "b", **duck}]},
+            },
         ],
     )
 
@@ -1336,3 +1298,36 @@ def test_marengo_3_text_image_without_media_source_is_a_bad_request():
             api_key="test-bearer-token-12345",
             input_type="text_image",
         )
+
+
+def test_bedrock_embedding_forwards_request_metadata(monkeypatch: pytest.MonkeyPatch):
+    client = HTTPHandler()
+    monkeypatch.setattr(
+        litellm,
+        "bedrock_request_metadata_fields",
+        ["user_api_key_alias", "user_api_key_team_alias"],
+    )
+    identity = {"user_api_key_alias": "prod-key", "user_api_key_team_alias": "platform"}
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps(titan_embedding_response)
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        response = litellm.embedding(
+            model="bedrock/amazon.titan-embed-text-v2:0",
+            input=test_input,
+            client=client,
+            metadata=dict(identity),
+            aws_region_name="us-east-1",
+            aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+            api_key="test-bearer-token-12345",
+        )
+
+        assert isinstance(response, litellm.EmbeddingResponse)
+        sent_headers = mock_post.call_args.kwargs.get("headers", {})
+        matched = [v for k, v in sent_headers.items() if k.lower() == BEDROCK_REQUEST_METADATA_HEADER.lower()]
+        assert matched != []
+        assert json.loads(matched[0]) == identity
