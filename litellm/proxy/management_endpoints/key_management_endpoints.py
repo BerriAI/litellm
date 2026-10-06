@@ -154,6 +154,7 @@ from litellm.repositories.verification_token_repository import (
 from litellm.router import Router
 from litellm.secret_managers.base_secret_manager import raise_if_unsafe_secret_name
 from litellm.secret_managers.main import get_secret
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
@@ -212,7 +213,7 @@ class _KeyUpdateResult(TypedDict):
     data: ReadOnly[Mapping[str, object]]
 
 
-class _StoredKeyRouterSettings(BaseModel):
+class _StoredKeyRouterSettings(LiteLLMBaseModel):
     router_settings: Mapping[str, object] | None = None
 
 
@@ -6491,7 +6492,7 @@ KeyStatus = Literal["active", "expired", "revoked", "deleted"]
 VALID_STATUS_FILTER_VALUES: Final[frozenset[KeyStatus]] = frozenset({"active", "expired", "revoked", "deleted"})
 
 
-class _KeyStatusSource(BaseModel):
+class _KeyStatusSource(LiteLLMBaseModel):
     blocked: bool | None = None
     expires: datetime | None = None
 

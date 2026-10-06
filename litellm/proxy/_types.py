@@ -35,6 +35,7 @@ from litellm.types.integrations.compression_interception import (
     CompressionSavingsMetadata,
 )
 from litellm.types.integrations.slack_alerting import AlertType
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     ResponsesAPIResponse,
@@ -2594,7 +2595,7 @@ class CallbackDelete(LiteLLMPydanticObjectBase):
     callback_name: str
 
 
-class FieldDetail(BaseModel):
+class FieldDetail(LiteLLMBaseModel):
     field_name: str
     field_type: str
     field_description: str
@@ -3814,7 +3815,7 @@ class LiteLLM_ProjectTableCachedObj(LiteLLM_ProjectTable):
     last_refreshed_at: float | None = None
 
 
-class LiteLLM_UserTableFiltered(BaseModel):  # done to avoid exposing sensitive data
+class LiteLLM_UserTableFiltered(LiteLLMBaseModel):  # done to avoid exposing sensitive data
     user_id: str
     user_email: str | None = None
 
@@ -4790,14 +4791,14 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     temp_budget_expiry: datetime | None = None
 
 
-class TeamModelAddRequest(BaseModel):
+class TeamModelAddRequest(LiteLLMBaseModel):
     """Request to add models to a team"""
 
     team_id: str
     models: list[str]
 
 
-class TeamModelDeleteRequest(BaseModel):
+class TeamModelDeleteRequest(LiteLLMBaseModel):
     """Request to delete models from a team"""
 
     team_id: str
@@ -4852,20 +4853,20 @@ class TeamInfoMember(Member):
     user_alias: str | None = None
 
 
-class TeamEditUnrestricted(BaseModel):
+class TeamEditUnrestricted(LiteLLMBaseModel):
     kind: Literal["unrestricted"] = "unrestricted"
 
 
-class TeamEditAsTeamAdmin(BaseModel):
+class TeamEditAsTeamAdmin(LiteLLMBaseModel):
     kind: Literal["team_admin"] = "team_admin"
     editable_fields: tuple[str, ...]
 
 
-class TeamEditAsTeamAdminDisabled(BaseModel):
+class TeamEditAsTeamAdminDisabled(LiteLLMBaseModel):
     kind: Literal["team_admin_disabled"] = "team_admin_disabled"
 
 
-class TeamEditNone(BaseModel):
+class TeamEditNone(LiteLLMBaseModel):
     kind: Literal["none"] = "none"
 
 
@@ -4904,7 +4905,7 @@ class TeamInfoResponseObject(TypedDict):
     team_memberships: ReadOnly[tuple[TeamInfoMembership, ...]]
 
 
-class TeamMemberResetBudgetResponse(BaseModel):
+class TeamMemberResetBudgetResponse(LiteLLMBaseModel):
     team_id: str
     user_id: str
     budget_id: str | None
@@ -5226,12 +5227,12 @@ class RoleBasedPermissions(OIDCPermissions):
     }
 
 
-class RoleMapping(BaseModel):
+class RoleMapping(LiteLLMBaseModel):
     role: str
     internal_role: RBAC_ROLES
 
 
-class JWTLiteLLMRoleMap(BaseModel):
+class JWTLiteLLMRoleMap(LiteLLMBaseModel):
     jwt_role: str
     litellm_role: LitellmUserRoles
 
@@ -5244,7 +5245,7 @@ class ScopeMapping(OIDCPermissions):
     }
 
 
-class JWTRoutingOverride(BaseModel):
+class JWTRoutingOverride(LiteLLMBaseModel):
     """
     Override default auth routing for JWT-shaped bearer tokens.
 
@@ -5263,9 +5264,7 @@ class JWTRoutingOverride(BaseModel):
     aud: str | list[str] | None = None
     path: Literal["oauth2"] = "oauth2"
 
-    model_config = {
-        "extra": "forbid",
-    }
+    model_config = ConfigDict(extra="forbid")
 
 
 class UnregisteredJWTClientBehavior(str, enum.Enum):
@@ -5287,7 +5286,7 @@ class UnregisteredJWTClientBehavior(str, enum.Enum):
     AUTO_REGISTER = "auto_register"
 
 
-class JWTIssuerConfig(BaseModel):
+class JWTIssuerConfig(LiteLLMBaseModel):
     """
     Issuer-bound JWT validation configuration.
 
@@ -5344,9 +5343,7 @@ class JWTIssuerConfig(BaseModel):
         description="Issuer-specific policy when the virtual key claim has no mapping. Falls back to the global policy.",
     )
 
-    model_config = {
-        "extra": "forbid",
-    }
+    model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="after")
     def validate_audience_configured(self) -> "JWTIssuerConfig":
@@ -5643,7 +5640,7 @@ class SpecialManagementEndpointEnums(enum.Enum):
     DEFAULT_ORGANIZATION = "default_organization"
 
 
-class TransformRequestBody(BaseModel):
+class TransformRequestBody(LiteLLMBaseModel):
     call_type: CallTypes
     request_body: dict
 

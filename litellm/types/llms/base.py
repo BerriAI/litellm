@@ -1,10 +1,20 @@
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from openai._models import BaseModel as OpenAIObject
 from pydantic import BaseModel, ConfigDict
 
+from litellm.constants import DEFER_PYDANTIC_BUILD
 
-class LiteLLMPydanticObjectBase(BaseModel):
+
+class LiteLLMBaseModel(BaseModel):
+    model_config = ConfigDict(defer_build=DEFER_PYDANTIC_BUILD)
+
+    if TYPE_CHECKING:
+
+        def __init__(self, /, **data: object) -> None: ...
+
+
+class LiteLLMPydanticObjectBase(LiteLLMBaseModel):
     """
     Implements default functions, all pydantic objects should have.
     """
@@ -26,7 +36,7 @@ class LiteLLMPydanticObjectBase(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class BaseLiteLLMOpenAIResponseObject(BaseModel):
+class BaseLiteLLMOpenAIResponseObject(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
     def __getitem__(self, key):
@@ -77,7 +87,7 @@ class HiddenParams(OpenAIObject):
         return data
 
 
-class CachedTokensDetails(BaseModel):
+class CachedTokensDetails(LiteLLMBaseModel):
     text_tokens: int | None = None
     audio_tokens: int | None = None
     image_tokens: int | None = None

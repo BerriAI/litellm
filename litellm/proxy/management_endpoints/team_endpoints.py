@@ -33,7 +33,7 @@ from typing import (
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -195,6 +195,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router import Router
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -4034,7 +4035,7 @@ async def reset_team_member_spend_fn(
     }
 
 
-class _TeamMetadataView(BaseModel):
+class _TeamMetadataView(LiteLLMBaseModel):
     metadata: Mapping[str, object] | None = None
 
 
@@ -4793,11 +4794,11 @@ async def _hydrate_member_user_details(
     return tuple(hydrate(m) for m in members)
 
 
-class _OrganizationModelsRow(BaseModel):
-    models: list[str] = []  # mutable-ok: pydantic field default
+class _OrganizationModelsRow(LiteLLMBaseModel):
+    models: list[str] = Field(default=[])  # mutable-ok: pydantic field default
 
 
-class _TeamRowWithOrganization(BaseModel):
+class _TeamRowWithOrganization(LiteLLMBaseModel):
     litellm_organization_table: _OrganizationModelsRow | None = None
 
 

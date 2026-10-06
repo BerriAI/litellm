@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, ConfigDict, Field, model_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 def calendar_lookback(hours: int) -> int:
@@ -24,7 +26,7 @@ LookbackHours: TypeAlias = Annotated[int, Field(ge=1), AfterValidator(calendar_l
 IntervalMinutes: TypeAlias = Annotated[int, Field(ge=1), AfterValidator(calendar_interval)]
 
 
-class Record(BaseModel):
+class Record(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 

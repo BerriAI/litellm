@@ -7,7 +7,9 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .analysis import AnalysisResponseError, AnalyzeSample, validation_details
 from .context_pipeline import analyze_sample
@@ -33,23 +35,23 @@ SLOTS: Final = 3
 POLL_SECONDS: Final = 2.0
 
 
-class ClaimedJobIdentity(BaseModel):
+class ClaimedJobIdentity(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
     id: str
 
 
-class ClaimIdentity(BaseModel):
+class ClaimIdentity(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
     lens_id: str
     job: ClaimedJobIdentity
 
 
-class PublicModelError(BaseModel):
+class PublicModelError(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     lens_error: str
 
 
-class ModelErrorEnvelope(BaseModel):
+class ModelErrorEnvelope(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore")
     detail: PublicModelError
 

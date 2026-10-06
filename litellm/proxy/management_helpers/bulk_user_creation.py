@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar
 
 from fastapi import HTTPException, Request
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -58,6 +58,7 @@ from litellm.proxy.utils import PrismaClient
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkNewUserItem,
     BulkNewUserMeta,
@@ -95,7 +96,7 @@ class _PendingUser:
     teams: tuple[NewUserRequestTeam, ...]
 
 
-class _UserRow(BaseModel):
+class _UserRow(LiteLLMBaseModel):
     """The `/user/new` body after defaults and object permission were applied."""
 
     model_config = ConfigDict(extra="ignore")
@@ -175,7 +176,7 @@ _ERROR_DETAIL: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
-class _KeyResponse(BaseModel):
+class _KeyResponse(LiteLLMBaseModel):
     token: str
 
 
