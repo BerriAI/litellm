@@ -1484,6 +1484,9 @@ object rather than ``True`` because ``request_data`` is the client body: JSON ca
 client can neither hide a guardrail block nor force a row by sending the key or a ``litellm_call_id`` itself."""
 
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
+_PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
+    {"model", "messages", "input", "prompt", "user", "stream", "metadata", "litellm_metadata", "litellm_call_id"}
+)
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
@@ -1516,6 +1519,10 @@ def _client_disconnected(exception: Exception) -> bool:
 
 def _provider_billed_the_failure(exception: Exception) -> bool:
     return _timed_out_reading_from_provider(exception) or _client_disconnected(exception)
+
+
+def _proxy_only_error_log_fields(request_data: Mapping[str, _T]) -> Mapping[str, _T]:
+    return MappingProxyType({k: v for k, v in request_data.items() if k in _PROXY_ONLY_ERROR_LOGGED_FIELDS})
 
 
 def _failure_fields_to_lift(
@@ -3892,7 +3899,7 @@ class ProxyLogging:
                 original_function=route or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
-                **request_data,
+                **_proxy_only_error_log_fields(request_data),
             )
             request_data["litellm_logging_obj"] = litellm_logging_obj  # rebind-ok: lifted then popped by the caller
             request_data.update({REJECTED_BEFORE_REQUEST_SETUP_KEY: REJECTED_BEFORE_REQUEST_SETUP})
@@ -3906,7 +3913,7 @@ class ProxyLogging:
             _litellm_params: Final = {}
 
             litellm_param_keys: Final = LoggedLiteLLMParams.__annotations__.keys()
-            for k, v in request_data.items():
+            for k, v in _proxy_only_error_log_fields(request_data).items():
                 if k in litellm_param_keys:
                     _litellm_params[k] = v
                 elif k not in ("model", "user", "litellm_logging_obj"):
