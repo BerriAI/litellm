@@ -13,6 +13,7 @@ from litellm.proxy.lens.models import (
     Lens,
     LensSettings,
     Progress,
+    Result,
     Review,
     ReviewPage,
     Sample,
@@ -86,6 +87,12 @@ def queue_job(
 
 def add_step(job: Job, step: Step) -> Job:
     return job.model_copy(update=MappingProxyType({"steps": (*job.steps, step)[-MAX_STEPS:]}))
+
+
+def result_status(result: Result) -> Literal["completed", "failed"]:
+    if result.error and not result.findings and not any(not item.cannot_assess for item in result.assessments):
+        return "failed"
+    return "completed"
 
 
 def end_job(job: Job, status: Literal["completed", "failed", "cancelled"], now: datetime) -> Job:

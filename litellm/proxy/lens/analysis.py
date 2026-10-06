@@ -175,21 +175,28 @@ async def structured_response_with_history(
     parsed, problem = await checked_response(response, schema, validate)
     if parsed is not None:
         return parsed, (*request.messages, ModelMessage(role="assistant", content=response.content))
-    correction: Final = (
-        "\nYour previous response did not match the required response contract. Generate a new response "
-        "from the original evidence, correcting these validation errors: " + problem
+    correction: Final = "\n" + json.dumps(
+        {
+            "instruction": (
+                "Your previous response did not match the required response contract. Generate a new response "
+                "from the original evidence, correcting the validation errors. Follow the complete object "
+                "structure in response_schema. If the schema allows tools, you may request them to inspect "
+                "evidence before finalizing."
+            ),
+            "validation_errors": problem,
+            "response_schema": schema.model_json_schema(),
+        },
+        ensure_ascii=False,
     )
     repair: Final = request.model_copy(
         update=MappingProxyType(
             {
                 "messages": (
-                    *request.messages,
+                    *request.conversation(),
                     ModelMessage(role="assistant", content=response.content),
-                    ModelMessage(role="user", content=correction),
+                    ModelMessage(role="system", content=correction),
                 )
             }
-            if request.messages
-            else {"prompt": request.prompt + correction}
         )
     )
     repaired: Final = await model(repair)

@@ -3,9 +3,10 @@ from queue import SimpleQueue
 from typing import Final
 
 import pytest
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from litellm.proxy.lens.agent_context import Checkpoint, compact_context
+from litellm.proxy.lens.agent_review import Findings, validate_findings
 from litellm.proxy.lens.agent_runtime import (
     AgentTurn,
     DialogueTurn,
@@ -18,7 +19,17 @@ from litellm.proxy.lens.agent_runtime import (
 )
 from litellm.proxy.lens.agent_workspace import EvidenceReply, EvidenceRequest, EvidenceWorkspace, SessionContent
 from litellm.proxy.lens.analysis import Extraction, Observation
-from litellm.proxy.lens.models import Claim, Evidence, ModelMessage, ModelRequest, ModelResult, Record, TracePart
+from litellm.proxy.lens.models import (
+    Claim,
+    Evidence,
+    Finding,
+    FindingDraft,
+    ModelMessage,
+    ModelRequest,
+    ModelResult,
+    Record,
+    TracePart,
+)
 from litellm.proxy.lens.state import queue_job
 from tests.unit.proxy.lens.test_agent_workspace import execution
 from tests.unit.proxy.lens.test_state import NOW, lens
@@ -35,6 +46,91 @@ class Continuation(BaseModel):
 class ToolResults(Record):
     journal_turns: int
     tool_results: tuple[str, ...]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("automatic", (False, True))
+async def test_checkpoint_preserves_retrieval_and_reuse_of_prior_finding_ids(automatic: bool) -> None:
+    part: Final = TracePart(execution_id="one", span_id="span", name="tool", kind="tool", content="timeout")
+    evidence: Final = (Evidence(execution_id="one", span_id="span", quote="timeout"),)
+    prior: Final = Finding(
+        id="prior-finding-sentinel",
+        title="A known transient timeout",
+        description="The observed timeout is already understood",
+        check_id="retries",
+        kind="pattern",
+        status="dismissed",
+        reason="The owner already reviewed this behavior",
+        evidence=evidence,
+        first_seen=NOW,
+        last_seen=NOW,
+        revision=1,
+    )
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=(prior,))
+    workspace: Final = EvidenceWorkspace(
+        sessions=(SessionContent(execution=execution("one"), parts=(part,), partial=False),)
+    )
+    resume_turn: Final = 2 if automatic else 1
+    turns: Final = iter(range(resume_turn + 2))
+
+    async def model(request: ModelRequest) -> ModelResult:
+        turn: Final = next(turns)
+        assert all(prior.id not in message.content for message in request.messages if message.role == "system")
+        if turn == 0:
+            assert prior.id in request.messages[1].content
+            return ModelResult(
+                content="" if automatic else AgentTurn[Findings](checkpoint="Consult prior findings").model_dump_json(),
+                context_exceeded=automatic,
+                cost=0,
+            )
+        if automatic and turn == 1:
+            assert prior.id in request.messages[1].content
+            return ModelResult(content=Checkpoint(working_notes="Consult prior findings").model_dump_json(), cost=0)
+        if turn == resume_turn:
+            continuation: Final = TypeAdapter(dict[str, JsonValue]).validate_json(request.messages[1].content)
+            assert continuation["initial_context_archived"] is True
+            assert all(prior.id not in message.content for message in request.messages)
+            return ModelResult(
+                content=AgentTurn[Findings](
+                    tools=(EvidenceRequest(action="history", include_initial=True, turn_end=0),)
+                ).model_dump_json(),
+                cost=0,
+            )
+        tool_result: Final = ToolResults.model_validate_json(request.messages[-1].content)
+        history: Final = JournalReply.model_validate_json(tool_result.tool_results[0])
+        assert history.initial_context is not None
+        assert history.initial_context.existing_findings == (prior,)
+        recovered: Final = history.initial_context.existing_findings[0]
+        return ModelResult(
+            content=AgentTurn[Findings](
+                result=Findings(
+                    findings=(
+                        FindingDraft(
+                            title=recovered.title,
+                            description=recovered.description,
+                            check_id=recovered.check_id,
+                            kind=recovered.kind,
+                            existing_finding_id=recovered.id,
+                            evidence=evidence,
+                        ),
+                    )
+                )
+            ).model_dump_json(),
+            cost=0,
+        )
+
+    result: Final = await run_agent(
+        stage="investigate",
+        task="Compare recorded behavior with prior findings",
+        purpose="investigate",
+        claim=claim,
+        workspace=workspace,
+        model=model,
+        schema=Findings,
+        validate=lambda finding: validate_findings(claim, workspace, finding),
+    )
+    assert result.findings[0].existing_finding_id == prior.id
+    assert next(turns, None) is None
 
 
 @pytest.mark.asyncio
@@ -61,7 +157,7 @@ async def test_repeated_compaction_preserves_unread_history_and_archived_initial
         purpose="extract",
         prompt="Review the complete evidence",
         messages=(
-            ModelMessage(role="user", content="Review the complete evidence"),
+            ModelMessage(role="system", content="Review the complete evidence"),
             previous,
             *(later if later_tool_result else ()),
         ),
@@ -69,12 +165,17 @@ async def test_repeated_compaction_preserves_unread_history_and_archived_initial
 
     async def model(checkpoint_request: ModelRequest) -> ModelResult:
         assert previous in checkpoint_request.messages
+        assert checkpoint_request.messages[0].role == "system"
+        assert checkpoint_request.messages[-1].role == "system"
+        assert "working_notes" in checkpoint_request.messages[-1].content
         return ModelResult(
             content=Checkpoint(working_notes="Continue investigating the recorded behavior").model_dump_json(),
             cost=0,
         )
 
     compacted: Final = await compact_context(request, model, 11 if later_tool_result else 10, None)
+    assert compacted[0] == request.messages[0]
+    assert compacted[1].role == "user"
     continuation: Final = Continuation.model_validate_json(compacted[1].content)
     assert continuation.resume_history_from_turn == 4
     assert continuation.initial_context_archived is True

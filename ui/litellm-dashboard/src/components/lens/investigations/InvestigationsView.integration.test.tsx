@@ -112,6 +112,7 @@ const lens: Lens = {
         candidates: 0,
         partial: 0,
         unassessable: 0,
+        failed_tasks: 0,
       },
       status: "completed",
       stage: "Complete",
@@ -377,7 +378,7 @@ it("opens the saved results of an older batch", async () => {
   });
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView readOnly />);
-  await screen.findByRole("option", { name: `${runTime(older.created_at)} · completed` });
+  await screen.findByRole("option", { name: `${runTime(older.created_at)} · Completed` });
   await user.selectOptions(screen.getByRole("combobox", { name: "Investigation run" }), "older");
   const investigation = within(screen.getByRole("complementary", { name: "Investigation details" }));
   expect(await investigation.findByText("Earlier batch finding")).toBeVisible();
@@ -745,6 +746,30 @@ it("shows the actual saved failure and run context without opening backend logs"
   expect(failure.queryByText(/find the error in proxy and worker logs/)).not.toBeInTheDocument();
 });
 
+it("keeps partial findings visible and shows how many analysis tasks failed", async () => {
+  testQueryClient.clear();
+  const job = {
+    ...lens.jobs[0],
+    error: "Result validation failed after 3 retries",
+    findings: [issue],
+    coverage: { ...lens.jobs[0].coverage, screened: 2, investigated: 1, failed_tasks: 1 },
+  };
+  proxy.get.mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [{ ...lens, jobs: [job] }], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return [job];
+    return { data: [] };
+  });
+  renderWithProviders(<InvestigationsView readOnly />);
+  expect(await screen.findByText("Partial results")).toBeVisible();
+  expect(screen.getByText("1 of 3 analysis tasks failed. Valid results are preserved.")).toBeVisible();
+  expect(screen.getByRole("button", { name: new RegExp(issue.title) })).toBeVisible();
+  expect(screen.queryByText("This investigation did not finish")).not.toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Investigation error")).not.toBeVisible();
+  fireEvent.click(screen.getByText("Run details", { selector: "summary" }));
+  expect(screen.getByLabelText("Investigation error")).toBeVisible();
+});
+
 it("keeps a finding open to retry when its update fails", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
@@ -856,7 +881,7 @@ it("refreshes run history as soon as the list reports a job the scheduler starte
   renderWithProviders(<InvestigationsView readOnly />);
   await user.click(await screen.findByRole("tab", { name: "History" }));
   const history = within(await screen.findByRole("tabpanel", { name: "History" }));
-  expect(await history.findByText("completed")).toBeVisible();
+  expect(await history.findByText("Completed")).toBeVisible();
   const fetched = runs.mock.calls.length;
 
   const queued = { ...lens.jobs[0], id: "scheduled", status: "queued" as const, stage: "Queued", findings: null };
@@ -868,7 +893,7 @@ it("refreshes run history as soon as the list reports a job the scheduler starte
       tracing_enabled: true,
     });
   });
-  expect(await history.findByText("queued")).toBeVisible();
+  expect(await history.findByText("Queued")).toBeVisible();
   expect(runs.mock.calls.length).toBeGreaterThan(fetched);
 });
 

@@ -14,6 +14,7 @@ const coverage: Job["coverage"] = {
   candidates: 0,
   partial: 0,
   unassessable: 0,
+  failed_tasks: 0,
 };
 
 const job: Job = {

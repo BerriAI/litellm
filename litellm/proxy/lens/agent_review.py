@@ -5,7 +5,7 @@ from typing import Final
 from .activity import ActivityTracker
 from .agent_runtime import run_agent
 from .agent_workspace import EvidenceReadError, EvidenceWorkspace, SessionContent
-from .analysis import Examined, Extraction, ModelCall
+from .analysis import Examined, Extraction, ModelCall, Observation
 from .models import Claim, Coverage, Evidence, FindingDraft, Record, Result, RunAssessment, Sample
 from .prompts import PROMPTS
 
@@ -29,34 +29,46 @@ class SessionReview(Record):
 
 
 async def validate_evidence(
-    claim: Claim, workspace: EvidenceWorkspace, check_id: str, evidence: tuple[Evidence, ...]
+    claim: Claim, workspace: EvidenceWorkspace, check_id: str, evidence: tuple[Evidence, ...], path: str
 ) -> str | None:
     if check_id not in frozenset(check.id for check in claim.job.settings.analysis_checks):
-        return "Use an enabled check ID."
-    for quote in evidence:
+        return f"{path}.check_id: Use an enabled check ID."
+
+    async def validate_quote(index: int, quote: Evidence) -> str | None:
+        location: Final = f"{path}.evidence[{index}]"
         try:
             if not await workspace.valid(quote):
                 return (
-                    "Every evidence quote must exactly match its execution and span in the original recorded content."
+                    f"{location}: Every evidence quote must exactly match its execution and span "
+                    "in the original recorded content."
                 )
         except EvidenceReadError as error:
-            return f"Could not verify this citation: {error}. Inspect narrower spans or other evidence and revise the citation."
-    return None
+            return (
+                f"{location}: Could not verify this citation: {error}. Inspect other evidence and revise the citation."
+            )
+        return None
+
+    problems: Final = tuple([await validate_quote(index, quote) for index, quote in enumerate(evidence)])
+    return "\n".join(problem for problem in problems if problem) or None
 
 
 async def validate_findings(claim: Claim, workspace: EvidenceWorkspace, findings: Findings) -> str | None:
-    for finding in findings.findings:
-        if invalid := await validate_evidence(claim, workspace, finding.check_id, finding.evidence):
+    async def validate_finding(index: int, finding: FindingDraft) -> str | None:
+        path: Final = f"result.findings[{index}]"
+        if invalid := await validate_evidence(claim, workspace, finding.check_id, finding.evidence, path):
             return invalid
         if not any(quote.role == "support" for quote in finding.evidence):
-            return "Every finding needs at least one supporting quote."
+            return f"{path}.evidence: Every finding needs at least one supporting quote."
         if finding.kind == "issue" and finding.brief is None:
-            return "Issues require a brief containing the problem, user goal, observed outcome, and test cases."
+            return f"{path}.brief: Issues require a brief containing the problem, user goal, observed outcome, and test cases."
         if finding.existing_finding_id is not None and not any(
             prior.id == finding.existing_finding_id and prior.check_id == finding.check_id for prior in claim.findings
         ):
-            return "An existing finding ID must identify an existing finding under the same check."
-    return None
+            return f"{path}.existing_finding_id: An existing finding ID must identify an existing finding under the same check."
+        return None
+
+    problems: Final = tuple([await validate_finding(index, finding) for index, finding in enumerate(findings.findings)])
+    return "\n".join(problem for problem in problems if problem) or None
 
 
 async def review_context(
@@ -69,13 +81,22 @@ async def review_context(
     enable_python: bool = False,
     activity: ActivityTracker | None = None,
 ) -> Examined:
-    async def validate(extraction: Extraction) -> str | None:
-        for observation in extraction.observations:
-            if invalid := await validate_evidence(claim, workspace, observation.check_id, observation.evidence):
-                return invalid
-            if not any(quote.role == "support" for quote in observation.evidence):
-                return "Each final observation requires supporting original evidence."
+    async def validate_observation(index: int, observation: Observation) -> str | None:
+        path: Final = f"result.observations[{index}]"
+        if invalid := await validate_evidence(claim, workspace, observation.check_id, observation.evidence, path):
+            return invalid
+        if not any(quote.role == "support" for quote in observation.evidence):
+            return f"{path}.evidence: Each final observation requires supporting original evidence."
         return None
+
+    async def validate(extraction: Extraction) -> str | None:
+        problems: Final = tuple(
+            [
+                await validate_observation(index, observation)
+                for index, observation in enumerate(extraction.observations)
+            ]
+        )
+        return "\n".join(problem for problem in problems if problem) or None
 
     summary: Final = await workspace.summary(session.execution.id)
     response: Final = await run_agent(
@@ -83,7 +104,7 @@ async def review_context(
         task=PROMPTS.review + "\nReview the assigned execution, including its recorded subagents. "
         "Original evidence is available through the tools. Inspect actual trace evidence before concluding "
         "there are no issues; session metadata alone is not enough to assess recorded behavior. "
-        "The final result follows the Extraction schema.",
+        "The result field follows the Extraction schema.",
         purpose="extract",
         claim=claim,
         workspace=workspace,
@@ -140,10 +161,13 @@ async def review_session(
     async def validate(review: SessionReview) -> str | None:
         if review.execution_id != session.execution.id:
             return "Return the execution_id of your assigned session."
-        for hunch in review.hunches:
-            if invalid := await validate_evidence(claim, workspace, hunch.check_id, hunch.evidence):
-                return invalid
-        return None
+        problems: Final = tuple(
+            [
+                await validate_evidence(claim, workspace, hunch.check_id, hunch.evidence, f"result.hunches[{index}]")
+                for index, hunch in enumerate(review.hunches)
+            ]
+        )
+        return "\n".join(problem for problem in problems if problem) or None
 
     return await run_agent(
         stage="session_revisit" if previous is not None else "session_review",

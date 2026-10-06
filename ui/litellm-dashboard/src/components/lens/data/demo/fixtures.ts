@@ -326,6 +326,7 @@ export function createLensDemoData(now = Date.now()) {
           candidates: snapshot.length,
           partial: 0,
           unassessable: 0,
+          failed_tasks: 0,
         },
         status: "completed",
         stage: "Complete",

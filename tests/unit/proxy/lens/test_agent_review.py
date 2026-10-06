@@ -1,10 +1,11 @@
+import asyncio
 from types import MappingProxyType
 from typing import Final
 
 import pytest
 
 from litellm.proxy.lens.agent_review import review_context
-from litellm.proxy.lens.agent_runtime import AgentTurn
+from litellm.proxy.lens.agent_runtime import AgentTurn, JournalReply
 from litellm.proxy.lens.agent_workspace import EvidenceReply, EvidenceRequest, EvidenceWorkspace, SessionContent
 from litellm.proxy.lens.analysis import Extraction, Observation, review_of
 from litellm.proxy.lens.models import Claim, Evidence, ExecutionContent, ModelRequest, ModelResult, TracePart
@@ -228,3 +229,142 @@ async def test_review_previews_use_verified_quotes_without_rereading_mutable_sou
             update=MappingProxyType({"content": "first\n[... content omitted ...]\nlast", "truncated": True})
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_format_repair_keeps_citation_feedback_and_tools_available_until_evidence_is_valid() -> None:
+    parts: Final = (
+        TracePart(execution_id="run", span_id="tool", name="tool", kind="tool", content="Original timeout"),
+        TracePart(execution_id="run", span_id="final", name="final", kind="agent", content="Recovered later"),
+    )
+    session: Final = SessionContent(execution=execution("run"), parts=parts, partial=False)
+    expected: Final = Extraction(
+        observations=(
+            Observation(
+                check_id="retries",
+                summary="Timeout followed by recovery",
+                evidence=tuple(
+                    Evidence(execution_id=part.execution_id, span_id=part.span_id, quote=part.content) for part in parts
+                ),
+            ),
+        )
+    )
+    invalid: Final = expected.model_copy(
+        update={
+            "observations": (
+                expected.observations[0].model_copy(
+                    update={
+                        "evidence": (
+                            Evidence(execution_id="run", span_id="tool", quote="private invented text"),
+                            Evidence(execution_id="run", span_id="tool", quote=parts[1].content),
+                        )
+                    }
+                ),
+            )
+        }
+    )
+    turns: Final = iter(range(6))
+
+    async def model(request: ModelRequest) -> ModelResult:
+        turn: Final = next(turns)
+        if turn == 0:
+            return ModelResult(content=invalid.model_dump_json(), cost=0)
+        if turn == 1:
+            assert request.messages[-1].role == "system"
+            assert "response_schema" in request.messages[-1].content
+            return ModelResult(content=AgentTurn[Extraction](result=invalid).model_dump_json(), cost=0)
+        if turn == 2:
+            feedback: Final = request.messages[-1]
+            assert feedback.role == "system"
+            assert "result.observations[0].evidence[0]" in feedback.content
+            assert "result.observations[0].evidence[1]" in feedback.content
+            assert "private invented text" not in feedback.content
+            return ModelResult(
+                content=AgentTurn[Extraction](tools=(EvidenceRequest(action="read"),)).model_dump_json(), cost=0
+            )
+        if turn == 3:
+            assert (
+                EvidenceReply.model_validate_json(
+                    ToolReply.model_validate_json(request.messages[-1].content).tool_results[0]
+                ).parts
+                == parts
+            )
+            partial: Final = invalid.model_copy(
+                update={
+                    "observations": (
+                        invalid.observations[0].model_copy(
+                            update={
+                                "evidence": (expected.observations[0].evidence[0], invalid.observations[0].evidence[1])
+                            }
+                        ),
+                    )
+                }
+            )
+            return ModelResult(content=AgentTurn[Extraction](result=partial).model_dump_json(), cost=0)
+        if turn == 4:
+            assert "result.observations[0].evidence[0]" not in request.messages[-1].content
+            assert "result.observations[0].evidence[1]" in request.messages[-1].content
+            return ModelResult(
+                content=AgentTurn[Extraction](tools=(EvidenceRequest(action="history", turn_end=3),)).model_dump_json(),
+                cost=0,
+            )
+        history: Final = JournalReply.model_validate_json(
+            ToolReply.model_validate_json(request.messages[-1].content).tool_results[0]
+        )
+        assert len(history.turns) == 3
+        assert history.turns[0].response == AgentTurn[Extraction](result=invalid).model_dump_json()
+        assert "evidence[0]" in history.turns[0].validation_error
+        assert "evidence[1]" in history.turns[2].validation_error
+        return ModelResult(content=AgentTurn[Extraction](result=expected).model_dump_json(), cost=0)
+
+    result: Final = await review_context(
+        Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=()),
+        session,
+        EvidenceWorkspace(sessions=(session,)),
+        model,
+    )
+    assert result.observations == expected.observations
+    assert next(turns, None) is None
+
+
+@pytest.mark.asyncio
+async def test_rejected_result_remains_cancellable_without_accepting_invalid_evidence() -> None:
+    session: Final = SessionContent(execution=execution("run"), parts=(), partial=False)
+    correcting: Final = asyncio.Event()
+    pending: Final = asyncio.Event()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if "validation_errors" in request.messages[-1].content:
+            correcting.set()
+            await pending.wait()
+        return ModelResult(
+            content=AgentTurn[Extraction](
+                result=Extraction(
+                    observations=(
+                        Observation(
+                            check_id="retries",
+                            summary="Unsupported",
+                            evidence=(Evidence(execution_id="run", span_id="absent", quote="invented"),),
+                        ),
+                    )
+                )
+            ).model_dump_json(),
+            cost=0,
+        )
+
+    task: Final = asyncio.create_task(
+        review_context(
+            Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=()),
+            session,
+            EvidenceWorkspace(sessions=(session,)),
+            model,
+        )
+    )
+    try:
+        await correcting.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

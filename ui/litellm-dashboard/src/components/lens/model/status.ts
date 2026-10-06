@@ -126,10 +126,22 @@ export function lensStatus(lens: Lens, connected: boolean): string {
   const spent = lens.budget_month === new Date().toISOString().slice(0, 7) ? lens.spent ?? 0 : 0;
   if (spent >= (lens.settings.monthly_budget ?? 100)) return "Budget reached";
   const latest = lens.jobs?.[0];
-  if (latest?.status === "failed") return "Failed";
-  if (latest?.status === "cancelled") return "Cancelled";
-  if (latest?.status === "completed") return "Completed";
-  return "Ready";
+  return latest ? runStatus(latest) : "Ready";
+}
+
+export function isPartial(job: Pick<Job, "status" | "error">): boolean {
+  return job.status === "completed" && !!job.error;
+}
+
+export function runStatus(job: Pick<Job, "status" | "error">): string {
+  const status = job.status ?? "";
+  return isPartial(job) ? "Partial" : status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+export function failedTaskSummary(job: Pick<Job, "coverage">): string {
+  const failed = job.coverage.failed_tasks ?? 0;
+  const total = job.coverage.screened + job.coverage.investigated;
+  return failed > 0 ? `${failed} of ${total} analysis tasks failed` : "Some analysis tasks could not finish";
 }
 
 export function nextCheckStatus(lens: Lens, now: number): string | null {

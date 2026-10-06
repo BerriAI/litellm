@@ -1,5 +1,9 @@
 import {
   activeJob,
+  failedTaskSummary,
+  isPartial,
+  lensStatus,
+  runStatus,
   investigationActivity,
   listPollInterval,
   nextCheckStatus,
@@ -24,6 +28,7 @@ const coverage: Job["coverage"] = {
   candidates: 0,
   partial: 0,
   unassessable: 0,
+  failed_tasks: 0,
 };
 
 const job: Job = {
@@ -176,6 +181,21 @@ const lens: Lens = {
   findings: [],
   jobs: [{ ...job, status: "completed" }],
 };
+
+it("labels usable results with errors as partial and counts failed tasks without counting inconclusive findings", () => {
+  const partial: Job = {
+    ...job,
+    status: "completed",
+    error: "Result validation failed after 3 retries",
+    coverage: { ...coverage, screened: 2, investigated: 3, inconclusive: 2, failed_tasks: 1 },
+  };
+  expect(isPartial(partial)).toBe(true);
+  expect(runStatus(partial)).toBe("Partial");
+  expect(lensStatus({ ...lens, jobs: [partial] }, false)).toBe("Partial");
+  expect(failedTaskSummary(partial)).toBe("1 of 5 analysis tasks failed");
+  expect(runStatus({ ...partial, status: "failed" })).toBe("Failed");
+  expect(runStatus({ ...partial, error: "" })).toBe("Completed");
+});
 
 it("shows the actual next schedule and avoids a stale countdown during active scans", () => {
   const now = Date.parse("2026-09-30T10:00:00Z");

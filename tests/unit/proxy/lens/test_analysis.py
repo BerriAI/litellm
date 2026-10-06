@@ -5,6 +5,7 @@ from types import MappingProxyType
 from typing import Final
 
 import pytest
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.lens.analysis import Candidate, Examined, evidence_valid, extract, investigate, partition_content
 from litellm.proxy.lens.models import (
@@ -493,7 +494,7 @@ async def test_conversation_repair_appends_raw_response_and_correction_without_c
     original: Final = ModelRequest(
         purpose="extract",
         prompt="Stable task",
-        messages=(ModelMessage(role="user", content="Stable task"), ModelMessage(role="user", content="Evidence")),
+        messages=(ModelMessage(role="system", content="Stable task"), ModelMessage(role="user", content="Evidence")),
     )
     malformed: Final = '{ "observations": "wrong type" }'
     corrected: Final = '{ "observations": [], "cannot_assess": false }'
@@ -507,7 +508,7 @@ async def test_conversation_repair_appends_raw_response_and_correction_without_c
         assert request.prompt == original.prompt
         assert request.messages[:-2] == original.messages
         assert request.messages[-2] == ModelMessage(role="assistant", content=malformed)
-        assert request.messages[-1].role == "user"
+        assert request.messages[-1].role == "system"
         assert "observations" in request.messages[-1].content
         repairs.put(request)
         return ModelResult(content=corrected, cost=0)
@@ -515,6 +516,35 @@ async def test_conversation_repair_appends_raw_response_and_correction_without_c
     result, history = await structured_response_with_history(original, Extraction, model)
     assert result == Extraction()
     assert history == (*repairs.get_nowait().messages, ModelMessage(role="assistant", content=corrected))
+    assert next(attempts, None) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conversation", (False, True))
+async def test_repair_repeats_complete_schema_without_unknown_fields_or_input_values(conversation: bool) -> None:
+    from litellm.proxy.lens.analysis import Extraction, structured_response
+
+    original: Final = ModelRequest(
+        purpose="extract",
+        prompt="Review original evidence",
+        messages=(ModelMessage(role="system", content="Review original evidence"),) if conversation else (),
+    )
+    attempts: Final = iter((0, 1))
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if next(attempts) == 0:
+            return ModelResult(content='{"private_field_sentinel":"private_value_sentinel"}', cost=0)
+        assert request.messages[-1].role == "system"
+        assert request.messages[:-2] == original.conversation()
+        content: Final = request.messages[-1].content
+        correction: Final = TypeAdapter(dict[str, JsonValue]).validate_json(content)
+        assert correction["response_schema"] == Extraction.model_json_schema()
+        assert "extra_forbidden" in content
+        assert "private_field_sentinel" not in content
+        assert "private_value_sentinel" not in content
+        return ModelResult(content=Extraction().model_dump_json(), cost=0)
+
+    assert await structured_response(original, Extraction, model) == Extraction()
     assert next(attempts, None) is None
 
 
@@ -684,7 +714,8 @@ async def test_grouping_repairs_duplicate_members_before_creating_findings() -> 
     async def model(request: ModelRequest) -> ModelResult:
         copies: Final = next(attempts)
         if copies == 1:
-            assert "do not duplicate" in request.prompt
+            assert "do not duplicate" in request.messages[-1].content
+            assert request.messages[-1].role == "system"
         group: Final = original.model_copy(update=MappingProxyType({"execution_ids": ("p0",)}))
         return ModelResult(content=Clusters(candidates=(group,) * copies).model_dump_json(), cost=0)
 

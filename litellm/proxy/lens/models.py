@@ -1,7 +1,17 @@
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 
 
 def calendar_lookback(hours: int) -> int:
@@ -145,6 +155,7 @@ class Coverage(Record):
     candidates: int = 0
     partial: int = 0
     unassessable: int = 0
+    failed_tasks: int = Field(default=0, ge=0)
 
 
 class Execution(Record):
@@ -414,7 +425,7 @@ class Result(Record):
 
 
 class ModelMessage(Record):
-    role: Literal["user", "assistant"]
+    role: Literal["system", "user", "assistant"]
     content: str
 
 
@@ -422,6 +433,25 @@ class ModelRequest(Record):
     prompt: str = Field(min_length=1)
     purpose: Literal["extract", "cluster", "investigate"]
     messages: tuple[ModelMessage, ...] = ()
+
+    def conversation(self) -> tuple[ModelMessage, ...]:
+        if self.messages:
+            return self.messages
+        try:
+            payload: Final = TypeAdapter(dict[str, JsonValue]).validate_json(self.prompt)
+        except ValidationError:
+            if self.prompt.lstrip().startswith(("{", "[")):
+                raise ValueError("Malformed legacy Lens prompt; send structured messages.") from None
+            return (ModelMessage(role="system", content=self.prompt), ModelMessage(role="user", content="{}"))
+        instruction_fields: Final = frozenset(
+            ("task", "navigation", "context", "checks", "questions", "response_schema")
+        )
+        instructions: Final = {key: value for key, value in payload.items() if key in instruction_fields}
+        evidence: Final = {key: value for key, value in payload.items() if key not in instruction_fields}
+        return (
+            ModelMessage(role="system", content=json.dumps(instructions, ensure_ascii=False)),
+            ModelMessage(role="user", content=json.dumps(evidence, ensure_ascii=False)),
+        )
 
 
 class ModelResult(Record):
