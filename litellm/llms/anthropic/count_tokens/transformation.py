@@ -13,9 +13,20 @@ from pydantic import JsonValue, TypeAdapter
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
+
+
+def _content_carries_compaction_block(content: JsonValue) -> bool:
+    if not isinstance(content, list):
+        return False
+    return any(isinstance(block, dict) and block.get("type") == "compaction" for block in content)
+
+
+def messages_carry_compaction_block(messages: Sequence[Mapping[str, JsonValue]]) -> bool:
+    return any(_content_carries_compaction_block(message.get("content")) for message in messages)
 
 
 class AnthropicCountTokensConfig:
@@ -73,18 +84,25 @@ class AnthropicCountTokensConfig:
             )
         )
 
-    def get_count_tokens_headers(self, auth_header: Mapping[str, str]) -> dict[str, str]:
+    def get_count_tokens_headers(
+        self, auth_header: Mapping[str, str], messages: Sequence[Mapping[str, JsonValue]]
+    ) -> dict[str, str]:
         """The count-tokens headers around a resolved Anthropic auth header
         (``AnthropicModelInfo.get_auth_header``): x-api-key for a static key, an Authorization
         bearer for ``ANTHROPIC_AUTH_TOKEN`` and for sk-ant-oat tokens, whose mandatory oauth beta
-        merges with the token-counting beta instead of replacing it."""
+        merges with the token-counting beta instead of replacing it. A history that carries a
+        signed compaction block also needs the compaction beta, or Anthropic rejects the block
+        as an unknown content type."""
+        request_betas: Final = (
+            (ANTHROPIC_TOKEN_COUNTING_BETA_VERSION, ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
+            if messages_carry_compaction_block(messages)
+            else (ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,)
+        )
         return {
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
             **auth_header,
-            "anthropic-beta": merge_anthropic_beta_headers(
-                auth_header.get("anthropic-beta"), ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
-            ),
+            "anthropic-beta": merge_anthropic_beta_headers(auth_header.get("anthropic-beta"), request_betas),
         }
 
     def validate_request(

@@ -3,10 +3,27 @@ import pytest
 import respx
 
 import litellm
+from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+
+COMPACTION_BETA = ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value
+COMPACTED_HISTORY = [
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "compaction",
+                "content": "The user is building a recipe app and asked for one-sentence class descriptions.",
+                "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40,
+            }
+        ],
+    },
+    {"role": "user", "content": "Now do the same for Ingredient."},
+]
 
 
 def test_transform_basic_request():
@@ -162,3 +179,37 @@ async def test_handler_posts_to_count_tokens_path_under_deployment_api_base(http
 
     assert route.called
     assert result == {"input_tokens": 7}
+
+
+def test_headers_add_the_compaction_beta_only_for_a_compacted_history():
+    config = AnthropicCountTokensConfig()
+    auth_header = {"x-api-key": "sk-ant-api03-test-key"}
+
+    with_block = config.get_count_tokens_headers(auth_header, COMPACTED_HISTORY)["anthropic-beta"].split(",")
+    plain = config.get_count_tokens_headers(auth_header, [{"role": "user", "content": "hi"}])["anthropic-beta"]
+
+    assert COMPACTION_BETA in with_block
+    assert ANTHROPIC_TOKEN_COUNTING_BETA_VERSION in with_block
+    assert plain == ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+
+
+@pytest.mark.asyncio
+async def test_handler_sends_the_compaction_beta_with_a_compacted_history(httpx_transport_clients):
+    """Anthropic validates the compaction block on count_tokens too: without the beta it answers 400
+    (an unexpected content block type), the proxy falls back to the local tokenizer, and that used to
+    reject the block as well, so the whole call came back as a 500."""
+    with respx.mock:
+        route = respx.post("https://gateway.example/v1/messages/count_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 404})
+        )
+        result = await AnthropicCountTokensHandler().handle_count_tokens_request(
+            model="claude-sonnet-5-5",
+            messages=COMPACTED_HISTORY,
+            auth_header={"x-api-key": "sk-ant-api03-test-key"},
+            api_base="https://gateway.example",
+        )
+
+    assert result == {"input_tokens": 404}
+    betas = route.calls.last.request.headers["anthropic-beta"].split(",")
+    assert COMPACTION_BETA in betas
+    assert ANTHROPIC_TOKEN_COUNTING_BETA_VERSION in betas

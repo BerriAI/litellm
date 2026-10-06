@@ -42,7 +42,7 @@ FEDERATED_DEPLOYMENT = {
 def count_tokens_headers_for(api_key: str) -> dict[str, str]:
     auth_header = AnthropicModelInfo.get_auth_header(api_key=api_key)
     assert auth_header is not None
-    return AnthropicCountTokensConfig().get_count_tokens_headers(auth_header)
+    return AnthropicCountTokensConfig().get_count_tokens_headers(auth_header, [{"role": "user", "content": "hi"}])
 
 
 @pytest.fixture

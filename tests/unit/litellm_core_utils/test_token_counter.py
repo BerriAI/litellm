@@ -1205,6 +1205,26 @@ def test_token_counter_with_redacted_thinking_content():
 
     assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
 
+
+def test_token_counter_with_compaction_block():
+    """
+    A replayed on-demand compaction block (Anthropic's signed summary of the earlier turns) counts its
+    summary text like a text block and nothing for its signature. It used to raise, which turned every
+    /v1/messages/count_tokens call on a compacted history into a 500 once the provider count fell back here.
+    """
+    model = "anthropic/claude-sonnet-5-5"
+    summary = "The user is building a recipe app in Python and asked for one-sentence class descriptions."
+    follow_up = {"role": "user", "content": [{"type": "text", "text": "Now do the same for Ingredient."}]}
+    signed_block = {"type": "compaction", "content": summary, "signature": "EqQBCkYIBRgCKkBjZ2xhc3M" * 40}
+
+    as_compaction = [{"role": "assistant", "content": [signed_block]}, follow_up]
+    unsigned = [{"role": "assistant", "content": [{"type": "compaction", "content": summary}]}, follow_up]
+    as_text = [{"role": "assistant", "content": [{"type": "text", "text": summary}]}, follow_up]
+
+    assert token_counter(model=model, messages=as_compaction) == token_counter(model=model, messages=as_text)
+    assert token_counter(model=model, messages=unsigned) == token_counter(model=model, messages=as_text)
+
+
 def test_token_counter_with_tool_reference_block():
     """
     Regression test: a message containing an Anthropic tool-search
