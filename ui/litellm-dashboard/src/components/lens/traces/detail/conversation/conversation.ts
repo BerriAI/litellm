@@ -354,6 +354,17 @@ export type ConversationGroup =
   | { kind: "item"; item: ConversationItem }
   | { kind: "branch"; id: string; name: string; children: ConversationGroup[] };
 
+export function conversationBranchGroups(groups: ConversationGroup[], branchId: string | null): ConversationGroup[] {
+  if (branchId === null) return groups;
+  for (const group of groups) {
+    if (group.kind === "item") continue;
+    if (group.id === branchId) return group.children;
+    const nested = conversationBranchGroups(group.children, branchId);
+    if (nested.length) return nested;
+  }
+  return [];
+}
+
 export function groupConversation(items: readonly ConversationItem[], spans: readonly Span[]): ConversationGroup[] {
   const byId = new Map(spans.map((span) => [span.span_id, span]));
   const parentById = new Map(
