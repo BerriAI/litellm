@@ -20,6 +20,8 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 OPENAI_KEY: Final = "sk-fine-tuning-openai"
 AZURE_KEY: Final = "azure-fine-tuning-key"
+AMBIENT_OPENAI_KEY: Final = "sk-fine-tuning-ambient-environment"
+AMBIENT_AZURE_KEY: Final = "azure-fine-tuning-ambient-environment"
 AZURE_API_VERSION: Final = "2024-10-21"
 MANAGED_MODEL: Final = "gpt-4.1-openai"
 DEPLOYMENT_KEYS: Final = ("sk-fine-tuning-deployment-a", "sk-fine-tuning-deployment-b")
@@ -27,7 +29,7 @@ PROVIDER_JOB: Final = "ftjob-provider-123"
 RUN: Final = uuid.uuid4().hex[:12]
 MANAGED_JOB: Final = f"ftjob-managed-{RUN}"
 TRAINING_LINE: Final = b'{"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]}\n'
-JOB_PATH: Final = re.compile(r"^/(?:openai/)?v1/fine_tuning/jobs/([^/]+)(/cancel)?$|^/openai/fine_tuning/jobs$")
+JOB_PATH: Final = re.compile(r"^/(?:openai/)?(?:v1/)?fine_tuning/jobs/([^/]+)(/cancel)?$")
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 PREFIXES: Final = (pytest.param("/v1", id="v1"), pytest.param("", id="unversioned"))
 
@@ -92,6 +94,17 @@ def _provider_file_id(bearer: str) -> str:
 
 def _bearer(request: Request) -> str:
     return request.headers.get("authorization", "").removeprefix("Bearer ")
+
+
+def _environment(wire: Wire) -> dict[str, str]:
+    return {
+        "OPENAI_BASE_URL": f"{wire.url}/v1",
+        "OPENAI_API_BASE": f"{wire.url}/v1",
+        "OPENAI_API_KEY": AMBIENT_OPENAI_KEY,
+        "AZURE_API_BASE": wire.url,
+        "AZURE_API_KEY": AMBIENT_AZURE_KEY,
+        "AZURE_API_VERSION": AZURE_API_VERSION,
+    }
 
 
 def _reply(body: Mapping[str, JsonValue]) -> Reply:
@@ -168,7 +181,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     with gateway_from_environment() as shared, wire_server(_respond) as wire:
         config: Final = directory / "config.yaml"
         config.write_text(yaml.safe_dump(_config(wire)))
-        with owned_proxy(shared, directory, {}, config=config) as proxy:
+        with owned_proxy(shared, directory, _environment(wire), config=config) as proxy:
             boot: Final[list[Request]] = []
             eventually(lambda: boot.extend(wire.drain()) or len(boot), lambda count: count >= len(DEPLOYMENT_KEYS))
             assert sorted((request.method, request.target, _bearer(request)) for request in boot) == [
@@ -210,8 +223,6 @@ def test_create_forwards_every_documented_optional_field(rig: Rig, prefix: str) 
             seed=42,
             extra_body={"custom_llm_provider": "openai"},
         )
-    assert raw.status_code == 200, raw.text
-    assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "validating_files"), raw.text
     sent: Final = _only(_drained(rig), "POST", "/v1/fine_tuning/jobs")
     assert sent.headers["authorization"] == f"Bearer {OPENAI_KEY}"
     assert JSON_OBJECT.validate_json(sent.body) == {
@@ -222,6 +233,8 @@ def test_create_forwards_every_documented_optional_field(rig: Rig, prefix: str) 
         "suffix": "custom-model",
         "seed": 42,
     }, sent.body
+    assert raw.status_code == 200, raw.text
+    assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "validating_files"), raw.text
 
 
 def test_create_forwards_the_method_object(rig: Rig) -> None:
@@ -235,8 +248,8 @@ def test_create_forwards_the_method_object(rig: Rig) -> None:
             method={"type": "supervised", "supervised": {"hyperparameters": {"n_epochs": 2}}},
             extra_body={"custom_llm_provider": "openai"},
         )
-    assert raw.status_code == 200, raw.text
     sent: Final = _only(_drained(rig), "POST", "/v1/fine_tuning/jobs")
+    assert raw.status_code == 200, raw.text
     assert JSON_OBJECT.validate_json(sent.body) == {
         "model": "gpt-4o-mini",
         "training_file": "file-abc123",
@@ -256,8 +269,8 @@ def test_create_forwards_integrations_as_the_sdk_sends_them(rig: Rig) -> None:
             integrations=[{"type": "wandb", "wandb": {"project": "fine-tuning"}}],
             extra_body={"custom_llm_provider": "openai"},
         )
-    assert raw.status_code == 200, raw.text
     sent: Final = _only(_drained(rig), "POST", "/v1/fine_tuning/jobs")
+    assert raw.status_code == 200, raw.text
     assert JSON_OBJECT.validate_json(sent.body) == {
         "model": "gpt-4o-mini",
         "training_file": "file-abc123",
@@ -272,11 +285,11 @@ def test_retrieve_forwards_the_raw_provider_job_id(rig: Rig, prefix: str) -> Non
         raw: Final = client.fine_tuning.jobs.with_raw_response.retrieve(
             PROVIDER_JOB, extra_query={"custom_llm_provider": "openai"}
         )
-    assert raw.status_code == 200, raw.text
-    assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "running"), raw.text
     sent: Final = _only(_drained(rig), "GET", f"/v1/fine_tuning/jobs/{PROVIDER_JOB}")
     assert sent.headers["authorization"] == f"Bearer {OPENAI_KEY}"
     assert sent.body == b""
+    assert raw.status_code == 200, raw.text
+    assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "running"), raw.text
 
 
 @pytest.mark.parametrize("prefix", PREFIXES)
@@ -285,11 +298,11 @@ def test_cancel_sends_the_cancel_to_the_provider(rig: Rig, prefix: str) -> None:
         raw: Final = client.fine_tuning.jobs.with_raw_response.cancel(
             PROVIDER_JOB, extra_body={"custom_llm_provider": "openai"}
         )
-    assert raw.status_code == 200, raw.text
-    assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "cancelled"), raw.text
     sent: Final = _only(_drained(rig), "POST", f"/v1/fine_tuning/jobs/{PROVIDER_JOB}/cancel")
     assert sent.headers["authorization"] == f"Bearer {OPENAI_KEY}"
     assert sent.body == b""
+    assert raw.status_code == 200, raw.text
+    assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "cancelled"), raw.text
 
 
 def test_azure_create_merges_finetune_settings_and_keeps_azure_fields(rig: Rig) -> None:
@@ -303,8 +316,6 @@ def test_azure_create_merges_finetune_settings_and_keeps_azure_fields(rig: Rig) 
                 "trainingType": 1,
             },
         )
-    assert raw.status_code == 200, raw.text
-    assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "validating_files", "file-abc"), raw.text
     sent: Final = _only(_drained(rig), "POST", f"/openai/fine_tuning/jobs?api-version={AZURE_API_VERSION}")
     assert sent.headers["api-key"] == AZURE_KEY
     assert JSON_OBJECT.validate_json(sent.body) == {
@@ -314,6 +325,60 @@ def test_azure_create_merges_finetune_settings_and_keeps_azure_fields(rig: Rig) 
         "trainingType": 1,
         "prompt_loss_weight": 0.01,
     }, sent.body
+    assert raw.status_code == 200, raw.text
+    assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "validating_files", "file-abc"), raw.text
+
+
+def test_azure_cancel_merges_finetune_settings(rig: Rig) -> None:
+    with rig.sdk("/v1") as client:
+        raw: Final = client.fine_tuning.jobs.with_raw_response.cancel(
+            PROVIDER_JOB, extra_body={"custom_llm_provider": "azure"}
+        )
+    sent: Final = _only(
+        _drained(rig), "POST", f"/openai/fine_tuning/jobs/{PROVIDER_JOB}/cancel?api-version={AZURE_API_VERSION}"
+    )
+    assert sent.headers["api-key"] == AZURE_KEY
+    assert sent.body == b""
+    assert raw.status_code == 200, raw.text
+    assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "cancelled"), raw.text
+
+
+def test_create_reads_the_documented_custom_llm_provider_header(rig: Rig) -> None:
+    pytest.skip(
+        "BUG: create ignores the documented custom-llm-provider header and returns 500"
+        " Invalid request, No litellm managed file id or custom_llm_provider provided."
+    )
+    with rig.sdk("/v1") as client:
+        raw: Final = client.fine_tuning.jobs.with_raw_response.create(
+            model="gpt-35-turbo-1106", training_file="file-abc", extra_headers={"custom-llm-provider": "azure"}
+        )
+    sent: Final = _only(_drained(rig), "POST", f"/openai/fine_tuning/jobs?api-version={AZURE_API_VERSION}")
+    assert sent.headers["api-key"] == AZURE_KEY
+    assert JSON_OBJECT.validate_json(sent.body) == {
+        "model": "gpt-35-turbo-1106",
+        "training_file": "file-abc",
+        "hyperparameters": {},
+    }, sent.body
+    assert raw.status_code == 200, raw.text
+    assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "validating_files", "file-abc"), raw.text
+
+
+def test_cancel_reads_the_documented_custom_llm_provider_header(rig: Rig) -> None:
+    pytest.skip(
+        "BUG: cancel ignores the documented custom-llm-provider header and the azure finetune_settings entry"
+        " and sends the cancel to the default OpenAI base URL and key"
+    )
+    with rig.sdk("/v1") as client:
+        raw: Final = client.fine_tuning.jobs.with_raw_response.cancel(
+            PROVIDER_JOB, extra_headers={"custom-llm-provider": "azure"}
+        )
+    sent: Final = _only(
+        _drained(rig), "POST", f"/openai/fine_tuning/jobs/{PROVIDER_JOB}/cancel?api-version={AZURE_API_VERSION}"
+    )
+    assert sent.headers["api-key"] == AZURE_KEY
+    assert sent.body == b""
+    assert raw.status_code == 200, raw.text
+    assert Job.model_validate_json(raw.text) == _client_job(PROVIDER_JOB, "cancelled"), raw.text
 
 
 def test_managed_create_sends_the_provider_file_id_of_the_pinned_deployment(rig: Rig) -> None:
@@ -343,7 +408,6 @@ def test_managed_create_sends_the_provider_file_id_of_the_pinned_deployment(rig:
             assert parts["purpose"].get_content() == "fine-tune"
 
         raw: Final = client.fine_tuning.jobs.with_raw_response.create(model=MANAGED_MODEL, training_file=managed_file)
-    assert raw.status_code == 200, raw.text
     sent: Final = _only(_drained(rig), "POST", "/v1/fine_tuning/jobs")
     deployment_key: Final = _bearer(sent)
     assert deployment_key in DEPLOYMENT_KEYS, sent.headers
@@ -352,6 +416,7 @@ def test_managed_create_sends_the_provider_file_id_of_the_pinned_deployment(rig:
         "training_file": _provider_file_id(deployment_key),
         "hyperparameters": {},
     }, sent.body
+    assert raw.status_code == 200, raw.text
     job: Final = Job.model_validate_json(raw.text)
     assert re.fullmatch(
         rf"litellm_proxy;model_id:[0-9a-f]{{64}};generic_response_id:{MANAGED_JOB}", _decoded(job.id)

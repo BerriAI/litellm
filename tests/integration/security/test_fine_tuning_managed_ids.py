@@ -2,8 +2,10 @@ import base64
 import json
 import re
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit
 
@@ -21,10 +23,11 @@ DEPLOYMENT_KEY: Final = "sk-fine-tuning-managed-deployment"
 RUN: Final = uuid.uuid4().hex[:12]
 PROVIDER_FILE: Final = f"file-managed-{RUN}"
 PROVIDER_JOB: Final = f"ftjob-managed-{RUN}"
+DEFAULT_PROVIDER_FILE: Final = f"file-managed-default-{RUN}"
+DEFAULT_PROVIDER_JOB: Final = f"ftjob-managed-default-{RUN}"
 TRAINING_LINE: Final = b'{"messages": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]}\n'
 JOB_PATH: Final = re.compile(r"^/v1/fine_tuning/jobs/([^/]+?)(/cancel)?$")
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
-UNIFIED_JOB: Final = re.compile(rf"litellm_proxy;model_id:[0-9a-f]{{64}};generic_response_id:{PROVIDER_JOB}")
 
 
 class Job(BaseModel):
@@ -42,7 +45,7 @@ class ProxyError(BaseModel):
     error: dict[str, JsonValue]
 
 
-def _job(job_id: str, status: str) -> dict[str, JsonValue]:
+def _job(job_id: str, status: str, file_id: str) -> dict[str, JsonValue]:
     return {
         "id": job_id,
         "object": "fine_tuning.job",
@@ -57,7 +60,7 @@ def _job(job_id: str, status: str) -> dict[str, JsonValue]:
         "seed": 42,
         "status": status,
         "trained_tokens": None,
-        "training_file": PROVIDER_FILE,
+        "training_file": file_id,
         "validation_file": None,
     }
 
@@ -66,14 +69,21 @@ def _reply(body: Mapping[str, JsonValue]) -> Reply:
     return Reply(body=json.dumps(body).encode())
 
 
-def _respond(request: Request) -> Reply:
+def _responder(file_id: str, job_id: str) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        return _respond(request, file_id, job_id)
+
+    return respond
+
+
+def _respond(request: Request, file_id: str, job_id: str) -> Reply:
     path: Final = urlsplit(request.target).path
     if (request.method, path) == ("GET", "/v1/models"):
         return _reply({"object": "list", "data": []})
     if (request.method, path) == ("POST", "/v1/files"):
         return _reply(
             {
-                "id": PROVIDER_FILE,
+                "id": file_id,
                 "object": "file",
                 "bytes": len(TRAINING_LINE),
                 "created_at": 1700000000,
@@ -83,18 +93,18 @@ def _respond(request: Request) -> Reply:
             }
         )
     if (request.method, path) == ("POST", "/v1/fine_tuning/jobs"):
-        return _reply(_job(PROVIDER_JOB, "validating_files"))
+        return _reply(_job(job_id, "validating_files", file_id))
     matched: Final = JOB_PATH.match(path)
     if matched and request.method == "GET" and not matched.group(2):
-        return _reply(_job(matched.group(1), "running"))
+        return _reply(_job(matched.group(1), "running", file_id))
     if matched and request.method == "POST" and matched.group(2):
-        return _reply(_job(matched.group(1), "cancelled"))
+        return _reply(_job(matched.group(1), "cancelled", file_id))
     return Reply(
         status=404, body=json.dumps({"error": {"message": f"unscripted {request.method} {request.target}"}}).encode()
     )
 
 
-def _config(wire: Wire) -> dict[str, JsonValue]:
+def _config(wire: Wire, litellm_settings: dict[str, JsonValue]) -> dict[str, JsonValue]:
     return {
         "model_list": [
             {
@@ -106,7 +116,7 @@ def _config(wire: Wire) -> dict[str, JsonValue]:
         "finetune_settings": [
             {"custom_llm_provider": "openai", "api_key": "sk-fine-tuning-raw-provider", "api_base": f"{wire.url}/v1"}
         ],
-        "litellm_settings": {"require_managed_files": True},
+        "litellm_settings": litellm_settings,
         "general_settings": {"master_key": "os.environ/LITELLM_MASTER_KEY", "database_url": "os.environ/DATABASE_URL"},
     }
 
@@ -125,6 +135,7 @@ class Rig:
     wire: Wire
     owner: str
     intruder: str
+    intruder_user: str
     managed_file: str
     managed_job: str
 
@@ -132,18 +143,18 @@ class Rig:
         return OpenAI(base_url=f"{str(self.proxy.client.base_url).rstrip('/')}/v1", api_key=key, max_retries=0)
 
 
-@pytest.fixture(scope="module")
-def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
-    directory: Final = tmp_path_factory.mktemp("fine-tuning-managed-ids")
-    with gateway_from_environment() as shared, wire_server(_respond) as wire:
+@contextmanager
+def _rig(directory: Path, litellm_settings: dict[str, JsonValue], file_id: str, job_id: str) -> Iterator[Rig]:
+    with gateway_from_environment() as shared, wire_server(_responder(file_id, job_id)) as wire:
         config: Final = directory / "config.yaml"
-        config.write_text(yaml.safe_dump(_config(wire)))
+        config.write_text(yaml.safe_dump(_config(wire, litellm_settings)))
         with owned_proxy(shared, directory, {}, config=config) as proxy, proxy.scenario() as scenario:
             eventually(
                 lambda: _targets(wire.drain()), lambda seen: seen == [("GET", "/v1/models", f"Bearer {DEPLOYMENT_KEY}")]
             )
             owner: Final = scenario.key(user_id=scenario.user())
-            intruder: Final = scenario.key(user_id=scenario.user())
+            intruder_user: Final = scenario.user()
+            intruder: Final = scenario.key(user_id=intruder_user)
             with OpenAI(
                 base_url=f"{str(proxy.client.base_url).rstrip('/')}/v1", api_key=owner, max_retries=0
             ) as client:
@@ -159,17 +170,38 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                 )
                 assert created.status_code == 200, created.text
             managed_job: Final = Job.model_validate_json(created.text).id
-            assert UNIFIED_JOB.fullmatch(_decoded(managed_job)), created.text
+            assert re.fullmatch(
+                rf"litellm_proxy;model_id:[0-9a-f]{{64}};generic_response_id:{job_id}", _decoded(managed_job)
+            ), created.text
             assert _targets(wire.drain()) == [
                 ("POST", "/v1/files", f"Bearer {DEPLOYMENT_KEY}"),
                 ("POST", "/v1/fine_tuning/jobs", f"Bearer {DEPLOYMENT_KEY}"),
             ]
-            yield Rig(proxy, wire, owner, intruder, managed_file, managed_job)
+            yield Rig(proxy, wire, owner, intruder, intruder_user, managed_file, managed_job)
             assert wire.drain() == ()
 
 
-def _refused(response: httpx.Response) -> None:
-    assert response.status_code in {403, 404}, response.text
+@pytest.fixture(scope="module")
+def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with _rig(
+        tmp_path_factory.mktemp("fine-tuning-managed-ids"), {"require_managed_files": True}, PROVIDER_FILE, PROVIDER_JOB
+    ) as built:
+        yield built
+
+
+@pytest.fixture(scope="module")
+def default_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    with _rig(
+        tmp_path_factory.mktemp("fine-tuning-managed-ids-default"), {}, DEFAULT_PROVIDER_FILE, DEFAULT_PROVIDER_JOB
+    ) as built:
+        yield built
+
+
+def _refused(response: httpx.Response, wire: Wire, detail: str) -> None:
+    reached: Final = _targets(wire.drain())
+    assert response.status_code == 403, response.text
+    assert ProxyError.model_validate_json(response.text).error["message"] == detail, response.text
+    assert reached == []
 
 
 def test_another_key_cannot_create_with_or_cancel_the_owners_managed_ids(rig: Rig) -> None:
@@ -179,10 +211,38 @@ def test_another_key_cannot_create_with_or_cancel_the_owners_managed_ids(rig: Ri
         {"model": MANAGED_MODEL, "training_file": rig.managed_file},
         key=rig.intruder,
     )
-    _refused(created)
+    _refused(created, rig.wire, "The caller does not have access to this managed file id.")
     cancelled: Final = rig.proxy.request("POST", f"/v1/fine_tuning/jobs/{rig.managed_job}/cancel", key=rig.intruder)
-    _refused(cancelled)
-    assert rig.wire.drain() == ()
+    _refused(cancelled, rig.wire, "The caller does not have access to this managed fine-tuning job id.")
+
+
+def test_another_key_cannot_cancel_the_owners_managed_job_by_default(default_rig: Rig) -> None:
+    cancelled: Final = default_rig.proxy.request(
+        "POST", f"/v1/fine_tuning/jobs/{default_rig.managed_job}/cancel", key=default_rig.intruder
+    )
+    _refused(
+        cancelled,
+        default_rig.wire,
+        f"User {default_rig.intruder_user} does not have access to the object {default_rig.managed_job}",
+    )
+
+
+def test_another_key_cannot_create_with_the_owners_managed_file_by_default(default_rig: Rig) -> None:
+    pytest.skip(
+        "BUG: another key can create a fine-tuning job with the owner's managed training_file"
+        " when require_managed_files is off"
+    )
+    created: Final = default_rig.proxy.request(
+        "POST",
+        "/v1/fine_tuning/jobs",
+        {"model": MANAGED_MODEL, "training_file": default_rig.managed_file},
+        key=default_rig.intruder,
+    )
+    _refused(
+        created,
+        default_rig.wire,
+        f"User {default_rig.intruder_user} does not have access to the file {default_rig.managed_file}",
+    )
 
 
 @pytest.mark.parametrize(
@@ -205,36 +265,40 @@ def test_raw_provider_ids_are_refused_when_managed_files_are_required(
     response: Final = rig.proxy.request(
         method, path, body, params={"custom_llm_provider": "openai"} if body is None else None
     )
+    reached: Final = _targets(rig.wire.drain())
     assert response.status_code == 400, response.text
     assert ProxyError.model_validate_json(response.text).error["message"] == (
         f"Raw provider {kind} ids cannot be used when require_managed_files is enabled in litellm_settings. "
         f"Use the LiteLLM managed {kind} id returned when the {kind} was created."
     ), response.text
-    assert rig.wire.drain() == ()
+    assert reached == []
 
 
 def test_owner_retrieve_reaches_the_provider_with_the_decoded_job_id(rig: Rig) -> None:
     pytest.skip("BUG: a virtual key gets 401 on GET /v1/fine_tuning/jobs/{id}, the route is missing from openai_routes")
-    _refused(rig.proxy.request("GET", f"/v1/fine_tuning/jobs/{rig.managed_job}", key=rig.intruder))
-    assert rig.wire.drain() == ()
+    _refused(
+        rig.proxy.request("GET", f"/v1/fine_tuning/jobs/{rig.managed_job}", key=rig.intruder),
+        rig.wire,
+        "The caller does not have access to this managed fine-tuning job id.",
+    )
     with rig.sdk(rig.owner) as client:
         retrieved: Final = client.fine_tuning.jobs.with_raw_response.retrieve(rig.managed_job)
+    assert [(r.method, r.target, r.headers["authorization"], r.body) for r in rig.wire.drain()] == [
+        ("GET", f"/v1/fine_tuning/jobs/{PROVIDER_JOB}", f"Bearer {DEPLOYMENT_KEY}", b"")
+    ]
     assert retrieved.status_code == 200, retrieved.text
     assert Job.model_validate_json(retrieved.text) == Job(
         id=rig.managed_job, object="fine_tuning.job", status="running", model="gpt-4.1"
     ), retrieved.text
-    assert [(r.method, r.target, r.headers["authorization"], r.body) for r in rig.wire.drain()] == [
-        ("GET", f"/v1/fine_tuning/jobs/{PROVIDER_JOB}", f"Bearer {DEPLOYMENT_KEY}", b"")
-    ]
 
 
 def test_owner_cancel_reaches_the_provider_with_the_decoded_job_id(rig: Rig) -> None:
     with rig.sdk(rig.owner) as client:
         cancelled: Final = client.fine_tuning.jobs.with_raw_response.cancel(rig.managed_job)
+    assert [(r.method, r.target, r.headers["authorization"], r.body) for r in rig.wire.drain()] == [
+        ("POST", f"/v1/fine_tuning/jobs/{PROVIDER_JOB}/cancel", f"Bearer {DEPLOYMENT_KEY}", b"")
+    ]
     assert cancelled.status_code == 200, cancelled.text
     assert Job.model_validate_json(cancelled.text) == Job(
         id=rig.managed_job, object="fine_tuning.job", status="cancelled", model="gpt-4.1"
     ), cancelled.text
-    assert [(r.method, r.target, r.headers["authorization"], r.body) for r in rig.wire.drain()] == [
-        ("POST", f"/v1/fine_tuning/jobs/{PROVIDER_JOB}/cancel", f"Bearer {DEPLOYMENT_KEY}", b"")
-    ]
