@@ -10,6 +10,7 @@ from litellm.proxy.lens.models import (
     Activity,
     AgentTestCase,
     Check,
+    Coverage,
     Evidence,
     Execution,
     FindingDraft,
@@ -20,7 +21,9 @@ from litellm.proxy.lens.models import (
     LensSettings,
     MetadataFilter,
     Progress,
+    Result,
     Review,
+    RunAssessment,
     Sample,
     Scope,
     Step,
@@ -40,11 +43,33 @@ from litellm.proxy.lens.state import (
     queue_job,
     renew_budget,
     replace_job,
+    result_status,
     reviews_after,
     summarized,
 )
 
 NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("has_finding", "assessable", "error", "expected"),
+    (
+        (True, False, "One candidate exhausted its retries", "completed"),
+        (False, True, "One review exhausted its retries", "completed"),
+        (False, False, "Every review exhausted its retries", "failed"),
+        (False, False, "", "completed"),
+    ),
+)
+def test_partial_results_are_completed_while_total_failure_remains_failed(
+    has_finding: bool, assessable: bool, error: str, expected: str
+) -> None:
+    result: Final = Result(
+        findings=(finding("run"),) if has_finding else (),
+        assessments=(RunAssessment(execution_id="run", cannot_assess=not assessable),),
+        coverage=Coverage(screened=1, unassessable=int(not assessable)),
+        error=error,
+    )
+    assert result_status(result) == expected
 
 
 def lens() -> Lens:

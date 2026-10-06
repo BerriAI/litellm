@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildConversation, conversationSteps, newConversationMessages } from "./conversation";
+import {
+  buildConversation,
+  conversationSteps,
+  newConversationMessages,
+  groupConversation,
+  conversationWarnings,
+} from "./conversation";
 import type { Span, SpanDetail, TraceMessage } from "../../types";
 import research from "../../__fixtures__/research_trace.json";
 
@@ -337,5 +343,275 @@ describe("recorded tool summaries", () => {
     expect(
       buildConversation([root, model, tool], details, true).filter((item) => item.toolCall || item.messages.length),
     ).toHaveLength(1);
+  });
+});
+
+describe("coding sessions", () => {
+  it("preserves identical user messages and assistant replies in transcript events", () => {
+    const spans = [
+      root,
+      ...[1, 2, 3, 4].map((n) => ({
+        ...root,
+        span_id: `m${n}`,
+        parent_span_id: root.span_id,
+        type: "chain" as const,
+        start_offset_ms: n,
+      })),
+    ];
+    const details = new Map([
+      [root.span_id, { ...detail(root.span_id, [user], []), attributes: { "lens.capture.messages_separate": "true" } }],
+      ...spans.slice(1).map(
+        (span, i) =>
+          [
+            span.span_id,
+            {
+              ...detail(span.span_id, i % 2 === 0 ? [user] : [], i % 2 === 1 ? [answer] : []),
+              attributes: { "lens.capture.source": "session_transcript" },
+            },
+          ] as const,
+      ),
+    ]);
+    expect(buildConversation(spans, details, true).flatMap((item) => item.messages)).toEqual([
+      user,
+      answer,
+      user,
+      answer,
+    ]);
+  });
+
+  it("uses one actor across resumed turns and keeps child branches together", () => {
+    const resumed = { ...root, span_id: "resumed", start_offset_ms: 10 };
+    const child = { ...root, span_id: "child", parent_span_id: root.span_id, start_offset_ms: 2, name: "reader" };
+    const nested = { ...child, span_id: "nested", parent_span_id: "child", start_offset_ms: 3, name: "checker" };
+    const details = new Map(
+      [root, resumed, child, nested].map((span) => [
+        span.span_id,
+        {
+          ...detail(span.span_id, span.name, "Done"),
+          attributes: { "gen_ai.agent.id": span === root || span === resumed ? "main-session" : span.span_id },
+        },
+      ]),
+    );
+    const items = buildConversation([root, resumed, child, nested], details, true);
+    expect(new Set(items.filter((item) => !item.parentBranchId).map((item) => item.agentId))).toEqual(
+      new Set(["main-session"]),
+    );
+    const groups = groupConversation(items, [root, resumed, child, nested]);
+    const branch = groups.find((group) => group.kind === "branch");
+    expect(branch).toMatchObject({ kind: "branch", id: "child", name: "reader" });
+    if (branch?.kind === "branch")
+      expect(branch.children.some((group) => group.kind === "branch" && group.id === "nested")).toBe(true);
+  });
+
+  it("shows child conversations when their parent has no recorded messages", () => {
+    const child = { ...root, span_id: "child", parent_span_id: root.span_id, start_offset_ms: 1, name: "reader" };
+    const details = new Map([
+      [root.span_id, detail(root.span_id, [], [])],
+      [child.span_id, detail(child.span_id, "Read the file", "File contents")],
+    ]);
+    const groups = groupConversation(buildConversation([root, child], details, true), [root, child]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ kind: "branch", id: "child", name: "reader" });
+    if (groups[0].kind === "branch") {
+      expect(groups[0].children.flatMap((group) => (group.kind === "item" ? group.item.messages : []))).toEqual([
+        { role: "user", content: "Read the file" },
+        { role: "assistant", content: "File contents" },
+      ]);
+    }
+  });
+
+  it("retains silent intermediate agents in nested branches", () => {
+    const child = { ...root, span_id: "child", parent_span_id: root.span_id, start_offset_ms: 1, name: "reader" };
+    const nested = { ...child, span_id: "nested", parent_span_id: child.span_id, start_offset_ms: 2, name: "checker" };
+    const spans = [root, child, nested];
+    const details = new Map([
+      [root.span_id, detail(root.span_id, [user], [])],
+      [child.span_id, detail(child.span_id, [], [])],
+      [nested.span_id, detail(nested.span_id, "Check the result", "Checked")],
+    ]);
+    const expectedBranch = {
+      kind: "branch",
+      id: child.span_id,
+      name: "reader",
+      children: [expect.objectContaining({ kind: "branch", id: nested.span_id, name: "checker" })],
+    };
+    expect(groupConversation(buildConversation(spans, details, true), spans)).toEqual([
+      expect.objectContaining({ kind: "item" }),
+      expect.objectContaining(expectedBranch),
+    ]);
+  });
+
+  it("folds native Claude Agent descendants and omits auxiliary suggestions", () => {
+    const agent = {
+      ...root,
+      span_id: "agent-tool",
+      parent_span_id: root.span_id,
+      type: "tool" as const,
+      name: "Agent",
+      framework: "claude-code",
+      start_offset_ms: 1,
+    };
+    const execution = {
+      ...agent,
+      span_id: "execution",
+      parent_span_id: agent.span_id,
+      type: "framework" as const,
+      name: "claude_code.tool.execution",
+    };
+    const response = {
+      ...root,
+      span_id: "response",
+      parent_span_id: execution.span_id,
+      type: "chain" as const,
+      start_offset_ms: 3,
+    };
+    const suggestion = { ...response, span_id: "suggestion", parent_span_id: root.span_id, type: "llm" as const };
+    const details = new Map([
+      [root.span_id, { ...detail(root.span_id, [user], []), attributes: { "gen_ai.agent.id": "session" } }],
+      [
+        agent.span_id,
+        {
+          ...detail(agent.span_id, { prompt: "Read", description: "Reader" }, "Started"),
+          attributes: { "gen_ai.agent.id": "session" },
+        },
+      ],
+      [
+        response.span_id,
+        { ...detail(response.span_id, [], "Child reply"), attributes: { "event.name": "assistant_response" } },
+      ],
+      [
+        suggestion.span_id,
+        {
+          ...detail(suggestion.span_id, [], "HIDDEN SUGGESTION"),
+          attributes: { query_source_safe: "prompt_suggestion" },
+        },
+      ],
+    ]);
+    const items = buildConversation([root, agent, execution, response, suggestion], details, true);
+    expect(items.flatMap((item) => item.messages).map((message) => message.content)).not.toContain("HIDDEN SUGGESTION");
+    expect(groupConversation(items, [root, agent, execution, response, suggestion])).toContainEqual(
+      expect.objectContaining({ kind: "branch", id: "agent-tool", name: "Reader" }),
+    );
+    expect(items.find((item) => item.span.span_id === response.span_id)?.agentId).toBe("agent-tool");
+  });
+
+  it("fills native tool arguments and missing results from logs without duplicating calls or replacing recorded output", () => {
+    const tool = {
+      ...root,
+      span_id: "tool",
+      parent_span_id: root.span_id,
+      type: "tool" as const,
+      name: "Bash",
+      start_offset_ms: 1,
+    };
+    const log = {
+      ...tool,
+      span_id: "log",
+      type: "framework" as const,
+      framework: "claude-code",
+      name: "claude_code.tool_result",
+      start_offset_ms: 2,
+    };
+    const body = { ...log, span_id: "body", name: "claude_code.api_request_body", start_offset_ms: 3 };
+    const toolDetail = {
+      ...detail(tool.span_id, { command: "exit 3" }, ""),
+      output: "",
+      attributes: { "gen_ai.tool.call.id": "call-1" },
+    };
+    const details = new Map([
+      [root.span_id, detail(root.span_id, [user], [])],
+      [tool.span_id, toolDetail],
+      [
+        log.span_id,
+        {
+          ...detail(log.span_id, { command: "exit 3", description: "Expected failure" }, ""),
+          attributes: { tool_use_id: "call-1" },
+        },
+      ],
+      [
+        body.span_id,
+        detail(body.span_id, "", {
+          tool_results: [
+            { id: "call-1", content: "Expected stdout" },
+            { id: "unrelated", content: "Other stdout" },
+          ],
+        }),
+      ],
+    ]);
+    const spans = [root, tool, log, body];
+    const items = buildConversation(spans, details, true);
+    expect(items.filter((item) => item.toolCall)).toHaveLength(1);
+    expect(items.find((item) => item.toolCall)).toMatchObject({
+      toolCall: { args: { command: "exit 3", description: "Expected failure" } },
+      toolResult: "Expected stdout",
+    });
+    details.set(tool.span_id, { ...toolDetail, output: "Recorded output" });
+    expect(buildConversation(spans, details, true).find((item) => item.toolCall)?.toolResult).toBe("Recorded output");
+    expect(
+      conversationWarnings(
+        new Map([
+          [
+            body.span_id,
+            {
+              ...detail(body.span_id, "", { warning: "Export truncated" }),
+              attributes: { "event.name": "api_request_body" },
+            },
+          ],
+        ]),
+        true,
+      ),
+    ).toEqual(["Export truncated"]);
+  });
+
+  it.each([
+    { recorded: "repl_main_thread", source: "repl_main_thread" },
+    { recorded: "agent", source: "agent:builtin:general-purpose" },
+    { recorded: "agent.builtin:general-purpose", source: "agent:builtin:general-purpose" },
+    { recorded: "agent.custom:reader", source: "agent:custom:reader" },
+  ])("positions $source commentary before tools with native source $recorded", ({ recorded, source }) => {
+    const llm = {
+      ...root,
+      span_id: "llm",
+      parent_span_id: root.span_id,
+      type: "llm" as const,
+      start_offset_ms: 1,
+      duration_ms: 10,
+      model: "model-a",
+    };
+    const tool = { ...llm, span_id: "tool", name: "Read", type: "tool" as const, start_offset_ms: 8, duration_ms: 1 };
+    const response = { ...llm, span_id: "reply", type: "chain" as const, start_offset_ms: 11, duration_ms: 0 };
+    const details = new Map([
+      [root.span_id, detail(root.span_id, [], [])],
+      [
+        llm.span_id,
+        {
+          ...detail(llm.span_id, [], []),
+          attributes: { query_source_safe: recorded, first_content_ms: "2" },
+        },
+      ],
+      [tool.span_id, detail(tool.span_id, {}, "File contents")],
+      [
+        response.span_id,
+        {
+          ...detail(response.span_id, [], "Checking"),
+          attributes: { "event.name": "assistant_response", query_source: source },
+        },
+      ],
+    ]);
+    expect(buildConversation([root, llm, tool, response], details, true)[0].time).toBe(3);
+    expect(buildConversation([root, llm, tool, response], details, true).map((item) => item.span.span_id)).toEqual([
+      "reply",
+      "tool",
+    ]);
+  });
+
+  it("warns about old incomplete native captures and clears the warning when reply logs arrive", () => {
+    const details = new Map([
+      ["llm", { ...detail("llm", [], []), output: "", attributes: { "span.type": "llm_request" } }],
+    ]);
+    expect(conversationWarnings(details, false)).toEqual([]);
+    expect(conversationWarnings(details, true)).toHaveLength(1);
+    details.set("reply", { ...detail("reply", [], "Hello"), attributes: { "event.name": "assistant_response" } });
+    expect(conversationWarnings(details, true)).toEqual([]);
   });
 });

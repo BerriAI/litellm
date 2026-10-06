@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from litellm.proxy.common_utils.semantic_text_index import (
     Embedder,
@@ -15,6 +15,7 @@ from litellm.proxy.common_utils.semantic_text_index import (
     router_embedder,
 )
 from litellm.types.agents import AgentResponse
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -48,7 +49,7 @@ class AgentSearchEmbeddingFailed:
 AgentSearchOutcome: TypeAlias = AgentSearchHits | AgentSearchNotConfigured | AgentSearchEmbeddingFailed
 
 
-class _SearchableSkill(BaseModel):
+class _SearchableSkill(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     name: str = ""
@@ -56,14 +57,14 @@ class _SearchableSkill(BaseModel):
     tags: tuple[str, ...] = ()
 
 
-class _SearchableCard(BaseModel):
+class _SearchableCard(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     description: str = ""
     skills: tuple[_SearchableSkill, ...] = ()
 
 
-class AgentSearchResult(BaseModel):
+class AgentSearchResult(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     agent_id: str

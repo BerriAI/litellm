@@ -1,6 +1,8 @@
+import { groupBy, orderBy } from "es-toolkit";
 import type { Span, SpanDetail, TraceMessage, TraceToolCall, UIContent } from "../../types";
 import { isFrameworkSpan, parseAssistantSummary, parseMessages, prettyPayload } from "../../utils";
 import { toTraceMessage, toolInput } from "../content/payload";
+import { claudeCaptureWarnings, claudeToolDetails, isClaudeSupplement } from "./nativeClaude";
 
 export const CONVERSATION_PAGE_SIZE = 20;
 
@@ -9,7 +11,8 @@ export function conversationSteps(spans: readonly Span[]): Span[] {
   return spans
     .filter((span) => {
       const isEvent = ["agent", "llm", "tool"].includes(span.type) || !parents.has(span.span_id);
-      return !isFrameworkSpan(span) && (span.parent_span_id === null || isEvent);
+      const visible = !isFrameworkSpan(span) && (span.parent_span_id === null || isEvent);
+      return isClaudeSupplement(span) || visible;
     })
     .sort((a, b) => a.start_offset_ms - b.start_offset_ms);
 }
@@ -29,6 +32,12 @@ function messages(value: string, content: UIContent | undefined, role: string): 
   if (parsed) return parsed;
   const text = contentText(value, content);
   return text ? [{ role, content: text }] : [];
+}
+
+function inputMessages(detail: SpanDetail): TraceMessage[] {
+  return detail.attributes["lens.capture.messages_separate"] === "true"
+    ? []
+    : messages(detail.input, detail.input_ui, "user");
 }
 
 function stableValue(value: unknown): unknown {
@@ -72,6 +81,10 @@ export interface ConversationItem {
   toolResult?: string;
   agentId?: string;
   agentName?: string;
+  branchId?: string;
+  parentBranchId?: string;
+  model?: string;
+  time?: number;
   showError?: boolean;
 }
 
@@ -110,6 +123,26 @@ interface ConversationEvent {
   output: boolean;
 }
 
+function messageTime(span: Span, steps: readonly Span[], details: ReadonlyMap<string, SpanDetail>): number {
+  const attributes = details.get(span.span_id)?.attributes;
+  if (attributes?.["event.name"] !== "assistant_response") return span.start_offset_ms;
+  const source = attributes["query_source"];
+  const matches = steps.filter((candidate) => {
+    const recorded = details.get(candidate.span_id)?.attributes["query_source_safe"];
+    const unnamedAgent = recorded === "agent" && source?.startsWith("agent:");
+    const sameSource = recorded === source || recorded === source?.replace(/^agent:/, "agent.") || unnamedAgent;
+    const sameRequest = candidate.parent_span_id === span.parent_span_id && candidate.model === span.model;
+    const matchingCall = candidate.type === "llm" && sameRequest && sameSource;
+    return matchingCall && Math.abs(candidate.start_offset_ms + candidate.duration_ms - span.start_offset_ms) < 2;
+  });
+  if (matches.length !== 1) return span.start_offset_ms;
+  const request = matches[0];
+  const firstContent = Number(details.get(request.span_id)?.attributes["first_content_ms"]);
+  return Number.isFinite(firstContent) && firstContent >= 0 && firstContent <= request.duration_ms
+    ? request.start_offset_ms + firstContent
+    : span.start_offset_ms;
+}
+
 function conversationEvents(
   steps: readonly Span[],
   byId: ReadonlyMap<string, Span>,
@@ -134,7 +167,7 @@ function conversationEvents(
   }
   return loaded
     .flatMap((span) => {
-      const start = { span, time: span.start_offset_ms, output: false };
+      const start = { span, time: messageTime(span, loaded, details), output: false };
       if (span.type === "tool" || (span.type !== "agent" && span.parent_span_id !== null)) return [start];
       const end = ends.get(span.span_id)!;
       return (complete && missingIndex < 0) || end < boundary ? [start, { span, time: end, output: true }] : [start];
@@ -171,12 +204,45 @@ function withoutForwardedAnswers(
   );
 }
 
-function agentLabels(agents: readonly Span[]): ReadonlyMap<string, string> {
-  const named = agents.map((agent) => ({ agent, name: agent.name || agent.agent || "Agent" }));
+function isNativeAgent(span: Span): boolean {
+  return span.framework === "claude-code" && span.type === "tool" && ["Agent", "Task"].includes(span.name);
+}
+
+function conversationBranch(span: Span, byId: ReadonlyMap<string, Span>): string {
+  if (span.type === "agent" || span.parent_span_id === null) return span.span_id;
+  let parent = span.parent_span_id ? byId.get(span.parent_span_id) : undefined;
+  const visited = new Set<string>();
+  while (parent && !visited.has(parent.span_id)) {
+    visited.add(parent.span_id);
+    if (parent.type === "agent" || isNativeAgent(parent)) return parent.span_id;
+    parent = parent.parent_span_id ? byId.get(parent.parent_span_id) : undefined;
+  }
+  return span.parent_span_id ?? span.span_id;
+}
+
+function agentIdentity(span: Span, details: ReadonlyMap<string, SpanDetail>): string {
+  return isNativeAgent(span) ? span.span_id : details.get(span.span_id)?.attributes["gen_ai.agent.id"] || span.span_id;
+}
+
+function agentLabels(agents: readonly Span[], details: ReadonlyMap<string, SpanDetail>): ReadonlyMap<string, string> {
+  const identity = (agent: Span): string => agentIdentity(agent, details);
+  const unique = agents.filter(
+    (agent, index) => agents.findIndex((other) => identity(other) === identity(agent)) === index,
+  );
+  const named = unique.map((agent) => {
+    const detail = details.get(agent.span_id);
+    const args = detail && isNativeAgent(agent) ? toolInput(detail.input, detail.input_ui) : undefined;
+    const description = args && typeof args === "object" && "description" in args ? args.description : undefined;
+    const name =
+      agent.framework === "claude-code" && !isNativeAgent(agent)
+        ? agent.agent || agent.name || "Agent"
+        : agent.name || agent.agent || "Agent";
+    return { agent, name: typeof description === "string" && description ? description : name };
+  });
   return new Map(
     Object.values(groupBy(named, ({ name }) => JSON.stringify(name))).flatMap((group) =>
       orderBy(group, [({ agent }) => agent.start_offset_ms, ({ agent }) => agent.span_id], ["asc", "asc"]).map(
-        ({ agent, name }, index) => [agent.span_id, group.length > 1 ? `${name} (${index + 1})` : name] as const,
+        ({ agent, name }, index) => [identity(agent), group.length > 1 ? `${name} (${index + 1})` : name] as const,
       ),
     ),
   );
@@ -184,29 +250,22 @@ function agentLabels(agents: readonly Span[]): ReadonlyMap<string, string> {
 
 export function buildConversation(
   spans: readonly Span[],
-  details: ReadonlyMap<string, SpanDetail>,
+  recordedDetails: ReadonlyMap<string, SpanDetail>,
   complete: boolean,
 ): ConversationItem[] {
+  const details = claudeToolDetails(spans, recordedDetails);
   const byId = new Map(spans.map((span) => [span.span_id, span]));
   const histories = new Map<string, TraceMessage[]>();
   const completedOutputs = new Map<string, TraceMessage[]>();
   const pendingCalls = new Map<string, TraceToolCall[]>();
   const items: ConversationItem[] = [];
   const events = conversationEvents(conversationSteps(spans), byId, details, complete);
-  const branch = (span: Span): string => {
-    if (span.type === "agent" || span.parent_span_id === null) return span.span_id;
-    let parent = span.parent_span_id ? byId.get(span.parent_span_id) : undefined;
-    const visited = new Set<string>();
-    while (parent && !visited.has(parent.span_id)) {
-      visited.add(parent.span_id);
-      if (parent.type === "agent") return parent.span_id;
-      parent = parent.parent_span_id ? byId.get(parent.parent_span_id) : undefined;
-    }
-    return span.parent_span_id ?? span.span_id;
-  };
+  const branch = (span: Span): string => conversationBranch(span, byId);
   for (const event of events) {
     const { span } = event;
+    if (isClaudeSupplement(span)) continue;
     const detail = details.get(span.span_id)!;
+    if (["generate_session_title", "prompt_suggestion"].includes(detail.attributes["query_source_safe"])) continue;
     const key = branch(span);
     const history = histories.get(key) ?? [];
     if (event.output) {
@@ -217,7 +276,13 @@ export function buildConversation(
         completedOutputs,
         byId,
       );
-      const item = { id: `${span.span_id}-output`, span, messages: fresh, showError: span.status === "error" };
+      const item = {
+        id: `${span.span_id}-output`,
+        span,
+        time: event.time,
+        messages: fresh,
+        showError: span.status === "error",
+      };
       if (fresh.length || item.showError) items.push(item);
       completedOutputs.set(span.span_id, output);
       histories.set(key, [...history, ...fresh]);
@@ -229,12 +294,16 @@ export function buildConversation(
       histories.set(key, [...history, { role: "tool", name: span.name, content: item.toolResult ?? "" }]);
       continue;
     }
-    const input = messages(detail.input, detail.input_ui, "user");
+    const input = inputMessages(detail);
     const output = messages(detail.output, detail.output_ui, "assistant");
-    const fresh = newConversationMessages(history, input);
+    const fresh =
+      detail.attributes["lens.capture.source"] === "session_transcript"
+        ? input
+        : newConversationMessages(history, input);
     if (span.type === "agent" || span.parent_span_id === null) {
       histories.set(key, input);
-      if (fresh.length) items.push({ id: span.span_id, span, messages: fresh });
+      const item = { id: span.span_id, span, time: event.time, messages: fresh };
+      if (fresh.length) items.push(item);
       continue;
     }
     const combined = [...fresh, ...output];
@@ -247,6 +316,7 @@ export function buildConversation(
     const item = {
       id: span.span_id,
       span,
+      time: event.time,
       showError: span.status === "error",
       messages: combined.map((message) => ({
         ...message,
@@ -259,14 +329,93 @@ export function buildConversation(
     const span = byId.get(id);
     return span ? [span] : [];
   });
-  const labels = agentLabels(agents);
+  const labels = agentLabels(agents, details);
+  const actor = (id: string): string => {
+    const span = byId.get(id);
+    return span ? agentIdentity(span, details) : id;
+  };
   return items
     .map((item) => ({
       ...item,
-      agentId: branch(item.span),
-      agentName: labels.get(branch(item.span)) || item.span.agent,
+      agentId: actor(branch(item.span)),
+      agentName: labels.get(actor(branch(item.span))) || item.span.agent,
+      branchId: branch(item.span),
+      parentBranchId: (() => {
+        const parentId = byId.get(branch(item.span))?.parent_span_id;
+        const parent = parentId ? byId.get(parentId) : undefined;
+        return parent ? branch(parent) : undefined;
+      })(),
+      model: item.span.model || details.get(item.span.span_id)?.attributes["gen_ai.request.model"] || undefined,
       messages: item.messages.filter((message) => Boolean(message.content) || Boolean(message.tool_calls?.length)),
     }))
     .filter((item) => item.messages.length || item.toolResult !== undefined || item.showError);
 }
-import { groupBy, orderBy } from "es-toolkit";
+export type ConversationGroup =
+  | { kind: "item"; item: ConversationItem }
+  | { kind: "branch"; id: string; name: string; children: ConversationGroup[] };
+
+export function groupConversation(items: readonly ConversationItem[], spans: readonly Span[]): ConversationGroup[] {
+  const byId = new Map(spans.map((span) => [span.span_id, span]));
+  const parentById = new Map(
+    conversationSteps(spans).flatMap((span) => {
+      const branch = byId.get(conversationBranch(span, byId));
+      if (!branch) return [];
+      const parent = branch.parent_span_id ? byId.get(branch.parent_span_id) : undefined;
+      return [[branch.span_id, parent ? conversationBranch(parent, byId) : undefined] as const];
+    }),
+  );
+  const roots = new Set(
+    [...parentById].flatMap(([id, parent]) => {
+      if (!parent) return [id];
+      return parentById.has(parent) ? [] : [parent];
+    }),
+  );
+  const directBranch = (item: ConversationItem, parent?: string): string | undefined => {
+    let id = item.branchId;
+    const visited = new Set<string>();
+    while (id && !visited.has(id)) {
+      visited.add(id);
+      const ancestor = parentById.get(id);
+      if (parent ? ancestor === parent : ancestor !== undefined && roots.has(ancestor)) return id;
+      id = ancestor;
+    }
+    return undefined;
+  };
+  const build = (parent?: string, ancestors = new Set<string>()): ConversationGroup[] => {
+    const seen = new Set<string>();
+    return items.flatMap((item): ConversationGroup[] => {
+      if (parent ? item.branchId === parent : !item.parentBranchId) return [{ kind: "item", item }];
+      const id = directBranch(item, parent);
+      if (!id || seen.has(id) || ancestors.has(id)) return [];
+      seen.add(id);
+      const first = items.find((candidate) => candidate.branchId === id);
+      const name = first?.agentName || byId.get(id)?.name || "Subagent";
+      return [{ kind: "branch", id, name, children: build(id, new Set([...ancestors, id])) }];
+    });
+  };
+  return build();
+}
+
+export function conversationWarnings(details: ReadonlyMap<string, SpanDetail>, complete: boolean): string[] {
+  const warnings = [
+    ...claudeCaptureWarnings(details),
+    ...[...details.values()].flatMap((detail) =>
+      detail.attributes["lens.capture.warning"] ? [detail.attributes["lens.capture.warning"]] : [],
+    ),
+  ];
+  if (
+    complete &&
+    ![...details.values()].some((detail) => detail.attributes["event.name"] === "assistant_response") &&
+    [...details.values()].some(
+      (detail) =>
+        detail.attributes["span.type"] === "llm_request" &&
+        !detail.output &&
+        !messages(detail.output, detail.output_ui, "assistant").length,
+    )
+  ) {
+    warnings.push(
+      "This Claude Code trace has no recorded assistant replies. Enable assistant response logs for future sessions.",
+    );
+  }
+  return [...new Set(warnings)];
+}
