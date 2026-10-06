@@ -8,8 +8,10 @@ Deploys the componentized LiteLLM proxy on GCP:
 
 - **VPC** + Private Services Access range + a Serverless VPC Access connector
   so Cloud Run can reach private IPs
-- **Cloud SQL for PostgreSQL** — primary instance + cross-zone read replica,
-  password auth via Secret Manager
+- **Cloud SQL for PostgreSQL** — primary instance, plus a cross-zone read
+  replica when `create_read_replica = true` (the default). Set false for a
+  writer-only stack; LiteLLM then uses the primary for every query.
+  Password auth via Secret Manager
 - **Memorystore (Redis)** for caching + rate limiting, private IP only
 - **GCS bucket** — private, versioned, uniform IAM; exposed as `GCS_BUCKET_NAME`
 - **Secret Manager** entries for `LITELLM_MASTER_KEY` and `DATABASE_PASSWORD`
@@ -95,10 +97,11 @@ spec. This stack therefore uses **password authentication**:
   (`<name>-db-password`).
 - Each Cloud Run service receives the password as `DATABASE_PASSWORD` via
   `value_source.secret_key_ref`.
-- The container's entrypoint shim assembles `DATABASE_URL` (and
-  `DATABASE_URL_READ_REPLICA`) from `DATABASE_HOST` / `DATABASE_PASSWORD`
-  before exec'ing uvicorn — so the password never appears in the service
-  spec or in logs.
+- The container's entrypoint shim assembles `DATABASE_URL` from
+  `DATABASE_HOST` / `DATABASE_PASSWORD` before exec'ing uvicorn — so the
+  password never appears in the service spec or in logs. When
+  `create_read_replica = true` (the default) it also exports
+  `DATABASE_URL_READ_REPLICA` from the replica IP.
 
 If you need GCP-native IAM auth later, add `cloud-sql-proxy` as a sidecar
 container under `template.template.containers` (Cloud Run v2 supports

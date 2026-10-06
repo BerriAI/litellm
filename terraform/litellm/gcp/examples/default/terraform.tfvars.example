@@ -12,6 +12,7 @@ env    = "stage"
 # create_runtime = false, network_id to the full host-project network ID, and
 # create_psa_connection = false after configuring PSA on that network.
 # create_runtime           = true
+# create_read_replica      = true
 # network_id               = ""
 # create_psa_connection    = true
 # redis_transit_encryption = true

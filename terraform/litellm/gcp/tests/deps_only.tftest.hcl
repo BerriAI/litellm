@@ -96,7 +96,7 @@ run "deps_only_creates_no_runtime" {
   assert {
     condition = alltrue([
       google_sql_database_instance.writer.name == "tenant-litellm-test",
-      google_sql_database_instance.reader.name == "tenant-litellm-test-reader",
+      google_sql_database_instance.reader[0].name == "tenant-litellm-test-reader",
       google_redis_instance.this.name == "tenant-litellm-test",
       google_storage_bucket.this.force_destroy == false,
       google_secret_manager_secret.master_key.secret_id == "tenant-litellm-test-master-key",
@@ -171,5 +171,38 @@ run "redis_plaintext_drops_tls_env" {
   assert {
     condition     = length(local.redis_ca_fragment) == 0
     error_message = "Plaintext Redis mode must not decode a Redis CA at startup."
+  }
+}
+
+run "skip_read_replica" {
+  command = plan
+
+  variables {
+    create_read_replica = false
+  }
+
+  assert {
+    condition     = length(google_sql_database_instance.reader) == 0
+    error_message = "create_read_replica = false must omit the Cloud SQL replica."
+  }
+
+  assert {
+    condition     = output.cloudsql_reader_ip == null
+    error_message = "cloudsql_reader_ip must be null when the replica is not created."
+  }
+
+  assert {
+    condition     = length(local.shared_env_kv) == 10
+    error_message = "Without a replica the runtime env must drop DATABASE_HOST/PORT_READ_REPLICA (12 → 10)."
+  }
+
+  assert {
+    condition     = length([for env in local.shared_env_kv : env if env.name == "DATABASE_HOST_READ_REPLICA"]) == 0
+    error_message = "DATABASE_HOST_READ_REPLICA must not be set when the replica is omitted."
+  }
+
+  assert {
+    condition     = length(local.database_url_fragment) == 1
+    error_message = "Without a replica the startup script must export only DATABASE_URL."
   }
 }
