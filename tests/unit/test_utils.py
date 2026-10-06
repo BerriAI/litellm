@@ -6711,3 +6711,67 @@ def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
 
     assert logged == [{"role": "user", "content": f"data:application/pdf;base64 ({len(payload)} chars)"}]
     assert payload not in str(logged)
+
+
+@pytest.mark.asyncio
+async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Chat over the Responses bridge exits two @client wrappers with one logging object. Issue
+    #44500: both exits enqueued a success handler, and on a large prompt the first one yielded to
+    the worker-thread base64 offload before it marked ``has_logged_async_success``, so the second
+    passed the check too and the request was logged and billed twice. The schedule step claims the
+    log for the object synchronously, so only the inner provider-shaped result is ever logged."""
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+    from litellm.utils import _dispatch_success_logging
+
+    class CountingLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.logged_results: list[object] = []
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+            if kwargs["litellm_call_id"] == "bridge-call-id":
+                self.logged_results.append(response_obj)
+
+    counting_logger: Final = CountingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [counting_logger])
+    real_truncate: Final = litellm_logging.truncate_base64_in_messages_async
+
+    async def yielding_truncate(messages):
+        await asyncio.sleep(0)
+        return await real_truncate(messages)
+
+    monkeypatch.setattr(litellm_logging, "truncate_base64_in_messages_async", yielding_truncate)
+
+    messages: Final = [{"role": "user", "content": "hello"}]
+    logging_obj: Final = Logging(
+        model="gpt-5.6-luna",
+        messages=messages,
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp(),
+        litellm_call_id="bridge-call-id",
+        function_id="bridge-fn-id",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="gpt-5.6-luna", custom_llm_provider="openai", input=messages
+    )
+    inner_result: Final = ModelResponse(id="inner")
+    outer_result: Final = ModelResponse(id="outer")
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    for result in (inner_result, outer_result):
+        _dispatch_success_logging(
+            logging_obj=logging_obj,
+            result=result,
+            start_time=now,
+            end_time=now,
+            is_completion_with_fallbacks=False,
+            is_litellm_internal_call=False,
+        )
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+    assert len(counting_logger.logged_results) == 1, counting_logger.logged_results
+    assert counting_logger.logged_results[0] is inner_result
