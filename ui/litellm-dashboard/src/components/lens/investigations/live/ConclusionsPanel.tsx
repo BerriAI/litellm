@@ -36,10 +36,10 @@ export function ConclusionsPanel({
   onSelect: (key: string | null) => void;
 }) {
   const flashing = useFlashing(groups);
-  if (!groups.length) return <p className="text-xs text-muted-foreground">Nothing concluded yet.</p>;
+  if (!groups.length) return <p className="text-xs text-muted-foreground">No observations flagged yet.</p>;
   return (
     <div className="flex flex-col gap-1.5">
-      <ol aria-label="Conclusions" className="flex flex-col gap-1.5">
+      <ol aria-label="Observations by check" className="flex flex-col gap-1.5">
         {groups.map((group) => {
           const active = selected === group.key;
           return (
