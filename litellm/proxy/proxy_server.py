@@ -8409,6 +8409,11 @@ class ProxyConfig:
                     if active_hooks:
                         for active_hook in active_hooks:
                             if isinstance(active_hook, SemanticToolFilterHook):
+                                if active_hook.index_build_task is not None and not active_hook.index_build_task.done():
+                                    verbose_proxy_logger.debug(
+                                        "Semantic filter settings unchanged, index build still in flight; skipping reinitialization"
+                                    )
+                                    return
                                 if active_hook.filter is not None and active_hook.filter.tool_router is not None:
                                     verbose_proxy_logger.debug(
                                         "Semantic filter settings unchanged, skipping reinitialization"
