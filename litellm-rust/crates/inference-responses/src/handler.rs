@@ -36,9 +36,11 @@ pub(super) async fn execute(
         )
         .await?;
     let cache = cache.filter(|_| authenticated.signer.is_none());
-    let cache_request =
-        crate::caching::CacheRequest::from_wire(identity, cache.as_ref().map(|_| &wire));
-    crate::caching::execute_streaming::<super::route::Responses, _, _>(
+    let cache_request = litellm_inference::caching::CacheRequest::from_wire(
+        identity,
+        cache.as_ref().map(|_| &wire),
+    );
+    litellm_inference::caching::execute_streaming::<super::route::Responses, _, _>(
         cache_request,
         cache.as_ref().map(|cache| cache.service.clone()),
         cache.as_ref().map(|cache| cache.options(cache_options)),
@@ -50,7 +52,7 @@ pub(super) async fn execute(
                 Some(serde_json::Value::Bool(value)) => *value,
                 Some(_) => return Err(Error::InvalidRequest("stream must be a boolean".into())),
             };
-            let outbound = crate::outbound::outbound_request(
+            let outbound = litellm_inference::outbound::outbound_request(
                 Authenticated {
                     headers: wire.headers,
                     signer: authenticated.signer,
@@ -59,7 +61,7 @@ pub(super) async fn execute(
                 &wire.body,
                 Some(request.timeout.unwrap_or(Duration::from_secs(600))),
             )?;
-            let response = crate::outbound::send(outbound, http)
+            let response = litellm_inference::outbound::send(outbound, http)
                 .await
                 .map_err(network)?;
             let status = response.status().as_u16();

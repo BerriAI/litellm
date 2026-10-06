@@ -38,6 +38,7 @@ litellm-auth-aws.workspace = true
 litellm-callbacks-legacy-python.workspace = true
 litellm-inference.workspace = true
 litellm-inference-transcription.workspace = true
+litellm-inference-responses.workspace = true
 litellm-core-utils.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true

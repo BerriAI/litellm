@@ -40,7 +40,7 @@ impl ResponsesWebSocketConnection {
         headers: &HashMap<String, String>,
         timeout: Option<Duration>,
     ) -> Result<Self, Error> {
-        crate::diagnostic::operation("litellm.websocket.connect_url", async {
+        litellm_inference::diagnostic::operation("litellm.websocket.connect_url", async {
             let mut request = url.into_client_request().map_err(|error| {
                 Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
             })?;
@@ -86,7 +86,7 @@ impl ResponsesWebSocketConnection {
         fields(outcome)
     )]
     pub async fn send_text(&self, text: String) -> Result<(), Error> {
-        crate::diagnostic::operation("litellm.websocket.send_text", async {
+        litellm_inference::diagnostic::operation("litellm.websocket.send_text", async {
             let mut socket = self.socket.lock().await;
             let Some(socket) = socket.as_mut() else {
                 return Err(Error::Transport(litellm_http::transport::Error::Network(
@@ -107,7 +107,7 @@ impl ResponsesWebSocketConnection {
         fields(outcome)
     )]
     pub async fn recv_text(&self) -> Result<Option<String>, Error> {
-        crate::diagnostic::operation("litellm.websocket.recv_text", async {
+        litellm_inference::diagnostic::operation("litellm.websocket.recv_text", async {
             let mut socket = self.socket.lock().await;
             let Some(socket) = socket.as_mut() else {
                 return Ok(None);
@@ -134,7 +134,7 @@ impl ResponsesWebSocketConnection {
         fields(outcome)
     )]
     pub async fn close(&self) -> Result<(), Error> {
-        crate::diagnostic::operation("litellm.websocket.close", async {
+        litellm_inference::diagnostic::operation("litellm.websocket.close", async {
             let mut socket = self.socket.lock().await;
             if let Some(socket) = socket.as_mut() {
                 socket.close(None).await.map_err(|error| {

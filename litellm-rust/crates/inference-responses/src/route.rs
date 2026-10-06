@@ -27,9 +27,9 @@ impl ResponsesRoute {
     pub fn machine(
         self,
         call: ResponsesCall,
-        options: impl Into<crate::CallOptions>,
+        options: impl Into<litellm_inference::CallOptions>,
     ) -> HostedMachine<Responses> {
-        let crate::CallOptions {
+        let litellm_inference::CallOptions {
             cache: cache_options,
             observers,
         } = options.into();
@@ -44,7 +44,7 @@ impl ResponsesRoute {
     }
 }
 
-impl crate::caching::Cachable for Responses {
+impl litellm_inference::caching::Cachable for Responses {
     const SURFACE: &'static str = "responses";
 
     fn reusable(response: &Self::Response) -> bool {
@@ -56,7 +56,7 @@ impl crate::caching::Cachable for Responses {
     }
 }
 
-impl crate::caching::StreamCachable for Responses {
+impl litellm_inference::caching::StreamCachable for Responses {
     const TERMINAL_EVENT: &'static str = "response.completed";
 
     fn replay(data: bytes::Bytes) -> Option<litellm_host::call::OutputOf<Self>> {

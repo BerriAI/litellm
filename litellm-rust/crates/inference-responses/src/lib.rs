@@ -1,11 +1,12 @@
-pub use crate::error::RouteError as Error;
 use litellm_host::observation::ObservationSender;
+pub use litellm_inference::RouteError as Error;
+
+pub mod route;
+pub mod types;
 pub mod websocket;
 
 mod handler;
 mod prepare;
-pub mod route;
-pub mod types;
 
 use std::sync::Arc;
 
@@ -47,9 +48,9 @@ impl ResponsesRoute {
         &self,
         call: ResponsesCall,
         interceptors: &impl Interceptors<Error>,
-        options: impl Into<crate::CallOptions>,
+        options: impl Into<litellm_inference::CallOptions>,
     ) -> Result<ResponsesOutput, Error> {
-        let crate::CallOptions {
+        let litellm_inference::CallOptions {
             cache: cache_options,
             observers,
         } = options.into();
@@ -75,7 +76,7 @@ impl ResponsesRoute {
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
-        crate::diagnostic::call(async {
+        litellm_inference::diagnostic::call(async {
             self.run_provider(call, cache_options, interceptors, observers)
                 .await
         })
@@ -90,7 +91,10 @@ impl ResponsesRoute {
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
         let request = prepare::prepare(call, self.secrets.as_ref()).await?;
-        crate::diagnostic::provider(&request.context.model, &request.context.custom_llm_provider);
+        litellm_inference::diagnostic::provider(
+            &request.context.model,
+            &request.context.custom_llm_provider,
+        );
         let execute: futures_util::future::BoxFuture<'_, Result<ResponsesOutput, Error>> =
             Box::pin(handler::execute(
                 &self.http,

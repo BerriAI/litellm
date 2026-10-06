@@ -37,17 +37,6 @@ pub fn chat_completions_route() -> litellm_inference::chat_completions::ChatComp
     )
 }
 
-pub fn responses_route(
-    secrets: Arc<dyn SecretSource>,
-) -> litellm_inference::responses::ResponsesRoute {
-    let resources = resources();
-    litellm_inference::responses::ResponsesRoute::new(
-        provider_http(&resources, &http_config()),
-        resources.auth,
-        secrets,
-    )
-}
-
 pub fn build_ocr_route(
     resources: &litellm_inference::resources::CoreResources,
     config: &HttpClientConfig,
