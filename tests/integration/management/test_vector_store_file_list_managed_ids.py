@@ -35,6 +35,10 @@ JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 MANAGED_FILE_ROW: Final = (
     'SELECT flat_model_file_ids, created_by, team_id FROM "LiteLLM_ManagedFileTable" WHERE unified_file_id = %s'
 )
+_FILE_CHUNKING: Final[dict[str, JsonValue]] = {
+    "type": "static",
+    "static": {"max_chunk_size_tokens": 800, "chunk_overlap_tokens": 400},
+}
 
 Listing = Callable[[Request], Reply]
 
@@ -82,6 +86,34 @@ def _store_file(store: str, file_id: JsonValue) -> dict[str, JsonValue]:
         "last_error": None,
         "chunking_strategy": {"type": "static", "static": {"max_chunk_size_tokens": 800, "chunk_overlap_tokens": 400}},
         "attributes": {},
+    }
+
+
+def _store_file_response(
+    store: str,
+    file_id: str,
+    attributes: Mapping[str, JsonValue],
+    chunking_strategy: Mapping[str, JsonValue] | None = None,
+) -> dict[str, JsonValue]:
+    return {
+        "id": file_id,
+        "object": "vector_store.file",
+        "usage_bytes": 123,
+        "created_at": 1700000001,
+        "vector_store_id": store,
+        "status": "completed",
+        "last_error": None,
+        "chunking_strategy": chunking_strategy or {"type": "auto"},
+        "attributes": dict(attributes),
+    }
+
+
+def _file_content_page(content: bytes) -> dict[str, JsonValue]:
+    return {
+        "object": "vector_store.file_content.page",
+        "data": [{"type": "text", "text": content.decode()}],
+        "has_more": False,
+        "next_page": None,
     }
 
 
@@ -148,6 +180,100 @@ def _provider(store: str, listing: Listing) -> Callable[[Request], Reply]:
             return _json_reply(_file_object(file.group(1)))
         if request.method == "DELETE" and file:
             return _json_reply({"id": file.group(1), "object": "file", "deleted": True})
+        return _json_reply({"error": {"message": f"unscripted {request.method} {request.target}"}}, 404)
+
+    return respond
+
+
+def _managed_file_create_provider(
+    store: str,
+    bearer: str,
+    filename: str,
+    attributes: Mapping[str, JsonValue],
+    chunking_strategy: Mapping[str, JsonValue],
+    *,
+    assert_create_body: bool = True,
+) -> Callable[[Request], Reply]:
+    provider_file_id: Final = _provider_file_id(bearer, filename)
+    create_body: Final[dict[str, JsonValue]] = {
+        "file_id": provider_file_id,
+        "attributes": dict(attributes),
+        "chunking_strategy": dict(chunking_strategy),
+    }
+
+    def respond(request: Request) -> Reply:
+        path: Final = urlsplit(request.target).path
+        assert request.headers["authorization"] == f"Bearer {bearer}"
+        if request.method == "POST" and path == "/v1/files":
+            uploaded_filename: Final = UPLOAD_FILENAME.search(request.body)
+            assert uploaded_filename is not None, request.body[:200]
+            return _json_reply(_file_object(_provider_file_id(bearer, uploaded_filename.group(1).decode())))
+        if request.method == "POST" and path == f"/v1/vector_stores/{store}/files":
+            actual_body: Final = JSON_OBJECT.validate_json(request.body)
+            if "chunking_strategy" in actual_body:
+                if assert_create_body:
+                    assert actual_body == create_body
+                else:
+                    assert actual_body["file_id"] == provider_file_id
+                return _json_reply(
+                    _store_file_response(store, provider_file_id, attributes, chunking_strategy)
+                )
+            assert actual_body == {"file_id": provider_file_id}
+            return _json_reply(_store_file(store, provider_file_id))
+        if request.method == "GET" and path == f"/v1/vector_stores/{store}/files/{provider_file_id}":
+            return _json_reply(_store_file_response(store, provider_file_id, attributes, chunking_strategy))
+        return _json_reply({"error": {"message": f"unscripted {request.method} {request.target}"}}, 404)
+
+    return respond
+
+
+def _managed_file_lifecycle_provider(
+    store: str,
+    bearer: str,
+    filename: str,
+    content: bytes,
+) -> Callable[[Request], Reply]:
+    provider_file_id: Final = _provider_file_id(bearer, filename)
+    update_body: Final[dict[str, JsonValue]] = {"attributes": {"tenant": "b"}}
+    chunking_strategy: Final[dict[str, JsonValue]] = {"type": "auto"}
+
+    def respond(request: Request) -> Reply:
+        path: Final = urlsplit(request.target).path
+        assert request.headers["authorization"] == f"Bearer {bearer}"
+        file_path: Final = f"/v1/vector_stores/{store}/files/{provider_file_id}"
+        if request.method in {"GET", "POST", "DELETE"} and path.startswith(file_path):
+            assert path in {file_path, f"{file_path}/content"}, request.target
+        if request.method == "POST" and path == "/v1/files":
+            uploaded_filename: Final = UPLOAD_FILENAME.search(request.body)
+            assert uploaded_filename is not None, request.body[:200]
+            return _json_reply(_file_object(_provider_file_id(bearer, uploaded_filename.group(1).decode())))
+        if request.method == "POST" and path == f"/v1/vector_stores/{store}/files":
+            body: Final = JSON_OBJECT.validate_json(request.body)
+            assert body == {"file_id": provider_file_id}
+            return _json_reply(_store_file(store, provider_file_id))
+        if path == f"/v1/vector_stores/{store}/files/{provider_file_id}":
+            if request.method == "GET":
+                return _json_reply(
+                    _store_file_response(
+                        store, provider_file_id, {"tenant": "a"}, chunking_strategy
+                    )
+                )
+            if request.method == "POST":
+                assert JSON_OBJECT.validate_json(request.body) == update_body
+                return _json_reply(
+                    _store_file_response(
+                        store, provider_file_id, {"tenant": "b"}, chunking_strategy
+                    )
+                )
+            if request.method == "DELETE":
+                return _json_reply(
+                    {"id": provider_file_id, "object": "vector_store.file.deleted", "deleted": True}
+                )
+        if request.method == "GET" and path == f"/v1/vector_stores/{store}/files/{provider_file_id}/content":
+            return Reply(
+                body=json.dumps(_file_content_page(content)).encode(),
+                headers={"content-disposition": f'attachment; filename="{filename}"'},
+            )
         return _json_reply({"error": {"message": f"unscripted {request.method} {request.target}"}}, 404)
 
     return respond
@@ -319,6 +445,240 @@ def test_attach_by_managed_id_sends_the_provider_file_id_and_lists_it_back_manag
         ]
         assert attach_bodies == [{"file_id": rig.file_id("a.txt")}], attach_bodies
         assert _ids(rig.listed(member.key)) == (managed_a,)
+
+
+def test_managed_file_create_forwards_attributes_and_chunking_strategy(gateway: Gateway) -> None:
+    store: Final = f"vs_create_managed_{uuid.uuid4().hex}"
+    bearer: Final = f"provider-create-{uuid.uuid4().hex}"
+    filename: Final = "create-managed.txt"
+    attributes: Final[dict[str, JsonValue]] = {"tenant": "a"}
+    with gateway.scenario() as scenario:
+        with wire_server(_managed_file_create_provider(store, bearer, filename, attributes, _FILE_CHUNKING)) as wire:
+            model: Final = scenario.model(api_base=f"{wire.url}/v1", api_key=bearer)
+            member: Final = _member(scenario, model)
+            _wait_until_every_worker_serves(gateway, model)
+            wire.drain()
+            managed_file_id: Final = _upload(gateway, member.key, model, filename)
+            with OpenAI(
+                base_url=_sdk_base_url(gateway),
+                api_key=member.key,
+                http_client=httpx.Client(trust_env=False),
+                max_retries=0,
+            ) as client:
+                created: Final = client.vector_stores.files.create(
+                    store,
+                    file_id=managed_file_id,
+                    attributes={"tenant": "a"},
+                    chunking_strategy=_FILE_CHUNKING,
+                    extra_query={"model": model},
+                )
+                polled: Final = client.vector_stores.files.create_and_poll(
+                    managed_file_id,
+                    vector_store_id=store,
+                    attributes={"tenant": "a"},
+                    chunking_strategy=_FILE_CHUNKING,
+                    poll_interval_ms=0,
+                    extra_query={"model": model},
+                )
+            assert created.id == managed_file_id, str(created)
+            assert created.attributes == {"tenant": "a"}, str(created)
+            assert polled.id == managed_file_id and polled.status == "completed", str(polled)
+            requests: Final = wire.drain()
+            assert [(request.method, urlsplit(request.target).path) for request in requests] == [
+                ("POST", "/v1/files"),
+                ("POST", f"/v1/vector_stores/{store}/files"),
+                ("POST", f"/v1/vector_stores/{store}/files"),
+                ("GET", f"/v1/vector_stores/{store}/files/{_provider_file_id(bearer, filename)}"),
+            ], requests
+            assert JSON_OBJECT.validate_json(requests[1].body) == {
+                "file_id": _provider_file_id(bearer, filename),
+                "attributes": {"tenant": "a"},
+                "chunking_strategy": _FILE_CHUNKING,
+            }, created
+            assert JSON_OBJECT.validate_json(requests[2].body) == JSON_OBJECT.validate_json(requests[1].body), polled
+
+
+def test_managed_file_create_preserves_numeric_and_boolean_attributes(gateway: Gateway) -> None:
+    pytest.skip("BUG: vector store file attributes drop non-string values (year, flag)")
+
+    store: Final = f"vs_attributes_{uuid.uuid4().hex}"
+    bearer: Final = f"provider-attributes-{uuid.uuid4().hex}"
+    filename: Final = "attributes-managed.txt"
+    attributes: Final[dict[str, JsonValue]] = {"tenant": "a", "year": 2024, "flag": True}
+    with gateway.scenario() as scenario:
+        with wire_server(
+            _managed_file_create_provider(
+                store, bearer, filename, attributes, _FILE_CHUNKING, assert_create_body=False
+            )
+        ) as wire:
+            model: Final = scenario.model(api_base=f"{wire.url}/v1", api_key=bearer)
+            member: Final = _member(scenario, model)
+            _wait_until_every_worker_serves(gateway, model)
+            managed_file_id: Final = _upload(gateway, member.key, model, filename)
+            with OpenAI(
+                base_url=_sdk_base_url(gateway),
+                api_key=member.key,
+                http_client=httpx.Client(trust_env=False),
+                max_retries=0,
+            ) as client:
+                created: Final = client.vector_stores.files.create(
+                    store,
+                    file_id=managed_file_id,
+                    attributes=attributes,
+                    chunking_strategy=_FILE_CHUNKING,
+                    extra_query={"model": model},
+                )
+            assert created.id == managed_file_id, str(created)
+            requests: Final = wire.drain()
+            assert JSON_OBJECT.validate_json(requests[-1].body) == {
+                "file_id": _provider_file_id(bearer, filename),
+                "attributes": attributes,
+                "chunking_strategy": _FILE_CHUNKING,
+            }, f"observed={JSON_OBJECT.validate_json(requests[-1].body)!r}; response={created}"
+
+
+def test_managed_file_lifecycle_routes_and_restores_managed_ids(gateway: Gateway) -> None:
+    store: Final = f"vs_lifecycle_{uuid.uuid4().hex}"
+    bearer: Final = f"provider-lifecycle-{uuid.uuid4().hex}"
+    filename: Final = "lifecycle-managed.txt"
+    content: Final = b"managed vector store file contents\n"
+    provider_file_id: Final = _provider_file_id(bearer, filename)
+    update_body: Final[dict[str, JsonValue]] = {"attributes": {"tenant": "b"}}
+    provider: Final = _managed_file_lifecycle_provider(store, bearer, filename, content)
+
+    with gateway.scenario() as scenario, wire_server(provider) as wire:
+        model: Final = scenario.model(api_base=f"{wire.url}/v1", api_key=bearer)
+        owner: Final = _member(scenario, model)
+        _wait_until_every_worker_serves(gateway, model)
+        wire.drain()
+        managed_file_id: Final = _upload(gateway, owner.key, model, filename)
+        attached: Final = gateway.request(
+            "POST",
+            f"/v1/vector_stores/{store}/files",
+            {"file_id": managed_file_id},
+            key=owner.key,
+            params={"model": model},
+        )
+        assert attached.status_code == 200, attached.text
+        assert _json(attached)["id"] == managed_file_id, attached.text
+        setup_requests: Final = wire.drain()
+        assert [(request.method, urlsplit(request.target).path) for request in setup_requests] == [
+            ("POST", "/v1/files"),
+            ("POST", f"/v1/vector_stores/{store}/files"),
+        ], setup_requests
+        assert JSON_OBJECT.validate_json(setup_requests[1].body) == {"file_id": provider_file_id}
+        assert all(request.headers["authorization"] == f"Bearer {bearer}" for request in setup_requests)
+
+        with OpenAI(
+            base_url=_sdk_base_url(gateway),
+                api_key=owner.key,
+                http_client=httpx.Client(trust_env=False),
+                max_retries=0,
+            ) as client:
+            retrieved: Final = client.vector_stores.files.retrieve(
+                managed_file_id, vector_store_id=store, extra_query={"model": model}
+            )
+            assert retrieved.id == managed_file_id, str(retrieved)
+            updated: Final = client.vector_stores.files.update(
+                managed_file_id,
+                vector_store_id=store,
+                attributes={"tenant": "b"},
+                extra_query={"model": model},
+            )
+            assert updated.id == managed_file_id, str(updated)
+            assert updated.attributes == {"tenant": "b"}, str(updated)
+            content_page: Final = client.vector_stores.files.content(
+                managed_file_id,
+                vector_store_id=store,
+                extra_query={"model": model},
+            )
+            expected_content_page: Final = _file_content_page(content)
+            assert content_page.model_dump(mode="json") == expected_content_page, str(content_page)
+            deleted: Final = client.vector_stores.files.delete(
+                managed_file_id, vector_store_id=store, extra_query={"model": model}
+            )
+            assert deleted.id == managed_file_id, str(deleted)
+            assert deleted.deleted is True, str(deleted)
+
+        raw_content: Final = gateway.request(
+            "GET",
+            f"/v1/vector_stores/{store}/files/{managed_file_id}/content",
+            key=owner.key,
+            params={"model": model},
+        )
+        assert raw_content.status_code == 200, raw_content.text
+        assert JSON_OBJECT.validate_json(raw_content.content) == _file_content_page(content), raw_content.text
+        assert raw_content.headers["content-disposition"].startswith("attachment"), raw_content.text
+        assert raw_content.headers["x-content-type-options"] == "nosniff", raw_content.text
+
+        lifecycle_requests: Final = wire.drain()
+        assert [(request.method, urlsplit(request.target).path) for request in lifecycle_requests] == [
+            ("GET", f"/v1/vector_stores/{store}/files/{provider_file_id}"),
+            ("POST", f"/v1/vector_stores/{store}/files/{provider_file_id}"),
+            ("GET", f"/v1/vector_stores/{store}/files/{provider_file_id}/content"),
+            ("DELETE", f"/v1/vector_stores/{store}/files/{provider_file_id}"),
+            ("GET", f"/v1/vector_stores/{store}/files/{provider_file_id}/content"),
+        ], lifecycle_requests
+        assert JSON_OBJECT.validate_json(lifecycle_requests[1].body) == update_body
+        assert all(request.headers["authorization"] == f"Bearer {bearer}" for request in lifecycle_requests)
+        assert wire.drain() == ()
+
+
+def test_stranger_cannot_access_another_teams_managed_file(gateway: Gateway) -> None:
+    pytest.skip("BUG: another team can retrieve, update, delete, and read content from a managed vector-store file")
+
+    store: Final = f"vs_stranger_{uuid.uuid4().hex}"
+    bearer: Final = f"provider-stranger-{uuid.uuid4().hex}"
+    filename: Final = f"stranger-{uuid.uuid4().hex}.txt"
+    content: Final = b"managed vector store file contents\n"
+    provider: Final = _managed_file_lifecycle_provider(store, bearer, filename, content)
+
+    with gateway.scenario() as scenario, wire_server(provider) as wire:
+        model: Final = scenario.model(api_base=f"{wire.url}/v1", api_key=bearer)
+        owner: Final = _member(scenario, model)
+        stranger: Final = _member(scenario, model)
+        _wait_until_every_worker_serves(gateway, model)
+        wire.drain()
+        managed_file_id: Final = _upload(gateway, owner.key, model, filename)
+        attached: Final = gateway.request(
+            "POST",
+            f"/v1/vector_stores/{store}/files",
+            {"file_id": managed_file_id},
+            key=owner.key,
+            params={"model": model},
+        )
+        assert attached.status_code == 200, attached.text
+        assert _json(attached)["id"] == managed_file_id, attached.text
+        setup_requests: Final = wire.drain()
+        assert [(request.method, urlsplit(request.target).path) for request in setup_requests] == [
+            ("POST", "/v1/files"),
+            ("POST", f"/v1/vector_stores/{store}/files"),
+        ], setup_requests
+
+        file_path: Final = f"/v1/vector_stores/{store}/files/{managed_file_id}"
+        responses: Final = (
+            gateway.request("GET", file_path, key=stranger.key, params={"model": model}),
+            gateway.request(
+                "POST",
+                file_path,
+                {"attributes": {"tenant": "b"}},
+                key=stranger.key,
+                params={"model": model},
+            ),
+            gateway.request("DELETE", file_path, key=stranger.key, params={"model": model}),
+            gateway.request(
+                "GET",
+                f"{file_path}/content",
+                key=stranger.key,
+                params={"model": model},
+            ),
+        )
+        upstream_requests: Final = wire.drain()
+        assert tuple(response.status_code for response in responses) == (403, 403, 403, 403), {
+            "responses": tuple((response.status_code, response.text) for response in responses),
+            "upstream": tuple((request.method, request.target) for request in upstream_requests),
+        }
+        assert upstream_requests == ()
 
 
 def test_openai_sdk_sync_auto_pager_walks_pages_with_managed_cursors(gateway: Gateway) -> None:
@@ -674,6 +1034,7 @@ def test_provider_outage_mid_burst_fails_loudly_and_mapping_resumes_after_recove
         with wire_server(respond) as wire:
             model: Final = scenario.model(api_base=wire.url + "/v1", api_key=bearer)
             _wait_until_every_worker_serves(gateway, model)
+            wire.drain()
             member: Final = _member(scenario, model)
             managed_a: Final = _upload(gateway, member.key, model, "a.txt")
             assert _carried_provider_file_id(managed_a) == provider_a
