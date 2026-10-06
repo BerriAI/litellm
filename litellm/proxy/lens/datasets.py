@@ -50,6 +50,8 @@ class _TextLine(BaseModel):
     reply: str = ""
     tool_calls: tuple[DatasetToolCall, ...] = ()
     expected: str = ""
+    source: CaseSource = CaseSource()
+    agent_version: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,9 +81,10 @@ def _tool_call_chars(tool_calls: tuple[DatasetToolCall, ...]) -> int:
 
 def case_chars(case: DatasetCase) -> int:
     return (
-        sum(len(m.content) + _tool_call_chars(m.tool_calls) for m in case.messages)
+        sum(len(m.content) + len(m.name) + _tool_call_chars(m.tool_calls) for m in case.messages)
         + len(case.reply)
         + _tool_call_chars(case.tool_calls)
+        + len(case.expected)
     )
 
 
@@ -201,19 +204,30 @@ async def _finding_cases(reader: DatasetReader, source: FindingSource) -> tuple[
     return tuple([await _evidence_case(reader, origin, execution) for execution, origin in spans])
 
 
-def _text_line(line: str) -> _TextLine | None:
+def _looks_like_json_line(line: str) -> bool:
+    return line.lstrip().startswith("{")
+
+
+def _text_line_case(line: str) -> Candidate:
     try:
-        return _TextLine.model_validate_json(line)
+        parsed: Final = _TextLine.model_validate_json(line)
     except ValidationError:
-        return None
+        return SkippedCase(source=CaseSource(), reason="invalid")
+    return make_case(
+        parsed.messages,
+        parsed.reply,
+        parsed.tool_calls,
+        parsed.source,
+        expected=parsed.expected,
+        agent_version=parsed.agent_version,
+    )
 
 
 def _text_cases(source: TextSource) -> tuple[Candidate, ...]:
     lines: Final = tuple(line for line in source.text.splitlines() if line.strip())
-    parsed: Final = tuple(_text_line(line) for line in lines)
-    if not lines or any(p is None for p in parsed):
-        return (make_case((DatasetMessage(role="user", content=source.text),), "", (), CaseSource()),)
-    return tuple(make_case(p.messages, p.reply, p.tool_calls, CaseSource(), expected=p.expected) for p in parsed if p)
+    if lines and all(_looks_like_json_line(line) for line in lines):
+        return tuple(_text_line_case(line) for line in lines)
+    return (make_case((DatasetMessage(role="user", content=source.text),), "", (), CaseSource()),)
 
 
 async def _source_cases(reader: DatasetReader, source: BuildSource) -> tuple[Candidate, ...]:
@@ -224,8 +238,7 @@ async def _source_cases(reader: DatasetReader, source: BuildSource) -> tuple[Can
             return await _finding_cases(reader, source)
         case TextSource():
             return _text_cases(source)
-        case _:
-            assert_never(source)
+    return assert_never(source)
 
 
 def _skip(state: _Admission, skipped: SkippedCase) -> _Admission:
@@ -242,14 +255,30 @@ def _admit(existing_count: int, state: _Admission, candidate: Candidate) -> _Adm
     return _Admission(state.seen | {candidate.id}, (*state.cases, candidate), state.skipped)
 
 
+def _unread_source(source: BuildSource) -> CaseSource:
+    match source:
+        case TraceSource():
+            return CaseSource(trace_id=source.trace_id, trace_ref=source.trace_ref, span_id=source.span_id)
+        case FindingSource():
+            return CaseSource(lens_id=source.lens_id, finding_id=source.finding_ids[0])
+        case TextSource():
+            return CaseSource()
+    return assert_never(source)
+
+
+async def _admit_source(
+    reader: DatasetReader, existing_count: int, state: _Admission, source: BuildSource
+) -> _Admission:
+    if existing_count + len(state.cases) >= LENS_DATASET_MAX_CASES:
+        return _skip(state, SkippedCase(source=_unread_source(source), reason="over_limit"))
+    return reduce(partial(_admit, existing_count), await _source_cases(reader, source), state)
+
+
 async def build_cases(request: BuildRequest, reader: DatasetReader, existing: tuple[DatasetCase, ...]) -> BuildResult:
-    candidates: Final = tuple([await _source_cases(reader, source) for source in request.sources])
-    admitted: Final = reduce(
-        partial(_admit, len(existing)),
-        chain.from_iterable(candidates),
-        _Admission(seen=frozenset(c.id for c in existing)),
-    )
-    return BuildResult(cases=admitted.cases, skipped=admitted.skipped)
+    state = _Admission(seen=frozenset(c.id for c in existing))  # rebind-ok: sources are read in order until full
+    for source in request.sources:
+        state = await _admit_source(reader, len(existing), state, source)
+    return BuildResult(cases=state.cases, skipped=state.skipped)
 
 
 def rehashed(case: DatasetCase) -> DatasetCase:
