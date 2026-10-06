@@ -934,14 +934,13 @@ async def test_non_transcription_completed_event_still_triggers_response_create(
     assert any(e.get("type") == "response.create" for e in sent_to_backend)
 
 
-def test_client_session_update_marks_transcription_session():
-    """A client session.update with type=transcription flags the session."""
+def test_client_session_update_does_not_mark_transcription_session():
     streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
     assert streaming._is_transcription_session is False
     streaming._collect_user_input_from_client_event(
         json.dumps({"type": "session.update", "session": {"type": "transcription"}})
     )
-    assert streaming._is_transcription_session is True
+    assert streaming._is_transcription_session is False
 
 
 @pytest.mark.asyncio
@@ -3567,10 +3566,9 @@ _GA_TRANSCRIPTION_SESSION_UPDATE: Final = {
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("force_transcription_model", [None, "gpt-4o-transcribe"])
 @pytest.mark.parametrize("prior_update_count", [0, 1])
 async def test_transcription_guardrail_leaves_client_transcription_session_update_untouched(
-    monkeypatch: pytest.MonkeyPatch, force_transcription_model: str | None, prior_update_count: int
+    monkeypatch: pytest.MonkeyPatch, prior_update_count: int
 ):
     monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
     frames: Final = [json.dumps(_GA_TRANSCRIPTION_SESSION_UPDATE)] * (prior_update_count + 1)
@@ -3579,13 +3577,42 @@ async def test_transcription_guardrail_leaves_client_transcription_session_updat
     backend_ws: Final = MagicMock()
     backend_ws.send = AsyncMock()
     streaming: Final = RealTimeStreaming(
-        client_ws, backend_ws, MagicMock(), force_transcription_model=force_transcription_model
+        client_ws, backend_ws, MagicMock(), force_transcription_model="gpt-4o-transcribe"
     )
 
     await streaming.client_ack_messages()
 
     forwarded: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
     assert forwarded == [_GA_TRANSCRIPTION_SESSION_UPDATE] * len(frames), forwarded
+
+
+@pytest.mark.asyncio
+async def test_client_declared_transcription_type_cannot_disable_guardrail_gate_on_voice_session(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    re_enable: Final = {
+        "type": "session.update",
+        "session": {"type": "realtime", "audio": {"input": {"turn_detection": {"create_response": True}}}},
+    }
+    client_ws: Final = _ga_client_ws()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(_GA_TRANSCRIPTION_SESSION_UPDATE),
+            json.dumps(re_enable),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(client_ws, backend_ws, MagicMock())
+
+    await streaming.client_ack_messages()
+
+    forwarded: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert streaming._is_transcription_session is False
+    assert forwarded[0]["session"]["audio"]["input"]["turn_detection"]["create_response"] is False, forwarded
+    assert forwarded[1]["session"]["audio"]["input"]["turn_detection"]["create_response"] is False, forwarded
 
 
 @pytest.mark.asyncio

@@ -298,10 +298,7 @@ class RealTimeStreaming:
                 tools: Final = session.get("tools")
                 if tools and isinstance(tools, list):
                     self.session_tools = tools
-                # GA: session.type is required; log it for traceability but no action needed
                 verbose_logger.debug("Realtime session.type: %s", session.get("type"))
-                if session.get("type") == "transcription":
-                    self._is_transcription_session = True
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
@@ -315,13 +312,6 @@ class RealTimeStreaming:
                     self.input_messages.append({"role": "user", "content": transcript})
         except (AttributeError, TypeError):
             pass
-
-    def _mark_transcription_session_from_client_update(self, client_event: Mapping[str, object]) -> None:
-        match client_event:
-            case {"session": {"type": "transcription"}}:
-                self._is_transcription_session = True
-            case _:
-                pass
 
     def _detect_transcription_session_from_backend(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
         """Flag transcription-only sessions from backend session events."""
@@ -1430,9 +1420,6 @@ class RealTimeStreaming:
                         # response.create so OpenAI doesn't generate an additional response.
                         self._pending_guardrail_message = None
                         continue
-
-                    if msg_type == "session.update":
-                        self._mark_transcription_session_from_client_update(client_event)
 
                     ## GUARDRAIL: Inject turn_detection into first session.update
                     # if needed. Done BEFORE the GA remap so the injected
