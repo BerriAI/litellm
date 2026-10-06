@@ -3550,10 +3550,12 @@ async def test_provider_bytes_are_sent_raw_after_pacing():
     provider_config.pace_backend_send.assert_awaited_once_with(b"\x00\x01")
 
 
-async def _forwarded_ga_session_updates(monkeypatch: pytest.MonkeyPatch, *client_sessions: dict) -> list[dict]:
+async def _forwarded_ga_session_updates(
+    monkeypatch: pytest.MonkeyPatch, *client_sessions: dict[str, object]
+) -> tuple[dict[str, object], ...]:
     """Run a GA client's session.updates through a transcript-guardrailed proxy and return the forwarded sessions."""
     monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
-    client_ws = AsyncMock()
+    client_ws: Final = AsyncMock()
     client_ws.scope = {"headers": []}
     client_ws.receive_text = AsyncMock(
         side_effect=[
@@ -3561,13 +3563,13 @@ async def _forwarded_ga_session_updates(monkeypatch: pytest.MonkeyPatch, *client
             ConnectionClosed(None, None),
         ]
     )
-    backend_ws = MagicMock()
+    backend_ws: Final = MagicMock()
     backend_ws.send = AsyncMock()
-    logging_obj = MagicMock()
+    logging_obj: Final = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
     logging_obj.success_handler = MagicMock()
     await RealTimeStreaming(client_ws, backend_ws, logging_obj).client_ack_messages()
-    return [json.loads(call.args[0])["session"] for call in backend_ws.send.await_args_list]
+    return tuple(json.loads(call.args[0])["session"] for call in backend_ws.send.await_args_list)
 
 
 @pytest.mark.asyncio
@@ -3577,7 +3579,7 @@ async def test_first_ga_session_update_keeps_client_turn_detection_when_guardrai
     """A transcript guardrail only flips create_response: the client's nested GA
     turn_detection, its type included, must reach the backend intact, or OpenAI
     rejects the whole update and the client's session config is lost."""
-    forwarded = await _forwarded_ga_session_updates(
+    forwarded: Final = await _forwarded_ga_session_updates(
         monkeypatch,
         {
             "type": "realtime",
@@ -3602,7 +3604,7 @@ async def test_first_ga_session_update_keeps_client_turn_detection_when_guardrai
 
 @pytest.mark.asyncio
 async def test_first_ga_session_update_without_turn_detection_gets_a_typed_gate(monkeypatch: pytest.MonkeyPatch):
-    forwarded = await _forwarded_ga_session_updates(monkeypatch, {"type": "realtime", "instructions": "hi"})
+    forwarded: Final = await _forwarded_ga_session_updates(monkeypatch, {"type": "realtime", "instructions": "hi"})
 
     assert len(forwarded) == 1
     assert "turn_detection" not in forwarded[0]
@@ -3615,7 +3617,7 @@ async def test_later_ga_session_update_without_turn_detection_is_forwarded_witho
 ):
     """OpenAI keeps the earlier create_response=false for a field left unset, while a
     bare create_response carries no type and gets the whole update rejected."""
-    forwarded = await _forwarded_ga_session_updates(
+    forwarded: Final = await _forwarded_ga_session_updates(
         monkeypatch,
         {"type": "realtime", "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": True}}}},
         {"type": "realtime", "instructions": "later"},
