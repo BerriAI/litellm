@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.common_utils import with_prompt_cache_controls
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -1453,11 +1454,14 @@ class LiteLLMCompletionResponsesConfig:
             if content is None:
                 return []
             return [
-                GenericChatCompletionMessage(
-                    role=_input_item_role(input_item),
-                    content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        content
+                with_prompt_cache_controls(
+                    GenericChatCompletionMessage(
+                        role=_input_item_role(input_item),
+                        content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                            content
+                        ),
                     ),
+                    input_item,
                 )
             ]
 
@@ -1783,9 +1787,7 @@ class LiteLLMCompletionResponsesConfig:
             file_dict["filename"] = item["filename"]
 
         new_item: Final[dict[str, object]] = {"type": "file", "file": file_dict}
-        if "cache_control" in item:
-            new_item["cache_control"] = item["cache_control"]
-        return new_item
+        return with_prompt_cache_controls(new_item, item)
 
     @staticmethod
     def _transform_input_image_item_to_image_item(
@@ -1830,9 +1832,7 @@ class LiteLLMCompletionResponsesConfig:
                         image_block = _STR_KEY_DICT_ADAPTER.validate_python(
                             dict(LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(item))
                         )
-                        if "cache_control" in item:
-                            image_block["cache_control"] = item["cache_control"]
-                        content_list.append(image_block)
+                        content_list.append(with_prompt_cache_controls(image_block, item))
                     elif item.get("type") == "encrypted_content":
                         encrypted_content = item.get("encrypted_content")
                         if encrypted_content is not None:
@@ -1850,9 +1850,7 @@ class LiteLLMCompletionResponsesConfig:
                             ),
                             "text": text_value,
                         }
-                        if "cache_control" in item:
-                            content_block["cache_control"] = item["cache_control"]
-                        content_list.append(content_block)
+                        content_list.append(with_prompt_cache_controls(content_block, item))
             return content_list
         else:
             raise ValueError(f"Invalid content type: {type(content)}")

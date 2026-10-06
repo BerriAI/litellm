@@ -581,3 +581,91 @@ async def test_estimator_capacity_remains_bounded_when_caller_is_cancelled() -> 
         release.set()
         await asyncio.gather(*pending, return_exceptions=True)
     assert all(task.result() is not None for task in pending[1:])
+
+
+@pytest.mark.parametrize("stream", (False, True))
+async def test_saturated_estimator_preserves_success_spend_payloads_before_logging_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+) -> None:
+    from threading import Event
+
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+    from litellm.proxy.hooks.autorouter_baseline_cache import finalize_baseline_cache
+    from litellm.types.utils import ModelResponse, Usage
+
+    release: Final = Event()
+
+    def count(model: str, text: str) -> int:
+        assert release.wait(timeout=5), "test did not release estimator"
+        return len(text)
+
+    collector: Final = AutoRouterBaselineCache(None, router=lambda: None, prefix_token_counter=count)
+    worker: Final = LoggingWorker(timeout=1.0, concurrency=8)
+    logs: Final = tuple(
+        Logging(
+            model="openai/gpt-6.1-sol",
+            messages=[{"role": "user", "content": "prompt"}],
+            stream=stream,
+            call_type=CallTypes.acompletion.value,
+            start_time=datetime.now(),
+            litellm_call_id=uuid4().hex,
+            function_id=uuid4().hex,
+        )
+        for _ in range(8)
+    )
+    captures: Final = tuple(_Capture(log.litellm_call_id) for log in logs)
+    first_observations: Final[asyncio.Queue[tuple[str, CapturedBaselineObservation | None]]] = asyncio.Queue()
+
+    async def duplicate(log: Logging, response: ModelResponse) -> None:
+        await finalize_baseline_cache(log, response)
+        first_observations.put_nowait((log.litellm_call_id, log.baseline_observation))
+
+    async def publish(log: Logging, response: ModelResponse) -> None:
+        await asyncio.gather(duplicate(log, response), log.async_success_handler(result=response))
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", list(captures))
+    monkeypatch.setattr(litellm, "success_callback", [])
+    for log in logs:
+        request: Final[dict[str, object]] = {
+            "messages": [{"role": "user", "content": "prompt"}],
+            "litellm_logging_obj": log,
+            "litellm_metadata": {"user_api_key_hash": "test-key", "session_id": "test-session"},
+        }
+        Router._record_routing_decision(
+            request,
+            StandardLoggingRoutingDecision(
+                router_model_name="test-router",
+                router_type="complexity",
+                routed_model="openai/gpt-6.1-sol",
+                savings_baseline_model="openai/gpt-6-astra",
+            ),
+        )
+        await collector.async_pre_call_deployment_hook(request, CallTypes.acompletion)
+        response: Final = ModelResponse(
+            model="gpt-6.1-sol",
+            usage=Usage(
+                prompt_tokens=5000,
+                completion_tokens=10,
+                total_tokens=5010,
+            ),
+        )
+        response._hidden_params["response_cost"] = 0.75
+        worker.ensure_initialized_and_enqueue(publish(log, response))
+    try:
+        payloads: Final = await asyncio.wait_for(asyncio.gather(*(capture.payload() for capture in captures)), 3)
+        observations: Final = tuple(log.baseline_observation for log in logs)
+        assert len(payloads) == len(logs)
+        assert all(payload["response_cost"] == 0.75 for payload in payloads)
+        assert all(_observation(payload).observation.reason == "baseline_estimation_timeout" for payload in payloads)
+        assert not release.is_set()
+        assert worker._timeout_total == 0
+        first: Final = dict(first_observations.get_nowait() for _ in logs)
+        assert all(log.baseline_observation is first[log.litellm_call_id] for log in logs)
+    finally:
+        release.set()
+        await asyncio.gather(*(log.baseline_cache_context.finalization for log in logs if log.baseline_cache_context))
+        await worker.stop()
+    assert tuple(log.baseline_observation for log in logs) == observations
+    assert all(capture.payloads.empty() for capture in captures)

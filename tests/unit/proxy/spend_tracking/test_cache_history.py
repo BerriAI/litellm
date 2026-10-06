@@ -361,3 +361,104 @@ def test_deferred_capture_owns_a_snapshot_before_provider_mutation() -> None:
     original: Final = prepared.count("gpt-6-astra").plan(_usage())
     content.clear()
     assert prepared.count("gpt-6-astra").plan(_usage()) == original
+
+
+@pytest.mark.parametrize("surface", ("messages", "input"))
+@pytest.mark.parametrize("marker", ("cache_control", "prompt_cache_breakpoint"))
+def test_message_cache_marker_covers_all_multipart_content(surface: str, marker: str) -> None:
+    from pydantic import JsonValue
+
+    control: Final[dict[str, JsonValue]] = {"type": "ephemeral", "ttl": "1h"}
+    content: Final[list[dict[str, JsonValue]]] = [
+        {"type": "text", "text": "stable prefix"},
+        {"type": "text", "text": "marked content " * 1000},
+    ]
+    message: Final = {"role": "user", "content": content, marker: control}
+    request: Final = {surface: [message], "prompt_cache_options": {"mode": "explicit", "ttl": "1h"}}
+    captured: Final = capture_cache_request(request, "test-model", "custom_provider", _PRICES, {})
+    normalized: Final = capture_cache_request(
+        {**request, surface: [{"role": "user", "content": [content[0], {**content[1], marker: control}]}]},
+        "test-model",
+        "custom_provider",
+        _PRICES,
+        {},
+    )
+    changed: Final = capture_cache_request(
+        {**request, surface: [{**message, "content": [content[0], {**content[1], "text": "different content"}]}]},
+        "test-model",
+        "custom_provider",
+        _PRICES,
+        {},
+    )
+    assert captured is not None and normalized is not None and changed is not None
+    plan: Final = captured.plan(_usage())
+    assert plan == normalized.plan(_usage())
+    assert len(plan.breakpoints) == 1
+    assert plan.breakpoints[0].prefix_tokens == plan.total_tokens
+    assert plan.breakpoints[0].ttl_seconds == 3600
+    first: Final = BaselineObservation(
+        request_id="first",
+        started_at=10000,
+        available_at=10001,
+        outcome="complete",
+        baseline_equivalent=False,
+        usage=_usage(),
+        plan=plan,
+        cache_policy="estimated",
+        cache_write_pricing="standard",
+    )
+    history, _ = advance_baseline_history(BaselineHistory(), (first,))
+    for prefix, reads in ((normalized, 8000), (changed, 0)):
+        _, estimates = advance_baseline_history(
+            history,
+            (
+                first.model_copy(
+                    update={
+                        "request_id": "next",
+                        "started_at": 10002,
+                        "available_at": 10003,
+                        "plan": prefix.plan(_usage()),
+                    }
+                ),
+            ),
+        )
+        assert estimates[0].usage is not None
+        assert estimates[0].usage.prompt_tokens_details.cached_tokens == reads
+        assert estimates[0].usage.prompt_tokens_details.cache_creation_tokens == 8000 - reads
+
+
+@pytest.mark.parametrize("surface", ("messages", "input"))
+def test_message_cache_marker_covers_string_content_parts(surface: str) -> None:
+    captured: Final = capture_cache_request(
+        {surface: [{"role": "user", "content": ["first", "last"], "cache_control": {"type": "ephemeral"}}]},
+        "claude-test", "custom_provider", _PRICES, {},
+    )
+    assert captured is not None
+    plan: Final = captured.plan(_usage())
+    assert len(plan.breakpoints) == 1
+    assert plan.breakpoints[0].prefix_tokens == plan.total_tokens
+
+
+def test_message_marker_matches_provider_precedence_without_losing_earlier_breakpoints() -> None:
+    from litellm.llms.openrouter.chat.transformation import OpenrouterConfig
+    from litellm.types.llms.openai import AllMessageValues
+
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "user",
+            "cache_control": {"type": "ephemeral", "ttl": "5m"},
+            "content": [
+                {"type": "text", "text": "earlier prefix", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                {"type": "text", "text": "remaining content", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
+        },
+    ]
+    transformed: Final = OpenrouterConfig()._move_cache_control_to_content(messages)
+    before: Final = capture_cache_request({"messages": messages}, "claude-test", "openrouter", _PRICES, {})
+    after: Final = capture_cache_request({"messages": transformed}, "claude-test", "openrouter", _PRICES, {})
+    assert before is not None and after is not None
+    plan: Final = before.plan(_usage())
+    assert plan == after.plan(_usage())
+    assert tuple(marker.ttl_seconds for marker in plan.breakpoints) == (3600, 300)
+    assert plan.breakpoints[-1].prefix_tokens == plan.total_tokens
+    assert "cache_control" in messages[0]

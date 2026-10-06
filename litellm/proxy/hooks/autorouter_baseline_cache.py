@@ -19,6 +19,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,  # pyright: ignore[reportUnknownVariableType]  # legacy metadata boundary validated below
 )
+from litellm.litellm_core_utils.logging_worker import optional_callback_budget
 from litellm.llms.anthropic.prompt_cache_prediction import (
     CountedPromptCachePlan,
     NativePredictionTarget,
@@ -211,7 +212,7 @@ class AutoRouterBaselineCache(CustomLogger):
                     request.route.baseline_deployment_id,
                     params,
                     prices,
-                    *((identity, "estimated_prefixes_v2") if estimated else ()),
+                    *((identity, "estimated_prefixes_v3") if estimated else ()),
                 )
             )
             started: Final = logging_obj.start_time.timestamp()
@@ -334,14 +335,25 @@ async def finalize_baseline_cache(logging_obj: Logging, response_obj: object) ->
     if context is None or logging_obj.baseline_observation is not None:
         return
     task: Final = context.finalization or asyncio.create_task(_capture(context, logging_obj, response_obj))
+    if context.finalization is None:
+        task.add_done_callback(_consume_finalization)
     active: Final = context if context.finalization is not None else replace(context, finalization=task)
     logging_obj.baseline_cache_context = active
     try:
-        capture: Final = await asyncio.shield(task)
+        capture: Final = await asyncio.wait_for(asyncio.shield(task), timeout=optional_callback_budget(_COUNT_TIMEOUT))
         if logging_obj.baseline_cache_context is active:
             logging_obj.baseline_observation = capture  # rebind-ok: attach only to the captured request owner
+    except TimeoutError:
+        if logging_obj.baseline_observation is None:
+            await invalidate_baseline_cache(logging_obj, "baseline_estimation_timeout")
     except Exception:  # noqa: BLE001  # observation failures must preserve inference and billing
-        await invalidate_baseline_cache(logging_obj, "observation_unavailable")
+        if logging_obj.baseline_observation is None:
+            await invalidate_baseline_cache(logging_obj, "observation_unavailable")
+
+
+def _consume_finalization(task: asyncio.Task[CapturedBaselineObservation]) -> None:
+    if not task.cancelled():
+        task.exception()
 
 
 async def _capture(

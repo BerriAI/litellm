@@ -1760,6 +1760,14 @@ def with_prompt_cache_breakpoint(target: _MarkedT, marker: object) -> _MarkedT:
     return cast(_MarkedT, marked)  # cast-ok: same block shape as the input plus the marker key
 
 
+def with_prompt_cache_controls(target: _MarkedT, source: Mapping[str, object]) -> _MarkedT:
+    controls: Final = {
+        key: source[key] for key in ("cache_control", "prompt_cache_breakpoint") if source.get(key) is not None
+    }
+    marked: Final = {**target, **controls} if controls else target
+    return cast(_MarkedT, marked)  # cast-ok: retain the target shape plus cache metadata
+
+
 LITELLM_INTERNAL_MESSAGE_FIELDS: Final = frozenset({"thinking_blocks", "reasoning_content", "provider_specific_fields"})
 
 

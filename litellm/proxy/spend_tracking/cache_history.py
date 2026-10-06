@@ -226,7 +226,16 @@ def _parts(message: dict[str, JsonValue]) -> Iterator[_Part]:
         return
     yield _Part({key: value for key, value in message.items() if key != "content"}, role, False)
     for index, part in enumerate(content):
-        yield _Part(part, role, index == len(content) - 1, part)
+        end = index == len(content) - 1
+        control = {
+            key: message[key]
+            if end and message.get(key) is not None
+            else part.get(key)
+            if isinstance(part, dict)
+            else None
+            for key in ("cache_control", "prompt_cache_breakpoint")
+        }
+        yield _Part(part, role, end, control)
 
 
 def _without_controls(value: JsonValue) -> JsonValue:

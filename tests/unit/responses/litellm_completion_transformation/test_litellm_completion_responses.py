@@ -4461,6 +4461,36 @@ class TestEnsureOutputItemContentPartAdded:
 
 
 class TestCacheControlPreservation:
+    @pytest.mark.parametrize("marker", ("cache_control", "prompt_cache_breakpoint"))
+    @pytest.mark.parametrize("kind", ("input_text", "input_image", "input_file"))
+    def test_message_and_content_cache_markers_survive_shared_conversion(self, marker: str, kind: str) -> None:
+        message_control: Final = (
+            {"type": "ephemeral", "ttl": "1h"} if marker == "cache_control" else {"mode": "explicit"}
+        )
+        block_control: Final = {"type": "ephemeral", "ttl": "5m"} if marker == "cache_control" else {"mode": "implicit"}
+        raw: Final = {
+            "input_text": {"type": "input_text", "text": "stable"},
+            "input_image": {"type": "input_image", "image_url": "https://example.com/test.png"},
+            "input_file": {"type": "input_file", "file_id": "file-test"},
+        }[kind]
+        expected: Final = {
+            "input_text": {"type": "text", "text": "stable"},
+            "input_image": {
+                "type": "image_url",
+                "image_url": {"url": "https://example.com/test.png", "detail": "auto"},
+            },
+            "input_file": {"type": "file", "file": {"file_id": "file-test"}},
+        }[kind]
+        result: Final = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            {
+                "type": "message",
+                "role": "user",
+                marker: message_control,
+                "content": [{**raw, marker: block_control}],
+            }
+        )
+        assert result == [{"role": "user", marker: message_control, "content": [{**expected, marker: block_control}]}]
+
     def test_cache_control_preserved_in_content_transformation(self):
         """cache_control injected by AnthropicCacheControlHook must survive
         the Responses API -> Chat Completion content transformation."""
