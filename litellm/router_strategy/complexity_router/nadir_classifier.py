@@ -6,11 +6,12 @@ endpoint, and everything else stays here. The tier's model pool, the provider ca
 operator's own provider keys, fallbacks, spend tracking and the response path are
 untouched, so Nadir sees the messages it is asked to classify and never the response.
 
-``/v1/bucket`` grades the request without generating an answer and replies ``simple`` /
-``medium`` / ``complex``, which map to the router's default SIMPLE / MEDIUM / COMPLEX
-tiers. Renaming the tiers with ``tier_labels`` needs nothing here, since the router still
-accepts the default names. A router built on ``tier_definitions`` names its own tiers, so
-it constructs its own instance with a ``tier_map`` onto them.
+``/v1/bucket`` grades the request without generating an answer and replies with a
+``routing_tier`` of ``simple`` / ``medium`` / ``complex``, which map to the router's
+default SIMPLE / MEDIUM / COMPLEX tiers. Renaming the tiers with ``tier_labels`` needs
+nothing here, since the router still accepts the default names. A router built on
+``tier_definitions`` names its own tiers, so it constructs its own instance with a
+``tier_map`` onto them.
 
 Configure it in the proxy by pointing ``classifier_plugin`` at the module-level
 instance::
@@ -138,10 +139,13 @@ class NadirComplexityClassifier:
         body: Final = {"messages": list(messages), "source": "litellm"}
         response: Final = await client.post(url=url, json=body, headers=self._headers(url))
         try:
-            bucket: Final = _VERDICT.validate_python(response.json()).get("bucket")
+            verdict: Final = _VERDICT.validate_python(response.json())
         except ValidationError:
             return None
-        return self._tier_map.get(bucket.strip().lower()) if isinstance(bucket, str) else None
+        # ``routing_tier`` is the tier Nadir itself routes on: the classifier's bucket after its
+        # deterministic confidence and gate adjustments. A server that predates it sends only ``bucket``.
+        tier: Final = verdict.get("routing_tier") or verdict.get("bucket")
+        return self._tier_map.get(tier.strip().lower()) if isinstance(tier, str) else None
 
 
 nadir_classifier: Final = NadirComplexityClassifier()

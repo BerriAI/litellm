@@ -155,6 +155,29 @@ class TestClassify:
         assert await NadirComplexityClassifier(client=_FakeClient(payload=payload)).classify(_context()) is None
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("payload", "expected_tier"),
+        [
+            ({"bucket": "simple", "routing_tier": "medium"}, "MEDIUM"),
+            ({"bucket": "complex", "routing_tier": "medium"}, "MEDIUM"),
+            ({"bucket": "complex"}, "COMPLEX"),
+        ],
+    )
+    async def test_routing_tier_wins_over_the_raw_bucket(self, payload, expected_tier):
+        """routing_tier carries Nadir's own confidence and gate adjustments; bucket is the pre-adjustment
+        prediction, read only from a server that predates routing_tier."""
+        assert (
+            await NadirComplexityClassifier(client=_FakeClient(payload=payload)).classify(_context()) == expected_tier
+        )
+
+    @pytest.mark.asyncio
+    async def test_unknown_routing_tier_declines_rather_than_reading_the_bucket(self):
+        classifier = NadirComplexityClassifier(
+            client=_FakeClient(payload={"bucket": "simple", "routing_tier": "reasoning"})
+        )
+        assert await classifier.classify(_context()) is None
+
+    @pytest.mark.asyncio
     async def test_bucket_name_is_matched_case_insensitively(self):
         classifier = NadirComplexityClassifier(client=_FakeClient(payload={"bucket": " Complex "}))
         assert await classifier.classify(_context()) == "COMPLEX"
