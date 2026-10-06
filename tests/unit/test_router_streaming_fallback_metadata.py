@@ -1,5 +1,5 @@
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -54,28 +54,88 @@ def test_apply_fallback_hidden_params_copies_from_fallback_response():
     }
 
 
-def test_apply_fallback_hidden_params_preserves_stream_chunk_cost():
-    chunk = litellm.ModelResponseStream(
-        id="test",
-        model="openai/internal-fallback",
-        choices=[],
-    )
-    chunk._hidden_params = {"response_cost": None}
-    fallback_response = MagicMock()
-    fallback_response._hidden_params = {
-        "model_id": "fallback-deployment",
-        "response_cost": 0.0,
-    }
+@pytest.mark.asyncio
+async def test_streaming_fallback_preserves_terminal_usage_cost():
+    from litellm.exceptions import MidStreamFallbackError
 
-    Router._apply_fallback_hidden_params_to_item(
-        fallback_item=chunk,
-        prepared_fallback_hidden_params=Router._prepare_fallback_hidden_params(
-            fallback_response
+    failed_error = MidStreamFallbackError(
+        message="upstream failed before the first chunk",
+        model="primary-model",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class FailedStream:
+        def __init__(self):
+            self.model = "primary-model"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+            self._hidden_params = {"model_id": "primary-deployment"}
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise failed_error
+
+    content_chunk = litellm.ModelResponseStream(
+        id="test",
+        model="openai/fallback-model",
+        choices=[{"index": 0, "delta": {"content": "ok"}}],
+    )
+    content_chunk._hidden_params = {"response_cost": None}
+    usage_chunk = litellm.ModelResponseStream(
+        id="test",
+        model="openai/fallback-model",
+        choices=[],
+        usage=litellm.Usage(
+            prompt_tokens=12,
+            completion_tokens=12,
+            total_tokens=24,
+            cost=0.00015,
         ),
     )
+    usage_chunk._hidden_params = {"response_cost": None}
 
-    assert chunk._hidden_params["model_id"] == "fallback-deployment"
-    assert chunk._hidden_params["response_cost"] is None
+    class FallbackStream:
+        def __init__(self):
+            self._hidden_params = {
+                "model_id": "fallback-deployment",
+                "response_cost": 0.0,
+            }
+            self._chunks = iter([content_chunk, usage_chunk])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+    router = _two_group_fallback_router()
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=FallbackStream(),
+    ):
+        stream = await router._acompletion_streaming_iterator(
+            model_response=FailedStream(),
+            messages=[{"role": "user", "content": "hello"}],
+            initial_kwargs={"model": "primary-model", "stream": True},
+        )
+        chunks = [chunk async for chunk in stream]
+
+    assert [chunk._hidden_params["model_id"] for chunk in chunks] == [
+        "fallback-deployment",
+        "fallback-deployment",
+    ]
+    assert [chunk._hidden_params["response_cost"] for chunk in chunks] == [None, None]
+    assert chunks[-1].usage is not None
+    assert chunks[-1].usage.cost == pytest.approx(0.00015)
 
 
 def _two_group_fallback_router() -> Router:
