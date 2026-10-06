@@ -7,7 +7,7 @@ use pyo3::{
 };
 
 use super::super::inference::InferenceHost;
-use crate::cache::{CacheCall, PythonCache, PythonCacheConfig, PythonCached};
+use crate::cache::{CacheCall, PythonCache, PythonCacheSelection, PythonCached};
 
 pub(super) struct ResponsesPythonHost {
     host: InferenceHost,
@@ -72,7 +72,7 @@ impl PythonBinding for ResponsesPythonHost {
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<(ResponsesCall, Option<PythonCacheConfig>), InvokeError<Error>> {
+    ) -> Result<(ResponsesCall, Option<PythonCacheSelection>), InvokeError<Error>> {
         let call = project(&self.host, py, arguments).map_err(InvokeError::Python)?;
         if call
             .optional_params
@@ -83,14 +83,14 @@ impl PythonBinding for ResponsesPythonHost {
                 "native Python responses streaming",
             )));
         }
-        let cache = crate::cache::configure_python_cache::<Responses>(
+        let selection = crate::cache::select_python_cache::<Responses>(
             &mut self.cache,
             py,
             arguments,
             self.call_type,
         )
         .map_err(InvokeError::Python)?;
-        Ok((call, cache))
+        Ok((call, selection))
     }
 
     fn encode_response(

@@ -9,7 +9,7 @@ use pyo3::{
     prelude::*,
 };
 pub(crate) use python::{CacheCall, PythonCache};
-pub(crate) use selection::{PythonCacheConfig, PythonCached, configure_python_cache};
+pub(crate) use selection::{PythonCacheSelection, PythonCached, select_python_cache};
 
 fn cache_error(error: Error) -> PyErr {
     match error {

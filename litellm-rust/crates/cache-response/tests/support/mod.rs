@@ -23,7 +23,7 @@ pub fn key() -> CacheKey {
 }
 
 pub fn keyed(key: &str) -> CacheKey {
-    CacheKey::External(key.into())
+    CacheKey::Supplied(key.into())
 }
 
 pub const DEFAULT: ExactCacheContext = ExactCacheContext { ttl: None };

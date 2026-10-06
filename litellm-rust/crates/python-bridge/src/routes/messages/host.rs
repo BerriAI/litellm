@@ -17,7 +17,7 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use crate::{
-    cache::{CacheCall, PythonCache, PythonCacheConfig, PythonCached},
+    cache::{CacheCall, PythonCache, PythonCacheSelection, PythonCached},
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{optional_timeout, python_timeout_seconds},
 };
@@ -234,8 +234,8 @@ impl PythonBinding for MessagesPythonHost {
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<(MessagesCall, Option<PythonCacheConfig>), InvokeError<Error>> {
-        let selection = crate::cache::configure_python_cache::<Messages>(
+    ) -> Result<(MessagesCall, Option<PythonCacheSelection>), InvokeError<Error>> {
+        let selection = crate::cache::select_python_cache::<Messages>(
             &mut self.cache,
             py,
             arguments,

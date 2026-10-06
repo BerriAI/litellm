@@ -10,6 +10,6 @@
 - Headers the caller forwards are key material, with names lowercased. Headers the route adds for authentication or provider defaults are not
 - A request that `before_provider_request` changed skips the cache on both storage paths, so neither derivation sees the rewritten request
 - A key is a value computed once per call and handed back to the service that produced it. It is never written back into the request, and no precomputed key or key input rides on `CacheOptions`
-- A key built outside this crate, such as Python's `get_cache_key` result, is `CacheKey::External` and never passes through `CacheKey::derive`
+- A key built outside this crate, such as Python's `get_cache_key` result, is `CacheKey::Supplied` and never passes through `CacheKey::derive`
 - Python-backed storage accepts only a scope without a `CacheCredential`, because Python's key cannot carry one. A scope with a credential against it fails key resolution and skips the cache
 - Changing the layout in `CacheKey::derive` is a key migration: bump `KEY_VERSION` with it

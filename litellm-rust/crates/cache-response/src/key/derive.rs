@@ -7,8 +7,8 @@ const KEY_VERSION: &str = "v0";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CacheKey {
-    Native(String),
-    External(String),
+    Derived(String),
+    Supplied(String),
 }
 
 impl CacheKey {
@@ -20,12 +20,12 @@ impl CacheKey {
             "parameters": input.parameters,
         });
         let hash = format!("{:x}", Sha256::digest(material.to_string()));
-        Self::Native(format!("{KEY_VERSION}:{hash}"))
+        Self::Derived(format!("{KEY_VERSION}:{hash}"))
     }
 
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Native(key) | Self::External(key) => key,
+            Self::Derived(key) | Self::Supplied(key) => key,
         }
     }
 }
@@ -33,7 +33,7 @@ impl CacheKey {
 impl From<CacheKey> for String {
     fn from(key: CacheKey) -> Self {
         match key {
-            CacheKey::Native(key) | CacheKey::External(key) => key,
+            CacheKey::Derived(key) | CacheKey::Supplied(key) => key,
         }
     }
 }

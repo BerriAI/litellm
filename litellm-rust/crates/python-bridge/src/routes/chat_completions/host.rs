@@ -7,7 +7,7 @@ use pyo3::{
 };
 
 use super::super::inference::InferenceHost;
-use crate::cache::{CacheCall, PythonCache, PythonCacheConfig, PythonCached};
+use crate::cache::{CacheCall, PythonCache, PythonCacheSelection, PythonCached};
 
 pub(super) struct ChatCompletionsPythonHost {
     host: InferenceHost,
@@ -51,7 +51,7 @@ impl PythonBinding for ChatCompletionsPythonHost {
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<(ChatCompletionsCall, Option<PythonCacheConfig>), InvokeError<Error>> {
+    ) -> Result<(ChatCompletionsCall, Option<PythonCacheSelection>), InvokeError<Error>> {
         let call = project(&self.host, py, arguments).map_err(InvokeError::Python)?;
         if call
             .optional_params
@@ -62,14 +62,14 @@ impl PythonBinding for ChatCompletionsPythonHost {
                 "native Python chat_completions streaming",
             )));
         }
-        let cache = crate::cache::configure_python_cache::<ChatCompletions>(
+        let selection = crate::cache::select_python_cache::<ChatCompletions>(
             &mut self.cache,
             py,
             arguments,
             self.call_type,
         )
         .map_err(InvokeError::Python)?;
-        Ok((call, cache))
+        Ok((call, selection))
     }
 
     fn encode_response(

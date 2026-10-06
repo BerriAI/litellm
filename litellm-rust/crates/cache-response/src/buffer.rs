@@ -121,7 +121,7 @@ mod tests {
         });
         let cache = ResponseCache::new(backend.clone());
         let buffer = WriteBuffer::new(2);
-        let key = CacheKey::External("buffered".into());
+        let key = CacheKey::Supplied("buffered".into());
 
         for batch in 0..=failed_flushes {
             let first = json!(batch * 2);

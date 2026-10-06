@@ -27,7 +27,7 @@ fn input(prompt: &str) -> CacheKeyInput {
 }
 
 fn keyed(key: &str) -> CacheKey {
-    CacheKey::External(key.into())
+    CacheKey::Supplied(key.into())
 }
 
 #[rstest]

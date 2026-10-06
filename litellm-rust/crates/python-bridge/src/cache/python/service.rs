@@ -65,7 +65,7 @@ pub(crate) enum CacheCall {
     },
 }
 
-struct PythonCacheService<P: Protocol> {
+struct PythonResponseCache<P: Protocol> {
     services: HostServices<P>,
     surface: &'static str,
 }
@@ -77,10 +77,10 @@ pub(in crate::cache) fn service<P: Protocol<HostCall = CacheCall>>(
 where
     P::Error: From<MachineFault>,
 {
-    std::sync::Arc::new(PythonCacheService { services, surface })
+    std::sync::Arc::new(PythonResponseCache { services, surface })
 }
 
-impl<P: Protocol<HostCall = CacheCall>> ResponseCacheService for PythonCacheService<P>
+impl<P: Protocol<HostCall = CacheCall>> ResponseCacheService for PythonResponseCache<P>
 where
     P::Error: From<MachineFault>,
 {
@@ -101,7 +101,7 @@ where
                     .call(|reply| CacheCall::GetCacheKey { reply })
                     .await
                     .map_err(|_| Error::Unavailable)?
-                    .map(CacheKey::External),
+                    .map(CacheKey::Supplied),
             }
         })
     }

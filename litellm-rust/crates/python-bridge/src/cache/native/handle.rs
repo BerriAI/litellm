@@ -103,7 +103,7 @@ impl NativeCacheHandle {
     }
     fn get(&self, py: Python<'_>, key: String) -> PyResult<Py<PyAny>> {
         self.check_process()?;
-        let key = CacheKey::External(key);
+        let key = CacheKey::Supplied(key);
         let value = release_gil(py, || self.backend.lookup(&key, now())).map_err(cache_error)?;
         to_py(py, &value)
     }
@@ -117,7 +117,7 @@ impl NativeCacheHandle {
         ttl: Option<f64>,
     ) -> PyResult<()> {
         self.check_process()?;
-        let key = CacheKey::External(key);
+        let key = CacheKey::Supplied(key);
         let ttl = optional_duration(ttl)?;
         let value: Value = from_py(value)?;
         release_gil(py, || self.backend.store(&key, ttl, value, now())).map_err(cache_error)
@@ -125,7 +125,7 @@ impl NativeCacheHandle {
 
     fn async_get<'py>(&self, py: Python<'py>, key: String) -> PyResult<Bound<'py, PyAny>> {
         self.check_process()?;
-        let key = CacheKey::External(key);
+        let key = CacheKey::Supplied(key);
         let backend = self.backend.clone();
         crate::execution::run_async(
             py,
@@ -143,7 +143,7 @@ impl NativeCacheHandle {
         ttl: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         self.check_process()?;
-        let key = CacheKey::External(key);
+        let key = CacheKey::Supplied(key);
         let ttl = optional_duration(ttl)?;
         let value: Value = from_py(value)?;
         let backend = self.backend.clone();
@@ -165,7 +165,7 @@ impl NativeCacheHandle {
         let entries: Vec<(String, Value)> = from_py(entries)?;
         let entries = entries
             .into_iter()
-            .map(|(key, value)| (CacheKey::External(key), value))
+            .map(|(key, value)| (CacheKey::Supplied(key), value))
             .collect();
         let ttl = optional_duration(ttl)?;
         let backend = self.backend.clone();

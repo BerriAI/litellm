@@ -90,11 +90,13 @@ fn run_public(
             Ok(litellm_host::call::hosted_call(
                 request,
                 None,
-                move |(call, config): (_, Option<crate::cache::PythonCacheConfig>),
+                move |(call, selection): (_, Option<crate::cache::PythonCacheSelection>),
                       services,
                       interceptors,
                       observers| async move {
-                    let (cache, options) = config.map(|config| config.into_parts(services)).unzip();
+                    let (cache, options) = selection
+                        .map(|selection| selection.into_parts(services))
+                        .unzip();
                     route
                         .with_cache(cache)
                         .execute(

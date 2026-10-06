@@ -15,7 +15,7 @@ use super::python;
 pub(crate) struct PythonCached<P>(std::marker::PhantomData<P>);
 
 impl<P: Protocol> Protocol for PythonCached<P> {
-    type Request = (P::Request, Option<PythonCacheConfig>);
+    type Request = (P::Request, Option<PythonCacheSelection>);
     type Response = P::Response;
     type Error = P::Error;
     type HostCall = python::CacheCall;
@@ -23,12 +23,12 @@ impl<P: Protocol> Protocol for PythonCached<P> {
     type StreamHead = P::StreamHead;
 }
 
-pub(crate) struct PythonCacheConfig {
+pub(crate) struct PythonCacheSelection {
     policy: CachePolicy,
     surface: &'static str,
 }
 
-impl PythonCacheConfig {
+impl PythonCacheSelection {
     pub(crate) fn into_parts<P: Protocol<HostCall = python::CacheCall>>(
         self,
         services: HostServices<P>,
@@ -97,12 +97,12 @@ fn selected_cache<'py>(
     Ok(allowed.then_some(cache))
 }
 
-pub(crate) fn configure_python_cache<P: Cachable>(
+pub(crate) fn select_python_cache<P: Cachable>(
     host: &mut python::PythonCache,
     py: Python<'_>,
     arguments: &Bound<'_, PyDict>,
     call_type: &str,
-) -> PyResult<Option<PythonCacheConfig>> {
+) -> PyResult<Option<PythonCacheSelection>> {
     let configured = py.import("litellm")?.getattr("cache")?;
     let Some(cache) = selected_cache(configured, arguments, call_type)? else {
         return Ok(None);
@@ -128,7 +128,7 @@ pub(crate) fn configure_python_cache<P: Cachable>(
         ..CachePolicy::default()
     };
     host.bind(cache, arguments);
-    Ok(Some(PythonCacheConfig {
+    Ok(Some(PythonCacheSelection {
         policy,
         surface: P::SURFACE,
     }))
