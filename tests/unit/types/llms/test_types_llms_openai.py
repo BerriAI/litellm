@@ -7,7 +7,12 @@ import pytest
 import json
 
 import litellm
-from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    HttpxBinaryResponseContent,
+    OpenAIModerationResponse,
+    ResponseCompletedEvent,
+    ResponsesAPIResponse,
+)
 
 
 @pytest.mark.parametrize("stream", (False, True))
@@ -559,6 +564,14 @@ class TestOpenAIFileObjectBatchGuardrailSerialization:
         page = FileListPage(object="list", data=[self._file_object()], has_more=False)
         assert "litellm_batch_guardrail" not in page.model_dump(mode="json")["data"][0]
 
+    def test_file_object_hidden_params_public_accessor_preserves_identity(self):
+        file_object: Final = self._file_object()
+        assert file_object.hidden_params is file_object._hidden_params
+
+        replacement: Final[dict[str, object]] = {"public_key": "visible"}
+        file_object.hidden_params = replacement
+        assert file_object._hidden_params is replacement
+
 
 def _binary_content(payload: bytes) -> HttpxBinaryResponseContent:
     import httpx
@@ -570,9 +583,14 @@ def test_httpx_binary_response_content_hidden_params_are_per_instance():
     first = _binary_content(b"first")
     second = _binary_content(b"second")
 
-    first._hidden_params["response_cost"] = 0.5
+    first.hidden_params["response_cost"] = 0.5
 
-    assert second._hidden_params == {}
+    assert second.hidden_params == {}
+
+    replacement: Final[dict[str, object]] = {"public_key": "visible"}
+    first.hidden_params = replacement
+    assert first._hidden_params is replacement
+    assert first.hidden_params is replacement
 
 
 def test_set_response_cost_none_leaves_hidden_params_empty():
@@ -606,3 +624,24 @@ def test_responses_api_response_hidden_params_public_accessor_is_instance_scoped
     first.hidden_params = replacement
     assert first._hidden_params is replacement
     assert first.hidden_params is replacement
+
+
+def test_response_completed_event_hidden_params_public_accessor_preserves_identity() -> None:
+    response: Final = ResponsesAPIResponse(id="resp_event", created_at=1, output=[])
+    event: Final = ResponseCompletedEvent(type="response.completed", response=response)
+
+    assert event.hidden_params is event._hidden_params
+
+    replacement: Final[dict[str, object]] = {"public_key": "visible"}
+    event.hidden_params = replacement
+    assert event._hidden_params is replacement
+
+
+def test_moderation_response_hidden_params_public_accessor_preserves_identity() -> None:
+    response: Final = OpenAIModerationResponse(id="modr_test", model="moderation", results=[])
+
+    assert response.hidden_params is response._hidden_params
+
+    replacement: Final[dict[str, object]] = {"public_key": "visible"}
+    response.hidden_params = replacement
+    assert response._hidden_params is replacement
