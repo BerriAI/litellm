@@ -1,8 +1,7 @@
 import asyncio
 import datetime
-from collections.abc import AsyncIterator, Mapping
-from types import MappingProxyType
-from typing import Final, Literal, Protocol, cast
+from collections.abc import Mapping
+from typing import Final, Literal, cast
 
 import pytest
 from pydantic import TypeAdapter
@@ -23,128 +22,28 @@ from litellm.proxy.utils import InternalUsageCache
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
+from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompletionsRequest
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import call_hook
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
+from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
 from litellm.types.caching import CachingSupportedCallTypes
-from tests.test_litellm_rust.support.cache import cache_key, collect, invoke, payload
+from litellm.types.utils import ModelResponse
+from tests.test_litellm_rust.support.cache import (
+    ClosableByteStream,
+    cache_key,
+    chunk_bytes,
+    collect,
+    collect_chunks,
+    invoke,
+    payload,
+)
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_EVENTS, MESSAGES_MODEL, MESSAGES_RESPONSE
 from tests.test_litellm_rust.test_inference import RESPONSES_RESPONSE
 
 pytestmark = pytest.mark.requires_rust_extension
-
-
-def payload(value: object) -> object:
-    if isinstance(value, ModelResponse):
-        return value.model_dump_json(exclude=MappingProxyType({"id": True, "created": True}))
-    if isinstance(value, dict):
-        fields: Final = TypeAdapter(dict[str, object]).validate_python(value)
-        return {name: field for name, field in fields.items() if name != "_hidden_params"}
-    return value.model_dump_json() if isinstance(value, BaseModel) else value
-
-
-def cache_key(response: object) -> object:
-    hidden: Final = get_hidden_params_dict(response)
-    headers: Final = TypeAdapter(dict[str, object]).validate_python(hidden.get("additional_headers", {}))
-    return headers.get("x-litellm-cache-key")
-
-
-async def invoke(
-    route: Literal["chat", "messages", "responses"],
-    server: RecordingServer,
-    options: Mapping[str, object],
-    native: bool = True,
-    events: tuple[tuple[str, object], ...] | None = None,
-    ensure_ascii: bool = True,
-) -> object:
-    common: Final = {"api_key": "test-key", "api_base": server.base_url, **options}
-    if route == "responses":
-        server.default_response = ResponseSpec(body=RESPONSES_RESPONSE)
-        arguments: Final = {"model": RESPONSES_MODEL, "input": "hello", **common}
-        if not native:
-            return await litellm.aresponses(**arguments)
-        request: Final = LiteLLMResponsesRequest(
-            RESPONSES_MODEL, "hello", None, "test-key", server.base_url, "openai", None, arguments
-        )
-        return await runtime.arun(
-            RouteContext(Route.RESPONSES),
-            binding=NATIVE_ARESPONSES,
-            native=lambda hook: call_hook(hook, request, (), arguments),
-            python=runtime.NO_PYTHON,
-            rules=(RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),),
-        )
-    server.default_response = (
-        ResponseSpec(
-            body=None,
-            events=MESSAGES_EVENTS if events is None else events,
-            ensure_ascii=ensure_ascii,
-        )
-        if options.get("stream")
-        else ResponseSpec(body=MESSAGES_RESPONSE)
-    )
-    parameters: Final = {"model": MESSAGES_MODEL, "messages": list(MESSAGES), "max_tokens": 32, **common}
-    if route == "chat":
-        if not native:
-            return await litellm.acompletion(**parameters)
-        chat: Final = LiteLLMChatCompletionsRequest(
-            MESSAGES_MODEL, list(MESSAGES), None, "test-key", server.base_url, None, None, parameters
-        )
-        return await runtime.arun(
-            RouteContext(Route.CHAT_COMPLETIONS),
-            binding=NATIVE_ACOMPLETION,
-            native=lambda hook: call_hook(hook, chat, (), parameters),
-            python=runtime.NO_PYTHON,
-            rules=(RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),),
-        )
-    if not native:
-        return await litellm.anthropic_messages(**parameters)
-    messages: Final = LiteLLMMessagesRequest(
-        MESSAGES_MODEL, list(MESSAGES), 32, None, "test-key", server.base_url, "anthropic", parameters
-    )
-    return await runtime.arun(
-        RouteContext(Route.MESSAGES),
-        binding=NATIVE_AMESSAGES,
-        native=lambda hook: call_hook(hook, messages, (), parameters),
-        python=runtime.NO_PYTHON,
-        rules=(RouteRule(Route.MESSAGES, Rollout.RUST_REQUIRED),),
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("route", ("chat", "messages", "responses"))
-@pytest.mark.parametrize("backend", ("memory", "redis"))
-async def test_v2_cache_skips_provider_and_reports_one_success_per_call(
-    recording_server: RecordingServer,
-    route: Literal["chat", "messages", "responses"],
-    backend: Literal["memory", "redis"],
-    redis_url: str,
-) -> None:
-    recording_server.expected_requests = 2
-    litellm.cache = _v2.Cache.memory() if backend == "memory" else _v2.Cache.redis(redis_url, namespace="headers")
-    recorder: Final = RecordingLogger()
-    first: Final = await invoke(route, recording_server, {"callbacks": [recorder]})
-    await recorder.wait_for_async("async_log_success_event")
-    second: Final = await invoke(route, recording_server, {"callbacks": [recorder]})
-    assert payload(first) == payload(second)
-    assert cache_key(first) is None
-    key: Final = cache_key(second)
-    assert isinstance(key, str)
-    assert key == get_hidden_params_dict(second)["cache_key"]
-    assert len(recording_server.requests) == 1
-    await drain_logging()
-    successes: Final = await recorder.wait_for_async("async_log_success_event", count=2)
-    assert len(successes) == 2
-    cached_log: Final = TypeAdapter(dict[str, object]).validate_python(successes[-1].kwargs)
-    assert cached_log["cache_hit"] is True
-    assert cached_log["response_cost"] == 0
-    await litellm.cache.delete_cache_keys([key])
-    refreshed: Final = await invoke(route, recording_server, {"callbacks": [recorder]})
-    assert cache_key(refreshed) is None
-    assert len(recording_server.requests) == 2
-    assert len(await recorder.wait_for_async("async_log_success_event", count=3)) == 3
-    await litellm.cache.disconnect()
 
 
 @pytest.mark.asyncio
@@ -337,29 +236,6 @@ async def test_cache_controls_and_backend_credential_key_semantics(
     await invoke(route, recording_server, {"caching": False})
     await invoke(route, recording_server, {})
     assert len(recording_server.requests) == recording_server.expected_requests
-
-
-async def collect(stream: object) -> bytes:
-    assert isinstance(stream, AsyncIterator)
-    return b"".join([chunk_bytes(chunk) async for chunk in stream])
-
-
-class ClosableByteStream(Protocol):
-    def __aiter__(self) -> AsyncIterator[bytes]: ...
-
-    async def __anext__(self) -> bytes: ...
-
-    async def aclose(self) -> None: ...
-
-
-async def collect_chunks(stream: object) -> tuple[bytes, ...]:
-    assert isinstance(stream, AsyncIterator)
-    return tuple([chunk_bytes(chunk) async for chunk in stream])
-
-
-def chunk_bytes(value: object) -> bytes:
-    assert isinstance(value, bytes)
-    return value
 
 
 @pytest.mark.asyncio

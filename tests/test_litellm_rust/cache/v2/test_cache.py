@@ -13,7 +13,11 @@ from litellm.caching.caching_handler import (
 )
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.types.utils import ModelResponse
-from tests.test_litellm_rust.support.cache import cache_key, invoke, payload
+from tests.test_litellm_rust.support.cache import (
+    cache_key,
+    invoke,
+    payload,
+)
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE

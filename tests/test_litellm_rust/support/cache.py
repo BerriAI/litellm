@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 from collections.abc import AsyncIterator, Mapping
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, Protocol
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -41,6 +39,8 @@ async def invoke(
     server: RecordingServer,
     options: Mapping[str, object],
     native: bool = True,
+    events: tuple[tuple[str, object], ...] | None = None,
+    ensure_ascii: bool = True,
 ) -> object:
     common: Final = {"api_key": "test-key", "api_base": server.base_url, **options}
     if route == "responses":
@@ -59,7 +59,11 @@ async def invoke(
             rules=(RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),),
         )
     server.default_response = (
-        ResponseSpec(body=None, events=MESSAGES_EVENTS)
+        ResponseSpec(
+            body=None,
+            events=MESSAGES_EVENTS if events is None else events,
+            ensure_ascii=ensure_ascii,
+        )
         if options.get("stream")
         else ResponseSpec(body=MESSAGES_RESPONSE)
     )
@@ -94,6 +98,19 @@ async def invoke(
 async def collect(stream: object) -> bytes:
     assert isinstance(stream, AsyncIterator)
     return b"".join([chunk_bytes(chunk) async for chunk in stream])
+
+
+class ClosableByteStream(Protocol):
+    def __aiter__(self) -> AsyncIterator[bytes]: ...
+
+    async def __anext__(self) -> bytes: ...
+
+    async def aclose(self) -> None: ...
+
+
+async def collect_chunks(stream: object) -> tuple[bytes, ...]:
+    assert isinstance(stream, AsyncIterator)
+    return tuple([chunk_bytes(chunk) async for chunk in stream])
 
 
 def chunk_bytes(value: object) -> bytes:
