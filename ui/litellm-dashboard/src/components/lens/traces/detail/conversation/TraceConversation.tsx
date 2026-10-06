@@ -163,7 +163,7 @@ function ConversationFeedback({
   );
 }
 
-function ConversationGroups({
+export function ConversationGroups({
   groups,
   multipleAgents,
   onOpenStep,
@@ -251,7 +251,7 @@ function ConversationGroups({
   );
 }
 
-function ConversationStep({
+export function ConversationStep({
   item,
   multipleAgents,
   onOpenStep,
@@ -299,7 +299,7 @@ function ConversationStep({
   );
 }
 
-function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpenStep: (id: string) => void }) {
+export function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpenStep: (id: string) => void }) {
   const [open, setOpen] = useState(item.span.status === "error");
   const failed = item.span.status === "error";
   const summary = toolSummary(item.toolCall?.args);
@@ -365,7 +365,7 @@ function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpen
   );
 }
 
-function ConversationMessage({ message }: { message: TraceMessage }) {
+export function ConversationMessage({ message }: { message: TraceMessage }) {
   if (message.role === "system" && (message.content.startsWith("Agent ") || message.content === "Context compacted"))
     return <p className="text-xs text-muted-foreground">{message.content}</p>;
   if (message.role === "system")
