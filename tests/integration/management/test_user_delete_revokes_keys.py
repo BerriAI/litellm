@@ -230,6 +230,7 @@ def test_scim_user_delete_revokes_keys(gateway: Gateway, peer: Gateway) -> None:
         model: Final = scenario.model()
         user_id: Final = _new_user(gateway)
         key: Final = _new_key(gateway, user_id=user_id, models=[model])
+        scenario.cleanups.callback(gateway.request, "POST", "/key/delete", {"keys": [key]})
         hashed: Final = sha256(key.encode()).hexdigest()
 
         assert _chat(gateway, model, key, f"warm {uuid.uuid4().hex}").status_code == 200
