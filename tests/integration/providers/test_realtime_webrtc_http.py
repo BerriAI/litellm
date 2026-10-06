@@ -8,7 +8,6 @@ request the deployment received instead of stopping at the status code.
 
 from __future__ import annotations
 
-import itertools
 import json
 import time
 import uuid
@@ -112,6 +111,12 @@ def _deployment_named_like_its_model(scenario: Scenario, gateway: Gateway, wire:
 def _json_body(request: Request) -> dict[str, JsonValue]:
     assert request.headers["content-type"].startswith("application/json"), request.headers
     return JSON_OBJECT.validate_json(request.body)
+
+
+def _without_top_level_model(session: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    # main adds a top-level model to every replayed transcription session, owned by the BUG-skipped
+    # test_transcription_session_replayed_at_calls_carries_no_top_level_model
+    return {key: value for key, value in session.items() if key != "model"}
 
 
 def _text_parts(request: Request) -> dict[str, str]:
@@ -391,60 +396,6 @@ def test_transcription_client_secret_sends_deployment_model_not_alias_on_mint_an
         }, calls_request.body
 
 
-def _mint_transcription_and_redeem(gateway: Gateway, mint_route: str) -> tuple[str, dict[str, JsonValue]]:
-    raw: Final = _raw_secret()
-    scenario_path: Final = f"/{uuid.uuid4().hex}"
-    reply: Final = (
-        _transcription_session_reply(raw, _expires_at())
-        if mint_route == "client_secrets"
-        else _beta_transcription_reply(raw, _expires_at())
-    )
-    with wire_server(_scripted_openai(reply)) as wire, gateway.scenario() as scenario:
-        # alias == deployment model so the alias-as-transcription-model bug cannot hide
-        name: Final = _deployment_named_like_its_model(scenario, gateway, wire, scenario_path)
-        key: Final = scenario.key(models=[name])
-        minted: Final = (
-            gateway.request(
-                "POST", "/v1/realtime/client_secrets", {"session": _nested_transcription_session(name)}, key=key
-            )
-            if mint_route == "client_secrets"
-            else gateway.request("POST", "/v1/realtime/transcription_sessions", _beta_transcription_body(name), key=key)
-        )
-        assert minted.status_code == 200, minted.text
-        token: Final = (
-            ClientSecretCreateResponse.model_validate_json(minted.content).value
-            if mint_route == "client_secrets"
-            else string_value(_TranscriptionSessionResponse.model_validate_json(minted.content).client_secret["value"])
-        )
-        answered: Final = _redeem(gateway, token)
-        assert answered.status_code == CALLS_STATUS, answered.text
-        assert answered.content == ANSWER, answered.text
-
-        mint_request, calls_request = wire.drain()
-        assert mint_request.target == f"{scenario_path}/v1/realtime/{mint_route}", mint_request.target
-        assert (calls_request.target, calls_request.headers["authorization"]) == (
-            f"{scenario_path}/v1/realtime/calls",
-            f"Bearer {raw}",
-        ), calls_request.headers
-        replayed: Final = JSON_OBJECT.validate_json(_text_parts(calls_request)["session"])
-        return name, replayed
-
-
-@pytest.mark.parametrize("mint_route", ["client_secrets", "transcription_sessions"])
-def test_transcription_client_secret_replays_transcription_session_at_calls(gateway: Gateway, mint_route: str) -> None:
-    name, replayed = _mint_transcription_and_redeem(gateway, mint_route)
-    contract: Final = {"type": "transcription", "audio": {"input": {"transcription": {"model": name}}}}
-    # main also adds a top-level model, asserted absent by the BUG-skipped test below
-    assert replayed in (contract, {**contract, "model": name}), replayed
-
-
-@pytest.mark.parametrize("mint_route", ["client_secrets", "transcription_sessions"])
-def test_transcription_session_replayed_at_calls_carries_no_top_level_model(gateway: Gateway, mint_route: str) -> None:
-    pytest.skip("BUG: /realtime/calls adds a top-level model to a replayed transcription session")
-    name, replayed = _mint_transcription_and_redeem(gateway, mint_route)
-    assert replayed == {"type": "transcription", "audio": {"input": {"transcription": {"model": name}}}}, replayed
-
-
 def test_beta_transcription_session_token_replays_deployment_model_not_alias_at_calls(gateway: Gateway) -> None:
     pytest.skip(
         "BUG: a beta transcription_sessions token replays the model group alias as the transcription model "
@@ -473,6 +424,31 @@ def test_beta_transcription_session_token_replays_deployment_model_not_alias_at_
             "type": "transcription",
             "audio": {"input": {"transcription": {"model": TRANSCRIBE_MODEL}}},
         }, calls_request.body
+
+
+def test_sdk_calls_create_redeems_token_with_raw_upstream_secret(gateway: Gateway) -> None:
+    # openai-python sends calls.create as multipart; the sdp and session parts are owned by the BUG-skipped test below
+    raw: Final = _raw_secret()
+    scenario_path: Final = f"/{uuid.uuid4().hex}"
+    with (
+        wire_server(_scripted_openai(_realtime_session_reply(raw, _expires_at()))) as wire,
+        gateway.scenario() as scenario,
+    ):
+        alias: Final = _deployment(scenario, wire, scenario_path, f"openai/{REALTIME_MODEL}")
+        key: Final = scenario.key(models=[alias])
+        token: Final = (
+            _sdk(gateway, key).realtime.client_secrets.create(session={"type": "realtime", "model": alias}).value
+        )
+        http_response: Final = _sdk(gateway, token).realtime.calls.with_raw_response.create(sdp=OFFER)
+        assert http_response.status_code == CALLS_STATUS, http_response.text
+        assert http_response.content == ANSWER, http_response.text
+        assert http_response.headers["content-type"] == "application/sdp", http_response.headers
+        assert [
+            (request.method, request.target, request.headers["authorization"]) for request in wire.drain()
+        ] == [
+            ("POST", f"{scenario_path}/v1/realtime/client_secrets", f"Bearer {DEPLOYMENT_KEY}"),
+            ("POST", f"{scenario_path}/v1/realtime/calls", f"Bearer {raw}"),
+        ]
 
 
 def test_sdk_calls_create_multipart_forwards_offer_and_merges_client_session(gateway: Gateway) -> None:
@@ -531,6 +507,86 @@ def _beta_transcription_reply(raw: str, expires_at: int) -> dict[str, JsonValue]
     }
 
 
+def _mint_transcription_and_redeem(
+    gateway: Gateway, mint_spelling: str
+) -> tuple[str, dict[str, JsonValue]]:
+    raw: Final = _raw_secret()
+    scenario_path: Final = f"/{uuid.uuid4().hex}"
+    is_beta: Final = mint_spelling == "beta"
+    route: Final = "transcription_sessions" if is_beta else "client_secrets"
+    with (
+        wire_server(
+            _scripted_openai(
+                _beta_transcription_reply(raw, _expires_at())
+                if is_beta
+                else _transcription_session_reply(raw, _expires_at())
+            )
+        ) as wire,
+        gateway.scenario() as scenario,
+    ):
+        name: Final = _deployment_named_like_its_model(scenario, gateway, wire, scenario_path)
+        key: Final = scenario.key(models=[name])
+        request_body: Final = (
+            _beta_transcription_body(name)
+            if is_beta
+            else {
+                "session": (
+                    _flat_transcription_session(name)
+                    if mint_spelling == "ga_flat"
+                    else _nested_transcription_session(name)
+                )
+            }
+        )
+        minted: Final = gateway.request("POST", f"/v1/realtime/{route}", request_body, key=key)
+        assert minted.status_code == 200, minted.text
+        token: Final = (
+            string_value(_TranscriptionSessionResponse.model_validate_json(minted.content).client_secret["value"])
+            if is_beta
+            else ClientSecretCreateResponse.model_validate_json(minted.content).value
+        )
+        answered: Final = _redeem(gateway, token)
+        assert answered.status_code == CALLS_STATUS, answered.text
+        assert answered.content == ANSWER, answered.text
+
+        mint_request, calls_request = wire.drain()
+        assert (
+            mint_request.method,
+            mint_request.target,
+            mint_request.headers["authorization"],
+        ) == (
+            "POST",
+            f"{scenario_path}/v1/realtime/{route}",
+            f"Bearer {DEPLOYMENT_KEY}",
+        ), mint_request.headers
+        assert _json_body(mint_request) == request_body, mint_request.body
+        assert (calls_request.target, calls_request.headers["authorization"]) == (
+            f"{scenario_path}/v1/realtime/calls",
+            f"Bearer {raw}",
+        ), calls_request.headers
+        replayed: Final = JSON_OBJECT.validate_json(_text_parts(calls_request)["session"])
+        return name, replayed
+
+
+@pytest.mark.parametrize("mint_spelling", ["ga_nested", "ga_flat", "beta"], ids=["ga_nested", "ga_flat", "beta"])
+def test_transcription_client_secret_replays_transcription_session_at_calls(
+    gateway: Gateway, mint_spelling: str
+) -> None:
+    name, replayed = _mint_transcription_and_redeem(gateway, mint_spelling)
+    assert _without_top_level_model(replayed) == {
+        "type": "transcription",
+        "audio": {"input": {"transcription": {"model": name}}},
+    }, replayed
+
+
+@pytest.mark.parametrize("mint_spelling", ["ga_nested", "ga_flat", "beta"], ids=["ga_nested", "ga_flat", "beta"])
+def test_transcription_session_replayed_at_calls_carries_no_top_level_model(
+    gateway: Gateway, mint_spelling: str
+) -> None:
+    pytest.skip("BUG: /realtime/calls adds a top-level model to a replayed transcription session")
+    name, replayed = _mint_transcription_and_redeem(gateway, mint_spelling)
+    assert replayed == {"type": "transcription", "audio": {"input": {"transcription": {"model": name}}}}, replayed
+
+
 @pytest.mark.parametrize("prefix", PATH_PREFIXES)
 @pytest.mark.parametrize("with_model_hint", [False, True], ids=["body_only", "model_hint"])
 def test_beta_transcription_session_forwards_body_with_deployment_model_and_encrypts_secret(
@@ -565,19 +621,6 @@ def test_beta_transcription_session_forwards_body_with_deployment_model_and_encr
             f"{scenario_path}/v1/realtime/calls",
             f"Bearer {raw}",
         ), calls_request.headers
-        replayed: Final = JSON_OBJECT.validate_json(_text_parts(calls_request)["session"])
-        # main replays the alias and a top-level model, owned by the BUG-skipped beta replay test
-        accepted: Final[tuple[dict[str, JsonValue], ...]] = tuple(
-            {
-                "type": "transcription",
-                "audio": {"input": {"transcription": {"model": transcription_model}}},
-                **top_level,
-            }
-            for transcription_model, top_level in itertools.product(
-                (TRANSCRIBE_MODEL, alias), ({}, {"model": TRANSCRIBE_MODEL})
-            )
-        )
-        assert replayed in accepted, replayed
 
 
 @pytest.mark.parametrize("prefix", PATH_PREFIXES)
@@ -591,17 +634,32 @@ def test_beta_transcription_session_routes_on_model_hint_over_smuggled_nested_mo
         wire_server(_scripted_openai(_beta_transcription_reply(raw, _expires_at()))) as wire,
         gateway.scenario() as scenario,
     ):
-        allowed: Final = _deployment(scenario, wire, allowed_path, f"openai/{TRANSCRIBE_MODEL}")
-        denied: Final = _deployment(scenario, wire, denied_path, "openai/gpt-4o-mini-transcribe")
-        key: Final = scenario.key(models=[allowed])
+        allowed_name: Final = _deployment_named_like_its_model(scenario, gateway, wire, allowed_path)
+        denied_name: Final = _deployment_named_like_its_model(scenario, gateway, wire, denied_path)
+        key: Final = scenario.key(models=[allowed_name])
         created: Final = gateway.request(
             "POST",
             f"{prefix}/realtime/transcription_sessions",
-            {**_beta_transcription_body(denied), "model": allowed},
+            {**_beta_transcription_body(denied_name), "model": allowed_name},
             key=key,
         )
         assert created.status_code == 200, created.text
 
-        (session_request,) = wire.drain()
+        token: Final = string_value(
+            _TranscriptionSessionResponse.model_validate_json(created.content).client_secret["value"]
+        )
+        answered: Final = _redeem(gateway, token)
+        assert answered.status_code == CALLS_STATUS, answered.text
+        assert answered.content == ANSWER, answered.text
+
+        session_request, calls_request = wire.drain()
         assert session_request.target == f"{allowed_path}/v1/realtime/transcription_sessions", session_request.target
-        assert _json_body(session_request) == _beta_transcription_body(TRANSCRIBE_MODEL), session_request.body
+        assert _json_body(session_request) == _beta_transcription_body(allowed_name), session_request.body
+        assert (calls_request.target, calls_request.headers["authorization"]) == (
+            f"{allowed_path}/v1/realtime/calls",
+            f"Bearer {raw}",
+        ), calls_request.headers
+        assert _without_top_level_model(JSON_OBJECT.validate_json(_text_parts(calls_request)["session"])) == {
+            "type": "transcription",
+            "audio": {"input": {"transcription": {"model": allowed_name}}},
+        }, calls_request.body
