@@ -8,13 +8,15 @@ from typing import Final
 import pytest
 
 from litellm.proxy._types import TeamMemberBudgetSource
-from litellm.proxy.list_api.list_framework import QueryPlan, SortKey
+from litellm.proxy.list_api.list_framework import Compare, ListQuery, QueryPlan, SortKey, Within
 from litellm.proxy.management.teams.repository import TeamMemberRow
+from litellm.proxy.management.teams.schemas import TeamMembersQuery
 from litellm.proxy.management.teams.service import (
     TEAM_MEMBERS_LIST_SPEC,
     TeamMembersPage,
     get_team_members_list,
     member_budget_source,
+    team_members_list_query,
 )
 
 RESET_AT: Final = datetime(2026, 11, 1, tzinfo=timezone.utc)
@@ -91,3 +93,28 @@ def test_list_item_carries_the_member_row_and_derives_its_budget_source() -> Non
         "rpm_limit": 10,
         "allowed_models": ("gpt-a", "gpt-b"),
     }
+
+
+def test_team_members_list_query_carries_every_declared_param_with_roles_as_roster_filters() -> None:
+    declared: Final = TeamMembersQuery.model_validate(
+        {
+            "q": "ada",
+            "filter[role]": "admin",
+            "filter[role][in]": "admin, user",
+            "sort": "-spend",
+            "page": 2,
+            "page_size": 10,
+        }
+    )
+
+    assert team_members_list_query(declared) == ListQuery(
+        page=2,
+        page_size=10,
+        sort="-spend",
+        search="ada",
+        filters=(Compare(field="role", op="eq", value="admin"), Within(field="role", values=("admin", "user"))),
+    )
+
+
+def test_team_members_list_query_with_no_params_filters_nothing() -> None:
+    assert team_members_list_query(TeamMembersQuery()) == ListQuery()

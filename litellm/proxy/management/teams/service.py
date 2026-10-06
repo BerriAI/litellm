@@ -5,9 +5,9 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.proxy._types import TeamMemberBudgetSource, UserAPIKeyAuth
-from litellm.proxy.list_api.list_framework import FilterSpec, ListSpec, QueryPlan, Scope, ScopeAll
+from litellm.proxy.list_api.list_framework import Compare, ListQuery, ListSpec, QueryPlan, Scope, ScopeAll, Within
 from litellm.proxy.management.teams.repository import RawQuery, TeamMemberRow, TeamMemberRows
-from litellm.proxy.management.teams.schemas import TeamMemberListItem
+from litellm.proxy.management.teams.schemas import TeamMemberListItem, TeamMembersQuery
 
 
 def member_budget_source(budget_id: str | None, team_default_budget_id: str | None) -> TeamMemberBudgetSource:
@@ -46,7 +46,7 @@ TEAM_MEMBERS_LIST_SPEC: Final[ListSpec[TeamMemberRow, TeamMemberListItem]] = Lis
         ("user_alias", "user_email", "user_id", "role", "spend", "total_spend", "max_budget_in_team", "budget_reset_at")
     ),
     searchable=frozenset(("user_id", "user_email")),
-    filters=MappingProxyType({"role": FilterSpec(type=str, ops=frozenset(("eq", "in")))}),
+    filters=MappingProxyType({}),
     default_sort=(),
     default_page_size=50,
     max_page_size=100,
@@ -54,6 +54,23 @@ TEAM_MEMBERS_LIST_SPEC: Final[ListSpec[TeamMemberRow, TeamMemberListItem]] = Lis
     serialize=_team_member_item,
     tiebreaker="position",
 )
+
+
+def team_members_list_query(query: TeamMembersQuery) -> ListQuery:
+    return ListQuery(
+        page=query.page,
+        page_size=query.page_size,
+        sort=query.sort,
+        search=query.q,
+        filters=(
+            *(() if query.role is None else (Compare(field="role", op="eq", value=query.role),)),
+            *(
+                ()
+                if query.role_in is None
+                else (Within(field="role", values=tuple(role.strip() for role in query.role_in.split(","))),)
+            ),
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)
