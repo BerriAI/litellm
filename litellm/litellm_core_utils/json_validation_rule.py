@@ -110,7 +110,9 @@ def validate_schema(schema: dict, response: str):
     except ModuleNotFoundError as error:
         if error.name != "jsonschema":
             raise
-        raise ImportError(f'Install response validation with pip install "{get_distribution_name()}[validation]"') from error
+        raise ImportError(
+            f'Install response validation with pip install "{get_distribution_name()}[validation]"'
+        ) from error
 
     from litellm import JSONSchemaValidationError
 

@@ -104,7 +104,9 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         except ModuleNotFoundError as error:
             if error.name != "botocore":
                 raise
-            raise ImportError(f'Install AWS signing support with pip install "{get_distribution_name()}[aws]"') from error
+            raise ImportError(
+                f'Install AWS signing support with pip install "{get_distribution_name()}[aws]"'
+            ) from error
 
         # Pin the credential-scope region to the region of the actual signing URL
         # so the SigV4 scope and URL host can never disagree, even when a stale

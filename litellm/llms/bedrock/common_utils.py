@@ -1827,7 +1827,9 @@ def create_event_stream_parser() -> EventStreamJSONParser:
     except ModuleNotFoundError as error:
         if error.name not in ("botocore", "botocore.parsers"):
             raise
-        raise ImportError(f'Install Bedrock event-stream support with pip install "{get_distribution_name()}[aws]"') from error
+        raise ImportError(
+            f'Install Bedrock event-stream support with pip install "{get_distribution_name()}[aws]"'
+        ) from error
     return EventStreamJSONParser()
 
 

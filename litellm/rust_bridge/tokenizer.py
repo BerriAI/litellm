@@ -85,7 +85,9 @@ def _python_huggingface_tokenizer() -> type[PythonHuggingFaceTokenizer]:
     except ModuleNotFoundError as error:
         if error.name != "tokenizers":
             raise
-        raise ImportError(f'Install Hugging Face tokenizer support with pip install "{get_distribution_name()}[tokenizers]"') from error
+        raise ImportError(
+            f'Install Hugging Face tokenizer support with pip install "{get_distribution_name()}[tokenizers]"'
+        ) from error
     return PythonHuggingFaceTokenizer
 
 
