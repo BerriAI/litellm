@@ -1101,6 +1101,18 @@ class LLMCachingHandler:
                         )
                     )
             else:
+                from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
+                    FakeAnthropicMessagesStreamIterator,
+                )
+
+                if isinstance(result, FakeAnthropicMessagesStreamIterator):
+                    # Synthetic streaming wrapper (e.g. websearch interception
+                    # short-circuit) around an already-served response. It is
+                    # not JSON-serializable and was never meant to be cached
+                    # as-is - caching it crashes the Redis/async cache backend
+                    # with "Object of type FakeAnthropicMessagesStreamIterator
+                    # is not JSON serializable" on every streaming request.
+                    return
                 create_cache_write_task(lambda: cache.async_add_cache(result, **new_kwargs))
 
     def sync_set_cache(
