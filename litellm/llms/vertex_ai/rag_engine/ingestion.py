@@ -14,10 +14,7 @@ Key differences from OpenAI:
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
-
-from pydantic import ConfigDict, TypeAdapter
 
 from litellm import get_secret_str
 from litellm._logging import verbose_logger
@@ -27,10 +24,6 @@ from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 if TYPE_CHECKING:
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
-
-_VERTEX_CHUNKING_FORMAT: Final = TypeAdapter(
-    Mapping[str, Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True)
-)
 
 
 def _get_str_or_none(value: object) -> str | None:
@@ -222,9 +215,8 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
             cast(RAGChunkingStrategy | None, self.chunking_strategy)
         )
 
-        vertex_format: Final = _VERTEX_CHUNKING_FORMAT.validate_python(chunking_config)
-        chunk_size: Final = vertex_format["chunking_config"]["chunk_size"]
-        chunk_overlap: Final = vertex_format["chunking_config"]["chunk_overlap"]
+        chunk_size: Final = chunking_config["chunking_config"]["chunk_size"]
+        chunk_overlap: Final = chunking_config["chunking_config"]["chunk_overlap"]
 
         return rag.TransformationConfig(
             chunking_config=rag.ChunkingConfig(

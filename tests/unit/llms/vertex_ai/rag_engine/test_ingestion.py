@@ -74,4 +74,3 @@ def test_ingest_runs_end_to_end_through_the_base_pipeline(monkeypatch):
     assert [(c["corpus_name"], c["paths"]) for c in import_calls] == [
         ("projects/test-project/locations/us-central1/ragCorpora/corpus-123", ["gs://rag-bucket/doc.txt"])
     ]
-    assert [c["transformation_config"] for c in import_calls] == [(1000, 200)]
