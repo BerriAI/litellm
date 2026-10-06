@@ -5,21 +5,26 @@ from types import MappingProxyType
 from typing import Final
 
 import pytest
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy.lens.analysis import Candidate, Examined, evidence_valid, extract, investigate, partition_content
 from litellm.proxy.lens.models import (
+    Activity,
     Claim,
     Coverage,
     Evidence,
     Execution,
     ExecutionContent,
+    InFlight,
+    ModelMessage,
     ModelRequest,
     ModelResult,
+    Review,
     Sample,
     TracePart,
 )
 from litellm.proxy.lens.state import queue_job
-from tests.unit.proxy.lens.test_state import NOW, issue_brief, lens, finding
+from tests.unit.proxy.lens.test_state import NOW, finding, issue_brief, lens
 
 
 @pytest.mark.asyncio
@@ -66,8 +71,16 @@ async def test_parallel_review_shares_one_model_limit_and_cleans_up(outcome: str
         finally:
             exited.put(request.prompt)
 
-    async def progress(stage: str, coverage: Coverage) -> None:
-        if stage == "Reading executions":
+    async def progress(
+        stage: str | None,
+        coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        assert coverage is not None
+        if stage == "Reading executions" and (_reading is None or _review is not None):
             counts.put(coverage.screened)
 
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
@@ -117,7 +130,15 @@ async def test_independent_investigations_overlap_and_report_completions() -> No
     async def read(_execution_id: str, _cursor: str, _offset: int) -> ExecutionContent:
         pytest.fail("Inconclusive decisions must not fetch evidence")
 
-    async def progress(stage: str, coverage: Coverage) -> None:
+    async def progress(
+        stage: str | None,
+        coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        assert coverage is not None
         assert stage == "Checking original evidence"
         progress_counts.put(coverage.investigated)
 
@@ -447,6 +468,87 @@ async def test_invalid_model_output_has_only_one_repair_attempt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_validation_source_failure_propagates_without_a_model_repair() -> None:
+    from litellm.proxy.lens.analysis import Extraction, structured_response
+
+    calls: Final = SimpleQueue[ModelRequest]()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        calls.put(request)
+        return ModelResult(content=Extraction().model_dump_json(), cost=0)
+
+    async def validate(_result: Extraction) -> str | None:
+        raise ValueError("Evidence source is unavailable")
+
+    with pytest.raises(ValueError, match="Evidence source is unavailable"):
+        await structured_response(
+            ModelRequest(purpose="extract", prompt="Extract observations"), Extraction, model, validate
+        )
+    assert calls.qsize() == 1
+
+
+@pytest.mark.asyncio
+async def test_conversation_repair_appends_raw_response_and_correction_without_changing_the_prefix() -> None:
+    from litellm.proxy.lens.analysis import Extraction, structured_response_with_history
+
+    original: Final = ModelRequest(
+        purpose="extract",
+        prompt="Stable task",
+        messages=(ModelMessage(role="system", content="Stable task"), ModelMessage(role="user", content="Evidence")),
+    )
+    malformed: Final = '{ "observations": "wrong type" }'
+    corrected: Final = '{ "observations": [], "cannot_assess": false }'
+    attempts: Final = iter((0, 1))
+    repairs: Final = SimpleQueue[ModelRequest]()
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if next(attempts) == 0:
+            assert request == original
+            return ModelResult(content=malformed, cost=0)
+        assert request.prompt == original.prompt
+        assert request.messages[:-2] == original.messages
+        assert request.messages[-2] == ModelMessage(role="assistant", content=malformed)
+        assert request.messages[-1].role == "system"
+        assert "observations" in request.messages[-1].content
+        repairs.put(request)
+        return ModelResult(content=corrected, cost=0)
+
+    result, history = await structured_response_with_history(original, Extraction, model)
+    assert result == Extraction()
+    assert history == (*repairs.get_nowait().messages, ModelMessage(role="assistant", content=corrected))
+    assert next(attempts, None) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conversation", (False, True))
+async def test_repair_repeats_complete_schema_without_unknown_fields_or_input_values(conversation: bool) -> None:
+    from litellm.proxy.lens.analysis import Extraction, structured_response
+
+    original: Final = ModelRequest(
+        purpose="extract",
+        prompt="Review original evidence",
+        messages=(ModelMessage(role="system", content="Review original evidence"),) if conversation else (),
+    )
+    attempts: Final = iter((0, 1))
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if next(attempts) == 0:
+            return ModelResult(content='{"private_field_sentinel":"private_value_sentinel"}', cost=0)
+        assert request.messages[-1].role == "system"
+        assert request.messages[:-2] == original.conversation()
+        content: Final = request.messages[-1].content
+        correction: Final = TypeAdapter(dict[str, JsonValue]).validate_json(content)
+        assert correction["response_schema"] == Extraction.model_json_schema()
+        assert "extra_forbidden" in content
+        assert "private_field_sentinel" not in content
+        assert "private_value_sentinel" not in content
+        return ModelResult(content=Extraction().model_dump_json(), cost=0)
+
+    assert await structured_response(original, Extraction, model) == Extraction()
+    assert next(attempts, None) is None
+
+
+@pytest.mark.asyncio
 async def test_grouping_consolidates_prior_batches_and_reports_real_progress() -> None:
     from litellm.proxy.lens.analysis import Clusters, Observation, cluster_batches
     from litellm.proxy.lens.models import Coverage
@@ -464,7 +566,15 @@ async def test_grouping_consolidates_prior_batches_and_reports_real_progress() -
     )
     stages: Final = iter((0, 1))
 
-    async def progress(stage: str, coverage: Coverage) -> None:
+    async def progress(
+        stage: str | None,
+        coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        assert coverage is not None
         assert stage == "Grouping observations"
         assert coverage.grouping_batches == 2
         assert coverage.grouped_batches == next(stages)
@@ -558,7 +668,15 @@ async def test_thousands_of_matching_runs_keep_all_members_without_a_growing_mod
             cost=0,
         )
 
-    async def progress(_stage: str, coverage: Coverage) -> None:
+    async def progress(
+        _stage: str | None,
+        coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        assert coverage is not None
         counts.put(coverage.grouped_batches)
 
     batches: Final = observation_batches(observations)
@@ -596,7 +714,8 @@ async def test_grouping_repairs_duplicate_members_before_creating_findings() -> 
     async def model(request: ModelRequest) -> ModelResult:
         copies: Final = next(attempts)
         if copies == 1:
-            assert "do not duplicate" in request.prompt
+            assert "do not duplicate" in request.messages[-1].content
+            assert request.messages[-1].role == "system"
         group: Final = original.model_copy(update=MappingProxyType({"execution_ids": ("p0",)}))
         return ModelResult(content=Clusters(candidates=(group,) * copies).model_dump_json(), cost=0)
 
@@ -632,7 +751,14 @@ async def test_review_keeps_original_ids_in_per_run_assessments() -> None:
     async def model(_request: ModelRequest) -> ModelResult:
         return ModelResult(content='{"observations":[],"cannot_assess":false}', cost=0)
 
-    async def progress(_stage: str, _coverage: Coverage) -> None:
+    async def progress(
+        _stage: str | None,
+        _coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
         pass
 
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
@@ -891,7 +1017,14 @@ async def test_final_registry_reconciles_patterns_split_across_pages() -> None:
         )
         return ModelResult(content=Clusters(candidates=grouped).model_dump_json(), cost=0)
 
-    async def progress(_stage: str, _coverage: Coverage) -> None:
+    async def progress(
+        _stage: str | None,
+        _coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
         return None
 
     result: Final = await cluster_batches((observations,), model, progress, Coverage())
@@ -918,7 +1051,14 @@ async def test_distinct_patterns_are_consolidated_in_batches_without_losing_runs
         payload: Final = json.loads(request.prompt)
         return ModelResult(content=json.dumps({"candidates": payload["candidates"]}), cost=0)
 
-    async def progress(_stage: str, _coverage: Coverage) -> None:
+    async def progress(
+        _stage: str | None,
+        _coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
         pass
 
     result: Final = await cluster_batches(observation_batches(observations), model, progress, Coverage())
@@ -950,7 +1090,15 @@ async def test_invalid_candidate_response_preserves_other_findings_and_reports_i
             return ModelResult(content="not JSON", cost=0)
         return ModelResult(content=json.dumps({"action": "submit", "finding": finding("run").model_dump()}), cost=0)
 
-    async def progress(_stage: str, coverage: Coverage) -> None:
+    async def progress(
+        _stage: str | None,
+        coverage: Coverage | None,
+        _review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        assert coverage is not None
         counts.put(coverage.inconclusive)
 
     claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
@@ -1196,3 +1344,158 @@ async def test_investigator_can_read_all_evidence_pages_across_successive_span_b
     assert result.error == ""
     assert tuple(seen.get_nowait() for _ in range(seen.qsize())) == tuple(p.span_id for p in parts)
     assert tuple(read_cursors.get_nowait() for _ in range(read_cursors.qsize())) == ("", "span039")
+
+
+def test_review_flags_only_spans_cited_by_this_runs_observations() -> None:
+    from litellm.proxy.lens.analysis import Observation, review_of
+
+    execution: Final = Execution(
+        id="run1",
+        source="traces",
+        trace_id="trace-1",
+        team_id="",
+        name="task",
+        start_time="",
+        span_count=3,
+        service="bot",
+    )
+    shown: Final = tuple(
+        TracePart(execution_id="run1", span_id=span, name=span, kind="tool", content=f"{span} output")
+        for span in ("root", "search", "answer")
+    )
+    observation: Final = Observation(
+        check_id="retries",
+        summary="Search failed twice",
+        evidence=(
+            Evidence(execution_id="run1", span_id="search", quote="search output"),
+            Evidence(execution_id="other", span_id="answer", quote="answer output"),
+        ),
+    )
+    examined: Final = Examined(
+        execution=execution,
+        observations=(observation,),
+        parts=shown,
+        partial=False,
+        cannot_assess=False,
+        reasoning="Asked to search; it retried without recovering.",
+        shown=shown,
+    )
+    review: Final = review_of(examined, "cerebras/model", 42, NOW)
+    assert tuple((s.span_id, s.cited) for s in review.spans) == (("root", False), ("search", True), ("answer", False))
+    assert (review.agent, review.trace_id, review.duration_ms) == ("bot", "trace-1", 42)
+    assert review.reasoning == examined.reasoning
+    assert tuple((v.check_id, v.summary) for v in review.verdicts) == (("retries", "Search failed twice"),)
+
+
+@pytest.mark.asyncio
+async def test_each_screened_run_reports_a_review_with_the_models_reasoning() -> None:
+    from litellm.proxy.lens.analysis import analyze_sample
+
+    execution: Final = Execution(
+        id="opaque-original", source="traces", trace_id="trace", team_id="", name="task", start_time="", span_count=2
+    )
+    reasoning: Final = "The user asked for a refund; the tool timed out and the agent gave up."
+    reviews: Final = SimpleQueue[Review]()
+
+    async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(
+            execution=execution,
+            parts=(
+                TracePart(execution_id=identity, span_id="a-root", name="agent", kind="agent", content="Refund please"),
+                TracePart(
+                    execution_id=identity,
+                    span_id="b-tool",
+                    parent_span_id="a-root",
+                    name="refund",
+                    kind="tool",
+                    content="Tool timeout",
+                ),
+            ),
+        )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if request.purpose == "cluster":
+            return ModelResult(content='{"candidates":[]}', cost=0)
+        if request.purpose == "investigate":
+            return ModelResult(content='{"action":"inconclusive"}', cost=0)
+        return ModelResult(
+            content=json.dumps(
+                {
+                    "reasoning": reasoning,
+                    "observations": [
+                        {
+                            "check_id": "retries",
+                            "summary": "Gave up after a timeout",
+                            "evidence": [{"execution_id": "r0", "span_id": "b-tool", "quote": "Tool timeout"}],
+                        }
+                    ],
+                }
+            ),
+            cost=0,
+        )
+
+    async def progress(
+        _stage: str | None,
+        _coverage: Coverage | None,
+        review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        if review is not None:
+            reviews.put(review)
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    await analyze_sample(claim, Sample(executions=(execution,), eligible=1), read, model, progress)
+    review: Final = reviews.get_nowait()
+    assert reviews.empty()
+    assert review.execution_id == execution.id
+    assert review.reasoning == reasoning
+    assert review.model == claim.job.settings.model
+    assert tuple((s.span_id, s.cited) for s in review.spans) == (("a-root", False), ("b-tool", True))
+    assert tuple(v.summary for v in review.verdicts) == ("Gave up after a timeout",)
+
+
+@pytest.mark.asyncio
+async def test_a_run_is_reported_in_flight_under_its_original_id_until_its_review_arrives() -> None:
+    from litellm.proxy.lens.analysis import analyze_sample
+
+    execution: Final = Execution(
+        id="opaque-original", source="traces", trace_id="trace", team_id="", name="task", start_time="", span_count=1
+    )
+    reports: Final = SimpleQueue[tuple[str | None, tuple[str, ...] | None]]()
+
+    async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(
+            execution=execution,
+            parts=(TracePart(execution_id=identity, span_id="s", name="agent", kind="agent", content="Hi"),),
+        )
+
+    async def model(request: ModelRequest) -> ModelResult:
+        if request.purpose == "cluster":
+            return ModelResult(content='{"candidates":[]}', cost=0)
+        return ModelResult(content='{"observations":[]}', cost=0)
+
+    async def progress(
+        stage: str | None,
+        _coverage: Coverage | None,
+        review: Review | None = None,
+        reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        if stage == "Reading executions":
+            reports.put(
+                (
+                    review and review.execution_id,
+                    None if reading is None else tuple(f"{r.execution_id}:{r.trace_id}" for r in reading),
+                )
+            )
+
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=())
+    await analyze_sample(claim, Sample(executions=(execution,), eligible=1), read, model, progress)
+    assert tuple(reports.get_nowait() for _ in range(reports.qsize())) == (
+        (None, None),
+        (None, ("opaque-original:trace",)),
+        ("opaque-original", ()),
+    )
