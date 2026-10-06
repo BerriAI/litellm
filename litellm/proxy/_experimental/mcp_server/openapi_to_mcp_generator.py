@@ -147,7 +147,7 @@ def _sanitize_path_parameter_value(param_value: object, param_name: str) -> str:
     return quote(value_str, safe="")
 
 
-def load_openapi_spec(filepath: str) -> dict[str, object]:
+def load_openapi_spec(filepath: str) -> dict[str, Any]:
     """
     Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
     """

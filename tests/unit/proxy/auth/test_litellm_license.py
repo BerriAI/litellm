@@ -138,6 +138,8 @@ def test_valid_signed_wildcard_license_lifts_the_limit() -> None:
         ({"verify": True}, True),
         ({"verify": False}, False),
         (["verify", True], False),
+        ({"verify": "true"}, False),
+        ({"verified": True}, False),
     ],
 )
 def test_is_premium_follows_the_license_server_reply_for_an_unsigned_license(

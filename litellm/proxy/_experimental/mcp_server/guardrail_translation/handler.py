@@ -50,7 +50,6 @@ if TYPE_CHECKING:
 
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
 
 
 def _blocked(reason: str) -> HTTPException:
@@ -143,7 +142,7 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         data: dict[str, Any],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         mcp_tool_name: Final = data.get("mcp_tool_name") or data.get("name")
         mcp_arguments: Final[object] = data.get("mcp_arguments") or data.get("arguments")
         mcp_tool_description: Final = data.get("mcp_tool_description") or data.get("description")
@@ -229,9 +228,9 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         response: "CallToolResult",
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-        user_api_key_dict: "UserAPIKeyAuth | None" = None,
+        user_api_key_dict: Any | None = None,
         request_data: dict | None = None,
-    ) -> "CallToolResult":
+    ) -> Any:
         """Scan the text content of an MCP tool result and write masked text back.
 
         The content list is rewritten in place (only the entries the guardrail
