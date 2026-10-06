@@ -1284,16 +1284,25 @@ class WebSearchInterceptionLogger(CustomLogger):
     def _resolve_max_tokens(
         optional_params: dict,
         kwargs: dict,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> int:
         """Extract max_tokens and validate against thinking.budget_tokens.
 
         Anthropic API requires ``max_tokens > thinking.budget_tokens``.
         If the constraint is violated, auto-adjust to ``budget_tokens + 1024``.
         """
-        max_tokens: int = optional_params.get(
-            "max_tokens",
-            kwargs.get("max_tokens", 1024),
-        )
+        # Look in optional_params, kwargs, or the original model_call_details / litellm_params
+        max_tokens_val = optional_params.get("max_tokens")
+        if max_tokens_val is None:
+            max_tokens_val = kwargs.get("max_tokens")
+        if max_tokens_val is None and logging_obj is not None:
+            model_details = getattr(logging_obj, "model_call_details", {}) or {}
+            max_tokens_val = model_details.get("max_tokens")
+            if max_tokens_val is None:
+                litellm_params = model_details.get("litellm_params", {}) or {}
+                max_tokens_val = litellm_params.get("max_tokens")
+
+        max_tokens: int = max_tokens_val if max_tokens_val is not None else 1024
         thinking_param: Final = optional_params.get("thinking")
         if thinking_param and isinstance(thinking_param, dict):
             budget_tokens: Final = thinking_param.get("budget_tokens")
@@ -1437,7 +1446,9 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         full_model_name = model  # safe default before try block
 
-        max_tokens: Final = self._resolve_max_tokens(anthropic_messages_optional_request_params, kwargs)
+        max_tokens: Final = self._resolve_max_tokens(
+            anthropic_messages_optional_request_params, kwargs, logging_obj=logging_obj
+        )
 
         verbose_logger.debug("WebSearchInterception: Using max_tokens=%s for follow-up request", max_tokens)
 

@@ -491,3 +491,38 @@ class TestFollowUpErrorScenarios:
         # But ALL proxy metadata must be preserved
         assert captured_kwargs.get("metadata") == proxy_metadata
         assert captured_kwargs.get("litellm_call_id") == "call-abc-123"
+
+    @pytest.mark.asyncio
+    async def test_max_tokens_resolved_from_logging_obj_when_popped_from_optional_params(self):
+        """When max_tokens was popped from optional_params (Messages transformation), it is resolved from logging_obj."""
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def _fake_acreate(**kw):
+            captured_kwargs.update(kw)
+            return MagicMock()
+
+        logging_obj = _make_logging_obj()
+        logging_obj.model_call_details["max_tokens"] = 4000
+
+        with (
+            patch(
+                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+                side_effect=_fake_acreate,
+            ),
+            patch.object(
+                logger, "_execute_search", return_value=("search result", None)
+            ),
+        ):
+            await logger._execute_agentic_loop(
+                model="us.anthropic.claude-opus-4-6-v1",
+                messages=[{"role": "user", "content": "hi"}],
+                tool_calls=_make_tool_calls(),
+                thinking_blocks=[],
+                anthropic_messages_optional_request_params={},  # max_tokens already popped by transformation
+                logging_obj=logging_obj,
+                stream=False,
+                kwargs={},
+            )
+
+        assert captured_kwargs.get("max_tokens") == 4000
