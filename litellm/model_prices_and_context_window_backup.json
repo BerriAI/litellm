@@ -29338,7 +29338,6 @@
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
             "/v1/chat/completions",
-            "/v1/images/generations",
             "/v1/images/edits"
         ],
         "supported_modalities": [
