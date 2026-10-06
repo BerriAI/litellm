@@ -686,7 +686,7 @@ def parse_admin_env_vars(
     Unknown / malformed entries are skipped silently.
     """
     global_values: Final[dict[str, str]] = {}
-    user_specs: Final[list[dict[str, Any]]] = []
+    user_specs: Final[list[dict[str, object]]] = []
     if not env_vars:
         return global_values, user_specs
     for raw in env_vars:

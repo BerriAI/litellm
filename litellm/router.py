@@ -164,7 +164,7 @@ from litellm.router_utils.auto_router_model_naming import (
     AUTO_ROUTER_MODEL_PREFIX,
     GatedAutoRouterCapability,
     capability_limit_violation,
-    claimed_capability,
+    claimed_capabilities,
     classify_strategy_router_model,
     count_capability_routers,
 )
@@ -4339,7 +4339,7 @@ class Router:
                         )
                     )
             responses: Final = await asyncio.gather(*_tasks)
-            final_responses: Final[list[list[Any]]] = [[] for _ in range(len(messages))]
+            final_responses: Final[list[list[object]]] = [[] for _ in range(len(messages))]
             for response in responses:
                 if isinstance(response, tuple):
                     final_responses[response[1]].append(response[0])
@@ -9491,10 +9491,8 @@ class Router:
         )
 
         complexity_router_config: Final[dict | None] = deployment.litellm_params.complexity_router_config
-        capability: Final = claimed_capability(complexity_router_config)
-        if capability is not None:
-            limit_violation: Final = self.auto_router_capability_violation(capability)
-            if limit_violation is not None:
+        for capability in claimed_capabilities(complexity_router_config):
+            if (limit_violation := self.auto_router_capability_violation(capability)) is not None:
                 raise ValueError(limit_violation)
 
         default_model: Final = (
@@ -11276,9 +11274,7 @@ class Router:
         configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
         reasoning_efforts_initialized = False
         reasoning_efforts_unknown = False
-        model_list: Final = self.get_model_list(model_name=model_group)
-        if model_list is None:
-            return None
+        model_list: Final = self.get_model_list_of_routed_group(model_group)
         for model in model_list:
             is_match = False
             if (
@@ -12409,26 +12405,42 @@ class Router:
         returned_models.extend(self.get_model_list_from_model_alias(model_name=model_name))
         returned_models.extend(self.get_model_list_from_routing_groups(model_name=model_name))
 
-        if len(returned_models) == 0:  # check if wildcard route
-            potential_wildcard_models: Final = self.pattern_router.get_deployments_by_pattern(model=model_name or "")
-
-            ## check for team-specific wildcard models
-            if team_id is not None and team_id in self.team_pattern_routers:
-                potential_team_only_wildcard_models: Final = self.team_pattern_routers[
-                    team_id
-                ].get_deployments_by_pattern(model=model_name or "")
-                potential_wildcard_models.extend(potential_team_only_wildcard_models)
-
-            if model_name is not None and potential_wildcard_models is not None:
-                for m in potential_wildcard_models:
-                    deployment_typed_dict = DeploymentTypedDict(**m)
-                    deployment_typed_dict["model_name"] = model_name
-                    returned_models.append(deployment_typed_dict)
+        if len(returned_models) == 0 and model_name is not None:
+            returned_models.extend(self._get_wildcard_deployments(model_name=model_name, team_id=team_id))
 
         if model_name is None:
             returned_models += self.model_list
 
         return returned_models
+
+    def _get_wildcard_deployments(self, model_name: str, team_id: str | None = None) -> list[DeploymentTypedDict]:
+        """
+        The deployments of the wildcard routes matching model_name (the proxy-wide
+        ones, plus team_id's own when given), each emitted under model_name.
+        """
+        team_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
+        matches: Final = [
+            *self.pattern_router.get_deployments_by_pattern(model=model_name),
+            *(team_router.get_deployments_by_pattern(model=model_name) if team_router is not None else ()),
+        ]
+        return [{**DeploymentTypedDict(**m), "model_name": model_name} for m in matches]
+
+    def get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
+        """
+        The deployments a request the router has already resolved to model_group is
+        served from: the ones named model_group, the routing group of that name, or
+        the wildcard route matching it when neither exists.
+
+        Unlike get_model_list, model_group's own model_group_alias entry is not
+        followed. The router resolves an alias exactly once, so a group reached as
+        an alias target is served by its own deployments, never by a second hop:
+        in the chain X -> T -> U a request to X is served from T's deployments.
+        """
+        named: Final = [
+            *self._get_all_deployments(model_name=model_group),
+            *self.get_model_list_from_routing_groups(model_name=model_group),
+        ]
+        return named or self._get_wildcard_deployments(model_name=model_group)
 
     def resolved_litellm_models(self, model_name: str, team_id: str | None = None) -> tuple[str, ...]:
         """The provider model strings `model_name` can actually be served by on this proxy.

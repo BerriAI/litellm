@@ -14,6 +14,7 @@ export const run = (overrides: Partial<TraceSummary>): TraceSummary => ({
   service: "svc",
   span_count: 1,
   spend: null,
+  priced_calls: 0,
   start_time: "2026-10-01T00:00:00Z",
   status: "ok",
   tool_calls: 0,

@@ -143,7 +143,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def _unwrap_predictions_response(
         self,
         response_json: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Unwrap the Vertex Gemma predictions format to OpenAI format.
 

@@ -3,7 +3,7 @@
 
 import os
 from ipaddress import ip_address
-from typing import TYPE_CHECKING, Any, Final, NoReturn
+from typing import TYPE_CHECKING, Final, NoReturn
 from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
@@ -61,7 +61,7 @@ def _oauth_invalid_request(
     error_description: str,
     *,
     hint: str | None = None,
-    **extra: Any,
+    **extra: object,
 ) -> NoReturn:
     """Raise ``invalid_request`` (RFC 6749) with a debuggable description.
 
@@ -69,7 +69,7 @@ def _oauth_invalid_request(
     ``invalid_request``; ``error_description`` and ``hint`` explain what
     failed and how to fix it (e.g. reverse-proxy / PROXY_BASE_URL issues).
     """
-    detail: Final[dict[str, Any]] = {
+    detail: Final[dict[str, object]] = {
         "error": "invalid_request",
         "error_description": error_description,
     }

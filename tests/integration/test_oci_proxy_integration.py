@@ -41,6 +41,7 @@ from typing import Iterator
 
 import httpx
 import pytest
+from tests._master_key import MASTER_KEY
 
 # ---------------------------------------------------------------------------
 # Skip gate
@@ -53,7 +54,6 @@ pytestmark = pytest.mark.skipif(
 
 
 CONFIG_PATH = Path(__file__).parent / "oci_proxy_test_config.yaml"
-MASTER_KEY = "sk-1234"
 STARTUP_TIMEOUT_S = 90.0
 REQUEST_TIMEOUT_S = 120.0
 
@@ -112,6 +112,7 @@ def _serve(config_path: str) -> Iterator[str]:
     """Boot the litellm proxy with the given config and yield its base URL."""
     env = os.environ.copy()
     env.update(_oci_env_from_profile())
+    env["LITELLM_MASTER_KEY"] = MASTER_KEY
     # Avoid pulling in DB-backed features for this lightweight smoke run.
     env.pop("DATABASE_URL", None)
     env["STORE_MODEL_IN_DB"] = "False"
