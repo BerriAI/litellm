@@ -26,6 +26,8 @@ function makeTrace(scene: Scenario, index: number, now: number) {
     parent_span_id: null,
     span_id: spanId(0),
     spend: null,
+    spend_log_request_id: null,
+    spend_match: null,
     start_offset_ms: 0,
     status: "ok",
     type: "agent",
@@ -53,6 +55,7 @@ function makeTrace(scene: Scenario, index: number, now: number) {
     input_tokens: 520 + index * 41,
     output_tokens: 48 + index * 7,
     spend: 0.003 + index * 0.0002,
+    spend_match: "matched",
   };
   const trace: Trace = {
     summary: {

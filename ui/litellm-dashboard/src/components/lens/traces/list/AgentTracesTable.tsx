@@ -39,7 +39,7 @@ export const formatCost = (cost: number): string => {
   return `$${cost.toFixed(2)}`;
 };
 
-type RunCost = { label: string; partial: string | null };
+type RunCost = { label: string; partial: { short: string; long: string } | null };
 
 export const runCost = ({
   spend,
@@ -48,13 +48,22 @@ export const runCost = ({
 }: Pick<TraceSummary, "spend" | "priced_calls" | "llm_calls">): RunCost | null => {
   if (spend == null || priced_calls === 0) return null;
   if (priced_calls >= llm_calls) return { label: formatCost(spend), partial: null };
-  return { label: `≥ ${formatCost(spend)}`, partial: `${priced_calls} of ${llm_calls} calls priced` };
+  return {
+    label: `≥ ${formatCost(spend)}`,
+    partial: { short: `${priced_calls}/${llm_calls} priced`, long: `${priced_calls} of ${llm_calls} calls priced` },
+  };
 };
 
 function CostCell({ run }: { run: TraceSummary }) {
   const cost = runCost(run);
   if (!cost) return "—";
-  return <span title={cost.partial ?? undefined}>{cost.label}</span>;
+  if (!cost.partial) return cost.label;
+  return (
+    <span className="inline-flex items-baseline gap-1.5" title={cost.partial.long}>
+      {cost.label}
+      <span className="text-xs text-muted-foreground">{cost.partial.short}</span>
+    </span>
+  );
 }
 
 const firstLine = (text: string): string => text.split("\n")[0] ?? text;

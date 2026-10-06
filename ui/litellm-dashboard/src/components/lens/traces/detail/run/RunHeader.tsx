@@ -112,7 +112,10 @@ export function RunHeader({ trace, handoff, onBack, embedded }: RunHeaderProps) 
         <Stat label="Duration" value={fmtMs(summary.duration_ms)} />
         <Stat label="Steps" value={summary.span_count.toLocaleString()} />
         <Stat label="Tokens" value={fmtTok(summary.input_tokens + summary.output_tokens)} />
-        <Stat label="Cost" value={cost ? [cost.label, cost.partial].filter(Boolean).join(" · ") : "Not reported"} />
+        <Stat
+          label="Cost"
+          value={cost ? [cost.label, cost.partial?.long].filter(Boolean).join(" · ") : "Not reported"}
+        />
         {summary.error_count > 0 && <Stat label="Step errors" value={summary.error_count.toLocaleString()} error />}
       </div>
     </header>
