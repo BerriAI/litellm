@@ -257,7 +257,9 @@ describe("SystemOneUI integration", () => {
     const user = userEvent.setup();
     render(<SystemOneUI accessToken={null} disabledPersonalKeyCreation />);
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
-    await user.type(screen.getByLabelText("Virtual Key", { exact: true }), "test-virtual-key");
+    fireEvent.change(screen.getByLabelText("Virtual Key", { exact: true }), {
+      target: { value: "test-virtual-key" },
+    });
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("Selected choice")).toBeInTheDocument();
     expect(Object.values(mockFetch.mock.calls[0]?.[1]?.headers ?? {})).toContain("Bearer test-virtual-key");
