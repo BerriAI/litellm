@@ -124,7 +124,7 @@ impl<'a> Resolution<'a> {
     }
 
     pub(super) fn requests(&self, index: usize) -> Option<Requests<'a>> {
-        spend::match_ids(&spend::call_ids(self.row(index)), &self.spend).0
+        spend::match_ids(&[spend::call_ids(self.row(index))], &self.spend).0
     }
 
     pub(super) fn call_match(&self, index: usize) -> Option<&CallMatch<'a>> {
@@ -140,7 +140,7 @@ impl<'a> Resolution<'a> {
         spend::match_ids(&self.call_ids(call), &self.spend)
     }
 
-    fn call_ids(&self, call: usize) -> BTreeSet<CallKey> {
+    fn call_ids(&self, call: usize) -> Vec<BTreeSet<CallKey>> {
         let wrappers = self.graph.ancestors(call).into_iter().filter(|ancestor| {
             self.kind(*ancestor) == ObservationType::Llm
                 && self
@@ -155,7 +155,7 @@ impl<'a> Resolution<'a> {
         std::iter::once(call)
             .chain(wrappers)
             .chain(self.graph.descendants(call))
-            .flat_map(|source| spend::call_ids(self.row(source)))
+            .map(|source| spend::call_ids(self.row(source)))
             .collect()
     }
 

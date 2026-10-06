@@ -592,11 +592,12 @@ fn a_single_matched_row_is_matched_whatever_its_cost(
 }
 
 #[rstest]
-#[case::same_request("gateway", Some(0.25))]
-#[case::two_requests("other", Some(0.75))]
-fn response_id_and_call_id_naming_one_request_count_it_once(
+#[case::same_request("gateway", Some(0.25), SpendMatch::Matched)]
+#[case::conflicting_requests("other", None, SpendMatch::Ambiguous)]
+fn response_id_and_call_id_must_name_the_same_request(
     #[case] call_id: &str,
     #[case] expected: Option<f64>,
+    #[case] matched: SpendMatch,
 ) {
     let rows = [TraceSpansRow {
         call_keys: vec![
@@ -612,9 +613,55 @@ fn response_id_and_call_id_naming_one_request_count_it_once(
     ];
     let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
     assert_eq!(
-        (trace.spans[0].spend, trace.summary.spend),
-        (expected, expected)
+        (
+            trace.spans[0].spend,
+            trace.summary.spend,
+            trace.spans[0].spend_match
+        ),
+        (expected, expected, Some(matched))
     );
+}
+
+#[rstest]
+fn call_id_picks_the_call_when_its_response_id_has_a_cache_hit_twin() {
+    let rows = [TraceSpansRow {
+        call_keys: vec![
+            litellm_traces::CallKey::ProviderResponse("chatcmpl-shared".into()),
+            litellm_traces::CallKey::LiteLlmRequest("gateway".into()),
+        ],
+        call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
+        ..llm("call", "", "agent", "")
+    }];
+    let logs = [
+        SpendByResponseIdsRow {
+            litellm_call_id: "gateway".into(),
+            ..spend("request", "chatcmpl-shared", 0.25)
+        },
+        SpendByResponseIdsRow {
+            litellm_call_id: "cache-hit".into(),
+            ..spend("request_cache_hit", "chatcmpl-shared", 0.0)
+        },
+    ];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(
+        (
+            trace.summary.spend,
+            trace.spans[0].spend_log_request_id.as_deref()
+        ),
+        (Some(0.25), Some("request"))
+    );
+}
+
+#[rstest]
+fn call_id_prices_a_legacy_spend_log_without_litellm_call_id() {
+    let rows = [TraceSpansRow {
+        call_keys: vec![litellm_traces::CallKey::LiteLlmRequest("legacy".into())],
+        call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
+        ..llm("call", "", "agent", "")
+    }];
+    let logs = [spend("legacy", "chatcmpl-legacy", 0.25)];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(trace.summary.spend, Some(0.25));
 }
 
 #[rstest]

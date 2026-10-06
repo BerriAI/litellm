@@ -52,7 +52,10 @@ fn names(key: &CallKey, spend: &SpendRow) -> bool {
         CallKey::ProviderResponse(id) => {
             spend.response_id == *id || spend.upstream_response_id == *id
         }
-        CallKey::LiteLlmRequest(id) => spend.litellm_call_id == *id,
+        CallKey::LiteLlmRequest(id) => {
+            spend.litellm_call_id == *id
+                || (spend.litellm_call_id.is_empty() && spend.request_id == *id)
+        }
         CallKey::Transport | CallKey::GatewayAttempt => false,
     }
 }
@@ -78,21 +81,54 @@ pub(super) fn call_ids(row: &TraceSpansRow) -> BTreeSet<CallKey> {
         .collect()
 }
 
-pub(super) fn match_ids<'a>(
-    ids: &BTreeSet<CallKey>,
-    spend_rows: &[&'a SpendRow],
-) -> (Option<Requests<'a>>, SpendMatch) {
-    if ids.is_empty() {
-        return (None, SpendMatch::NoCallId);
-    }
-    let named: Vec<Requests<'a>> = ids
+enum SpanLog<'a> {
+    NoLog,
+    One(&'a SpendRow),
+    Ambiguous,
+}
+
+fn span_log<'a>(ids: &BTreeSet<CallKey>, spend_rows: &[&'a SpendRow]) -> SpanLog<'a> {
+    let candidates: Vec<Requests<'a>> = ids
         .iter()
         .map(|id| unique(spend_rows.iter().copied().filter(|spend| names(id, spend))))
+        .filter(|rows| !rows.is_empty())
         .collect();
-    if named.iter().any(|rows| rows.len() > 1) {
+    let Some((first, rest)) = candidates.split_first() else {
+        return SpanLog::NoLog;
+    };
+    let agreed: Vec<&'a SpendRow> = first
+        .iter()
+        .copied()
+        .filter(|row| {
+            rest.iter()
+                .all(|rows| rows.iter().any(|other| other.identity() == row.identity()))
+        })
+        .collect();
+    match agreed.as_slice() {
+        [row] => SpanLog::One(row),
+        _ => SpanLog::Ambiguous,
+    }
+}
+
+pub(super) fn match_ids<'a>(
+    span_ids: &[BTreeSet<CallKey>],
+    spend_rows: &[&'a SpendRow],
+) -> (Option<Requests<'a>>, SpendMatch) {
+    let logs: Vec<SpanLog<'a>> = span_ids
+        .iter()
+        .filter(|ids| !ids.is_empty())
+        .map(|ids| span_log(ids, spend_rows))
+        .collect();
+    if logs.is_empty() {
+        return (None, SpendMatch::NoCallId);
+    }
+    if logs.iter().any(|log| matches!(log, SpanLog::Ambiguous)) {
         return (None, SpendMatch::Ambiguous);
     }
-    let matched = unique(named.into_iter().flatten());
+    let matched = unique(logs.iter().filter_map(|log| match log {
+        SpanLog::One(row) => Some(*row),
+        SpanLog::NoLog | SpanLog::Ambiguous => None,
+    }));
     if matched.is_empty() {
         return (None, SpendMatch::NoSpendLog);
     }
