@@ -28,6 +28,7 @@ from ..exceptions import (
     ContextWindowExceededError,
     InternalServerError,
     NotFoundError,
+    PaymentRequiredError,
     PermissionDeniedError,
     RateLimitError,
     ServiceUnavailableError,
@@ -2328,12 +2329,11 @@ def _map_exception_by_status(
                 exception_status_code=status_code,
             )
         case 402:
-            raise APIError(
-                status_code=402,
+            raise PaymentRequiredError(
                 message=message,
-                llm_provider=custom_llm_provider,
                 model=model,
-                request=original_exception.request if hasattr(original_exception, "request") else None,
+                llm_provider=custom_llm_provider,
+                response=response,
                 litellm_debug_info=extra_information,
             )
         case _ if status_code < 500:
