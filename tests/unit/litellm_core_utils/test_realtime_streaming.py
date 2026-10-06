@@ -1,11 +1,12 @@
 import asyncio
 import json
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from typing_extensions import ReadOnly, TypedDict
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
@@ -18,6 +19,7 @@ from litellm.litellm_core_utils.realtime_streaming import (
 )
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 
 def _make_transcript_event(text: str, item_id: str = "item_x") -> bytes:
@@ -3552,20 +3554,36 @@ async def test_provider_bytes_are_sent_raw_after_pacing():
     provider_config.pace_backend_send.assert_awaited_once_with(b"\x00\x01")
 
 
+class _ViolationSettings(TypedDict, total=False):
+    on_violation: ReadOnly[str]
+    end_session_after_n_fails: ReadOnly[int]
+
+
 def _passthrough_transcription_config() -> MagicMock:
+    def transform_response(
+        message: str | bytes,
+        model: str,
+        logging_obj: object,
+        realtime_response_transform_input: object,
+    ) -> dict[str, object]:
+        return {
+            "response": json.loads(message),
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_delta_chunks": None,
+            "current_conversation_id": None,
+            "current_item_chunks": None,
+            "current_delta_type": None,
+            "session_configuration_request": None,
+        }
+
+    def transform_request(message: str, model: str, session_configuration_request: str | None = None) -> list[str]:
+        return [message]
+
     provider_config: Final = MagicMock()
     provider_config.requires_session_configuration.return_value = False
-    provider_config.transform_realtime_response.side_effect = lambda raw, *_args, **_kwargs: {
-        "response": json.loads(raw),
-        "current_output_item_id": None,
-        "current_response_id": None,
-        "current_delta_chunks": None,
-        "current_conversation_id": None,
-        "current_item_chunks": None,
-        "current_delta_type": None,
-        "session_configuration_request": None,
-    }
-    provider_config.transform_realtime_request.side_effect = lambda msg, model, session_config: [msg]
+    provider_config.transform_realtime_response.side_effect = transform_response
+    provider_config.transform_realtime_request.side_effect = transform_request
     return provider_config
 
 
@@ -3582,11 +3600,17 @@ def _passthrough_transcription_config() -> MagicMock:
 async def test_transcription_session_guardrail_block_only_reports_violation(
     monkeypatch: pytest.MonkeyPatch,
     uses_provider_config: bool,
-    violation_settings: dict,
+    violation_settings: _ViolationSettings,
     expect_session_closed: bool,
-):
+) -> None:
     class BlockingGuardrail(CustomGuardrail):
-        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        async def apply_guardrail(
+            self,
+            inputs: GenericGuardrailAPIInputs,
+            request_data: Mapping[str, object],
+            input_type: Literal["request", "response"],
+            logging_obj: object | None = None,
+        ) -> GenericGuardrailAPIInputs:
             if any("blocked" in text for text in inputs.get("texts", [])):
                 raise ValueError("blocked transcript")
             return inputs
