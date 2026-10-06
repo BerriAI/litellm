@@ -5919,13 +5919,10 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data: Final = deployment["litellm_params"].copy()
             model_name = data["model"]
-            custom_llm_provider: Final = cast(Mapping[str, object], data).get("custom_llm_provider")
+            custom_llm_provider: Final = data.get("custom_llm_provider")
             raise_if_embedding_batch_too_large(
-                input=effective_embedding_input(
-                    cast(str | Sequence[object], input),
-                    kwargs.get("extra_body", cast(Mapping[str, object], data).get("extra_body")),
-                ),
-                model_info=cast(Mapping[str, object], kwargs["model_info"]),
+                input=effective_embedding_input(input, kwargs.get("extra_body", data.get("extra_body"))),
+                model_info=kwargs["model_info"],
                 model=model,
                 llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else "",
             )
@@ -6005,13 +6002,10 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data: Final = deployment["litellm_params"].copy()
             model_name = data["model"]
-            custom_llm_provider: Final = cast(Mapping[str, object], data).get("custom_llm_provider")
+            custom_llm_provider: Final = data.get("custom_llm_provider")
             raise_if_embedding_batch_too_large(
-                input=effective_embedding_input(
-                    cast(str | Sequence[object], input),
-                    kwargs.get("extra_body", cast(Mapping[str, object], data).get("extra_body")),
-                ),
-                model_info=cast(Mapping[str, object], kwargs["model_info"]),
+                input=effective_embedding_input(input, kwargs.get("extra_body", data.get("extra_body"))),
+                model_info=kwargs["model_info"],
                 model=model,
                 llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else "",
             )
