@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -12,7 +13,6 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
-from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     AnthropicConfig,
@@ -855,8 +855,8 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     @staticmethod
     def _merge_message_start_cache_into_delta_usage(
-        delta_usage: dict[str, Any],
-        start_usage: dict[str, Any] | None,
+        delta_usage: dict[str, object],
+        start_usage: Mapping[str, object] | None,
     ) -> None:
         """
         Copy cache breakdown from message_start onto message_delta usage when
@@ -885,7 +885,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         _CACHE_FIELDS: Final = ("cache_creation_input_tokens", "cache_read_input_tokens")
         pending_delta: dict[str, Any] | None = None
-        start_usage_snapshot: dict[str, Any] | None = None
+        start_usage_snapshot: Mapping[str, object] | None = None
 
         async for chunk in completion_stream:
             if not isinstance(chunk, dict):
@@ -898,7 +898,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             chunk_type = chunk.get("type")
 
             if chunk_type == "message_start":
-                msg: dict[str, Any] = cast(dict[str, Any], chunk.get("message") or {})
+                msg: dict[str, object] = cast(dict[str, Any], chunk.get("message") or {})
                 u = msg.get("usage")
                 if isinstance(u, dict):
                     start_usage_snapshot = dict(u)

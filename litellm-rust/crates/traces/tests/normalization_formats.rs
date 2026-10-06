@@ -73,6 +73,28 @@ fn decode(
 }
 
 #[rstest]
+#[case::interaction("interaction", "user_prompt", "")]
+#[case::model_context("llm_request", "new_context", "[USER]\n")]
+fn native_claude_prompts_preserve_notification_text_and_user_role(
+    span: Span,
+    #[case] kind: &str,
+    #[case] key: &str,
+    #[case] prefix: &str,
+) {
+    let prompt = "<task-notification><summary>Quoted summary</summary><result>Keep this result</result></task-notification>\nExplain this example";
+    let payload = format!("{prefix}{prompt}");
+    let decoded = decode(
+        span,
+        "com.anthropic.claude_code.tracing",
+        &[("span.type", kind), (key, &payload)],
+        vec![],
+    )
+    .unwrap();
+    let messages: Value = serde_json::from_str(&decoded.normalized.input).unwrap();
+    assert_eq!(messages, json!([{"role": "user", "content": prompt}]));
+}
+
+#[rstest]
 #[case::agent("agent", ObservationType::Agent)]
 #[case::workflow("workflow", ObservationType::Chain)]
 #[case::task("task", ObservationType::Chain)]

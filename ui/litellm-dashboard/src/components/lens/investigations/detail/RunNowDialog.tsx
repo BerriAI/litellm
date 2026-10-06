@@ -5,6 +5,14 @@ import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
 import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -64,18 +72,25 @@ export function RunNowDialog({
         <div className="space-y-4">
           <label className="grid gap-1.5 text-sm font-medium">
             Agent
-            <Input
-              list="run-now-agents"
-              value={agent}
-              placeholder="All agents"
-              onChange={(e) => setAgent(e.target.value)}
-              aria-label="Agent"
-            />
-            <datalist id="run-now-agents">
-              {agents.map((name) => (
-                <option key={name} value={name} />
-              ))}
-            </datalist>
+            <Combobox
+              items={agents}
+              value={agent || null}
+              inputValue={agent}
+              onInputValueChange={setAgent}
+              onValueChange={(name) => setAgent(name ?? "")}
+            >
+              <ComboboxInput aria-label="Agent" placeholder="All agents" showClear={!!agent} className="h-9 w-full" />
+              <ComboboxContent>
+                <ComboboxEmpty>No matches. You can enter a recorded name.</ComboboxEmpty>
+                <ComboboxList>
+                  {(name: string) => (
+                    <ComboboxItem key={name} value={name}>
+                      {name}
+                    </ComboboxItem>
+                  )}
+                </ComboboxList>
+              </ComboboxContent>
+            </Combobox>
           </label>
           <fieldset className="space-y-2">
             <legend className="text-sm font-medium">Traces to review</legend>

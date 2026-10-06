@@ -432,7 +432,6 @@ if TYPE_CHECKING:
     )
     from litellm.llms.cohere.common_utils import CohereModelInfo
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-    from litellm.proxy._types import AllowedModelRegion
     from litellm.router_utils.get_retry_from_policy import (
         get_num_retries_from_retry_policy,
         reset_retry_policy,
@@ -447,7 +446,7 @@ if TYPE_CHECKING:
         ChatCompletionToolCallFunctionChunk,
     )
     from litellm.types.rerank import RerankResponse
-    from litellm.types.router import LiteLLM_Params
+    from litellm.types.router import AllowedModelRegion, LiteLLM_Params
 
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.completion.transformation import BaseTextCompletionConfig
@@ -1662,6 +1661,14 @@ def post_call_processing(
         raise e
 
 
+def _is_litellm_router_call(kwargs: Mapping[str, object], *, is_async: bool) -> bool:
+    """Router completion uses metadata. Async generic calls retry with litellm_metadata; sync generic calls need SDK retries."""
+    metadata_buckets: Final = (
+        (kwargs.get("metadata"), kwargs.get("litellm_metadata")) if is_async else (kwargs.get("metadata"),)
+    )
+    return any(isinstance(bucket, Mapping) and "model_group" in bucket for bucket in metadata_buckets)
+
+
 def client(original_function):
     from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
 
@@ -1904,11 +1911,9 @@ def client(original_function):
                 litellm.num_retries = None  # set retries to None to prevent infinite loops
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
-                _is_litellm_router_call = "model_group" in (
-                    kwargs.get("metadata") or {}
-                )  # check if call from litellm.router/proxy
+                is_completion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
-                    num_retries and not _is_litellm_router_call
+                    num_retries and not is_completion_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -1921,7 +1926,7 @@ def client(original_function):
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
-                    and not _is_litellm_router_call
+                    and not is_completion_litellm_router_call
                 ):
                     if len(args) > 0:
                         args[0] = context_window_fallback_dict[model]
@@ -1940,11 +1945,9 @@ def client(original_function):
                     kwargs["retry_policy"] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = None  # set retries to None to prevent infinite loops
 
-                _is_litellm_router_call = "model_group" in (
-                    kwargs.get("metadata") or {}
-                )  # check if call from litellm.router/proxy
+                is_responses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
-                    num_retries and not _is_litellm_router_call
+                    num_retries and not is_responses_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -2219,12 +2222,10 @@ def client(original_function):
             if call_type == CallTypes.acompletion.value:
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
-                _is_litellm_router_call = "model_group" in (
-                    kwargs.get("metadata") or {}
-                )  # check if call from litellm.router/proxy
+                is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
-                    num_retries and not _is_litellm_router_call
+                    num_retries and not is_acompletion_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -2243,7 +2244,7 @@ def client(original_function):
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
-                    and not _is_litellm_router_call
+                    and not is_acompletion_litellm_router_call
                 ):
                     if len(args) > 0:
                         args[0] = context_window_fallback_dict[model]
@@ -2252,12 +2253,10 @@ def client(original_function):
                     result = await original_function(*args, **kwargs)
                     return result
             elif call_type == CallTypes.aresponses.value:
-                _is_litellm_router_call = "model_group" in (
-                    kwargs.get("metadata") or {}
-                )  # check if call from litellm.router/proxy
+                is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
-                    num_retries and not _is_litellm_router_call
+                    num_retries and not is_aresponses_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops

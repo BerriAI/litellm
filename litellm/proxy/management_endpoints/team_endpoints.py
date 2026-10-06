@@ -33,7 +33,7 @@ from typing import (
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -109,7 +109,7 @@ from litellm.proxy.auth.auth_checks import (
     invalidate_team_member_spend_state,
 )
 from litellm.proxy.auth.auth_utils import (
-    enforce_batch_enqueued_token_limit_is_admin_only,
+    enforce_batch_limits_are_admin_only,
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -195,6 +195,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router import Router
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -1406,7 +1407,7 @@ async def new_team(
     Example Request:
     ```
     curl --location 'http://0.0.0.0:4000/team/new' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
       "team_alias": "my-new-team_2",
@@ -1418,7 +1419,7 @@ async def new_team(
 
      ```
     curl --location 'http://0.0.0.0:4000/team/new' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
                 "team_alias": "QA Prod Bot",
@@ -1488,7 +1489,7 @@ async def new_team(
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
-        enforce_batch_enqueued_token_limit_is_admin_only(
+        enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=None,
             user_api_key_dict=user_api_key_dict,
@@ -2166,7 +2167,7 @@ async def update_team(
 
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
@@ -2177,7 +2178,7 @@ async def update_team(
     Example - Update Team `max_budget` budget
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "team_id": "8d916b1c-510d-4894-a334-1c16a93344f5",
@@ -2274,7 +2275,7 @@ async def update_team(
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
-        enforce_batch_enqueued_token_limit_is_admin_only(
+        enforce_batch_limits_are_admin_only(
             data=data,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
             user_api_key_dict=user_api_key_dict,
@@ -2596,7 +2597,7 @@ async def patch_team(
 
     ```
     curl --location --request PATCH 'http://0.0.0.0:4000/team/8d916b1c-510d-4894-a334-1c16a93344f5' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "metadata": {"cost_center": "1234", "deprecated_key": null}
@@ -3367,7 +3368,7 @@ async def team_member_add(
     ```
 
     curl -X POST 'http://0.0.0.0:4000/team/member_add' \
-    -H 'Authorization: Bearer sk-1234' \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -H 'Content-Type: application/json' \
     -d '{"team_id": "45e3e396-ee08-4a61-a88e-16b3ce7e0849", "member": {"role": "user", "user_id": "krrish247652@berri.ai"}}'
 
@@ -3548,7 +3549,7 @@ async def team_member_delete(
     ```
     curl -X POST 'http://0.0.0.0:8000/team/member_delete' \
 
-    -H 'Authorization: Bearer sk-1234' \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     -H 'Content-Type: application/json' \
 
@@ -4034,7 +4035,7 @@ async def reset_team_member_spend_fn(
     }
 
 
-class _TeamMetadataView(BaseModel):
+class _TeamMetadataView(LiteLLMBaseModel):
     metadata: Mapping[str, object] | None = None
 
 
@@ -4195,7 +4196,7 @@ async def bulk_team_member_add(
     Example request:
     ```bash
     curl --location 'http://0.0.0.0:4000/team/bulk_member_add' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234",
@@ -4328,7 +4329,7 @@ async def delete_team(
 
     ```
     curl --location 'http://0.0.0.0:4000/team/delete' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data-raw '{
         "team_ids": ["8d916b1c-510d-4894-a334-1c16a93344f5"]
@@ -4793,11 +4794,11 @@ async def _hydrate_member_user_details(
     return tuple(hydrate(m) for m in members)
 
 
-class _OrganizationModelsRow(BaseModel):
-    models: list[str] = []  # mutable-ok: pydantic field default
+class _OrganizationModelsRow(LiteLLMBaseModel):
+    models: list[str] = Field(default=[])  # mutable-ok: pydantic field default
 
 
-class _TeamRowWithOrganization(BaseModel):
+class _TeamRowWithOrganization(LiteLLMBaseModel):
     litellm_organization_table: _OrganizationModelsRow | None = None
 
 
@@ -5140,7 +5141,7 @@ async def block_team(
     Example:
     ```
     curl --location 'http://0.0.0.0:4000/team/block' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234"
@@ -5195,7 +5196,7 @@ async def unblock_team(
     Example:
     ```
     curl --location 'http://0.0.0.0:4000/team/unblock' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234"
@@ -5866,7 +5867,7 @@ async def list_team(
     """
     ```
     curl --location --request GET 'http://0.0.0.0:4000/team/list' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Parameters:
@@ -6070,7 +6071,7 @@ async def team_model_add(
     Example Request:
     ```
     curl --location 'http://0.0.0.0:4000/team/model/add' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234",
@@ -6186,7 +6187,7 @@ async def team_model_delete(
     Example Request:
     ```
     curl --location 'http://0.0.0.0:4000/team/model/delete' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --header 'Content-Type: application/json' \
     --data '{
         "team_id": "team-1234",

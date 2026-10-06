@@ -11,6 +11,7 @@ import litellm
 from litellm.proxy._types import LiteLLMRoutes
 from litellm.proxy.proxy_server import app
 from litellm.types.router import ModelGroupInfo
+from tests._master_key import MASTER_KEY
 
 client = TestClient(app)
 
@@ -274,7 +275,7 @@ def test_the_search_matches_model_group_names_case_insensitively(monkeypatch):
 @pytest.fixture
 def guarded(monkeypatch):
     """A proxy with a master key set, so anything but a public route would demand credentials."""
-    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-1234")
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", MASTER_KEY)
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
 

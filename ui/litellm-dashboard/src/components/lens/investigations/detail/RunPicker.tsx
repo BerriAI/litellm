@@ -10,6 +10,7 @@ import type { Lens, Job } from "../../model/types";
 import { useRunRoute } from "../../route";
 
 import { money, when } from "../../model/format";
+import { runStatus } from "../../model/status";
 
 export interface RunPickerProps {
   readonly lens: Lens;
@@ -20,6 +21,8 @@ export function RunPicker({ lens, job }: RunPickerProps) {
   const { batchId, selectRun } = useRunRoute();
   const history = useRunHistory(lens, 0);
   const options = history.data ?? lens.jobs;
+  const reused = job?.coverage?.reused ?? 0;
+  const newlyReviewed = Math.max(0, (job?.coverage?.screened ?? 0) - reused);
   const aggregate = batchId === "latest" || batchId === "all";
   const outsideHistory = !aggregate && !options.some((j) => j.id === batchId);
   return (
@@ -33,12 +36,12 @@ export function RunPicker({ lens, job }: RunPickerProps) {
         <option value="latest">Latest run</option>
         {job && outsideHistory && (
           <option value={batchId}>
-            {when(job.created_at)} · {job.status}
+            {when(job.created_at)} · {runStatus(job)}
           </option>
         )}
         {options.map((j) => (
           <option key={j.id} value={j.id}>
-            {when(j.created_at)} · {j.status}
+            {when(j.created_at)} · {runStatus(j)}
           </option>
         ))}
         <option value="all">All accumulated findings</option>
@@ -54,7 +57,7 @@ export function RunPicker({ lens, job }: RunPickerProps) {
           <PopoverContent align="end" className="gap-3">
             <PopoverTitle>Run details</PopoverTitle>
             <p className="text-xs text-muted-foreground">
-              {job.coverage?.screened ?? 0} / {job.coverage?.selected ?? 0} selected runs reviewed
+              {newlyReviewed} newly reviewed · {reused} reused reviews
               <ScanDuration job={job} />
             </p>
             <p className="text-xs text-muted-foreground">
@@ -74,7 +77,7 @@ export function RunPicker({ lens, job }: RunPickerProps) {
               </div>
               <div className="flex justify-between gap-2">
                 <dt className="text-muted-foreground">Status</dt>
-                <dd className="capitalize">{job.status}</dd>
+                <dd>{runStatus(job)}</dd>
               </div>
             </dl>
           </PopoverContent>

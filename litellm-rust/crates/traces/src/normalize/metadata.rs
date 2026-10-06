@@ -15,9 +15,15 @@ pub enum AgentType {
 }
 
 #[derive(
-    Clone, Debug, Eq, PartialEq, Serialize, Deserialize, strum::EnumString, strum::Display,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    strum::EnumString,
+    strum::Display,
+    serde_with::DeserializeFromStr,
+    serde_with::SerializeDisplay,
 )]
-#[serde(from = "String", into = "String")]
 #[strum(serialize_all = "kebab-case")]
 pub enum Integration {
     ClaudeCode,

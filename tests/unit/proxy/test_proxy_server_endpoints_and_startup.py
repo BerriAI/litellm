@@ -45,6 +45,9 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, initialize, openai_exception_handler
 from litellm.utils import _invalidate_model_cost_lowercase_map
+from tests._master_key import MASTER_KEY
+
+PUBLICLY_KNOWN_KEY: Final = "sk-" + "1234"
 
 example_embedding_result = {
     "object": "list",
@@ -1258,7 +1261,7 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
     # Bypass auth dependency
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY
     )
 
     client = TestClient(app)
@@ -1307,7 +1310,7 @@ def test_get_config_callbacks_fall_back_to_process_env(mock_env_vars, monkeypatc
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY
     )
 
     client = TestClient(app)
@@ -1404,7 +1407,7 @@ def test_get_config_returns_email_settings(monkeypatch):
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY
     )
 
     client = TestClient(app)
@@ -1441,7 +1444,7 @@ def _get_email_alert_variables(monkeypatch, config_data):
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY
     )
 
     client = TestClient(app)
@@ -1566,7 +1569,7 @@ def test_get_config_returns_slack_webhook(monkeypatch):
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY
     )
 
     client = TestClient(app)
@@ -1616,7 +1619,7 @@ def test_get_config_cleared_slack_webhook_not_overridden_by_os_env(monkeypatch):
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY
     )
 
     client = TestClient(app)
@@ -1670,7 +1673,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
     app = FastAPI()
 
     # Test Case 1: Master key from config.yaml
-    test_master_key = "sk-12345"
+    test_master_key = MASTER_KEY
     test_config = {"general_settings": {"master_key": test_master_key}}
 
     # Create a temporary config file
@@ -1689,7 +1692,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         assert master_key == test_master_key
 
     # Test Case 2: Master key from environment variable
-    test_env_master_key = "sk-test-67890"
+    test_env_master_key = f"{MASTER_KEY}-environment"
 
     # Create empty config
     empty_config = {"general_settings": {}}
@@ -1704,7 +1707,7 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         assert master_key == test_env_master_key
 
     # Test Case 3: Master key with os.environ prefix
-    test_resolved_key = "sk-resolved-key"
+    test_resolved_key = f"{MASTER_KEY}-resolved"
     test_config_with_prefix = {"general_settings": {"master_key": "os.environ/CUSTOM_MASTER_KEY"}}
 
     # Create config with os.environ prefix
@@ -1743,7 +1746,7 @@ def _boot_with_general_settings(monkeypatch, tmp_path, general_settings):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "general_settings",
-    [{"master_key": "sk-1234"}, {"master_key": ""}, {"master_key": None}, {}],
+    [{"master_key": PUBLICLY_KNOWN_KEY}, {"master_key": ""}, {"master_key": None}, {}],
     ids=["publicly-known", "empty", "yaml-null", "no-general-settings"],
 )
 async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database_is_unreachable(
@@ -1887,7 +1890,9 @@ class _DatabaseWithOneStoredCredential:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("encrypted_with, asks_to_migrate", [("sk-1234", True), ("sk-some-other-key", False)])
+@pytest.mark.parametrize(
+    "encrypted_with, asks_to_migrate", [(PUBLICLY_KNOWN_KEY, True), ("sk-some-other-key", False)]
+)
 async def test_proxy_startup_asks_to_migrate_only_when_the_database_holds_values_under_the_unsafe_key(
     monkeypatch, tmp_path, encrypted_with, asks_to_migrate
 ):
@@ -1902,7 +1907,7 @@ async def test_proxy_startup_asks_to_migrate_only_when_the_database_holds_values
     async def connected():
         return database
 
-    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-1234"})
+    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY})
     monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
     monkeypatch.setattr("litellm.proxy.proxy_server._connect_to_count_stored_values", connected)
 
@@ -1910,7 +1915,7 @@ async def test_proxy_startup_asks_to_migrate_only_when_the_database_holds_values
         async with proxy_startup_event(FastAPI()):
             pass
 
-    assert ("LITELLM_MIGRATE_FROM_MASTER_KEY=sk-1234" in announced[0]) == asks_to_migrate
+    assert (f"LITELLM_MIGRATE_FROM_MASTER_KEY={PUBLICLY_KNOWN_KEY}" in announced[0]) == asks_to_migrate
     assert ("holds 1 value(s) encrypted with this master key" in announced[0]) == asks_to_migrate
 
 
@@ -1949,7 +1954,7 @@ async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatc
 
     _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
-    monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", PUBLICLY_KNOWN_KEY)
 
     with (
         caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
@@ -1970,7 +1975,9 @@ async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monke
     from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
     from litellm.proxy.proxy_server import proxy_startup_event
 
-    config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-1234"})
+    config_path, announced = _boot_with_general_settings(
+        monkeypatch, tmp_path, {"master_key": PUBLICLY_KNOWN_KEY}
+    )
 
     with pytest.raises(UnsafeMasterKeyError):
         async with proxy_startup_event(FastAPI()):
@@ -1987,7 +1994,7 @@ async def test_proxy_startup_boots_an_unsafe_master_key_under_the_override(monke
     from litellm.proxy.proxy_server import proxy_startup_event
 
     general_settings = {
-        "master_key": "sk-1234",
+        "master_key": PUBLICLY_KNOWN_KEY,
         **({"dangerously_permit_weak_or_unset_master_key": True} if override == "yaml" else {}),
     }
     _, announced = _boot_with_general_settings(monkeypatch, tmp_path, general_settings)
@@ -1997,7 +2004,7 @@ async def test_proxy_startup_boots_an_unsafe_master_key_under_the_override(monke
     async with proxy_startup_event(FastAPI()):
         from litellm.proxy.proxy_server import master_key
 
-        assert master_key == "sk-1234"
+        assert master_key == PUBLICLY_KNOWN_KEY
 
     assert announced == []
 
@@ -2018,7 +2025,7 @@ async def test_proxy_shutdown_stops_the_view_setup_task(monkeypatch, tmp_path):
     fake_prisma = _ShutdownAwarePrisma()
     config_path = tmp_path / "config.yaml"
     with open(config_path, "w") as f:
-        yaml.dump({"general_settings": {"master_key": "sk-12345"}}, f)
+        yaml.dump({"general_settings": {"master_key": MASTER_KEY}}, f)
     monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
     monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
     monkeypatch.setattr(proxy_server_module, "store_model_in_db", False)
@@ -5514,9 +5521,9 @@ class TestPriceDataReloadIntegration:
 
     def test_config_file_parsing(self):
         """Test parsing of config file with reload settings"""
-        config_content = """
+        config_content = f"""
 general_settings:
-  master_key: sk-1234
+  master_key: {MASTER_KEY}
   model_cost_map_reload_interval: 21600
 
 model_list:
@@ -6085,7 +6092,7 @@ def test_model_info_v1_list_skips_fastapi_jsonable_encoder(monkeypatch):
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", models=[], team_models=[]
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY, models=[], team_models=[]
     )
     client = TestClient(app)
     try:
@@ -6119,7 +6126,7 @@ def test_model_info_v1_cli_model_returns_single_deployment_as_json(monkeypatch):
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234", models=[], team_models=[]
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY, models=[], team_models=[]
     )
     client = TestClient(app)
     try:
@@ -7200,7 +7207,7 @@ def test_get_config_normalizes_string_callbacks(monkeypatch):
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key=MASTER_KEY
     )
 
     client = TestClient(app)
@@ -8264,7 +8271,7 @@ async def test_update_general_settings_keeps_yaml_pass_through_endpoints_next_to
         "litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock()
     )  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
     master_key: Final = patch(
-        "litellm.proxy.proxy_server.master_key", "sk-master"
+        "litellm.proxy.proxy_server.master_key", MASTER_KEY
     )  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
@@ -8312,7 +8319,7 @@ async def test_update_general_settings_db_pass_through_endpoint_overrides_yaml_e
     settings: Final = patch("litellm.proxy.proxy_server.general_settings", {"pass_through_endpoints": [yaml_endpoint]})  # test-quality-ok: the method reads this module global; no injection seam
     yaml_endpoints: Final = patch("litellm.proxy.proxy_server.config_passthrough_endpoints", [yaml_endpoint])  # test-quality-ok: module global holding the YAML endpoints the fix merges in
     initialize: Final = patch("litellm.proxy.proxy_server.initialize_pass_through_endpoints", AsyncMock())  # test-quality-ok: route registration needs the FastAPI app; auth is the observable here
-    master_key: Final = patch("litellm.proxy.proxy_server.master_key", "sk-master")  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
+    master_key: Final = patch("litellm.proxy.proxy_server.master_key", MASTER_KEY)  # test-quality-ok: a set master key is what makes a missing Authorization header a 401
     with settings, yaml_endpoints, initialize, master_key:
         await ProxyConfig()._update_general_settings(db_general_settings={"pass_through_endpoints": [db_endpoint]})
 
@@ -10029,7 +10036,7 @@ def _update_config_setup(monkeypatch):
         app.dependency_overrides[auth_dep] = lambda: UserAPIKeyAuth(
             user_id="test_admin",
             user_role=LitellmUserRoles.PROXY_ADMIN,
-            api_key="sk-1234",
+            api_key=MASTER_KEY,
         )
         client = TestClient(app)
 
@@ -12167,7 +12174,7 @@ async def test_failed_config_load_keeps_callbacks_the_stored_config_registered(m
     pc = ps.ProxyConfig()
     monkeypatch.setattr(ps, "proxy_config", pc)
     monkeypatch.setattr(ps, "llm_router", None)
-    monkeypatch.setattr(ps, "master_key", "sk-1234")
+    monkeypatch.setattr(ps, "master_key", MASTER_KEY)
     monkeypatch.setattr(
         pc, "get_config", AsyncMock(return_value={"litellm_settings": {"success_callback": ["helicone"]}})
     )
