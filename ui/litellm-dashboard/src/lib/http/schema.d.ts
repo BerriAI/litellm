@@ -16025,6 +16025,88 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/subscription_accounts/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Subscription Account
+         * @description Stop tracking a subscription account's fee; its requests stay marked as subscription-covered.
+         */
+        post: operations["delete_subscription_account_subscription_accounts_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/subscription_accounts/new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * New Subscription Account
+         * @description Record the monthly fee of one subscription-backed provider account.
+         */
+        post: operations["new_subscription_account_subscription_accounts_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/subscription_accounts/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update Subscription Account
+         * @description Change the fee, currency, billing period start, or label of a subscription account.
+         */
+        post: operations["update_subscription_account_subscription_accounts_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/subscription_accounts/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Subscription Usage
+         * @description Subscription-backed accounts behind the proxy's deployments, each with its configured
+         *     monthly fee and the fixed cost attributed to the date range: the fee once per billing
+         *     period whose start date falls inside the range, however many deployments share the account.
+         */
+        get: operations["get_subscription_usage_subscription_accounts_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tag/daily/activity": {
         parameters: {
             query?: never;
@@ -27086,6 +27168,19 @@ export interface components {
             /** Entities */
             entities: components["schemas"]["BedrockChecksSensitiveInformationEntityItem"][];
         };
+        /** BillingPeriod */
+        BillingPeriod: {
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+        };
         /** BlockKeyRequest */
         BlockKeyRequest: {
             /** Key */
@@ -31361,6 +31456,11 @@ export interface components {
              */
             type: string;
         };
+        /** DeleteSubscriptionAccountRequest */
+        DeleteSubscriptionAccountRequest: {
+            /** Subscription Account Id */
+            subscription_account_id: string;
+        };
         /** DeleteTeamRequest */
         DeleteTeamRequest: {
             /** Team Ids */
@@ -35615,6 +35715,37 @@ export interface components {
              * @default
              */
             user: string | null;
+        };
+        /** LiteLLM_SubscriptionAccountTable */
+        LiteLLM_SubscriptionAccountTable: {
+            /** Account Id */
+            account_id: string;
+            /** Billing Period Start */
+            billing_period_start: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Currency */
+            currency: string;
+            /** Custom Llm Provider */
+            custom_llm_provider: string;
+            /** Label */
+            label?: string | null;
+            /** Monthly Fee */
+            monthly_fee: number;
+            /** Subscription Account Id */
+            subscription_account_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
         };
         /** LiteLLM_TeamMembership */
         LiteLLM_TeamMembership: {
@@ -45477,6 +45608,55 @@ export interface components {
              */
             purpose: string;
         };
+        /** SubscriptionAccountFeeRequest */
+        SubscriptionAccountFeeRequest: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Billing Period Start
+             * Format: date
+             */
+            billing_period_start: string;
+            /** Currency */
+            currency: string;
+            /** Custom Llm Provider */
+            custom_llm_provider: string;
+            /** Label */
+            label?: string | null;
+            /** Monthly Fee */
+            monthly_fee: number;
+        };
+        /** SubscriptionAccountUsage */
+        SubscriptionAccountUsage: {
+            /** Account Id */
+            account_id: string | null;
+            /** Billing Periods */
+            billing_periods: components["schemas"]["BillingPeriod"][];
+            /** Custom Llm Provider */
+            custom_llm_provider: string;
+            /** Deployments */
+            deployments: string[];
+            fee: components["schemas"]["LiteLLM_SubscriptionAccountTable"] | null;
+            /** Fixed Cost */
+            fixed_cost: number | null;
+        };
+        /** SubscriptionUsageResponse */
+        SubscriptionUsageResponse: {
+            /** Accounts */
+            accounts: components["schemas"]["SubscriptionAccountUsage"][];
+            /**
+             * End Date
+             * Format: date
+             */
+            end_date: string;
+            /**
+             * Start Date
+             * Format: date
+             */
+            start_date: string;
+            /** Subscription Providers */
+            subscription_providers: string[];
+        };
         /**
          * SuccessfulKeyUpdate
          * @description Successfully updated key with its updated information
@@ -48023,6 +48203,19 @@ export interface components {
         /** UpdateSearchToolRequest */
         UpdateSearchToolRequest: {
             search_tool: components["schemas"]["SearchTool"];
+        };
+        /** UpdateSubscriptionAccountFeeRequest */
+        UpdateSubscriptionAccountFeeRequest: {
+            /** Billing Period Start */
+            billing_period_start?: string | null;
+            /** Currency */
+            currency?: string | null;
+            /** Label */
+            label?: string | null;
+            /** Monthly Fee */
+            monthly_fee?: number | null;
+            /** Subscription Account Id */
+            subscription_account_id: string;
         };
         /**
          * UpdateTeamMemberPermissionsRequest
@@ -71406,6 +71599,139 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    delete_subscription_account_subscription_accounts_delete_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeleteSubscriptionAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SubscriptionAccountTable"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    new_subscription_account_subscription_accounts_new_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubscriptionAccountFeeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SubscriptionAccountTable"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_subscription_account_subscription_accounts_update_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSubscriptionAccountFeeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_SubscriptionAccountTable"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_subscription_usage_subscription_accounts_usage_get: {
+        parameters: {
+            query: {
+                /** @description First day of the Usage page filter, YYYY-MM-DD */
+                start_date: string;
+                /** @description Last day of the Usage page filter, YYYY-MM-DD */
+                end_date: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionUsageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

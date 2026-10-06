@@ -794,6 +794,8 @@ PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO: Final = frozenset(
     }
 )
 
+SUBSCRIPTION_BACKED_PROVIDERS: Final = frozenset({"chatgpt"})
+
 LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS: Final = [
     "openai",
     "azure",

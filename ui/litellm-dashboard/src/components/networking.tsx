@@ -116,6 +116,13 @@ import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
+import type {
+  SubscriptionAccountCreateRequest,
+  SubscriptionAccountDeleteRequest,
+  SubscriptionAccountUpdateRequest,
+  SubscriptionFee,
+  SubscriptionUsageResponse,
+} from "@/app/(dashboard)/usage/_components/components/SubscriptionCost/types";
 import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
 import type {
   SpanDetail,
@@ -1328,6 +1335,34 @@ export const dailyActivityAggregatedCall = (
     accessToken: req.accessToken,
     query: dailyActivityQuery(entity, req, req.apiKeyLimit === undefined ? {} : { api_key_limit: req.apiKeyLimit }),
   });
+
+export const subscriptionUsageCall = (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+): Promise<SubscriptionUsageResponse> =>
+  apiClient.get<SubscriptionUsageResponse>("/subscription_accounts/usage", {
+    accessToken,
+    query: { start_date: formatDate(startTime), end_date: formatDate(endTime) },
+  });
+
+export const subscriptionAccountCreateCall = (
+  accessToken: string,
+  body: SubscriptionAccountCreateRequest,
+): Promise<SubscriptionFee> => apiClient.post<SubscriptionFee>("/subscription_accounts/new", { accessToken, body });
+
+export const subscriptionAccountUpdateCall = (
+  accessToken: string,
+  body: SubscriptionAccountUpdateRequest,
+): Promise<SubscriptionFee> => apiClient.post<SubscriptionFee>("/subscription_accounts/update", { accessToken, body });
+
+export const subscriptionAccountDeleteCall = (
+  accessToken: string,
+  subscriptionAccountId: string,
+): Promise<SubscriptionFee> => {
+  const body: SubscriptionAccountDeleteRequest = { subscription_account_id: subscriptionAccountId };
+  return apiClient.post<SubscriptionFee>("/subscription_accounts/delete", { accessToken, body });
+};
 
 export const dailyActivityKeyPageCall = (
   entity: DailyActivityEntity,
