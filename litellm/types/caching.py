@@ -18,11 +18,6 @@ class LiteLLMCacheType(str, Enum):
     GCS = "gcs"
 
 
-class SemanticCacheScope(str, Enum):
-    KEY = "key"
-    END_USER = "end_user"
-
-
 CachingSupportedCallTypes = Literal[
     "completion",
     "acompletion",
