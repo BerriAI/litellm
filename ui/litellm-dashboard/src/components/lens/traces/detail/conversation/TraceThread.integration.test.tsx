@@ -106,6 +106,49 @@ describe("TraceThread", () => {
     window.history.replaceState(null, "", "/");
   });
 
+  it.each([false, true])("refreshes the reply in place and keeps it if the refresh fails (%s)", async (failed) => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Thread" }));
+    const thread = await screen.findByRole("region", { name: "Trace thread" });
+    expect(await within(thread).findByText("The release is ready")).toBeVisible();
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) => {
+      if (failed) throw new Error("content refresh failed");
+      return id === "root"
+        ? { ...details.root, output: '[{"role":"assistant","content":"Updated answer"}]' }
+        : details[id];
+    });
+    await user.click(screen.getByRole("button", { name: "Refresh run" }));
+    if (failed) {
+      expect(await within(thread).findByRole("button", { name: "Retry" })).toBeVisible();
+      expect(within(thread).getByText("The release is ready")).toBeVisible();
+    } else {
+      expect(await within(thread).findByText("Updated answer")).toBeVisible();
+      expect(within(thread).queryByText("The release is ready")).not.toBeInTheDocument();
+    }
+  });
+
+  it("keeps the whole thread on screen when a refresh of the run fails", async () => {
+    const user = userEvent.setup();
+    const first = { ...trace, spans: [root, llm], next_cursor: "next-page" } as Trace;
+    const second = { ...trace, spans: [tool], next_cursor: null } as Trace;
+    vi.mocked(agentTraceCall).mockImplementation(async (_token, _trace, _ref, cursor) => (cursor ? second : first));
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Thread" }));
+    const thread = await screen.findByRole("region", { name: "Trace thread" });
+    expect(await within(thread).findByText("End of thread")).toBeVisible();
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, "next-page"]);
+    vi.mocked(agentTraceCall).mockRejectedValue(new Error("refresh unavailable"));
+    await user.click(screen.getByRole("button", { name: "Refresh run" }));
+    expect(await screen.findByText(/Previously received steps are still shown/)).toBeVisible();
+    expect(within(thread).getByText("Read the release notes")).toBeVisible();
+    expect(within(thread).getByText("The release is ready")).toBeVisible();
+  });
+
   it("shows a failed shell command's output inside the Worked bar and in the step details", async () => {
     const user = userEvent.setup();
     const command = "npm test -- checkout";
