@@ -10,7 +10,7 @@ use crate::{
     spend::spend,
 };
 use litellm_traces::{
-    SpanDetail, SpanErrorPage, Trace, TracePage,
+    ObservationType, SpanDetail, SpanErrorPage, Trace, TracePage,
     query::named::{
         ListTracesParams, ReadAccessParams, SpanDetailParams, SpanDetailsParams, SpanErrorParams,
         TraceIdentityParams, TraceSpansParams,
@@ -350,6 +350,19 @@ fn page<E>(
             .iter()
             .filter_map(|span| span.actor_id.as_deref())
             .collect();
+        let legacy_agents: HashSet<&str> = page_spans
+            .iter()
+            .filter(|span| span.actor_id.is_none() && !span.actor_unassigned)
+            .filter_map(|span| {
+                if !span.agent.is_empty() {
+                    Some(span.agent.as_str())
+                } else if span.kind == ObservationType::Agent {
+                    Some(span.name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
         Trace {
             capture: snapshot.trace().capture.as_ref().map(|capture| {
                 litellm_traces::TraceCapture {
@@ -369,11 +382,9 @@ fn page<E>(
                 .trace()
                 .agents
                 .iter()
-                .filter(|agent| {
-                    agent
-                        .actor_id
-                        .as_deref()
-                        .is_none_or(|id| actors.contains(id))
+                .filter(|agent| match agent.actor_id.as_deref() {
+                    Some(id) => actors.contains(id),
+                    None => legacy_agents.contains(agent.name.as_str()),
                 })
                 .cloned()
                 .collect(),

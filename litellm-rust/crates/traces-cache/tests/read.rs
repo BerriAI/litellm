@@ -572,6 +572,54 @@ async fn actor_metadata_pages_with_spans_without_losing_trace_totals(
 }
 
 #[rstest]
+#[case::explicit_names(4096, true)]
+#[case::span_name_fallback(4096, false)]
+#[case::larger_pages(8192, true)]
+#[tokio::test]
+async fn legacy_agent_metadata_fits_each_page_without_losing_agents(
+    #[case] response_bytes: usize,
+    #[case] explicit_names: bool,
+) {
+    let rows = (0..120)
+        .map(|index| TraceSpansRow {
+            kind: ObservationType::Agent,
+            name: format!("legacy-{index}"),
+            agent: if explicit_names {
+                format!("legacy-{index}")
+            } else {
+                String::new()
+            },
+            parent_span_id: String::new(),
+            ..span(index)
+        })
+        .collect();
+    let store = FakeStore::with_spans("ref", rows);
+    let reader = TraceReader::new(response_bytes);
+    let mut cursor = None;
+    let mut names = HashSet::new();
+    loop {
+        let page = reader
+            .get_trace_page(&store, &access(), "trace", "ref", cursor.as_deref(), 200)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(serde_json::to_vec(&page).unwrap().len() <= response_bytes);
+        assert_eq!(page.summary.agent_count, 120);
+        assert_eq!(page.agents.len(), page.spans.len());
+        for agent in page.agents {
+            assert!(page.spans.iter().any(|span| span.name == agent.name));
+            assert!(names.insert(agent.name));
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(names.len(), 120);
+    assert_eq!(store.calls(Operation::TraceSpans), 1);
+}
+
+#[rstest]
 #[tokio::test]
 async fn oversized_run_batch_falls_back_to_each_run_and_keeps_listed_summaries() {
     let store = FakeStore::with_spans("ref-good", vec![span(0)]);
