@@ -30,6 +30,8 @@ _INFERENCE_CONTEXT: Final = frozenset(
         "litellm_logging_obj",
         "litellm_credential_name",
         "proxy_server_request",
+        "cache_key",
+        "litellm_params",
     }
 )
 

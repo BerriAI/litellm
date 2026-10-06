@@ -1,8 +1,8 @@
-use litellm_host::observation::ObservationSender;
 use std::convert::Infallible;
 
 use litellm_host::{
     call::{CallOutput, HostedMachine, hosted_call},
+    observation::ObservationSender,
     protocol::Protocol,
 };
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
@@ -55,7 +55,7 @@ impl ChatCompletionsRoute {
     pub(super) async fn run_call(
         &self,
         call: ChatCompletionsCall,
-        cache_options: Option<litellm_cache_response::CachePolicy>,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {

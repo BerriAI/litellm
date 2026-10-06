@@ -1,6 +1,5 @@
 //! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
 
-use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{
@@ -10,6 +9,7 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
+use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_host_http::Sse;
 use litellm_inference_messages::{MessagesCall, messages_body, route::Messages};
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
@@ -45,16 +45,15 @@ async fn handle(
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
     let route = gateway.messages.clone();
-    let route = match &gateway.cache {
-        Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
-            cache.clone(),
-            cache_options.scope.clone(),
-        )),
-        None => route,
-    };
 
     let call = project(deployment, body, headers)?;
-    let machine = route.machine(call, cache_options.policy);
+    let machine = route.machine(
+        call,
+        litellm_inference::CallOptions {
+            cache: Some(cache_options),
+            observers: None,
+        },
+    );
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
     let headers = crate::caching::CacheHeaders::default();

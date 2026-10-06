@@ -23,6 +23,7 @@ tokio-tungstenite.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+serde.workspace = true
 litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
 litellm-host-native.workspace = true

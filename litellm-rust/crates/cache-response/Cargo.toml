@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+futures-util.workspace = true
 litellm-cache.workspace = true
 py_literal = "0.4.0"
 serde.workspace = true

@@ -4,9 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use axum::body::to_bytes;
 use litellm_cache_memory::InMemoryCache;
-use litellm_cache_response::{
-    CacheKeyInput, ResponseCache, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
-};
+use litellm_cache_response::{CacheKey, ResponseCache, ResponseCacheService};
 use rstest::rstest;
 use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
@@ -52,10 +50,7 @@ async fn all_inference_endpoints_share_native_cache(
             Some(100),
             Some(Duration::from_secs(60)),
         )))
-        .with_config(ResponseCacheConfig {
-            namespace: "gateway-test".into(),
-            max_entry_bytes: 4096,
-        }),
+        .with_max_entry_bytes(4096),
     );
     let app = support::app_with_cache(model, &upstream.uri(), cache.clone());
     let request = if is_responses {
@@ -73,10 +68,8 @@ async fn all_inference_endpoints_share_native_cache(
     assert!(!cache_key.as_bytes().is_empty());
     let stored = cache
         .lookup(
-            &ResponseCacheRequest::new(CacheKeyInput {
-                preset: Some(cache_key.to_str().unwrap().into()),
-                ..Default::default()
-            }),
+            &CacheKey::Derived(cache_key.to_str().unwrap().into()),
+            None,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap(),

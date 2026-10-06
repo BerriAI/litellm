@@ -1,8 +1,11 @@
-use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
 use std::time::Duration;
 
 use litellm_auth::AuthServices;
-use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
+use litellm_host::{
+    interceptors::{Interceptors, RawResponse, RequestContext, WireRequest},
+    lifecycle::ExecutionEvent,
+    observation::ObservationSender,
+};
 use litellm_http::{Client, outbound::OutboundRequest, request::truncate_error_body};
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
@@ -18,8 +21,7 @@ pub(super) async fn execute(
     http: &Client,
     auth: &AuthServices,
     request: ProviderChatCompletionsRequest,
-    cache: Option<litellm_cache_response::ScopedCache>,
-    cache_options: Option<litellm_cache_response::CachePolicy>,
+    cache: Option<litellm_inference::caching::CachePlan>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<ChatCompletionsResponse, Error> {
@@ -47,25 +49,18 @@ pub(super) async fn execute(
         model: context.model.clone(),
         provider: context.custom_llm_provider.clone(),
     };
-    let wire = interceptors
-        .before_provider_request(
-            WireRequest {
-                url,
-                headers: authenticated.headers,
-                body,
-            },
-            context,
-        )
-        .await?;
+    let outbound = WireRequest {
+        url,
+        headers: authenticated.headers,
+        body,
+    };
     let cache = cache.filter(|_| authenticated.signer.is_none());
-    let cache_request = litellm_inference::caching::CacheRequest::from_wire(
-        identity,
-        cache.as_ref().map(|_| &wire),
-    );
+    let wire = interceptors
+        .before_provider_request(outbound, context)
+        .await?;
     litellm_inference::caching::execute_unary::<super::route::ChatCompletions, _, _>(
-        cache_request,
-        cache.as_ref().map(|cache| cache.service.clone()),
-        cache.as_ref().map(|cache| cache.options(cache_options)),
+        identity,
+        cache,
         interceptors,
         observers,
         || async move {
@@ -252,7 +247,6 @@ mod tests {
             &AuthServices::default(),
             prepared(&upstream.uri()),
             None,
-            None,
             &interceptors,
             None,
         )
@@ -292,7 +286,6 @@ mod tests {
             &Client::plain_for_test(),
             &AuthServices::default(),
             prepared(&upstream.uri()),
-            None,
             None,
             &interceptors,
             None,

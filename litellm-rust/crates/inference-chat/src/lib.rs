@@ -6,20 +6,23 @@ mod common_utils;
 pub mod constants;
 pub(crate) mod handler;
 mod prepare;
-use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
-use prepare::{prepare_provider_request, resolve_request};
+
+use std::sync::Arc;
 
 use litellm_auth::AuthServices;
+use litellm_inference::caching::CachePlan;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use litellm_secrets::source::SecretSource;
-use std::sync::Arc;
-use types::ChatCompletionsRequest;
+use prepare::{prepare_provider_request, resolve_request};
+
+use crate::types::{ChatCompletionsCall, ChatCompletionsRequest};
 
 #[derive(Clone)]
 pub struct ChatCompletionsRoute {
     http: litellm_http::Client,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
-    cache: Option<litellm_cache_response::ScopedCache>,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
 }
 
 impl ChatCompletionsRoute {
@@ -36,16 +39,19 @@ impl ChatCompletionsRoute {
         }
     }
 
-    pub fn with_cache(self, cache: litellm_cache_response::ScopedCache) -> Self {
+    pub fn with_cache(
+        self,
+        cache: impl Into<Option<Arc<dyn litellm_cache_response::ResponseCacheService>>>,
+    ) -> Self {
         Self {
-            cache: Some(cache),
+            cache: cache.into(),
             ..self
         }
     }
 
     pub async fn execute(
         &self,
-        request: ChatCompletionsRequest<'_>,
+        request: impl Into<ChatCompletionsCall>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         options: impl Into<litellm_inference::CallOptions>,
     ) -> Result<ChatCompletionsResponse, Error> {
@@ -68,10 +74,11 @@ impl ChatCompletionsRoute {
     async fn run(
         &self,
         request: ChatCompletionsRequest<'_>,
-        cache_options: Option<litellm_cache_response::CachePolicy>,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
+        let cache = CachePlan::for_request(self.cache.as_ref(), cache_options, &request)?;
         let resolved = resolve_request(request)?;
         let snapshot = self
             .secrets
@@ -84,8 +91,7 @@ impl ChatCompletionsRoute {
                 &self.http,
                 &self.auth,
                 prepared,
-                self.cache.clone(),
-                cache_options,
+                cache,
                 interceptors,
                 observers,
             ));
