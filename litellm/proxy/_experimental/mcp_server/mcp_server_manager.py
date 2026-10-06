@@ -4423,12 +4423,11 @@ class MCPServerManager:
                 # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
                 # through _create_prefixed_tools — that would add the prefix a second
                 # time producing "test_petstore-test_petstore-getinventory".
-                unprefixed_tools: Final = guarded_openapi
-                self._record_listed_tools(
-                    server, unprefixed_tools, listed_caller, listed_generation, record_listing=record_listing
+                self.record_listed_tools(
+                    server, guarded_openapi, listed_caller, listed_generation, record_listing=record_listing
                 )
                 if not add_prefix:
-                    return ListToolsResult(tools=list(unprefixed_tools))
+                    return ListToolsResult(tools=list(guarded_openapi))
                 return ListToolsResult(
                     tools=[t.model_copy(update={"name": registered_names[t.name]}) for t in guarded_openapi]
                 )
@@ -4455,7 +4454,7 @@ class MCPServerManager:
                 register_bare_names=params is None or (params.cursor is None and not page.next_cursor),
                 listing_updates=listing_updates,
             )
-            self._record_listed_tools(
+            self.record_listed_tools(
                 server, guarded_tools, listed_caller, listed_generation, record_listing=record_listing
             )
 
