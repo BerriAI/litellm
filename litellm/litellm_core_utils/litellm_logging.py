@@ -292,11 +292,8 @@ else:
     _GENERIC_API_LOGGER_CLS: Final = GenericAPILogger
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
-# Nested @client wrappers (chat over the Responses bridge) run async success logging for one
-# request as two concurrent tasks on the same Logging object. The dedup flag is only set after
-# awaited work, so the tasks are serialised per logging object: the second one waits, then sees
-# the flag and skips, or logs itself if the first one raised or was cancelled before logging.
-# Kept outside the instance so Logging stays copyable and the lock goes away with the object.
+# Nested @client wrappers log one request from two concurrent tasks; the lock serialises them so the
+# dedup flag holds. Off-instance so Logging stays copyable.
 _async_success_dedup_locks: Final["weakref.WeakKeyDictionary[Logging, asyncio.Lock]"] = weakref.WeakKeyDictionary()
 
 _STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(("used_client_oauth_token",))
