@@ -24,7 +24,7 @@ from openai._legacy_response import HttpxBinaryResponseContent
 
 import litellm
 from litellm._internal_context import in_post_response_phase
-from litellm._logging import session_id_var, trace_id_var
+from litellm._logging import session_id_var, trace_id_var, verbose_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM, SENTRY_PII_DENYLIST
 from litellm.cost_calculator import ocr_batch_cost
@@ -56,7 +56,6 @@ from litellm.types.utils import (
     Usage,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.local_testing.create_mock_standard_logging_payload import create_standard_logging_payload_with_long_content
 
 @pytest.fixture
 def logging_obj():
@@ -10247,12 +10246,29 @@ def testget_standard_logging_payload_session_id_empty_when_flag_off(monkeypatch)
     )
     assert result == ""
 
-@pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
+@pytest.fixture
+def restore_verbose_logger_level() -> Iterator[None]:
+    original_level: Final = verbose_logger.level
+    yield
+    verbose_logger.setLevel(original_level)
+
+
+@pytest.mark.usefixtures(
+    "_vcr_outcome_gate",
+    "drain_logging_worker",
+    "isolate_litellm_state",
+    "setup_and_teardown",
+    "restore_verbose_logger_level",
+)
 def test_truncate_standard_logging_payload():
     """
     1. the payload passed in is never modified, since every callback of the request shares it
     2. the `messages`, `response`, and `error_str` in the returned payload are truncated
     """
+    from tests.local_testing.create_mock_standard_logging_payload import (
+        create_standard_logging_payload_with_long_content,
+    )
+
     _custom_logger = CustomLogger()
     standard_logging_payload: StandardLoggingPayload = create_standard_logging_payload_with_long_content()
     original_messages = standard_logging_payload["messages"]

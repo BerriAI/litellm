@@ -228,12 +228,10 @@ async def test_default_tagged_deployments():
 
 
 @pytest.mark.asyncio()
-async def test_error_from_tag_routing(request: pytest.FixtureRequest):
+async def test_error_from_tag_routing():
     """
     Tests the correct error raised when no deployments found for tag
     """
-    original_level: Final = verbose_logger.level
-    request.addfinalizer(lambda: verbose_logger.setLevel(original_level))
     verbose_logger.setLevel(logging.DEBUG)
     router = litellm.Router(
         model_list=[

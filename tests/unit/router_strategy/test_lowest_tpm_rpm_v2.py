@@ -6,7 +6,7 @@ import importlib
 import os
 import time
 import traceback
-from typing import Dict
+from typing import Dict, Final, Iterator
 
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -18,6 +18,7 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.lowest_tpm_rpm_v2 import (
     LowestTPMLoggingHandler_v2 as LowestTPMLoggingHandler,
@@ -25,7 +26,6 @@ from litellm.router_strategy.lowest_tpm_rpm_v2 import (
 from litellm.types.router import DeploymentTypedDict
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
-from tests.local_testing.create_mock_standard_logging_payload import create_standard_logging_payload
 
 ### UNIT TESTS FOR TPM/RPM ROUTING ###
 
@@ -34,7 +34,17 @@ from tests.local_testing.create_mock_standard_logging_payload import create_stan
 """
 
 
+@pytest.fixture
+def restore_verbose_logger_level() -> Iterator[None]:
+    original_level: Final = verbose_logger.level
+    yield
+    verbose_logger.setLevel(original_level)
+
+
+@pytest.mark.usefixtures("restore_verbose_logger_level")
 def test_tpm_rpm_updated():
+    from tests.local_testing.create_mock_standard_logging_payload import create_standard_logging_payload
+
     test_cache = DualCache()
     lowest_tpm_logger = LowestTPMLoggingHandler(router_cache=test_cache)
     model_group = "gpt-3.5-turbo"
@@ -86,7 +96,10 @@ def test_tpm_rpm_updated():
 # test_tpm_rpm_updated()
 
 
+@pytest.mark.usefixtures("restore_verbose_logger_level")
 def test_get_available_deployments():
+    from tests.local_testing.create_mock_standard_logging_payload import create_standard_logging_payload
+
     test_cache = DualCache()
     model_list = [
         {
@@ -172,10 +185,13 @@ def test_get_available_deployments():
 # test_get_available_deployments()
 
 
+@pytest.mark.usefixtures("restore_verbose_logger_level")
 def test_router_get_available_deployments():
     """
     Test if routers 'get_available_deployments' returns the lowest tpm deployment
     """
+    from tests.local_testing.create_mock_standard_logging_payload import create_standard_logging_payload
+
     model_list = [
         {
             "model_name": "azure-model",
@@ -266,10 +282,13 @@ def test_router_get_available_deployments():
 # test_router_get_available_deployments()
 
 
+@pytest.mark.usefixtures("restore_verbose_logger_level")
 def test_router_skip_rate_limited_deployments():
     """
     Test if routers 'get_available_deployments' raises No Models Available error if max tpm would be reached by message
     """
+    from tests.local_testing.create_mock_standard_logging_payload import create_standard_logging_payload
+
     model_list = [
         {
             "model_name": "azure-model",
