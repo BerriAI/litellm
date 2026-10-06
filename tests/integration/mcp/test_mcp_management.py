@@ -620,6 +620,23 @@ def _not_found(gateway: Gateway, key: str, identity: str) -> bool:
     }
 
 
+def _refusal(gateway: Gateway, key: str, identity: str) -> tuple[int, dict[str, JsonValue]]:
+    response: Final = gateway.client.post(
+        "/mcp-rest/tools/call",
+        headers={"x-litellm-api-key": key},
+        json={"server_id": identity, "name": "add", "arguments": ADD},
+    )
+    return response.status_code, JSON_OBJECT.validate_json(response.content)
+
+
+def _called_tools(upstream: McpPeer) -> list[tuple[object, object]]:
+    return [
+        (call["body"]["params"]["name"], call["body"]["params"]["arguments"])
+        for call in tool_calls(upstream.drain())
+        if isinstance(call["body"], dict) and isinstance(call["body"]["params"], dict)
+    ]
+
+
 def test_team_submission_is_inert_until_approved_serves_both_workers_and_stops_after_reject(
     gateway: Gateway, peer: Gateway
 ) -> None:
@@ -628,6 +645,7 @@ def test_team_submission_is_inert_until_approved_serves_both_workers_and_stops_a
         user: Final = scenario.user()
         team: Final = scenario.team()
         member: Final = scenario.key(team_id=team, user_id=user)
+        outsider: Final = scenario.key(team_id=scenario.team())
         registered: Final = gateway.client.post(
             "/v1/mcp/server/register",
             headers={"x-litellm-api-key": member},
@@ -647,22 +665,32 @@ def test_team_submission_is_inert_until_approved_serves_both_workers_and_stops_a
         )
         assert granted.status_code == 200, granted.text
         upstream.drain()
-        for worker in (gateway, peer):
-            pending_list = worker.client.get("/mcp-rest/tools/list", headers={"x-litellm-api-key": member})
+        not_found: Final = (
+            404,
+            {"detail": {"error": "server_not_found", "message": f"MCP server '{identity}' was not found"}},
+        )
+        for worker, key in itertools.product((gateway, peer), (member, outsider)):
+            pending_list = worker.client.get("/mcp-rest/tools/list", headers={"x-litellm-api-key": key})
             assert pending_list.status_code == 200, pending_list.text
             listed = ToolListing.model_validate_json(pending_list.content).tools
             assert [tool.name for tool in listed if tool.mcp_info.server_id == identity] == [], pending_list.text
-            assert _not_found(worker, member, identity), "a pending submission was not refused as server_not_found"
-        assert tool_calls(upstream.drain()) == ()
+            assert _refusal(worker, key, identity) == not_found, worker.client.base_url
+        assert _called_tools(upstream) == [], "a pending submission reached the peer"
 
         approved: Final = gateway.request("PUT", f"/v1/mcp/server/{identity}/approve")
         assert approved.status_code == 200, approved.text
         assert Submission.model_validate_json(approved.content).approval_status == "active", approved.text
         assert _submission_row(identity)[0]["approval_status"] == "active"
         assert _submission(gateway, identity).approval_status == "active"
+        assert _served(gateway, member, identity), "the approving worker did not serve the approved submission"
+        assert eventually(partial(_served, peer, member, identity), bool, seconds=70)
+        denied: Final = (
+            403,
+            {"detail": {"error": "access_denied", "message": f"The key is not allowed to access server {identity}"}},
+        )
         for worker in (gateway, peer):
-            assert eventually(partial(_served, worker, member, identity), bool, seconds=70)
-        assert len(tool_calls(upstream.drain())) >= 2
+            assert _refusal(worker, outsider, identity) == denied, worker.client.base_url
+        assert _called_tools(upstream) == [("add", ADD), ("add", ADD)], "expected one served call per worker"
 
         notes: Final = "rejected by integration review " + uuid.uuid4().hex[:8]
         rejected: Final = gateway.request("PUT", f"/v1/mcp/server/{identity}/reject", {"review_notes": notes})
@@ -674,9 +702,11 @@ def test_team_submission_is_inert_until_approved_serves_both_workers_and_stops_a
         ]
         submission: Final = _submission(gateway, identity)
         assert (submission.approval_status, submission.review_notes) == ("rejected", notes)
-        for worker in (gateway, peer):
-            assert eventually(partial(_not_found, worker, member, identity), bool, seconds=70)
+        assert _refusal(gateway, member, identity) == not_found, "the rejecting worker still served the submission"
+        assert _called_tools(upstream) == [], "the rejecting worker forwarded a call for the rejected submission"
+        assert eventually(partial(_not_found, peer, member, identity), bool, seconds=70)
         upstream.drain()
         for worker in (gateway, peer):
-            assert _not_found(worker, member, identity), "a rejected submission was not refused as server_not_found"
-        assert tool_calls(upstream.drain()) == ()
+            assert _refusal(worker, member, identity) == not_found, worker.client.base_url
+            assert _refusal(worker, outsider, identity) == not_found, worker.client.base_url
+        assert _called_tools(upstream) == [], "a rejected submission reached the peer"

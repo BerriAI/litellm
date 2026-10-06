@@ -27,7 +27,7 @@ from integration._support.mcp import (
     text_result,
     tool_calls,
 )
-from integration._support.mcp_grants import SUBJECTS, Subject, grant
+from integration._support.mcp_grants import SUBJECTS, Subject, create_toolset, grant
 from integration._support.process import owned_proxy
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
@@ -316,6 +316,51 @@ def test_rest_call_by_alias_or_server_name_reaches_only_the_granted_server(gatew
         assert tool_calls(granted_peer.drain()) == (), "an ungranted name resolved to the granted sibling"
 
 
+def test_a_config_alias_shadowing_a_db_server_name_resolves_alias_first_and_never_crosses_the_grant(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    with scripted_peer(echo_tool("lookup")) as config_peer, scripted_peer(echo_tool("lookup")) as db_peer:
+        suffix: Final = uuid.uuid4().hex[:8]
+        shared: Final = f"orders_{suffix}"
+        config_name: Final = f"order_config_{suffix}"
+        config: Final = JSON_OBJECT.validate_python(
+            yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
+        )
+        config["mcp_servers"] = {
+            config_name: {**JSON_OBJECT.validate_python(config_peer.registration()), "alias": shared}
+        }
+        path: Final = tmp_path / "shadowing_alias.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            servers: Final = candidate.client.get("/v1/mcp/server", headers={"x-litellm-api-key": candidate.key})
+            assert servers.status_code == 200, servers.text
+            config_server: Final = next(
+                string_value(server["server_id"])
+                for server in _TOOL_ENTRIES.validate_json(servers.content)
+                if server["server_name"] == config_name
+            )
+            db_server: Final = register_mcp(scenario, db_peer, f"order_db_{suffix}", server_name=shared)
+            alias_key: Final = scenario.key(object_permission={"mcp_servers": [config_server]})
+            name_key: Final = scenario.key(object_permission={"mcp_servers": [db_server]})
+            arguments: Final = {"order_id": "B-" + suffix}
+            config_peer.drain()
+            db_peer.drain()
+            served: Final = _rest_call(candidate, alias_key, shared, "lookup", arguments)
+            assert served.status_code == 200, served.text
+            assert CallResult.model_validate_json(served.content) == CallResult(
+                content=[TextBlock(type="text", text=json.dumps(arguments, sort_keys=True))], isError=False
+            ), served.text
+            _single_tools_call(config_peer, "lookup", arguments)
+            assert tool_calls(db_peer.drain()) == (), "the alias match also reached the server_name sibling"
+            refused: Final = _rest_call(candidate, name_key, shared, "lookup", arguments)
+            assert refused.status_code == 403, refused.text
+            assert refused.json() == {
+                "detail": {"error": "access_denied", "message": f"The key is not allowed to access server {shared}"}
+            }, refused.text
+            assert tool_calls(config_peer.drain()) == (), "a name owned by an ungranted alias reached that server"
+            assert tool_calls(db_peer.drain()) == (), "a name owned by an ungranted alias fell back to the sibling"
+
+
 def _tool_entries(response: httpx.Response) -> list[dict[str, JsonValue]]:
     assert response.status_code == 200, response.text
     tools: Final = _TOOL_ENTRIES.validate_python(JSON_OBJECT.validate_json(response.content)["tools"])
@@ -331,7 +376,9 @@ def test_rest_listing_selects_the_same_scope_for_every_server_spelling(gateway: 
             scenario, peer, alias, server_name=server_name, allowed_tools=["add", "multiply"]
         )
         sibling: Final = register_mcp(scenario, sibling_peer, f"scope_sibling_{suffix}", allowed_tools=["fail"])
-        key: Final = scenario.key(object_permission={"mcp_servers": [identity, sibling]})
+        toolset_name: Final = f"scope_toolset_{suffix}"
+        toolset: Final = create_toolset(scenario, ((identity, "add"), (identity, "multiply")), toolset_name)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity, sibling], "mcp_toolsets": [toolset]})
         by_uuid: Final = _tool_entries(_rest_listing(gateway, key, {"server_id": identity}))
         assert [tool["name"] for tool in by_uuid] == ["add", "multiply"], by_uuid
         assert {string_value(object_value(tool["mcp_info"])["server_id"]) for tool in by_uuid} == {identity}, by_uuid
@@ -345,8 +392,10 @@ def test_rest_listing_selects_the_same_scope_for_every_server_spelling(gateway: 
             {"server_id": server_name},
             {"mcp_server_name": alias},
             {"mcp_server_name": server_name},
+            {"toolset_name": toolset_name},
         ):
-            assert _tool_entries(_rest_listing(gateway, key, params)) == by_uuid, params
+            listed = _rest_listing(gateway, key, params)
+            assert _tool_entries(listed) == by_uuid, (params, listed.text)
 
 
 def test_include_disabled_tools_widens_the_listing_only_for_an_admin(gateway: Gateway) -> None:
@@ -381,7 +430,7 @@ def _assert_only_add_is_listed_and_callable(
         peer.drain()
         allowed = caller.call(name, CALLABLE["add"], identity if caller is rest else None)
         assert allowed.ok and allowed.text == RESULTS["add"], (name, allowed.raw)
-        assert _called_names(peer) == ["add"], name
+        assert _called_names(peer) == ["add"], (name, allowed.raw)
 
 
 @pytest.mark.parametrize("configured", ("bare", "prefixed"))
@@ -425,6 +474,18 @@ def test_config_declared_disallowed_tools_hide_and_refuse_the_tool_in_bare_and_p
             for alias, peer in ((bare, bare_peer), (prefixed, prefixed_peer)):
                 key = scenario.key(object_permission={"mcp_servers": [ids[alias]]})
                 _assert_only_add_is_listed_and_callable(candidate, key, peer, alias, ids[alias])
+
+
+def test_api_created_disallowed_tools_hide_and_refuse_the_tool_in_bare_and_prefixed_spelling(gateway: Gateway) -> None:
+    pytest.skip("BUG: POST /v1/mcp/server silently drops disallowed_tools and the tool stays callable")
+    with peer_of("http") as peer, gateway.scenario() as scenario:
+        alias: Final = "apideny" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, peer, alias, disallowed_tools=["multiply", "fail"])
+        readback: Final = gateway.client.get(f"/v1/mcp/server/{identity}", headers={"x-litellm-api-key": gateway.key})
+        assert readback.status_code == 200, readback.text
+        assert JSON_OBJECT.validate_json(readback.content)["disallowed_tools"] == ["multiply", "fail"], readback.text
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        _assert_only_add_is_listed_and_callable(gateway, key, peer, alias, identity)
 
 
 def _ip_filtering_detail(server_id: str, client_ip: str) -> dict[str, str]:
@@ -527,7 +588,8 @@ def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_
             )
 
         def assert_external_view(client: httpx.Client, forwarded: str, client_ip: str) -> None:
-            assert _served_pairs(listing(client, forwarded)) == public_only
+            listed: Final = listing(client, forwarded)
+            assert _served_pairs(listed) == public_only, listed.text
             scoped: Final = listing(client, forwarded, internal)
             assert scoped.status_code == 403, scoped.text
             assert scoped.json() == {"detail": _ip_filtering_detail(internal, client_ip)}, scoped.text
@@ -539,13 +601,14 @@ def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_
             public_peer.drain()
             served: Final = call(client, forwarded, public)
             assert served.status_code == 200 and served.json()["content"][0]["text"] == RESULTS["add"], served.text
-            assert _called_names(public_peer) == ["add"]
+            assert _called_names(public_peer) == ["add"], "the public server did not receive exactly one add call"
 
-        assert _served_pairs(listing(candidate.client, "10.1.2.3")) == both
+        internal_view: Final = listing(candidate.client, "10.1.2.3")
+        assert _served_pairs(internal_view) == both, internal_view.text
         internal_peer.drain()
         reached: Final = call(candidate.client, "10.1.2.3", internal)
         assert reached.status_code == 200 and reached.json()["content"][0]["text"] == RESULTS["add"], reached.text
-        assert _called_names(internal_peer) == ["add"]
+        assert _called_names(internal_peer) == ["add"], "the internal caller did not reach the internal server once"
 
         assert_external_view(candidate.client, external, external)
         assert_external_view(untrusted, "10.1.2.3", "127.0.0.2")
@@ -553,8 +616,9 @@ def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_
         published: Final = candidate.request("POST", "/v1/mcp/make_public", {"mcp_server_ids": [internal]})
         assert published.status_code == 202, published.text
         assert published.json()["public_mcp_servers"] == [internal], published.text
-        assert _served_pairs(listing(candidate.client, external)) == both
+        widened_view: Final = listing(candidate.client, external)
+        assert _served_pairs(widened_view) == both, widened_view.text
         internal_peer.drain()
         widened: Final = call(candidate.client, external, internal)
         assert widened.status_code == 200 and widened.json()["content"][0]["text"] == RESULTS["add"], widened.text
-        assert _called_names(internal_peer) == ["add"]
+        assert _called_names(internal_peer) == ["add"], "make_public did not let the external caller reach it once"

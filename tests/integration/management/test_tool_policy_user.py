@@ -578,7 +578,7 @@ def _assert_chat_served(gateway: Gateway, upstream: Wire, model: str, key: str, 
     served: Final = gateway.request("POST", "/v1/chat/completions", _tool_call_request(model, tool_name), key=key)
     assert served.status_code == 200, served.text
     assert served.json()["choices"][0]["message"]["content"] == "ok", served.text
-    assert _upstream_tool_names(upstream) == [[tool_name]]
+    assert _upstream_tool_names(upstream) == [[tool_name]], "the served request did not reach the upstream once"
 
 
 def test_global_tool_policy_update_reads_back_persists_and_blocks_the_next_request(
@@ -676,6 +676,8 @@ def _mcp_call(gateway: Gateway, key: str, identity: str, name: str) -> httpx.Res
     )
 
 
+_TEAM_PERMISSION: Final = 'SELECT object_permission_id FROM "LiteLLM_TeamTable" WHERE team_id = %s'
+_KEY_PERMISSION: Final = 'SELECT object_permission_id FROM "LiteLLM_VerificationToken" WHERE token = %s'
 _TEAM_BLOCKED_TOOLS: Final = (
     'SELECT p.blocked_tools FROM "LiteLLM_TeamTable" t JOIN "LiteLLM_ObjectPermissionTable" p'
     " ON p.object_permission_id = t.object_permission_id WHERE t.team_id = %s"
@@ -702,8 +704,10 @@ def test_scoped_tool_overrides_block_only_their_team_or_key_survive_restart_and_
         team_key: Final = scenario.key(team_id=blocked_team, models=[model])
         sibling_team_key: Final = scenario.key(team_id=sibling_team, models=[model])
         blocked_key: Final = scenario.key(models=[model], **unscoped)
+        raw_key: Final = scenario.key(models=[model], **unscoped)
         sibling_key: Final = scenario.key(models=[model], **unscoped)
         blocked_hash: Final = sha256(blocked_key.encode()).hexdigest()
+        raw_hash: Final = sha256(raw_key.encode()).hexdigest()
 
         def assert_scopes(candidate: Gateway, refused: tuple[str, ...], served: tuple[str, ...]) -> None:
             for key in refused:
@@ -714,8 +718,8 @@ def test_scoped_tool_overrides_block_only_their_team_or_key_survive_restart_and_
         first_dir: Final = tmp_path / "first"
         first_dir.mkdir()
         with owned_proxy(gateway, first_dir, {}, config=proxy_config) as first:
-            assert_scopes(first, (), (team_key, sibling_team_key, blocked_key, sibling_key))
-            for scope in ({"team_id": blocked_team}, {"key_hash": blocked_hash}):
+            assert_scopes(first, (), (team_key, sibling_team_key, blocked_key, raw_key, sibling_key))
+            for scope in ({"team_id": blocked_team}, {"key_hash": blocked_hash}, {"key_hash": raw_key}):
                 response = first.request(
                     "POST", "/v1/tool/policy", {"tool_name": tool, "input_policy": "blocked", **scope}
                 )
@@ -729,7 +733,7 @@ def test_scoped_tool_overrides_block_only_their_team_or_key_survive_restart_and_
                     "key_hash": None,
                     **scope,
                 }, response.text
-            assert_scopes(first, (team_key, blocked_key), (sibling_team_key, sibling_key))
+            assert_scopes(first, (team_key, blocked_key, raw_key), (sibling_team_key, sibling_key))
             _discovered_tool(first, tool)
             overrides: Final = first.get(f"/v1/tool/{tool}/detail")["overrides"]
             assert isinstance(overrides, list), overrides
@@ -740,26 +744,73 @@ def test_scoped_tool_overrides_block_only_their_team_or_key_survive_restart_and_
                     object_value(row)["input_policy"],
                 )
                 for row in overrides
-            ) == sorted([(blocked_team, "None", "blocked"), ("None", blocked_hash, "blocked")]), overrides
+            ) == sorted(
+                [(blocked_team, "None", "blocked"), ("None", blocked_hash, "blocked"), ("None", raw_hash, "blocked")]
+            ), overrides
             assert read_rows(_TEAM_BLOCKED_TOOLS, (blocked_team,)) == [{"blocked_tools": [tool]}]
             assert read_rows(_KEY_BLOCKED_TOOLS, (blocked_hash,)) == [{"blocked_tools": [tool]}]
+            assert read_rows(_KEY_BLOCKED_TOOLS, (raw_hash,)) == [{"blocked_tools": [tool]}]
             assert read_rows(_TEAM_BLOCKED_TOOLS, (sibling_team,)) == [{"blocked_tools": []}]
+            assert read_rows(_KEY_BLOCKED_TOOLS, (sha256(sibling_key.encode()).hexdigest(),)) == [{"blocked_tools": []}]
 
         second_dir: Final = tmp_path / "second"
         second_dir.mkdir()
         with owned_proxy(gateway, second_dir, {}, config=proxy_config) as second:
-            assert_scopes(second, (team_key, blocked_key), (sibling_team_key, sibling_key))
+            assert_scopes(second, (team_key, blocked_key, raw_key), (sibling_team_key, sibling_key))
             removed_team: Final = second.request(
                 "DELETE", f"/v1/tool/{tool}/overrides", params={"team_id": blocked_team}
             )
             assert removed_team.status_code == 200, removed_team.text
             assert removed_team.json() == {"deleted": True, "tool_name": tool}, removed_team.text
-            assert_scopes(second, (blocked_key,), (team_key, sibling_team_key, sibling_key))
+            assert_scopes(second, (blocked_key, raw_key), (team_key, sibling_team_key, sibling_key))
             removed_key: Final = second.request(
                 "DELETE", f"/v1/tool/{tool}/overrides", params={"key_hash": blocked_hash}
             )
             assert removed_key.status_code == 200, removed_key.text
             assert removed_key.json() == {"deleted": True, "tool_name": tool}, removed_key.text
-            assert_scopes(second, (), (team_key, sibling_team_key, blocked_key, sibling_key))
+            assert_scopes(second, (raw_key,), (team_key, sibling_team_key, blocked_key, sibling_key))
+            removed_raw: Final = second.request("DELETE", f"/v1/tool/{tool}/overrides", params={"key_hash": raw_key})
+            assert removed_raw.status_code == 200, removed_raw.text
+            assert removed_raw.json() == {"deleted": True, "tool_name": tool}, removed_raw.text
+            assert_scopes(second, (), (team_key, sibling_team_key, blocked_key, raw_key, sibling_key))
             assert read_rows(_TEAM_BLOCKED_TOOLS, (blocked_team,)) == [{"blocked_tools": []}]
             assert read_rows(_KEY_BLOCKED_TOOLS, (blocked_hash,)) == [{"blocked_tools": []}]
+            assert read_rows(_KEY_BLOCKED_TOOLS, (raw_hash,)) == [{"blocked_tools": []}]
+
+
+def test_scoped_override_on_a_team_or_key_without_object_permission_is_enforced_on_the_next_request(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    pytest.skip(
+        "BUG: POST /v1/tool/policy with team_id or key_hash for a team or key that has no object_permission returns"
+        " updated=true and persists blocked_tools, but the proxy keeps serving the tool to that team or key for about"
+        " a minute because the cached key and team objects never learn the newly created object_permission_id"
+    )
+    model: Final = "integration-tool-override-" + uuid.uuid4().hex
+    tool: Final = f"integration/override/{uuid.uuid4().hex[:12]}/tool"
+    with (
+        wire_server(_chat_upstream) as upstream,
+        owned_proxy(gateway, tmp_path, {}, config=_tool_policy_config(tmp_path, model, upstream.url)) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        scenario.cleanups.callback(_forget_tool, tool)
+        blocked_team: Final = scenario.team()
+        team_key: Final = scenario.key(team_id=blocked_team, models=[model])
+        blocked_key: Final = scenario.key(models=[model])
+        sibling_key: Final = scenario.key(models=[model])
+        blocked_hash: Final = sha256(blocked_key.encode()).hexdigest()
+        assert read_rows(_TEAM_PERMISSION, (blocked_team,)) == [{"object_permission_id": None}]
+        assert read_rows(_KEY_PERMISSION, (blocked_hash,)) == [{"object_permission_id": None}]
+        for key in (team_key, blocked_key, sibling_key):
+            _assert_chat_served(candidate, upstream, model, key, tool)
+        for scope in ({"team_id": blocked_team}, {"key_hash": blocked_key}):
+            response = candidate.request(
+                "POST", "/v1/tool/policy", {"tool_name": tool, "input_policy": "blocked", **scope}
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["updated"] is True, response.text
+        assert read_rows(_TEAM_BLOCKED_TOOLS, (blocked_team,)) == [{"blocked_tools": [tool]}]
+        assert read_rows(_KEY_BLOCKED_TOOLS, (blocked_hash,)) == [{"blocked_tools": [tool]}]
+        _assert_chat_refused(candidate, upstream, model, team_key, tool)
+        _assert_chat_refused(candidate, upstream, model, blocked_key, tool)
+        _assert_chat_served(candidate, upstream, model, sibling_key, tool)
