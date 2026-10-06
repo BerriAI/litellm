@@ -30,7 +30,7 @@ from litellm.integrations.otel.mappers.utils import drop_none
 from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
-from litellm.integrations.otel.model.semconv import LiteLLM, Metric
+from litellm.integrations.otel.model.semconv import LiteLLM, Metric, MetricBuckets
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
@@ -714,11 +714,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             name=Metric.OPERATION_DURATION,
             description="GenAI operation duration",
             unit="s",
+            explicit_bucket_boundaries_advisory=MetricBuckets.OPERATION_DURATION,
         )
         self._token_usage_histogram = meter.create_histogram(
             name=Metric.TOKEN_USAGE,
             description="GenAI token usage",
             unit="{token}",
+            explicit_bucket_boundaries_advisory=MetricBuckets.TOKEN_USAGE,
         )
         self._cost_histogram = meter.create_histogram(
             name=Metric.TOKEN_COST,
@@ -729,16 +731,19 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             name=Metric.TIME_TO_FIRST_TOKEN,
             description="Time to first token for streaming requests",
             unit="s",
+            explicit_bucket_boundaries_advisory=MetricBuckets.TIME_TO_FIRST_TOKEN,
         )
         self._time_per_output_token_histogram = meter.create_histogram(
             name=Metric.TIME_PER_OUTPUT_TOKEN,
             description="Average time per output token (generation time / completion tokens)",
             unit="s",
+            explicit_bucket_boundaries_advisory=MetricBuckets.TIME_PER_OUTPUT_TOKEN,
         )
         self._response_duration_histogram = meter.create_histogram(
             name=Metric.RESPONSE_DURATION,
             description="Total LLM API generation time (excludes LiteLLM overhead)",
             unit="s",
+            explicit_bucket_boundaries_advisory=MetricBuckets.RESPONSE_DURATION,
         )
 
     def _init_logs(self, logger_provider):
