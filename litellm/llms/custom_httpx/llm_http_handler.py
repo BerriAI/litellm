@@ -6347,8 +6347,6 @@ class BaseLLMHTTPHandler:
                         await backend_ws.send(_session_config)
                         realtime_streaming.session_configuration_request = _session_config
 
-                # When no setup went upstream, optionally send a synthetic
-                # session.created to unblock clients waiting on connect.
                 if not _session_config:
                     synthetic_session: Final = provider_config.transform_session_created_event(
                         model=model,

@@ -214,7 +214,7 @@ class SonioxEventTransformer:
         return (speech_event("input_audio_buffer.speech_started", item_id),)
 
     def _current_item_id(self) -> str:
-        assert self._item_id is not None  # _start always runs before a delta is emitted
+        assert self._item_id is not None
         return self._item_id
 
     def _complete(self, *, speech_stopped: bool) -> tuple[OpenAIRealtimeEvents, ...]:
@@ -404,7 +404,7 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
     def _backend_events(self, payload: str) -> tuple[OpenAIRealtimeEvents, ...]:
         if payload != SESSION_STARTED_FRAME:
             return self._transformer.transform(payload)
-        assert self._start_request is not None  # the backend signals session start only after the start request
+        assert self._start_request is not None
         return (_session_created(self._session_id, self._start_request),)
 
     def _start(self, model: str, update: TranscriptionSessionUpdate | None) -> tuple[str, ...]:
