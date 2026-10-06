@@ -14,7 +14,7 @@ class OpenAIGPTAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         """
         Get the supported OpenAI params for the `gpt-4o-transcribe` models
         """
-        return [  # mutable-ok: base transcription interface requires a mutable supported-parameter list
+        return [
             "language",
             "prompt",
             "response_format",
@@ -56,7 +56,7 @@ class OpenAIGPTTranscribeAudioTranscriptionConfig(OpenAIGPTAudioTranscriptionCon
         optional_params: dict,  # mutable-ok: base transformation interface supplies a mutable request payload
         litellm_params: dict,  # mutable-ok: base transformation interface supplies mutable provider parameters
     ) -> AudioTranscriptionRequestData:
-        data: Final = {  # mutable-ok: OpenAI SDK consumes this multipart request mapping
+        data: Final = {
             "model": model,
             "file": audio_file,
             "response_format": "json",

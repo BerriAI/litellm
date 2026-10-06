@@ -72,13 +72,7 @@ class _TranscriptionEventCollector:
         response: Final = TranscriptionResponse(
             text=done_event.text if done_event is not None else "".join(self.text_deltas),
             usage=done_event.usage.model_dump() if done_event is not None and done_event.usage is not None else None,
-            languages=(
-                [  # mutable-ok: the response model requires a concrete serialized language list
-                    language.model_dump() for language in done_languages
-                ]
-                if done_languages is not None
-                else None
-            ),
+            languages=([language.model_dump() for language in done_languages] if done_languages is not None else None),
         )
         if self.duration is not None:
             response.set_audio_transcription_duration(self.duration)
