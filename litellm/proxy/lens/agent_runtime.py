@@ -11,10 +11,11 @@ from .activity import ActivityTracker, observe_operation, observed_model
 from .agent_context import compact_context
 from .agent_workspace import EvidenceReadError, EvidenceRequest, EvidenceWorkspace, PythonRequest
 from .analysis import AnalysisContextExceeded, AnalysisResponseError, ModelCall, structured_response_with_history
-from .models import Claim, ModelMessage, ModelRequest, Record, TracePart
+from .models import Claim, Finding, ModelMessage, ModelRequest, Record, TracePart
 from .python_tool import execute_python
 
 ResponseT: Final = TypeVar("ResponseT", bound=Record)
+MAX_RESULT_RETRIES: Final = 3
 
 
 class AgentTurn(Record, Generic[ResponseT]):
@@ -32,11 +33,13 @@ class PythonAgentTurn(Record, Generic[ResponseT]):
 class DialogueTurn(Record):
     response: str
     tool_results: tuple[str, ...]
+    validation_error: str = ""
 
 
 class InitialContext(Record):
     evidence: tuple[TracePart, ...]
     supplied: str
+    existing_findings: tuple[Finding, ...] = ()
 
 
 class JournalReply(Record):
@@ -118,15 +121,14 @@ async def run_agent(
     enable_python: bool = False,
     activity: ActivityTracker | None = None,
 ) -> ResponseT:
-    initial: Final = InitialContext(evidence=initial_evidence, supplied=supplied)
+    initial: Final = InitialContext(evidence=initial_evidence, supplied=supplied, existing_findings=claim.findings)
     journal: tuple[DialogueTurn, ...] = ()  # rebind-ok: preserve every turn even when active context is replaced
     response_schema: Final = PythonAgentTurn[schema] if enable_python else AgentTurn[schema]
 
-    async def valid_turn(turn: AgentTurn[ResponseT] | PythonAgentTurn[ResponseT]) -> str | None:
+    def valid_turn(turn: AgentTurn[ResponseT] | PythonAgentTurn[ResponseT]) -> str | None:
         if bool(turn.tools or turn.checkpoint) == (turn.result is not None):
             return "Return tools and/or a checkpoint with result=null, or a final result without tools or checkpoint."
-        validation: Final = validate(turn.result) if turn.result is not None else None
-        return await validation if isawaitable(validation) else validation
+        return None
 
     async def tool_result(request: EvidenceRequest | PythonRequest) -> str:
         if isinstance(request, PythonRequest):
@@ -156,6 +158,11 @@ async def run_agent(
         {
             "stage": stage,
             "task": task,
+            "response_instructions": (
+                "Return one JSON object matching response_schema. To continue, use tools and/or checkpoint "
+                "with result=null. To finish, put the complete final output inside result, with tools=[] and "
+                "checkpoint=null. Final-output fields belong inside result, never at the top level."
+            ),
             "tool_instructions": (
                 "Tools remain available throughout the task. Read retrieves complete original spans or sessions. "
                 "When initial_evidence is present, it already contains the complete stored original content of "
@@ -175,13 +182,18 @@ async def run_agent(
                 "To replace active context, return checkpoint with your complete replacement working notes. "
                 "This archives the current dialogue and initial material rather than carrying it into the next "
                 "prompt. Preserve reviewer coverage, unresolved causes, evidence references, counterexamples, "
-                "and next steps in your notes. Checkpoint when useful; no read, batch, or output quota applies. "
+                "existing finding IDs, statuses and feedback, and next steps in your notes. "
+                "Checkpoint when useful; no read, batch, or output quota applies. "
                 "History retrieves the full journal or an agent-chosen turn_start:turn_end range, zero-based with "
                 "exclusive end. char_start/char_end can read any serialized history reply in pieces; "
                 "turn_end=0 lists turn character sizes. Set include_initial=true to reread initial evidence and supplied "
                 "material. Earlier history retrievals appear in the journal as stable history_reference records; "
                 "issue the included request to resolve their original turn range. Original tool responses remain "
                 "recorded in full. Nothing is deleted by checkpointing, and all original evidence remains readable. "
+                "After automatic compaction, resume review of archived turns from resume_history_from_turn; "
+                "their tool results may not have been read. Use working_notes to avoid repeating completed reads. "
+                "If initial_context_archived is true, retrieve history with include_initial=true to recover the "
+                "original assignment and existing findings. "
                 "An assigned session is your responsibility, not a restriction on evidence access. "
                 "Parent_span_id preserves subagent hierarchy; span ID order is not chronology. Span start_time "
                 "and end_time are recorded UTC timestamps at source precision; empty means unknown. Use these "
@@ -210,7 +222,6 @@ async def run_agent(
             ),
             "context": claim.job.settings.context,
             "checks": tuple(check.model_dump() for check in claim.job.settings.analysis_checks),
-            "existing_findings": tuple(finding.model_dump(mode="json") for finding in claim.findings),
             "catalog_fields": ("span_id", "parent_span_id", "name", "kind", "characters", "start_time", "end_time"),
             "available_sessions": len(workspace.sessions),
             "available_review_records": len(workspace.reviews),
@@ -218,7 +229,7 @@ async def run_agent(
         },
         ensure_ascii=False,
     )
-    task_message: Final = ModelMessage(role="user", content=prompt)
+    task_message: Final = ModelMessage(role="system", content=prompt)
     messages: tuple[ModelMessage, ...] = (  # rebind-ok: append turns unless the agent explicitly checkpoints
         task_message,
         ModelMessage(
@@ -227,6 +238,9 @@ async def run_agent(
                 {
                     "initial_evidence": tuple(part.model_dump() for part in initial.evidence),
                     "supplied": initial.supplied,
+                    "existing_findings": tuple(
+                        finding.model_dump(mode="json") for finding in initial.existing_findings
+                    ),
                 },
                 ensure_ascii=False,
             ),
@@ -250,7 +264,37 @@ async def run_agent(
             continue
         just_compacted = False
         if response.result is not None:
-            return response.result
+            validation: str | None | Awaitable[str | None] = validate(response.result)
+            invalid: str | None = await validation if isawaitable(validation) else validation
+            if not invalid:
+                return response.result
+            journal = (
+                *journal,
+                DialogueTurn(response=responded[-1].content, tool_results=(), validation_error=invalid),
+            )
+            if sum(bool(turn.validation_error) for turn in journal) > MAX_RESULT_RETRIES:
+                raise AnalysisResponseError(f"Result validation failed after {MAX_RESULT_RETRIES} retries.\n{invalid}")
+            messages = (
+                *responded,
+                ModelMessage(role="user", content=json.dumps({"journal_turns": len(journal)})),
+                ModelMessage(
+                    role="system",
+                    content=json.dumps(
+                        {
+                            "instruction": (
+                                "The submitted result was not accepted. Correct the validation errors using original "
+                                "evidence. Tools remain available to inspect the source before resubmitting. "
+                                "Verify each quote belongs to its cited execution and span. "
+                                "Remove or qualify claims the evidence cannot support. "
+                                "Continue using the task's response_schema."
+                            ),
+                            "validation_errors": invalid,
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            continue
         completed_turn: DialogueTurn = DialogueTurn(
             response=responded[-1].content,
             tool_results=await parallel_tools(tuple(respond(request) for request in response.tools)),
@@ -271,7 +315,10 @@ async def run_agent(
                 (
                     task_message,
                     ModelMessage(
-                        role="user", content=json.dumps({"working_notes": response.checkpoint}, ensure_ascii=False)
+                        role="user",
+                        content=json.dumps(
+                            {"working_notes": response.checkpoint, "initial_context_archived": True}, ensure_ascii=False
+                        ),
                     ),
                     responded[-1],
                 )
