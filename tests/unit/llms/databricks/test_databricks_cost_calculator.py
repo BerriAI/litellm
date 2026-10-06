@@ -69,6 +69,9 @@ PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-gpt-5-4-mini": ("10.714", "64.286", "10.714", "1.071"),
     "databricks/databricks-gpt-5-4-nano": ("2.857", "17.857", "2.857", "0.286"),
     "databricks/databricks-gemini-3-6-flash": ("26.786", "133.929", "26.786", "2.679"),
+    # Rows below: https://www.databricks.com/product/pricing/proprietary-foundation-model-serving as of 2026-10-06.
+    # The two Flash rows are the 50% promotional DBU rate Databricks lists through 2026-12-31; the image rows
+    # publish no cache rate, so cache fields repeat the input rate.
     "databricks/databricks-gemini-3-8-flash": ("10.714", "53.571", "10.714", "1.071"),
     "databricks/databricks-gemini-3-7-flash": ("10.714", "53.571", "10.714", "1.071"),
     "databricks/databricks-gemini-3-pro-image": ("35.714", "2142.86", "35.714", "35.714"),
@@ -314,6 +317,8 @@ def test_newly_published_gemini_rows_bill_at_their_dbu_rate(local_model_cost_map
 
 
 def test_gemini_flash_promotional_dbu_rate_matches_google_list_price(local_model_cost_map: None) -> None:
+    # Databricks' promotional Flash DBU rate (10.714 / 53.571 / 1.071 per 1M, pricing page as of 2026-10-06)
+    # equals Google's list price for gemini-3.8-flash (https://ai.google.dev/gemini-api/docs/pricing, same date).
     databricks: Final = _model_info("databricks/databricks-gemini-3-8-flash")
     google: Final = litellm.model_cost["gemini/gemini-3.8-flash"]
 
