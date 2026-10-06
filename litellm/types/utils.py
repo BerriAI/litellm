@@ -1983,7 +1983,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
 
-        if cost is not None:
+        if isinstance(cost, (int, float)):
             self.cost = cost
         else:
             del self.cost
