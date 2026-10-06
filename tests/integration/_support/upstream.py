@@ -593,7 +593,13 @@ def main() -> None:
     parser: Final = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8190)
     arguments: Final = parser.parse_args()
-    uvicorn.run(Provider().app(), host="127.0.0.1", port=cast(int, arguments.port), access_log=False)
+    uvicorn.run(
+        Provider().app(),
+        host="127.0.0.1",
+        port=cast(int, arguments.port),
+        access_log=False,
+        timeout_keep_alive=125,
+    )
 
 
 if __name__ == "__main__":
