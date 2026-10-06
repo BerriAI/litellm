@@ -346,14 +346,15 @@ export function buildConversation(
       for (const result of unexecutedToolResults(details.get(span.span_id)!)) {
         if (attempts.has(result.id)) continue;
         attempts.add(result.id);
-        items.push({
+        const attempt: ConversationItem = {
           id: `${span.span_id}-${result.id}`,
           span,
           messages: [],
           toolCall: { name: "Tool attempt", args: { tool_call_id: result.id } },
           toolAttempt: { isError: result.isError, resultStatus: "recorded" },
           toolResult: result.content,
-        });
+        };
+        items.push(attempt);
       }
       continue;
     }

@@ -306,12 +306,11 @@ function ConversationTool({ item, onOpenStep }: { item: ConversationItem; onOpen
   const executionStatus = failed ? "Failed" : "Completed";
   const [open, setOpen] = useState(failed);
   const name = item.toolCall?.name ?? item.span.name;
-  const attemptStatus =
-    item.toolAttempt?.resultStatus === "recorded"
-      ? "Result recorded"
-      : item.toolAttempt?.resultStatus === "conflicting"
-        ? "Conflicting results"
-        : "Result not recorded";
+  const attemptStatus = {
+    recorded: "Result recorded",
+    conflicting: "Conflicting results",
+    not_recorded: "Result not recorded",
+  }[item.toolAttempt?.resultStatus ?? "not_recorded"];
   const summary = toolSummary(item.toolCall?.args);
   return (
     <div className={cn("min-w-0 overflow-hidden rounded-md border", failed && "border-destructive/40")}>
