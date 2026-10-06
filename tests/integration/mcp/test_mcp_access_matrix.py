@@ -3,6 +3,8 @@ import re
 import textwrap
 import uuid
 from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal
 
@@ -310,8 +312,13 @@ def test_rest_call_by_alias_or_server_name_reaches_only_the_granted_server(gatew
         ), response.text
         _single_tools_call(granted_peer, "lookup", arguments)
         refused: Final = _rest_call(gateway, key, sibling_names[spelling], "lookup", arguments)
-        assert refused.status_code in (403, 404), refused.text
-        assert granted not in refused.text, refused.text
+        assert refused.status_code == 403, refused.text
+        assert refused.json() == {
+            "detail": {
+                "error": "access_denied",
+                "message": f"The key is not allowed to access server {sibling_names[spelling]}",
+            }
+        }, refused.text
         assert tool_calls(sibling_peer.drain()) == (), "an ungranted server's name reached its peer"
         assert tool_calls(granted_peer.drain()) == (), "an ungranted name resolved to the granted sibling"
 
@@ -512,17 +519,27 @@ def _served_pairs(response: httpx.Response) -> set[tuple[str, str]]:
     }
 
 
-def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_public_widens_them(
-    gateway: Gateway, tmp_path: Path
-) -> None:
+@dataclass(frozen=True, slots=True)
+class _ForwardedIpRig:
+    candidate: Gateway
+    public: str
+    internal: str
+    key: str
+    public_peer: McpPeer
+    internal_peer: McpPeer
+
+
+@contextmanager
+def _forwarded_ip_rig(
+    gateway: Gateway, tmp_path: Path, settings: Mapping[str, JsonValue]
+) -> Iterator[_ForwardedIpRig]:
     config: Final = JSON_OBJECT.validate_python(
         yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
     )
     config["general_settings"] = {
         **object_value(config["general_settings"]),
         "use_x_forwarded_for": True,
-        "mcp_trusted_proxy_ranges": ["127.0.0.1/32"],
-        "mcp_internal_ip_ranges": ["10.0.0.0/8"],
+        **settings,
     }
     path: Final = tmp_path / "forwarded_ip.yaml"
     path.write_text(yaml.safe_dump(config))
@@ -533,16 +550,10 @@ def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_
         owned_proxy(
             gateway,
             tmp_path,
-            {"DATABASE_URL": database_url},
+            {"DATABASE_URL": database_url, "FORWARDED_ALLOW_IPS": "192.0.2.1"},
             config=path,
             remove_environment=("DATABASE_URL_READ_REPLICA",),
         ) as candidate,
-        httpx.Client(
-            base_url=str(candidate.client.base_url),
-            transport=httpx.HTTPTransport(local_address="127.0.0.2"),
-            timeout=15,
-            trust_env=False,
-        ) as untrusted,
     ):
         suffix: Final = uuid.uuid4().hex[:8]
         public: Final = _created_server(
@@ -565,60 +576,200 @@ def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_
         key: Final = string_value(
             candidate.post("/key/generate", {"object_permission": {"mcp_servers": [public, internal]}})["key"]
         )
-        tools: Final = ("add", "fail", "multiply")
-        both: Final = {(server, tool) for server in (public, internal) for tool in tools}
-        public_only: Final = {(public, tool) for tool in tools}
+        yield _ForwardedIpRig(candidate, public, internal, key, public_peer, internal_peer)
+
+
+def _forwarded_ip_headers(key: str, forwarded: str) -> dict[str, str]:
+    return {"x-litellm-api-key": key, "x-forwarded-for": forwarded}
+
+
+def _forwarded_ip_listing(
+    client: httpx.Client, key: str, forwarded: str, server_id: str | None = None
+) -> httpx.Response:
+    return client.get(
+        "/mcp-rest/tools/list",
+        headers=_forwarded_ip_headers(key, forwarded),
+        params={"server_id": server_id} if server_id else None,
+    )
+
+
+def _forwarded_ip_call(client: httpx.Client, key: str, forwarded: str, server_id: str) -> httpx.Response:
+    return client.post(
+        "/mcp-rest/tools/call",
+        headers=_forwarded_ip_headers(key, forwarded),
+        json={"server_id": server_id, "name": "add", "arguments": CALLABLE["add"]},
+    )
+
+
+def _assert_external_view(
+    client: httpx.Client,
+    key: str,
+    forwarded: str,
+    client_ip: str,
+    public: str,
+    internal: str,
+    public_peer: McpPeer,
+    internal_peer: McpPeer,
+) -> None:
+    tools: Final = ("add", "fail", "multiply")
+    public_only: Final = {(public, tool) for tool in tools}
+    listed: Final = _forwarded_ip_listing(client, key, forwarded)
+    assert _served_pairs(listed) == public_only, listed.text
+    scoped: Final = _forwarded_ip_listing(client, key, forwarded, internal)
+    assert scoped.status_code == 403, scoped.text
+    assert scoped.json() == {"detail": _ip_filtering_detail(internal, client_ip)}, scoped.text
+    internal_peer.drain()
+    refused: Final = _forwarded_ip_call(client, key, forwarded, internal)
+    assert refused.status_code == 403, refused.text
+    assert refused.json() == {"detail": _ip_filtering_detail(internal, client_ip)}, refused.text
+    assert tool_calls(internal_peer.drain()) == (), "an external caller reached an internal-only server"
+    public_peer.drain()
+    served: Final = _forwarded_ip_call(client, key, forwarded, public)
+    assert served.status_code == 200 and served.json()["content"][0]["text"] == RESULTS["add"], served.text
+    assert _called_names(public_peer) == ["add"], "the public server did not receive exactly one add call"
+
+
+def _assert_internal_view(
+    client: httpx.Client,
+    key: str,
+    forwarded: str,
+    public: str,
+    internal: str,
+    public_peer: McpPeer,
+    internal_peer: McpPeer,
+) -> None:
+    tools: Final = ("add", "fail", "multiply")
+    both: Final = {(server, tool) for server in (public, internal) for tool in tools}
+    listed: Final = _forwarded_ip_listing(client, key, forwarded)
+    assert _served_pairs(listed) == both, listed.text
+    public_peer.drain()
+    internal_peer.drain()
+    reached: Final = _forwarded_ip_call(client, key, forwarded, internal)
+    assert reached.status_code == 200 and reached.json()["content"][0]["text"] == RESULTS["add"], reached.text
+    assert _called_names(internal_peer) == ["add"], "the internal caller did not reach the internal server once"
+    assert tool_calls(public_peer.drain()) == (), "the internal call reached the public server"
+
+
+def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_public_widens_them(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    settings: Final = {
+        "mcp_trusted_proxy_ranges": ["127.0.0.1/32"],
+        "mcp_internal_ip_ranges": ["10.0.0.0/8"],
+    }
+    with (
+        _forwarded_ip_rig(gateway, tmp_path, settings) as rig,
+        httpx.Client(
+            base_url=str(rig.candidate.client.base_url),
+            transport=httpx.HTTPTransport(local_address="127.0.0.2"),
+            timeout=15,
+            trust_env=False,
+        ) as untrusted,
+    ):
         external: Final = "203.0.113.7"
+        _assert_internal_view(
+            rig.candidate.client, rig.key, "10.1.2.3", rig.public, rig.internal, rig.public_peer, rig.internal_peer
+        )
+        _assert_external_view(
+            rig.candidate.client,
+            rig.key,
+            external,
+            external,
+            rig.public,
+            rig.internal,
+            rig.public_peer,
+            rig.internal_peer,
+        )
+        _assert_external_view(
+            untrusted,
+            rig.key,
+            "10.1.2.3",
+            "127.0.0.2",
+            rig.public,
+            rig.internal,
+            rig.public_peer,
+            rig.internal_peer,
+        )
+        _assert_external_view(
+            rig.candidate.client,
+            rig.key,
+            "203.0.113.7, 10.0.0.1",
+            "203.0.113.7, 10.0.0.1",
+            rig.public,
+            rig.internal,
+            rig.public_peer,
+            rig.internal_peer,
+        )
+        _assert_internal_view(
+            rig.candidate.client,
+            rig.key,
+            "10.1.2.3, 10.0.0.1",
+            rig.public,
+            rig.internal,
+            rig.public_peer,
+            rig.internal_peer,
+        )
 
-        def headers(forwarded: str) -> dict[str, str]:
-            return {"x-litellm-api-key": key, "x-forwarded-for": forwarded}
-
-        def listing(client: httpx.Client, forwarded: str, server_id: str | None = None) -> httpx.Response:
-            return client.get(
-                "/mcp-rest/tools/list",
-                headers=headers(forwarded),
-                params={"server_id": server_id} if server_id else None,
-            )
-
-        def call(client: httpx.Client, forwarded: str, server_id: str) -> httpx.Response:
-            return client.post(
-                "/mcp-rest/tools/call",
-                headers=headers(forwarded),
-                json={"server_id": server_id, "name": "add", "arguments": CALLABLE["add"]},
-            )
-
-        def assert_external_view(client: httpx.Client, forwarded: str, client_ip: str) -> None:
-            listed: Final = listing(client, forwarded)
-            assert _served_pairs(listed) == public_only, listed.text
-            scoped: Final = listing(client, forwarded, internal)
-            assert scoped.status_code == 403, scoped.text
-            assert scoped.json() == {"detail": _ip_filtering_detail(internal, client_ip)}, scoped.text
-            internal_peer.drain()
-            refused: Final = call(client, forwarded, internal)
-            assert refused.status_code == 403, refused.text
-            assert refused.json() == {"detail": _ip_filtering_detail(internal, client_ip)}, refused.text
-            assert tool_calls(internal_peer.drain()) == (), "an external caller reached an internal-only server"
-            public_peer.drain()
-            served: Final = call(client, forwarded, public)
-            assert served.status_code == 200 and served.json()["content"][0]["text"] == RESULTS["add"], served.text
-            assert _called_names(public_peer) == ["add"], "the public server did not receive exactly one add call"
-
-        internal_view: Final = listing(candidate.client, "10.1.2.3")
-        assert _served_pairs(internal_view) == both, internal_view.text
-        internal_peer.drain()
-        reached: Final = call(candidate.client, "10.1.2.3", internal)
-        assert reached.status_code == 200 and reached.json()["content"][0]["text"] == RESULTS["add"], reached.text
-        assert _called_names(internal_peer) == ["add"], "the internal caller did not reach the internal server once"
-
-        assert_external_view(candidate.client, external, external)
-        assert_external_view(untrusted, "10.1.2.3", "127.0.0.2")
-
-        published: Final = candidate.request("POST", "/v1/mcp/make_public", {"mcp_server_ids": [internal]})
+        published: Final = rig.candidate.request(
+            "POST", "/v1/mcp/make_public", {"mcp_server_ids": [rig.internal]}
+        )
         assert published.status_code == 202, published.text
-        assert published.json()["public_mcp_servers"] == [internal], published.text
-        widened_view: Final = listing(candidate.client, external)
+        assert published.json()["public_mcp_servers"] == [rig.internal], published.text
+        widened_view: Final = _forwarded_ip_listing(rig.candidate.client, rig.key, external)
+        tools: Final = ("add", "fail", "multiply")
+        both: Final = {(server, tool) for server in (rig.public, rig.internal) for tool in tools}
         assert _served_pairs(widened_view) == both, widened_view.text
-        internal_peer.drain()
-        widened: Final = call(candidate.client, external, internal)
+        rig.internal_peer.drain()
+        widened: Final = _forwarded_ip_call(rig.candidate.client, rig.key, external, rig.internal)
         assert widened.status_code == 200 and widened.json()["content"][0]["text"] == RESULTS["add"], widened.text
-        assert _called_names(internal_peer) == ["add"], "make_public did not let the external caller reach it once"
+        assert _called_names(rig.internal_peer) == ["add"], "make_public did not let the external caller reach it once"
+
+
+def test_trusted_hop_count_takes_the_client_from_a_load_balancer_chain_and_ignores_prepended_spoofs(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    settings: Final = {
+        "mcp_trusted_proxy_ranges": ["127.0.0.1/32"],
+        "mcp_internal_ip_ranges": ["10.0.0.0/8"],
+        "mcp_xff_num_trusted_hops": 2,
+    }
+    with _forwarded_ip_rig(gateway, tmp_path, settings) as rig:
+        _assert_external_view(
+            rig.candidate.client,
+            rig.key,
+            "203.0.113.7, 10.0.0.1",
+            "203.0.113.7",
+            rig.public,
+            rig.internal,
+            rig.public_peer,
+            rig.internal_peer,
+        )
+        _assert_external_view(
+            rig.candidate.client,
+            rig.key,
+            "10.1.2.3, 203.0.113.7, 10.0.0.1",
+            "203.0.113.7",
+            rig.public,
+            rig.internal,
+            rig.public_peer,
+            rig.internal_peer,
+        )
+        _assert_internal_view(
+            rig.candidate.client,
+            rig.key,
+            "10.1.2.3, 10.0.0.1",
+            rig.public,
+            rig.internal,
+            rig.public_peer,
+            rig.internal_peer,
+        )
+        _assert_external_view(
+            rig.candidate.client,
+            rig.key,
+            "203.0.113.7",
+            "",
+            rig.public,
+            rig.internal,
+            rig.public_peer,
+            rig.internal_peer,
+        )
