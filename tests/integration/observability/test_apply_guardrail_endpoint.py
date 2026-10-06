@@ -6,7 +6,7 @@ from typing import Final
 
 import httpx
 import yaml
-from integration._support.client import Gateway
+from integration._support.client import Gateway, string_value
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
@@ -167,6 +167,65 @@ def test_apply_guardrail_returns_a_block_error_for_generic_guardrails(gateway: G
         ]
         request: Final = requests[0]
         _assert_guardrail_request(request, _BLOCKED_TEXT, response)
+
+
+def test_apply_guardrail_forwards_messages_to_the_guardrail(gateway: Gateway) -> None:
+    def allow(_request: Request) -> Reply:
+        return Reply(body=json.dumps({"data": {"guardrailsResult": {"Allowed": True, "Reason": ""}}}).encode())
+
+    text: Final = f"akto apply text {uuid.uuid4().hex}"
+    messages: Final = [
+        {"role": "system", "content": "akto system prompt"},
+        {"role": "user", "content": "akto user content different from the text field"},
+    ]
+    with wire_server(allow) as akto, gateway.scenario() as scenario:
+        name: Final = _create_guardrail(
+            gateway,
+            scenario.cleanups,
+            f"akto-apply-{uuid.uuid4().hex}",
+            {
+                "guardrail": "akto",
+                "mode": "pre_call",
+                "default_on": False,
+                "akto_base_url": akto.url,
+                "akto_api_key": "synthetic-akto-apply-key",
+            },
+        )
+        with_messages: Final = gateway.request(
+            "POST",
+            "/guardrails/apply_guardrail",
+            {"guardrail_name": name, "text": text, "messages": messages},
+        )
+        assert with_messages.status_code == 200, with_messages.text
+        assert _ApplyResponse.model_validate_json(with_messages.content).model_dump() == {"response_text": text}, (
+            with_messages.text
+        )
+        without_messages: Final = gateway.request(
+            "POST",
+            "/guardrails/apply_guardrail",
+            {"guardrail_name": name, "text": text},
+        )
+        assert without_messages.status_code == 200, without_messages.text
+        assert _ApplyResponse.model_validate_json(without_messages.content).model_dump() == {"response_text": text}, (
+            without_messages.text
+        )
+
+        requests: Final = akto.drain()
+        assert [(request.method, request.target) for request in requests] == [
+            ("POST", "/api/http-proxy?akto_connector=litellm&guardrails=true"),
+            ("POST", "/api/http-proxy?akto_connector=litellm&guardrails=true"),
+        ]
+        assert [request.headers["authorization"] for request in requests] == ["synthetic-akto-apply-key"] * 2
+        bodies: Final = tuple(
+            _JSON_OBJECT.validate_json(
+                string_value(
+                    json.loads(string_value(_JSON_OBJECT.validate_json(request.body)["requestPayload"]))["body"]
+                )
+            )
+            for request in requests
+        )
+        assert bodies[0]["messages"] == messages, bodies[0]
+        assert bodies[1]["messages"] == [{"role": "user", "content": text}], bodies[1]
 
 
 def test_apply_guardrail_forwards_metadata_to_custom_code(

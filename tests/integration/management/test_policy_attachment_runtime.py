@@ -10,7 +10,7 @@ from integration._support.client import Gateway, Scenario, object_value, string_
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, wire_server
 from openai import OpenAI
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _MASKED: Final = "masked integration prompt"
@@ -644,3 +644,254 @@ def test_request_published_policy_version_id_resolves_after_force_sync(gateway: 
         provider_requests: Final = provider.drain()
         assert [(request.method, request.target) for request in provider_requests] == [("POST", "/v1/chat/completions")]
         _assert_provider_request(provider_requests[0], _MASKED_SECOND)
+
+
+class _ChatErrorBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str
+    type: str | None
+    param: str | None
+    code: JsonValue
+
+
+class _ChatError(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    error: _ChatErrorBody
+
+
+def test_policy_attachment_with_a_blocking_guardrail_stops_the_request_before_the_provider(
+    gateway: Gateway,
+) -> None:
+    blocked_reason: Final = f"policy attachment blocked {uuid.uuid4().hex}"
+    with (
+        wire_server(lambda _request: Reply(body=json.dumps(_PROVIDER_RESPONSE).encode())) as provider,
+        wire_server(
+            lambda _request: Reply(body=json.dumps({"action": "BLOCKED", "blocked_reason": blocked_reason}).encode())
+        ) as guardrail,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        other_model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        key: Final = scenario.key(models=[model, other_model])
+        prefix: Final = f"attachment-{uuid.uuid4().hex}"
+        guardrail_name: Final = _create_guardrail(
+            gateway,
+            scenario.cleanups,
+            f"guardrail-{prefix}",
+            f"{guardrail.url}/beta/litellm_basic_guardrail_api",
+            "synthetic-guardrail-key",
+        )
+        policy_name: Final = f"policy-{prefix}"
+        _create_policy(gateway, scenario.cleanups, policy_name, guardrail_name)
+        attachment: Final = gateway.request(
+            "POST", "/policies/attachments", {"policy_name": policy_name, "models": [model]}
+        )
+        assert attachment.status_code == 200, attachment.text
+        created_attachment: Final = _AttachmentResponse.model_validate_json(attachment.content)
+        scenario.cleanups.callback(_delete_attachment, gateway, created_attachment.attachment_id)
+
+        blocked: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": _PROMPT}]},
+            key=key,
+        )
+        assert blocked.status_code == 400, blocked.text
+        error: Final = _ChatError.model_validate_json(blocked.content)
+        assert error.model_dump() == {
+            "error": {
+                "message": blocked_reason,
+                "type": "invalid_request_error",
+                "param": None,
+                "code": "400",
+            }
+        }, blocked.text
+
+        allowed: Final = _chat(gateway, other_model, key, _PROMPT)
+        assert allowed.headers.get("x-litellm-applied-policies") is None, allowed.text
+
+        guardrail_requests: Final = guardrail.drain()
+        assert len(guardrail_requests) == 1
+        _assert_guardrail_request(guardrail_requests[0], _PROMPT, model, key, response=blocked)
+        provider_requests: Final = provider.drain()
+        assert [(request.method, request.target) for request in provider_requests] == [("POST", "/v1/chat/completions")]
+        _assert_provider_request(provider_requests[0], _PROMPT)
+
+
+def test_policy_attachment_tag_scope_matches_only_tagged_requests(gateway: Gateway) -> None:
+    with (
+        wire_server(lambda _request: Reply(body=json.dumps(_PROVIDER_RESPONSE).encode())) as provider,
+        wire_server(
+            lambda _request: Reply(body=b'{"action":"GUARDRAIL_INTERVENED","texts":["masked integration prompt"]}')
+        ) as guardrail,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        key: Final = scenario.key(models=[model])
+        prefix: Final = f"attachment-{uuid.uuid4().hex}"
+        guardrail_name: Final = _create_guardrail(
+            gateway,
+            scenario.cleanups,
+            f"guardrail-{prefix}",
+            f"{guardrail.url}/beta/litellm_basic_guardrail_api",
+            "synthetic-guardrail-key",
+        )
+        policy_name: Final = f"policy-{prefix}"
+        _create_policy(gateway, scenario.cleanups, policy_name, guardrail_name)
+        attachment: Final = gateway.request(
+            "POST", "/policies/attachments", {"policy_name": policy_name, "tags": [f"{prefix}-*"]}
+        )
+        assert attachment.status_code == 200, attachment.text
+        created_attachment: Final = _AttachmentResponse.model_validate_json(attachment.content)
+        scenario.cleanups.callback(_delete_attachment, gateway, created_attachment.attachment_id)
+        expected_scope: Final = {
+            "attachment_id": created_attachment.attachment_id,
+            "policy_name": policy_name,
+            "scope": None,
+            "teams": [],
+            "keys": [],
+            "models": [],
+            "tags": [f"{prefix}-*"],
+            "priority": None,
+            "default": False,
+        }
+        assert created_attachment.model_dump() == expected_scope, attachment.text
+        readback: Final = gateway.request("GET", f"/policies/attachments/{created_attachment.attachment_id}")
+        assert readback.status_code == 200, readback.text
+        assert _AttachmentResponse.model_validate_json(readback.content).model_dump() == expected_scope, readback.text
+        rows: Final = read_rows(
+            'SELECT policy_name, tags, is_default FROM "LiteLLM_PolicyAttachmentTable" WHERE attachment_id=%s',
+            (created_attachment.attachment_id,),
+        )
+        assert rows == [{"policy_name": policy_name, "tags": [f"{prefix}-*"], "is_default": False}]
+
+        tagged: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": _PROMPT}],
+                "metadata": {"tags": [f"{prefix}-prod"]},
+            },
+            key=key,
+        )
+        assert tagged.status_code == 200, tagged.text
+        _ChatResponse.model_validate_json(tagged.content)
+        assert tagged.headers.get("x-litellm-applied-policies") == policy_name, tagged.text
+        untagged: Final = _chat(gateway, model, key, _PROMPT)
+        assert untagged.headers.get("x-litellm-applied-policies") is None, untagged.text
+
+        guardrail_requests: Final = guardrail.drain()
+        assert len(guardrail_requests) == 1
+        _assert_guardrail_request(guardrail_requests[0], _PROMPT, model, key, response=tagged)
+        provider_requests: Final = provider.drain()
+        assert [(request.method, request.target) for request in provider_requests] == [
+            ("POST", "/v1/chat/completions"),
+            ("POST", "/v1/chat/completions"),
+        ]
+        _assert_provider_request(provider_requests[0], _MASKED)
+        _assert_provider_request(provider_requests[1], _PROMPT)
+
+
+def test_default_policy_attachment_applies_only_when_no_other_attachment_matches(gateway: Gateway) -> None:
+    with (
+        wire_server(lambda _request: Reply(body=json.dumps(_PROVIDER_RESPONSE).encode())) as provider,
+        wire_server(
+            lambda _request: Reply(body=b'{"action":"GUARDRAIL_INTERVENED","texts":["masked default policy prompt"]}')
+        ) as default_guardrail,
+        wire_server(
+            lambda _request: Reply(body=b'{"action":"GUARDRAIL_INTERVENED","texts":["masked scoped policy prompt"]}')
+        ) as scoped_guardrail,
+        gateway.scenario() as scenario,
+    ):
+        first_model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        second_model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        key: Final = scenario.key(models=[first_model, second_model])
+        prefix: Final = f"attachment-{uuid.uuid4().hex}"
+        default_guardrail_name: Final = _create_guardrail(
+            gateway,
+            scenario.cleanups,
+            f"guardrail-default-{prefix}",
+            f"{default_guardrail.url}/beta/litellm_basic_guardrail_api",
+            "synthetic-guardrail-key",
+        )
+        scoped_guardrail_name: Final = _create_guardrail(
+            gateway,
+            scenario.cleanups,
+            f"guardrail-scoped-{prefix}",
+            f"{scoped_guardrail.url}/beta/litellm_basic_guardrail_api",
+            "synthetic-guardrail-key",
+        )
+        default_policy: Final = f"policy-default-{prefix}"
+        _create_policy(gateway, scenario.cleanups, default_policy, default_guardrail_name)
+        scoped_policy: Final = f"policy-scoped-{prefix}"
+        _create_policy(gateway, scenario.cleanups, scoped_policy, scoped_guardrail_name)
+
+        default_attachment: Final = gateway.request(
+            "POST",
+            "/policies/attachments",
+            {"policy_name": default_policy, "scope": "*", "default": True},
+        )
+        assert default_attachment.status_code == 200, default_attachment.text
+        created_default: Final = _AttachmentResponse.model_validate_json(default_attachment.content)
+        scenario.cleanups.callback(_delete_attachment, gateway, created_default.attachment_id)
+        assert created_default.model_dump() == {
+            "attachment_id": created_default.attachment_id,
+            "policy_name": default_policy,
+            "scope": "*",
+            "teams": [],
+            "keys": [],
+            "models": [],
+            "tags": [],
+            "priority": None,
+            "default": True,
+        }, default_attachment.text
+        scoped_attachment: Final = gateway.request(
+            "POST",
+            "/policies/attachments",
+            {"policy_name": scoped_policy, "models": [second_model]},
+        )
+        assert scoped_attachment.status_code == 200, scoped_attachment.text
+        created_scoped: Final = _AttachmentResponse.model_validate_json(scoped_attachment.content)
+        scenario.cleanups.callback(_delete_attachment, gateway, created_scoped.attachment_id)
+        assert created_scoped.model_dump() == {
+            "attachment_id": created_scoped.attachment_id,
+            "policy_name": scoped_policy,
+            "scope": None,
+            "teams": [],
+            "keys": [],
+            "models": [second_model],
+            "tags": [],
+            "priority": None,
+            "default": False,
+        }, scoped_attachment.text
+        rows: Final = read_rows(
+            'SELECT policy_name, is_default FROM "LiteLLM_PolicyAttachmentTable" WHERE attachment_id=%s',
+            (created_default.attachment_id,),
+        )
+        assert rows == [{"policy_name": default_policy, "is_default": True}]
+
+        first_response: Final = _chat(gateway, first_model, key, _PROMPT)
+        assert first_response.headers.get("x-litellm-applied-policies") == default_policy, first_response.text
+        second_response: Final = _chat(gateway, second_model, key, _PROMPT)
+        assert second_response.headers.get("x-litellm-applied-policies") == scoped_policy, second_response.text
+
+        default_requests: Final = default_guardrail.drain()
+        assert [(request.method, request.target) for request in default_requests] == [
+            ("POST", "/beta/litellm_basic_guardrail_api")
+        ]
+        _assert_guardrail_request(default_requests[0], _PROMPT, first_model, key, response=first_response)
+        scoped_requests: Final = scoped_guardrail.drain()
+        assert [(request.method, request.target) for request in scoped_requests] == [
+            ("POST", "/beta/litellm_basic_guardrail_api")
+        ]
+        _assert_guardrail_request(scoped_requests[0], _PROMPT, second_model, key, response=second_response)
+        provider_requests: Final = provider.drain()
+        assert [(request.method, request.target) for request in provider_requests] == [
+            ("POST", "/v1/chat/completions"),
+            ("POST", "/v1/chat/completions"),
+        ]
+        _assert_provider_request(provider_requests[0], "masked default policy prompt")
+        _assert_provider_request(provider_requests[1], "masked scoped policy prompt")

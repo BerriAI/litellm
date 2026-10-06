@@ -147,6 +147,33 @@ def test_apply_guardrail_with_the_default_config_masks_every_detected_entity(
         assert len(presidio.anonymizer.drain()) == 1
 
 
+def test_apply_guardrail_forwards_documented_language_and_entities_to_presidio(gateway: Gateway) -> None:
+    pytest.skip("BUG: /guardrails/apply_guardrail drops the documented language and entities fields before Presidio")
+    with _presidio(gateway, "pre_call", None) as presidio:
+        text: Final = f"apply language contract {CARD} and {EMAIL}"
+        response: Final = gateway.request(
+            "POST",
+            "/guardrails/apply_guardrail",
+            {
+                "guardrail_name": presidio.name,
+                "text": text,
+                "language": "fr",
+                "entities": ["EMAIL_ADDRESS"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        masked: Final = string_value(response.json()["response_text"])
+        assert masked == f"apply language contract {CARD} and <EMAIL_ADDRESS>", masked
+        analyzer_requests: Final = presidio.analyzer.drain()
+        assert len(analyzer_requests) == 1
+        assert json.loads(analyzer_requests[0].body) == {
+            "text": text,
+            "language": "fr",
+            "entities": ["EMAIL_ADDRESS"],
+        }, analyzer_requests[0].body
+        assert len(presidio.anonymizer.drain()) == 1
+
+
 def test_apply_guardrail_aliases_accept_admin_auth(gateway: Gateway) -> None:
     with _presidio(gateway, "pre_call", None) as presidio:
         text: Final = f"alias contract {CARD} and {EMAIL}"
@@ -161,21 +188,29 @@ def test_apply_guardrail_aliases_accept_admin_auth(gateway: Gateway) -> None:
         assert presidio.anonymizer.drain() == ()
 
         admin_requests: Final = tuple(
-            gateway.client.post(path, json=body, headers={"Authorization": f"Bearer {gateway.key}"}) for path in paths
+            gateway.client.post(path, json=body, headers=headers)
+            for path, headers in (
+                (paths[0], {"Authorization": f"Bearer {gateway.key}"}),
+                (paths[1], {"Authorization": f"Bearer {gateway.key}"}),
+                (paths[0], {"x-litellm-api-key": gateway.key}),
+                (paths[1], {"x-litellm-api-key": gateway.key}),
+            )
+        )
+        assert tuple(response.status_code for response in admin_requests) == (200, 200, 200, 200), tuple(
+            response.text for response in admin_requests
         )
         for response in admin_requests:
-            assert response.status_code == 200, response.text
             assert _ApplyGuardrailResponse.model_validate_json(response.content).model_dump() == {
                 "response_text": "alias contract <CREDIT_CARD> and <EMAIL_ADDRESS>"
             }, response.text
 
         analyzer_requests: Final = presidio.analyzer.drain()
-        assert len(analyzer_requests) == 2
+        assert len(analyzer_requests) == 4
         assert all(request.method == "POST" and request.target == "/analyze" for request in analyzer_requests)
         assert len({request.body for request in analyzer_requests}) == 1
         assert json.loads(analyzer_requests[0].body) == {"text": text, "language": "en"}, analyzer_requests[0].body
         anonymizer_requests: Final = presidio.anonymizer.drain()
-        assert len(anonymizer_requests) == 2
+        assert len(anonymizer_requests) == 4
         assert all(request.method == "POST" and request.target == "/anonymize" for request in anonymizer_requests)
         assert len({request.body for request in anonymizer_requests}) == 1
         assert json.loads(anonymizer_requests[0].body) == {
