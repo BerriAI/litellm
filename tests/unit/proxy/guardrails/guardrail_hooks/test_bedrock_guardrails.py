@@ -33,6 +33,35 @@ from litellm.types.utils import CallTypes, ModelResponse
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
 
+def test_replay_original_streaming_text_reset_ignores_a_foreign_context():
+    import threading
+
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
+        _replay_original_streaming_text,
+    )
+
+    entered = threading.Event()
+    release = threading.Event()
+    holder: dict[str, object] = {}
+
+    def _enter() -> None:
+        manager = _replay_original_streaming_text()
+        manager.__enter__()
+        holder["manager"] = manager
+        entered.set()
+        release.wait(2)
+
+    worker = threading.Thread(target=_enter)
+    worker.start()
+    assert entered.wait(2)
+    manager = holder["manager"]
+    assert hasattr(manager, "__exit__")
+    manager.__exit__(None, None, None)
+    release.set()
+    worker.join(2)
+    assert not worker.is_alive()
+
+
 @pytest.mark.asyncio
 async def test__redact_pii_matches_function():
     """Test the _redact_pii_matches function directly"""
@@ -1152,26 +1181,6 @@ async def test_bedrock_apply_guardrail_response_uses_OUTPUT_source():
         assert synthetic.choices[0].message.role == "assistant"
         assert synthetic.choices[1].message.content == "second line"
         assert synthetic.choices[1].message.role == "assistant"
-
-
-@pytest.mark.asyncio
-async def test_apply_guardrail_response_scans_every_choice_when_latest_role_only():
-    guardrail = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail",
-        guardrailVersion="DRAFT",
-        experimental_use_latest_role_message_only=True,
-    )
-
-    with patch.object(guardrail, "make_bedrock_api_request", new_callable=AsyncMock) as mock_api:
-        mock_api.return_value = {"action": "NONE", "outputs": []}
-        await guardrail.apply_guardrail(
-            inputs={"texts": ["blocked choice", "clean choice"]},
-            request_data={"model": "gpt-4o"},
-            input_type="response",
-        )
-
-    synthetic = mock_api.call_args.kwargs["response"]
-    assert [choice.message.content for choice in synthetic.choices] == ["blocked choice", "clean choice"]
 
 
 @pytest.mark.asyncio
@@ -2310,7 +2319,6 @@ async def test_streaming_post_call_output_only_path_passes_request_data_to_make_
         guardrailVersion="DRAFT",
         event_hook=GuardrailEventHooks.during_call,
         default_on=True,
-        streaming_strategy="aggregate",
     )
     mock_chunks = [
         litellm.ModelResponseStream(
@@ -3373,7 +3381,6 @@ async def test_streaming_post_call_block_yields_synthetic_stream_not_raise():
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
         disable_exception_on_block=True,
-        streaming_strategy="aggregate",
     )
 
     async def _stream():
@@ -3435,7 +3442,6 @@ async def test_streaming_post_call_block_preserves_upstream_usage():
         guardrailIdentifier="test-guardrail",
         guardrailVersion="DRAFT",
         disable_exception_on_block=True,
-        streaming_strategy="aggregate",
     )
 
     async def _stream_with_usage():
@@ -5806,48 +5812,6 @@ async def test_buffered_default_hook_scans_before_any_chunk():
 
 
 @pytest.mark.asyncio
-async def test_sync_strategy_scans_each_window_before_release():
-    guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-sync-windows",
-        guardrailIdentifier="test-id",
-        guardrailVersion="DRAFT",
-        event_hook=GuardrailEventHooks.post_call,
-        default_on=True,
-        streaming_strategy="sync",
-    )
-    events = []
-    parts = ("a", "b", "c", "d", "e", "f")
-
-    async def mock_stream():
-        for index, part in enumerate(parts):
-            yield _chat_chunk(part, "stop" if index == len(parts) - 1 else None)
-
-    async def record_scan(*args, **kwargs):
-        events.append("scan")
-        return {"action": "NONE", "assessments": [], "outputs": []}
-
-    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(side_effect=record_scan)):
-        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(),
-            response=mock_stream(),
-            request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
-        ):
-            content = chunk.choices[0].delta.content if chunk.choices else None
-            events.append(("chunk", content))
-
-    assert events == [
-        "scan",
-        ("chunk", "a"),
-        ("chunk", "b"),
-        ("chunk", "c"),
-        ("chunk", "d"),
-        ("chunk", "e"),
-        "scan",
-        ("chunk", "f"),
-    ]
-
-
-@pytest.mark.asyncio
 async def test_buffered_release_on_scan_hook_releases_each_window_after_its_scan():
     guardrail = BedrockGuardrail(
         guardrail_name="bedrock-release-on-scan",
@@ -5865,145 +5829,15 @@ async def test_buffered_release_on_scan_hook_releases_each_window_after_its_scan
     assert events == ["scan", ("chunk", "Hello"), "scan", ("chunk", " world"), ("chunk", "")]
 
 
-def test_streaming_strategy_overrides_conflicting_flags():
-    sync = BedrockGuardrail(
-        guardrail_name="bedrock-sync",
+@pytest.mark.asyncio
+async def test_windowed_stream_withholds_text_bedrock_anonymized():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-window-anonymize",
         guardrailIdentifier="test-id",
         guardrailVersion="DRAFT",
-        streaming_strategy="sync",
-        streaming_sampling_rate=2,
-        streaming_buffer_until_moderated=False,
-        streaming_end_of_stream_only=True,
-    )
-    async_strategy = BedrockGuardrail(
-        guardrail_name="bedrock-async",
-        guardrailIdentifier="test-id",
-        guardrailVersion="DRAFT",
-        streaming_strategy="async",
-        streaming_buffer_until_moderated=True,
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
         streaming_buffer_release_on_scan=True,
-    )
-    aggregate = BedrockGuardrail(
-        guardrail_name="bedrock-aggregate",
-        guardrailIdentifier="test-id",
-        guardrailVersion="DRAFT",
-        streaming_strategy="aggregate",
-        streaming_buffer_release_on_scan=True,
-    )
-
-    assert sync.streaming_strategy == "sync"
-    assert sync.streaming_sampling_rate == 2
-    assert sync.streaming_buffer_until_moderated is True
-    assert sync.streaming_buffer_release_on_scan is True
-    assert sync.streaming_end_of_stream_only is False
-    assert sync._streams_incrementally() is True
-    assert async_strategy.streaming_buffer_until_moderated is False
-    assert async_strategy.streaming_end_of_stream_only is True
-    assert async_strategy.streaming_buffer_release_on_scan is False
-    assert async_strategy._streams_incrementally() is True
-    assert aggregate.streaming_buffer_until_moderated is True
-    assert aggregate.streaming_buffer_release_on_scan is False
-    assert aggregate._streams_incrementally() is False
-
-
-def test_initialize_bedrock_wires_streaming_strategy():
-    from litellm.proxy.guardrails.guardrail_initializers import initialize_bedrock
-
-    synced = initialize_bedrock(
-        _streaming_litellm_params(streaming_strategy="sync", streaming_sampling_rate=2),
-        {"guardrail_name": "bedrock-sync"},
-    )
-    streamed = initialize_bedrock(
-        _streaming_litellm_params(streaming_strategy="async"),
-        {"guardrail_name": "bedrock-async"},
-    )
-    for registered in (synced, streamed):
-        litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, registered)
-
-    assert synced.streaming_strategy == "sync"
-    assert synced.streaming_sampling_rate == 2
-    assert synced.streaming_buffer_release_on_scan is True
-    assert streamed.streaming_strategy == "async"
-    assert streamed.streaming_end_of_stream_only is True
-    assert streamed.streaming_buffer_until_moderated is False
-
-
-def test_initialize_bedrock_rejects_unknown_streaming_strategy():
-    from pydantic import ValidationError
-
-    from litellm.proxy.guardrails.guardrail_initializers import initialize_bedrock
-
-    with pytest.raises(ValidationError):
-        initialize_bedrock(
-            _streaming_litellm_params(streaming_strategy="parallel"),
-            {"guardrail_name": "bedrock-bad-strategy"},
-        )
-
-
-@pytest.mark.asyncio
-async def test_sync_strategy_holds_each_window_until_its_scan_returns():
-    guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-sync-window",
-        guardrailIdentifier="test-id",
-        guardrailVersion="DRAFT",
-        event_hook=GuardrailEventHooks.post_call,
-        default_on=True,
-        streaming_strategy="sync",
-        streaming_sampling_rate=2,
-    )
-
-    events = await _run_streaming_hook_recording_order(guardrail)
-
-    assert events[0] == "scan"
-    assert events[:3] == ["scan", ("chunk", "Hello"), ("chunk", " world")]
-    assert ("chunk", "Hello") not in events[:1]
-
-
-@pytest.mark.asyncio
-async def test_sync_strategy_does_not_release_a_window_the_scan_blocks():
-    guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-sync-block",
-        guardrailIdentifier="test-id",
-        guardrailVersion="DRAFT",
-        event_hook=GuardrailEventHooks.post_call,
-        default_on=True,
-        streaming_strategy="sync",
-        streaming_sampling_rate=1,
-    )
-    yielded: list = []
-
-    async def mock_stream():
-        yield _chat_chunk("bad", None)
-        yield _chat_chunk(" text", None)
-
-    async def _drain() -> None:
-        async for item in guardrail.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
-            response=mock_stream(),
-            request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
-        ):
-            yielded.append(item)
-
-    with patch.object(
-        guardrail,
-        "make_bedrock_api_request",
-        AsyncMock(side_effect=guardrail._get_http_exception_for_blocked_guardrail({"action": "GUARDRAIL_INTERVENED"})),
-    ):
-        with pytest.raises(HTTPException):
-            await _drain()
-
-    assert yielded == []
-
-
-@pytest.mark.asyncio
-async def test_sync_stream_withholds_text_bedrock_anonymized():
-    guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-sync-anonymize",
-        guardrailIdentifier="test-id",
-        guardrailVersion="DRAFT",
-        event_hook=GuardrailEventHooks.post_call,
-        default_on=True,
-        streaming_strategy="sync",
     )
     yielded: list[object] = []
 
@@ -6041,14 +5875,32 @@ async def test_sync_stream_withholds_text_bedrock_anonymized():
 
 
 @pytest.mark.asyncio
-async def test_async_strategy_releases_anthropic_sse_before_the_scan():
-    guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-async-sse",
-        guardrailIdentifier="test-id",
-        guardrailVersion="DRAFT",
-        event_hook=GuardrailEventHooks.post_call,
-        default_on=True,
-        streaming_strategy="async",
+async def test_windowed_flags_hold_untranslatable_sse_for_one_scan():
+    guardrail = _sse_guardrail(streaming_buffer_release_on_scan=True, streaming_sampling_rate=1)
+    events: list[str] = []
+
+    async def record_scan(*args, **kwargs):
+        events.append("scan")
+        return {"action": "NONE", "outputs": []}
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(side_effect=record_scan)):
+        async for _chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(request_route="/not-a-translated-route"),
+            response=_anthropic_sse_stream(),
+            request_data={"model": "claude", "messages": [{"role": "user", "content": "hi"}]},
+        ):
+            events.append("chunk")
+
+    assert events[0] == "scan"
+    assert events.count("scan") == 1
+    assert events.count("chunk") == len(_ANTHROPIC_SSE_CHUNKS)
+
+
+@pytest.mark.asyncio
+async def test_end_of_stream_flags_still_release_a_messages_stream():
+    guardrail = _sse_guardrail(
+        streaming_buffer_until_moderated=False,
+        streaming_end_of_stream_only=True,
     )
     events: list[str] = []
 
@@ -6056,88 +5908,16 @@ async def test_async_strategy_releases_anthropic_sse_before_the_scan():
         events.append("scan")
         return {"action": "NONE", "assessments": [], "outputs": []}
 
-    async def mock_stream():
-        for chunk in _ANTHROPIC_SSE_CHUNKS:
-            yield chunk
-
     with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(side_effect=record_scan)):
         async for _chunk in guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(request_route="/v1/messages"),
-            response=mock_stream(),
+            response=_anthropic_sse_stream(),
             request_data={"model": "claude", "messages": [{"role": "user", "content": "hi"}]},
         ):
             events.append("chunk")
 
     assert events[0] == "chunk"
     assert events.index("scan") > 0
-
-
-@pytest.mark.asyncio
-async def test_async_strategy_sends_chunks_then_scans_once():
-    guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-async-strategy",
-        guardrailIdentifier="test-id",
-        guardrailVersion="DRAFT",
-        event_hook=GuardrailEventHooks.post_call,
-        default_on=True,
-        streaming_strategy="async",
-    )
-
-    events = await _run_streaming_hook_recording_order(guardrail)
-
-    scan_index = events.index("scan")
-    assert events.count("scan") == 1
-    assert ("chunk", "Hello") in events[:scan_index]
-    assert ("chunk", " world") in events[:scan_index]
-
-
-@pytest.mark.asyncio
-async def test_async_strategy_block_cannot_recall_chunks_already_sent():
-    guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-async-block",
-        guardrailIdentifier="test-id",
-        guardrailVersion="DRAFT",
-        event_hook=GuardrailEventHooks.post_call,
-        default_on=True,
-        streaming_strategy="async",
-    )
-    yielded: list = []
-
-    async def mock_stream():
-        yield _chat_chunk("bad", None)
-        yield _chat_chunk("", "stop")
-
-    with patch.object(
-        guardrail,
-        "make_bedrock_api_request",
-        AsyncMock(side_effect=guardrail._get_http_exception_for_blocked_guardrail({"action": "GUARDRAIL_INTERVENED"})),
-    ):
-        async for item in guardrail.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
-            response=mock_stream(),
-            request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
-        ):
-            yielded.append(item)
-
-    assert yielded[0].choices[0].delta.content == "bad"
-    assert isinstance(yielded[-1], bytes)
-
-
-@pytest.mark.asyncio
-async def test_aggregate_strategy_scans_before_any_chunk():
-    guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-aggregate-strategy",
-        guardrailIdentifier="test-id",
-        guardrailVersion="DRAFT",
-        event_hook=GuardrailEventHooks.post_call,
-        default_on=True,
-        streaming_strategy="aggregate",
-    )
-
-    events = await _run_streaming_hook_recording_order(guardrail)
-
-    assert events[0] == "scan"
-    assert events.count("scan") == 1
 
 
 @pytest.mark.asyncio
@@ -6296,7 +6076,6 @@ async def test_responses_api_stream_scans_output_and_replays_buffered_events():
         guardrailVersion="DRAFT",
         event_hook=GuardrailEventHooks.post_call,
         default_on=True,
-        streaming_strategy="aggregate",
     )
     stream_events = _responses_stream_events()
     order = []
@@ -6367,7 +6146,6 @@ async def test_responses_api_failed_stream_scans_delta_text_before_replay():
         guardrailVersion="DRAFT",
         event_hook=GuardrailEventHooks.post_call,
         default_on=True,
-        streaming_strategy="aggregate",
     )
     stream_events = _responses_failed_stream_events()
     order = []

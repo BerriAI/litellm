@@ -64,7 +64,6 @@ from litellm.proxy.guardrails.anthropic_sse import (
 from litellm.types.guardrails import (
     BedrockChecksConfigModel,
     BedrockGuardrailStreamingParams,
-    BedrockStreamingStrategy,
     GuardrailEventHooks,
     LitellmParams,
 )
@@ -243,7 +242,11 @@ def _replay_original_streaming_text() -> Generator[None, None, None]:
     try:
         yield
     finally:
-        _STREAMING_REPLAYS_ORIGINAL_TEXT.reset(token)
+        try:
+            _STREAMING_REPLAYS_ORIGINAL_TEXT.reset(token)
+        except ValueError:
+            # The stream was closed on another task, so this token's context is already gone.
+            pass
 
 
 def _streaming_route_is_translatable(request_route: str | None) -> bool:
@@ -281,7 +284,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         pii_confidence_threshold: float | None = 0.5,
         chunk_budget_chars: int = BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS,
         contextual_grounding_from_messages: bool = False,
-        streaming_strategy: BedrockStreamingStrategy | None = None,
         streaming_buffer_until_moderated: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_end_of_stream_only: bool | None = None,
@@ -293,7 +295,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             BedrockGuardrailStreamingParams.from_extras(
                 MappingProxyType(
                     {
-                        "streaming_strategy": streaming_strategy,
                         "streaming_buffer_until_moderated": streaming_buffer_until_moderated,
                         "streaming_sampling_rate": streaming_sampling_rate,
                         "streaming_end_of_stream_only": streaming_end_of_stream_only,
@@ -358,7 +359,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
     def _set_streaming_params(self, streaming_params: BedrockGuardrailStreamingParams) -> None:
-        self.streaming_strategy = streaming_params.streaming_strategy
         self.streaming_buffer_until_moderated = streaming_params.streaming_buffer_until_moderated
         self.streaming_sampling_rate = streaming_params.streaming_sampling_rate
         self.streaming_end_of_stream_only = streaming_params.streaming_end_of_stream_only
@@ -666,12 +666,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Decide which messages an apply_guardrail scan should cover.
 
         With ``experimental_use_latest_role_message_only`` enabled, request
-        scans must select by the ORIGINAL message roles. Response scans still
-        cover every text, so a clean later choice cannot release an earlier one.
-        The flat `texts` list has no role information, and wrapping it in
-        role="user" mock messages makes the latest-user filter degenerate to
-        "latest text of any role", leaking tool/assistant content to the INPUT
-        scan (https://github.com/BerriAI/litellm/issues/23476).
+        scans must select by the ORIGINAL message roles. The flat `texts` list
+        has no role information, and wrapping it in role="user" mock messages
+        makes the latest-user filter degenerate to "latest text of any role",
+        leaking tool/assistant content to the INPUT scan
+        (https://github.com/BerriAI/litellm/issues/23476).
         """
         mock_messages: list[AllMessageValues] = [ChatCompletionUserMessage(role="user", content=text) for text in texts]
 
@@ -696,13 +695,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             list[AllMessageValues] | None,
             inputs.get("structured_messages") or request_data.get("messages"),
         )
-        if input_type != "request":
-            return ApplyGuardrailMessageSelection(
-                filtered_messages=mock_messages,
-                scanned_slice=None,
-                scanned_role_subset=False,
-            )
-        if not structured_messages:
+        if input_type != "request" or not structured_messages:
             # No role information available (e.g. raw-text callers like
             # /guardrails/apply_guardrail). Keep scanning the latest text only.
             filter_result: Final = self._prepare_guardrail_messages_for_role(messages=mock_messages)
@@ -2784,11 +2777,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         Process streaming response chunks with a post_call OUTPUT scan.
 
-        The default holds the whole stream for one ApplyGuardrail call. sync holds
-        each window, waits for that call, then releases the window. async sends
-        chunks immediately and scans once at the end. Raw SSE on a route with a
-        streaming translation follows the selected strategy. Frames with no
-        translation stay on the full-stream scan.
+        The streaming flags decide whether chunks are held, released per window, or sent live.
+        Raw SSE on a route with no guardrail translation is held for one full scan even when
+        those flags would otherwise send chunks before the scan. A rewrite found on that
+        streaming path is sent in place of the original text.
         """
         if self._streams_incrementally():
             response_iterator: Final = response.__aiter__()
