@@ -75,6 +75,22 @@ def test_denied_subpath_is_blocked_even_when_allowed_while_its_sibling_still_rea
         assert _upstream_targets(wire) == ("/upstream/public",)
 
 
+@pytest.mark.parametrize(
+    "subpath",
+    ["public/%2e%2e/admin/users", "/admin/users"],
+    ids=["encoded_dot_dot_segment", "empty_segment"],
+)
+def test_dot_and_empty_segments_cannot_reach_a_denied_subpath(gateway: Gateway, subpath: str) -> None:
+    with wire_server(_echo) as wire, gateway.scenario() as scenario:
+        path: Final = _registered_endpoint(gateway, scenario, wire)
+        key: Final = scenario.key(allowed_passthrough_routes=[path], denied_passthrough_routes=[f"{path}/admin"])
+
+        response: Final = _call(gateway, f"{path}/{subpath}", key)
+
+        _assert_denied(response, f"{path}/admin")
+        assert _upstream_targets(wire) == ()
+
+
 def test_trailing_wildcard_deny_blocks_every_route_with_that_prefix(gateway: Gateway) -> None:
     with wire_server(_echo) as wire, gateway.scenario() as scenario:
         path: Final = _registered_endpoint(gateway, scenario, wire)
@@ -195,3 +211,26 @@ def test_team_endpoint_listing_hides_routes_the_team_denies(gateway: Gateway) ->
         paths: Final = {string_value(object_value(endpoint)["path"]) for endpoint in ENDPOINTS.validate_python(listed)}
         assert visible in paths, paths
         assert denied not in paths, paths
+
+
+def test_team_admin_cannot_clear_or_drop_a_deny_a_proxy_admin_set_on_a_team_key(gateway: Gateway) -> None:
+    with wire_server(_echo) as wire, gateway.scenario() as scenario:
+        path: Final = _registered_endpoint(gateway, scenario, wire)
+        team_admin: Final = scenario.user(user_role="internal_user")
+        team: Final = scenario.team(members_with_roles=[{"role": "admin", "user_id": team_admin}])
+        team_admin_key: Final = scenario.key(user_id=team_admin)
+        denied: Final[list[JsonValue]] = [f"{path}/admin"]
+        key: Final = scenario.key(team_id=team, allowed_passthrough_routes=[path], denied_passthrough_routes=denied)
+
+        def update(body: dict[str, JsonValue]) -> httpx.Response:
+            return gateway.request("POST", "/key/update", {"key": key, **body}, key=team_admin_key)
+
+        cleared: Final = update({"denied_passthrough_routes": []})
+        dropped: Final = update({"metadata": {}})
+        unchanged: Final = update({"denied_passthrough_routes": denied})
+
+        assert cleared.status_code == 403 and "denied_passthrough_routes" in cleared.text, cleared.text
+        assert dropped.status_code == 403 and "metadata.denied_passthrough_routes" in dropped.text, dropped.text
+        assert unchanged.status_code == 200, unchanged.text
+        _assert_denied(_call(gateway, f"{path}/admin/users", key), f"{path}/admin")
+        assert _upstream_targets(wire) == ()

@@ -1364,7 +1364,7 @@ class KeyRequestBase(GenerateRequestBase):
     enforced_params: list[str] | None = None
     allowed_routes: list | None = []
     allowed_passthrough_routes: list | None = None
-    denied_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = (
         None  # raise an error if 'guaranteed_throughput' is set and we're overallocating rpm
@@ -2212,7 +2212,7 @@ class NewTeamRequest(TeamBase):
     prompts: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
     allowed_passthrough_routes: list | None = None
-    denied_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     disable_global_guardrails: bool | None = None
     secret_manager_settings: dict | None = None
     model_rpm_limit: dict[str, int] | None = None
@@ -2294,7 +2294,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_member_tpm_limit: int | None = None
     team_member_key_duration: str | None = None
     allowed_passthrough_routes: list | None = None
-    denied_passthrough_routes: list | None = None
+    denied_passthrough_routes: list[str] | None = None
     secret_manager_settings: dict | None = None
     prompts: list[str] | None = None
     model_rpm_limit: dict[str, int] | None = None

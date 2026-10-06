@@ -3095,6 +3095,7 @@ async def _validate_update_key_data(
     _check_passthrough_routes_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
     )
     _check_permissions_caller_permission(
         data=data,
@@ -5826,10 +5827,6 @@ async def regenerate_key_fn(
                 user_api_key_dict=user_api_key_dict,
                 allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
             )
-            _check_passthrough_routes_caller_permission(
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-            )
             _check_permissions_caller_permission(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
@@ -5925,6 +5922,11 @@ async def regenerate_key_fn(
             data,
             _key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
             user_api_key_dict,
+        )
+        _check_passthrough_routes_caller_permission(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            existing_metadata=_key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
         )
 
         # check if user has permission to regenerate key

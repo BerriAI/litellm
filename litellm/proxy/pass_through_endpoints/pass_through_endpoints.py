@@ -3604,27 +3604,23 @@ async def _filter_endpoints_by_team_allowed_routes(
     team_metadata: Final = cast(  # cast-ok: prisma types the Json column as str; reads hand back the decoded value
         "Mapping[str, object] | None", team.metadata
     )
-    if team_metadata is not None and team_metadata.get("allowed_passthrough_routes") is not None:
-        ## FILTER pass_through_endpoints by allowed_passthrough_routes
-        pass_through_endpoints = [
-            endpoint
-            for endpoint in pass_through_endpoints
-            if endpoint.path
-            in cast(  # cast-ok: guarded above; team metadata stores this key as a list of route paths
-                Sequence[str], team_metadata.get("allowed_passthrough_routes")
-            )
-        ]
-    if team_metadata is not None and team_metadata.get("denied_passthrough_routes"):
-        from litellm.proxy.auth.route_checks import RouteChecks
+    if team_metadata is None:
+        return pass_through_endpoints
 
-        pass_through_endpoints = [
-            endpoint
-            for endpoint in pass_through_endpoints
-            if RouteChecks.matching_denied_passthrough_route(route=endpoint.path, metadata_sources=(team_metadata,))
-            is None
-        ]
+    from litellm.proxy.auth.route_checks import RouteChecks
 
-    return pass_through_endpoints
+    allowed_routes: Final = cast(  # cast-ok: team metadata stores this key as a list of route paths
+        "Sequence[str] | None", team_metadata.get("allowed_passthrough_routes")
+    )
+    return [
+        endpoint
+        for endpoint in pass_through_endpoints
+        if (allowed_routes is None or endpoint.path in allowed_routes)
+        and not (
+            endpoint.auth
+            and RouteChecks.matching_denied_passthrough_route(route=endpoint.path, metadata_sources=(team_metadata,))
+        )
+    ]
 
 
 @router.get(

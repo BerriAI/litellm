@@ -1,6 +1,8 @@
+import itertools
+import posixpath
 import re
 from collections.abc import Collection, Iterable, Mapping
-from typing import Final
+from typing import Final, cast
 
 from fastapi import HTTPException, Request, status
 
@@ -694,19 +696,56 @@ class RouteChecks:
         )
 
     @staticmethod
+    def _forwardable_routes(route: str) -> frozenset[str]:
+        """
+        Every path ``route`` can reach once the pass-through forwarder resolves ``.``, ``..`` and empty
+        segments in the subpath after the endpoint's own path, which can be any clean prefix of ``route``.
+        """
+        segments: Final = tuple(route.lstrip("/").split("/"))
+        clean_prefix_length: Final = next(
+            (index for index, segment in enumerate(segments) if segment in ("", ".", "..")), len(segments)
+        )
+        resolved: Final = (
+            RouteChecks._join_resolved_subpath(segments[:index], segments[index:])
+            for index in range(clean_prefix_length + 1)
+        )
+        return frozenset(resolved)
+
+    @staticmethod
+    def _join_resolved_subpath(prefix: tuple[str, ...], subpath: tuple[str, ...]) -> str:
+        resolved_subpath: Final = posixpath.normpath("/" + "/".join(subpath)).strip("/")
+        return "/" + "/".join((*prefix, resolved_subpath) if resolved_subpath else prefix)
+
+    @staticmethod
+    def _route_matches_denied_route(route: str, denied_route: str) -> bool:
+        return RouteChecks._route_matches_allowed_route(
+            route=route, allowed_route=denied_route
+        ) or RouteChecks.route_matches_wildcard_pattern(route=route, pattern=denied_route)
+
+    @staticmethod
     def matching_denied_passthrough_route(route: str, metadata_sources: Iterable[Mapping | None]) -> str | None:
         """
         First ``denied_passthrough_routes`` entry across ``metadata_sources`` that matches ``route``.
         Unlike the allowlist (key list, else team list), every source's deny list applies.
         """
-        for metadata in metadata_sources:
-            denied_routes = (metadata or {}).get("denied_passthrough_routes") or []
-            for denied_route in denied_routes:
-                if RouteChecks._route_matches_allowed_route(
-                    route=route, allowed_route=denied_route
-                ) or RouteChecks.route_matches_wildcard_pattern(route=route, pattern=denied_route):
-                    return denied_route
-        return None
+        forwardable_routes: Final = RouteChecks._forwardable_routes(route)
+        denied_routes: Final = itertools.chain.from_iterable(
+            cast(  # cast-ok: management endpoints validate this metadata key as a list of route strings on write
+                "list[str]", (metadata or {}).get("denied_passthrough_routes") or []
+            )
+            for metadata in metadata_sources
+        )
+        return next(
+            (
+                denied_route
+                for denied_route in denied_routes
+                if any(
+                    RouteChecks._route_matches_denied_route(route=candidate, denied_route=denied_route)
+                    for candidate in forwardable_routes
+                )
+            ),
+            None,
+        )
 
     @staticmethod
     def passthrough_route_denied_exception(route: str, denied_route: str) -> HTTPException:

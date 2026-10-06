@@ -2284,7 +2284,12 @@ async def update_team(
             entity="team",
         )
 
-        _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
+        _check_passthrough_routes_caller_permission(
+            data,
+            user_api_key_dict,
+            entity="team",
+            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
+        )
         _check_disable_global_guardrails_caller_permission(
             data.disable_global_guardrails,
             data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict

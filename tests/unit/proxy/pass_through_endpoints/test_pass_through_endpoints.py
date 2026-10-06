@@ -53,9 +53,9 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.types import utils as types_utils
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    EndpointType,
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    EndpointType,
 )
 from tests._master_key import MASTER_KEY
 
@@ -1695,7 +1695,9 @@ async def test_pass_through_request_streamed_response_is_owned_by_the_caller():
     cache_dict[cache_key] = SimpleNamespace(client=httpx.AsyncClient(transport=httpx.MockTransport(transport_handler)))
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type, endpoint_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, endpoint_type: data
+    )
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
     mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
     mock_proxy_logging.get_proxy_hook = MagicMock(return_value=MagicMock())
@@ -2743,12 +2745,8 @@ async def test_pass_through_request_follows_redirect_to_final_response(httpx_tra
     mock_user_api_key_dict = MagicMock()
 
     with respx.mock(assert_all_called=True) as upstream:
-        upstream.get("https://upstream.test/redirect/1").respond(
-            302, headers={"Location": "/get"}
-        )
-        upstream.get("https://upstream.test/get").respond(
-            200, json={"url": "https://upstream.test/get"}
-        )
+        upstream.get("https://upstream.test/redirect/1").respond(302, headers={"Location": "/get"})
+        upstream.get("https://upstream.test/get").respond(200, json={"url": "https://upstream.test/get"})
 
         response = await pass_through_request(
             request=mock_request,
@@ -7001,18 +6999,32 @@ async def test_user_defined_passthrough_is_neither_tracked_nor_enforced(metadata
     budget: Final = {"managed-model": {"budget_limit": 0.1, "time_period": "1d"}}
     limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(DualCache())
     auth: Final = UserAPIKeyAuth(
-        api_key="custom-key", token="custom-key", team_id="shared-team", team_model_max_budget=budget,
+        api_key="custom-key",
+        token="custom-key",
+        team_id="shared-team",
+        team_model_max_budget=budget,
     )
     endpoint: Final = create_pass_through_route(
-        endpoint="/custom-budget-test", target="https://upstream.test/echo", custom_headers={}, cost_per_request=0.25,
+        endpoint="/custom-budget-test",
+        target="https://upstream.test/echo",
+        custom_headers={},
+        cost_per_request=0.25,
     )
-    request: Final = Request({
-        "type": "http", "method": "POST", "path": "/custom-budget-test", "headers": [],
-        "query_string": b"", "endpoint": endpoint,
-    })
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/custom-budget-test",
+            "headers": [],
+            "query_string": b"",
+            "endpoint": endpoint,
+        }
+    )
     body: Final = {
-        "model": "upstream-only-model", metadata_slot: {
-            "model_group": "managed-model", "customer_label": "retained",
+        "model": "upstream-only-model",
+        metadata_slot: {
+            "model_group": "managed-model",
+            "customer_label": "retained",
             "user_api_key_team_model_max_budget": budget,
         },
     }
@@ -7020,48 +7032,84 @@ async def test_user_defined_passthrough_is_neither_tracked_nor_enforced(metadata
     assert await limiter.is_team_within_model_budget("shared-team", budget, None, "managed-model")
     start: Final = datetime.now()
     logging_obj: Final = LiteLLMLoggingObj(
-        model="upstream-only-model", messages=[], stream=False, call_type="pass_through_endpoint",
-        start_time=start, litellm_call_id="custom-budget", function_id="custom-budget", kwargs={},
+        model="upstream-only-model",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=start,
+        litellm_call_id="custom-budget",
+        function_id="custom-budget",
+        kwargs={},
         dynamic_async_success_callbacks=[limiter],
     )
     payload: Final = {
-        "url": "https://upstream.test/echo", "request_body": body, "request_method": "POST", "cost_per_request": 0.25,
+        "url": "https://upstream.test/echo",
+        "request_body": body,
+        "request_method": "POST",
+        "cost_per_request": 0.25,
     }
     kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
-        request=request, user_api_key_dict=auth, passthrough_logging_payload=payload, logging_obj=logging_obj,
-        _parsed_body=body, litellm_call_id="custom-budget",
+        request=request,
+        user_api_key_dict=auth,
+        passthrough_logging_payload=payload,
+        logging_obj=logging_obj,
+        _parsed_body=body,
+        litellm_call_id="custom-budget",
     )
     logging_obj.update_environment_variables(
-        model="upstream-only-model", user="unknown", optional_params={},
-        litellm_params=kwargs["litellm_params"], call_type="pass_through_endpoint",
+        model="upstream-only-model",
+        user="unknown",
+        optional_params={},
+        litellm_params=kwargs["litellm_params"],
+        call_type="pass_through_endpoint",
     )
     response: Final = httpx.Response(
-        200, request=httpx.Request("POST", "https://upstream.test/echo"), json={"ok": True},
+        200,
+        request=httpx.Request("POST", "https://upstream.test/echo"),
+        json={"ok": True},
     )
     await PassThroughEndpointLogging().pass_through_async_success_handler(
-        httpx_response=response, response_body={"ok": True}, request_body=body, logging_obj=logging_obj,
-        url_route="https://upstream.test/echo", result=response.text, start_time=start, end_time=datetime.now(),
-        cache_hit=False, **kwargs,
+        httpx_response=response,
+        response_body={"ok": True},
+        request_body=body,
+        logging_obj=logging_obj,
+        url_route="https://upstream.test/echo",
+        result=response.text,
+        start_time=start,
+        end_time=datetime.now(),
+        cache_hit=False,
+        **kwargs,
     )
     assert logging_obj.model_call_details["response_cost"] == 0.25
     assert await limiter.is_team_within_model_budget("shared-team", budget, None, "managed-model")
     metadata: Final = kwargs["litellm_params"]["metadata"]
     assert (metadata["model_group"], metadata["customer_label"]) == ("managed-model", "retained")
-    assert metadata.keys().isdisjoint({
-        "user_api_key_model_max_budget", "user_api_key_team_model_max_budget",
-        "user_api_key_user_model_max_budget", "user_api_key_end_user_model_max_budget",
-    })
+    assert metadata.keys().isdisjoint(
+        {
+            "user_api_key_model_max_budget",
+            "user_api_key_team_model_max_budget",
+            "user_api_key_user_model_max_budget",
+            "user_api_key_end_user_model_max_budget",
+        }
+    )
 
 
 @pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
 def test_builtin_passthrough_pins_model_group_to_the_resolved_model(metadata_slot: str) -> None:
-    request: Final = Request({
-        "type": "http", "method": "POST", "path": "/gemini/v1beta/models/gemini-2.5-flash:generateContent",
-        "headers": [], "query_string": b"",
-    })
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/gemini/v1beta/models/gemini-2.5-flash:generateContent",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
     kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
-        request=request, user_api_key_dict=UserAPIKeyAuth(token="hash", user_id="u-1"),
-        passthrough_logging_payload=MagicMock(), logging_obj=MagicMock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(token="hash", user_id="u-1"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
         _parsed_body={"contents": [], metadata_slot: {"model_group": "unbounded-client-choice"}},
     )
     assert kwargs["litellm_params"]["metadata"]["model_group"] == "gemini-2.5-flash"
@@ -7427,7 +7475,9 @@ def test_passthrough_logs_the_resolved_deployment_model_info_over_the_request_bo
     the call to (LIT-1761: passthrough successes carried model_id="")."""
     mock_request = MagicMock(spec=Request)
     mock_request.method = "POST"
-    mock_request.url = httpx.URL("http://0.0.0.0:4000/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent")
+    mock_request.url = httpx.URL(
+        "http://0.0.0.0:4000/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent"
+    )
     mock_request.headers = Headers({})
     mock_request.scope = {}
     mock_request.state = SimpleNamespace(
@@ -7990,9 +8040,7 @@ async def test_a_deleted_db_pass_through_stops_serving_on_the_next_db_sync(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_config_pass_through_reads_its_custom_key_header_when_the_db_holds_pass_throughs(
-    tmp_path, monkeypatch
-):
+async def test_config_pass_through_reads_its_custom_key_header_when_the_db_holds_pass_throughs(tmp_path, monkeypatch):
     proxy: Final = await _boot_db_backed_proxy(
         tmp_path,
         monkeypatch,
@@ -8376,3 +8424,28 @@ async def test_filter_endpoints_by_team_allowed_routes_drops_denied():
     )
 
     assert [endpoint.path for endpoint in result] == ["/api/public"]
+
+
+@pytest.mark.asyncio
+async def test_filter_endpoints_by_team_allowed_routes_keeps_public_endpoints_the_team_denies():
+    from litellm.proxy._types import PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _filter_endpoints_by_team_allowed_routes,
+    )
+
+    endpoints = [
+        PassThroughGenericEndpoint(id="endpoint-1", path="/api/webhook", target="http://example.com/a", auth=False),
+        PassThroughGenericEndpoint(id="endpoint-2", path="/api/admin", target="http://example.com/b"),
+    ]
+    mock_prisma_client = MagicMock()
+    mock_team = MagicMock()
+    mock_team.metadata = {"denied_passthrough_routes": ["/api"]}
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team)
+
+    result = await _filter_endpoints_by_team_allowed_routes(
+        team_id="test-team-123",
+        pass_through_endpoints=endpoints,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert [endpoint.path for endpoint in result] == ["/api/webhook"]
