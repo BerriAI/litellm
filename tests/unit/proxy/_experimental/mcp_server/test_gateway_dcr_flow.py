@@ -1856,6 +1856,7 @@ def _redis_that(async_increment):
     cache = DualCache()
     cache.redis_cache = MagicMock()
     cache.redis_cache.async_increment = async_increment
+    cache.redis_cache.async_get_cache = AsyncMock(return_value=None)
     cache.async_increment_cache = AsyncMock(side_effect=AssertionError("must not fall back to in-memory"))
     return cache
 
@@ -1953,6 +1954,24 @@ async def test_revoke_from_another_client_leaves_the_token_usable():
     assert revoked.status_code == 200
     refreshed = await _refresh_native(payload["refresh_token"], client_id, _Minter(), cache)
     assert refreshed.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_revoke_of_an_already_rotated_token_ends_its_chain():
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    cache = DualCache()
+    payload = json.loads(
+        (await _redeem_native(await _native_code(client_id, cache=cache), client_id, _Minter(), cache=cache)).body
+    )
+    rotated = json.loads((await _refresh_native(payload["refresh_token"], client_id, _Minter(), cache)).body)
+    revoked = await revoke_refresh_token(
+        token=payload["refresh_token"], client_id=client_id, master_key=MASTER_KEY, cache=cache
+    )
+    assert revoked.status_code == 200
+    refused = await _refresh_native(rotated["refresh_token"], client_id, _Minter(), cache)
+    assert refused.status_code == 400
+    assert json.loads(refused.body)["error"] == "invalid_grant"
+    assert "revoked" in json.loads(refused.body)["error_description"]
 
 
 @pytest.mark.asyncio
@@ -2073,6 +2092,47 @@ async def test_introspect_refresh_token_goes_inactive_once_rotated():
     assert revoked.status_code == 200
     status, body = await _introspect(minted.token.get_secret_value(), cache=cache)
     assert (status, body) == (200, {"active": False})
+
+
+@pytest.mark.asyncio
+async def test_refresh_replay_ends_every_rotation_of_the_session_pair_chain():
+    """The identity-only MCP session pair rotates under the same chain rule as the proxy-API
+    credential: a replayed ancestor ends the live descendant (OAuth 2.0 Security BCP section
+    4.13.2), introspection reports that descendant inactive, and a token the gateway minted before
+    chains were stamped (no ``family`` claim) roots its own chain, so it keeps rotating."""
+    keys, now, principal = _introspection_fixtures()
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    cache = DualCache()
+    root = mint_session_refresh_token(SessionPrincipal(user_id="u1", client_id=client_id), keys, now)
+
+    async def _refresh(token):
+        return await aggregate_token(
+            request=_request("/token", method="POST"),
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id=client_id,
+            code_verifier=None,
+            refresh_token=token,
+            master_key=MASTER_KEY,
+            reload_user=_reload_user_active,
+            cache=cache,
+        )
+
+    root_token = root.token.get_secret_value()
+    rotated = json.loads((await _refresh(root_token)).body)["refresh_token"]
+    twice_rotated = json.loads((await _refresh(rotated)).body)["refresh_token"]
+    assert json.loads((await _refresh(root_token)).body)["error"] == "invalid_grant"
+
+    refused = await _refresh(twice_rotated)
+    assert refused.status_code == 400
+    assert json.loads(refused.body)["error"] == "invalid_grant"
+    assert "revoked" in json.loads(refused.body)["error_description"]
+    status, body = await _introspect(twice_rotated, cache=cache)
+    assert (status, body) == (200, {"active": False})
+
+    unrelated = mint_session_refresh_token(principal.model_copy(update={"client_id": client_id}), keys, now)
+    assert (await _refresh(unrelated.token.get_secret_value())).status_code == 200
 
 
 @pytest.mark.asyncio

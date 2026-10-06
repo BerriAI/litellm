@@ -240,12 +240,13 @@ def resolve_session_bearer(
 
 class SessionRefreshOpened(BaseModel):
     """A valid session refresh token presented to the token endpoint: the principal to
-    re-validate and renew under."""
+    re-validate and renew under, and the rotation chain the renewal continues."""
 
     model_config = ConfigDict(frozen=True)
     tag: Literal["opened"] = "opened"
     principal: SessionPrincipal
     jti: str
+    family: str
 
 
 class SessionRefreshInvalid(BaseModel):
@@ -284,4 +285,4 @@ def open_session_refresh_bearer(
         return SessionRefreshInvalid()
     if opened.principal.client_id != expected_client_id:
         return SessionRefreshInvalid()
-    return SessionRefreshOpened(principal=opened.principal, jti=opened.jti)
+    return SessionRefreshOpened(principal=opened.principal, jti=opened.jti, family=opened.family)

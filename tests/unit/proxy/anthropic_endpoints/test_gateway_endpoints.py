@@ -93,6 +93,9 @@ class _SharedRedisFake:
         self.counters = MappingProxyType({**self.counters, key: incremented})
         return incremented
 
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:
+        return self.counters.get(key, self.values.get(key))
+
 
 def _replica(redis: _SharedRedisFake) -> DualCache:
     return DualCache(redis_cache=redis, default_in_memory_ttl=600)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
@@ -509,7 +512,7 @@ def test_refresh_grant_mints_a_new_bearer_and_rotates_the_refresh_token():
     re-mints the session JWT from the live user row for the team the login picked, hands back a
     fresh refresh token, and the presented one is dead from then on (rotation). The mint runs
     before the single-use claim on every presentation, a replay included, so a transient mint
-    failure never burns a still-valid token."""
+    failure never burns a still-valid token; the chain itself keeps rotating until a replay."""
     minter: Final = _Minter()
     with _gateway_env(minter=minter) as (client, cache):
         signed_in = _signed_in(client, cache)
@@ -524,15 +527,15 @@ def test_refresh_grant_mints_a_new_bearer_and_rotates_the_refresh_token():
         assert rotated["refresh_token"] != signed_in["refresh_token"]
         assert _opened_refresh(rotated["refresh_token"]).team_id == "team-a"
 
-        replayed = _refresh(client, str(signed_in["refresh_token"]))
-        assert replayed.status_code == 400
-        assert replayed.json()["error"] == "invalid_grant"
-        assert "already used" in replayed.json()["error_description"]
-        assert "access_token" not in replayed.json()
-
         chained = _refresh(client, rotated["refresh_token"])
-    assert chained.status_code == 200
-    assert chained.json()["refresh_token"] != rotated["refresh_token"]
+        assert chained.status_code == 200
+        assert chained.json()["refresh_token"] != rotated["refresh_token"]
+
+        replayed = _refresh(client, str(signed_in["refresh_token"]))
+    assert replayed.status_code == 400
+    assert replayed.json()["error"] == "invalid_grant"
+    assert "already used" in replayed.json()["error_description"]
+    assert "access_token" not in replayed.json()
     assert minter.calls == (("user-123", "team-a"),) * 3
 
 
@@ -547,6 +550,30 @@ def test_refresh_grant_replay_is_refused_on_a_replica_that_did_not_serve_the_rot
     assert replayed.status_code == 400
     assert replayed.json()["error"] == "invalid_grant"
     assert len(minter.calls) == 2
+
+
+def test_refresh_grant_replay_ends_every_rotation_of_the_same_sign_in():
+    """OAuth 2.0 Security BCP section 4.13.2: a refresh token presented a second time means two
+    holders have the chain, so the rotation that already succeeded on it dies with it instead of
+    staying alive for whoever renewed first; a new sign-in starts a chain of its own. The chain
+    check runs before the mint, so a dead chain never reaches the database."""
+    minter: Final = _Minter()
+    with _gateway_env(minter=minter) as (client, cache):
+        first = str(_signed_in(client, cache)["refresh_token"])
+        rotated = str(_refresh(client, first).json()["refresh_token"])
+        assert _refresh(client, first).status_code == 400
+        assert len(minter.calls) == 2
+
+        descendant = _refresh(client, rotated)
+        assert descendant.status_code == 400
+        assert descendant.json()["error"] == "invalid_grant"
+        assert "revoked" in descendant.json()["error_description"]
+        assert "access_token" not in descendant.json()
+        assert len(minter.calls) == 2
+
+        fresh_sign_in = str(_signed_in(client, cache)["refresh_token"])
+        assert _refresh(client, fresh_sign_in).status_code == 200
+    assert len(minter.calls) == 3
 
 
 @pytest.mark.parametrize(
@@ -627,7 +654,7 @@ def test_revoke_burns_the_refresh_token_and_answers_200_for_every_other_token():
         missing = client.post(_REVOKE_URL, data={"token_type_hint": "refresh_token"})
     assert missing.status_code == 400
     assert missing.json()["error"] == "invalid_request"
-    assert len(minter.calls) == 3
+    assert len(minter.calls) == 2
 
 
 def test_revoke_from_another_client_leaves_the_refresh_token_usable():
@@ -638,6 +665,20 @@ def test_revoke_from_another_client_leaves_the_refresh_token_usable():
         own = str(_signed_in(client, cache)["refresh_token"])
         assert _revoke(client, _foreign_refresh_token(foreign)).status_code == 200
         assert _refresh(client, own).status_code == 200
+
+
+def test_revoke_ends_the_rotation_chain_of_the_presented_token():
+    """``/logout`` posts the refresh token Claude Code holds. When a copy of that token already
+    rotated it, the copy's live descendant must die with the sign-out (RFC 7009 section 2.1 revokes
+    the grant, not one token), instead of the single-use record only confirming what the copy did."""
+    with _gateway_env(minter=_Minter()) as (client, cache):
+        stored = str(_signed_in(client, cache)["refresh_token"])
+        copied_and_rotated = str(_refresh(client, stored).json()["refresh_token"])
+        assert _revoke(client, stored).status_code == 200
+        refused = _refresh(client, copied_and_rotated)
+    assert refused.status_code == 400
+    assert refused.json()["error"] == "invalid_grant"
+    assert "revoked" in refused.json()["error_description"]
 
 
 def test_revoke_404_when_gateway_disabled():
