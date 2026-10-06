@@ -15,7 +15,7 @@ from apscheduler.schedulers.asyncio import (  # pyright: ignore[reportMissingTyp
     AsyncIOScheduler,
 )
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, SecretStr, TypeAdapter, ValidationError
+from pydantic import ConfigDict, SecretStr, TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 
 from litellm.llms.custom_httpx.http_handler import (
@@ -50,6 +50,7 @@ from litellm.proxy.roi_calculator.sync import (
 )
 from litellm.proxy.roi_calculator.sync_store import SyncStore
 from litellm.repositories.config_repository import ConfigRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.roi_calculator import (
     DEFAULT_PROMPT,
     ROIBranchSpend,
@@ -78,7 +79,7 @@ _SYNC_MANAGER: Final = SyncManager()
 _ROI_TAGS: Final[list[str | Enum]] = ["roi calculator"]  # mutable-ok: FastAPI requires list-valued route tags
 
 
-class _RouterEstimatorParams(BaseModel):
+class _RouterEstimatorParams(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", from_attributes=True)
 
     model: str | None = None
@@ -86,14 +87,14 @@ class _RouterEstimatorParams(BaseModel):
     custom_llm_provider: str | None = None
 
 
-class _RouterEstimatorModelInfo(BaseModel):
+class _RouterEstimatorModelInfo(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", from_attributes=True)
 
     base_model: str | None = None
     mode: str | None = None
 
 
-class _RouterEstimatorDeployment(BaseModel):
+class _RouterEstimatorDeployment(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", from_attributes=True)
 
     model_name: str = ""
@@ -270,11 +271,11 @@ def _completion_caller(settings: ROISettings) -> CompletionCaller:
     return complete
 
 
-class _GatewayModel(BaseModel):
+class _GatewayModel(LiteLLMBaseModel):
     id: str
 
 
-class _GatewayModels(BaseModel):
+class _GatewayModels(LiteLLMBaseModel):
     data: tuple[_GatewayModel, ...]
 
 
