@@ -504,6 +504,28 @@ def _provider_calls(wire: Wire) -> tuple[Request, ...]:
     return tuple(entry for entry in wire.drain() if not _is_model_discovery(entry))
 
 
+def _assert_serving_state(s: TeamScenario, name: str, wire: Wire, *, blocked: bool) -> None:
+    served: Final = _serve(s, name, s.keys["team_admin"])
+    if blocked:
+        assert (served.status_code, served.json()) == _MODEL_BLOCKED_REFUSED, served.text
+        assert _provider_calls(wire) == (), f"Blocked model reached the provider: {served.text}"
+        return
+
+    assert served.status_code == 200, served.text
+    assert served.json()["choices"][0]["message"]["content"] == "model serving control", served.text
+    received: Final = _provider_calls(wire)
+    assert [
+        (entry.method, entry.target, entry.headers["authorization"], json.loads(entry.body)) for entry in received
+    ] == [
+        (
+            "POST",
+            "/v1/chat/completions",
+            "Bearer integration-provider-key",
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "serving state"}]},
+        )
+    ], served.text
+
+
 def _refusal(response: httpx.Response) -> JsonValue:
     """The error body with the caller's masked user id elided, since it differs per caller."""
     body: Final = response.json()
@@ -574,7 +596,7 @@ def test_only_proxy_admin_flips_a_models_blocked_flag(
         )
         for blocked in (True, False):
             s.gateway.post("/model/block" if blocked else "/model/unblock", {"model_id": model_id})
-            attempts: Final = (
+            attempts = (
                 Call("POST", "/model/unblock" if blocked else "/model/block", {"model_id": model_id}),
                 Call("PATCH", f"/model/{model_id}/update", {"blocked": not blocked}),
             )
@@ -583,7 +605,7 @@ def test_only_proxy_admin_flips_a_models_blocked_flag(
                 if call.method == "PATCH" and caller != "team_admin":
                     assert response.status_code == 403, f"{caller} {call.method} {call.path}: {response.text}"
                 else:
-                    expected: Final = (
+                    expected = (
                         _PATCH_BLOCKED_REFUSED if call.method == "PATCH" else _BLOCK_REFUSALS[call.method, call.path]
                     )
                     assert (response.status_code, _refusal(response)) == expected, (
@@ -593,31 +615,13 @@ def test_only_proxy_admin_flips_a_models_blocked_flag(
                     f"{caller} {call.method} {call.path} flipped blocked"
                 )
             if internal_key is not None:
-                path: Final = "/model/unblock" if blocked else "/model/block"
-                internal_response: Final = s.gateway.request("POST", path, {"model_id": model_id}, key=internal_key)
+                path = "/model/unblock" if blocked else "/model/block"
+                internal_response = s.gateway.request("POST", path, {"model_id": model_id}, key=internal_key)
                 assert (internal_response.status_code, _refusal(internal_response)) == _BLOCK_REFUSALS["POST", path], (
                     internal_response.text
                 )
                 assert _blocked(model_id) == [{"blocked": blocked}], internal_response.text
-            served: Final = _serve(s, name, s.keys["team_admin"])
-            if blocked:
-                assert (served.status_code, served.json()) == _MODEL_BLOCKED_REFUSED, served.text
-                assert _provider_calls(wire) == (), f"Blocked model reached the provider: {served.text}"
-            else:
-                assert served.status_code == 200, served.text
-                assert served.json()["choices"][0]["message"]["content"] == "model serving control", served.text
-                received: Final = _provider_calls(wire)
-                assert [
-                    (entry.method, entry.target, entry.headers["authorization"], json.loads(entry.body))
-                    for entry in received
-                ] == [
-                    (
-                        "POST",
-                        "/v1/chat/completions",
-                        "Bearer integration-provider-key",
-                        {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "serving state"}]},
-                    )
-                ], served.text
+            _assert_serving_state(s, name, wire, blocked=blocked)
 
 
 def test_a_key_allowed_the_block_routes_still_cannot_flip_a_models_blocked_flag(shared: TeamScenario) -> None:
@@ -627,29 +631,11 @@ def test_a_key_allowed_the_block_routes_still_cannot_flip_a_models_blocked_flag(
         model_id, name = _team_model(shared, f"{wire.url}/v1")
         for blocked in (True, False):
             shared.gateway.post("/model/block" if blocked else "/model/unblock", {"model_id": model_id})
-            call: Final = Call("POST", "/model/unblock" if blocked else "/model/block", {"model_id": model_id})
-            response: Final = shared.gateway.request(call.method, call.path, call.body, key=key)
+            call = Call("POST", "/model/unblock" if blocked else "/model/block", {"model_id": model_id})
+            response = shared.gateway.request(call.method, call.path, call.body, key=key)
             assert (response.status_code, response.json()) == _PATCH_BLOCKED_REFUSED, response.text
             assert _blocked(model_id) == [{"blocked": blocked}], response.text
-            served: Final = _serve(shared, name, shared.keys["team_admin"])
-            if blocked:
-                assert (served.status_code, served.json()) == _MODEL_BLOCKED_REFUSED, served.text
-                assert _provider_calls(wire) == (), f"Blocked model reached the provider: {served.text}"
-            else:
-                assert served.status_code == 200, served.text
-                assert served.json()["choices"][0]["message"]["content"] == "model serving control", served.text
-                received: Final = _provider_calls(wire)
-                assert [
-                    (entry.method, entry.target, entry.headers["authorization"], json.loads(entry.body))
-                    for entry in received
-                ] == [
-                    (
-                        "POST",
-                        "/v1/chat/completions",
-                        "Bearer integration-provider-key",
-                        {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "serving state"}]},
-                    )
-                ], served.text
+            _assert_serving_state(shared, name, wire, blocked=blocked)
 
 
 @contextmanager
