@@ -180,65 +180,6 @@ class ResponsesWebSocketConnection:
     def close(self) -> Future[None]: ...
 
 @final
-class _ResponseCacheRuntime:
-    @staticmethod
-    def from_cache(cache: object) -> _ResponseCacheRuntime: ...
-    @staticmethod
-    def from_selected(cache: object) -> _ResponseCacheRuntime: ...
-    @property
-    def kind(self) -> str: ...
-    def lookup(
-        self,
-        request: object,
-        *,
-        callback_kwargs: Mapping[str, object] | Sequence[object] | None = None,
-    ) -> object: ...
-    def lookup_semantic(self, request: object) -> tuple[object, float | None]: ...
-    def store(
-        self,
-        request: object,
-        response: object,
-        *,
-        callback_kwargs: Mapping[str, object] | None = None,
-    ) -> None: ...
-    def lookup_batch(
-        self,
-        requests: Sequence[object],
-        *,
-        callback_kwargs: Sequence[object] | None = None,
-    ) -> object: ...
-    def async_lookup(
-        self,
-        request: object,
-        *,
-        callback_kwargs: Mapping[str, object] | None = None,
-    ) -> Future[object]: ...
-    def async_lookup_semantic(self, request: object) -> Future[tuple[object, float | None]]: ...
-    def async_store(
-        self,
-        request: object,
-        response: object,
-        *,
-        callback_kwargs: Mapping[str, object] | None = None,
-    ) -> Future[None]: ...
-    def async_lookup_batch(
-        self,
-        requests: Sequence[object],
-        *,
-        callback_kwargs: Sequence[object] | None = None,
-    ) -> Future[object]: ...
-    def async_store_batch(
-        self,
-        requests: Sequence[object],
-        responses: Sequence[object],
-        *,
-        callback_result: object = None,
-        callback_kwargs: Mapping[str, object] | None = None,
-    ) -> Future[object]: ...
-    def async_flush(self) -> Future[None]: ...
-    def ping(self) -> Future[object]: ...
-
-@final
 class TokenCounter:
     @staticmethod
     def from_tokenizer(tokenizer: Tokenizer, fast: bool = False) -> TokenCounter: ...

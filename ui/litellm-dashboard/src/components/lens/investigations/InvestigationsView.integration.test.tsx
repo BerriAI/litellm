@@ -294,8 +294,12 @@ it("runs with saved settings from Run now without opening setup, then accepts an
   });
   proxy.post.mockResolvedValue(lens);
   const user = userEvent.setup();
+  const runNow = async () => {
+    await user.click(await screen.findByRole("button", { name: "Investigation actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Run now" }));
+  };
   renderWithProviders(<InvestigationsView />);
-  await user.click(await screen.findByRole("button", { name: "Run now" }));
+  await runNow();
   const choices = await screen.findByRole("dialog", { name: "Run now" });
   expect(within(choices).getByRole("button", { name: "Since last run" })).toHaveAttribute("aria-pressed", "true");
   await user.click(within(choices).getByRole("button", { name: "Run now" }));
@@ -303,7 +307,7 @@ it("runs with saved settings from Run now without opening setup, then accepts an
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 
   proxy.post.mockClear();
-  await user.click(screen.getByRole("button", { name: "Run now" }));
+  await runNow();
   const custom = await screen.findByRole("dialog", { name: "Run now" });
   fireEvent.change(within(custom).getByRole("combobox", { name: "Agent" }), { target: { value: "billing" } });
   await user.click(within(custom).getByRole("button", { name: "Last 24h" }));
@@ -502,6 +506,27 @@ it("allows retrying a failed trace readiness check without treating it as an emp
   await user.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   expect(traceCheck).toHaveBeenCalledTimes(2);
+});
+
+it("shows a loading state until the investigation list arrives", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  let resolveList: (list: unknown) => void = () => {};
+  proxy.get.mockImplementation((path) => {
+    if (path === "/lens")
+      return new Promise((resolve) => {
+        resolveList = resolve;
+      });
+    if (path === "/lens/agents") return Promise.resolve([]);
+    return Promise.resolve({ traces: true, requests: false, data: [] });
+  });
+  renderWithProviders(<InvestigationsView />);
+  expect(await screen.findByRole("status", { name: "Loading investigations…" })).toBeVisible();
+  expect(screen.queryByRole("region", { name: "Get Lens running" })).not.toBeInTheDocument();
+
+  act(() => resolveList({ lenses: [], workers: [], tracing_enabled: true }));
+  expect(await screen.findByRole("region", { name: "Get Lens running" })).toBeVisible();
+  expect(screen.queryByRole("status", { name: "Loading investigations…" })).not.toBeInTheDocument();
 });
 
 it("shows a centered failure with a retry when investigations cannot load, then recovers", async () => {
@@ -770,6 +795,22 @@ it("keeps partial findings visible and shows how many analysis tasks failed", as
   expect(screen.getByLabelText("Investigation error")).toBeVisible();
 });
 
+it("sends the report's Review issues action to the open issues of that run", async () => {
+  window.history.replaceState({}, "", "/lens/?lens=lens&kind=pattern&finding_status=resolved");
+  testQueryClient.clear();
+  proxy.get.mockImplementation(async (path) => {
+    if (path === "/lens") return { lenses: [lens], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return lens.jobs;
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView />);
+  const report = within(await screen.findByRole("region", { name: "Run report" }));
+  expect(screen.queryByRole("button", { name: issue.title })).not.toBeInTheDocument();
+  await user.click(report.getByRole("button", { name: "Review 1 issue" }));
+  expect(await screen.findByRole("button", { name: new RegExp(issue.title) })).toBeVisible();
+});
+
 it("keeps a finding open to retry when its update fails", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();
@@ -810,7 +851,7 @@ it("pauses monitoring from the detail menu by saving the investigation with moni
   expect(sentBody(proxy.put, "/lens/lens")).toEqual([{ ...watching.settings, enabled: false }]);
 });
 
-it("cancels the running job from the progress banner", async () => {
+it("stops the running job from the run report's primary action", async () => {
   testQueryClient.clear();
   const running = { ...lens.jobs[0], id: "live", status: "running" as const, stage: "Reading executions" };
   proxy.get.mockImplementation(async (path) => {
@@ -822,7 +863,25 @@ it("cancels the running job from the progress banner", async () => {
   });
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView />);
-  await user.click(await screen.findByRole("button", { name: "Cancel" }));
+  await user.click(await screen.findByRole("button", { name: "Stop run" }));
+  await waitFor(() => expect(proxy.post).toHaveBeenCalledWith("/lens/lens/cancel", expect.anything()));
+});
+
+it("keeps Stop run on an older run while another run is active", async () => {
+  testQueryClient.clear();
+  window.history.replaceState({}, "", `/lens/?lens=lens&run=${lens.jobs[0].id}`);
+  const running = { ...lens.jobs[0], id: "live", status: "running" as const, stage: "Reading executions" };
+  proxy.get.mockImplementation(async (path) => {
+    if (path.endsWith("/reviews")) return { reviews: [], reviewed: 0 };
+    if (path === "/lens")
+      return { lenses: [{ ...lens, jobs: [running, lens.jobs[0]] }], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return [running, lens.jobs[0]];
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  renderWithProviders(<InvestigationsView />);
+  const report = await screen.findByRole("region", { name: "Run report" });
+  await user.click(await within(report).findByRole("button", { name: "Stop run" }));
   await waitFor(() => expect(proxy.post).toHaveBeenCalledWith("/lens/lens/cancel", expect.anything()));
 });
 
@@ -923,7 +982,8 @@ it("lists recorded agents in Run now and runs the one picked from the list", asy
   proxy.post.mockResolvedValue(lens);
   const user = userEvent.setup();
   renderWithProviders(<InvestigationsView />);
-  await user.click(await screen.findByRole("button", { name: "Run now" }));
+  await user.click(await screen.findByRole("button", { name: "Investigation actions" }));
+  await user.click(await screen.findByRole("menuitem", { name: "Run now" }));
   const dialog = within(await screen.findByRole("dialog", { name: "Run now" }));
   await user.click(dialog.getByRole("combobox", { name: "Agent" }));
   expect(await screen.findByRole("option", { name: "support-bot" })).toBeVisible();
