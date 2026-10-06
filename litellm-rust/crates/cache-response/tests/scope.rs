@@ -2,15 +2,22 @@ use std::sync::Arc;
 
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheCredential, CacheEntry, CacheKey, CacheKeyInput, CacheScope, ResponseCache,
+    CacheCredential, CacheEntry, CacheKey, CacheKeyInput, CacheScope, Deployment, ResponseCache,
 };
 use rstest::rstest;
 use serde_json::json;
 
 fn key(credential: Option<CacheCredential>) -> CacheKey {
     ResponseCache::new(Arc::new(InMemoryCache::<CacheEntry>::default())).key(
-        &CacheKeyInput::new("messages", json!({"model": "claude", "prompt": "hello"})),
-        &CacheScope { credential },
+        &CacheKeyInput::new(
+            "messages",
+            Deployment::new("claude", None, None),
+            json!({"prompt": "hello"}),
+        ),
+        &CacheScope {
+            credential,
+            model_group: None,
+        },
     )
 }
 

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use litellm_cache_response::CacheKeyInput;
+use litellm_cache_response::{CacheKeyInput, Deployment, extra_headers};
 use litellm_host::call::CallOutput;
 use litellm_inference::{
     RouteError,
@@ -43,18 +43,18 @@ pub(super) struct ProviderResponsesRequest {
 
 impl CacheKeyProjection for ResponsesCall {
     fn cache_key_input(&self) -> Result<CacheKeyInput, RouteError> {
-        Ok(CacheKeyInput::new(
+        Ok(CacheKeyInput::forwarded(
             <crate::route::Responses as Cachable>::SURFACE,
-            Value::Object(
-                self.optional_params
-                    .clone()
-                    .into_iter()
-                    .chain([
-                        ("model".into(), self.model.clone().into()),
-                        ("input".into(), self.input.clone()),
-                    ])
-                    .collect(),
+            Deployment::new(
+                &self.model,
+                self.custom_llm_provider.as_deref(),
+                self.api_base.as_deref(),
             ),
+            self.optional_params
+                .clone()
+                .into_iter()
+                .chain([("input".into(), self.input.clone())]),
+            extra_headers(self.extra_headers.as_ref()),
         ))
     }
 }

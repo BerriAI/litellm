@@ -443,6 +443,7 @@ async fn cache_policy_overrides_keep_the_caller_scope(call: MessagesCall) {
             },
             scope: CacheScope {
                 credential: Some(CacheCredential::new("test", caller, "key")),
+                model_group: None,
             },
         };
         let MessagesCallResponse::Complete(response) =

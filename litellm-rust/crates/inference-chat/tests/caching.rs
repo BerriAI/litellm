@@ -9,7 +9,7 @@ use std::{
 };
 
 use litellm_cache_memory::InMemoryCache;
-use litellm_cache_response::{CacheOptions, ResponseCache, ResponseCacheService};
+use litellm_cache_response::{CacheOptions, CacheScope, ResponseCache, ResponseCacheService};
 use litellm_host::{
     interceptors::{
         ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext, ResultSource,
@@ -313,6 +313,70 @@ async fn cache_identity_ignores_deployment_settings_and_skips_rewritten_requests
     }
     first.verify().await;
     second.verify().await;
+}
+
+#[rstest]
+#[case::same_group_other_deployment("anthropic/claude-b", "group-a", true)]
+#[case::other_group_same_deployment("anthropic/claude-a", "group-b", false)]
+#[tokio::test]
+async fn the_model_group_decides_cache_reuse(
+    cache: Arc<dyn ResponseCacheService>,
+    #[case] model: &str,
+    #[case] model_group: &str,
+    #[case] hit: bool,
+) {
+    use litellm_inference::CallOptions;
+    use litellm_inference_chat::types::ChatCompletionsRequest;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id":"message-test", "type":"message", "role":"assistant", "model":"test",
+            "content":[{"type":"text", "text":"answer"}], "stop_reason":"end_turn",
+            "stop_sequence":null, "usage":{"input_tokens":3,"output_tokens":2}
+        })))
+        .expect(if hit { 1 } else { 2 })
+        .mount(&upstream)
+        .await;
+    let route = support::chat_completions_route().with_cache(cache);
+    let hooks = ChangingHooks::default();
+    for (model, model_group) in [("anthropic/claude-a", "group-a"), (model, model_group)] {
+        route
+            .execute(
+                ChatCompletionsRequest {
+                    model,
+                    messages: json!([{"role":"user","content":"hello"}]),
+                    optional_params: [("max_tokens".into(), json!(32))].into_iter().collect(),
+                    api_key: Some("sk-test"),
+                    api_base: Some(&upstream.uri()),
+                    custom_llm_provider: None,
+                    extra_headers: None,
+                    timeout: None,
+                },
+                &hooks,
+                CallOptions {
+                    cache: Some(CacheOptions {
+                        scope: CacheScope {
+                            model_group: Some(model_group.into()),
+                            ..CacheScope::default()
+                        },
+                        ..CacheOptions::default()
+                    }),
+                    observers: None,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        matches!(
+            hooks.facts.lock().unwrap()[1].source,
+            ResultSource::Cache { .. }
+        ),
+        hit
+    );
+    upstream.verify().await;
 }
 
 #[rstest]

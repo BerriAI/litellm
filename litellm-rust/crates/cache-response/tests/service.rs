@@ -11,7 +11,7 @@ use litellm_cache::{CacheCodec, Error};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::RedisCache;
 use litellm_cache_response::{
-    CacheEntry, CacheKey, CacheKeyInput, CacheScope, ResponseCache, ResponseCacheCodec,
+    CacheEntry, CacheKey, CacheKeyInput, CacheScope, Deployment, ResponseCache, ResponseCacheCodec,
     ResponseCacheService,
 };
 use redis_test::{MockCmd, MockRedisConnection};
@@ -19,7 +19,11 @@ use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
 fn input(prompt: &str) -> CacheKeyInput {
-    CacheKeyInput::new("responses", json!({"model": "gpt-5", "input": prompt}))
+    CacheKeyInput::new(
+        "responses",
+        Deployment::new("gpt-5", None, None),
+        json!({"input": prompt}),
+    )
 }
 
 fn keyed(key: &str) -> CacheKey {

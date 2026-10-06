@@ -1,6 +1,7 @@
 #[derive(Clone, Debug, Default)]
 pub struct CacheScope {
     pub credential: Option<CacheCredential>,
+    pub model_group: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

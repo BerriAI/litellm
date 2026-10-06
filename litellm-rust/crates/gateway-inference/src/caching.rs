@@ -53,6 +53,7 @@ pub(crate) fn prepare(
                 caller.principal().subject(),
                 &caller.authentication().credential_id,
             )),
+            model_group: Some(crate::request::model_name(&body)?.to_owned()),
         },
     };
     Ok((

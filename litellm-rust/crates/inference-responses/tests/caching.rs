@@ -8,8 +8,8 @@ use std::{
 
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheKey, CacheKeyInput, CacheOptions, CacheScope, ResponseCache, ResponseCacheService,
-    ResponseEnvelope,
+    CacheKey, CacheKeyInput, CacheOptions, CacheScope, Deployment, ResponseCache,
+    ResponseCacheService, ResponseEnvelope,
 };
 use litellm_host::interceptors::{Interceptors, ProviderIdentity};
 use litellm_inference::{
@@ -20,6 +20,7 @@ use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 struct CacheRequest {
     identity: ProviderIdentity,
+    deployment: Deployment,
     parameters: Value,
 }
 
@@ -29,6 +30,7 @@ fn cache_request(input: Value) -> CacheRequest {
             model: "test-model".into(),
             provider: "test-provider".into(),
         },
+        deployment: Deployment::new("test-model", None, None),
         parameters: input,
     }
 }
@@ -42,7 +44,7 @@ fn plan<P: Cachable>(
         CachePlan::new(
             cache,
             options,
-            CacheKeyInput::new(P::SURFACE, request.parameters),
+            CacheKeyInput::new(P::SURFACE, request.deployment, request.parameters),
         )
     });
     (request.identity, plan)
