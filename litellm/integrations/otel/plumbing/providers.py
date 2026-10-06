@@ -499,6 +499,12 @@ def _without_stack_trace(event: Event) -> Event:
     )
 
 
+def _tenant_resource(resource: Resource, defaults: Mapping[str, str], extra: Mapping[str, str]) -> Resource:
+    """``resource`` over the backend's ``defaults``, under the destination's ``extra``."""
+    filled: Final = Resource(defaults).merge(resource) if defaults else resource
+    return filled.merge(Resource(extra)) if extra else filled
+
+
 def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> ReadableSpan:
     """The view of ``span`` a tenant destination receives.
 
@@ -514,6 +520,7 @@ def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> Read
     itself stays, so the tenant still gets the whole trace tree.
     """
     extra: Final = destination.resource_attributes
+    defaults: Final = destination.resource_defaults
     attributes: Final = span.attributes or _NO_ATTRIBUTES
     database: Final = _is_database_span(attributes)
     owned: Final = _is_tenant_owned_span(attributes)
@@ -528,9 +535,9 @@ def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> Read
     recorded: Final = span.events
     events: Final = tuple(_without_stack_trace(event) for event in recorded) if owned else ()
     unchanged: Final = owned and _same_attributes(kept, attributes) and all(a is b for a, b in zip(events, recorded))
-    if not extra and unchanged:
+    if not extra and not defaults and unchanged:
         return span
-    resource: Final = span.resource.merge(Resource(extra)) if extra else span.resource
+    resource: Final = _tenant_resource(span.resource, defaults, extra)
     status: Final = span.status if owned else Status(span.status.status_code)
     return _SpanView(span, resource, kept, events, status, parent=span.parent)
 
