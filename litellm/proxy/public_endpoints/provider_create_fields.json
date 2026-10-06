@@ -1,5 +1,23 @@
 [
   {
+    "provider": "ACEDATACLOUD",
+    "provider_display_name": "Ace Data Cloud",
+    "litellm_provider": "acedatacloud",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "acedatacloud/gpt-6-luna"
+  },
+  {
     "provider": "AIML",
     "provider_display_name": "AI/ML API",
     "litellm_provider": "aiml",
