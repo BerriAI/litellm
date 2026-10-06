@@ -1225,6 +1225,30 @@ def test_token_counter_with_compaction_block():
     assert token_counter(model=model, messages=unsigned) == token_counter(model=model, messages=as_text)
 
 
+def test_count_content_list_skips_the_tokenizer_for_empty_block_text():
+    """
+    An empty thinking block, a redacted_thinking block (no thinking text at all) and a compaction
+    block with no summary carry no tokens, even under a tokenizer that charges for the empty string
+    (the llama-2 tokenizer prepends its BOS token to every encode call). Counting them through the
+    tokenizer added one token per block on such models.
+    """
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    def charges_for_empty_text(text: str) -> int:
+        return len(text.split()) + 1
+
+    empty_blocks = [
+        {"type": "thinking", "thinking": "", "signature": "EqcLCkYICxgCKkCrqu6lP..."},
+        {"type": "thinking", "thinking": None, "signature": "EqcLCkYICxgCKkCrqu6lP..."},
+        {"type": "redacted_thinking", "data": "EmwKAhgBEgy3va3pzix/LafPsn4aDFIT2Xlxh0L5L8rLVyIw"},
+        {"type": "compaction", "content": ""},
+        {"type": "text", "text": ""},
+    ]
+
+    assert _count_content_list(charges_for_empty_text, empty_blocks, False, None) == 0
+    assert _count_content_list(charges_for_empty_text, [{"type": "thinking", "thinking": "two words"}], False, None) == 3
+
+
 def test_token_counter_with_tool_reference_block():
     """
     Regression test: a message containing an Anthropic tool-search

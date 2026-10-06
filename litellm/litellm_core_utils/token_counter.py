@@ -927,7 +927,9 @@ def _count_content_list(
             if isinstance(c, str):
                 num_tokens += count_function(c)
             elif c["type"] in _TEXT_FIELD_BY_BLOCK_TYPE:
-                num_tokens += count_function(str(c.get(_TEXT_FIELD_BY_BLOCK_TYPE[c["type"]]) or ""))
+                block_text = str(c.get(_TEXT_FIELD_BY_BLOCK_TYPE[c["type"]]) or "")
+                if block_text:
+                    num_tokens += count_function(block_text)
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
