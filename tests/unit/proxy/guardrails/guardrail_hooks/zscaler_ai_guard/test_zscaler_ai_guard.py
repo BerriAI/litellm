@@ -561,3 +561,78 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_user_field_included_in_payload_when_present(mock_api_call):
+    """
+    Test that the top-level 'user' field from the request is forwarded
+    to make_zscaler_ai_guard_api_call when present in request_data.
+    """
+    guardrail = ZscalerAIGuard(policy_id=100)
+    inputs = {"texts": ["test content"]}
+    request_data = {"user": "john@example.com"}
+
+    await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    mock_api_call.assert_called_once()
+    assert mock_api_call.call_args.kwargs["user"] == "john@example.com"
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_user_field_omitted_from_payload_when_absent(mock_api_call):
+    """
+    Test that the 'user' kwarg is None when the request_data has no 'user' field,
+    so the payload omits it (backwards compatibility).
+    """
+    guardrail = ZscalerAIGuard(policy_id=100)
+    inputs = {"texts": ["test content"]}
+    request_data = {}
+
+    await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    mock_api_call.assert_called_once()
+    assert mock_api_call.call_args.kwargs["user"] is None
+
+
+@pytest.mark.asyncio
+async def test_make_api_call_includes_user_in_body():
+    """
+    Test that make_zscaler_ai_guard_api_call includes 'user' in the JSON body
+    when provided, and omits it when not.
+    """
+    guardrail = ZscalerAIGuard(api_key="test_key", api_base="http://example.com", policy_id=1)
+
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"statusCode": 200, "action": "ALLOW"}
+
+    with patch.object(guardrail, "_send_request", new_callable=AsyncMock) as mock_send:
+        mock_send.return_value = mock_response
+
+        # With user — 'user' should appear in the JSON body
+        await guardrail.make_zscaler_ai_guard_api_call(
+            guardrail.zscaler_ai_guard_url, guardrail.api_key,
+            guardrail.policy_id, "IN", "content", user="alice@example.com",
+        )
+        sent_data = mock_send.call_args[0][2]  # positional arg: (url, headers, data)
+        assert sent_data["user"] == "alice@example.com"
+
+        mock_send.reset_mock()
+        mock_send.return_value = mock_response
+
+        # Without user — 'user' key should not be in the JSON body
+        await guardrail.make_zscaler_ai_guard_api_call(
+            guardrail.zscaler_ai_guard_url, guardrail.api_key,
+            guardrail.policy_id, "IN", "content",
+        )
+        sent_data = mock_send.call_args[0][2]
+        assert "user" not in sent_data
