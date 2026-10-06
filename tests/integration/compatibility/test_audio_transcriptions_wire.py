@@ -174,7 +174,6 @@ def test_audio_transcription_verbose_json_forwards_every_form_field_and_returns_
         assert request.headers["authorization"] == "Bearer synthetic-openai-key"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == _VERBOSE_TEXT_PARTS
-        # the proxy re-derives the file part content type from the filename, ignoring the client's
         assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
         return Reply(body=json.dumps(_VERBOSE_TRANSCRIPT).encode())
 
