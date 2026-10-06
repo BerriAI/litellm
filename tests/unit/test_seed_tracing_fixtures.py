@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from datetime import datetime
@@ -64,7 +65,23 @@ def test_all_fixture_replays_are_recent_and_preserve_spans(path: Path) -> None:
         trace_id, span_id, parent_id, timestamp = SPAN_IDENTITY.validate_python(
             (before["TraceId"], before["SpanId"], before["ParentSpanId"], before["Timestamp"])
         )
-        assert after["TraceId"] == seed_id(trace_id, replay.namespace, 32)
+        span_attributes: Final = before["SpanAttributes"]
+        if isinstance(span_attributes, dict) and "lens.original_trace_id" in span_attributes:
+            before_original_trace_id: Final = span_attributes["lens.original_trace_id"]
+            before_session: Final = span_attributes["session.id"]
+            assert isinstance(before_original_trace_id, str)
+            assert isinstance(before_session, str)
+            after_span_attributes: Final = after["SpanAttributes"]
+            assert isinstance(after_span_attributes, dict)
+            assert after_span_attributes["lens.original_trace_id"] == seed_id(
+                before_original_trace_id, replay.namespace, 32
+            )
+            assert after["TraceId"] == hashlib.sha256(
+                f"litellm.claude.session.v1\0{seed_id(before_session, replay.namespace, 32)}".encode()
+            ).hexdigest()[:32]
+            assert after["TraceId"] != before["TraceId"]
+        else:
+            assert after["TraceId"] == seed_id(trace_id, replay.namespace, 32)
         assert after["SpanId"] == seed_id(span_id, replay.namespace, 16)
         assert after["ParentSpanId"] == seed_id(parent_id, replay.namespace, 16)
         assert after["Timestamp"] == timestamp + replay.offset_ms * 1_000_000
