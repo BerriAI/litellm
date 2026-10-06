@@ -154,6 +154,7 @@ describe("TraceConversation", () => {
   it("keeps refresh busy until content finishes when live updates pause", async () => {
     const user = userEvent.setup();
     const pending = Promise.withResolvers<SpanDetail>();
+    vi.mocked(agentTraceCall).mockResolvedValue({ ...trace, next_cursor: "next-page" });
     renderWithProviders(
       <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
     );
@@ -166,11 +167,14 @@ describe("TraceConversation", () => {
     await user.click(refresh);
     await waitFor(() => expect(testQueryClient.isFetching({ queryKey: ["agentTrace"] })).toBe(0));
     expect(refresh).toBeDisabled();
+    const more = screen.getByRole("button", { name: "Load next 20 entries" });
+    expect(more).toBeDisabled();
     await user.click(refresh);
     await user.click(screen.getByRole("button", { name: "Live updates" }));
     await act(async () => pending.resolve({ ...rootDetail, output: "Updated final answer" }));
     expect(await screen.findByText("Updated final answer")).toBeVisible();
     await waitFor(() => expect(refresh).toBeEnabled());
+    expect(more).toBeEnabled();
     expect(agentTraceCall).toHaveBeenCalledTimes(2);
   });
 
