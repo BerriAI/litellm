@@ -41,21 +41,32 @@ def _embedding_router(
     api_base: str,
     max_embedding_batch_size: int,
     deployment_id: str,
+    litellm_params_extra: dict[str, object] | None = None,
 ) -> Router:
+    litellm_params: dict[str, object] = {
+        "model": provider_model,
+        "api_key": "sk-fake",
+        "api_base": api_base,
+    }
+    if litellm_params_extra:
+        litellm_params.update(litellm_params_extra)
     return Router(
         model_list=[
             {
                 "model_name": "embed",
-                "litellm_params": {
-                    "model": provider_model,
-                    "api_key": "sk-fake",
-                    "api_base": api_base,
-                },
+                "litellm_params": litellm_params,
                 "model_info": {"id": deployment_id, "max_embedding_batch_size": max_embedding_batch_size},
             }
         ],
         num_retries=0,
     )
+
+
+async def _call_embedding(router: Router, *, sync: bool, **kwargs: object) -> None:
+    if sync:
+        router.embedding(**kwargs)
+    else:
+        await router.aembedding(**kwargs)
 
 
 def _vllm_embedding_response(input_count: int) -> httpx.Response:
@@ -106,10 +117,15 @@ class TestEffectiveEmbeddingInput:
             (
                 ["would", "be", "three"],
                 {"dimensions": 256, "input": "single-string", "model": "ignored"},
-                "single-string",
+                ["would", "be", "three"],
             ),
             ("ok", {"truncate": "NONE", "input": ("a", "b")}, ("a", "b")),
-            (["x", "y", "z"], {"input": [[1, 2], [3, 4]], "foo": "bar"}, [[1, 2], [3, 4]]),
+            (["x", "y", "z"], {"input": [[1, 2], [3, 4]], "foo": "bar"}, ["x", "y", "z"]),
+            (
+                ["a", "b", "c"],
+                {"input": "ok"},
+                ["a", "b", "c"],
+            ),
             (["a", "b"], {}, ["a", "b"]),
             (["a", "b", "c"], {"input": None, "truncate": "END"}, ["a", "b", "c"]),
             (["a", "b"], {"input": {"nested": "dict"}, "truncate": "END"}, ["a", "b"]),
@@ -211,10 +227,12 @@ class TestRouterEmbeddingBatchLimit:
         with respx.mock(assert_all_called=False) as respx_mock:
             route: Final = respx_mock.post(embeddings_url).mock(return_value=empty_ok)
             with pytest.raises(litellm.BadRequestError, match="max_embedding_batch_size=2"):
-                if sync:
-                    router.embedding(model="embed", input=["one", "two", "three"])
-                else:
-                    await router.aembedding(model="embed", input=["one", "two", "three"])
+                await _call_embedding(
+                    router,
+                    sync=sync,
+                    model="embed",
+                    input=["one", "two", "three"],
+                )
             assert route.call_count == 0
 
     @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
@@ -232,10 +250,41 @@ class TestRouterEmbeddingBatchLimit:
         with respx.mock(assert_all_called=False) as respx_mock:
             route: Final = respx_mock.post(embeddings_url).mock(return_value=_vllm_embedding_response(3))
             with pytest.raises(litellm.BadRequestError, match="3 inputs"):
-                if sync:
-                    router.embedding(model="embed", input="ok", extra_body=extra_body)
-                else:
-                    await router.aembedding(model="embed", input="ok", extra_body=extra_body)
+                await _call_embedding(
+                    router,
+                    sync=sync,
+                    model="embed",
+                    input="ok",
+                    extra_body=extra_body,
+                )
+            assert route.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_deployment_extra_body_input_counts_toward_batch_limit(self) -> None:
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "embed",
+                    "litellm_params": {
+                        "model": "hosted_vllm/bge-m3",
+                        "api_key": "sk-fake",
+                        "api_base": _VLLM_EMBED_BASE,
+                        "extra_body": {"input": ["a", "b", "c"]},
+                    },
+                    "model_info": {
+                        "id": "vllm-embed-deployment-extra-body",
+                        "max_embedding_batch_size": 2,
+                    },
+                }
+            ],
+            num_retries=0,
+        )
+        embeddings_url: Final = f"{_VLLM_EMBED_BASE}/embeddings"
+
+        with respx.mock(assert_all_called=False) as respx_mock:
+            route: Final = respx_mock.post(embeddings_url).mock(return_value=_vllm_embedding_response(3))
+            with pytest.raises(litellm.BadRequestError, match="3 inputs"):
+                await router.aembedding(model="embed", input="ok")
             assert route.call_count == 0
 
     @pytest.mark.asyncio
@@ -267,9 +316,66 @@ class TestRouterEmbeddingBatchLimit:
         with respx.mock(assert_all_called=False) as respx_mock:
             route: Final = respx_mock.post(embeddings_url).mock(return_value=_vllm_embedding_response(3))
             with pytest.raises(litellm.BadRequestError, match="3 inputs"):
-                await router.aembedding(
+                await _call_embedding(
+                    router,
+                    sync=False,
                     model="embed",
                     input=["a", "b", "c"],
                     extra_body={"truncate": "END", "encoding_format": "float"},
+                )
+            assert route.call_count == 0
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_bedrock_ignores_extra_body_input_override_for_provider_but_guard_uses_top_level(
+        self,
+        sync: bool,
+    ) -> None:
+        router: Final = _embedding_router(
+            provider_model="bedrock/amazon.titan-embed-text-v1",
+            api_base="",
+            max_embedding_batch_size=2,
+            deployment_id="bedrock-titan-embed-batch-capped",
+            litellm_params_extra={
+                "aws_access_key_id": "AKIAFAKE",
+                "aws_secret_access_key": "fake-secret",
+                "aws_region_name": "us-east-1",
+                "custom_llm_provider": "bedrock",
+            },
+        )
+
+        with pytest.raises(litellm.BadRequestError, match="3 inputs"):
+            await _call_embedding(
+                router,
+                sync=sync,
+                model="embed",
+                input=["a", "b", "c"],
+                extra_body={"input": "ok"},
+            )
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_explicit_custom_llm_provider_in_deployment_rejects_oversized_batch(
+        self,
+        sync: bool,
+    ) -> None:
+        router: Final = _embedding_router(
+            provider_model="openai/text-embedding-3-small",
+            api_base=_OPENAI_EMBED_BASE,
+            max_embedding_batch_size=2,
+            deployment_id="embed-batch-capped-explicit-provider",
+            litellm_params_extra={"custom_llm_provider": "openai"},
+        )
+        embeddings_url: Final = f"{_OPENAI_EMBED_BASE}/embeddings"
+        empty_ok: Final = httpx.Response(200, json={"object": "list", "data": [], "model": "x", "usage": {}})
+
+        with respx.mock(assert_all_called=False) as respx_mock:
+            route: Final = respx_mock.post(embeddings_url).mock(return_value=empty_ok)
+            with pytest.raises(litellm.BadRequestError, match="max_embedding_batch_size=2"):
+                await _call_embedding(
+                    router,
+                    sync=sync,
+                    model="embed",
+                    input=["one", "two", "three"],
                 )
             assert route.call_count == 0
