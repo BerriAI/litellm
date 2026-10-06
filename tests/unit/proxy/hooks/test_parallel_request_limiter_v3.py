@@ -4342,13 +4342,17 @@ async def test_success_event_releases_parallel_slot_v3(monkeypatch):
     )
 
 
+_SSE_KEEPALIVE_CALLBACK_TIME: Final = datetime(2026, 1, 1)
+# Long enough that a request answering without waiting never sees a ping.
+_SSE_KEEPALIVE_NEVER_PINGS_SECONDS: Final = 60.0
+# The ping path is forced by holding the upstream until a ping is seen, so this
+# interval only sets how soon the first ping arrives, never which path runs.
+_SSE_KEEPALIVE_PINGS_SECONDS: Final = 0.001
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "upstream_delay_seconds",
-    [0.0, 0.2],
-    ids=["answers_before_first_ping", "answers_after_keepalive_pings"],
-)
-async def test_sse_keepalive_does_not_leak_parallel_slot_v3(monkeypatch, upstream_delay_seconds):
+@pytest.mark.parametrize("answers_after_ping", [False, True], ids=["answers_before_first_ping", "answers_after_ping"])
+async def test_sse_keepalive_does_not_leak_parallel_slot_v3(answers_after_ping):
     """
     Regression for #42819. `open_sse_before_first_byte` runs the request,
     pre-call hooks included, in its own Task, which works on a copy of the
@@ -4362,15 +4366,19 @@ async def test_sse_keepalive_does_not_leak_parallel_slot_v3(monkeypatch, upstrea
     from fastapi.responses import Response, StreamingResponse
 
     from litellm.proxy.common_request_processing import open_sse_before_first_byte
+    from litellm.proxy.common_utils.sse_keepalive import SSE_COMMENT_PING_BYTES
 
     _api_key = hash_token("sk-12345")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
-    monkeypatch.setattr(handler, "get_rate_limit_type", lambda: "total")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
     counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
 
     async def streamed_request() -> None:
+        upstream_answers = asyncio.Event()
+        if not answers_after_ping:
+            upstream_answers.set()
+
         async def produce_response() -> Response:
             await handler.async_pre_call_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -4378,21 +4386,30 @@ async def test_sse_keepalive_does_not_leak_parallel_slot_v3(monkeypatch, upstrea
                 data={"model": "gpt-3.5-turbo"},
                 call_type="",
             )
-            await asyncio.sleep(upstream_delay_seconds)
+            await upstream_answers.wait()
             return Response(content=b"{}")
 
-        response = await open_sse_before_first_byte(produce_response(), ping_interval_seconds=0.05)
+        response = await open_sse_before_first_byte(
+            produce_response(),
+            ping_interval_seconds=(
+                _SSE_KEEPALIVE_PINGS_SECONDS if answers_after_ping else _SSE_KEEPALIVE_NEVER_PINGS_SECONDS
+            ),
+        )
+        assert isinstance(response, StreamingResponse) is answers_after_ping
         if isinstance(response, StreamingResponse):
-            async for _ in response.body_iterator:
-                pass
+            chunks = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+                upstream_answers.set()
+            assert chunks[0] == SSE_COMMENT_PING_BYTES
 
         await handler.async_log_success_event(
             kwargs={
                 "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
             },
             response_obj=ModelResponse(usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)),
-            start_time=datetime.now(),
-            end_time=datetime.now(),
+            start_time=_SSE_KEEPALIVE_CALLBACK_TIME,
+            end_time=_SSE_KEEPALIVE_CALLBACK_TIME,
         )
 
     # Each request gets a fresh context, as each ASGI request does in the proxy.
@@ -4402,7 +4419,7 @@ async def test_sse_keepalive_does_not_leak_parallel_slot_v3(monkeypatch, upstrea
 
 
 @pytest.mark.asyncio
-async def test_sse_keepalive_still_enforces_max_parallel_requests_v3(monkeypatch):
+async def test_sse_keepalive_still_enforces_max_parallel_requests_v3():
     """
     The #42819 fix shares the request stash with the keepalive Task; it must not
     weaken the limit itself. Two concurrent wrapped requests on a
@@ -4417,8 +4434,9 @@ async def test_sse_keepalive_still_enforces_max_parallel_requests_v3(monkeypatch
     _api_key = hash_token("sk-12345")
     local_cache = DualCache()
     handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
-    monkeypatch.setattr(handler, "get_rate_limit_type", lambda: "total")
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+    # Holds the admitted request in flight until the other one has been answered.
+    upstream_answers = asyncio.Event()
 
     async def streamed_request() -> object:
         async def produce_response() -> Response:
@@ -4428,19 +4446,24 @@ async def test_sse_keepalive_still_enforces_max_parallel_requests_v3(monkeypatch
                 data={"model": "gpt-3.5-turbo"},
                 call_type="",
             )
-            await asyncio.sleep(0.2)
+            await upstream_answers.wait()
             return Response(content=b"{}")
 
-        return await open_sse_before_first_byte(produce_response(), ping_interval_seconds=5.0)
+        return await open_sse_before_first_byte(
+            produce_response(), ping_interval_seconds=_SSE_KEEPALIVE_NEVER_PINGS_SECONDS
+        )
 
-    results = await asyncio.gather(
-        *(asyncio.create_task(streamed_request(), context=contextvars.Context()) for _ in range(2)),
-        return_exceptions=True,
-    )
+    requests = [asyncio.create_task(streamed_request(), context=contextvars.Context()) for _ in range(2)]
+    answered, in_flight = await asyncio.wait(requests, return_when=asyncio.FIRST_COMPLETED)
+    upstream_answers.set()
+    await asyncio.wait(in_flight)
 
-    rejected = [result for result in results if isinstance(result, HTTPException)]
-    assert len(rejected) == 1
-    assert rejected[0].status_code == 429
+    (rejected_request,) = answered
+    rejection = rejected_request.exception()
+    assert isinstance(rejection, HTTPException)
+    assert rejection.status_code == 429
+    (admitted_request,) = in_flight
+    assert isinstance(admitted_request.result(), Response)
 
 
 @pytest.mark.asyncio
