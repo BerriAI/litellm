@@ -29,6 +29,7 @@ from litellm.integrations.otel.model.semconv import (
     Error,
     GenAI,
     Metric,
+    MetricBuckets,
     resolve_operation,
     resolve_provider,
 )
@@ -70,11 +71,13 @@ def create_genai_metrics(meter: Meter) -> GenAIMetrics:
             name=Metric.OPERATION_DURATION,
             unit="s",
             description="GenAI operation duration",
+            explicit_bucket_boundaries_advisory=MetricBuckets.OPERATION_DURATION,
         ),
         token_usage=meter.create_histogram(
             name=Metric.TOKEN_USAGE,
             unit="{token}",
             description="GenAI token usage",
+            explicit_bucket_boundaries_advisory=MetricBuckets.TOKEN_USAGE,
         ),
         token_cost=meter.create_histogram(
             name=Metric.TOKEN_COST,
@@ -85,16 +88,19 @@ def create_genai_metrics(meter: Meter) -> GenAIMetrics:
             name=Metric.TIME_TO_FIRST_TOKEN,
             unit="s",
             description="Time to first token for streaming requests",
+            explicit_bucket_boundaries_advisory=MetricBuckets.TIME_TO_FIRST_TOKEN,
         ),
         time_per_output_token=meter.create_histogram(
             name=Metric.TIME_PER_OUTPUT_TOKEN,
             unit="s",
             description="Average time per output token (generation time / completion tokens)",
+            explicit_bucket_boundaries_advisory=MetricBuckets.TIME_PER_OUTPUT_TOKEN,
         ),
         response_duration=meter.create_histogram(
             name=Metric.RESPONSE_DURATION,
             unit="s",
             description="Total LLM API generation time (excludes LiteLLM overhead)",
+            explicit_bucket_boundaries_advisory=MetricBuckets.RESPONSE_DURATION,
         ),
     )
 
