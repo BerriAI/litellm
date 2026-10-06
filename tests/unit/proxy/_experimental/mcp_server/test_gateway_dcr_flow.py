@@ -724,6 +724,7 @@ async def test_single_use_guard_peek_fails_closed_when_redis_errors():
     cache = DualCache()
     cache.redis_cache = MagicMock()
     cache.redis_cache.async_get_cache = AsyncMock(return_value=None)
+    cache.redis_cache.check_and_fix_namespace = MagicMock(side_effect=lambda key: key)
     cache.redis_cache.init_async_client.return_value.get = AsyncMock(side_effect=ConnectionError("redis down"))
 
     guard = _SingleUseGuard(cache)
@@ -731,6 +732,40 @@ async def test_single_use_guard_peek_fails_closed_when_redis_errors():
 
     cache.redis_cache.init_async_client.return_value.get = AsyncMock(return_value=b"1")
     assert await guard.peek("family-fault") == "claimed"
+
+
+@pytest.mark.asyncio
+async def test_single_use_guard_peek_reads_the_key_under_the_namespace_claim_wrote():
+    """A configured ``redis_namespace`` prefixes every key the cache wrapper writes, so the raw client
+    read behind peek must ask for the same prefixed key: a revocation written under ``ns:...`` and
+    peeked at the bare key would never be seen, and the revoked chain would keep renewing."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import _SingleUseGuard
+
+    stored: dict[str, int] = {}  # mutable-ok: the fake Redis store the test inspects
+
+    def namespaced(key: str) -> str:
+        return f"ns:{key}"
+
+    async def increment(key: str, value: int, ttl: int) -> int:
+        stored[namespaced(key)] = stored.get(namespaced(key), 0) + value
+        return stored[namespaced(key)]
+
+    async def raw_get(key: str) -> bytes | None:
+        return None if key not in stored else str(stored[key]).encode()
+
+    cache = DualCache()
+    cache.redis_cache = MagicMock()
+    cache.redis_cache.check_and_fix_namespace = MagicMock(side_effect=namespaced)
+    cache.redis_cache.async_increment = AsyncMock(side_effect=increment)
+    cache.redis_cache.init_async_client.return_value.get = AsyncMock(side_effect=raw_get)
+
+    guard = _SingleUseGuard(cache)
+    assert await guard.peek("family-ns") == "unclaimed"
+    assert await guard.claim("family-ns", 60) == "first"
+    assert set(stored) == {"ns:family-ns"}
+    assert await guard.peek("family-ns") == "claimed"
 
 
 LOOPBACK_REDIRECT_URI = "http://localhost:3118/callback"
@@ -1877,6 +1912,7 @@ def _redis_that(async_increment, get=None):
     cache = DualCache()
     cache.redis_cache = MagicMock()
     cache.redis_cache.async_increment = async_increment
+    cache.redis_cache.check_and_fix_namespace = MagicMock(side_effect=lambda key: key)
     cache.redis_cache.init_async_client.return_value.get = get or AsyncMock(return_value=None)
     cache.redis_cache.async_get_cache = AsyncMock(side_effect=AssertionError("peek must read the client, not the wrapper"))
     cache.async_increment_cache = AsyncMock(side_effect=AssertionError("must not fall back to in-memory"))

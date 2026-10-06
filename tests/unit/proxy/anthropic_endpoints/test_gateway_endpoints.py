@@ -72,29 +72,39 @@ _COMPLETED_SESSION: Final = MappingProxyType(
 
 
 class _SharedRedisFake:
+    """A Redis double with a configured namespace, prefixing every key its wrapper methods touch the
+    way ``RedisCache`` does, while its raw client answers only the exact key it is asked for."""
+
+    namespace: Final = "qa"
+
     def __init__(self) -> None:
         self.values: Mapping[str, object] = MappingProxyType({})
         self.counters: Mapping[str, float] = MappingProxyType({})
 
+    def check_and_fix_namespace(self, key: str) -> str:
+        return key if key.startswith(f"{self.namespace}:") else f"{self.namespace}:{key}"
+
     def set_cache(self, key: str, value: object, **kwargs: object) -> None:
-        self.values = MappingProxyType({**self.values, key: value})
+        self.values = MappingProxyType({**self.values, self.check_and_fix_namespace(key): value})
 
     def get_cache(self, key: str, **kwargs: object) -> object:
-        return self.values.get(key)
+        return self.values.get(self.check_and_fix_namespace(key))
 
     def delete_cache(self, key: str) -> None:
-        self.values = MappingProxyType({name: value for name, value in self.values.items() if name != key})
+        gone: Final = self.check_and_fix_namespace(key)
+        self.values = MappingProxyType({name: value for name, value in self.values.items() if name != gone})
 
     async def async_delete_cache(self, key: str) -> None:
         self.delete_cache(key)
 
     async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
-        incremented: Final = self.counters.get(key, 0) + value
-        self.counters = MappingProxyType({**self.counters, key: incremented})
+        namespaced: Final = self.check_and_fix_namespace(key)
+        incremented: Final = self.counters.get(namespaced, 0) + value
+        self.counters = MappingProxyType({**self.counters, namespaced: incremented})
         return incremented
 
     async def async_get_cache(self, key: str, **kwargs: object) -> object:
-        return self.values.get(key)
+        return self.values.get(self.check_and_fix_namespace(key))
 
     def init_async_client(self) -> "_SharedRedisClientFake":
         return _SharedRedisClientFake(self)
@@ -690,6 +700,25 @@ def test_revoke_ends_the_rotation_chain_of_the_presented_token():
     assert refused.status_code == 400
     assert refused.json()["error"] == "invalid_grant"
     assert "revoked" in refused.json()["error_description"]
+
+
+def test_revoke_on_one_replica_ends_the_chain_on_another_through_a_namespaced_redis():
+    """The sign-out's revocation marker is written through the cache wrapper, which prefixes the key
+    with the configured ``redis_namespace``; the replica serving the next renewal must look for the
+    marker under that same prefix, or the revoked chain keeps renewing everywhere but where it signed
+    out."""
+    redis: Final = _SharedRedisFake()
+    minter: Final = _Minter()
+    with _gateway_env(claim_cache=_replica(redis), minter=minter) as (client, cache):
+        stored = str(_signed_in(client, cache)["refresh_token"])
+        copied_and_rotated = str(_refresh(client, stored).json()["refresh_token"])
+        assert _revoke(client, stored).status_code == 200
+    with _gateway_env(claim_cache=_replica(redis), minter=minter) as (client, _):
+        refused = _refresh(client, copied_and_rotated)
+    assert refused.status_code == 400
+    assert refused.json()["error"] == "invalid_grant"
+    assert "revoked" in refused.json()["error_description"]
+    assert len(minter.calls) == 1
 
 
 def test_revoke_404_when_gateway_disabled():
