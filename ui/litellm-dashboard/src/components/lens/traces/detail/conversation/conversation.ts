@@ -458,8 +458,14 @@ export function conversationWarnings(details: ReadonlyMap<string, SpanDetail>, c
       detail.attributes["lens.capture.warning"] ? [detail.attributes["lens.capture.warning"]] : [],
     ),
   ];
+  const hasAssistantText = [...details.values()].some((detail) =>
+    messages(detail.output, detail.output_ui, "assistant").some(
+      (message) => message.role === "assistant" && message.content.trim(),
+    ),
+  );
   if (
     complete &&
+    !hasAssistantText &&
     ![...details.values()].some((detail) => detail.attributes["event.name"] === "assistant_response") &&
     [...details.values()].some(
       (detail) =>
