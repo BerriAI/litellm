@@ -84,7 +84,5 @@ def test_config_deployment_dropped_by_stale_boot_cost_map_is_restored_after_relo
                     "method": "POST",
                     "api_key": "",
                     "body": {"model": model, "messages": [{"role": "user", "content": "stale cost map control"}]},
-                    "method": "POST",
-                    "api_key": "",
                 }
             ]
