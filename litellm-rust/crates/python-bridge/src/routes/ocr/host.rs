@@ -1,5 +1,5 @@
 use litellm_auth::ResolvedCredential;
-use litellm_core::ocr::route::{Ocr, OcrCall, OcrOp};
+use litellm_inference::ocr::route::{Ocr, OcrCall, OcrOp};
 use litellm_host_python::{InvokeError, PythonBinding, missing_state, to_py};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 use litellm_llms::base_llm::ocr::error::Error;

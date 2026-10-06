@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use litellm_core::ocr::{
+use litellm_inference::ocr::{
     route::{Ocr, OcrCall, OcrOp},
     types::OcrDocumentInput,
 };

@@ -1,4 +1,4 @@
-use litellm_core::RouteError;
+use litellm_inference::RouteError;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host_python::{from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;

@@ -15,7 +15,7 @@ use litellm_cache_response::{
     CacheOptions, CachePolicy, CacheScope, ResponseCache, ResponseCacheConfig,
     ResponseCacheService, ResponseEnvelope,
 };
-use litellm_core::{
+use litellm_inference::{
     RouteError,
     caching::{Cachable, CacheRequest, StreamCachable, execute_streaming, execute_unary},
 };
@@ -410,7 +410,7 @@ async fn an_invalid_cached_envelope_is_replaced_by_a_provider_result(#[case] poi
 async fn responses_refetches_instead_of_deserializing_another_api_response(
     #[case] poisoned: Value,
 ) {
-    use litellm_core::responses::route::Responses;
+    use litellm_inference::responses::route::Responses;
     use litellm_llms_types::formats::responses::ResponsesApiResponse;
 
     let cache: Arc<dyn ResponseCacheService> = Arc::new(InvalidEntryCache(
@@ -460,7 +460,7 @@ async fn messages_cache_identity_includes_provider_native_parameters(
     #[case] original: Value,
     #[case] changed: Value,
 ) {
-    use litellm_core::messages::route::Messages;
+    use litellm_inference::messages::route::Messages;
     use litellm_llms_types::formats::messages::MessagesResponse;
 
     let calls = AtomicUsize::new(0);
@@ -842,7 +842,7 @@ async fn responses_cache_only_reuses_completed_responses(
     #[case] status: &str,
     #[case] expected_calls: usize,
 ) {
-    use litellm_core::responses::route::Responses;
+    use litellm_inference::responses::route::Responses;
     use litellm_llms_types::formats::responses::ResponsesApiResponse;
 
     let calls = AtomicUsize::new(0);
@@ -883,7 +883,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
     traces: support::TraceCapture,
 ) {
     use litellm_cache_response::ScopedCache;
-    use litellm_core::chat_completions::types::ChatCompletionsRequest;
+    use litellm_inference::chat_completions::types::ChatCompletionsRequest;
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     let upstream = MockServer::start().await;
@@ -1038,7 +1038,7 @@ async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
     #[case] change: &str,
 ) {
     use litellm_cache_response::ScopedCache;
-    use litellm_core::{
+    use litellm_inference::{
         chat_completions::{ChatCompletionsRoute, types::ChatCompletionsRequest},
         messages::MessagesCall,
         responses::types::ResponsesCall,
@@ -1178,7 +1178,7 @@ async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
 #[tokio::test]
 async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheService>) {
     use litellm_cache_response::ScopedCache;
-    use litellm_core::chat_completions::types::ChatCompletionsRequest;
+    use litellm_inference::chat_completions::types::ChatCompletionsRequest;
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     let upstream = MockServer::start().await;

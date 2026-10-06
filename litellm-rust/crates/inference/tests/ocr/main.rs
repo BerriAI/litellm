@@ -1,4 +1,4 @@
-use litellm_core::ocr::{
+use litellm_inference::ocr::{
     OcrRoute,
     document::prepare_document,
     route::{Ocr, OcrCall, OcrOp},

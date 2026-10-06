@@ -3,7 +3,7 @@ use axum::{
     Json,
     response::{IntoResponse, Response},
 };
-use litellm_core::RouteError;
+use litellm_inference::RouteError;
 use litellm_http::transport::Error as TransportError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use serde_json::{Map, Value, json};

@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use litellm_core::messages::{
+use litellm_inference::messages::{
     Error, MessagesCall, MessagesShaping,
     route::{Messages, MessagesMachine, MessagesOutput},
 };

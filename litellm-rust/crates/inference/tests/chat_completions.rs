@@ -5,7 +5,7 @@ use litellm_host::{
 };
 use std::time::Duration;
 
-use litellm_core::chat_completions::{Error, types::ChatCompletionsRequest};
+use litellm_inference::chat_completions::{Error, types::ChatCompletionsRequest};
 use litellm_http::transport::Error as TransportError;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use rstest::{fixture, rstest};
@@ -257,7 +257,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
     request: ChatCompletionsRequest<'static>,
     #[case] hosted: bool,
 ) {
-    use litellm_core::chat_completions::route::ChatCompletions;
+    use litellm_inference::chat_completions::route::ChatCompletions;
     use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
 
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;

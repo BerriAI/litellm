@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{Json, body::Bytes, extract::State, response::Response};
-use litellm_core::responses::{route::Responses, types::ResponsesCall};
+use litellm_inference::responses::{route::Responses, types::ResponsesCall};
 use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_host_http::Sse;
 use serde_json::json;

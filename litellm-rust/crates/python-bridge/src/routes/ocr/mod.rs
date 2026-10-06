@@ -5,7 +5,7 @@ mod project;
 
 use host::OcrPythonHost;
 use litellm_callbacks_legacy_python::LoggingOperation;
-use litellm_core::ocr::provider_config;
+use litellm_inference::ocr::provider_config;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::to_py;
 use litellm_llms::base_llm::ocr::settings::OcrSettings;
@@ -58,7 +58,7 @@ fn run_ocr(
                 crate::secrets::source(py)?,
             )
             .map_err(http::client_error)?;
-            let route = litellm_core::ocr::OcrRoute::new(client);
+            let route = litellm_inference::ocr::OcrRoute::new(client);
             Ok(route.machine(request, None))
         },
         OcrPythonHost::new(request.unbind()),

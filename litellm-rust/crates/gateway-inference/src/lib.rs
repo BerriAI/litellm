@@ -15,7 +15,7 @@ mod responses;
 use std::sync::Arc;
 
 use axum::{Router, routing::post};
-use litellm_core::{
+use litellm_inference::{
     audio_transcription::AudioTranscriptionRoute, chat_completions::ChatCompletionsRoute,
     messages::MessagesRoute, ocr::OcrRoute, resources::CoreResources, responses::ResponsesRoute,
 };

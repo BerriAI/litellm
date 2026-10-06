@@ -4,7 +4,7 @@ use litellm_cache::Error;
 use litellm_cache_response::{
     ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
 };
-use litellm_core::caching::CachedOutput;
+use litellm_inference::caching::CachedOutput;
 use litellm_host::{
     machine::{HostServices, MachineFault},
     protocol::{Protocol, Reply},

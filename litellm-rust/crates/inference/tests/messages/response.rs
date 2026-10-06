@@ -1,4 +1,4 @@
-use litellm_core::messages::{MessagesCallResponse, messages_body};
+use litellm_inference::messages::{MessagesCallResponse, messages_body};
 use litellm_host::{
     interceptors::{ExecutionFacts, ResultSource},
     lifecycle::ExecutionEvent,
@@ -269,7 +269,7 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
     };
 
     let resources = support::resources();
-    let response = litellm_core::messages::MessagesRoute::new(
+    let response = litellm_inference::messages::MessagesRoute::new(
         provider_http(&resources, &Resolution::from(&settings).config),
         resources.auth,
         no_secrets(),
@@ -348,7 +348,7 @@ async fn route_uses_injected_dependencies_and_optional_cache(
 ) {
     use litellm_cache_memory::InMemoryCache;
     use litellm_cache_response::{CacheScope, ResponseCache, ScopedCache};
-    use litellm_core::messages::MessagesRoute;
+    use litellm_inference::messages::MessagesRoute;
 
     let upstream = upstream([message_response(), message_response()]).await;
     let resources = resources();

@@ -2,7 +2,7 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
-use litellm_core::messages::{
+use litellm_inference::messages::{
     Error, MessagesCall, MessagesShaping, messages_body,
     route::{Messages, MessagesStreamHead},
 };

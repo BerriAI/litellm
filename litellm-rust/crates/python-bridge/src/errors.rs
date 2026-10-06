@@ -1,4 +1,4 @@
-use litellm_core::RouteError;
+use litellm_inference::RouteError;
 use litellm_http::transport::Error as TransportError;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},

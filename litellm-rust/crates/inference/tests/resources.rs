@@ -9,7 +9,7 @@ use litellm_auth::AuthServices;
 use litellm_auth_gcp::{
     CredentialSource, VertexAuth, VertexAuthFuture, VertexProviderLoader, VertexTokenSource,
 };
-use litellm_core::{
+use litellm_inference::{
     ocr::wire::{OcrWireRequest, decode_request},
     resources::CoreResources,
 };

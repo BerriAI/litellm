@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use litellm_core::ocr::{
+use litellm_inference::ocr::{
     route::{OcrCall, OcrMachine, OcrOp},
     types::OcrDocumentInput,
 };

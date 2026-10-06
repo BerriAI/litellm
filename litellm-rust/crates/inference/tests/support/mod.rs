@@ -24,8 +24,8 @@ pub fn http_pool() -> HttpClientPool {
     HttpClientPool::new(Arc::new(PublicDnsResolver))
 }
 
-pub fn resources() -> litellm_core::resources::CoreResources {
-    litellm_core::resources::CoreResources::new(Arc::new(http_pool()))
+pub fn resources() -> litellm_inference::resources::CoreResources {
+    litellm_inference::resources::CoreResources::new(Arc::new(http_pool()))
 }
 
 pub fn no_secrets() -> Arc<dyn SecretSource> {
@@ -33,7 +33,7 @@ pub fn no_secrets() -> Arc<dyn SecretSource> {
 }
 
 pub fn provider_http(
-    resources: &litellm_core::resources::CoreResources,
+    resources: &litellm_inference::resources::CoreResources,
     config: &HttpClientConfig,
 ) -> litellm_http::Client {
     resources
@@ -42,36 +42,36 @@ pub fn provider_http(
         .unwrap()
 }
 
-pub fn messages_route(secrets: Arc<dyn SecretSource>) -> litellm_core::messages::MessagesRoute {
+pub fn messages_route(secrets: Arc<dyn SecretSource>) -> litellm_inference::messages::MessagesRoute {
     let resources = resources();
-    litellm_core::messages::MessagesRoute::new(
+    litellm_inference::messages::MessagesRoute::new(
         provider_http(&resources, &http_config()),
         resources.auth,
         secrets,
     )
 }
 
-pub fn chat_completions_route() -> litellm_core::chat_completions::ChatCompletionsRoute {
+pub fn chat_completions_route() -> litellm_inference::chat_completions::ChatCompletionsRoute {
     let resources = resources();
-    litellm_core::chat_completions::ChatCompletionsRoute::new(
+    litellm_inference::chat_completions::ChatCompletionsRoute::new(
         provider_http(&resources, &http_config()),
         resources.auth,
         no_secrets(),
     )
 }
 
-pub fn responses_route(secrets: Arc<dyn SecretSource>) -> litellm_core::responses::ResponsesRoute {
+pub fn responses_route(secrets: Arc<dyn SecretSource>) -> litellm_inference::responses::ResponsesRoute {
     let resources = resources();
-    litellm_core::responses::ResponsesRoute::new(
+    litellm_inference::responses::ResponsesRoute::new(
         provider_http(&resources, &http_config()),
         resources.auth,
         secrets,
     )
 }
 
-pub fn audio_transcription_route() -> litellm_core::audio_transcription::AudioTranscriptionRoute {
+pub fn audio_transcription_route() -> litellm_inference::audio_transcription::AudioTranscriptionRoute {
     let resources = resources();
-    litellm_core::audio_transcription::AudioTranscriptionRoute::new(
+    litellm_inference::audio_transcription::AudioTranscriptionRoute::new(
         provider_http(&resources, &http_config()),
         resources.auth,
         no_secrets(),
@@ -79,13 +79,13 @@ pub fn audio_transcription_route() -> litellm_core::audio_transcription::AudioTr
 }
 
 pub fn build_ocr_route(
-    resources: &litellm_core::resources::CoreResources,
+    resources: &litellm_inference::resources::CoreResources,
     config: &HttpClientConfig,
     url_policy: litellm_http::media::UrlPolicy,
     settings: litellm_llms::base_llm::ocr::settings::OcrSettings,
     secrets: Arc<dyn SecretSource>,
-) -> litellm_core::ocr::OcrRoute {
-    litellm_core::ocr::OcrRoute::new(
+) -> litellm_inference::ocr::OcrRoute {
+    litellm_inference::ocr::OcrRoute::new(
         litellm_llms::base_llm::ocr::handler::OcrClient::new(
             &resources.pool,
             config,
@@ -396,7 +396,7 @@ impl TraceCapture {
 
 impl litellm_tracing::Sink for TraceCapture {
     fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
-        metadata.target().starts_with("litellm_core")
+        metadata.target().starts_with("litellm_inference")
     }
 
     fn emit(&self, record: &litellm_tracing::Record) {

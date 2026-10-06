@@ -5,7 +5,7 @@ use litellm_host::{
 use std::sync::Arc;
 
 use futures_util::TryStreamExt;
-use litellm_core::responses::{
+use litellm_inference::responses::{
     route::Responses,
     types::{ResponsesCall, ResponsesOutput},
 };
@@ -417,7 +417,7 @@ async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credent
     traces: TraceCapture,
 ) {
     use futures_util::{SinkExt, StreamExt};
-    use litellm_core::responses::websocket::ResponsesWebSocketConnection;
+    use litellm_inference::responses::websocket::ResponsesWebSocketConnection;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

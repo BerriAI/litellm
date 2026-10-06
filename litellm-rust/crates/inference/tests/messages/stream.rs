@@ -5,7 +5,7 @@ use std::{
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
-use litellm_core::messages::{
+use litellm_inference::messages::{
     MessagesCallResponse,
     route::{Messages, MessagesStreamHead},
 };
@@ -35,7 +35,7 @@ struct TraceSink(mpsc::Sender<(String, Value)>);
 
 impl Sink for TraceSink {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        metadata.target().starts_with("litellm_core::messages")
+        metadata.target().starts_with("litellm_inference::messages")
     }
 
     fn emit(&self, record: &Record) {

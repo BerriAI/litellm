@@ -6,7 +6,7 @@ use axum::{
     body::{Body, Bytes},
     http::Request,
 };
-use litellm_core::{
+use litellm_inference::{
     chat_completions::{ChatCompletionsRoute, types::ChatCompletionsRequest},
     resources::CoreResources,
 };

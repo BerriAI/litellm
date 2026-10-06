@@ -1,5 +1,5 @@
 use litellm_auth::SecretValue;
-use litellm_core::ocr::{
+use litellm_inference::ocr::{
     types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
 };

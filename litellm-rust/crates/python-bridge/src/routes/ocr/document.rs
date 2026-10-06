@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use litellm_core::ocr::types::OcrDocumentInput;
+use litellm_inference::ocr::types::OcrDocumentInput;
 use litellm_host_python::{PythonFileReader, py_bytes};
 use pyo3::{
     exceptions::PyValueError,
