@@ -6,6 +6,9 @@ import { renderWithLens, stubGateway } from "@/../tests/lens-test-utils";
 import { ApiError } from "@/lib/http/client";
 import { lensKeys } from "../data/queries";
 import { InvestigationsView } from "./InvestigationsView";
+import { investigationHandoffText } from "./agentHandoff";
+import { LensServicesProvider } from "../data/LensServices";
+import { createLensDemo } from "../data/demo/createLensDemo";
 import { RunReport } from "./detail/RunReport";
 import { briefMarkdown } from "../model/findings";
 import { findingKey } from "../model/inbox";
@@ -171,6 +174,38 @@ describe("Lens findings and runs", () => {
       if (path === "/lens/lens/runs") return lens.jobs;
       return { data: [] };
     });
+  });
+
+  it.each([false, true])("copies an agent handoff in one click (readOnly=%s)", async (readOnly) => {
+    const user = userEvent.setup();
+    renderWithProviders(<InvestigationsView readOnly={readOnly} />);
+    const investigation = within(await screen.findByRole("complementary", { name: "Investigation details" }));
+    await user.click(investigation.getByRole("button", { name: "Copy for agent" }));
+    expect(await navigator.clipboard.readText()).toBe(investigationHandoffText("", "lens"));
+    expect(investigation.getByRole("button", { name: "Copy for agent" })).toHaveTextContent("Command copied");
+    expect(proxy.post).not.toHaveBeenCalled();
+  });
+
+  it.each(["all", "older-run"])("copies the selected %s results rather than silently using latest", async (run) => {
+    const user = userEvent.setup();
+    renderWithProviders(<InvestigationsView readOnly />, { searchParams: `?lens=lens&run=${run}` });
+    const investigation = within(await screen.findByRole("complementary", { name: "Investigation details" }));
+    await user.click(investigation.getByRole("button", { name: "Copy for agent" }));
+    expect(await navigator.clipboard.readText()).toBe(investigationHandoffText("", "lens", run));
+  });
+
+  it("does not offer live API commands for demo investigations", async () => {
+    const services = createLensDemo();
+    const [demoLens] = (await services.lens.lenses()).lenses;
+    renderWithProviders(
+      <LensServicesProvider services={services}>
+        <InvestigationsView readOnly />
+      </LensServicesProvider>,
+      { searchParams: `?lens=${demoLens.id}&demo=true` },
+    );
+    const investigation = within(await screen.findByRole("complementary", { name: "Investigation details" }));
+    expect(investigation.getByRole("heading", { name: demoLens.settings.name })).toBeVisible();
+    expect(investigation.queryByRole("button", { name: "Copy for agent" })).not.toBeInTheDocument();
   });
 
   it("separates patterns from issues and reveals original evidence only when requested", async () => {

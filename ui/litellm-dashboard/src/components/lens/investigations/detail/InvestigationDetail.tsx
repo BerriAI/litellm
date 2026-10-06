@@ -1,6 +1,11 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import CopyButton from "@/components/shared/CopyButton";
+import { getProxyBaseUrl } from "@/components/networking";
+import { getAuthHeaderName } from "@/lib/http/runtime";
+import { useTracesLive } from "../../traces/api";
+import { investigationHandoffText } from "../agentHandoff";
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RunsTab } from "./RunsTab";
@@ -44,6 +49,7 @@ export function InvestigationDetail({
   onReviewFinding,
   ...intents
 }: InvestigationDetailProps) {
+  const isLive = useTracesLive();
   const { section, setSection } = useSectionRoute();
   const { setKind, setStatus } = useFindingFilters();
   const snapshot = useRunSnapshot(lens);
@@ -70,7 +76,17 @@ export function InvestigationDetail({
             <h2 className="text-lg font-semibold">{lens.settings.name}</h2>
             <InvestigationSummary lens={lens} />
           </div>
-          {!readOnly && <InvestigationActions lens={lens} ready={ready} busy={busy} {...intents} />}
+          <div className="flex items-center gap-2 self-start">
+            {isLive && (
+              <CopyButton
+                variant="action"
+                label="Copy for agent"
+                copiedLabel="Command copied"
+                value={investigationHandoffText(getProxyBaseUrl(), lens.id, batchId, getAuthHeaderName())}
+              />
+            )}
+            {!readOnly && <InvestigationActions lens={lens} ready={ready} busy={busy} {...intents} />}
+          </div>
         </div>
         <RunReport
           lens={lens}
