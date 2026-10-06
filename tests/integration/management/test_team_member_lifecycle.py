@@ -397,18 +397,16 @@ def test_member_add_list_mixing_id_and_email_applies_budget_and_allowed_models(
         response: Final = _MemberAddResponse.model_validate_json(added.text)
         assert tuple(user.user_id for user in response.updated_users) == (user_one, user_two), added.text
         assert tuple(member.user_id for member in response.updated_team_memberships) == (user_one, user_two), added.text
-        membership_rows: Final = read_rows(
-            "SELECT tm.user_id, tm.budget_id, b.max_budget, b.allowed_models "
+        assert read_rows(
+            "SELECT tm.user_id, b.max_budget, b.allowed_models "
             'FROM "LiteLLM_TeamMembership" tm '
             'JOIN "LiteLLM_BudgetTable" b ON b.budget_id = tm.budget_id '
             "WHERE tm.team_id = %s ORDER BY tm.user_id",
             (team,),
-        )
-        assert tuple(row["user_id"] for row in membership_rows) == tuple(
-            sorted((user_one, user_two)),
-        ), membership_rows
-        assert all(float(row["max_budget"]) == 1 for row in membership_rows), membership_rows
-        assert all(row["allowed_models"] == [model_one] for row in membership_rows), membership_rows
+        ) == [
+            {"user_id": user_id, "max_budget": 1.0, "allowed_models": [model_one]}
+            for user_id in sorted((user_one, user_two))
+        ], added.text
         info: Final = _team_info(gateway, team)
         membership_limits: Final = tuple(
             sorted(
@@ -462,10 +460,15 @@ def test_bulk_member_add_adds_every_listed_member_and_reports_failures(
         user_two: Final = scenario.user(user_role="internal_user")
         email_three: Final = f"bulk-member-{uuid.uuid4().hex}@integration.test"
         user_three: Final = scenario.user(user_email=email_three, user_role="internal_user")
+        email_four: Final = f"bulk-admin-{uuid.uuid4().hex}@integration.test"
+        user_four: Final = scenario.user(user_email=email_four, user_role="internal_user")
+        email_five: Final = f"bulk-admin-provisioned-{uuid.uuid4().hex}@integration.test"
         members: Final = [
             {"role": "user", "user_id": user_one},
             {"role": "user", "user_id": user_two},
             {"role": "user", "user_email": email_three},
+            {"role": "admin", "user_email": email_four},
+            {"role": "admin", "user_email": email_five},
         ]
         added: Final = gateway.request(
             "POST",
@@ -473,27 +476,40 @@ def test_bulk_member_add_adds_every_listed_member_and_reports_failures(
             {"team_id": team, "members": members, "max_budget_in_team": 1},
         )
         assert added.status_code == 200, added.text
+        provisioned_rows: Final = read_rows(
+            'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_email = %s',
+            (email_five,),
+        )
+        assert len(provisioned_rows) == 1, added.text
+        user_five: Final = string_value(provisioned_rows[0]["user_id"])
+        scenario.cleanups.callback(scenario.delete_user, user_five)
         response: Final = _BulkAddResponse.model_validate_json(added.text)
         assert response.team_id == team, added.text
-        assert response.total_requested == 3, added.text
-        assert response.successful_additions == 3, added.text
+        assert response.total_requested == 5, added.text
+        assert response.successful_additions == 5, added.text
         assert response.failed_additions == 0, added.text
         assert response.results == [
             _BulkAddResult(user_id=user_one, success=True),
             _BulkAddResult(user_id=user_two, success=True),
             _BulkAddResult(user_id=user_three, user_email=email_three, success=True),
+            _BulkAddResult(user_id=user_four, user_email=email_four, success=True),
+            _BulkAddResult(user_email=email_five, success=True),
         ], added.text
         assert read_rows(
             'SELECT user_id, team_id FROM "LiteLLM_TeamMembership" WHERE team_id = %s ORDER BY user_id',
             (team,),
-        ) == [{"user_id": user_id, "team_id": team} for user_id in sorted((user_one, user_two, user_three))], added.text
+        ) == [
+            {"user_id": user_id, "team_id": team}
+            for user_id in sorted((user_one, user_two, user_three, user_four, user_five))
+        ], added.text
         assert read_rows(
             'SELECT m.user_id, b.max_budget FROM "LiteLLM_TeamMembership" m '
             'JOIN "LiteLLM_BudgetTable" b ON b.budget_id = m.budget_id WHERE m.team_id = %s ORDER BY m.user_id',
             (team,),
-        ) == [{"user_id": user_id, "max_budget": 1.0} for user_id in sorted((user_one, user_two, user_three))], (
-            added.text
-        )
+        ) == [
+            {"user_id": user_id, "max_budget": 1.0}
+            for user_id in sorted((user_one, user_two, user_three, user_four, user_five))
+        ], added.text
         assert read_rows(
             'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s',
             (team,),
@@ -503,6 +519,8 @@ def test_bulk_member_add_adds_every_listed_member_and_reports_failures(
                     _roster_member(user_one, None),
                     _roster_member(user_two, None),
                     _roster_member(user_three, email_three),
+                    _roster_member(user_four, email_four, role="admin"),
+                    _roster_member(user_five, email_five, role="admin"),
                 ]
             }
         ], added.text
@@ -524,10 +542,10 @@ def test_bulk_member_add_adds_every_listed_member_and_reports_failures(
         )
         assert duplicate.status_code == 200, duplicate.text
         failed: Final = _BulkAddResponse.model_validate_json(duplicate.text)
-        assert failed.total_requested == 3, duplicate.text
+        assert failed.total_requested == 5, duplicate.text
         assert failed.successful_additions == 0, duplicate.text
-        assert failed.failed_additions == 3, duplicate.text
-        assert tuple(result.success for result in failed.results) == (False, False, False), duplicate.text
+        assert failed.failed_additions == 5, duplicate.text
+        assert tuple(result.success for result in failed.results) == (False,) * 5, duplicate.text
         assert all(result.error is not None for result in failed.results), duplicate.text
         assert read_rows(
             'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s',
@@ -538,9 +556,57 @@ def test_bulk_member_add_adds_every_listed_member_and_reports_failures(
                     _roster_member(user_one, None),
                     _roster_member(user_two, None),
                     _roster_member(user_three, email_three),
+                    _roster_member(user_four, email_four, role="admin"),
+                    _roster_member(user_five, email_five, role="admin"),
                 ]
             }
         ], duplicate.text
+
+        admin_personal_key: Final = _key(scenario, user_id=user_four)
+        provisioned_admin_key: Final = _key(scenario, user_id=user_five)
+        member_personal_key: Final = _key(scenario, user_id=user_one)
+        probe: Final = scenario.user()
+        admin_added: Final = gateway.request(
+            "POST",
+            "/team/member_add",
+            {"team_id": team, "member": {"role": "user", "user_id": probe}},
+            key=admin_personal_key,
+        )
+        assert admin_added.status_code == 200, admin_added.text
+        probe_five: Final = scenario.user()
+        provisioned_admin_added: Final = gateway.request(
+            "POST",
+            "/team/member_add",
+            {"team_id": team, "member": {"role": "user", "user_id": probe_five}},
+            key=provisioned_admin_key,
+        )
+        assert provisioned_admin_added.status_code == 200, provisioned_admin_added.text
+        refused_probe: Final = scenario.user()
+        member_denied: Final = gateway.request(
+            "POST",
+            "/team/member_add",
+            {"team_id": team, "member": {"role": "user", "user_id": refused_probe}},
+            key=member_personal_key,
+        )
+        assert member_denied.status_code == 403, member_denied.text
+        denied_response: Final = _HTTPErrorResponse.model_validate_json(member_denied.text)
+        assert "User not proxy admin OR team admin" in denied_response.detail.error, member_denied.text
+        assert read_rows(
+            'SELECT members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s',
+            (team,),
+        ) == [
+            {
+                "members_with_roles": [
+                    _roster_member(user_one, None),
+                    _roster_member(user_two, None),
+                    _roster_member(user_three, email_three),
+                    _roster_member(user_four, email_four, role="admin"),
+                    _roster_member(user_five, email_five, role="admin"),
+                    _roster_member(probe, None),
+                    _roster_member(probe_five, None),
+                ]
+            }
+        ], member_denied.text
         observed: Final = _models(upstream)
         assert observed == (provider_model, provider_model), repr(observed)
 
