@@ -227,6 +227,13 @@ describe("strip state", () => {
 
   it("is done for finished runs and reviewing once reviews arrive", () => {
     expect(stripState({ ...base, status: "completed" }, MODEL).kind).toBe("done");
+    const partialJob = {
+      ...base,
+      status: "completed" as const,
+      error: "One task failed",
+      steps: [{ at: "2026-10-05T18:00:00Z", kind: "error", label: "One task failed" }] as Job["steps"],
+    };
+    expect(stripState(partialJob, MODEL).kind).toBe("done");
     expect(stripState({ ...base, reviews: [review("a")] }, MODEL).kind).toBe("reviewing");
   });
 });

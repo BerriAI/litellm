@@ -9000,6 +9000,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/traces/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Trace Findings */
+        post: operations["trace_findings_lens_traces_findings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/watch-all": {
         parameters: {
             query?: never;
@@ -20368,6 +20385,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest Otlp Traces */
+        post: operations["ingest_otlp_traces_v1_logs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/access_groups": {
         parameters: {
             query?: never;
@@ -30745,6 +30779,11 @@ export interface components {
              */
             eligible: number;
             /**
+             * Failed Tasks
+             * @default 0
+             */
+            failed_tasks: number;
+            /**
              * Grouped Batches
              * @default 0
              */
@@ -33363,6 +33402,7 @@ export interface components {
              * @default {
              *       "candidates": 0,
              *       "eligible": 0,
+             *       "failed_tasks": 0,
              *       "grouped_batches": 0,
              *       "grouping_batches": 0,
              *       "inconclusive": 0,
@@ -38274,7 +38314,7 @@ export interface components {
              * Role
              * @enum {string}
              */
-            role: "user" | "assistant";
+            role: "system" | "user" | "assistant";
         };
         /** ModelParams */
         ModelParams: {
@@ -46950,6 +46990,33 @@ export interface components {
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
         };
+        /** TraceFindingCount */
+        TraceFindingCount: {
+            /** Finding Count */
+            finding_count: number | null;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
+        /** TraceFindingsRequest */
+        TraceFindingsRequest: {
+            /** Traces */
+            traces: components["schemas"]["TraceIdentity"][];
+        };
+        /** TraceIdentity */
+        TraceIdentity: {
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
         /** TracePage */
         TracePage: {
             /** Data */
@@ -46961,6 +47028,11 @@ export interface components {
         TracePart: {
             /** Content */
             content: string;
+            /**
+             * End Time
+             * @default
+             */
+            end_time: string;
             /** Execution Id */
             execution_id: string;
             /** Kind */
@@ -46974,6 +47046,11 @@ export interface components {
             parent_span_id: string;
             /** Span Id */
             span_id: string;
+            /**
+             * Start Time
+             * @default
+             */
+            start_time: string;
             /**
              * Truncated
              * @default false
@@ -62253,6 +62330,39 @@ export interface operations {
             };
         };
     };
+    trace_findings_lens_traces_findings_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TraceFindingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceFindingCount"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     watch_all_lens_watch_all_post: {
         parameters: {
             query?: never;
@@ -77331,6 +77441,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_otlp_traces_v1_logs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
