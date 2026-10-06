@@ -162,10 +162,11 @@ class TestAzureModelRouterFee:
             pytest.approx(1000 * fee_per_token, rel=1e-9)
         )
 
-    def test_fee_prefers_the_azure_row_when_present(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.parametrize("router_name", ["model-router", "model_router", "azure-model-router"])
+    def test_fee_prefers_the_azure_row_when_present(self, monkeypatch: pytest.MonkeyPatch, router_name: str) -> None:
         azure_fee_per_token: Final = _azure_ai_router_fee_per_token() * 2
         _cost_map_with_azure_router_fee(monkeypatch, azure_fee_per_token)
-        assert calculate_azure_model_router_flat_cost("model-router", 1000, custom_llm_provider="azure") == (
+        assert calculate_azure_model_router_flat_cost(router_name, 1000, custom_llm_provider="azure") == (
             pytest.approx(1000 * azure_fee_per_token, rel=1e-9)
         )
         assert calculate_azure_model_router_flat_cost("model-router", 1000) == pytest.approx(

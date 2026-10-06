@@ -3,7 +3,6 @@ Azure AI cost calculation helper.
 Handles Azure AI Foundry Model Router flat cost and other Azure AI specific pricing.
 """
 
-from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm._logging import verbose_logger
@@ -35,25 +34,23 @@ def is_azure_model_router(model: str) -> bool:
 ROUTER_FEE_ENTRY_NAMES: Final = frozenset({"model-router", "model_router"})
 
 
-DEFAULT_ROUTER_FEE_ENTRY_NAMES: Final = MappingProxyType({"azure_ai": "model_router", "azure": "model-router"})
+AZURE_ROUTER_FEE_ENTRY_NAME: Final = "model-router"
 
 
 def is_router_fee_entry(model: str, custom_llm_provider: str = "azure_ai") -> bool:
     return model.lower().removeprefix(f"{custom_llm_provider}/") in ROUTER_FEE_ENTRY_NAMES
 
 
-def _router_fee_entry_name(model: str, custom_llm_provider: str = "azure_ai") -> str:
-    entry_name: Final = model.lower().removeprefix(f"{custom_llm_provider}/")
-    return entry_name if entry_name in ROUTER_FEE_ENTRY_NAMES else DEFAULT_ROUTER_FEE_ENTRY_NAMES[custom_llm_provider]
+def _router_fee_entry_name(model: str) -> str:
+    entry_name: Final = model.lower().removeprefix("azure_ai/")
+    return entry_name if entry_name in ROUTER_FEE_ENTRY_NAMES else "model_router"
 
 
 def _router_fee_model_info(model: str, custom_llm_provider: str) -> ModelInfo:
     if custom_llm_provider == "azure_ai":
         return get_model_info(model=_router_fee_entry_name(model), custom_llm_provider="azure_ai")
     try:
-        return get_model_info(
-            model=_router_fee_entry_name(model, custom_llm_provider), custom_llm_provider=custom_llm_provider
-        )
+        return get_model_info(model=AZURE_ROUTER_FEE_ENTRY_NAME, custom_llm_provider=custom_llm_provider)
     except Exception as e:
         verbose_logger.debug(
             "Azure Model Router: no %s fee entry for '%s', using the azure_ai entry. Error: %s",
@@ -61,7 +58,7 @@ def _router_fee_model_info(model: str, custom_llm_provider: str) -> ModelInfo:
             model,
             e,
         )
-        return get_model_info(model=_router_fee_entry_name(model), custom_llm_provider="azure_ai")
+        return get_model_info(model="model_router", custom_llm_provider="azure_ai")
 
 
 def calculate_azure_model_router_flat_cost(
