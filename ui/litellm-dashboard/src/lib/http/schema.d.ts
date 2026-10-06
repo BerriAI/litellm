@@ -33899,10 +33899,10 @@ export interface components {
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
-        /** ListResponse[TeamMemberListItem] */
-        ListResponse_TeamMemberListItem_: {
+        /** ListResponse[TeamMemberResponse] */
+        ListResponse_TeamMemberResponse_: {
             /** Data */
-            data: components["schemas"]["TeamMemberListItem"][];
+            data: components["schemas"]["TeamMemberResponse"][];
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
@@ -45926,13 +45926,39 @@ export interface components {
             user_id: string;
         };
         /**
-         * TeamMemberListItem
+         * TeamMemberRef
+         * @description One member, named by exactly one of `user_id` or `user_email`.
+         */
+        TeamMemberRef: {
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /** TeamMemberResetBudgetResponse */
+        TeamMemberResetBudgetResponse: {
+            /** Budget Id */
+            budget_id: string | null;
+            /**
+             * Budget Source
+             * @enum {string}
+             */
+            budget_source: "team_default" | "custom" | "none";
+            /** Previous Budget Id */
+            previous_budget_id: string | null;
+            /** Team Id */
+            team_id: string;
+            /** User Id */
+            user_id: string;
+        };
+        /**
+         * TeamMemberResponse
          * @description One roster entry with the member's spend in the team and the budget row their membership points at.
          *
          *     The limits are that row's, exactly as `/team/info` returns it under `team_memberships`, so a member
          *     with no row of their own reads null limits even when `budget_source` is `team_default`.
          */
-        TeamMemberListItem: {
+        TeamMemberResponse: {
             /** Allowed Models */
             allowed_models: string[];
             /** Budget Duration */
@@ -45967,32 +45993,6 @@ export interface components {
             user_email: string | null;
             /** User Id */
             user_id: string | null;
-        };
-        /**
-         * TeamMemberRef
-         * @description One member, named by exactly one of `user_id` or `user_email`.
-         */
-        TeamMemberRef: {
-            /** User Email */
-            user_email?: string | null;
-            /** User Id */
-            user_id?: string | null;
-        };
-        /** TeamMemberResetBudgetResponse */
-        TeamMemberResetBudgetResponse: {
-            /** Budget Id */
-            budget_id: string | null;
-            /**
-             * Budget Source
-             * @enum {string}
-             */
-            budget_source: "team_default" | "custom" | "none";
-            /** Previous Budget Id */
-            previous_budget_id: string | null;
-            /** Team Id */
-            team_id: string;
-            /** User Id */
-            user_id: string;
         };
         /** TeamMemberUpdateRequest */
         TeamMemberUpdateRequest: {
@@ -62990,7 +62990,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ListResponse_TeamMemberListItem_"];
+                    "application/json": components["schemas"]["ListResponse_TeamMemberResponse_"];
                 };
             };
             /** @description Validation Error */

@@ -7,7 +7,7 @@ from typing import Final
 from litellm.proxy._types import TeamMemberBudgetSource, UserAPIKeyAuth
 from litellm.proxy.list_api.list_framework import Compare, ListQuery, ListSpec, QueryPlan, Scope, ScopeAll, Within
 from litellm.proxy.management.teams.repository import RawQuery, TeamMemberRow, TeamMemberRows
-from litellm.proxy.management.teams.schemas import TeamMemberListItem, TeamMembersQuery
+from litellm.proxy.management.teams.schemas import TeamMemberResponse, TeamMembersQueryParams
 
 
 def member_budget_source(budget_id: str | None, team_default_budget_id: str | None) -> TeamMemberBudgetSource:
@@ -16,8 +16,8 @@ def member_budget_source(budget_id: str | None, team_default_budget_id: str | No
     return "team_default" if team_default_budget_id is not None else "none"
 
 
-def _team_member_item(row: TeamMemberRow) -> TeamMemberListItem:
-    return TeamMemberListItem(
+def _team_member_item(row: TeamMemberRow) -> TeamMemberResponse:
+    return TeamMemberResponse(
         user_id=row.user_id,
         user_email=row.user_email,
         user_alias=row.user_alias,
@@ -40,7 +40,7 @@ def _roster_reader_scope(_caller: UserAPIKeyAuth) -> Scope:
     return ScopeAll()
 
 
-TEAM_MEMBERS_LIST_SPEC: Final[ListSpec[TeamMemberRow, TeamMemberListItem]] = ListSpec(
+TEAM_MEMBERS_LIST_SPEC: Final[ListSpec[TeamMemberRow, TeamMemberResponse]] = ListSpec(
     resource="team members",
     sortable=frozenset(
         ("user_alias", "user_email", "user_id", "role", "spend", "total_spend", "max_budget_in_team", "budget_reset_at")
@@ -56,7 +56,7 @@ TEAM_MEMBERS_LIST_SPEC: Final[ListSpec[TeamMemberRow, TeamMemberListItem]] = Lis
 )
 
 
-def team_members_list_query(query: TeamMembersQuery) -> ListQuery:
+def team_members_list_query(query: TeamMembersQueryParams) -> ListQuery:
     return ListQuery(
         page=query.page,
         page_size=query.page_size,
@@ -75,7 +75,7 @@ def team_members_list_query(query: TeamMembersQuery) -> ListQuery:
 
 @dataclass(frozen=True, slots=True)
 class TeamMembersPage:
-    members: tuple[TeamMemberListItem, ...]
+    members: tuple[TeamMemberResponse, ...]
     total_count: int
 
 

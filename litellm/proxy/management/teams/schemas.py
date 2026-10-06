@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from litellm.proxy._types import TeamMemberBudgetSource
 
 
-class TeamMemberListItem(BaseModel):
+class TeamMemberResponse(BaseModel):
     """One roster entry with the member's spend in the team and the budget row their membership points at.
 
     The limits are that row's, exactly as `/team/info` returns it under `team_memberships`, so a member
@@ -31,7 +31,7 @@ class TeamMemberListItem(BaseModel):
     allowed_models: tuple[str, ...]
 
 
-class TeamMembersQuery(BaseModel):
+class TeamMembersQueryParams(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     q: str | None = Field(

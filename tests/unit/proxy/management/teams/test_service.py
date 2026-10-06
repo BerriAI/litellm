@@ -10,7 +10,7 @@ import pytest
 from litellm.proxy._types import TeamMemberBudgetSource
 from litellm.proxy.list_api.list_framework import Compare, ListQuery, QueryPlan, SortKey, Within
 from litellm.proxy.management.teams.repository import TeamMemberRow
-from litellm.proxy.management.teams.schemas import TeamMembersQuery
+from litellm.proxy.management.teams.schemas import TeamMembersQueryParams
 from litellm.proxy.management.teams.service import (
     TEAM_MEMBERS_LIST_SPEC,
     TeamMembersPage,
@@ -96,7 +96,7 @@ def test_list_item_carries_the_member_row_and_derives_its_budget_source() -> Non
 
 
 def test_team_members_list_query_carries_every_declared_param_with_roles_as_roster_filters() -> None:
-    declared: Final = TeamMembersQuery.model_validate(
+    declared: Final = TeamMembersQueryParams.model_validate(
         {
             "q": "ada",
             "filter[role]": "admin",
@@ -117,4 +117,4 @@ def test_team_members_list_query_carries_every_declared_param_with_roles_as_rost
 
 
 def test_team_members_list_query_with_no_params_filters_nothing() -> None:
-    assert team_members_list_query(TeamMembersQuery()) == ListQuery()
+    assert team_members_list_query(TeamMembersQueryParams()) == ListQuery()

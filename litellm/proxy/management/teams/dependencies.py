@@ -10,7 +10,7 @@ from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
 from litellm.proxy.list_api.list_framework import QueryPlan, plan_list_query, reject_repeated_params
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management.teams.exceptions import members_not_readable, team_not_found
-from litellm.proxy.management.teams.schemas import TeamMembersQuery
+from litellm.proxy.management.teams.schemas import TeamMembersQueryParams
 from litellm.proxy.management.teams.service import TEAM_MEMBERS_LIST_SPEC, team_members_list_query
 from litellm.proxy.management.users.service import PrismaOrgRoles
 from litellm.repositories.team_repository import TeamRepository
@@ -69,7 +69,7 @@ async def get_readable_team(
 
 
 def get_team_members_plan(
-    query: Annotated[TeamMembersQuery, Query()],
+    query: Annotated[TeamMembersQueryParams, Query()],
     request: Request,
     caller: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> QueryPlan:

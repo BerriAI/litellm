@@ -7,7 +7,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.list_api.list_framework import QueryPlan, list_response
 from litellm.proxy.management.teams.dependencies import get_readable_team, get_roster_db, get_team_members_plan
 from litellm.proxy.management.teams.repository import RawQuery
-from litellm.proxy.management.teams.schemas import TeamMemberListItem
+from litellm.proxy.management.teams.schemas import TeamMemberResponse
 from litellm.proxy.management.teams.service import get_team_members_list
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.types.proxy.management_endpoints.management_v1 import ListResponse
@@ -19,14 +19,14 @@ router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
     "/teams/{team_id}/members",
     tags=["team management"],
     dependencies=(Depends(user_api_key_auth),),
-    response_model=ListResponse[TeamMemberListItem],
+    response_model=ListResponse[TeamMemberResponse],
 )
 async def list_team_members(
     request: Request,
     team: Annotated[LiteLLM_TeamTable, Depends(get_readable_team)],
     plan: Annotated[QueryPlan, Depends(get_team_members_plan)],
     roster_db: Annotated[RawQuery, Depends(get_roster_db)],
-) -> ListResponse[TeamMemberListItem]:
+) -> ListResponse[TeamMemberResponse]:
     """
     List a team's members one page at a time, with each member's spend and budget limits in the team.
 
