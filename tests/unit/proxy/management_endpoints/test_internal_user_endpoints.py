@@ -283,7 +283,7 @@ _SCOPED_SEARCH_USER: Final = "scoped-search-user"
 
 
 def _search_database(stored_ui_settings_read: AsyncMock) -> MagicMock:
-    prisma_client = MagicMock()
+    prisma_client: Final = MagicMock()
     prisma_client.writer_db.litellm_uisettings.find_unique = stored_ui_settings_read
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(
         return_value=LiteLLM_UserTable(
