@@ -41,6 +41,7 @@ const defaultSettingsData = {
     embedding_model: "text-embedding-3-small",
     top_k: 10,
     similarity_threshold: 0.3,
+    defer_index_build: false,
   },
 };
 
@@ -54,6 +55,7 @@ const SWITCH_ONLY_PAYLOAD = {
   embedding_model: "text-embedding-3-small",
   top_k: 10,
   similarity_threshold: 0.3,
+  defer_index_build: false,
 };
 
 const DEFAULTED_PAYLOAD = {
@@ -61,6 +63,7 @@ const DEFAULTED_PAYLOAD = {
   embedding_model: "text-embedding-3-small",
   top_k: 7,
   similarity_threshold: 0.3,
+  defer_index_build: false,
 };
 
 const FULLY_EDITED_PAYLOAD = {
@@ -68,6 +71,7 @@ const FULLY_EDITED_PAYLOAD = {
   embedding_model: "text-embedding-3-large",
   top_k: 25,
   similarity_threshold: 0.35,
+  defer_index_build: false,
 };
 
 const CLEARED_TOP_K_PAYLOAD = {
@@ -75,6 +79,7 @@ const CLEARED_TOP_K_PAYLOAD = {
   embedding_model: "text-embedding-3-small",
   top_k: null,
   similarity_threshold: 0.3,
+  defer_index_build: false,
 };
 
 const CLAMPED_MAX_PAYLOAD = {
@@ -82,6 +87,23 @@ const CLAMPED_MAX_PAYLOAD = {
   embedding_model: "text-embedding-3-small",
   top_k: 100,
   similarity_threshold: 0.3,
+  defer_index_build: false,
+};
+
+const DEFER_KEPT_PAYLOAD = {
+  enabled: false,
+  embedding_model: "text-embedding-3-small",
+  top_k: 7,
+  similarity_threshold: 0.3,
+  defer_index_build: true,
+};
+
+const DEFER_ON_PAYLOAD = {
+  enabled: false,
+  embedding_model: "text-embedding-3-small",
+  top_k: 10,
+  similarity_threshold: 0.3,
+  defer_index_build: true,
 };
 
 const CLAMPED_MIN_PAYLOAD = {
@@ -89,6 +111,7 @@ const CLAMPED_MIN_PAYLOAD = {
   embedding_model: "text-embedding-3-small",
   top_k: 1,
   similarity_threshold: 0.3,
+  defer_index_build: false,
 };
 
 // Helper that renders the component and flushes the fetchAvailableModels effect
@@ -190,7 +213,7 @@ describe("MCPSemanticFilterSettings", () => {
 
     expect(screen.getByRole("button", { name: /save settings/i })).toBeDisabled();
 
-    await user.click(screen.getByRole("switch"));
+    await user.click(screen.getByRole("switch", { name: "Enable Semantic Filtering" }));
 
     expect(screen.getByRole("button", { name: /save settings/i })).toBeEnabled();
   });
@@ -210,7 +233,7 @@ describe("MCPSemanticFilterSettings", () => {
     const user = userEvent.setup();
     await renderSettings({ accessToken: "test-token" });
 
-    await user.click(screen.getByRole("switch"));
+    await user.click(screen.getByRole("switch", { name: "Enable Semantic Filtering" }));
     await user.click(screen.getByRole("button", { name: /save settings/i }));
 
     expect(mockMutate).toHaveBeenCalledWith(SWITCH_ONLY_PAYLOAD, expect.anything());
@@ -239,7 +262,7 @@ describe("MCPSemanticFilterSettings", () => {
     const user = userEvent.setup();
     await renderSettings({ accessToken: "test-token" });
 
-    await user.click(screen.getByRole("switch"));
+    await user.click(screen.getByRole("switch", { name: "Enable Semantic Filtering" }));
 
     const topK = screen.getByRole("spinbutton");
     await user.clear(topK);
@@ -296,6 +319,37 @@ describe("MCPSemanticFilterSettings", () => {
 
     expect(mockMutate).toHaveBeenCalledWith(CLAMPED_MIN_PAYLOAD, expect.anything());
   });
+  it("keeps a stored defer_index_build of true when another field is saved", async () => {
+    vi.mocked(useMCPSemanticFilterSettings).mockReturnValue({
+      data: {
+        field_schema: defaultSettingsData.field_schema,
+        values: { ...defaultSettingsData.values, defer_index_build: true },
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    } as any);
+    const user = userEvent.setup();
+    await renderSettings({ accessToken: "test-token" });
+
+    const topK = screen.getByRole("spinbutton");
+    await user.clear(topK);
+    fireEvent.change(topK, { target: { value: "7" } });
+    await user.click(screen.getByRole("button", { name: /save settings/i }));
+
+    expect(mockMutate).toHaveBeenCalledWith(DEFER_KEPT_PAYLOAD, expect.anything());
+  });
+
+  it("sends defer_index_build true when the background build switch is turned on", async () => {
+    const user = userEvent.setup();
+    await renderSettings({ accessToken: "test-token" });
+
+    await user.click(screen.getByRole("switch", { name: "Build Index in Background" }));
+    await user.click(screen.getByRole("button", { name: /save settings/i }));
+
+    expect(mockMutate).toHaveBeenCalledWith(DEFER_ON_PAYLOAD, expect.anything());
+  });
+
   it("offers no way to clear the embedding model, as the antd Select had no allowClear", async () => {
     const { container } = await renderSettings({ accessToken: "test-token" });
 

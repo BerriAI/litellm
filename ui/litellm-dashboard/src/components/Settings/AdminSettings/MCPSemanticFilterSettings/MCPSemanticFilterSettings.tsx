@@ -31,6 +31,7 @@ interface MCPSemanticFilterStoredValues {
   embedding_model?: string;
   top_k?: number;
   similarity_threshold?: number;
+  defer_index_build?: boolean;
 }
 
 interface MCPSemanticFilterFieldSchema {
@@ -42,6 +43,7 @@ interface MCPSemanticFilterFormValues {
   embedding_model: string;
   top_k: number | null;
   similarity_threshold: number;
+  defer_index_build: boolean;
 }
 
 const DEFAULT_FORM_VALUES: MCPSemanticFilterFormValues = {
@@ -49,6 +51,7 @@ const DEFAULT_FORM_VALUES: MCPSemanticFilterFormValues = {
   embedding_model: "text-embedding-3-small",
   top_k: 10,
   similarity_threshold: 0.3,
+  defer_index_build: false,
 };
 
 const NO_STORED_VALUES: MCPSemanticFilterStoredValues = {};
@@ -148,6 +151,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
         embedding_model: values.embedding_model ?? DEFAULT_FORM_VALUES.embedding_model,
         top_k: values.top_k ?? DEFAULT_FORM_VALUES.top_k,
         similarity_threshold: values.similarity_threshold ?? DEFAULT_FORM_VALUES.similarity_threshold,
+        defer_index_build: values.defer_index_build ?? DEFAULT_FORM_VALUES.defer_index_build,
       });
       setIsDirty(false);
     }
@@ -346,6 +350,25 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
                                 ))}
                               </div>
                             </div>
+                          )}
+                        </FormField>
+
+                        <FormField
+                          control={form.control}
+                          name="defer_index_build"
+                          label={labelWithHint(
+                            "Build Index in Background",
+                            "Build the tool embedding index in the background so proxy startup is not blocked. Requests pass through unfiltered until the index is ready.",
+                          )}
+                        >
+                          {({ value, onChange, onBlur, id }) => (
+                            <Switch
+                              id={id}
+                              checked={value}
+                              onCheckedChange={(checked) => commitChange(onChange, checked)}
+                              onBlur={onBlur}
+                              disabled={isUpdating}
+                            />
                           )}
                         </FormField>
                       </FieldGroup>
