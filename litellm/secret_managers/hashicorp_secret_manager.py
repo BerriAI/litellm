@@ -15,7 +15,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.rust_bridge.secret_manager import resolve_native_provider_reader, resolve_native_provider_writer
 from litellm.types.secret_managers.main import KeyManagementSystem
 
 from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
@@ -406,10 +405,6 @@ class HashicorpSecretManager(BaseSecretManager):
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
         Returns the entire data dict from data.data, or None on failure.
         """
-        native: Final = resolve_native_provider_reader(self, "hashicorp_vault")
-        if native is not None:
-            return await native.async_read_secret(secret_name, optional_params, timeout)
-
         async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
         )
@@ -441,10 +436,6 @@ class HashicorpSecretManager(BaseSecretManager):
         secret_name is just the path inside the KV mount (e.g., 'myapp/config').
         Returns the entire data dict from data.data, or None on failure.
         """
-        native: Final = resolve_native_provider_reader(self, "hashicorp_vault")
-        if native is not None:
-            return native.sync_read_secret(secret_name, optional_params, timeout)
-
         sync_client: Final = _get_httpx_client()
         try:
             target: Final = self._build_secret_target(secret_name, optional_params)
@@ -485,12 +476,6 @@ class HashicorpSecretManager(BaseSecretManager):
         Returns:
             dict: Response containing status and details of the operation
         """
-        native: Final = resolve_native_provider_writer(self, "hashicorp_vault")
-        if native is not None:
-            return await native.async_write_secret(
-                secret_name, secret_value, description, optional_params, timeout, tags
-            )
-
         async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"timeout": timeout},
@@ -540,12 +525,6 @@ class HashicorpSecretManager(BaseSecretManager):
                   On success, returns the response from async_write_secret.
                   On error, returns {"status": "error", "message": "error message"}
         """
-        native: Final = resolve_native_provider_writer(self, "hashicorp_vault")
-        if native is not None:
-            return await native.async_rotate_secret(
-                current_secret_name, new_secret_name, new_secret_value, optional_params, timeout
-            )
-
         async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"timeout": timeout},
@@ -692,10 +671,6 @@ class HashicorpSecretManager(BaseSecretManager):
         Returns:
             dict: Response containing status and details of the operation
         """
-        native: Final = resolve_native_provider_writer(self, "hashicorp_vault")
-        if native is not None:
-            return await native.async_delete_secret(secret_name, recovery_window_in_days, optional_params, timeout)
-
         async_client: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
             params={"timeout": timeout},

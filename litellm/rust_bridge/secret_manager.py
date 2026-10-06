@@ -1,17 +1,11 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Awaitable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
-from typing import Final, Protocol, runtime_checkable
+from typing import Final
 
-import httpx
-from pydantic import JsonValue
-
-from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Rules, SecretManagerContext, decision
-from litellm.rust_bridge.configuration import Decision
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
 
@@ -163,123 +157,3 @@ def native_secret_manager_config(client: object) -> NativeSecretManagerConfig | 
         ):
             return _capture(client, adapter)
     return None
-
-
-class NativeSecretManagerRuntime(Protocol):
-    @property
-    def system(self) -> str: ...
-
-    def read_secret(self, name: str, settings: Mapping[str, object] | None = None) -> JsonValue: ...
-
-
-@runtime_checkable
-class NativeSecretManagerFactory(Protocol):
-    @staticmethod
-    def from_client(client: object) -> NativeSecretManagerRuntime | None: ...
-
-
-def _factory(value: object) -> NativeSecretManagerFactory | None:
-    return value if isinstance(value, NativeSecretManagerFactory) and callable(value.from_client) else None
-
-
-NATIVE_SECRET_MANAGER: Final = NativeBinding("_SecretManagerRuntime", validate=_factory)
-
-
-def resolve_native_secret_manager(
-    client: object,
-    system: str,
-    rules: Rules | None = None,
-    *,
-    binding: NativeBinding[NativeSecretManagerFactory] = NATIVE_SECRET_MANAGER,
-) -> NativeSecretManagerRuntime | None:
-    if system in ("custom", "local"):
-        return None
-    selected: Final = decision(SecretManagerContext(system=system), rules)
-    if selected is Decision.PYTHON:
-        return None
-    factory: Final = binding.load()
-    if factory is None:
-        if selected is Decision.RUST_REQUIRED:
-            raise RuntimeError("Rust secret manager runtime is unavailable")
-        return None
-    runtime: Final = factory.from_client(client)
-    if runtime is not None and runtime.system != system:
-        raise ValueError("Native secret manager system does not match configuration")
-    return runtime
-
-
-@runtime_checkable
-class NativeProviderReader(Protocol):
-    def sync_read_secret(
-        self,
-        secret_name: str,
-        optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None,
-    ) -> str | None: ...
-
-    def async_read_secret(
-        self,
-        secret_name: str,
-        optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None,
-    ) -> Awaitable[str | None]: ...
-
-
-def resolve_native_provider_reader(
-    client: object,
-    system: str,
-    rules: Rules | None = None,
-    *,
-    binding: NativeBinding[NativeSecretManagerFactory] = NATIVE_SECRET_MANAGER,
-) -> NativeProviderReader | None:
-    runtime: Final = resolve_native_secret_manager(client, system, rules, binding=binding)
-    if runtime is None:
-        return None
-    if not isinstance(runtime, NativeProviderReader):
-        raise TypeError("Rust secret manager provider reads are unavailable")
-    return runtime
-
-
-@runtime_checkable
-class NativeProviderWriter(Protocol):
-    def async_write_secret(
-        self,
-        secret_name: str,
-        secret_value: str,
-        description: str | None = None,
-        optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None,
-        tags: object = None,
-    ) -> Awaitable[dict[str, JsonValue]]: ...
-
-    def async_delete_secret(
-        self,
-        secret_name: str,
-        recovery_window_in_days: int | None = 7,
-        optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None,
-    ) -> Awaitable[dict[str, JsonValue]]: ...
-
-    def async_rotate_secret(
-        self,
-        current_secret_name: str,
-        new_secret_name: str,
-        new_secret_value: str,
-        optional_params: Mapping[str, object] | None = None,
-        timeout: float | httpx.Timeout | None = None,
-    ) -> Awaitable[dict[str, JsonValue]]: ...
-
-
-def resolve_native_provider_writer(
-    client: object,
-    system: str,
-    rules: Rules | None = None,
-    *,
-    binding: NativeBinding[NativeSecretManagerFactory] = NATIVE_SECRET_MANAGER,
-) -> NativeProviderWriter | None:
-    runtime: Final = resolve_native_secret_manager(client, system, rules, binding=binding)
-    if runtime is None:
-        return None
-    if not isinstance(runtime, NativeProviderWriter):
-        raise TypeError("Rust secret manager provider writes are unavailable")
-    return runtime
