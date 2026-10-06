@@ -147,9 +147,7 @@ _GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
 
 
 def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> dict[str, object]:
-    normalized: Final[
-        dict[str, object]
-    ] = {}  # mutable-ok: iterative traversal preserves deeply nested provider payloads
+    normalized: Final[dict[str, object]] = {}
 
     pending: Final[  # mutable-ok: the explicit worklist must grow while avoiding recursive traversal
         list[tuple[dict[str, object] | list[object], Mapping[object, object] | list[object]]]
@@ -167,9 +165,9 @@ def _normalize_gemini_speech_config_item(value: Mapping[str, object]) -> dict[st
 
             child: object
             if isinstance(item, Mapping):
-                child = {}  # mutable-ok: nested mappings are filled by the worklist
+                child = {}
             elif isinstance(item, list):
-                child = []  # mutable-ok: nested lists are filled by the worklist
+                child = []
             else:
                 child = item
 
@@ -207,7 +205,7 @@ def normalize_gemini_speech_config(
         return {key: item for key, item in normalized.items() if key not in ("name", "voiceName", "voice")}
     if voice_name is None:
         return normalized
-    return {  # mutable-ok: provider request serialization requires a concrete dict
+    return {
         **{key: item for key, item in normalized.items() if key not in ("name", "voiceName", "voice", "modelName")},
         "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_name}},
     }
@@ -1136,19 +1134,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         speech_config_without_language: Final[  # mutable-ok: provider request serialization requires a concrete dict
             dict[str, object]
         ] = (
-            {  # mutable-ok: provider request serialization requires a concrete dict
-                "voiceConfig": {  # mutable-ok: nested provider payload is serialized as a dict
-                    "prebuiltVoiceConfig": {  # mutable-ok: nested provider payload is serialized as a dict
+            {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
                         "voiceName": value["voice"],
                     }
                 }
             }
             if "voice" in value
-            else {}  # mutable-ok: provider request serialization requires a concrete empty dict
+            else {}
         )
 
         if language_code is not None:
-            return {  # mutable-ok: provider request serialization requires a concrete dict
+            return {
                 **speech_config_without_language,
                 "languageCode": language_code,
             }

@@ -230,16 +230,16 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
             "multi_speaker_voice_config",
         )
         if multi_speaker_config is None:
-            return []  # mutable-ok: provider request serialization requires a concrete empty list
+            return []
         raw_speaker_configs: Final = multi_speaker_config.get(
             "speakerVoiceConfigs",
             multi_speaker_config.get(
                 "speaker_voice_configs",
-                [],  # mutable-ok: missing speaker configuration uses a concrete empty-list sentinel
+                [],
             ),
         )
         if not isinstance(raw_speaker_configs, list):
-            return []  # mutable-ok: malformed speaker configuration produces a concrete empty list
+            return []
         speaker_configs: Final[  # mutable-ok: validated payloads are accumulated for serialization
             list[VertexTextToSpeechSpeakerVoiceConfig]
         ] = []
@@ -269,7 +269,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
                         )
             if speaker_alias is not None and speaker_id is not None:
                 speaker_configs.append(
-                    {  # mutable-ok: provider request serialization requires a concrete dict
+                    {
                         "speakerAlias": speaker_alias,
                         "speakerId": speaker_id,
                     }
@@ -305,7 +305,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         voice: str | Mapping[str, object],
     ) -> tuple[str | None, dict[str, object]]:  # mutable-ok: provider request serialization requires a concrete dict
         if isinstance(voice, str):
-            return voice, {  # mutable-ok: provider request serialization requires a concrete dict
+            return voice, {
                 "languageCode": self.DEFAULT_LANGUAGE_CODE,
                 "modelName": model,
                 "name": voice,
@@ -320,21 +320,21 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         model_name: Final = model
         speaker_configs: Final = self._extract_gemini_tts_speaker_configs(voice)
         if speaker_configs:
-            return None, {  # mutable-ok: provider request serialization requires a concrete dict
+            return None, {
                 "languageCode": language_code,
                 "modelName": model_name,
-                "multiSpeakerVoiceConfig": {  # mutable-ok: nested provider payload is serialized as a dict
+                "multiSpeakerVoiceConfig": {
                     "speakerVoiceConfigs": speaker_configs,
                 },
             }
         voice_name: Final = self._extract_gemini_tts_voice_name(voice)
         if voice_name is not None:
-            return None, {  # mutable-ok: provider request serialization requires a concrete dict
+            return None, {
                 "languageCode": language_code,
                 "modelName": model_name,
                 "name": voice_name,
             }
-        return None, {  # mutable-ok: provider request serialization requires a concrete dict
+        return None, {
             **voice,
             "languageCode": language_code,
             "modelName": model_name,
