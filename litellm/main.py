@@ -8465,7 +8465,8 @@ def speech(
         # set API KEY
         api_key = (
             api_key
-            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+            or dynamic_api_key  # key resolved by get_llm_provider, e.g. INWORLD_API_KEY for JSON-configured providers
+            or litellm.api_key
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")
         )
