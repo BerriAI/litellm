@@ -37,6 +37,7 @@ litellm-auth.workspace = true
 litellm-auth-aws.workspace = true
 litellm-callbacks-legacy-python.workspace = true
 litellm-core.workspace = true
+litellm-router.workspace = true
 litellm-core-utils.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true

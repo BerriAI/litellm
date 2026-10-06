@@ -11,3 +11,20 @@ pub struct Deployment {
     pub timeout: Option<Duration>,
     pub shaping: MessagesShaping,
 }
+
+#[derive(Clone, Debug)]
+pub(crate) struct CatalogEntry {
+    pub id: String,
+    pub model_name: String,
+    pub deployment: Deployment,
+}
+
+impl CatalogEntry {
+    pub fn candidate(&self) -> crate::selection::Candidate {
+        crate::selection::Candidate {
+            deployment_id: self.id.clone(),
+            model_name: self.model_name.clone(),
+            model: self.deployment.model.clone(),
+        }
+    }
+}

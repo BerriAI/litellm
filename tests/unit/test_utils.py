@@ -6558,3 +6558,9 @@ def test_function_setup_never_logs_the_ocr_data_uri_payload() -> None:
 
     assert logged == [{"role": "user", "content": f"data:application/pdf;base64 ({len(payload)} chars)"}]
     assert payload not in str(logged)
+
+
+def test_router_handle_is_consumed_as_a_litellm_parameter() -> None:
+    from litellm.utils import filter_out_litellm_params
+
+    assert filter_out_litellm_params({"router": object(), "temperature": 0.2}) == {"temperature": 0.2}

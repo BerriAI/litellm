@@ -4123,6 +4123,7 @@ dependencies = [
  "litellm-http",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-router",
  "litellm-secrets",
  "litellm-secrets-aws",
  "litellm-secrets-types",
@@ -4170,9 +4171,10 @@ dependencies = [
 name = "litellm-router"
 version = "0.1.0"
 dependencies = [
- "litellm-config",
  "litellm-core",
  "rstest",
+ "serde",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

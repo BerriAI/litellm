@@ -17,7 +17,7 @@ use http_body_util::BodyExt;
 use litellm_config::Config;
 use litellm_core::resources::CoreResources;
 use litellm_gateway_auth::Auth;
-use litellm_gateway_inference::{Gateway, ModelRouter};
+use litellm_gateway_inference::{Deployment, Gateway, ModelRouter};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
     media::PublicDnsResolver,
@@ -25,6 +25,28 @@ use litellm_http::{
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
+
+fn model_router(models: &[litellm_config::Model]) -> ModelRouter {
+    models
+        .iter()
+        .map(|model| {
+            (
+                model.model_name.clone(),
+                Deployment {
+                    model: model.litellm_params.model.clone(),
+                    api_key: model
+                        .litellm_params
+                        .api_key
+                        .as_ref()
+                        .map(|value| value.expose().to_owned()),
+                    api_base: model.litellm_params.api_base.clone(),
+                    custom_llm_provider: model.litellm_params.custom_llm_provider.clone(),
+                    ..Deployment::default()
+                },
+            )
+        })
+        .collect()
+}
 
 pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
@@ -66,7 +88,7 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         resources,
         http,
         secrets,
-        ModelRouter::from_model_list(&config.model_list),
+        model_router(&config.model_list),
     )?))
 }
 
@@ -187,6 +209,51 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[rstest]
+    #[case::minimal("")]
+    #[case::configured(
+        "api_key: test-key\n      api_base: https://provider.example/v1\n      custom_llm_provider: test-provider"
+    )]
+    #[case::secret_reference("api_key: os.environ/ROUTER_TEST_API_KEY")]
+    fn configuration_preserves_deployment_parameters(#[case] parameters: &str) {
+        let config = Config::from_yaml(&format!(
+            "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: provider/model\n      {parameters}"
+        ))
+        .unwrap();
+        let models = model_router(&config.model_list);
+        let deployment = models.get(&config.model_list[0].model_name).unwrap();
+        let params = &config.model_list[0].litellm_params;
+
+        assert_eq!(deployment.model, params.model);
+        assert_eq!(
+            deployment.api_key.as_deref(),
+            params.api_key.as_ref().map(|key| key.expose())
+        );
+        assert_eq!(deployment.api_base, params.api_base);
+        assert_eq!(deployment.custom_llm_provider, params.custom_llm_provider);
+        assert_eq!(deployment.timeout, Deployment::default().timeout);
+        assert_eq!(deployment.shaping, Deployment::default().shaping);
+    }
+
+    #[rstest]
+    fn model_projection_preserves_legacy_last_entry_wins() {
+        let config = Config::from_yaml(
+            "model_list:
+  - model_name: public-model
+    model_info: {id: repeated}
+    litellm_params: {model: provider/first}
+  - model_name: public-model
+    model_info: {id: repeated}
+    litellm_params: {model: provider/second}",
+        )
+        .unwrap();
+        let models = model_router(&config.model_list);
+
+        assert_eq!(models.get("public-model").unwrap().model, "provider/second");
+        assert!(models.get("provider/second").is_none());
+        assert_eq!(models.snapshot().deployments.len(), config.model_list.len());
+    }
 
     struct LogSink(mpsc::Sender<Value>);
 

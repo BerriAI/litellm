@@ -60,6 +60,7 @@ from litellm.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.router import Router
+    from litellm.rust_bridge._native import RouterHandle
     from litellm.types.utils import TokenCountResponse
 
 from litellm.constants import (
@@ -473,6 +474,8 @@ async def acompletion(
     shared_session: Optional["ClientSession"] = None,
     # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
     enable_json_schema_validation: bool | None = None,
+    *,
+    router: "RouterHandle | None" = None,
     **kwargs,
 ) -> ModelResponse | CustomStreamWrapper:
     """
@@ -5197,6 +5200,8 @@ def completion(
     shared_session: Optional["ClientSession"] = None,
     # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
     enable_json_schema_validation: bool | None = None,
+    *,
+    router: "RouterHandle | None" = None,
     **kwargs,
 ) -> ModelResponse | CustomStreamWrapper:
     """
