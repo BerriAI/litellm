@@ -103,9 +103,7 @@ def _callback_entries(response: httpx.Response) -> dict[str, dict[str, JsonValue
     return {string_value(callback["name"]): callback for callback in callbacks}
 
 
-def _callback_entries_match(
-    response: httpx.Response, expected: dict[str, dict[str, JsonValue]]
-) -> bool:
+def _callback_entries_match(response: httpx.Response, expected: dict[str, dict[str, JsonValue]]) -> bool:
     entries: Final = _callback_entries(response)
     return all(entries.get(name) == callback for name, callback in expected.items())
 
@@ -155,9 +153,7 @@ def test_multi_section_config_update_merges_sent_keys_normalizes_callbacks_and_a
         return _completion_reply(content)
 
     with (
-        _config_callback_rig(
-            gateway, tmp_path, monkeypatch, provider, generic_flush_interval="1"
-        ) as rig,
+        _config_callback_rig(gateway, tmp_path, monkeypatch, provider, generic_flush_interval="1") as rig,
         rig.first.scenario() as scenario,
     ):
         seed: Final = rig.first.request(
@@ -291,9 +287,7 @@ def test_multi_section_config_update_merges_sent_keys_normalizes_callbacks_and_a
 def test_deleted_callback_case_variant_stops_delivery_on_both_workers(
     gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert os.environ.get("LITELLM_LICENSE"), (
-        "LITELLM_LICENSE must be set: audit logs are an enterprise feature"
-    )
+    assert os.environ.get("LITELLM_LICENSE"), "LITELLM_LICENSE must be set: audit logs are an enterprise feature"
     marker: Final = "callback-delete-" + uuid.uuid4().hex
     provider_secret: Final = "provider-secret-" + marker
 
@@ -309,9 +303,7 @@ def test_deleted_callback_case_variant_stops_delivery_on_both_workers(
         return _completion_reply(string_value(object_value(body["messages"][0])["content"]))
 
     with (
-        _config_callback_rig(
-            gateway, tmp_path, monkeypatch, provider, generic_flush_interval="3"
-        ) as rig,
+        _config_callback_rig(gateway, tmp_path, monkeypatch, provider, generic_flush_interval="3") as rig,
         rig.first.scenario() as scenario,
     ):
         seed: Final = rig.first.request(
@@ -427,9 +419,11 @@ def test_deleted_callback_case_variant_stops_delivery_on_both_workers(
         assert "langfuse" not in _callback_entries(callbacks_first), callbacks_first.text
         callbacks_peer: Final = eventually(
             lambda: rig.peer.request("GET", "/get/config/callbacks"),
-            lambda response: response.status_code == 200
-            and _callback_entries_match(response, expected_remaining_callbacks)
-            and "langfuse" not in _callback_entries(response),
+            lambda response: (
+                response.status_code == 200
+                and _callback_entries_match(response, expected_remaining_callbacks)
+                and "langfuse" not in _callback_entries(response)
+            ),
             seconds=20,
         )
         assert _callback_entries_match(callbacks_peer, expected_remaining_callbacks), callbacks_peer.text
@@ -458,7 +452,9 @@ def test_deleted_callback_case_variant_stops_delivery_on_both_workers(
         assert audit_row["updated_values"] == {"success_callback": ["generic_api"]}, audit_row
 
         absence_markers: Final = (marker + "-after-first", marker + "-after-peer")
-        for worker, proxy, absence_marker in zip(("first", "peer"), (rig.first, rig.peer), absence_markers, strict=True):
+        for worker, proxy, absence_marker in zip(
+            ("first", "peer"), (rig.first, rig.peer), absence_markers, strict=True
+        ):
             absent: Final = proxy.request(
                 "POST",
                 "/v1/chat/completions",
@@ -490,9 +486,9 @@ def test_deleted_callback_case_variant_stops_delivery_on_both_workers(
 
         missing: Final = rig.first.request("POST", "/config/callback/delete", {"callback_name": "not-a-callback"})
         assert missing.status_code == 404, missing.text
-        assert missing.json() == {
-            "detail": {"error": "Callback 'not-a-callback' not found in active configuration"}
-        }, missing.text
+        assert missing.json() == {"detail": {"error": "Callback 'not-a-callback' not found in active configuration"}}, (
+            missing.text
+        )
 
 
 def test_dashboard_field_updates_preserve_plugin_key_and_apply_at_runtime(
@@ -583,15 +579,36 @@ def test_dashboard_field_updates_preserve_plugin_key_and_apply_at_runtime(
                     }
                 ]
             }
-            plugin_response: Final = candidate.request(
-                "POST", "/plugin-proxy/integration-plugin/rpc", plugin_body
+            blank_key_plugins: Final = [
+                {
+                    "name": "integration-plugin",
+                    "display_name": "Integration updated",
+                    "url": plugin_wire.url,
+                    "plugin_key": "",
+                }
+            ]
+            blank_repost: Final = candidate.request(
+                "POST",
+                "/config/field/update",
+                {"field_name": "plugins", "field_value": blank_key_plugins, "config_type": "general_settings"},
             )
+            assert blank_repost.status_code == 200, blank_repost.text
+            assert _config_section(database_url, "general_settings") == {
+                "plugins": [
+                    {
+                        "name": "integration-plugin",
+                        "display_name": "Integration updated",
+                        "url": plugin_wire.url,
+                        "plugin_key": plugin_key,
+                    }
+                ]
+            }
+            plugin_response: Final = candidate.request("POST", "/plugin-proxy/integration-plugin/rpc", plugin_body)
             assert plugin_response.status_code == 200, plugin_response.text
             assert plugin_response.json() == {"received": plugin_body}, plugin_response.text
             peer_plugin_response: Final = eventually(
                 lambda: peer.request("POST", "/plugin-proxy/integration-plugin/rpc", plugin_body),
-                lambda response: response.status_code == 200
-                and response.json() == {"received": plugin_body},
+                lambda response: response.status_code == 200 and response.json() == {"received": plugin_body},
                 seconds=20,
             )
             assert peer_plugin_response.json() == {"received": plugin_body}, peer_plugin_response.text
@@ -619,13 +636,10 @@ def test_dashboard_field_updates_preserve_plugin_key_and_apply_at_runtime(
             assert passthrough_response.json() == {"received": passthrough_body}, passthrough_response.text
             peer_passthrough_response: Final = eventually(
                 lambda: peer.request("POST", passthrough_path, passthrough_body),
-                lambda response: response.status_code == 200
-                and response.json() == {"received": passthrough_body},
+                lambda response: response.status_code == 200 and response.json() == {"received": passthrough_body},
                 seconds=20,
             )
-            assert peer_passthrough_response.json() == {"received": passthrough_body}, (
-                peer_passthrough_response.text
-            )
+            assert peer_passthrough_response.json() == {"received": passthrough_body}, peer_passthrough_response.text
 
             alerting_args: Final = {
                 "daily_report_frequency": 43200,
@@ -705,7 +719,9 @@ def test_dashboard_field_updates_preserve_plugin_key_and_apply_at_runtime(
             list_after_size: Final = TypeAdapter(list[dict[str, JsonValue]]).validate_json(
                 candidate.request("GET", "/config/list", params={"config_type": "general_settings"}).content
             )
-            max_size_listed: Final = next(entry for entry in list_after_size if entry["field_name"] == "max_request_size_mb")
+            max_size_listed: Final = next(
+                entry for entry in list_after_size if entry["field_name"] == "max_request_size_mb"
+            )
             assert max_size_listed["field_value"] == 1 and max_size_listed["stored_in_db"] is True
             oversized: Final = candidate.request(
                 "POST",
@@ -726,13 +742,13 @@ def test_dashboard_field_updates_preserve_plugin_key_and_apply_at_runtime(
                         "messages": [{"role": "user", "content": "x" * (1024 * 1024 + 1)}],
                     },
                 ),
-                lambda response: response.status_code == 413
-                and response.text == '{"error":"Request size is too large. Max size is 1 MB"}',
+                lambda response: (
+                    response.status_code == 413
+                    and response.text == '{"error":"Request size is too large. Max size is 1 MB"}'
+                ),
                 seconds=20,
             )
-            assert peer_oversized.text == '{"error":"Request size is too large. Max size is 1 MB"}', (
-                peer_oversized.text
-            )
+            assert peer_oversized.text == '{"error":"Request size is too large. Max size is 1 MB"}', peer_oversized.text
 
             plugin_requests: Final = plugin_wire.drain()
             assert tuple((request.method, request.target) for request in plugin_requests) == (
@@ -755,11 +771,12 @@ def test_model_block_changes_actual_route_and_leaves_other_route_working(gateway
         gateway.chat(model)
         gateway.chat(other)
         gateway.post("/model/block", {"model_id": identity})
-        assert read_rows(
-            'SELECT blocked FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)
-        ) == [{"blocked": True}]
+        assert read_rows('SELECT blocked FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == [
+            {"blocked": True}
+        ]
         response: Final = gateway.request(
-            "POST", "/v1/chat/completions",
+            "POST",
+            "/v1/chat/completions",
             {"model": model, "messages": [{"role": "user", "content": "blocked deployment"}]},
         )
         assert response.status_code == 403, response.text
@@ -767,15 +784,18 @@ def test_model_block_changes_actual_route_and_leaves_other_route_working(gateway
         assert response.json()["error"]["message"] == "litellm.PermissionDeniedError: Model is blocked"
         assert object_value(gateway.chat(other)["usage"])["total_tokens"] == 40
         gateway.post("/model/unblock", {"model_id": identity})
-        assert read_rows(
-            'SELECT blocked FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)
-        ) == [{"blocked": False}]
+        assert read_rows('SELECT blocked FROM "LiteLLM_ProxyModelTable" WHERE model_id = %s', (identity,)) == [
+            {"blocked": False}
+        ]
         assert object_value(gateway.chat(model)["usage"])["total_tokens"] == 40
 
 
 @pytest.mark.covers("mgmt.router_settings.update.changes_observed_attempt_count")
 def test_saved_retry_setting_controls_real_attempts_and_restores(gateway: Gateway) -> None:
-    with httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream, gateway.scenario() as scenario:
+    with (
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+        gateway.scenario() as scenario,
+    ):
         original: Final = object_value(gateway.get("/router/settings")["current_values"])["num_retries"]
         provider_model: Final = f"retry-{uuid.uuid4().hex}"
         model: Final = scenario.model(model=f"openai/{provider_model}", input_cost_per_token=0, output_cost_per_token=0)
@@ -794,8 +814,12 @@ def test_saved_retry_setting_controls_real_attempts_and_restores(gateway: Gatewa
                 assert configured.status_code == 200, configured.text
                 upstream.get("/__observations").raise_for_status()
                 response: Final = gateway.request(
-                    "POST", "/v1/chat/completions",
-                    {"model": model, "messages": [{"role": "user", "content": f"{provider_model} attempt {generation}"}]},
+                    "POST",
+                    "/v1/chat/completions",
+                    {
+                        "model": model,
+                        "messages": [{"role": "user", "content": f"{provider_model} attempt {generation}"}],
+                    },
                 )
                 observed: Final = upstream.get("/__observations")
                 observed.raise_for_status()
@@ -815,26 +839,37 @@ def test_saved_retry_setting_controls_real_attempts_and_restores(gateway: Gatewa
 
 @pytest.mark.covers("mgmt.credential.update.saved_value_reaches_wire")
 def test_credential_value_update_and_model_reload_reach_provider(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario, httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream:
+    with (
+        gateway.scenario() as scenario,
+        httpx.Client(base_url=gateway.upstream_url, timeout=5, trust_env=False) as upstream,
+    ):
         name: Final = f"credential-{uuid.uuid4().hex}"
-        gateway.post("/credentials", {
-            "credential_name": name, "credential_values": {"api_key": "synthetic-credential-first"}, "credential_info": {}
-        })
+        gateway.post(
+            "/credentials",
+            {
+                "credential_name": name,
+                "credential_values": {"api_key": "synthetic-credential-first"},
+                "credential_info": {},
+            },
+        )
 
         def remove_credential() -> None:
             response: Final = gateway.request("DELETE", f"/credentials/{name}")
             assert response.status_code == 200, response.text
-            assert read_rows(
-                'SELECT credential_name FROM "LiteLLM_CredentialsTable" WHERE credential_name = %s', (name,)
-            ) == []
+            assert (
+                read_rows('SELECT credential_name FROM "LiteLLM_CredentialsTable" WHERE credential_name = %s', (name,))
+                == []
+            )
 
         scenario.cleanups.callback(remove_credential)
         model: Final = scenario.model(api_key=None, litellm_credential_name=name)
         identity: Final = model_identity(gateway, model)
         for value in ("synthetic-credential-first", "synthetic-credential-second"):
-            patched: Final = gateway.request("PATCH", f"/credentials/{name}", {
-                "credential_name": name, "credential_values": {"api_key": value}, "credential_info": {}
-            })
+            patched: Final = gateway.request(
+                "PATCH",
+                f"/credentials/{name}",
+                {"credential_name": name, "credential_values": {"api_key": value}, "credential_info": {}},
+            )
             assert patched.status_code == 200, patched.text
             rows: Final = read_rows(
                 'SELECT credential_values FROM "LiteLLM_CredentialsTable" WHERE credential_name = %s', (name,)
@@ -844,10 +879,15 @@ def test_credential_value_update_and_model_reload_reach_provider(gateway: Gatewa
             assert isinstance(stored["api_key"], str) and stored["api_key"] != value
             for reload in (False, True):
                 if reload:
-                    response: Final = gateway.request("PATCH", f"/model/{identity}/update", {"model_info": {"description": value}})
+                    response: Final = gateway.request(
+                        "PATCH", f"/model/{identity}/update", {"model_info": {"description": value}}
+                    )
                     assert response.status_code == 200, response.text
                 upstream.get("/__observations").raise_for_status()
-                assert object_value(gateway.chat(model, text=f"{name} {value} reload={reload}")["usage"])["total_tokens"] == 40
+                assert (
+                    object_value(gateway.chat(model, text=f"{name} {value} reload={reload}")["usage"])["total_tokens"]
+                    == 40
+                )
                 observed: Final = upstream.get("/__observations")
                 observed.raise_for_status()
                 assert len(observed.json()["requests"]) == 1, (value, reload, observed.text)
