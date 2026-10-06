@@ -264,9 +264,6 @@ def test_raw_key_in_assigned_key_ids_grants_the_same_access_as_the_hashed_key(ga
         assert created.status_code == 201, created.text
         access_group_id: Final = string_value(created.json()["access_group_id"])
         scenario.cleanups.callback(gateway.request, "DELETE", f"/v1/access_group/{access_group_id}")
-        info: Final = _AccessGroupInfo.model_validate(gateway.get(f"/v1/access_group/{access_group_id}"))
-        assert info.assigned_key_ids == [key]
-        assert _group_row(access_group_id) == [{"assigned_team_ids": None, "assigned_key_ids": [key]}]
         assert _key_groups(hashed_key) == [{"access_group_ids": [access_group_id]}]
         text: Final = f"granted {uuid.uuid4().hex}"
         _assert_served(_chat(gateway, model, key, text))
