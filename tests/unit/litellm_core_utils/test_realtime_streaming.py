@@ -3,7 +3,8 @@ import base64
 import json
 from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass
-from typing import Final
+from datetime import UTC, datetime
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,13 +14,18 @@ from websockets.frames import Close
 import litellm
 from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import _apply_resolved_guardrails_to_metadata
+from litellm.realtime_api.main import _build_litellm_metadata
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyMatchContext
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 
 
 def _make_transcript_event(text: str, item_id: str = "item_x") -> bytes:
@@ -3138,6 +3144,79 @@ async def test_translation_rejects_applicable_guardrails_before_forwarding_audio
 
     messages: Final = tuple(json.loads(call.args[0]) for call in client.send_text.await_args_list)
     if default_on or requested:
+        assert messages[0]["error"]["type"] == "guardrail_error"
+        client.close.assert_awaited_once_with(
+            code=1008, reason="Translation sessions cannot enforce configured realtime guardrails"
+        )
+        backend.send.assert_not_awaited()
+    else:
+        assert output_event in messages
+        backend.send.assert_awaited_once_with(input_event)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_bucket", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("mode", ("pre_call", "post_call"))
+@pytest.mark.parametrize("selected,condition_matches", ((True, True), (True, False), (False, True)))
+async def test_translation_rejects_selected_pipeline_guardrails_before_forwarding_audio(
+    monkeypatch: pytest.MonkeyPatch,
+    metadata_bucket: str,
+    mode: Literal["pre_call", "post_call"],
+    selected: bool,
+    condition_matches: bool,
+) -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="speech-policy", event_hook=GuardrailEventHooks(mode), default_on=False
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    request_data: Final[dict[str, object]] = {"metadata": {}, "litellm_metadata": {"user_id": "qa-user"}}
+    _apply_resolved_guardrails_to_metadata(
+        data=request_data,
+        metadata_variable_name=metadata_bucket,
+        context=PolicyMatchContext(model="qa-translation"),
+        policy_names=["translation-policy"] if selected else [],
+        policies={
+            "translation-policy": Policy(
+                condition=PolicyCondition(model="qa-translation" if condition_matches else "unrelated-model"),
+                pipeline=GuardrailPipeline(mode=mode, steps=[PipelineStep(guardrail="speech-policy", on_fail="block")]),
+            )
+        },
+    )
+    input_event: Final = json.dumps(
+        {"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(4800)).decode()}
+    )
+    output_event: Final = {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(4800)).decode()}
+    client: Final = _ga_client_ws()
+    client.receive_text = AsyncMock(side_effect=[input_event, ConnectionClosed(None, None)])
+    client.send_text = AsyncMock()
+    client.close = AsyncMock()
+    backend: Final = MagicMock()
+    backend.send = AsyncMock()
+    backend.recv = AsyncMock(side_effect=[json.dumps(output_event), ConnectionClosed(None, None)])
+    logging_obj: Final = Logging(
+        model="gpt-realtime-translate",
+        messages=[],
+        stream=True,
+        call_type="_arealtime",
+        start_time=datetime(2026, 1, 1, tzinfo=UTC),
+        litellm_call_id="pipeline-rejection",
+        function_id="pipeline-rejection",
+    )
+    worker: Final = _InlineLoggingWorker()
+    streaming: Final = RealTimeStreaming(
+        websocket=client,
+        backend_ws=backend,
+        logging_obj=logging_obj,
+        translation_session=True,
+        request_data={"litellm_metadata": _build_litellm_metadata(request_data)},
+        logging_worker=worker,
+    )
+
+    await streaming.bidirectional_forward()
+    await worker.drain()
+
+    messages: Final = tuple(json.loads(call.args[0]) for call in client.send_text.await_args_list)
+    if selected and condition_matches:
         assert messages[0]["error"]["type"] == "guardrail_error"
         client.close.assert_awaited_once_with(
             code=1008, reason="Translation sessions cannot enforce configured realtime guardrails"

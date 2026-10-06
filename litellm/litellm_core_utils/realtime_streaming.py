@@ -152,7 +152,7 @@ class RealTimeStreaming:
         provider_config: BaseRealtimeConfig | None = None,
         model: str = "",
         user_api_key_dict: object | None = None,
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
         backend_uses_beta_protocol: bool | None = None,
         force_transcription_model: str | None = None,
         event_normalizer: RealtimeEventNormalizer | None = None,
@@ -197,7 +197,7 @@ class RealTimeStreaming:
         self.current_delta_type: ALL_DELTA_TYPES | None = None
         self.session_configuration_request: str | None = None
         self.user_api_key_dict = user_api_key_dict
-        self.request_data: dict = request_data or {}
+        self.request_data: Mapping[str, object] = request_data or {}
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
         # When a text message is blocked, hold the guardrail reason so the next
@@ -1030,9 +1030,18 @@ class RealTimeStreaming:
         )
 
     def _has_realtime_guardrails(self) -> bool:
-        """Return True if any callback is registered for realtime guardrail event types."""
         from litellm.types.guardrails import GuardrailEventHooks
 
+        if any(
+            isinstance(bucket, Mapping) and "_guardrail_pipelines" in bucket
+            for bucket in (self.request_data.get("metadata"), self.request_data.get("litellm_metadata"))
+        ):
+            from litellm.proxy.utils import pipeline_managed_guardrail_names
+
+            if pipeline_managed_guardrail_names(self.request_data, "pre_call") or pipeline_managed_guardrail_names(
+                self.request_data, "post_call"
+            ):
+                return True
         return self._has_realtime_guardrails_for_event_hooks(
             [
                 GuardrailEventHooks.realtime_input_transcription,
