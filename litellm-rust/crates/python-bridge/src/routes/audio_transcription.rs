@@ -1,6 +1,6 @@
 use crate::execution::{run_async, run_sync};
 use litellm_host_python::from_py_argument;
-use litellm_inference::audio_transcription::{
+use litellm_inference_transcription::{
     AudioTranscriptionRoute, Error, types::AudioTranscriptionRequest,
 };
 use pyo3::{prelude::*, types::PyDict};

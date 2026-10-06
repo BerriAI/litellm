@@ -17,6 +17,7 @@ litellm-traces-cache = { path = "crates/traces-cache" }
 litellm-traces-clickhouse = { path = "crates/traces-clickhouse" }
 litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }
 litellm-inference = { path = "crates/inference" }
+litellm-inference-transcription = { path = "crates/inference-transcription" }
 litellm-gateway-mcp = { path = "crates/gateway-mcp" }
 litellm-gateway = { path = "crates/gateway" }
 litellm-gateway-inference = { path = "crates/gateway-inference" }

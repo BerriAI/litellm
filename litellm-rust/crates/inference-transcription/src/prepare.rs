@@ -11,10 +11,8 @@ use litellm_llms::{
 use litellm_secrets::source::SecretSource;
 
 use super::Error;
-use crate::audio_transcription::types::{
-    AudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
-};
-use crate::provider::resolve_llm_provider;
+use crate::types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
+use litellm_inference::provider::resolve_llm_provider;
 
 fn provider_config(provider: LlmProviders) -> Option<&'static dyn BaseAudioTranscriptionConfig> {
     match provider {
