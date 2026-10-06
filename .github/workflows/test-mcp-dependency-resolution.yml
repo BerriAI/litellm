@@ -145,7 +145,7 @@ jobs:
       - uses: ./.github/actions/cache-cargo-build
       - name: Build the core wheel and source distribution
         run: >-
-          uv run --no-project --with coverage==7.14.0 python -m coverage run
+          uv run --no-project --with coverage==7.14.0 python -m coverage run --rcfile=/dev/null
           --branch --include="*/scripts/build_core_distribution.py"
           scripts/build_core_distribution.py --out-dir dist/core
       - name: Verify metadata, resources, and independent source rebuild
@@ -154,7 +154,7 @@ jobs:
         run: >-
           uv run --no-project --with pytest==9.0.3 --with pytest-cov==5.0.0 --with coverage==7.14.0 --with 'tomli==2.4.1; python_version < "3.11"'
           python -m pytest tests/base_sdk_tests/test_core_distribution.py -v
-          --cov=scripts.build_core_distribution --cov-branch --cov-append --cov-report=
+          --cov-config=/dev/null --cov=scripts.build_core_distribution --cov-branch --cov-append --cov-report=
       - name: Verify isolated core installations
         run: |
           wheel=$(realpath dist/core/litellm_core-*.whl)
@@ -165,8 +165,8 @@ jobs:
             (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/.venv-core-$resolution/bin/python" -I "$GITHUB_WORKSPACE/tests/base_sdk_tests/check_base_sdk_install.py")
           done
           uv pip install --python .venv-core-highest coverage==7.14.0
-          .venv-core-highest/bin/python -I -m coverage run --append --branch --include="*/tests/base_sdk_tests/check_base_sdk_install.py" tests/base_sdk_tests/check_base_sdk_install.py
-          uv run --no-project --with coverage==7.14.0 python -m coverage xml -o coverage-core.xml
+          .venv-core-highest/bin/python -I -m coverage run --rcfile=/dev/null --append --branch --include="*/tests/base_sdk_tests/check_base_sdk_install.py" tests/base_sdk_tests/check_base_sdk_install.py
+          uv run --no-project --with coverage==7.14.0 python -m coverage xml --rcfile=/dev/null -o coverage-core.xml
       - name: Upload core packaging coverage
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
