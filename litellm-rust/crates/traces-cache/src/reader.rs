@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use crate::{
     ReadError, Snapshot, SnapshotCache, SnapshotKey, StoreError, TraceStore,
@@ -324,11 +324,39 @@ fn page<E>(
     let spans = &snapshot.trace().spans;
     let create_page = |count: usize| {
         let end = position.offset.saturating_add(count).min(spans.len());
+        let page_spans = &spans[position.offset..end];
+        let actors: HashSet<&str> = page_spans
+            .iter()
+            .filter_map(|span| span.actor_id.as_deref())
+            .collect();
         Trace {
-            capture: snapshot.trace().capture.clone(),
+            capture: snapshot.trace().capture.as_ref().map(|capture| {
+                litellm_traces::TraceCapture {
+                    actors: capture
+                        .actors
+                        .iter()
+                        .filter(|actor| actors.contains(actor.actor_id.as_str()))
+                        .cloned()
+                        .collect(),
+                    content_events: capture.content_events,
+                    unassigned_events: capture.unassigned_events,
+                    warning_events: capture.warning_events,
+                }
+            }),
             summary: snapshot.trace().summary.clone(),
-            agents: snapshot.trace().agents.clone(),
-            spans: spans[position.offset..end].to_vec(),
+            agents: snapshot
+                .trace()
+                .agents
+                .iter()
+                .filter(|agent| {
+                    agent
+                        .actor_id
+                        .as_deref()
+                        .is_none_or(|id| actors.contains(id))
+                })
+                .cloned()
+                .collect(),
+            spans: page_spans.to_vec(),
             next_cursor: (end < spans.len()).then(|| {
                 encode_cursor(&SpanPosition {
                     trace_ref: position.trace_ref.clone(),

@@ -27,18 +27,20 @@ export function pendingConversationBranches(
   const pageBoundary = spans.reduce((latest, span) => Math.max(latest, span.start_offset_ms), -Infinity);
   const pending = spans.filter((span) => {
     const missingDetail = steps.has(span.span_id) && !details.has(span.span_id);
-    const mayHaveLaterChildren = hasMoreSpans && span.start_offset_ms + span.duration_ms >= pageBoundary;
+    const mayHaveLaterChildren =
+      hasMoreSpans && (Boolean(span.actor_id) || span.start_offset_ms + span.duration_ms >= pageBoundary);
     return missingDetail || mayHaveLaterChildren;
   });
   const initial = {
-    pending: new Set(pending.map((span) => span.span_id)),
+    pending: new Set(pending.flatMap((span) => [span.span_id, ...(span.actor_id ? [span.actor_id] : [])])),
     ancestors: new Map(
-      spans.flatMap((span) =>
-        span.parent_span_id && byId.has(span.parent_span_id) ? [[span.span_id, span.parent_span_id] as const] : [],
-      ),
+      spans.flatMap((span) => [
+        ...(span.parent_span_id && byId.has(span.parent_span_id) ? [[span.span_id, span.parent_span_id] as const] : []),
+        ...(span.actor_id && span.parent_actor_id ? [[span.actor_id, span.parent_actor_id] as const] : []),
+      ]),
     ),
   };
-  const doublingPasses = Math.ceil(Math.log2(Math.max(1, spans.length)));
+  const doublingPasses = Math.ceil(Math.log2(Math.max(1, initial.ancestors.size + 1)));
   return Array.from({ length: doublingPasses }).reduce<typeof initial>((state) => {
     if (!state.pending.size || !state.ancestors.size) return state;
     return {
@@ -274,9 +276,7 @@ function agentIdentity(span: Span, details: ReadonlyMap<string, SpanDetail>): st
 
 function agentLabels(agents: readonly Span[], details: ReadonlyMap<string, SpanDetail>): ReadonlyMap<string, string> {
   const identity = (agent: Span): string => agentIdentity(agent, details);
-  const unique = agents.filter(
-    (agent, index) => agents.findIndex((other) => identity(other) === identity(agent)) === index,
-  );
+  const unique = [...new Map(agents.toReversed().map((agent) => [identity(agent), agent])).values()];
   const named = unique.map((agent) => {
     const detail = details.get(agent.span_id);
     const args = detail && isNativeAgent(agent) ? toolInput(detail.input, detail.input_ui) : undefined;
@@ -375,7 +375,10 @@ export function buildConversation(
     if (combined.length || item.showError) items.push(item);
   }
   const byBranch = new Map(
-    [...spans].sort((a, b) => b.start_offset_ms - a.start_offset_ms).map((span) => [branch(span), span]),
+    spans
+      .filter((span) => span.actor_id || span.actor_unassigned)
+      .sort((a, b) => b.start_offset_ms - a.start_offset_ms)
+      .map((span) => [branch(span), span]),
   );
   const agents = [...new Set(conversationSteps(spans).map(branch))].flatMap((id) => {
     const span = byId.get(id) ?? byBranch.get(id);

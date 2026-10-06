@@ -92,7 +92,7 @@ export function TraceConversation({
   return (
     <section aria-label="Trace conversation" className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto min-w-0 max-w-3xl space-y-5 px-3 py-4 sm:px-6 sm:py-5">
-        <CaptureCoverage capture={trace.capture} />
+        <CaptureCoverage capture={trace.capture} hasMore={Boolean(trace.next_cursor)} />
         {rootErrors.map((span) => (
           <ErrorBlock key={span.span_id} span={span} />
         ))}

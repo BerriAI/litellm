@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { Trace } from "../../types";
 
-export function CaptureCoverage({ capture }: { capture: Trace["capture"] }) {
+export function CaptureCoverage({ capture, hasMore = false }: { capture: Trace["capture"]; hasMore?: boolean }) {
   const [limit, setLimit] = useState(20);
   if (!capture) return null;
   const missing = capture.actors.filter((actor) => actor.llm_calls > 0 && !actor.reply_events && !actor.model_outputs);
@@ -14,9 +14,10 @@ export function CaptureCoverage({ capture }: { capture: Trace["capture"] }) {
     <section aria-label="Capture coverage" className="rounded-md border p-3 text-sm">
       <p className="font-medium">Capture coverage</p>
       <p className="text-muted-foreground">
-        {capture.content_events} content events received across {capture.actors.length} actors. More records may still
-        arrive.
+        {capture.content_events} content events received. Coverage for {capture.actors.length} loaded actors. More
+        records may still arrive.
       </p>
+      {hasMore && <p className="text-muted-foreground">Load more steps to include coverage for later actors.</p>}
       {missing.length > 0 && (
         <p role="status">
           No reply recorded yet for {names}

@@ -27,6 +27,48 @@ const detail = (span_id: string, input: unknown, output: unknown): SpanDetail =>
 });
 
 describe("trace conversation", () => {
+  it.each([false, true])("keeps native actor branches pending across details and pages (%s)", (hasMore) => {
+    const child = { ...root, span_id: "child", actor_id: "child-actor", parent_actor_id: "root-actor", duration_ms: 1 };
+    const later = { ...root, span_id: "later", actor_id: "root-actor", start_offset_ms: 100 };
+    const details = new Map([
+      [later.span_id, detail(later.span_id, [], [])],
+      ...(hasMore ? [[child.span_id, detail(child.span_id, [], [])] as const] : []),
+    ]);
+    const pending = pendingConversationBranches([child, later], details, hasMore);
+    expect(pending.has("child-actor")).toBe(true);
+    expect(pending.has("root-actor")).toBe(true);
+    expect(pending.has("child")).toBe(true);
+  });
+
+  it("builds a conversation below 20,000 hidden framework spans", () => {
+    const chain = Array.from(
+      { length: 20_000 },
+      (_, index): Span => ({
+        ...root,
+        span_id: `hidden-${index}`,
+        parent_span_id: index ? `hidden-${index - 1}` : root.span_id,
+        type: "framework",
+        name: "internal",
+        start_offset_ms: 1,
+      }),
+    );
+    const tool: Span = {
+      ...root,
+      span_id: "tool",
+      parent_span_id: "hidden-19999",
+      type: "tool",
+      name: "Read",
+      start_offset_ms: 2,
+    };
+    const details = new Map([
+      [root.span_id, detail(root.span_id, "Read file", "")],
+      [tool.span_id, detail(tool.span_id, { path: "alpha.txt" }, "value")],
+    ]);
+    const items = buildConversation([root, ...chain, tool], details, true);
+    expect(items.map((item) => item.span.span_id)).toEqual([root.span_id, tool.span_id]);
+    expect(items[1].toolResult).toBe("value");
+  });
+
   it("keeps missing nested details pending through framework and native agent ancestors", () => {
     const agent = {
       ...root,

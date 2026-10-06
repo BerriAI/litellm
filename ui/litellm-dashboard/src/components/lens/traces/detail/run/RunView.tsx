@@ -109,8 +109,28 @@ function LoadedRun({
   const failure = traceQuery.error ? classifyTraceReadFailure(traceQuery.error) : null;
   const trace = useMemo(() => {
     const pages = traceQuery.data.pages;
+    const capture = pages[0].capture;
     return {
       ...pages[0],
+      agents: [
+        ...new Map(
+          pages.flatMap((page) =>
+            page.agents.map(
+              (agent) => [agent.actor_id ?? JSON.stringify([agent.name, agent.parent_agent]), agent] as const,
+            ),
+          ),
+        ).values(),
+      ],
+      capture: capture
+        ? {
+            ...capture,
+            actors: [
+              ...new Map(
+                pages.flatMap((page) => page.capture?.actors.map((actor) => [actor.actor_id, actor] as const) ?? []),
+              ).values(),
+            ],
+          }
+        : capture,
       spans: pages.flatMap((page) => page.spans),
       next_cursor: pages[pages.length - 1].next_cursor,
     };
