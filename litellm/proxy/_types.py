@@ -545,6 +545,7 @@ class LiteLLMRoutes(enum.Enum):
         "/lens/workers/register",
         "/lens/workers/{worker_id}",
         "/v1/traces",
+        "/v1/logs",
         "/v1/traces/query",
         "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
@@ -1053,6 +1054,7 @@ class LiteLLMRoutes(enum.Enum):
     # updating this list — the default-allow behavior covers it automatically.
     admin_viewer_routes = (
         [
+            "/lens/traces/findings",
             "/user/list",
             "/user/available_users",
             "/user/available_roles",
