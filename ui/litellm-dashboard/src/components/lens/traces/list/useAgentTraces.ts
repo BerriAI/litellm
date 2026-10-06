@@ -2,7 +2,13 @@ import { useTracesApi } from "../api";
 import { keepPreviousData, useInfiniteQuery, useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-import { isLive, LIVE_TAIL_INTERVAL_MS, type RelativeRange, timeWindow } from "@/components/shared/timeRange/timeRange";
+import {
+  isLive,
+  LIVE_TAIL_INTERVAL_MS,
+  type RelativeRange,
+  type TimeWindow,
+  timeWindow,
+} from "@/components/shared/timeRange/timeRange";
 import { ApiError } from "@/lib/http/client";
 
 import type { TracePage, TraceSummary } from "../types";
@@ -44,6 +50,8 @@ export interface AgentTracesResult {
   isFetching: boolean;
   /** The previous range's rows, still shown while the newly picked range loads. */
   isPlaceholder: boolean;
+  /** The window the shown rows were fetched for; lags the picked range while a placeholder is shown. */
+  window: TimeWindow | null;
   /** Set when the proxy answered 501: tracing isn't configured. */
   notEnabledDetail: string | null;
   error: Error | null;
@@ -87,6 +95,7 @@ export function useAgentTraces({ accessToken, range, enabled }: UseAgentTracesOp
     isLoading: query.isLoading,
     isFetching: query.isFetching,
     isPlaceholder: query.isPlaceholderData,
+    window: query.data?.pages[0]?.window ?? null,
     notEnabledDetail: notEnabled ? query.error?.message || "Agent tracing is not enabled" : null,
     error: notEnabled ? null : displayError(query.error),
     hasMore: query.hasNextPage,

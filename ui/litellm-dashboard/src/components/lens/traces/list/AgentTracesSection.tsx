@@ -99,7 +99,9 @@ export function AgentTracesSection({
 
   // A live range ends "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
   const minuteEndMs = moment().endOf("minute").valueOf();
-  const window = useMemo(() => timeWindow(range, minuteEndMs), [range, minuteEndMs]);
+  const pickedWindow = useMemo(() => timeWindow(range, minuteEndMs), [range, minuteEndMs]);
+  // While the previous range's rows stay on screen, describe them with their own window.
+  const window = traces.isPlaceholder && traces.window ? traces.window : pickedWindow;
   const filtered = useMemo(
     () => filterRuns(traces.traces, query, { agent, status }),
     [traces.traces, query, agent, status],

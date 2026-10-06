@@ -705,6 +705,23 @@ describe("AgentTracesPage", () => {
     expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(1);
   });
 
+  it("keeps the timeline on the shown runs' window while a narrower range loads", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.parse("2026-09-30T12:00Z") });
+    vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
+    renderWithProviders(<AgentTracesPage accessToken="sk-test" />, { searchParams: "?hours=24" });
+    expect(await screen.findAllByTestId("agent-trace-row")).toHaveLength(runs.length);
+    const sum = () => bucketRunCounts().reduce((a, b) => a + b, 0);
+    expect(sum()).toBe(runs.length);
+
+    vi.mocked(agentTraceListCall).mockImplementation(() => new Promise<TracePage>(() => {}));
+    fireEvent.click(screen.getByRole("button", { name: "Time range" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Last hour" }));
+
+    expect(await screen.findByRole("status", { name: "Loading results" })).toBeInTheDocument();
+    expect(screen.getAllByTestId("agent-trace-row")).toHaveLength(runs.length);
+    expect(sum()).toBe(runs.length);
+  });
+
   it("asks the proxy for the last 24 hours by default", async () => {
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     renderWithProviders(<AgentTracesPage accessToken="sk-test" />);
