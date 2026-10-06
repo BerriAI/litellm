@@ -5,6 +5,7 @@ from typing import Final, Literal
 
 from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_in_range, get_env_int_or_none
 
+DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})
@@ -2209,6 +2210,16 @@ BATCH_ENQUEUED_TOKEN_TTL_SECONDS: Final[int] = 8 * 24 * 60 * 60
 # admins may write it: when present it replaces the standard RPM/TPM checks for
 # batch submissions.
 BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
+MAX_BATCH_FILE_RECORDS_KEY: Final = "max_batch_file_records"
+MAX_BATCH_FILE_UPLOADS_PER_DAY_KEY: Final = "max_batch_file_uploads_per_day"
+MAX_FILE_DOWNLOADS_PER_MINUTE_KEY: Final = "max_file_downloads_per_minute"
+ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS: Final = (
+    BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    MAX_BATCH_FILE_RECORDS_KEY,
+    MAX_BATCH_FILE_UPLOADS_PER_DAY_KEY,
+    MAX_FILE_DOWNLOADS_PER_MINUTE_KEY,
+)
+FILE_USAGE_MAX_TRACKED_COUNTERS: Final = 20_000
 
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.
