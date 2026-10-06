@@ -16,7 +16,8 @@ import json
 import re
 import sys
 import time
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Generator, Mapping, Sequence
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
 from types import MappingProxyType
@@ -228,6 +229,33 @@ async def _prepend_stream_chunk(first: object, rest: AsyncIterator[object]) -> A
     yield first
     async for item in rest:
         yield item
+
+
+_STREAMING_REPLAYS_ORIGINAL_TEXT: Final[ContextVar[bool]] = ContextVar(
+    "bedrock_streaming_replays_original_text",
+    default=False,
+)
+
+
+@contextlib.contextmanager
+def _replay_original_streaming_text() -> Generator[None, None, None]:
+    token: Final = _STREAMING_REPLAYS_ORIGINAL_TEXT.set(True)
+    try:
+        yield
+    finally:
+        _STREAMING_REPLAYS_ORIGINAL_TEXT.reset(token)
+
+
+def _streaming_route_is_translatable(request_route: str | None) -> bool:
+    if request_route is None:
+        return False
+    call_types: Final = get_call_types_for_route(request_route)
+    if not call_types:
+        return False
+    from litellm.llms import load_guardrail_translation_mappings
+
+    mappings: Final = load_guardrail_translation_mappings()
+    return any(call_type in mappings for call_type in call_types)
 
 
 def _is_responses_api_route(request_route: str | None) -> bool:
@@ -2752,7 +2780,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         The default holds each window of chunks, waits for ApplyGuardrail, then
         releases that window. aggregate still holds the whole stream for one scan.
-        Raw SSE frames stay on that full-stream scan, which is what can assemble them.
+        Raw SSE on a route with a streaming translation follows that same strategy.
+        Frames with no translation stay on the full-stream scan.
         """
         if self._streams_incrementally():
             response_iterator: Final = response.__aiter__()
@@ -2761,24 +2790,27 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             except StopAsyncIteration:
                 return
             continued: Final = _prepend_stream_chunk(first_chunk, response_iterator)
-            if isinstance(first_chunk, (bytes, str)):
-                response = continued  # rebind-ok: raw SSE must fall through to the assembler
+            if isinstance(first_chunk, (bytes, str)) and not _streaming_route_is_translatable(
+                user_api_key_dict.request_route
+            ):
+                response = continued  # rebind-ok: untranslatable SSE must fall through to the assembler
             else:
                 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
                     UnifiedLLMGuardrails,
                 )
 
-                async with contextlib.aclosing(
-                    UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        response=continued,
-                        request_data=request_data,
-                        guardrail_to_apply=self,
-                        buffer_until_moderated_default=False,
-                    )
-                ) as guarded:
-                    async for streamed_chunk in guarded:
-                        yield streamed_chunk
+                with _replay_original_streaming_text():
+                    async with contextlib.aclosing(
+                        UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            response=continued,
+                            request_data=request_data,
+                            guardrail_to_apply=self,
+                            buffer_until_moderated_default=False,
+                        )
+                    ) as guarded:
+                        async for streamed_chunk in guarded:
+                            yield streamed_chunk
                 return
 
         # Responses-API events are neither chat-completions chunks nor raw
@@ -2789,14 +2821,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 UnifiedLLMGuardrails,
             )
 
-            async for translated_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-                user_api_key_dict=user_api_key_dict,
-                response=response,
-                request_data=request_data,
-                guardrail_to_apply=self,
-                buffer_until_moderated_default=True,
-            ):
-                yield translated_chunk
+            with _replay_original_streaming_text():
+                async for translated_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    response=response,
+                    request_data=request_data,
+                    guardrail_to_apply=self,
+                    buffer_until_moderated_default=True,
+                ):
+                    yield translated_chunk
             return
 
         # Import here to avoid circular imports
@@ -3168,6 +3201,26 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         return inputs
 
+    def _refuse_unreplayable_streaming_rewrite(
+        self,
+        texts: Sequence[object],
+        masked_texts: Sequence[object],
+        request_data: Mapping[str, object],
+    ) -> None:
+        if "responses" not in request_data and not _STREAMING_REPLAYS_ORIGINAL_TEXT.get():
+            return
+        original_texts: Final = tuple(str(text) for text in texts)
+        rewritten_texts: Final = tuple(str(text) for text in masked_texts)
+        if original_texts == rewritten_texts:
+            return
+        safe_message: Final = "\n".join(rewritten_texts) if rewritten_texts else "Response withheld"
+        raise ModifyResponseException(
+            message=safe_message,
+            model=str(request_data.get("model") or "bedrock-guardrail"),
+            request_data=request_data,  # pyright: ignore[reportArgumentType] # exception takes a dict
+            guardrail_name=self.guardrail_name,
+        )
+
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
@@ -3294,6 +3347,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             verbose_proxy_logger.debug("Bedrock Guardrail: Successfully applied guardrail")
 
+            self._refuse_unreplayable_streaming_rewrite(
+                texts=texts,
+                masked_texts=masked_texts,  # pyright: ignore[reportUnknownArgumentType] # output list is untyped
+                request_data=request_data,  # pyright: ignore[reportUnknownArgumentType] # request dict is untyped
+            )
             inputs["texts"] = masked_texts
             return inputs
 

@@ -735,6 +735,8 @@ class BedrockGuardrailStreamingParams(BaseModel):
                         "streaming_end_of_stream_only": True,
                     }
                 )
+            case _:  # pyright: ignore[reportUnnecessaryComparison] # CodeQL needs an explicit return here
+                return self
 
     @classmethod
     def from_extras(cls, extras: Mapping[str, object] | None) -> "BedrockGuardrailStreamingParams":

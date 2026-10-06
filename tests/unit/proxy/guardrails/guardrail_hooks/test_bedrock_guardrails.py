@@ -5936,20 +5936,99 @@ async def test_sync_strategy_does_not_release_a_window_the_scan_blocks():
         yield _chat_chunk("bad", None)
         yield _chat_chunk(" text", None)
 
+    async def _drain() -> None:
+        async for item in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            response=mock_stream(),
+            request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+        ):
+            yielded.append(item)
+
     with patch.object(
         guardrail,
         "make_bedrock_api_request",
         AsyncMock(side_effect=guardrail._get_http_exception_for_blocked_guardrail({"action": "GUARDRAIL_INTERVENED"})),
     ):
         with pytest.raises(HTTPException):
-            async for item in guardrail.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
-                response=mock_stream(),
-                request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
-            ):
-                yielded.append(item)
+            await _drain()
 
     assert yielded == []
+
+
+@pytest.mark.asyncio
+async def test_sync_stream_withholds_text_bedrock_anonymized():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-sync-anonymize",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+    )
+    yielded: list[object] = []
+
+    async def mock_stream():
+        yield _chat_chunk("my ssn is 123-45-6789", None)
+        yield _chat_chunk("", "stop")
+
+    with patch.object(
+        guardrail,
+        "make_bedrock_api_request",
+        AsyncMock(
+            return_value={
+                "action": "GUARDRAIL_INTERVENED",
+                "outputs": [{"text": "my ssn is {SSN}"}],
+                "assessments": [
+                    {
+                        "sensitiveInformationPolicy": {
+                            "piiEntities": [{"type": "US_SOCIAL_SECURITY_NUMBER", "action": "ANONYMIZED"}]
+                        }
+                    }
+                ],
+            }
+        ),
+    ):
+        async for item in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            response=mock_stream(),
+            request_data={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+        ):
+            yielded.append(item)
+
+    rendered = b"".join(item if isinstance(item, bytes) else str(item).encode() for item in yielded)
+    assert b"123-45-6789" not in rendered
+    assert b"{SSN}" in rendered
+
+
+@pytest.mark.asyncio
+async def test_async_strategy_releases_anthropic_sse_before_the_scan():
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-async-sse",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
+        streaming_strategy="async",
+    )
+    events: list[str] = []
+
+    async def record_scan(*args, **kwargs):
+        events.append("scan")
+        return {"action": "NONE", "assessments": [], "outputs": []}
+
+    async def mock_stream():
+        for chunk in _ANTHROPIC_SSE_CHUNKS:
+            yield chunk
+
+    with patch.object(guardrail, "make_bedrock_api_request", AsyncMock(side_effect=record_scan)):
+        async for _chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/messages"),
+            response=mock_stream(),
+            request_data={"model": "claude", "messages": [{"role": "user", "content": "hi"}]},
+        ):
+            events.append("chunk")
+
+    assert events[0] == "chunk"
+    assert events.index("scan") > 0
 
 
 @pytest.mark.asyncio
