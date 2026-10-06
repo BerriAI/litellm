@@ -52,7 +52,7 @@ impl From<litellm_host::machine::MachineFault> for RouteError {
 }
 
 impl RouteError {
-    pub(crate) fn post_call(error: Self) -> Self {
+    pub fn post_call(error: Self) -> Self {
         Self::PostCallHook(Arc::new(error))
     }
 
