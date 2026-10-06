@@ -1,3 +1,9 @@
+import os
+import subprocess
+import sys
+
+import pytest
+
 import litellm
 from litellm import Router
 from litellm import router as litellm_router_module
@@ -34,3 +40,21 @@ def test_live_router_membership_is_scoped_to_this_test():
 def test_live_router_membership_was_rolled_back():
     assert _CanaryRouterHolder.router is not None
     assert _CanaryRouterHolder.router not in litellm_router_module._live_routers
+
+
+def test_isolated_environment_still_lets_a_child_python_import_asyncio():
+    child = subprocess.run(
+        [sys.executable, "-c", "import asyncio; print('ok')"],
+        env={**os.environ},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert child.returncode == 0, child.stderr
+    assert child.stdout.strip() == "ok"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="only Windows needs these for Winsock and cmd.exe")
+def test_windows_system_variables_survive_isolation():
+    for name in ("SYSTEMROOT", "COMSPEC", "PATHEXT"):
+        assert name in os.environ

@@ -12,6 +12,20 @@ import httpx
 import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
 
+WINDOWS_HOST_ENVIRONMENT: Final = frozenset(
+    (
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+    )
+)
 HOST_ENVIRONMENT_ALLOWLIST: Final = frozenset(
     (
         "PATH",
@@ -29,7 +43,7 @@ HOST_ENVIRONMENT_ALLOWLIST: Final = frozenset(
         "LITELLM_LOCAL_MODEL_COST_MAP",
         "TIKTOKEN_CACHE_DIR",
     )
-)
+) | (WINDOWS_HOST_ENVIRONMENT if os.name == "nt" else frozenset())
 HOST_ENVIRONMENT_ALLOWED_PREFIXES: Final = ("PYTEST_", "PYTHON", "COV_CORE_", "COVERAGE_")
 HOST_ONLY_ENVIRONMENT: Final = frozenset(
     name
