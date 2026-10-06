@@ -401,7 +401,9 @@ def _ui_session_cookie(gateway: Gateway, user_id: str) -> dict[str, str]:
     return {"token": jwt.encode(claims, gateway.key, algorithm="HS256")}
 
 
-def _gateway_session_bearer(gateway: Gateway, user_id: str, resource: str | None = None) -> str:
+def _gateway_session_bearer(
+    gateway: Gateway, user_id: str, resource: str | None = None, selected_servers: tuple[str, ...] = ()
+) -> str:
     registered: Final = gateway.client.post(
         "/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
     )
@@ -425,7 +427,9 @@ def _gateway_session_bearer(gateway: Gateway, user_id: str, resource: str | None
     assert started.status_code == 303, started.text
     handle: Final = parse_qs(urlsplit(started.headers["location"]).query)["connect_flow"][0]
     completed: Final = gateway.client.post(
-        "/authorize/complete", data={"flow": handle}, cookies={**cookies, **dict(started.cookies)}
+        "/authorize/complete",
+        data={"flow": handle, "selected_servers": list(selected_servers)},
+        cookies={**cookies, **dict(started.cookies)},
     )
     assert completed.status_code == 303, completed.text
     callback: Final = parse_qs(urlsplit(completed.headers["location"]).query)
@@ -467,7 +471,7 @@ def test_gateway_session_bearer_of_a_team_member_is_served_the_team_toolset_on_i
         granted_id: Final = create_toolset(scenario, ((server_id, "add"),), toolset_name=granted_name)
         create_toolset(scenario, ((server_id, "multiply"),), toolset_name=withheld_name)
         member: Final = scenario.member(scenario.team(object_permission={"mcp_toolsets": [granted_id]}))
-        bearer: Final = _gateway_session_bearer(gateway, member)
+        bearer: Final = _gateway_session_bearer(gateway, member, selected_servers=(server_id,))
         assert bearer.startswith("llm_session_"), bearer[:16]
         listed: Final = _toolset_rpc(gateway, bearer, granted_name, "tools/list", {})
         assert listed.tools == (f"{alias}-add",), listed.raw
