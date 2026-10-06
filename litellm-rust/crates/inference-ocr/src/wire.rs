@@ -6,13 +6,13 @@ use litellm_llms_types::formats::ocr::OcrDocument;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
+use crate::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
 
 pub fn consumed_optional_params(
     model: &str,
     provider: Option<&str>,
 ) -> Result<Vec<litellm_core_utils::call_arguments::ArgumentSpec>, Error> {
-    let specs = crate::ocr::arguments::consumed_optional_params(model, provider)?;
+    let specs = crate::arguments::consumed_optional_params(model, provider)?;
     Ok(consumed_optional_param_names(model, provider)?
         .into_iter()
         .map(|name| litellm_core_utils::call_arguments::ArgumentSpec {
@@ -26,7 +26,7 @@ pub fn consumed_optional_param_names(
     model: &str,
     provider: Option<&str>,
 ) -> Result<Vec<&'static str>, Error> {
-    let names = crate::ocr::arguments::consumed_optional_param_names(model, provider)?;
+    let names = crate::arguments::consumed_optional_param_names(model, provider)?;
     let (_, config) = super::provider_config::resolve_provider_config(model, provider)?;
     if config == super::provider_config::OcrConfigKind::VertexDeepSeek {
         return Ok(names
@@ -109,7 +109,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::ocr::arguments::is_supported_request;
+    use crate::arguments::is_supported_request;
 
     #[rstest]
     #[case::omitted(json!({"type":"document_url", "document_url":"https://example.com/a.pdf"}))]

@@ -3838,6 +3838,7 @@ dependencies = [
  "litellm-inference",
  "litellm-inference-chat",
  "litellm-inference-messages",
+ "litellm-inference-ocr",
  "litellm-inference-responses",
  "litellm-inference-transcription",
  "litellm-llms",
@@ -4096,6 +4097,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-inference-ocr"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-util",
+ "litellm-auth",
+ "litellm-auth-aws",
+ "litellm-auth-gcp",
+ "litellm-core-utils",
+ "litellm-host",
+ "litellm-host-native",
+ "litellm-http",
+ "litellm-inference",
+ "litellm-llms",
+ "litellm-llms-types",
+ "litellm-secrets",
+ "litellm-tracing",
+ "mime_guess",
+ "rand 0.8.7",
+ "rstest",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-inference-responses"
 version = "0.1.0"
 dependencies = [
@@ -4226,6 +4257,7 @@ dependencies = [
  "litellm-inference",
  "litellm-inference-chat",
  "litellm-inference-messages",
+ "litellm-inference-ocr",
  "litellm-inference-responses",
  "litellm-inference-transcription",
  "litellm-llms",

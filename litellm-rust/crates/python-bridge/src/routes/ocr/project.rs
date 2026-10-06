@@ -1,6 +1,6 @@
 use litellm_auth::SecretValue;
 use litellm_host_python::from_py;
-use litellm_inference::ocr::{
+use litellm_inference_ocr::{
     types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
 };

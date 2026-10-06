@@ -4,7 +4,6 @@ pub mod diagnostic;
 pub mod caching;
 pub mod constants;
 pub mod error;
-pub mod ocr;
 pub mod outbound;
 pub mod provider;
 pub mod resources;

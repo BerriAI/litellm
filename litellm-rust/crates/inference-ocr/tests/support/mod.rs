@@ -22,8 +22,8 @@ pub fn build_ocr_route(
     url_policy: litellm_http::media::UrlPolicy,
     settings: litellm_llms::base_llm::ocr::settings::OcrSettings,
     secrets: Arc<dyn SecretSource>,
-) -> litellm_inference::ocr::OcrRoute {
-    litellm_inference::ocr::OcrRoute::new(
+) -> litellm_inference_ocr::OcrRoute {
+    litellm_inference_ocr::OcrRoute::new(
         litellm_llms::base_llm::ocr::handler::OcrClient::new(
             &resources.pool,
             config,

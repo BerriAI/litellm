@@ -6,7 +6,7 @@ use litellm_llms::base_llm::ocr::{
 };
 use litellm_secrets::source::Secrets;
 
-use crate::ocr::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
+use crate::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
 
 pub(crate) fn prepare_request(
     request: ResolvedOcrRequest,
@@ -95,7 +95,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::ocr::{
+    use crate::{
         document::prepare_document,
         types::LiteLLMOcrRequest,
         wire::{OcrWireRequest, decode_request},
