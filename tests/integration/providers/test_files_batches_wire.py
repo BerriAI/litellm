@@ -1,8 +1,9 @@
 import base64
 import json
 import re
+import threading
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from email.message import Message
 from email.parser import BytesParser
@@ -24,6 +25,10 @@ from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_wit
 
 INPUT_FILENAME: Final = "in.jsonl"
 OUTPUT_BYTES: Final = b'{"custom_id": "r1", "result": {"response": {"body": "ok"}}}\n'
+STREAM_CHUNK_BYTES: Final = 1024 * 1024
+_HEAD_OPEN: Final = b'{"custom_id": "r0", "padding": "'
+_HEAD_CLOSE: Final = b'"}\n'
+OUTPUT_HEAD: Final = _HEAD_OPEN + b"h" * (STREAM_CHUNK_BYTES - len(_HEAD_OPEN) - len(_HEAD_CLOSE)) + _HEAD_CLOSE
 MANAGED_PREFIX: Final = "litellm_proxy:"
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 MANAGED_FILE_ROW: Final = (
@@ -209,6 +214,7 @@ def _deployment_ids(gateway: Gateway, *model_names: str) -> dict[str, str]:
 
 def _multiplexed_openai_backends(
     created_batch: Mapping[str, JsonValue] | None = None,
+    content_gate: threading.Event | None = None,
 ) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         raw_path: Final = urlsplit(request.target).path
@@ -229,6 +235,12 @@ def _multiplexed_openai_backends(
                 )
             )
         if request.method == "GET" and path.startswith("/v1/files/") and path.endswith("/content"):
+            if content_gate is not None:
+                return Reply(
+                    content_type="application/octet-stream",
+                    chunks=(OUTPUT_HEAD, OUTPUT_BYTES),
+                    gate_after_first=content_gate,
+                )
             return Reply(body=OUTPUT_BYTES, content_type="application/octet-stream")
         if request.method == "GET" and path.startswith("/v1/files/"):
             return _json_reply(_file_object(path.rsplit("/", 1)[1], len(_jsonl("uploaded-model"))))
@@ -559,20 +571,51 @@ def _encoded_output_file_id(gateway: Gateway, alias: str, bearer_key: str) -> tu
     return batch.output_file_id, f"file-out-{bearer_key}"
 
 
-def _download_file_content(
+def _content_request(
     gateway: Gateway, route: _ContentRoute, encoded_output: str, raw_output: str, alias: str
-) -> httpx.Response:
+) -> httpx.Request:
+    authorization: Final = {"Authorization": f"Bearer {gateway.key}"}
     match route:
         case "v1_encoded":
-            return gateway.request("GET", f"/v1/files/{encoded_output}/content")
+            return gateway.client.build_request("GET", f"/v1/files/{encoded_output}/content", headers=authorization)
         case "files_encoded":
-            return gateway.request("GET", f"/files/{encoded_output}/content")
+            return gateway.client.build_request("GET", f"/files/{encoded_output}/content", headers=authorization)
         case "files_raw_query":
-            return gateway.request("GET", f"/files/{raw_output}/content", params={"model": alias})
+            return gateway.client.build_request(
+                "GET", f"/files/{raw_output}/content", params={"model": alias}, headers=authorization
+            )
         case "v1_raw_header":
-            return gateway.request("GET", f"/v1/files/{raw_output}/content", headers={"x-litellm-model": alias})
+            return gateway.client.build_request(
+                "GET", f"/v1/files/{raw_output}/content", headers={**authorization, "x-litellm-model": alias}
+            )
         case _:
             assert_never(route)
+
+
+def _open_and_read_head(
+    client: httpx.Client, request: httpx.Request
+) -> tuple[httpx.Response, Iterator[bytes], bytes]:
+    response: Final = client.send(request, stream=True)
+    chunks: Final = response.iter_bytes()
+    return response, chunks, next(chunks, b"")
+
+
+def _gated_download(gateway: Gateway, request: httpx.Request, gate: threading.Event) -> tuple[int, bytes, bytes]:
+    with ThreadPoolExecutor(max_workers=1) as reader:
+        head_read: Final = reader.submit(_open_and_read_head, gateway.client, request)
+        try:
+            head_arrived: Final = eventually(head_read.done, bool, seconds=3, return_last_on_timeout=True)
+        finally:
+            gate.set()
+        response, chunks, head = head_read.result()
+        try:
+            rest: Final = b"".join(chunks)
+        finally:
+            response.close()
+    assert head_arrived, (
+        f"client got no content bytes while the upstream held the rest of the file: {response.status_code}"
+    )
+    return response.status_code, head, rest
 
 
 @pytest.mark.parametrize("provider", ["openai", "azure"], ids=["openai-streaming", "azure-non-streaming"])
@@ -585,7 +628,9 @@ def test_batch_output_file_content_downloads_through_the_model_encoded_id(
     gateway: Gateway, provider: str, route: _ContentRoute
 ) -> None:
     key: Final = f"provider-key-{provider}-" + uuid.uuid4().hex[:8]
-    with wire_server(_multiplexed_openai_backends()) as wire, gateway.scenario() as scenario:
+    gate: Final = threading.Event()
+    gate.set()
+    with wire_server(_multiplexed_openai_backends(content_gate=gate)) as wire, gateway.scenario() as scenario:
         deployment: Final = (
             {"model": "openai/gpt-4o-mini", "api_base": wire.url + "/v1", "api_key": key}
             if provider == "openai"
@@ -617,9 +662,13 @@ def test_batch_output_file_content_downloads_through_the_model_encoded_id(
             ("GET", expected_content_target),
         ], [(r.method, r.target) for r in settled]
 
-        response: Final = _download_file_content(gateway, route, encoded_output, raw_output, alias)
-        assert response.status_code == 200, response.text
-        assert response.content == OUTPUT_BYTES, response.text
+        if provider == "openai":
+            gate.clear()
+        status, head, rest = _gated_download(
+            gateway, _content_request(gateway, route, encoded_output, raw_output, alias), gate
+        )
+        assert status == 200, (head + rest).decode()
+        assert head + rest == OUTPUT_HEAD + OUTPUT_BYTES, f"{len(head)} head bytes, {len(rest)} tail bytes"
         (content_request,) = _drained_other_than_model_list_probes(wire)
         assert (content_request.method, content_request.target) == ("GET", expected_content_target), (
             content_request.target

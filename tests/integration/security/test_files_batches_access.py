@@ -1,10 +1,17 @@
 import base64
+import contextlib
 import json
+import socket
+import socketserver
+import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
+from queue import SimpleQueue
 from typing import Final, Literal
 from urllib.parse import quote, urlsplit
 
@@ -14,7 +21,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
+from integration._support.process import owned_proxy
+from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import Reply, Request, Wire, wire_server
+from openai import OpenAI, PermissionDeniedError
 from pydantic import BaseModel, JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
@@ -28,7 +38,11 @@ BUCKET: Final = "integration-delete-bucket"
 VERTEX_PROJECT: Final = "files-batches-delete-project"
 VERTEX_LOCATION: Final = "us-central1"
 VERTEX_MODEL: Final = "vertex_ai/gemini-2.5-flash"
+GCS_HOST: Final = "storage.googleapis.com"
+GCS_AUTHORITY: Final = f"{GCS_HOST}:443"
+VERTEX_ACCESS_TOKEN: Final = "ya29.scripted-delete-token"
 _ForbiddenSurface = Literal[
+    "upload_sdk_extra_body",
     "upload_form",
     "upload_query",
     "upload_header",
@@ -271,6 +285,20 @@ def test_stranger_cannot_retrieve_or_cancel_another_teams_managed_batch(gateway:
         assert cancel_request.headers["authorization"] == f"Bearer {key}", cancel_request.headers
 
 
+def _sdk_upload_refusal(gateway: Gateway, forbidden: str, caller_key: str) -> httpx.Response:
+    sdk_base_url: Final = str(gateway.client.base_url).rstrip("/") + "/v1"
+    with OpenAI(base_url=sdk_base_url, api_key=caller_key, max_retries=0) as client:
+        try:
+            uploaded: Final = client.files.with_raw_response.create(
+                file=(INPUT_FILENAME, _jsonl(forbidden), "application/jsonl"),
+                purpose="batch",
+                extra_body={"model": forbidden},
+            )
+        except PermissionDeniedError as refused:
+            return refused.response
+    raise AssertionError(f"SDK upload with a forbidden model was accepted: {uploaded.status_code} {uploaded.text}")
+
+
 def _forbidden_surface_request(
     gateway: Gateway,
     surface: _ForbiddenSurface,
@@ -282,6 +310,8 @@ def _forbidden_surface_request(
     encoded_batch: str,
 ) -> httpx.Response:
     match surface:
+        case "upload_sdk_extra_body":
+            return _sdk_upload_refusal(gateway, forbidden, caller_key)
         case "upload_form":
             return gateway.request_multipart(
                 "/v1/files",
@@ -376,6 +406,7 @@ def _forbidden_surface_request(
 @pytest.mark.parametrize(
     "surface",
     [
+        "upload_sdk_extra_body",
         "upload_form",
         "upload_query",
         "upload_header",
@@ -394,6 +425,7 @@ def _forbidden_surface_request(
         "batch_get_header",
     ],
     ids=[
+        "upload-sdk-extra-body-model",
         "upload-form-model",
         "upload-query-model",
         "upload-header-model",
@@ -685,3 +717,108 @@ def test_proxy_admin_deletes_a_raw_s3_uri_with_one_signed_delete(gateway: Gatewa
             request.target
         )
         assert request.headers["authorization"].startswith("AWS4-HMAC-SHA256 "), request.headers
+
+
+def _granting_vertex_token_backend(request: Request) -> Reply:
+    if request.method == "POST" and request.target == "/_oauth/token":
+        return _json_reply({"access_token": VERTEX_ACCESS_TOKEN, "expires_in": 3600, "token_type": "Bearer"})
+    return _json_reply({"error": {"message": f"unscripted {request.method} {request.target}"}}, 404)
+
+
+def _gcs_backend(request: Request) -> Reply:
+    if request.method == "DELETE":
+        return Reply(status=204, body=b"")
+    return _json_reply({"error": {"message": f"unscripted {request.method} {request.target}"}}, 404)
+
+
+def _pipe(source: socket.socket, sink: socket.socket) -> None:
+    with contextlib.suppress(OSError):
+        for chunk in iter(lambda: source.recv(65536), b""):
+            sink.sendall(chunk)
+    with contextlib.suppress(OSError):
+        sink.shutdown(socket.SHUT_WR)
+
+
+@dataclass(frozen=True, slots=True)
+class _ConnectTunnel:
+    url: str
+    authorities: SimpleQueue[str]
+
+
+@contextmanager
+def _gcs_tunnel(destination: Wire) -> Generator[_ConnectTunnel, None, None]:
+    authorities: Final[SimpleQueue[str]] = SimpleQueue()
+    destination_port: Final = int(destination.url.rsplit(":", 1)[1])
+
+    class Tunnel(socketserver.StreamRequestHandler):
+        rbufsize = 0
+        request: socket.socket
+
+        def handle(self) -> None:
+            authority: Final = self.rfile.readline().decode().split()[1]
+            while self.rfile.readline() not in (b"\r\n", b""):
+                pass
+            authorities.put(authority)
+            if authority != GCS_AUTHORITY:
+                self.wfile.write(b"HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\n\r\n")
+                return
+            self.wfile.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            self.request.settimeout(10)
+            with socket.create_connection(("127.0.0.1", destination_port), timeout=10) as upstream:
+                outbound: Final = threading.Thread(target=_pipe, args=(self.request, upstream))
+                outbound.start()
+                _pipe(upstream, self.request)
+                outbound.join(timeout=12)
+
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), Tunnel) as server:
+        thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
+        thread.start()
+        try:
+            yield _ConnectTunnel(f"http://127.0.0.1:{server.server_address[1]}", authorities)
+        finally:
+            server.shutdown()
+            thread.join(timeout=6)
+
+
+def _queued(queue: SimpleQueue[str]) -> tuple[str, ...]:
+    return tuple(queue.get_nowait() for _ in range(queue.qsize()))
+
+
+@pytest.mark.timeout(180)
+def test_proxy_admin_deletes_a_raw_gcs_uri_with_one_authorized_storage_delete(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    cert_file, key_file = write_self_signed_cert(tmp_path, (GCS_HOST,))
+    object_name: Final = f"litellm-vertex-files/admin-{uuid.uuid4().hex}.jsonl"
+    object_uri: Final = f"gs://{BUCKET}/{object_name}"
+    with (
+        wire_server(_granting_vertex_token_backend) as token_wire,
+        wire_server(_gcs_backend, tls=server_context(cert_file, key_file)) as storage,
+        _gcs_tunnel(storage) as tunnel,
+        owned_proxy(gateway, tmp_path, {"HTTPS_PROXY": tunnel.url, "SSL_VERIFY": "False"}) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model=VERTEX_MODEL,
+            api_key=None,
+            vertex_project=VERTEX_PROJECT,
+            vertex_location=VERTEX_LOCATION,
+            vertex_credentials=_vertex_credentials(token_wire.url),
+            gcs_bucket_name=BUCKET,
+        )
+        token_wire.drain()
+
+        deleted: Final = candidate.request(
+            "DELETE", "/v1/files/" + quote(object_uri, safe=""), params={"model": model}
+        )
+        storage_requests: Final = storage.drain()
+        assert deleted.status_code == 200, f"{deleted.text}; storage requests={storage_requests}"
+        parsed: Final = _FileDeleted.model_validate_json(deleted.content)
+        assert parsed.deleted is True and parsed.id == object_uri, deleted.text
+        assert [(r.method, r.target) for r in storage_requests] == [
+            ("DELETE", f"/storage/v1/b/{BUCKET}/o/{quote(object_name, safe='')}")
+        ], storage_requests
+        assert storage_requests[0].headers["authorization"] == f"Bearer {VERTEX_ACCESS_TOKEN}", (
+            storage_requests[0].headers
+        )
+        assert _queued(tunnel.authorities) == (GCS_AUTHORITY,), "raw GCS delete took an unexpected route"
