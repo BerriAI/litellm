@@ -3,6 +3,7 @@ from typing import Final
 
 import pytest
 
+from litellm._version import get_distribution_name
 from litellm.litellm_core_utils.optional_dependencies import MissingOptionalDependencyError, require_optional_dependency
 
 
@@ -39,6 +40,7 @@ def test_core_startup_without_optional_packages(mode: str, reload: str, broken_d
     import os
     import subprocess
     import sys
+
     import litellm
 
     source: Final = '''
@@ -62,8 +64,8 @@ print(json.dumps([litellm.__file__, response.choices[0].message.content]))
     elif broken_dotenv:
         assert result.returncode != 0
         assert "ModuleNotFoundError: Broken dotenv installation" in result.stderr
-        assert "litellm[dotenv]" not in result.stderr
+        assert f"{get_distribution_name()}[dotenv]" not in result.stderr
     else:
         assert result.returncode != 0
-        assert "litellm[dotenv]" in result.stderr
+        assert f"{get_distribution_name()}[dotenv]" in result.stderr
         assert "ModuleNotFoundError: Optional feature is absent" in result.stderr

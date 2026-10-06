@@ -2,6 +2,7 @@ from importlib import import_module
 from typing import Final
 
 from litellm._logging import verbose_logger
+from litellm._version import get_distribution_name
 
 
 class MissingOptionalDependencyError(ImportError):
@@ -14,6 +15,8 @@ def require_optional_dependency(module: str, extra: str, capability: str) -> Non
     except ModuleNotFoundError as error:
         if error.name != module:
             raise
-        message: Final = f'{capability} requires {module}. Install support with pip install "litellm[{extra}]"'
+        message: Final = (
+            f'{capability} requires {module}. Install support with pip install "{get_distribution_name()}[{extra}]"'
+        )
         verbose_logger.error(message)
         raise MissingOptionalDependencyError(message) from error

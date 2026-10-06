@@ -1,6 +1,7 @@
 ### Hide pydantic namespace conflict warnings globally ###
 from __future__ import annotations
 
+from litellm._version import get_distribution_name
 import warnings
 
 warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*")
@@ -31,12 +32,12 @@ if os.getenv("LITELLM_MODE", "DEV") == "DEV":
             raise
         if _dev_env_hot_reload_enabled():
             raise ImportError(
-                'Environment-file reload requires python-dotenv. Install with pip install "litellm[dotenv]"'
+                f'Environment-file reload requires python-dotenv. Install with pip install "{get_distribution_name()}[dotenv]"'
             ) from _dotenv_error
         import logging as _env_logging
 
         _env_logging.getLogger("LiteLLM").debug(
-            'Environment-file loading is unavailable. Use process environment variables or pip install "litellm[dotenv]"'
+            f'Environment-file loading is unavailable. Use process environment variables or pip install "{get_distribution_name()}[dotenv]"'
         )
     else:
         _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())

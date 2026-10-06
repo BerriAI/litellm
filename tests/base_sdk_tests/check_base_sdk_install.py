@@ -13,9 +13,9 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import traceback
 import warnings
-import tempfile
 from collections.abc import Callable
 from functools import partial
 from importlib.metadata import distribution
@@ -210,7 +210,7 @@ def check_mcp_install_guidance() -> str:
         _require(f"pip install '{get_distribution_name()}[mcp]'" in str(error), f"missing MCP installation guidance: {error}")
         _require(isinstance(error.__cause__, ModuleNotFoundError), "original missing-dependency cause was lost")
         _require(error.__cause__.name == "mcp", f"unexpected missing dependency: {error.__cause__}")
-        return "optional MCP client explains how to install litellm[mcp]"
+        return f"optional MCP client explains how to install {get_distribution_name()}[mcp]"
     raise AssertionError("MCP client imported without the MCP extra")
 
 
@@ -287,7 +287,7 @@ def _expect_extra(extra: str, action: Callable[[], object]) -> None:
     try:
         action()
     except ImportError as error:
-        _require(f"litellm[{extra}]" in str(error), f"missing {extra} installation guidance: {error}")
+        _require(f"{get_distribution_name()}[{extra}]" in str(error), f"missing {extra} installation guidance: {error}")
         _require(isinstance(error.__cause__, ModuleNotFoundError), "missing dependency cause was lost")
     else:
         raise AssertionError(f"requested capability silently succeeded without {extra}")
@@ -295,8 +295,8 @@ def _expect_extra(extra: str, action: Callable[[], object]) -> None:
 
 def check_prompt_rendering() -> str:
     import litellm
-    from litellm.integrations.dotprompt.prompt_manager import PromptManager
     from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+    from litellm.integrations.dotprompt.prompt_manager import PromptManager
     from litellm.litellm_core_utils.prompt_templates.factory import ahf_chat_template, hf_chat_template, prompt_factory
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
 
@@ -357,7 +357,7 @@ def check_environment_files() -> str:
             }
             result: Final = subprocess.run([sys.executable, "-I", "-c", source], cwd=root, env=environment, capture_output=True, text=True, timeout=60)
             if reload == "True" and not available:
-                _require(result.returncode != 0 and "litellm[dotenv]" in result.stderr, "explicit reload lost missing-extra guidance")
+                _require(result.returncode != 0 and f"{get_distribution_name()}[dotenv]" in result.stderr, "explicit reload lost missing-extra guidance")
             else:
                 _require(result.returncode == 0, f"environment loading failed: {result.stderr}")
                 _require(json.loads(result.stdout.strip().splitlines()[-1]) == [*expected, litellm.__file__], "file/process environment precedence changed")
@@ -365,9 +365,9 @@ def check_environment_files() -> str:
 
 
 def check_integration_configuration() -> str:
-    from litellm.integrations.otel.model.flags import is_otel_v2_enabled
     from litellm.integrations.langfuse.langfuse import raise_if_unsupported_langfuse_version
     from litellm.integrations.lunary import LunaryLogger
+    from litellm.integrations.otel.model.flags import is_otel_v2_enabled
 
     _require(is_otel_v2_enabled() is False, "disabled telemetry must work in core")
     from litellm.litellm_core_utils import litellm_logging
