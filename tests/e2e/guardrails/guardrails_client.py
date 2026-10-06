@@ -233,7 +233,6 @@ class GuardrailsClient:
             ),
         )
 
-    @step("Add a deployment named {prefix}-<marker> that calls {backend}")
     def create_backend_model(
         self,
         resources: ResourceManager,
