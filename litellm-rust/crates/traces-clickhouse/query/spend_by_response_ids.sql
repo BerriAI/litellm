@@ -17,4 +17,5 @@ FROM (
 WHERE response_id IN {response_ids:Array(String)}
    OR upstream_response_id IN {response_ids:Array(String)}
    OR (litellm_call_id != '' AND litellm_call_id IN {call_ids:Array(String)})
+   OR (litellm_call_id = '' AND request_id IN {call_ids:Array(String)})
 ORDER BY start_time DESC
