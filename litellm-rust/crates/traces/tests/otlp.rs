@@ -1767,6 +1767,32 @@ fn contextless_native_logs_preserve_the_entire_batch(
 }
 
 #[rstest]
+#[case::session(true)]
+#[case::standalone(false)]
+fn absent_native_log_context_has_encoding_independent_identity(#[case] session: bool) {
+    use prost::Message;
+    let mut request = log_request("repl_main_thread");
+    let record = &mut request.resource_logs[0].scope_logs[0].log_records[0];
+    record.trace_id.clear();
+    record.span_id.clear();
+    if !session {
+        record.attributes.retain(|entry| entry.key != "session.id");
+    }
+    let omitted = litellm_traces::decode_otlp_logs(
+        &serde_json::to_vec(&request).unwrap(),
+        Some("application/json"),
+    )
+    .unwrap();
+    let record = &mut request.resource_logs[0].scope_logs[0].log_records[0];
+    record.trace_id = vec![0; 16];
+    record.span_id = vec![0; 8];
+    let zeroed = litellm_traces::decode_otlp_logs(&request.encode_to_vec(), None).unwrap();
+    assert_eq!(omitted[0].trace_id, zeroed[0].trace_id);
+    assert_eq!(omitted[0].span_id, zeroed[0].span_id);
+    assert_eq!(omitted[0].normalized.output, zeroed[0].normalized.output);
+}
+
+#[rstest]
 #[case::nodes(litellm_traces::DecodeLimits { nodes: 4, ..Default::default() })]
 #[case::depth(litellm_traces::DecodeLimits { depth: 2, ..Default::default() })]
 #[case::bytes(litellm_traces::DecodeLimits { decoded_span_bytes: 20, ..Default::default() })]

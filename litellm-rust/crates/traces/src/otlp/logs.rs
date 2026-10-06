@@ -43,10 +43,16 @@ fn message(record: LogRecord) -> (Span, LogContext) {
     } else {
         record.time_unix_nano
     };
+    let missing_trace = absent_id(&record.trace_id, 16);
+    let missing_parent = absent_id(&record.span_id, 8);
     let mut hash = Sha256::new();
     hash.update(b"litellm.claude.message.v1\0");
-    hash.update(&record.trace_id);
-    hash.update(&record.span_id);
+    if !missing_trace {
+        hash.update(&record.trace_id);
+    }
+    if !missing_parent {
+        hash.update(&record.span_id);
+    }
     hash.update(text(&record.attributes, "event.name"));
     let uuid = text(&record.attributes, "message.uuid");
     if uuid.is_empty() {
@@ -59,8 +65,6 @@ fn message(record: LogRecord) -> (Span, LogContext) {
     } else {
         hash.update(uuid);
     }
-    let missing_trace = absent_id(&record.trace_id, 16);
-    let missing_parent = absent_id(&record.span_id, 8);
     if missing_trace {
         hash.update(b"\0unassigned\0");
         hash.update(text(&record.attributes, "session.id"));
