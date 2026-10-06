@@ -39,7 +39,7 @@ fn to_python(value: Value, surface: &'static str) -> Result<Value, Error> {
             let response = serde_json::Map::from_iter([(
                 STREAM_EVENTS_KEY.to_owned(),
                 Value::Array(
-                    text.split_inclusive("\n\n")
+                    litellm_framer::sse::text_blocks(&text)
                         .map(|block| Value::String(block.to_owned()))
                         .collect(),
                 ),
