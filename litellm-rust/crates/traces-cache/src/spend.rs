@@ -48,6 +48,7 @@ pub(super) async fn spend<S: TraceStore>(
     let params = SpendByResponseIdsParams {
         access: access.clone(),
         response_ids: lookup.response_ids,
+        call_ids: lookup.call_ids,
         start_ms: window.start,
         end_ms: window.end,
     };

@@ -163,6 +163,7 @@ pub struct SpendByResponseIdsParams {
     #[serde(flatten)]
     pub access: ReadAccessParams,
     pub response_ids: Vec<String>,
+    pub call_ids: Vec<String>,
     pub start_ms: i64,
     pub end_ms: i64,
 }
@@ -170,6 +171,7 @@ pub struct SpendByResponseIdsParams {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SpendByResponseIdsRow {
     pub request_id: String,
+    pub litellm_call_id: String,
     pub response_id: String,
     pub upstream_response_id: String,
     pub team_id: String,

@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use indexmap::IndexMap;
 
 use crate::{
-    normalize::ObservationType,
+    normalize::{CallKey, ObservationType},
     query::named::{SpendByResponseIdsRow as SpendRow, TraceSpansRow},
 };
 
@@ -109,11 +109,11 @@ impl<'a> Resolution<'a> {
     }
 
     pub(super) fn requests(&self, index: usize) -> Option<Requests<'a>> {
-        spend::requests(&spend::response_ids(self.row(index)), self.spend)
+        spend::requests(&spend::call_ids(self.row(index)), self.spend)
     }
 
-    /// A model call is priced by every response id recorded on it, on the LLM wrappers around
-    /// only it, and on the spans beneath it.
+    /// A model call is priced by every id LiteLLM assigned that is recorded on it, on the LLM
+    /// wrappers around only it, and on the spans beneath it.
     pub(super) fn call_requests(&self, call: usize) -> Option<Requests<'a>> {
         let wrappers = self.graph.ancestors(call).into_iter().filter(|ancestor| {
             self.kind(*ancestor) == ObservationType::Llm
@@ -126,10 +126,10 @@ impl<'a> Resolution<'a> {
                             || self.kind(descendant) != ObservationType::Llm
                     })
         });
-        let ids: BTreeSet<String> = std::iter::once(call)
+        let ids: BTreeSet<CallKey> = std::iter::once(call)
             .chain(wrappers)
             .chain(self.graph.descendants(call))
-            .flat_map(|source| spend::response_ids(self.row(source)))
+            .flat_map(|source| spend::call_ids(self.row(source)))
             .collect();
         spend::requests(&ids, self.spend)
     }

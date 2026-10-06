@@ -1,5 +1,5 @@
 SELECT * FROM (
-SELECT request_id, response_id, upstream_response_id, team_id, spend,
+SELECT request_id, litellm_call_id, response_id, upstream_response_id, team_id, spend,
        toUnixTimestamp64Milli(start_time) AS start_ms
 FROM (
     SELECT *,
@@ -17,6 +17,7 @@ FROM (
 )
 WHERE response_id IN {response_ids:Array(String)}
    OR upstream_response_id IN {response_ids:Array(String)}
+   OR (litellm_call_id != '' AND litellm_call_id IN {call_ids:Array(String)})
 ORDER BY start_time DESC
 )
 WHERE {has_cursor:UInt8} = 0

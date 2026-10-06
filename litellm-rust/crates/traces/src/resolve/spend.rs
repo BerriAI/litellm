@@ -7,36 +7,55 @@ use crate::{
     query::named::{SpendByResponseIdsRow as SpendRow, TraceSpansRow},
 };
 
-/// The `spend_logs.response_id` values a set of spans names as `gen_ai.response.id`.
+/// The ids LiteLLM assigned to the calls a set of spans recorded: `gen_ai.response.id` values
+/// (`spend_logs.response_id`) and `litellm.call_id` values (`spend_logs.litellm_call_id`).
 #[derive(Debug, Default, PartialEq)]
 pub struct SpendLookup {
     pub response_ids: Vec<String>,
+    pub call_ids: Vec<String>,
 }
 
 impl SpendLookup {
     pub fn new(rows: &[TraceSpansRow]) -> Self {
-        let ids: BTreeSet<String> = rows
-            .iter()
-            .flat_map(CallEvidence::row_keys)
-            .filter_map(response_id)
-            .collect();
+        let keys: BTreeSet<CallKey> = rows.iter().flat_map(CallEvidence::row_keys).collect();
+        let ids = |pick: fn(&CallKey) -> Option<&String>| {
+            keys.iter()
+                .filter_map(pick)
+                .filter(|id| !id.is_empty())
+                .cloned()
+                .collect()
+        };
         Self {
-            response_ids: ids.into_iter().collect(),
+            response_ids: ids(|key| match key {
+                CallKey::ProviderResponse(id) => Some(id),
+                _ => None,
+            }),
+            call_ids: ids(|key| match key {
+                CallKey::LiteLlmRequest(id) => Some(id),
+                _ => None,
+            }),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.response_ids.is_empty()
+        self.response_ids.is_empty() && self.call_ids.is_empty()
     }
 }
 
-fn response_id(key: CallKey) -> Option<String> {
+fn assigned_id(key: &CallKey) -> bool {
     match key {
-        CallKey::ProviderResponse(id) if !id.is_empty() => Some(id),
-        CallKey::ProviderResponse(_)
-        | CallKey::LiteLlmRequest(_)
-        | CallKey::Transport
-        | CallKey::GatewayAttempt => None,
+        CallKey::ProviderResponse(id) | CallKey::LiteLlmRequest(id) => !id.is_empty(),
+        CallKey::Transport | CallKey::GatewayAttempt => false,
+    }
+}
+
+fn names(key: &CallKey, spend: &SpendRow) -> bool {
+    match key {
+        CallKey::ProviderResponse(id) => {
+            spend.response_id == *id || spend.upstream_response_id == *id
+        }
+        CallKey::LiteLlmRequest(id) => spend.litellm_call_id == *id,
+        CallKey::Transport | CallKey::GatewayAttempt => false,
     }
 }
 
@@ -51,39 +70,36 @@ pub(super) fn unique<'a>(requests: impl IntoIterator<Item = &'a SpendRow>) -> Re
         .collect()
 }
 
-fn unique_match<'a>(id: &str, spend_rows: &'a [SpendRow]) -> Option<&'a SpendRow> {
-    match unique(
-        spend_rows
-            .iter()
-            .filter(|spend| spend.response_id == id || spend.upstream_response_id == id),
-    )
-    .as_slice()
-    {
+fn unique_match<'a>(key: &CallKey, spend_rows: &'a [SpendRow]) -> Option<&'a SpendRow> {
+    match unique(spend_rows.iter().filter(|spend| names(key, spend))).as_slice() {
         [request] => Some(request),
         _ => None,
     }
 }
 
-pub(super) fn response_ids(row: &TraceSpansRow) -> BTreeSet<String> {
+pub(super) fn call_ids(row: &TraceSpansRow) -> BTreeSet<CallKey> {
     CallEvidence::from_row(row)
         .key_set()
         .into_iter()
         .flatten()
+        .filter(|key| assigned_id(key))
         .cloned()
-        .filter_map(response_id)
         .collect()
 }
 
-/// The spend rows that `ids` name, or `None` when there are none or any id matches no row or
+/// The spend rows that `ids` name, or `None` when there are no ids or any id matches no row or
 /// more than one.
 pub(super) fn requests<'a>(
-    ids: &BTreeSet<String>,
+    ids: &BTreeSet<CallKey>,
     spend_rows: &'a [SpendRow],
 ) -> Option<Requests<'a>> {
     if ids.is_empty() {
         return None;
     }
-    ids.iter().map(|id| unique_match(id, spend_rows)).collect()
+    ids.iter()
+        .map(|id| unique_match(id, spend_rows))
+        .collect::<Option<Vec<_>>>()
+        .map(unique)
 }
 
 pub(super) fn request_cost(requests: &[&SpendRow]) -> Option<f64> {
