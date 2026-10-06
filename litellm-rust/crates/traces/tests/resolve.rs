@@ -2435,3 +2435,109 @@ fn native_tool_ownership_and_coverage_use_session_scoped_call_ids(#[case] separa
         expected
     );
 }
+
+#[rstest]
+#[case::same_session("first", "first", true)]
+#[case::foreign_descendant("first", "second", false)]
+#[case::foreign_intermediate("second", "first", false)]
+#[case::foreign_chain("second", "second", false)]
+#[case::unknown_intermediate("", "first", false)]
+fn native_ancestor_ownership_stops_at_session_boundaries(
+    #[case] middle_session: &str,
+    #[case] event_session: &str,
+    #[case] assigned: bool,
+) {
+    let owner = TraceSpansRow {
+        framework: "claude-code".into(),
+        session_id: "first".into(),
+        native_agent_id: "reader".into(),
+        ..row("owner", "", "claude_code.llm_request", "llm", "assistant")
+    };
+    let middle = TraceSpansRow {
+        framework: owner.framework.clone(),
+        session_id: middle_session.into(),
+        ..row("middle", "owner", "native", "framework", "assistant")
+    };
+    let reply = TraceSpansRow {
+        framework: owner.framework.clone(),
+        session_id: event_session.into(),
+        query_source: "agent".into(),
+        ..row(
+            "reply",
+            "middle",
+            "claude_code.assistant_response",
+            "chain",
+            "assistant",
+        )
+    };
+    let tool = TraceSpansRow {
+        framework: owner.framework.clone(),
+        session_id: event_session.into(),
+        ..row("tool", "middle", "Read", "tool", "assistant")
+    };
+    let trace = resolve_trace("trace", "ref", &[reply, tool, middle, owner], &[]).unwrap();
+    for id in ["reply", "tool"] {
+        let span = trace.spans.iter().find(|span| span.span_id == id).unwrap();
+        assert_eq!(span.actor_id.is_some(), assigned);
+        assert_eq!(span.actor_unassigned, !assigned);
+    }
+    let capture = trace.capture.unwrap();
+    assert_eq!(capture.unassigned_events, u64::from(!assigned));
+    assert_eq!(capture.actors.len(), 1);
+    assert_eq!(capture.actors[0].reply_events, u64::from(assigned));
+    assert_eq!(capture.actors[0].tool_calls, u64::from(assigned));
+}
+
+#[rstest]
+#[case::same_session("first", true)]
+#[case::foreign_child("second", false)]
+fn native_execution_boundaries_require_matching_sessions(
+    #[case] child_session: &str,
+    #[case] assigned: bool,
+) {
+    let execution = TraceSpansRow {
+        framework: "claude-code".into(),
+        session_id: "first".into(),
+        ..row(
+            "execution",
+            "",
+            "claude_code.tool.execution",
+            "framework",
+            "assistant",
+        )
+    };
+    let child = TraceSpansRow {
+        framework: execution.framework.clone(),
+        session_id: child_session.into(),
+        native_agent_id: "reader".into(),
+        ..row(
+            "child",
+            "execution",
+            "claude_code.llm_request",
+            "llm",
+            "assistant",
+        )
+    };
+    let reply = TraceSpansRow {
+        framework: execution.framework.clone(),
+        session_id: execution.session_id.clone(),
+        query_source: "agent".into(),
+        ..row(
+            "reply",
+            "execution",
+            "claude_code.assistant_response",
+            "chain",
+            "assistant",
+        )
+    };
+    let trace = resolve_trace("trace", "ref", &[reply, child, execution], &[]).unwrap();
+    for id in ["reply", "execution"] {
+        let span = trace.spans.iter().find(|span| span.span_id == id).unwrap();
+        assert_eq!(span.actor_id.is_some(), assigned);
+        assert_eq!(span.actor_unassigned, !assigned);
+    }
+    let capture = trace.capture.unwrap();
+    assert_eq!(capture.unassigned_events, u64::from(!assigned));
+    assert_eq!(capture.actors.len(), 1);
+    assert_eq!(capture.actors[0].reply_events, u64::from(assigned));
+}

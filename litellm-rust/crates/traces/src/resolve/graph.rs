@@ -64,7 +64,11 @@ impl<'a> Graph<'a> {
         found
     }
 
-    pub(super) fn nearest_ancestors(&self, matches: &[bool]) -> Vec<Option<usize>> {
+    pub(super) fn nearest_session_ancestors(&self, matches: &[bool]) -> Vec<Option<usize>> {
+        let parent = |index: usize| {
+            self.parent(index)
+                .filter(|parent| self.rows[*parent].session_id == self.rows[index].session_id)
+        };
         let mut nearest: Vec<_> = matches
             .iter()
             .enumerate()
@@ -85,7 +89,7 @@ impl<'a> Graph<'a> {
                 }
                 visiting[node] = true;
                 path.push(node);
-                current = self.parent(node);
+                current = parent(node);
             };
             for node in path {
                 nearest[node] = found;
@@ -94,7 +98,7 @@ impl<'a> Graph<'a> {
         }
         (0..self.rows.len())
             .map(|index| {
-                self.parent(index)
+                parent(index)
                     .and_then(|parent| nearest[parent])
                     .filter(|found| *found != index)
             })
@@ -188,7 +192,7 @@ mod tests {
         #[case] expected: Vec<Option<usize>>,
     ) {
         assert_eq!(
-            Graph::new(&unordered_rows).nearest_ancestors(&candidates),
+            Graph::new(&unordered_rows).nearest_session_ancestors(&candidates),
             expected
         );
     }
@@ -202,7 +206,10 @@ mod tests {
         #[case] expected: Vec<Option<usize>>,
     ) {
         let rows = [row("first", "second"), row("second", "first")];
-        assert_eq!(Graph::new(&rows).nearest_ancestors(&candidates), expected);
+        assert_eq!(
+            Graph::new(&rows).nearest_session_ancestors(&candidates),
+            expected
+        );
     }
 
     #[rstest]
