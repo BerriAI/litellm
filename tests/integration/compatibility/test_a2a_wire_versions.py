@@ -363,7 +363,7 @@ def test_a2a_stream_relays_each_upstream_event_as_its_own_sse_frame_in_the_pinne
             received = ""
             for piece in pieces:
                 received += piece
-                if "\n" in received:
+                if "\n\n" in received:
                     break
             first_frame_seen.set()
             received += "".join(pieces)
