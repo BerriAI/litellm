@@ -57,6 +57,26 @@ def test_get_complete_url_custom_api_base():
     assert "BidiGenerateContent" in url
 
 
+@pytest.mark.parametrize("location", ["us", "eu"])
+def test_get_complete_url_multi_region_uses_rep_host(location):
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location=location
+    )
+    url = cfg.get_complete_url(api_base=None, model="gemini-3.8-live")
+    assert url == (
+        f"wss://aiplatform.{location}.rep.googleapis.com"
+        "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+    )
+
+
+def test_get_complete_url_rejects_malformed_location():
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="evil.example#"
+    )
+    with pytest.raises(ValueError, match="Invalid vertex_location format"):
+        cfg.get_complete_url(api_base=None, model="gemini-3.8-live")
+
+
 def test_validate_environment_sets_bearer_and_project():
     cfg = VertexAIRealtimeConfig(
         access_token="mytoken", project="proj-123", location="us-central1"

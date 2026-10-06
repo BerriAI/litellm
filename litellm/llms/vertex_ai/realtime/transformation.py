@@ -4,7 +4,7 @@ Vertex AI Realtime (BidiGenerateContent) config.
 Extends GeminiRealtimeConfig but adapts the WSS URL and auth header for the
 Vertex AI endpoint instead of Google AI Studio.
 
-URL pattern:
+URL pattern (multi-region ``us``/``eu`` use ``aiplatform.{geo}.rep.googleapis.com``):
   wss://{location}-aiplatform.googleapis.com/ws/
       google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent
 
@@ -21,6 +21,7 @@ from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import (
     VertexChirpRealtimeConfig,
     is_vertex_speech_to_text_model,
 )
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 
@@ -63,13 +64,8 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
             base = base.replace("https://", "wss://").replace("http://", "ws://")
             return f"{base}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
 
-        location: Final = self._location
-        if location == "global":
-            host = "aiplatform.googleapis.com"
-        else:
-            host = f"{location}-aiplatform.googleapis.com"
-
-        return f"wss://{host}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+        base_url: Final = get_vertex_base_url(self._location).replace("https://", "wss://", 1)
+        return f"{base_url}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
 
     # ------------------------------------------------------------------
     # Auth headers
