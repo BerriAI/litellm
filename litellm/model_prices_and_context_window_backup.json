@@ -798,6 +798,8 @@
         "output_cost_per_token": 1.5e-06
     },
     "anthropic.claude-3-5-haiku-20241022-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1e-06,
         "cache_read_input_token_cost": 8e-08,
         "input_cost_per_token": 8e-07,
@@ -816,6 +818,8 @@
         "prompt_cache_min_tokens": 2048
     },
     "anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -844,6 +848,8 @@
         "output_cost_per_token_batches": 2.5e-06
     },
     "anthropic.claude-haiku-4-5@20251001": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -891,6 +897,8 @@
         "cache_read_input_token_cost": 3e-07
     },
     "anthropic.claude-3-5-sonnet-20241022-v2:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
@@ -914,6 +922,8 @@
         "cache_read_input_token_cost_above_200k_tokens": 6e-07
     },
     "anthropic.claude-3-7-sonnet-20240620-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_read_input_token_cost": 3.6e-07,
         "input_cost_per_token": 3.6e-06,
@@ -934,6 +944,8 @@
         "supports_vision": true
     },
     "anthropic.claude-3-7-sonnet-20250219-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
@@ -979,6 +991,8 @@
         "supports_tool_choice": true
     },
     "anthropic.claude-opus-4-1-20250805-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.875e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "deprecation_date": "2027-01-08",
@@ -1006,6 +1020,8 @@
         "prompt_cache_min_tokens": 1024
     },
     "anthropic.claude-opus-4-20250514-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.875e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 1.5e-05,
@@ -1032,6 +1048,8 @@
         "prompt_cache_min_tokens": 1024
     },
     "anthropic.claude-opus-4-5-20251101-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1065,6 +1083,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "anthropic.claude-opus-4-6-v1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1101,6 +1121,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-opus-4-6-v1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1137,6 +1159,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-opus-4-6-v1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1173,6 +1197,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-opus-4-6-v1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1209,6 +1235,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-opus-4-6-v1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1245,6 +1273,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-opus-4-7": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1283,6 +1313,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "anthropic.claude-mythos-preview": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.4375e-05,
         "cache_creation_input_token_cost_above_1hr": 5.5e-05,
         "cache_read_input_token_cost": 2.75e-06,
@@ -1303,6 +1335,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-opus-4-7": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.25e-06,
@@ -1341,6 +1375,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-opus-4-7": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1379,6 +1415,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-opus-4-7": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1417,6 +1455,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-opus-4-7": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "cache_creation_input_token_cost": 6.875e-06,
@@ -1455,6 +1495,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-fable-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 1e-06,
@@ -1493,6 +1535,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "anthropic.claude-fable-5-1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 2.5e-07,
@@ -1532,6 +1576,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-fable-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 1e-06,
@@ -1570,6 +1616,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-fable-5-1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 2.5e-07,
@@ -1609,6 +1657,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-fable-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 1.1e-06,
@@ -1647,6 +1697,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-fable-5-1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 2.75e-07,
@@ -1686,6 +1738,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-fable-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 1.1e-06,
@@ -1724,6 +1778,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-fable-5-1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 2.75e-07,
@@ -1762,6 +1818,8 @@
         "prompt_cache_min_tokens": 512
     },
     "anthropic.claude-opus-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -1800,6 +1858,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "anthropic.claude-opus-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -1840,6 +1900,8 @@
         "supports_forced_tool_use": false
     },
     "global.anthropic.claude-opus-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -1878,6 +1940,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-opus-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -1918,6 +1982,8 @@
         "supports_forced_tool_use": false
     },
     "us.anthropic.claude-opus-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -1956,6 +2022,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-opus-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -1996,6 +2064,8 @@
         "supports_forced_tool_use": false
     },
     "eu.anthropic.claude-opus-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2034,6 +2104,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-opus-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2074,6 +2146,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-opus-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2112,6 +2186,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-opus-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2152,6 +2228,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-opus-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2190,6 +2268,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-opus-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2230,6 +2310,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-opus-4-8": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2269,6 +2351,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-opus-4-8": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2308,6 +2392,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-opus-4-8": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2347,6 +2433,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-opus-4-8": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2386,6 +2474,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-opus-4-8": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2425,6 +2515,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-opus-4-8": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -2464,6 +2556,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-opus-4-7": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
@@ -2501,6 +2595,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-sonnet-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -2540,6 +2636,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-sonnet-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -2579,6 +2677,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-sonnet-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -2618,6 +2718,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-sonnet-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -2657,6 +2759,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-sonnet-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -2696,6 +2800,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-sonnet-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -2735,6 +2841,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-sonnet-4-6": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
@@ -2770,6 +2878,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-sonnet-4-6": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 3.75e-06,
@@ -2805,6 +2915,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-sonnet-4-6": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -2840,6 +2952,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-sonnet-4-6": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -2875,6 +2989,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "au.anthropic.claude-sonnet-4-6": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -2910,6 +3026,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-sonnet-4-6": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "cache_creation_input_token_cost": 4.125e-06,
@@ -2945,6 +3063,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-sonnet-4-20250514-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-10-14",
@@ -2978,6 +3098,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -3199,6 +3321,8 @@
         "supports_tool_choice": true
     },
     "apac.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 1.1e-06,
@@ -3226,6 +3350,8 @@
         "output_cost_per_token_batches": 2.75e-06
     },
     "apac.anthropic.claude-sonnet-4-20250514-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-10-14",
@@ -3271,6 +3397,8 @@
         "output_cost_per_second": 0.0
     },
     "au.anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -14337,6 +14465,8 @@
         "output_cost_per_token": 1.5e-06
     },
     "bedrock/us-gov-east-1/anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
@@ -14362,6 +14492,8 @@
         "prompt_cache_min_tokens": 1024
     },
     "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
@@ -14514,6 +14646,8 @@
         "output_cost_per_token": 1.5e-06
     },
     "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
@@ -14539,6 +14673,8 @@
         "prompt_cache_min_tokens": 1024
     },
     "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
@@ -14813,6 +14949,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1e-06,
         "cache_read_input_token_cost": 8e-08,
         "input_cost_per_token": 8e-07,
@@ -15006,6 +15144,8 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "claude-haiku-4-5-20251001": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_creation_input_token_cost_batches": 6.25e-07,
@@ -15033,6 +15173,8 @@
         "prompt_cache_min_tokens": 4096
     },
     "claude-haiku-4-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_creation_input_token_cost_batches": 6.25e-07,
@@ -15061,6 +15203,8 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-4-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
@@ -15104,6 +15248,8 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-4-5-20250929": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
@@ -15148,6 +15294,8 @@
         "source": "https://docs.anthropic.com/en/docs/about-claude/pricing"
     },
     "claude-sonnet-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -15192,6 +15340,8 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -15238,6 +15388,8 @@
         "supports_web_search": true
     },
     "claude-sonnet-4-6": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -15280,6 +15432,8 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-4-5-20250929-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
@@ -15311,6 +15465,8 @@
         "output_cost_per_token_batches": 7.5e-06
     },
     "claude-opus-4-5-20251101": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_creation_input_token_cost_batches": 3.125e-06,
@@ -15345,6 +15501,8 @@
         "prompt_cache_min_tokens": 4096
     },
     "claude-opus-4-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_creation_input_token_cost_batches": 3.125e-06,
@@ -15380,6 +15538,8 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-6": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -15423,6 +15583,8 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-6-20260205": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -15465,6 +15627,8 @@
         "prompt_cache_min_tokens": 4096
     },
     "claude-opus-4-7": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -15509,6 +15673,8 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-7-20260416": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -15552,6 +15718,8 @@
         "prompt_cache_min_tokens": 2048
     },
     "claude-fable-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
@@ -15596,6 +15764,8 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-fable-5-1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
@@ -15641,6 +15811,8 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 5e-06,
         "cache_creation_input_token_cost_above_1hr": 8e-06,
@@ -15688,6 +15860,8 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -15735,6 +15909,8 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-8": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -23168,6 +23344,8 @@
         "supports_tool_choice": true
     },
     "eu.anthropic.claude-3-5-haiku-20241022-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "input_cost_per_token": 8e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -23186,6 +23364,8 @@
         "prompt_cache_min_tokens": 2048
     },
     "eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -23231,6 +23411,8 @@
         "cache_creation_input_token_cost": 3.75e-06
     },
     "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -23250,6 +23432,8 @@
         "cache_creation_input_token_cost": 3.75e-06
     },
     "eu.anthropic.claude-3-7-sonnet-20250219-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 200000,
@@ -23285,6 +23469,8 @@
         "cache_creation_input_token_cost": 1.875e-05
     },
     "eu.anthropic.claude-opus-4-1-20250805-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.875e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 1.5e-05,
@@ -23312,6 +23498,8 @@
         "deprecation_date": "2027-01-08"
     },
     "eu.anthropic.claude-opus-4-20250514-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.875e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 1.5e-05,
@@ -23338,6 +23526,8 @@
         "prompt_cache_min_tokens": 1024
     },
     "eu.anthropic.claude-sonnet-4-20250514-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-10-14",
@@ -23371,6 +23561,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -32139,6 +32331,8 @@
         "mode": "search"
     },
     "global.anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -32177,6 +32371,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-sonnet-4-20250514-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-10-14",
@@ -32210,6 +32406,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -37313,6 +37511,8 @@
         "source": "https://api.jina.ai/v1/models"
     },
     "jp.anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -37351,6 +37551,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -47259,6 +47461,8 @@
         "supports_tool_choice": true
     },
     "us.anthropic.claude-3-5-haiku-20241022-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1e-06,
         "cache_read_input_token_cost": 8e-08,
         "input_cost_per_token": 8e-07,
@@ -47277,6 +47481,8 @@
         "prompt_cache_min_tokens": 2048
     },
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -47321,6 +47527,8 @@
         "cache_creation_input_token_cost": 3.75e-06
     },
     "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
@@ -47340,6 +47548,8 @@
         "supports_vision": true
     },
     "us.anthropic.claude-3-7-sonnet-20250219-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
@@ -47375,6 +47585,8 @@
         "cache_creation_input_token_cost": 1.875e-05
     },
     "us.anthropic.claude-opus-4-1-20250805-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.875e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "deprecation_date": "2027-01-08",
@@ -47403,6 +47615,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -47441,6 +47655,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
@@ -47472,6 +47688,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us-gov.anthropic.claude-sonnet-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 3e-06,
@@ -47506,6 +47724,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "us-gov.anthropic.claude-opus-4-8": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 7.5e-06,
@@ -47540,6 +47760,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "us-gov.anthropic.claude-opus-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 7.5e-06,
         "cache_creation_input_token_cost_above_1hr": 1.2e-05,
@@ -47573,6 +47795,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "us-gov.anthropic.claude-opus-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6e-06,
         "cache_creation_input_token_cost_above_1hr": 9.6e-06,
@@ -47608,6 +47832,8 @@
         "supports_forced_tool_use": false
     },
     "us-gov.anthropic.claude-fable-5-1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.5e-05,
         "cache_creation_input_token_cost_above_1hr": 2.4e-05,
         "cache_read_input_token_cost": 3e-07,
@@ -47759,6 +47985,8 @@
         "supports_vision": true
     },
     "au.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -47787,6 +48015,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-opus-4-20250514-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.875e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 1.5e-05,
@@ -47813,6 +48043,8 @@
         "prompt_cache_min_tokens": 1024
     },
     "us.anthropic.claude-opus-4-5-20251101-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -47846,6 +48078,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-opus-4-5-20251101-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -47879,6 +48113,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "eu.anthropic.claude-opus-4-5-20251101-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -47912,6 +48148,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "us.anthropic.claude-sonnet-4-20250514-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-10-14",
@@ -49469,6 +49707,8 @@
         "supports_tool_choice": true
     },
     "vertex_ai/claude-haiku-4-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2026-10-15",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
@@ -49498,6 +49738,8 @@
         "prompt_cache_min_tokens": 4096
     },
     "vertex_ai/claude-haiku-4-5@20251001": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2026-10-15",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
@@ -49640,6 +49882,8 @@
         "supports_vision": true
     },
     "vertex_ai/claude-opus-4-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2026-11-24",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -49675,6 +49919,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-5@20251101": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2026-11-24",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
@@ -49711,6 +49957,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-6": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2027-02-05",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
@@ -49749,6 +49997,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-6@default": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2027-02-05",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
@@ -49787,6 +50037,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-7": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2027-04-16",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
@@ -49825,6 +50077,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-7@default": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2027-04-16",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
@@ -49863,6 +50117,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-fable-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2027-06-08",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
@@ -49903,6 +50159,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-fable-5-1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -49945,6 +50203,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-fable-5@default": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2027-06-08",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
@@ -49985,6 +50245,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-fable-5-1@default": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -50027,6 +50289,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2027-01-24",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
@@ -50066,6 +50330,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-5@default": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2027-01-24",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
@@ -50105,6 +50371,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 5e-06,
@@ -50146,6 +50414,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-5-5@default": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 5e-06,
@@ -50187,6 +50457,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-8": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2027-05-28",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
@@ -50226,6 +50498,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-opus-4-8@default": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2027-05-28",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
@@ -50265,6 +50539,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-sonnet-4-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2026-09-29",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -50299,6 +50575,8 @@
         "cache_creation_input_token_cost_batches": 1.88e-06
     },
     "vertex_ai/claude-sonnet-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2026-12-24",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
@@ -50336,6 +50614,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-sonnet-4-6": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
@@ -50373,6 +50653,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-sonnet-4-5@20250929": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2026-09-29",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -58031,6 +58313,8 @@
         }
     },
     "vertex_ai/claude-sonnet-5@default": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2026-12-24",
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
@@ -58068,6 +58352,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-sonnet-4-6@default": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
@@ -59700,6 +59986,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.5e-06,
         "cache_creation_input_token_cost_above_1hr": 2.4e-06,
         "cache_read_input_token_cost": 1.2e-07,
@@ -59726,6 +60014,8 @@
         "prompt_cache_min_tokens": 4096
     },
     "bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.5e-06,
         "cache_creation_input_token_cost_above_1hr": 2.4e-06,
         "cache_read_input_token_cost": 1.2e-07,
@@ -60914,6 +61204,8 @@
         "supports_audio_output": true
     },
     "claude-mythos-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
@@ -60958,6 +61250,8 @@
         }
     },
     "claude-mythos-5-1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
@@ -61003,6 +61297,8 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-mythos-preview": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "deprecation_date": "2026-06-09",
         "supports_anthropic_compaction": true,
         "cache_creation_input_token_cost": 1.25e-05,
@@ -65506,6 +65802,8 @@
         "supports_tool_choice": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-sonnet-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 3e-06,
@@ -65539,6 +65837,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-opus-4-8": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 7.5e-06,
@@ -65572,6 +65872,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-opus-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 7.5e-06,
         "cache_creation_input_token_cost_above_1hr": 1.2e-05,
@@ -65604,6 +65906,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-opus-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6e-06,
         "cache_creation_input_token_cost_above_1hr": 9.6e-06,
@@ -65639,6 +65943,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-gov-west-1/anthropic.claude-fable-5-1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.5e-05,
         "cache_creation_input_token_cost_above_1hr": 2.4e-05,
         "cache_read_input_token_cost": 3e-07,
@@ -65768,6 +66074,8 @@
         "supports_tool_choice": true
     },
     "bedrock/us-gov-east-1/anthropic.claude-sonnet-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 3e-06,
@@ -65801,6 +66109,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-east-1/anthropic.claude-opus-4-8": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 7.5e-06,
@@ -65834,6 +66144,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-east-1/anthropic.claude-opus-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 7.5e-06,
         "cache_creation_input_token_cost_above_1hr": 1.2e-05,
@@ -65866,6 +66178,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-east-1/anthropic.claude-opus-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6e-06,
         "cache_creation_input_token_cost_above_1hr": 9.6e-06,
@@ -65901,6 +66215,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-gov-east-1/anthropic.claude-fable-5-1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "cache_creation_input_token_cost": 1.5e-05,
         "cache_creation_input_token_cost_above_1hr": 2.4e-05,
         "cache_read_input_token_cost": 3e-07,
@@ -78707,6 +79023,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "anthropic.claude-mythos-5-1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78740,6 +79058,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-mythos-5-1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78773,6 +79093,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "us.anthropic.claude-mythos-5-1": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78806,6 +79128,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "us.anthropic.claude-mythos-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78839,6 +79163,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-fable-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78872,6 +79198,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "au.anthropic.claude-fable-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -78905,6 +79233,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-opus-4-7": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "litellm_provider": "bedrock_converse",
@@ -78938,6 +79268,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-opus-4-8": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -78972,6 +79304,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-opus-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -79005,6 +79339,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-opus-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "supports_adaptive_thinking": true,
         "supports_mid_conversation_system": true,
@@ -79040,6 +79376,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-sonnet-4-6": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "supports_adaptive_thinking": true,
         "supports_legacy_thinking": true,
         "litellm_provider": "bedrock_converse",
@@ -79070,6 +79408,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-sonnet-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
@@ -79104,6 +79444,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "us.anthropic.claude-mythos-preview": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -79124,6 +79466,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-mythos-preview": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -79144,6 +79488,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "au.anthropic.claude-mythos-preview": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
@@ -79216,6 +79562,8 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/mistral-ai/"
     },
     "anthropic.claude-sonnet-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -79257,6 +79605,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "apac.anthropic.claude-sonnet-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "litellm_provider": "bedrock_converse",
         "supports_tool_search": true,
@@ -79293,6 +79643,8 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "au.anthropic.claude-sonnet-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -79368,6 +79720,8 @@
         "prompt_cache_min_tokens": 512
     },
     "bedrock/us-gov-east-1/anthropic.claude-sonnet-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 3e-06,
@@ -79403,6 +79757,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-sonnet-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 3e-06,
@@ -79438,6 +79794,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "eu.anthropic.claude-sonnet-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -79479,6 +79837,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "global.anthropic.claude-sonnet-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -79520,6 +79880,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "jp.anthropic.claude-sonnet-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -79664,6 +80026,8 @@
         "source": "https://docs.perplexity.ai/docs/agent-api/models"
     },
     "us-gov.anthropic.claude-sonnet-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "bedrock_output_config_effort_ceiling": "xhigh",
         "cache_creation_input_token_cost": 3e-06,
@@ -79700,6 +80064,8 @@
         "supports_xhigh_reasoning_effort": true
     },
     "us.anthropic.claude-sonnet-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.75e-06,
         "cache_creation_input_token_cost_above_1hr": 4.4e-06,
@@ -79741,6 +80107,8 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "vertex_ai/claude-sonnet-5-5": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 2.5e-06,
@@ -79781,6 +80149,8 @@
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
     },
     "vertex_ai/claude-sonnet-5-5@default": {
+        "prompt_cache_mode": "explicit",
+        "prompt_cache_default_ttl_seconds": 300,
         "regional_endpoint_uplift_multiplier": 1.1,
         "supports_mid_conversation_system": true,
         "cache_creation_input_token_cost": 2.5e-06,

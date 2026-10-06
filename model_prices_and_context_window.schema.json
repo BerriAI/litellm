@@ -852,10 +852,23 @@
           "minimum": 0,
           "description": "Embedding dimension for embedding models."
         },
+        "prompt_cache_default_ttl_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Default prompt cache lifetime in seconds when the request does not specify a retention period."
+        },
         "prompt_cache_min_tokens": {
           "type": "integer",
           "minimum": 0,
           "description": "Smallest prefix the provider will actually cache; absent means the provider default applies."
+        },
+        "prompt_cache_mode": {
+          "type": "string",
+          "description": "Whether prompt caching requires explicit boundaries or happens implicitly.",
+          "enum": [
+            "explicit",
+            "implicit"
+          ]
         },
         "provider_specific_entry": {
           "type": "object",

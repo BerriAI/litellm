@@ -189,6 +189,11 @@ INTEGER_KEYS: dict[str, JsonSchema] = {
         **NONNEG_INTEGER,
         "description": "Smallest prefix the provider will actually cache; absent means the provider default applies.",
     },
+    "prompt_cache_default_ttl_seconds": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Default prompt cache lifetime in seconds when the request does not specify a retention period.",
+    },
     "tpm": {**NONNEG_INTEGER, "description": "Provider default tokens-per-minute limit."},
     "rpm": {**NONNEG_INTEGER, "description": "Provider default requests-per-minute limit."},
 }
@@ -252,6 +257,11 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "type": "string",
             "description": "Primary API surface / task type of the model.",
             "enum": list(modes),
+        },
+        "prompt_cache_mode": {
+            "type": "string",
+            "description": "Whether prompt caching requires explicit boundaries or happens implicitly.",
+            "enum": ["explicit", "implicit"],
         },
         "source": {
             "type": "string",
