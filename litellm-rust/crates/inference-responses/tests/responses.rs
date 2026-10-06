@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use futures_util::TryStreamExt;
 use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
-use litellm_inference::test_support::{RecordingSecrets, no_secrets};
+use litellm_inference_testing::{RecordingSecrets, no_secrets};
 use litellm_inference_responses::{
     route::Responses,
     types::{ResponsesCall, ResponsesOutput},
