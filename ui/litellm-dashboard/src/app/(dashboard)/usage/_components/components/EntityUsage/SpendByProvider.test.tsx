@@ -262,6 +262,34 @@ describe("SpendByProvider", () => {
     expect(container.querySelector("text.fill-foreground")?.textContent).toBe("$200.50");
   });
 
+  it("always shows a subscription-covered provider and marks it included in the subscription", () => {
+    const providerSpendWithSubscription = [
+      {
+        provider: "chatgpt",
+        spend: 0,
+        requests: 7,
+        successful_requests: 7,
+        failed_requests: 0,
+        tokens: 11608,
+        subscription_covered: true,
+      },
+      {
+        provider: "google",
+        spend: 0,
+        requests: 0,
+        successful_requests: 0,
+        failed_requests: 0,
+        tokens: 0,
+      },
+    ];
+    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithSubscription} />);
+    expect(screen.getAllByText("chatgpt").length).toBeGreaterThan(0);
+    expect(screen.getByText("Included in subscription")).toBeInTheDocument();
+    expect(screen.getByText("11,608")).toBeInTheDocument();
+    expect(screen.queryByText("google")).not.toBeInTheDocument();
+    expect(screen.getByText("Included in subscription").closest("td")).not.toHaveTextContent("$");
+  });
+
   it("should include all providers with spend greater than zero by default", () => {
     const providerSpendWithMixed = [
       {

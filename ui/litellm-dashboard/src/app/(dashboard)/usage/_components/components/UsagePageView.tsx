@@ -25,7 +25,7 @@ import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { hasCapability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { all_admin_roles, internalUserRoles } from "@/utils/roles";
+import { all_admin_roles, hasProxyWideSpendView, internalUserRoles, isProxyAdminRole } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
@@ -61,6 +61,11 @@ import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
+import SubscriptionCostCard from "./SubscriptionCost/SubscriptionCostCard";
+import SubscriptionFeeModal from "./SubscriptionCost/SubscriptionFeeModal";
+import { isSubscriptionCovered } from "./SubscriptionCost/types";
+import { useSubscriptionFeeActions } from "./SubscriptionCost/useSubscriptionFeeActions";
+import { useSubscriptionUsage } from "../hooks/useSubscriptionUsage";
 import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
 import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { getGlobalTopKeys } from "./EntityUsage/entityUsageAggregations";
@@ -219,6 +224,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   }, [isAdmin, gatewayRequest, currentGatewayRangeKey]);
 
   const gatewayActivity = selectGatewayActivity(isAdmin, gatewayActivityData, currentGatewayRangeKey);
+  const subscriptionUsageOptions = { accessToken, startTime, endTime, enabled: hasProxyWideSpendView(userRole) };
+  const subscriptionUsage = useSubscriptionUsage(subscriptionUsageOptions);
+  const feeActions = useSubscriptionFeeActions({ accessToken, refetch: subscriptionUsage.refetch });
 
   const userSpendData = useMemo(
     () => ({
@@ -380,6 +388,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         providerSpendMap[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
         providerSpendMap[provider].metrics.cache_creation_input_tokens +=
           metrics.metrics.cache_creation_input_tokens || 0;
+        if (isSubscriptionCovered(metrics.metadata)) {
+          providerSpendMap[provider].metadata = { subscription_covered: true };
+        }
       });
     });
 
@@ -390,6 +401,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       successful_requests: metrics.metrics.successful_requests,
       failed_requests: metrics.metrics.failed_requests,
       tokens: metrics.metrics.total_tokens,
+      subscription_covered: isSubscriptionCovered(metrics.metadata),
     }));
   }, [userSpendData.results]);
 
@@ -542,6 +554,18 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                         />
                       )}
                     </div>
+
+                    <SubscriptionCostCard
+                      loading={subscriptionUsage.loading}
+                      failed={subscriptionUsage.failed}
+                      isDateChanging={isDateChanging}
+                      usage={subscriptionUsage.data}
+                      meteredSpend={totalSpend}
+                      canEdit={isProxyAdminRole(userRole || "")}
+                      onSetFee={feeActions.openFeeModal}
+                      onEditFee={feeActions.openFeeModal}
+                      onRemoveFee={feeActions.removeFee}
+                    />
 
                     <div className="col-span-2">
                       <ShadcnCard>
@@ -1037,6 +1061,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
       {/* AI Chat Panel */}
       <UsageAIChatPanel open={isAiChatOpen} onClose={() => setIsAiChatOpen(false)} accessToken={accessToken} />
+
+      <SubscriptionFeeModal
+        visible={feeActions.feeModalAccount !== null}
+        account={feeActions.feeModalAccount}
+        onCancel={feeActions.closeFeeModal}
+        onSubmit={feeActions.submitFee}
+      />
     </div>
   );
 };

@@ -1954,3 +1954,19 @@ model LiteLLM_LensWorker {
   token_hash String @unique
   data       Json
 }
+
+model LiteLLM_SubscriptionAccountTable {
+  subscription_account_id String @id @default(uuid())
+  custom_llm_provider String
+  account_id String
+  label String?
+  monthly_fee Float
+  currency String
+  billing_period_start String
+  created_at    DateTime               @default(now()) @map("created_at")
+  created_by String
+  updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
+  updated_by String
+
+  @@unique([custom_llm_provider, account_id], map: "LiteLLM_SubscriptionAccountTable_provider_account_key")
+}

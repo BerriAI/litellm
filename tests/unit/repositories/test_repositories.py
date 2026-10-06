@@ -29,6 +29,11 @@ from litellm.repositories.object_permission_repository import (
 )
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
+from litellm.repositories.subscription_account_repository import (
+    SetLabel,
+    SubscriptionAccountFeeChanges,
+    SubscriptionAccountRepository,
+)
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
@@ -139,6 +144,7 @@ class MockPrismaClient:
         self.db.litellm_projecttable = MockTable(pk_field="project_id")
         self.db.litellm_objectpermissiontable = MockTable(pk_field="object_permission_id")
         self.db.litellm_credentialstable = MockTable()
+        self.db.litellm_subscriptionaccounttable = MockTable(pk_field="subscription_account_id")
 
 
 class TestBaseRepository:
@@ -2405,3 +2411,40 @@ class TestAutoRouterSessionRepository:
         assert AutoRouterSessionRepository(client).table is client.db.litellm_autoroutersession
         with pytest.raises(RuntimeError, match="No DB Connected"):
             _ = AutoRouterSessionRepository(None).table
+
+
+class TestSubscriptionAccountRepository:
+    @pytest.mark.asyncio
+    async def test_update_fee_writes_only_the_named_columns(self):
+        client = MockPrismaClient()
+        stored_at = datetime(2026, 10, 1)
+        await client.db.litellm_subscriptionaccounttable.create(
+            data={
+                "subscription_account_id": "sub-1",
+                "custom_llm_provider": "chatgpt",
+                "account_id": "acct_123",
+                "label": "Team plan (test value)",
+                "monthly_fee": 25.0,
+                "currency": "USD",
+                "billing_period_start": "2026-10-01",
+                "created_at": stored_at,
+                "created_by": "admin-a",
+                "updated_at": stored_at,
+                "updated_by": "admin-a",
+            }
+        )
+        repo = SubscriptionAccountRepository(client)
+
+        fee_only = await repo.update_fee("sub-1", SubscriptionAccountFeeChanges(monthly_fee=30.0), "admin-b")
+        label_cleared = await repo.update_fee("sub-1", SubscriptionAccountFeeChanges(label=SetLabel(None)), "admin-c")
+        missing = await repo.update_fee("sub-2", SubscriptionAccountFeeChanges(monthly_fee=1.0), "admin-b")
+
+        assert fee_only is not None and label_cleared is not None
+        assert (fee_only.monthly_fee, fee_only.currency, fee_only.label, fee_only.updated_by) == (
+            30.0,
+            "USD",
+            "Team plan (test value)",
+            "admin-b",
+        )
+        assert (label_cleared.monthly_fee, label_cleared.label, label_cleared.updated_by) == (30.0, None, "admin-c")
+        assert missing is None

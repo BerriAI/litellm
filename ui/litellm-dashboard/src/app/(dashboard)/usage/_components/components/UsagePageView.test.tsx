@@ -7,7 +7,7 @@ import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "@/../tests/test-utils";
+import { renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import type { Organization } from "@/components/networking";
 import * as networking from "@/components/networking";
 import UsagePage from "./UsagePageView";
@@ -25,6 +25,11 @@ beforeAll(() => {
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
+  formatDate: (date: Date) => date.toISOString().slice(0, 10),
+  subscriptionUsageCall: vi.fn(),
+  subscriptionAccountCreateCall: vi.fn(),
+  subscriptionAccountUpdateCall: vi.fn(),
+  subscriptionAccountDeleteCall: vi.fn(),
   dailyActivityAggregatedCall: vi.fn(),
   dailyActivityKeyPageCall: vi.fn(),
   dailyActivityKeySearchCall: vi.fn(),
@@ -61,6 +66,14 @@ vi.mock("./EntityUsage/EntityUsage", () => ({
 
 vi.mock("./EntityUsage/SpendByProvider", () => ({
   default: () => <div>Spend By Provider</div>,
+}));
+
+vi.mock("./SubscriptionCost/SubscriptionCostCard", () => ({
+  default: ({ usage }: { usage: unknown }) => (
+    <div data-testid="subscription-cost-card" data-usage={JSON.stringify(usage)}>
+      Subscription Cost
+    </div>
+  ),
 }));
 
 vi.mock("./EndpointUsage/EndpointUsage", () => ({
@@ -174,6 +187,7 @@ describe("UsagePage", () => {
   const mockDailyActivityKeyPageCall = vi.mocked(networking.dailyActivityKeyPageCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
+  const mockSubscriptionUsageCall = vi.mocked(networking.subscriptionUsageCall);
   const mockUseCustomers = vi.mocked(useCustomers);
   const mockUseAgents = vi.mocked(useAgents);
   const mockUseAuthorized = vi.mocked(useAuthorized);
@@ -365,7 +379,24 @@ describe("UsagePage", () => {
     organizations: [],
   };
 
+  const mockSubscriptionUsage = {
+    subscription_providers: ["chatgpt"],
+    accounts: [
+      {
+        custom_llm_provider: "chatgpt",
+        account_id: "acct_123",
+        deployments: ["gpt-5.6-terra", "gpt-5.6-sol"],
+        fee: null,
+        billing_periods: [],
+        fixed_cost: null,
+      },
+    ],
+  };
+
   beforeEach(() => {
+    testQueryClient.clear();
+    mockSubscriptionUsageCall.mockReset();
+    mockSubscriptionUsageCall.mockResolvedValue(mockSubscriptionUsage);
     mockUseAuthorized.mockReturnValue({
       isLoading: false,
       isAuthorized: true,
@@ -434,6 +465,33 @@ describe("UsagePage", () => {
       isLoading: false,
       error: null,
     } as any);
+  });
+
+  it("hands the subscription usage to the fixed cost card for an admin and never fetches it otherwise", async () => {
+    const { unmount } = renderWithProviders(<UsagePage {...defaultProps} />);
+    await waitFor(() => {
+      expect(mockSubscriptionUsageCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute(
+        "data-usage",
+        JSON.stringify(mockSubscriptionUsage),
+      );
+    });
+    unmount();
+
+    for (const session of [nonAdminSession, { ...nonAdminSession, userRole: "org_admin" }]) {
+      mockSubscriptionUsageCall.mockClear();
+      mockUserDailyActivityAggregatedCall.mockClear();
+      mockUseAuthorized.mockReturnValue(session);
+      const rendered = renderWithProviders(<UsagePage {...defaultProps} />);
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      expect(mockSubscriptionUsageCall).not.toHaveBeenCalled();
+      expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute("data-usage", "null");
+      rendered.unmount();
+    }
   });
 
   it("should render and fetch usage data on mount", async () => {

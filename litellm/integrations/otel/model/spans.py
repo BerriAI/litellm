@@ -351,6 +351,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_Lens",
         "LiteLLM_LensRun",
         "LiteLLM_LensWorker",
+        "LiteLLM_SubscriptionAccountTable",
     )
 )
 PRISMA_RELATIONS: Final[frozenset[str]] = _PRISMA_MODELS | _PRISMA_VIEWS

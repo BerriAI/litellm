@@ -2542,3 +2542,68 @@ async def test_get_daily_activity_rejects_non_canonical_dates_before_querying(st
     assert error.value.detail == {"error": "start_date and end_date must be valid YYYY-MM-DD dates"}
     mock_table.count.assert_not_awaited()
     mock_table.find_many.assert_not_awaited()
+
+
+def _provider_record(provider: str, *, model: str, spend: float):
+    base = vars(_spend_record("real-key", model=model, spend=spend))
+    return SimpleNamespace(**{**base, "custom_llm_provider": provider, "api_requests": 1, "successful_requests": 1})
+
+
+def test_per_row_provider_bucket_marks_subscription_backed_providers_only():
+    from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+    from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+    breakdown = BreakdownMetrics()
+    update_breakdown_metrics(breakdown, _provider_record("chatgpt", model="gpt-5.6-terra", spend=0.0), {}, {}, {})
+    update_breakdown_metrics(breakdown, _provider_record("openai", model="gpt-5.6", spend=0.0), {}, {}, {})
+    update_breakdown_metrics(breakdown, _provider_record("chatgpt", model="gpt-5.6-sol", spend=0.0), {}, {}, {})
+
+    assert breakdown.providers["chatgpt"].metadata == {"subscription_covered": True}
+    assert "subscription_covered" not in breakdown.providers["openai"].metadata
+    assert breakdown.providers["chatgpt"].metrics.api_requests == 2
+    assert "subscription_covered" not in breakdown.models["gpt-5.6-terra"].metadata
+
+
+def test_per_row_provider_marker_keeps_existing_provider_metadata():
+    from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+    from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+    breakdown = BreakdownMetrics()
+    update_breakdown_metrics(
+        breakdown,
+        _provider_record("chatgpt", model="gpt-5.6-terra", spend=0.0),
+        {},
+        {"chatgpt": {"region": "us"}},
+        {},
+    )
+
+    assert breakdown.providers["chatgpt"].metadata == {"region": "us", "subscription_covered": True}
+
+
+@pytest.mark.parametrize("provider_row_first", [True, False])
+def test_grouping_sets_provider_bucket_marks_subscription_backed_providers_in_any_row_order(provider_row_first):
+    from litellm.proxy.management_endpoints.common_daily_activity import (
+        _GROUP_DATE_PROVIDER,
+        _GROUP_DATE_PROVIDER_API_KEY,
+        _GROUP_GRAND_TOTAL,
+        _aggregate_grouping_sets_records_sync,
+    )
+
+    provider_rows = [
+        _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="chatgpt", spend=0.0),
+        _grouping_row(_GROUP_DATE_PROVIDER_API_KEY, custom_llm_provider="chatgpt", api_key="real-key", spend=0.0),
+    ]
+    ordered_rows = provider_rows if provider_row_first else list(reversed(provider_rows))
+    records = [
+        *ordered_rows,
+        _grouping_row(_GROUP_DATE_PROVIDER, custom_llm_provider="openai", spend=0.0),
+        _grouping_row(_GROUP_DATE_PROVIDER_API_KEY, custom_llm_provider="openai", api_key="real-key", spend=0.0),
+        _grouping_row(_GROUP_GRAND_TOTAL, spend=0.0),
+    ]
+
+    aggregated = _aggregate_grouping_sets_records_sync(records=records, api_key_metadata={})
+
+    providers = aggregated["results"][0].breakdown.providers
+    assert providers["chatgpt"].metadata == {"subscription_covered": True}
+    assert "real-key" in providers["chatgpt"].api_key_breakdown
+    assert "subscription_covered" not in providers["openai"].metadata
