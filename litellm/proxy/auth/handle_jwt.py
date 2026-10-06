@@ -16,7 +16,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
+from typing import Final, Literal, NoReturn, Protocol, TypeVar, cast
 
 import httpx
 import jwt
@@ -428,7 +428,7 @@ class JWTHandler:
         default-team behavior should still go through ``get_team_id``.
         """
         team_ids: Final[list[str]] = list(self.get_team_ids_from_jwt(token))
-        singular: Any = None
+        singular: object = None
         if self._has_trusted_issuer_normalized_claim(token=token, claim=self.LITELLM_TEAM_ID_CLAIM):
             singular = token.get(self.LITELLM_TEAM_ID_CLAIM)
         elif self.litellm_jwtauth.team_id_jwt_field is not None:
@@ -1151,7 +1151,7 @@ class JWTHandler:
         # its jwks_uri, matching JWTIssuerConfig.jwks_url's documented fallback.
         return f"{issuer_config.issuer.rstrip('/')}/.well-known/openid-configuration"
 
-    def _get_claim_value_for_issuer_mapping(self, token: dict, claim_field: str) -> Any:
+    def _get_claim_value_for_issuer_mapping(self, token: dict, claim_field: str) -> object:
         """Resolve a mapped claim from ``token``.
 
         Returns ``None`` when the field is absent or empty so that mapped claims
@@ -1480,7 +1480,7 @@ class JWTAuthManager:
             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
         )
         if not is_allowed:
-            allowed_routes: Final[list[Any]] = jwt_handler.litellm_jwtauth.admin_allowed_routes
+            allowed_routes: Final = jwt_handler.litellm_jwtauth.admin_allowed_routes
             actual_routes: Final = get_actual_routes(allowed_routes=allowed_routes)
             raise Exception(f"Admin not allowed to access this route. Route={route}, Allowed Routes={actual_routes}")
 

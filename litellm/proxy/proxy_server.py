@@ -262,7 +262,7 @@ def generate_feedback_box():
 
 import contextlib
 from collections import defaultdict
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from functools import lru_cache, partial
 
 import litellm
@@ -1614,75 +1614,81 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         settings=tracing_settings,
     ) as receiver:
         state: Final[ProxyLifespanState] = {"tracing_receiver": receiver}
-        yield state
+        from litellm.proxy.admin_mcp import admin_mcp_lifespan
 
-        if model_info_scheduler is not None and model_info_scheduler.running:
-            model_info_scheduler.remove_job("refresh_model_info")
-            if model_info_scheduler is not scheduler:
-                model_info_scheduler.shutdown(wait=False)
+        try:
+            async with AsyncExitStack() as admin_mcp_stack:
+                try:
+                    await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
+                    yield state
+                finally:
+                    if model_info_scheduler is not None and model_info_scheduler.running:
+                        model_info_scheduler.remove_job("refresh_model_info")
+                        if model_info_scheduler is not scheduler:
+                            model_info_scheduler.shutdown(wait=False)
 
-        # Shutdown event - stop starting scheduled jobs; the ones already running keep the drain window
-        if scheduler is not None:
-            pause_scheduled_jobs(scheduler)
+                    # Shutdown event - stop starting scheduled jobs; the ones already running keep the drain window
+                    if scheduler is not None:
+                        pause_scheduled_jobs(scheduler)
 
-        # Shutdown event - drain in-flight requests before tearing down dependencies
-        # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
-        GracefulShutdownManager.start_shutdown()
-        await GracefulShutdownManager.wait_for_drain()
+                    # Shutdown event - drain in-flight requests before tearing down dependencies
+                    # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
+                    GracefulShutdownManager.start_shutdown()
+                    await GracefulShutdownManager.wait_for_drain()
+        finally:
+            # Shutdown event - close shared aiohttp session
+            if shared_aiohttp_session is not None:
+                try:
+                    await shared_aiohttp_session.close()
+                    verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
+                except Exception as e:
+                    verbose_proxy_logger.error("Error closing shared aiohttp session: %s", e)
 
-        # Shutdown event - close shared aiohttp session
-        if shared_aiohttp_session is not None:
-            try:
-                await shared_aiohttp_session.close()
-                verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
-            except Exception as e:
-                verbose_proxy_logger.error("Error closing shared aiohttp session: %s", e)
+            # Shutdown event - stop RDS IAM token refresh background task
+            if (
+                prisma_client is not None
+                and hasattr(prisma_client, "db")
+                and hasattr(prisma_client.db, "stop_token_refresh_task")
+            ):
+                try:
+                    await prisma_client.db.stop_token_refresh_task()
+                except Exception as e:
+                    verbose_proxy_logger.error("Error stopping token refresh task: %s", e)
 
-        # Shutdown event - stop RDS IAM token refresh background task
-        if (
-            prisma_client is not None
-            and hasattr(prisma_client, "db")
-            and hasattr(prisma_client.db, "stop_token_refresh_task")
-        ):
-            try:
-                await prisma_client.db.stop_token_refresh_task()
-            except Exception as e:
-                verbose_proxy_logger.error("Error stopping token refresh task: %s", e)
+            # Shutdown event - stop Prisma DB health watchdog task
+            if prisma_client is not None and hasattr(prisma_client, "stop_db_health_watchdog_task"):
+                try:
+                    await prisma_client.stop_db_health_watchdog_task()
+                except Exception as e:
+                    verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
 
-        # Shutdown event - stop Prisma DB health watchdog task
-        if prisma_client is not None and hasattr(prisma_client, "stop_db_health_watchdog_task"):
-            try:
-                await prisma_client.stop_db_health_watchdog_task()
-            except Exception as e:
-                verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
+            if prisma_client is not None and hasattr(prisma_client, "stop_view_setup_task"):
+                try:
+                    await prisma_client.stop_view_setup_task()
+                except Exception as e:
+                    verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
 
-        if prisma_client is not None and hasattr(prisma_client, "stop_view_setup_task"):
-            try:
-                await prisma_client.stop_view_setup_task()
-            except Exception as e:
-                verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
+            await _drain_spend_event_producer_on_shutdown()
 
-        await _drain_spend_event_producer_on_shutdown()
+            # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
+            if scheduler is not None and scheduler_executor is not None:
+                try:
+                    await stop_in_flight_scheduler_jobs(scheduler, scheduler_executor)
+                except Exception as e:
+                    verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
-        # Shutdown event - finish or cancel in-flight scheduled jobs before the shutdown flushes and the DB disconnect
-        if scheduler is not None and scheduler_executor is not None:
-            try:
-                await stop_in_flight_scheduler_jobs(scheduler, scheduler_executor)
-            except Exception as e:
-                verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
+            await flush_spend_counters_on_shutdown()
 
-        await flush_spend_counters_on_shutdown()
+            await _flush_spend_logs_queue_on_shutdown()
 
-        await _flush_spend_logs_queue_on_shutdown()
+            await proxy_config.stop_config_sync_subscriber()
 
-        await proxy_config.stop_config_sync_subscriber()
+            await proxy_config.stop_auth_cache_invalidation_subscriber()
 
-        await proxy_config.stop_auth_cache_invalidation_subscriber()
+            await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
 
-        await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
-
-        if prometheus_multiproc_dir:
-            mark_worker_exit(os.getpid())
+            if prometheus_multiproc_dir:
+                mark_worker_exit(os.getpid())
 
 
 def _generate_stable_operation_id(route: "APIRoute") -> str:
@@ -12059,7 +12065,7 @@ async def chat_completion(
 
     -H "Content-Type: application/json" \
 
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     -d '{
         "model": "gpt-4o",
@@ -12223,7 +12229,7 @@ async def completion(
 
     -H "Content-Type: application/json" \
 
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     -d '{
         "model": "gpt-3.5-turbo-instruct",
@@ -12407,7 +12413,7 @@ async def embeddings(
 
     -H "Content-Type: application/json" \
 
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
 
     -d '{
         "model": "text-embedding-ada-002",
@@ -12515,7 +12521,7 @@ async def moderations(
     ```
     curl --location 'http://0.0.0.0:4000/moderations' \
     --header 'Content-Type: application/json' \
-    --header 'Authorization: Bearer sk-1234' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
     --data '{"input": "Sample text goes here", "model": "text-moderation-stable"}'
     ```
     """
@@ -14169,7 +14175,7 @@ async def supported_openai_params(model: str):
     Example curl:
     ```
     curl -X GET --location 'http://localhost:4000/utils/supported_openai_params?model=gpt-3.5-turbo-16k' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
@@ -14214,7 +14220,7 @@ async def model_info_lookup(model: str, custom_llm_provider: str | None = None):
     Example curl:
     ```
     curl -X GET --location 'http://localhost:4000/utils/model_info?model=gpt-4o&custom_llm_provider=openai' \
-        --header 'Authorization: Bearer sk-1234'
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     detail: Final = {"error": f"model={model}, custom_llm_provider={custom_llm_provider} is not in the model cost map"}
@@ -14792,7 +14798,7 @@ async def _fetch_db_models_for_search(
     filter for `team_public_model_name` instead and keep the DB cost
     bounded by `search`.
     """
-    db_where_condition: Final[dict[str, Any]] = {
+    db_where_condition: Final[dict[str, object]] = {
         "model_name": {"contains": search_lower, "mode": "insensitive"} if model_name is None else model_name
     }
     if db_model_ids_in_router:
@@ -15458,7 +15464,7 @@ async def model_info_v2(
     Example request:
     ```
     curl -X GET 'http://localhost:4000/v2/model/info?include_team_models=true&page=1&size=50' \\
-    --header 'Authorization: Bearer sk-1234'
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example response:
@@ -16408,7 +16414,7 @@ async def model_deprecations(
     Example:
     ```shell
     curl -X GET 'http://localhost:4000/model/deprecations' \\
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     return collect_model_deprecations(llm_router=llm_router, warn_within_days=warn_within_days)
@@ -16470,7 +16476,7 @@ async def model_group_info(
     curl -X 'GET' \
     'http://localhost:4000/model_group/info' \
     -H 'accept: application/json' \
-    -H 'x-api-key: sk-1234'
+    -H "x-api-key: $LITELLM_MASTER_KEY"
     ```
 
     Example Request (Specific Model Group):
@@ -16478,7 +16484,7 @@ async def model_group_info(
     curl -X 'GET' \
     'http://localhost:4000/model_group/info?model_group=rerank-english-v3.0' \
     -H 'accept: application/json' \
-    -H 'Authorization: Bearer sk-1234'
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Example Request (Specific Wildcard Model Group): (e.g. `model_name: openai/*` on config.yaml)
@@ -16486,7 +16492,7 @@ async def model_group_info(
     curl -X 'GET' \
     'http://localhost:4000/model_group/info?model_group=openai/tts-1'
     -H 'accept: application/json' \
-    -H 'Authorization: Bearersk-1234'
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Learn how to use and set wildcard models [here](https://docs.litellm.ai/docs/wildcard_routing)
@@ -18287,6 +18293,9 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "admission_queue_timeout_seconds": "Float",
         "max_request_size_mb": "Integer",
         "max_batch_file_size_mb": "Integer",
+        "max_batch_file_records": "Integer",
+        "max_batch_file_uploads_per_day": "Integer",
+        "max_file_downloads_per_minute": "Integer",
         "max_file_size_mb": "Integer",
         "allowed_file_extensions": "List",
         "blocked_file_extensions": "List",

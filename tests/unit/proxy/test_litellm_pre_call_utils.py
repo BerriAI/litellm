@@ -1968,7 +1968,7 @@ async def test_add_litellm_data_to_request_audio_transcription_multipart():
     request_mock.query_params = {}
     request_mock.headers = {
         "Content-Type": "multipart/form-data",
-        "Authorization": "Bearer sk-1234",
+        "Authorization": "Bearer sk-9876",
     }
     request_mock.client = MagicMock()
     request_mock.client.host = "127.0.0.1"
@@ -4803,7 +4803,7 @@ async def test_bearer_token_not_in_debug_logs():
         "messages": [{"role": "user", "content": "hi"}],
     }
 
-    user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-9876")
 
     # Capture all debug log output from the proxy logger
     log_capture = StringIO()

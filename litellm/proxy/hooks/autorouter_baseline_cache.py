@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx
 import pydantic
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
@@ -50,6 +50,7 @@ from litellm.proxy.spend_tracking.savings import (
     _proxy_llm_router,  # pyright: ignore[reportPrivateUsage]  # existing optional proxy-router owner
     _resolve_model,  # pyright: ignore[reportPrivateUsage]  # shared model identity resolver
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import get_prompt_cache_min_tokens
@@ -66,7 +67,7 @@ _COUNT_TIMEOUT: Final = 3.0
 _MAX_COUNTS: Final = 4096
 
 
-class CapturedBaselineObservation(BaseModel):
+class CapturedBaselineObservation(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     scope: str
@@ -102,14 +103,14 @@ class BaselineCacheContext:
     finalization: asyncio.Task[CapturedBaselineObservation] | None = field(default=None, repr=False, compare=False)
 
 
-class _Metadata(BaseModel):
+class _Metadata(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True, arbitrary_types_allowed=True)
     route: BaselineRouteStamp = Field(alias="_autorouter_baseline_route")
     user_api_key_hash: str = Field(min_length=1)
     session_id: str | None = None
 
 
-class _WireEvent(BaseModel):
+class _WireEvent(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True, arbitrary_types_allowed=True)
     httpx_response: httpx.Response
     api_call_start_time: datetime
@@ -119,7 +120,7 @@ class _WireEvent(BaseModel):
     prompt_cache_response_complete: bool = False
 
 
-class _ResponseUsage(BaseModel):
+class _ResponseUsage(LiteLLMBaseModel):
     model_config = ConfigDict(strict=True, from_attributes=True)
     usage: Usage | None = None
 

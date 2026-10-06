@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` to DashScope's `/v1/chat/complet
 """
 
 from collections.abc import Coroutine
-from typing import Any, Final, Literal, overload
+from typing import Final, Literal, overload
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -33,7 +33,7 @@ class DashScopeChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -45,7 +45,7 @@ class DashScopeChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         if is_async:
             return super()._transform_messages(messages=messages, model=model, is_async=True)
         else:

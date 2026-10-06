@@ -3,7 +3,7 @@ mod host;
 use pyo3::types::{PyDict, PyTuple};
 
 use crate::execution::{run_async, run_sync};
-use litellm_core::chat_completions::{ChatCompletionsRoute, Error, types::ChatCompletionsRequest};
+use litellm_inference_chat::{ChatCompletionsRoute, Error, types::ChatCompletionsRequest};
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
