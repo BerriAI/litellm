@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass
@@ -2943,14 +2944,14 @@ def test_translation_audio_duration_is_finalized_once(event_type: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("output_bytes", (0, 48000))
-@pytest.mark.parametrize("format_event_type", ("session.created", "session.update"))
+@pytest.mark.parametrize("format_event_type", ("session.created", "session.updated"))
 @pytest.mark.parametrize(
     "audio_format,bytes_per_second",
     (
         ("pcm16", 48000),
         ("g711_ulaw", 8000),
         ("g711_alaw", 8000),
-        ({"type": "audio/pcm", "rate": 16000}, 32000),
+        ({"type": "audio/pcm", "rate": 24000}, 48000),
         ({"type": "audio/pcmu", "rate": 8000}, 8000),
         ({"type": "audio/pcma", "rate": 8000}, 8000),
         ({"type": "audio/pcmu"}, 8000),
@@ -2975,10 +2976,7 @@ async def test_translation_disconnect_bills_sent_input_audio(
         "type": format_event_type,
         "session": {"audio": {"input": {"format": audio_format}}},
     }
-    if format_event_type == "session.update":
-        await streaming._send_to_backend(json.dumps(format_event))
-    else:
-        streaming._capture_translation_output_audio(format_event)
+    streaming._capture_translation_output_audio(format_event)
     await streaming._send_to_backend(
         json.dumps(
             {
@@ -2999,6 +2997,96 @@ async def test_translation_disconnect_bills_sent_input_audio(
             "usage": {"type": "duration", "input_seconds": 2.0, "output_seconds": output_bytes / 48000},
         }
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rate", (24000, 1, 0, -1, float("nan"), float("inf")))
+async def test_translation_client_format_updates_do_not_change_billed_duration(rate: int | float) -> None:
+    backend: Final = MagicMock()
+    backend.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=MagicMock(), translation_session=True
+    )
+    streaming._capture_translation_output_audio(
+        {
+            "type": "session.created",
+            "session": {"audio": {"input": {"format": "g711_ulaw"}, "output": {"format": "g711_ulaw"}}},
+        }
+    )
+    input_event: Final = json.dumps(
+        {"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(8000)).decode()}
+    )
+    output_event: Final = {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(8000)).decode()}
+    await streaming._send_to_backend(input_event)
+    streaming._capture_translation_output_audio(output_event)
+    await streaming._send_to_backend(
+        json.dumps(
+            {
+                "type": "session.update",
+                "session": {
+                    "audio": {
+                        "input": {"format": {"type": "audio/pcm", "rate": rate}},
+                        "output": {"format": {"type": "audio/pcm", "rate": rate}},
+                    }
+                },
+            }
+        )
+    )
+    await streaming._send_to_backend(input_event)
+    streaming._capture_translation_output_audio(output_event)
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == [
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 2.0, "output_seconds": 2.0}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_translation_confirmed_format_changes_preserve_previous_audio_duration() -> None:
+    backend: Final = MagicMock()
+    backend.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=MagicMock(), translation_session=True
+    )
+    await streaming._send_to_backend(
+        json.dumps({"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(48000)).decode()})
+    )
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(48000)).decode()}
+    )
+    streaming._capture_translation_output_audio(
+        {
+            "type": "session.updated",
+            "session": {"audio": {"input": {"format": "g711_alaw"}, "output": {"format": "g711_alaw"}}},
+        }
+    )
+    await streaming._send_to_backend(
+        json.dumps({"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(8000)).decode()})
+    )
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(8000)).decode()}
+    )
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == [
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 2.0, "output_seconds": 2.0}}
+    ]
+
+
+@pytest.mark.parametrize("rate", (1, 0, -1, float("nan"), float("inf"), 10**400))
+def test_translation_invalid_provider_format_preserves_audio_duration(rate: int | float) -> None:
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(), backend_ws=MagicMock(), logging_obj=MagicMock(), translation_session=True
+    )
+    output_event: Final = {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(48000)).decode()}
+    streaming._capture_translation_output_audio(output_event)
+    streaming._capture_translation_output_audio(
+        {"type": "session.updated", "session": {"audio": {"output": {"format": {"type": "audio/pcm", "rate": rate}}}}}
+    )
+    streaming._capture_translation_output_audio(output_event)
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == [{"type": "session.closed", "usage": {"type": "duration", "output_seconds": 2.0}}]
 
 
 @pytest.mark.asyncio
@@ -3085,7 +3173,9 @@ def test_translation_does_not_duplicate_provider_duration_usage():
         model="gpt-realtime-translate",
         translation_session=True,
     )
-    streaming._translation_output_audio_bytes = 48000
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(48000)).decode()}
+    )
     streaming.messages.append({"type": "session.closed", "usage": {"type": "duration", "output_seconds": 0.5}})
     streaming._finalize_translation_usage()
 
@@ -3133,7 +3223,9 @@ def test_translation_preserves_input_only_provider_usage(
         model="gpt-realtime-translate",
         translation_session=True,
     )
-    streaming._translation_output_audio_bytes = output_audio_bytes
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(output_audio_bytes)).decode()}
+    )
     streaming._capture_translation_output_audio(
         {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 0.25}}
     )
@@ -3153,7 +3245,9 @@ def test_translation_retained_input_only_close_event_bills_captured_output(monke
         model="gpt-realtime-translate",
         translation_session=True,
     )
-    streaming._translation_output_audio_bytes = 48000
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(48000)).decode()}
+    )
     close_event: Final = {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 0.25}}
 
     streaming._capture_translation_output_audio(close_event)
@@ -3175,10 +3269,15 @@ def test_translation_malformed_provider_duration_uses_captured_audio(malformed_o
         model="gpt-realtime-translate",
         translation_session=True,
     )
-    streaming._translation_output_audio_bytes = 48000
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(48000)).decode()}
+    )
 
     streaming._capture_translation_output_audio(
-        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 0.25, "output_seconds": malformed_output}}
+        {
+            "type": "session.closed",
+            "usage": {"type": "duration", "input_seconds": 0.25, "output_seconds": malformed_output},
+        }
     )
     streaming._finalize_translation_usage()
 

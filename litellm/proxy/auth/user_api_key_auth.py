@@ -3347,6 +3347,7 @@ async def _authorize_authenticated_request(
                 user_model,
                 request.path_params.get("model") or request.path_params.get("model_name"),
                 request.query_params.get("model"),
+                intent=request.query_params.get("intent"),
             )
             if user_api_key_auth_obj.managed_agent_policy is not None
             else request_data

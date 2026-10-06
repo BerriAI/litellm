@@ -110,11 +110,19 @@ def managed_inference_request(
     cli_model: str | None,
     path_model: object = None,
     query_model: object = None,
+    intent: str | None = None,
 ) -> dict[str, object]:
     from litellm.proxy.auth.route_checks import RouteChecks
 
     if route in _MANAGED_REALTIME_ROUTES:
-        model: Final = query_model or body.get("model")
+        from litellm.proxy.common_utils.http_parsing_utils import resolve_realtime_route_model
+
+        requested_model: Final = query_model if query_model is not None else body.get("model")
+        model: Final = (
+            resolve_realtime_route_model(None, intent, route.endswith("/realtime/translations"))
+            if requested_model is None
+            else requested_model
+        )
         if not isinstance(model, str) or not model:
             raise_identity_failure(
                 AgentIdentityFailure(message="Managed inference requires an explicit or configured model")

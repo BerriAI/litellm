@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
 
+from openai.types.realtime.realtime_audio_formats import AudioPCM, AudioPCMA, AudioPCMU, RealtimeAudioFormats
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
@@ -113,23 +114,17 @@ def _decode_json_object(payload: str) -> Mapping[str, object]:
     return json.loads(payload)
 
 
-_TRANSLATION_AUDIO_FORMAT: Final = TypeAdapter(str | Mapping[str, object] | None)
+_TRANSLATION_AUDIO_FORMAT: Final = TypeAdapter(str | RealtimeAudioFormats | None)
 
 
-def _translation_audio_bytes_per_second(audio_format: str | Mapping[str, object] | None) -> float | None:
-    if isinstance(audio_format, str):
-        return 8000.0 if audio_format in ("g711_ulaw", "g711_alaw") else None
-    if audio_format is None:
-        return None
-    format_type: Final = audio_format.get("type")
-    rate: Final = audio_format.get("rate")
-    if format_type in ("audio/pcmu", "audio/pcma") and rate is None:
-        return 8000.0
-    if not isinstance(rate, (int, float)) or rate <= 0:
-        return None
-    if format_type == "audio/pcm":
-        return float(rate) * 2
-    return float(rate) if format_type in ("audio/pcmu", "audio/pcma") else None
+def _translation_audio_bytes_per_second(audio_format: str | RealtimeAudioFormats | None) -> float | None:
+    match audio_format:
+        case "pcm16" | AudioPCM():
+            return 48000.0
+        case "g711_ulaw" | "g711_alaw" | AudioPCMU() | AudioPCMA():
+            return 8000.0
+        case _:
+            return None
 
 
 class RealtimeEventNormalizer(Protocol):
@@ -176,7 +171,7 @@ class RealTimeStreaming:
         self._is_translation_session = translation_session
         self._translation_input_seconds = 0.0
         self._translation_input_bytes_per_second = 48000.0
-        self._translation_output_audio_bytes = 0
+        self._translation_output_seconds = 0.0
         self._translation_output_bytes_per_second = 48000.0
         self._translation_usage_finalized = False
 
@@ -473,11 +468,7 @@ class RealTimeStreaming:
                 if reported_input_seconds is not None
                 else self._translation_input_seconds or None
             )
-            synthetic_output_seconds: Final = (
-                self._translation_output_audio_bytes / self._translation_output_bytes_per_second
-                if self._translation_output_audio_bytes > 0
-                else None
-            )
+            synthetic_output_seconds: Final = self._translation_output_seconds or None
             resolved_output_seconds: Final = output_seconds if output_seconds is not None else synthetic_output_seconds
             if input_seconds is not None or resolved_output_seconds is not None:
                 if self._should_store_message(event_obj):
@@ -527,7 +518,7 @@ class RealTimeStreaming:
             decoded: Final = base64.b64decode(delta, validate=True)
         except (ValueError, TypeError):
             return
-        self._translation_output_audio_bytes += len(decoded)
+        self._translation_output_seconds += len(decoded) / self._translation_output_bytes_per_second
 
     def _capture_translation_input_audio(self, message: str) -> None:
         if not self._is_translation_session:
@@ -536,7 +527,6 @@ class RealTimeStreaming:
             event: Final = _decode_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return
-        self._capture_translation_audio_formats(event)
         if event.get("type") != "session.input_audio_buffer.append" or not isinstance(audio := event.get("audio"), str):
             return
         try:
@@ -546,6 +536,8 @@ class RealTimeStreaming:
         self._translation_input_seconds += len(decoded) / self._translation_input_bytes_per_second
 
     def _capture_translation_audio_formats(self, event_obj: Mapping[str, object]) -> None:
+        if event_obj.get("type") not in ("session.created", "session.updated"):
+            return
         session: Final = event_obj.get("session")
         if not isinstance(session, dict):
             return
@@ -581,15 +573,18 @@ class RealTimeStreaming:
             ):
                 self._translation_usage_finalized = True
                 return
-        if self._translation_output_audio_bytes == 0 and self._translation_input_seconds == 0:
+        if self._translation_output_seconds == 0 and self._translation_input_seconds == 0:
             return
-        output_seconds: Final = self._translation_output_audio_bytes / self._translation_output_bytes_per_second
         synthetic_usage: Final = (
             OpenAIRealtimeTranslationDurationUsage(
-                type="duration", input_seconds=self._translation_input_seconds, output_seconds=output_seconds
+                type="duration",
+                input_seconds=self._translation_input_seconds,
+                output_seconds=self._translation_output_seconds,
             )
             if self._translation_input_seconds > 0
-            else OpenAIRealtimeTranslationDurationUsage(type="duration", output_seconds=output_seconds)
+            else OpenAIRealtimeTranslationDurationUsage(
+                type="duration", output_seconds=self._translation_output_seconds
+            )
         )
         self.messages.append(OpenAIRealtimeTranslationClosedEvent(type="session.closed", usage=synthetic_usage))
         self._translation_usage_finalized = True

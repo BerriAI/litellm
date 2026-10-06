@@ -445,6 +445,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_form_data,
     resolve_inference_model,
 )
+from litellm.proxy.common_utils.http_parsing_utils import (
+    resolve_realtime_route_model as _resolve_realtime_route_model,
+)
 from litellm.proxy.common_utils.load_config_utils import get_config_from_bucket
 from litellm.proxy.common_utils.model_deprecation import collect_model_deprecations
 from litellm.proxy.common_utils.model_listing_utils import (
@@ -13040,20 +13043,6 @@ async def _reject_realtime_session(
     finally:
         await _release_realtime_budget_reservation(user_api_key_dict)
         await _release_realtime_max_parallel_slot(user_api_key_dict)
-
-
-def _resolve_realtime_route_model(
-    model: str | None,
-    intent: str | None,
-    is_translation: bool,
-) -> str | None:
-    if model is not None:
-        return model
-    if is_translation:
-        return "gpt-realtime-translate"
-    if intent == "transcription":
-        return "gpt-realtime-whisper"
-    return None
 
 
 def _resolve_realtime_upstream_query_model(
