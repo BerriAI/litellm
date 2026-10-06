@@ -401,3 +401,17 @@ def test_huggingface_encoding_exposes_the_tokenizers_lookup_and_mutation_surface
     assert merged.offsets == type(expected).merge([expected, reference.encode("more")]).offsets
     with pytest.raises(ValueError, match="direction"):
         actual.pad(8, direction="sideways")
+
+
+def test_missing_python_tokenizer_warns_before_approximate_count(caplog, monkeypatch):
+    from unittest.mock import patch
+    from litellm.utils import _load_huggingface_tokenizer, _select_tokenizer_helper
+
+    monkeypatch.setenv("LITELLM_RUST", "false")
+    _load_huggingface_tokenizer.cache_clear()
+    with patch.dict(sys.modules, {"tokenizers": None}):
+        result = _select_tokenizer_helper("llama-2")
+    assert result["type"] == "openai_tokenizer"
+    assert result["tokenizer"].encode("hello")
+    assert "token counts may be approximate" in caplog.text
+    assert "install tokenizers" in caplog.text

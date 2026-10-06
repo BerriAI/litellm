@@ -1151,3 +1151,19 @@ async def test_async_invoke_streaming_fails_at_the_request_timeout_not_the_upstr
 def test_sync_invoke_streaming_fails_at_the_request_timeout_not_the_upstreams_pace() -> None:
     with pytest.raises(litellm.Timeout):
         litellm.completion(client=slow_upstream_sync_client(), **_invoke_streaming_kwargs())
+
+
+@pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
+def test_invoke_decoder_reports_only_missing_aws_dependency(missing):
+    from unittest.mock import patch
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+
+    failure = ModuleNotFoundError("missing dependency", name=missing)
+    with patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ImportError) as error:
+            AWSEventStreamDecoder(model="anthropic.claude-3-sonnet-20240229-v1:0")
+    if missing == "botocore":
+        assert "pip install boto3" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure

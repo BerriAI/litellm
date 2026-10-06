@@ -4,7 +4,6 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # native class is validated at the binding boundary
 
 import tiktoken
-from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
 
 from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, HuggingFaceTokenizer, OpenAIEncoding
 from litellm.rust_bridge import runtime
@@ -12,6 +11,8 @@ from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.catalog import Route, RouteContext
 
 if TYPE_CHECKING:
+    from tokenizers import Tokenizer as PythonHuggingFaceTokenizer
+
     from litellm.rust_bridge._native import Tokenizer as NativeTokenizer
 
 
@@ -76,6 +77,16 @@ def get_encoding(name: str) -> Encoding:
     )
 
 
+def _python_tokenizer() -> type[PythonHuggingFaceTokenizer]:
+    try:
+        from tokenizers import Tokenizer
+    except ModuleNotFoundError as error:
+        if error.name != "tokenizers":
+            raise
+        raise ImportError("Python tokenization requires tokenizers. Run 'pip install tokenizers'.") from error
+    return Tokenizer
+
+
 def anthropic() -> HuggingFace:
     """The packaged Anthropic tokenizer on the selected backend."""
     from litellm.utils import claude_json_str
@@ -84,7 +95,7 @@ def anthropic() -> HuggingFace:
         HUGGINGFACE_CONTEXT,
         binding=TOKENIZER,
         native=lambda factory: HuggingFaceTokenizer(_native_anthropic(factory)),
-        python=lambda: PythonHuggingFaceTokenizer.from_str(claude_json_str),
+        python=lambda: _python_tokenizer().from_str(claude_json_str),
     )
 
 
@@ -93,7 +104,7 @@ def from_str(json: str) -> HuggingFace:
         HUGGINGFACE_CONTEXT,
         binding=TOKENIZER,
         native=lambda factory: HuggingFaceTokenizer(factory.from_json(json)),
-        python=lambda: PythonHuggingFaceTokenizer.from_str(json),
+        python=lambda: _python_tokenizer().from_str(json),
     )
 
 
@@ -104,5 +115,5 @@ def from_pretrained(identifier: str, revision: str = "main", token: str | None =
         native=lambda factory: HuggingFaceTokenizer(
             factory.from_pretrained(identifier, revision=revision, token=token)
         ),
-        python=lambda: PythonHuggingFaceTokenizer.from_pretrained(identifier, revision=revision, token=token),
+        python=lambda: _python_tokenizer().from_pretrained(identifier, revision=revision, token=token),
     )

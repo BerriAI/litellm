@@ -1151,3 +1151,19 @@ def test_get_anthropic_beta_from_headers_reads_a_json_array_header(header_value:
     from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
 
     assert get_anthropic_beta_from_headers({"anthropic-beta": header_value}) == expected
+
+
+@pytest.mark.parametrize("missing", ["botocore", "unrelated_dependency"])
+def test_event_decoder_reports_only_missing_aws_dependency(missing):
+    from unittest.mock import patch
+    from litellm.llms.bedrock.common_utils import BedrockEventStreamDecoderBase
+
+    failure = ModuleNotFoundError("missing dependency", name=missing)
+    with patch("builtins.__import__", side_effect=failure):
+        with pytest.raises(ImportError) as error:
+            BedrockEventStreamDecoderBase()
+    if missing == "botocore":
+        assert "pip install boto3" in str(error.value)
+        assert error.value.__cause__ is failure
+    else:
+        assert error.value is failure
