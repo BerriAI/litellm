@@ -527,12 +527,12 @@ class _ForwardedIpRig:
     key: str
     public_peer: McpPeer
     internal_peer: McpPeer
+    public_alias: str
+    internal_alias: str
 
 
 @contextmanager
-def _forwarded_ip_rig(
-    gateway: Gateway, tmp_path: Path, settings: Mapping[str, JsonValue]
-) -> Iterator[_ForwardedIpRig]:
+def _forwarded_ip_rig(gateway: Gateway, tmp_path: Path, settings: Mapping[str, JsonValue]) -> Iterator[_ForwardedIpRig]:
     config: Final = JSON_OBJECT.validate_python(
         yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
     )
@@ -576,7 +576,9 @@ def _forwarded_ip_rig(
         key: Final = string_value(
             candidate.post("/key/generate", {"object_permission": {"mcp_servers": [public, internal]}})["key"]
         )
-        yield _ForwardedIpRig(candidate, public, internal, key, public_peer, internal_peer)
+        yield _ForwardedIpRig(
+            candidate, public, internal, key, public_peer, internal_peer, "pub" + suffix, "int" + suffix
+        )
 
 
 def _forwarded_ip_headers(key: str, forwarded: str) -> dict[str, str]:
@@ -599,6 +601,63 @@ def _forwarded_ip_call(client: httpx.Client, key: str, forwarded: str, server_id
         headers=_forwarded_ip_headers(key, forwarded),
         json={"server_id": server_id, "name": "add", "arguments": CALLABLE["add"]},
     )
+
+
+class _RpcTool(BaseModel):
+    name: str
+
+
+class _RpcToolList(BaseModel):
+    tools: list[_RpcTool]
+
+
+class _RpcListReply(BaseModel):
+    result: _RpcToolList
+
+
+class _RpcCallReply(BaseModel):
+    result: CallResult
+
+
+def _forwarded_ip_rpc(
+    client: httpx.Client, key: str, forwarded: str, path: str, method: str, params: JsonRpc
+) -> httpx.Response:
+    return client.post(
+        path,
+        headers={**_forwarded_ip_headers(key, forwarded), "Accept": "application/json, text/event-stream"},
+        json={"jsonrpc": "2.0", "id": 1, "method": method, "params": dict(params)},
+    )
+
+
+def _sse_payload(response: httpx.Response) -> str:
+    events: Final = [
+        line.removeprefix("data:").strip() for line in response.text.splitlines() if line.startswith("data:")
+    ]
+    assert len(events) == 1, response.text
+    return events[0]
+
+
+def _rpc_listed_names(client: httpx.Client, key: str, forwarded: str) -> set[str]:
+    listed: Final = _forwarded_ip_rpc(client, key, forwarded, "/mcp", "tools/list", {})
+    assert listed.status_code == 200, listed.text
+    return {tool.name for tool in _RpcListReply.model_validate_json(_sse_payload(listed)).result.tools}
+
+
+def _rpc_server_call(client: httpx.Client, key: str, forwarded: str, alias: str) -> httpx.Response:
+    return _forwarded_ip_rpc(
+        client, key, forwarded, f"/{alias}/mcp", "tools/call", {"name": f"{alias}-add", "arguments": CALLABLE["add"]}
+    )
+
+
+def _assert_rpc_served(response: httpx.Response) -> None:
+    assert response.status_code == 200, response.text
+    assert _RpcCallReply.model_validate_json(_sse_payload(response)).result == CallResult(
+        content=[TextBlock(type="text", text=RESULTS["add"])], isError=False
+    ), response.text
+
+
+def _rpc_tools(alias: str) -> set[str]:
+    return {f"{alias}-{tool}" for tool in ("add", "fail", "multiply")}
 
 
 def _assert_external_view(
@@ -629,6 +688,20 @@ def _assert_external_view(
     assert _called_names(public_peer) == ["add"], "the public server did not receive exactly one add call"
 
 
+def _assert_external_rpc_view(rig: _ForwardedIpRig, client: httpx.Client, forwarded: str) -> None:
+    assert _rpc_listed_names(client, rig.key, forwarded) == _rpc_tools(rig.public_alias), forwarded
+    rig.internal_peer.drain()
+    refused: Final = _rpc_server_call(client, rig.key, forwarded, rig.internal_alias)
+    assert refused.status_code == 404, refused.text
+    assert refused.json() == {"detail": f"MCP server, toolset, or access group '{rig.internal_alias}' not found"}, (
+        refused.text
+    )
+    assert tool_calls(rig.internal_peer.drain()) == (), "an external JSON-RPC caller reached an internal-only server"
+    rig.public_peer.drain()
+    _assert_rpc_served(_rpc_server_call(client, rig.key, forwarded, rig.public_alias))
+    assert _called_names(rig.public_peer) == ["add"], "the public server did not receive exactly one JSON-RPC add"
+
+
 def _assert_internal_view(
     client: httpx.Client,
     key: str,
@@ -648,6 +721,18 @@ def _assert_internal_view(
     assert reached.status_code == 200 and reached.json()["content"][0]["text"] == RESULTS["add"], reached.text
     assert _called_names(internal_peer) == ["add"], "the internal caller did not reach the internal server once"
     assert tool_calls(public_peer.drain()) == (), "the internal call reached the public server"
+
+
+def _assert_internal_rpc_view(rig: _ForwardedIpRig, forwarded: str) -> None:
+    client: Final = rig.candidate.client
+    assert _rpc_listed_names(client, rig.key, forwarded) == _rpc_tools(rig.public_alias) | _rpc_tools(
+        rig.internal_alias
+    ), forwarded
+    rig.public_peer.drain()
+    rig.internal_peer.drain()
+    _assert_rpc_served(_rpc_server_call(client, rig.key, forwarded, rig.internal_alias))
+    assert _called_names(rig.internal_peer) == ["add"], "the internal JSON-RPC caller did not reach it once"
+    assert tool_calls(rig.public_peer.drain()) == (), "the internal JSON-RPC call reached the public server"
 
 
 def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_public_widens_them(
@@ -670,6 +755,7 @@ def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_
         _assert_internal_view(
             rig.candidate.client, rig.key, "10.1.2.3", rig.public, rig.internal, rig.public_peer, rig.internal_peer
         )
+        _assert_internal_rpc_view(rig, "10.1.2.3")
         _assert_external_view(
             rig.candidate.client,
             rig.key,
@@ -680,6 +766,7 @@ def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_
             rig.public_peer,
             rig.internal_peer,
         )
+        _assert_external_rpc_view(rig, rig.candidate.client, external)
         _assert_external_view(
             untrusted,
             rig.key,
@@ -690,6 +777,7 @@ def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_
             rig.public_peer,
             rig.internal_peer,
         )
+        _assert_external_rpc_view(rig, untrusted, "10.1.2.3")
         _assert_external_view(
             rig.candidate.client,
             rig.key,
@@ -700,6 +788,7 @@ def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_
             rig.public_peer,
             rig.internal_peer,
         )
+        _assert_external_rpc_view(rig, rig.candidate.client, "203.0.113.7, 10.0.0.1")
         _assert_internal_view(
             rig.candidate.client,
             rig.key,
@@ -709,10 +798,9 @@ def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_
             rig.public_peer,
             rig.internal_peer,
         )
+        _assert_internal_rpc_view(rig, "10.1.2.3, 10.0.0.1")
 
-        published: Final = rig.candidate.request(
-            "POST", "/v1/mcp/make_public", {"mcp_server_ids": [rig.internal]}
-        )
+        published: Final = rig.candidate.request("POST", "/v1/mcp/make_public", {"mcp_server_ids": [rig.internal]})
         assert published.status_code == 202, published.text
         assert published.json()["public_mcp_servers"] == [rig.internal], published.text
         widened_view: Final = _forwarded_ip_listing(rig.candidate.client, rig.key, external)
@@ -723,6 +811,38 @@ def test_forwarded_client_ip_limits_external_callers_to_public_servers_and_make_
         widened: Final = _forwarded_ip_call(rig.candidate.client, rig.key, external, rig.internal)
         assert widened.status_code == 200 and widened.json()["content"][0]["text"] == RESULTS["add"], widened.text
         assert _called_names(rig.internal_peer) == ["add"], "make_public did not let the external caller reach it once"
+        assert _rpc_listed_names(rig.candidate.client, rig.key, external) == _rpc_tools(rig.public_alias) | _rpc_tools(
+            rig.internal_alias
+        )
+        _assert_rpc_served(_rpc_server_call(rig.candidate.client, rig.key, external, rig.internal_alias))
+        assert _called_names(rig.internal_peer) == ["add"], "make_public did not let the JSON-RPC caller reach it once"
+
+
+def test_aggregate_mcp_tools_call_refuses_an_internal_only_server_to_an_external_client_ip(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    pytest.skip(
+        "BUG: with use_x_forwarded_for and mcp_trusted_proxy_ranges, POST /mcp tools/call <internal alias>-add from"
+        " an external X-Forwarded-For runs the tool on an internal-only server, although /mcp tools/list hides that"
+        " server from the same caller and /{alias}/mcp refuses it with 404"
+    )
+    settings: Final = {
+        "mcp_trusted_proxy_ranges": ["127.0.0.1/32"],
+        "mcp_internal_ip_ranges": ["10.0.0.0/8"],
+    }
+    with _forwarded_ip_rig(gateway, tmp_path, settings) as rig:
+        client: Final = rig.candidate.client
+        call: Final = {"name": f"{rig.internal_alias}-add", "arguments": CALLABLE["add"]}
+        rig.internal_peer.drain()
+        _assert_rpc_served(_forwarded_ip_rpc(client, rig.key, "10.1.2.3", "/mcp", "tools/call", call))
+        assert _called_names(rig.internal_peer) == ["add"], "the internal caller did not reach the internal server once"
+        assert _rpc_listed_names(client, rig.key, "203.0.113.7") == _rpc_tools(rig.public_alias)
+        refused: Final = _forwarded_ip_rpc(client, rig.key, "203.0.113.7", "/mcp", "tools/call", call)
+        assert refused.status_code == 200, refused.text
+        assert _RpcCallReply.model_validate_json(_sse_payload(refused)).result == CallResult(
+            content=[TextBlock(type="text", text="Error: User not allowed to call this tool.")], isError=True
+        ), refused.text
+        assert tool_calls(rig.internal_peer.drain()) == (), "an external /mcp caller reached an internal-only server"
 
 
 def test_trusted_hop_count_takes_the_client_from_a_load_balancer_chain_and_ignores_prepended_spoofs(
@@ -744,6 +864,7 @@ def test_trusted_hop_count_takes_the_client_from_a_load_balancer_chain_and_ignor
             rig.public_peer,
             rig.internal_peer,
         )
+        _assert_external_rpc_view(rig, rig.candidate.client, "203.0.113.7, 10.0.0.1")
         _assert_external_view(
             rig.candidate.client,
             rig.key,
@@ -754,6 +875,7 @@ def test_trusted_hop_count_takes_the_client_from_a_load_balancer_chain_and_ignor
             rig.public_peer,
             rig.internal_peer,
         )
+        _assert_external_rpc_view(rig, rig.candidate.client, "10.1.2.3, 203.0.113.7, 10.0.0.1")
         _assert_internal_view(
             rig.candidate.client,
             rig.key,
@@ -763,6 +885,7 @@ def test_trusted_hop_count_takes_the_client_from_a_load_balancer_chain_and_ignor
             rig.public_peer,
             rig.internal_peer,
         )
+        _assert_internal_rpc_view(rig, "10.1.2.3, 10.0.0.1")
         _assert_external_view(
             rig.candidate.client,
             rig.key,
@@ -773,3 +896,4 @@ def test_trusted_hop_count_takes_the_client_from_a_load_balancer_chain_and_ignor
             rig.public_peer,
             rig.internal_peer,
         )
+        _assert_external_rpc_view(rig, rig.candidate.client, "203.0.113.7")
