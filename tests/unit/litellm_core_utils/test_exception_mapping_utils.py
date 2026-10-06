@@ -955,7 +955,12 @@ def test_a_provider_without_a_handler_maps_by_the_upstream_status(provider, stat
         assert isinstance(raised.value, litellm.BadRequestError)
         assert raised.value.response.status_code == 402
         assert str(raised.value).startswith("litellm.PaymentRequiredError: ")
+        assert "litellm.BadRequestError:" not in str(raised.value)
         assert repr(raised.value) == str(raised.value)
+
+
+def test_payment_required_error_without_response_uses_402_response() -> None:
+    assert litellm.PaymentRequiredError("x", "m", "p").response.status_code == 402
 
 
 def test_a_minimax_bad_key_is_an_authentication_error(quiet_exception_mapping):

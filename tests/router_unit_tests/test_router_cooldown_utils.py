@@ -279,12 +279,20 @@ def test_is_cooldown_required_for_account_errors(testing_litellm_router, excepti
 
 @pytest.mark.parametrize("allowed_fails", (None, 0))
 def test_single_deployment_402_does_not_cooldown(
-    single_deployment_router: Router, allowed_fails: int | None
+    allowed_fails: int | None,
 ) -> None:
-    single_deployment_router.allowed_fails = allowed_fails
     assert (
         _should_cooldown_deployment(
-            single_deployment_router,
+            Router(
+                model_list=[
+                    {
+                        "model_name": "gpt-5-mini",
+                        "litellm_params": {"model": "gpt-5-mini"},
+                        "model_info": {"id": "dep-1"},
+                    },
+                ],
+                allowed_fails=allowed_fails,
+            ),
             "dep-1",
             402,
             litellm.PaymentRequiredError(

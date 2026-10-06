@@ -582,15 +582,29 @@ class PaymentRequiredError(BadRequestError):
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
     ) -> None:
+        response_is_valid: Final = (
+            response is not None
+            and isinstance(response, httpx.Response)
+            and hasattr(response, "_request")
+            and getattr(response, "_request", None) is not None
+        )
+        response_for_parent: Final = (
+            response
+            if response_is_valid
+            else httpx.Response(
+                status_code=402,
+                request=httpx.Request(method="GET", url="https://litellm.ai"),
+            )
+        )
         super().__init__(
             message=message,
             model=model,
             llm_provider=llm_provider,
-            response=response,
+            response=response_for_parent,
             litellm_debug_info=litellm_debug_info,
         )
         self.status_code = 402
-        self.message = f"litellm.PaymentRequiredError: {self.message}"
+        self.message = f"litellm.PaymentRequiredError: {message}"
 
     def __str__(self) -> str:
         return (
