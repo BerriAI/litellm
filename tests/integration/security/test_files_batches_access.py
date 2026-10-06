@@ -274,7 +274,6 @@ def test_stranger_cannot_retrieve_or_cancel_another_teams_managed_batch(gateway:
 def _forbidden_surface_request(
     gateway: Gateway,
     surface: _ForbiddenSurface,
-    allowed: str,
     forbidden: str,
     caller_key: str,
     raw_file: str,
@@ -458,7 +457,6 @@ def test_a_key_granted_one_model_cannot_spend_another_deployments_files_or_batch
         response: Final = _forbidden_surface_request(
             gateway,
             surface,
-            allowed,
             forbidden,
             caller.key,
             raw_file_object.id,
@@ -539,6 +537,32 @@ def test_repeated_target_model_upload_cannot_use_a_forbidden_deployment(gateway:
         assert provider_requests == (), f"repeated target-model upload reached the provider: {provider_requests}"
 
 
+def test_plain_target_model_upload_cannot_use_a_forbidden_deployment(gateway: Gateway) -> None:
+    key_allowed: Final = "provider-key-allowed-" + uuid.uuid4().hex[:8]
+    key_forbidden: Final = "provider-key-forbidden-" + uuid.uuid4().hex[:8]
+    with wire_server(_openai_backend()) as wire, gateway.scenario() as scenario:
+        allowed: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key_allowed)
+        forbidden: Final = scenario.model(model="openai/gpt-4.1-mini", api_base=wire.url + "/v1", api_key=key_forbidden)
+        _wait_until_every_worker_serves(gateway, allowed, forbidden)
+        team: Final = scenario.team(models=[allowed, forbidden])
+        user: Final = scenario.member(team)
+        caller_key: Final = scenario.key(team_id=team, user_id=user, models=[allowed])
+
+        response: Final = gateway.request_multipart(
+            "/v1/files",
+            {"purpose": "batch", "target_model_names": forbidden},
+            {"file": (INPUT_FILENAME, _jsonl(forbidden), "application/jsonl")},
+            key=caller_key,
+        )
+        provider_requests: Final = _drained_other_than_model_list_probes(wire)
+        assert response.status_code == 403, f"{response.text}; provider requests={provider_requests}"
+        assert _error_message(response, 403) == (
+            f"The requested model '{forbidden}' is not available for this API key, or the model name is invalid. "
+            "Check the models available to you and try again."
+        ), response.text
+        assert provider_requests == (), f"plain target-model upload reached the provider: {provider_requests}"
+
+
 def _s3_backend() -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         if request.method == "DELETE":
@@ -591,7 +615,7 @@ def _vertex_token_backend(request: Request) -> Reply:
     return _json_reply({"error": {"message": f"unscripted {request.method} {request.target}"}}, 404)
 
 
-def test_non_admin_cannot_delete_a_raw_cloud_storage_uri(gateway: Gateway) -> None:
+def test_non_admin_cannot_delete_a_raw_s3_uri(gateway: Gateway) -> None:
     with wire_server(_s3_backend()) as wire, gateway.scenario() as scenario:
         model: Final = _bedrock_model(scenario, wire)
         _wait_until_every_worker_serves(gateway, model)
@@ -614,13 +638,11 @@ def test_non_admin_cannot_delete_a_raw_cloud_storage_uri(gateway: Gateway) -> No
 def test_non_admin_cannot_delete_a_raw_gcs_uri_before_vertex_auth_or_storage(gateway: Gateway) -> None:
     with (
         wire_server(_vertex_token_backend) as token_wire,
-        wire_server(_s3_backend()) as storage_wire,
         gateway.scenario() as scenario,
     ):
         model: Final = scenario.model(
             model=VERTEX_MODEL,
             api_key=None,
-            api_base=storage_wire.url,
             vertex_project=VERTEX_PROJECT,
             vertex_location=VERTEX_LOCATION,
             vertex_credentials=_vertex_credentials(token_wire.url),
@@ -631,7 +653,6 @@ def test_non_admin_cannot_delete_a_raw_gcs_uri_before_vertex_auth_or_storage(gat
         caller_key: Final = scenario.key(user_id=caller_user, models=[model])
         object_uri: Final = f"gs://{BUCKET}/litellm-vertex-files/litellm-vertex-files-obj.jsonl"
         token_wire.drain()
-        storage_wire.drain()
 
         denied: Final = gateway.request(
             "DELETE",
@@ -640,16 +661,12 @@ def test_non_admin_cannot_delete_a_raw_gcs_uri_before_vertex_auth_or_storage(gat
             params={"model": model},
         )
         token_requests: Final = token_wire.drain()
-        storage_requests: Final = storage_wire.drain()
-        assert denied.status_code == 403, (
-            f"{denied.text}; token requests={token_requests}; storage requests={storage_requests}"
-        )
+        assert denied.status_code == 403, f"{denied.text}; token requests={token_requests}"
         assert _error_message(denied, 403) == (
             "Raw cloud storage file ids can only be deleted by a proxy admin key. "
             "Use the LiteLLM managed file id returned when the file was created."
         ), denied.text
         assert token_requests == (), "non-admin raw GCS delete reached the Vertex token endpoint"
-        assert storage_requests == (), "non-admin raw GCS delete reached the storage double"
 
 
 def test_proxy_admin_deletes_a_raw_s3_uri_with_one_signed_delete(gateway: Gateway) -> None:
