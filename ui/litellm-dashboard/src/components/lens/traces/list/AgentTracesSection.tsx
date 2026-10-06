@@ -57,11 +57,11 @@ interface InvestigateActionProps {
   zoom: TimeWindow | null;
 }
 
-/** Hidden while a search or status filter narrows the runs, since an investigation cannot express either. */
+/** Investigations only look back from now, so this hides for a search, a status filter, or a window that ends earlier. */
 function InvestigateAction({ onInvestigate, agent, query, status, range, zoom }: InvestigateActionProps) {
-  const narrowed = query.trim() !== "" || status !== "all";
+  const { startMs, endMs } = zoom ?? range;
+  const narrowed = query.trim() !== "" || status !== "all" || endMs < moment().startOf("minute").valueOf();
   if (!onInvestigate || !agent || narrowed) return null;
-  const startMs = (zoom ?? range).startMs;
   const investigate = () =>
     onInvestigate({ agent, lookbackHours: Math.max(1, Math.ceil((Date.now() - startMs) / HOUR_MS)) });
   return (

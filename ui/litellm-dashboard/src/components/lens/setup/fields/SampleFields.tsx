@@ -26,7 +26,7 @@ interface RunCountProps {
   readonly onBlur: () => void;
 }
 
-/** Shows how many runs will be analyzed; typing a smaller number caps it, and a cap that limits nothing is dropped. */
+/** Shows how many runs will be analyzed; typing a smaller number caps it. A larger cap stays, since the count it is compared against can be stale. */
 function RunCount({ cap, sampled, onCapChange, onBlur }: RunCountProps) {
   const [typing, setTyping] = useState<string | null>(null);
   const analyzed = sampled === undefined ? cap : Math.min(sampled, cap ?? Infinity);
@@ -34,7 +34,6 @@ function RunCount({ cap, sampled, onCapChange, onBlur }: RunCountProps) {
   const shown = typing ?? analyzed?.toLocaleString() ?? "";
   const finishTyping = () => {
     setTyping(null);
-    if (cap != null && sampled !== undefined && cap >= sampled) onCapChange(null);
     onBlur();
   };
   return (

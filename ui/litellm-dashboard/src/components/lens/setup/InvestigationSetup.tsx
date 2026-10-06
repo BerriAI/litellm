@@ -105,11 +105,11 @@ export function InvestigationSetup(props: SetupProps) {
 
 /** Writes the draft to the URL once typing pauses; only this empty component re-renders per keystroke. */
 function DraftUrlSync({ defaultSource }: { defaultSource: Settings["source"] }) {
-  const [name, selection, context, watching, questions, repeat, interval] = useWatch<
+  const [name, selection, context, watching, questions, repeat, interval, selectedModel, budget] = useWatch<
     InvestigationInput,
     typeof DRAFT_FIELDS
   >({ name: DRAFT_FIELDS });
-  const draft = { name, selection, context, watching, questions, repeat, interval };
+  const draft = { name, selection, context, watching, questions, repeat, interval, selectedModel, budget };
   const { value } = useDebouncedValue(draft, DRAFT_URL_DEBOUNCE_MS);
   const { saveDraft } = useSetupDraftRoute(defaultSource);
   useEffect(() => saveDraft(value), [value, saveDraft]);

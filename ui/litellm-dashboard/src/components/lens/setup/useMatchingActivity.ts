@@ -22,6 +22,7 @@ export function useDropPicks(): () => void {
   const { getValues, setValue } = useFormContext<InvestigationInput>();
   return useCallback(() => {
     if (getValues("selection.execution_ids").length) setValue("selection.execution_ids", []);
+    if (getValues("manualSelection")) setValue("manualSelection", false);
   }, [getValues, setValue]);
 }
 
@@ -169,7 +170,10 @@ export function useMatchingActivity(): MatchingActivity {
     (id: string, checked: boolean) => setExecutionIds(checked ? [...ids, id] : ids.filter((other) => other !== id)),
     [ids, setExecutionIds],
   );
-  const clear = useCallback(() => setExecutionIds([]), [setExecutionIds]);
+  const clear = useCallback(() => {
+    setValue("manualSelection", false);
+    setExecutionIds([]);
+  }, [setExecutionIds, setValue]);
   const { hasNextPage, isFetching, fetchNextPage } = preview;
   const loadMore = useCallback(() => {
     if (hasNextPage && !isFetching) void fetchNextPage({ cancelRefetch: false });

@@ -39,6 +39,8 @@ export const SETUP_DRAFT_PARSERS = {
   checks: parseAsArrayOf(parseAsString).withDefault([]),
   monitor: parseAsBoolean.withDefault(NEW_DRAFT.repeat),
   every: parseAsInteger.withDefault(NEW_DRAFT.interval),
+  model: parseAsString,
+  budget: parseAsFloat.withDefault(NEW_DRAFT.budget),
 };
 
 export const SETUP_STEP_PARSERS = { step: parseAsStringLiteral(SETUP_STEPS) };
@@ -51,7 +53,17 @@ export const SETUP_KEYS = [...Object.keys(SETUP_DRAFT_PARSERS), ...Object.keys(S
 export type SetupDraftParams = inferParserType<typeof SETUP_DRAFT_PARSERS>;
 type SetupDraftUpdate = Nullable<SetupDraftParams>;
 
-export const DRAFT_FIELDS = ["name", "selection", "context", "watching", "questions", "repeat", "interval"] as const;
+export const DRAFT_FIELDS = [
+  "name",
+  "selection",
+  "context",
+  "watching",
+  "questions",
+  "repeat",
+  "interval",
+  "selectedModel",
+  "budget",
+] as const;
 export type DraftFields = Pick<InvestigationInput, (typeof DRAFT_FIELDS)[number]>;
 
 const filterParam = ({ key, value }: Filter) => `${key}=${value}`;
@@ -81,6 +93,8 @@ export function draftFromParams(params: SetupDraftParams, defaultSource: Source 
     questions: params.checks.map((instruction) => ({ id: crypto.randomUUID(), instruction, enabled: true })),
     repeat: params.monitor,
     interval: params.every,
+    selectedModel: params.model,
+    budget: params.budget,
   };
 }
 
@@ -104,6 +118,8 @@ export function paramsFromDraft(draft: DraftFields, defaultSource: Source = "tra
     checks: draft.questions.map((check) => check.instruction).filter((instruction) => instruction.trim()),
     monitor: draft.repeat,
     every: finite(draft.interval),
+    model: draft.selectedModel,
+    budget: finite(draft.budget),
   };
 }
 

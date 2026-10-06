@@ -36,6 +36,8 @@ describe("setup draft params", () => {
       questions: [{ id: "c1", instruction: "Quotes a price, then changes it", enabled: true }],
       repeat: !blank.repeat,
       interval: 60,
+      selectedModel: "gpt-4o-mini",
+      budget: 25.5,
     };
     const restored = draftFromParams(fromUrl(toUrl(paramsFromDraft(edited))));
     expect({ ...restored, questions: restored.questions.map((check) => check.instruction) }).toEqual({

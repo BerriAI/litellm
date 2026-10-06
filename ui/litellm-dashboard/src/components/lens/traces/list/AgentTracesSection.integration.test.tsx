@@ -84,7 +84,7 @@ describe("AgentTracesSection", () => {
     });
   });
 
-  it("offers to investigate the agent-filtered runs over the shown range, only while that filter alone narrows them", async () => {
+  it("offers to investigate the agent-filtered runs over the shown range, only while that filter alone narrows them up to now", async () => {
     vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-01T00:00:00Z") });
     vi.mocked(agentTraceListCall).mockResolvedValue(traceList as TracePage);
     const user = userEvent.setup();
@@ -106,6 +106,7 @@ describe("AgentTracesSection", () => {
       "",
       "?agent=support_triage_agent&q=status:error",
       "?agent=support_triage_agent&status=error",
+      `?agent=support_triage_agent&from=${Date.parse("2026-09-30T06:00Z")}&to=${Date.parse("2026-09-30T12:00Z")}`,
     ]) {
       const view = renderFiltered(searchParams);
       expect(await screen.findByRole("combobox", { name: "Search runs" })).toBeInTheDocument();

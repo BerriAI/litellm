@@ -79,7 +79,7 @@ beforeEach(() => {
   proxy.post.mockResolvedValue({ eligible: 1, selected: 1, executions: [] });
 });
 describe("Investigation setup", () => {
-  it("preserves saved manual run selections when editing and lets the preview footer clear them", async () => {
+  it("preserves saved manual run selections when editing and lets the preview footer clear them back to every match", async () => {
     const user = userEvent.setup();
     proxy.post.mockResolvedValue({
       eligible: 2,
@@ -104,10 +104,10 @@ describe("Investigation setup", () => {
     expect(preview.getByText("1 selected for analysis")).toBeVisible();
     await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled());
     await user.click(preview.getByRole("button", { name: "Clear 1 selected runs" }));
-    expect(preview.getByRole("checkbox", { name: "Select Saved run" })).not.toBeChecked();
+    expect(preview.queryByRole("checkbox", { name: "Select Saved run" })).not.toBeInTheDocument();
     expect(preview.queryByRole("button", { name: /Clear/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("Choose at least one run or turn off individual selection");
-    expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    expect(screen.queryByText("Choose at least one run or turn off individual selection")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled());
   });
 
   it.each([
@@ -143,6 +143,11 @@ describe("Investigation setup", () => {
     expect(preview.getByRole("button", { name: "Clear 1 selected runs" })).toBeVisible();
     change();
     await waitFor(() => expect(preview.queryByRole("button", { name: /Clear/ })).not.toBeInTheDocument());
+    expect(screen.queryByText("Choose at least one run or turn off individual selection")).not.toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save changes" })).toBeEnabled());
   });
 
   it("preserves check identity and disabled state when a check is edited", async () => {
@@ -597,7 +602,7 @@ describe("Sample", () => {
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ sample_percent: 3, sample_size: 25 }));
   });
 
-  it("drops a cap that no longer limits anything once the field is left", async () => {
+  it("shows a cap that limits nothing as the sampled count without the capped badge", async () => {
     const user = userEvent.setup();
     proxy.post.mockResolvedValue({ eligible: 40, selected: 40, executions: [run("one")] });
     renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />);
