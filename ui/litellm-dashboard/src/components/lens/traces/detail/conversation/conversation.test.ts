@@ -693,6 +693,34 @@ describe("coding sessions", () => {
     },
   );
 
+  it.each([
+    { secondSession: "first", expected: ["Denied in first session"] },
+    { secondSession: "second", expected: ["Denied in first session", "Denied in second session"] },
+  ])("scopes repeated unexecuted results to session $secondSession", ({ secondSession, expected }) => {
+    const bodies = ["first-body", "second-body"].map((span_id) => ({
+      ...root,
+      span_id,
+      framework: "claude-code",
+      type: "framework" as const,
+      name: "claude_code.api_request_body",
+    }));
+    const details = new Map(
+      bodies.map((body, index) => [
+        body.span_id,
+        {
+          ...detail(body.span_id, "", ""),
+          attributes: {
+            "session.id": index === 0 ? "first" : secondSession,
+            "lens.content.unexecuted_tool_results": JSON.stringify([
+              { id: "reused-call", content: `Denied in ${index === 0 ? "first" : "second"} session`, is_error: true },
+            ]),
+          },
+        },
+      ]),
+    );
+    expect(buildConversation(bodies, details, true).map((item) => item.toolResult)).toEqual(expected);
+  });
+
   it("uses canonical native tool content without browser supplements overriding it", () => {
     const tool = {
       ...root,

@@ -123,6 +123,7 @@ export interface ConversationItem {
   messages: TraceMessage[];
   toolCall?: TraceToolCall;
   toolResult?: string;
+  toolResultIsError?: boolean;
   toolAttempt?: { isError: boolean; resultStatus: "recorded" | "conflicting" | "not_recorded" };
   inputWarning?: string;
   contentWarning?: string;
@@ -166,10 +167,11 @@ function toolItem(
     detail.attributes["lens.content.input_status"] === "conflicting"
       ? "Conflicting tool arguments were recorded. Inspect the capture source spans."
       : undefined;
+  const toolResultIsError = detail.attributes["lens.content.tool_result_is_error"] === "1";
   const toolAttempt: ConversationItem["toolAttempt"] =
     detail.attributes["lens.content.execution_status"] === "not_recorded"
       ? {
-          isError: detail.attributes["lens.content.tool_result_is_error"] === "1",
+          isError: toolResultIsError,
           resultStatus: status === "recorded" || status === "conflicting" ? status : "not_recorded",
         }
       : undefined;
@@ -184,6 +186,7 @@ function toolItem(
     messages: [],
     toolCall: call,
     toolResult: result,
+    toolResultIsError,
     toolAttempt,
     inputWarning,
     contentWarning,
@@ -343,9 +346,11 @@ export function buildConversation(
   for (const event of events) {
     const { span } = event;
     if (isClaudeSupplement(span)) {
-      for (const result of unexecutedToolResults(details.get(span.span_id)!)) {
-        if (attempts.has(result.id)) continue;
-        attempts.add(result.id);
+      const detail = details.get(span.span_id)!;
+      for (const result of unexecutedToolResults(detail)) {
+        const attemptKey = JSON.stringify([detail.attributes["session.id"] ?? "", result.id]);
+        if (attempts.has(attemptKey)) continue;
+        attempts.add(attemptKey);
         const attempt: ConversationItem = {
           id: `${span.span_id}-${result.id}`,
           span,

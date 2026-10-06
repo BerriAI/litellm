@@ -380,6 +380,29 @@ describe("TraceConversation", () => {
     },
   );
 
+  it("shows executed tool failures recorded only in canonical result evidence", async () => {
+    vi.mocked(agentTraceSpanCall).mockResolvedValue({
+      ...toolDetail,
+      output: "File access was denied",
+      attributes: {
+        "lens.content.execution_status": "recorded",
+        "lens.content.output_status": "recorded",
+        "lens.content.tool_result_is_error": "1",
+      },
+    });
+    renderWithProviders(
+      <TraceConversation trace={{ ...trace, spans: [tool] }} accessToken="test" onOpenStep={vi.fn()} />,
+    );
+    expect(await screen.findByText("Failed")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Collapse read_file tool call" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByText("File access was denied")).toBeVisible();
+    expect(screen.queryByText("Completed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Execution not recorded")).not.toBeInTheDocument();
+  });
+
   it("loads twenty span details initially and pages conversation entries on demand", async () => {
     const user = userEvent.setup();
     const spans = [
