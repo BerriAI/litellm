@@ -1,9 +1,10 @@
 import json
+import math
 import uuid
 from email.message import Message
 from email.parser import BytesParser
 from email.policy import HTTP
-from typing import Final
+from typing import Final, cast
 
 import httpx
 import pytest
@@ -165,6 +166,7 @@ def test_audio_transcription_verbose_json_forwards_every_form_field_and_returns_
     gateway: Gateway,
 ) -> None:
     call_id: Final = f"audio-transcription-{uuid.uuid4().hex}"
+    wav: Final = _WAV_BYTES + uuid.uuid4().bytes
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
@@ -172,7 +174,8 @@ def test_audio_transcription_verbose_json_forwards_every_form_field_and_returns_
         assert request.headers["authorization"] == "Bearer synthetic-openai-key"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == _VERBOSE_TEXT_PARTS
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", _WAV_BYTES),)
+        # the proxy re-derives the file part content type from the filename, ignoring the client's
+        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
         return Reply(body=json.dumps(_VERBOSE_TRANSCRIPT).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -181,12 +184,13 @@ def test_audio_transcription_verbose_json_forwards_every_form_field_and_returns_
             api_base=f"{wire.url}/v1",
             api_key="synthetic-openai-key",
             input_cost_per_token=0.000001,
+            input_cost_per_audio_token=0.000003,
             output_cost_per_token=0.000002,
         )
         with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
-                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                file=("a.wav", wav, "audio/wav"),
                 temperature=0.2,
                 language="en",
                 prompt="hi",
@@ -199,20 +203,30 @@ def test_audio_transcription_verbose_json_forwards_every_form_field_and_returns_
         assert json.loads(response.content) == _VERBOSE_TRANSCRIPT, response.text
         _VerboseTranscript.model_validate_json(response.content)
         assert response.headers["x-litellm-call-id"] == call_id, response.text
-        assert float(response.headers["x-litellm-response-cost"]) >= 0, response.text
+        usage: Final = cast("dict[str, object]", _VERBOSE_TRANSCRIPT["usage"])
+        token_details: Final = cast("dict[str, int]", usage["input_token_details"])
+        assert math.isclose(
+            float(response.headers["x-litellm-response-cost"]),
+            token_details["audio_tokens"] * 0.000003
+            + token_details["text_tokens"] * 0.000001
+            + cast(int, usage["output_tokens"]) * 0.000002,
+            rel_tol=1e-9,
+        ), response.text
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/transcriptions")]
 
 
 def test_audio_transcription_reaches_upstream_identically_on_prefixed_and_unprefixed_routes(
     gateway: Gateway,
 ) -> None:
+    wav: Final = _WAV_BYTES + uuid.uuid4().bytes
+
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/audio/transcriptions"
         assert request.headers["authorization"] == "Bearer synthetic-openai-key"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == _VERBOSE_TEXT_PARTS
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", _WAV_BYTES),)
+        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
         return Reply(body=json.dumps(_VERBOSE_TRANSCRIPT).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -229,7 +243,7 @@ def test_audio_transcription_reaches_upstream_identically_on_prefixed_and_unpref
                 return json.loads(
                     sdk.audio.transcriptions.with_raw_response.create(
                         model=model,
-                        file=("a.wav", _WAV_BYTES, "audio/wav"),
+                        file=("a.wav", wav, "audio/wav"),
                         temperature=0.2,
                         language="en",
                         prompt="hi",
@@ -250,12 +264,14 @@ def test_audio_transcription_reaches_upstream_identically_on_prefixed_and_unpref
 
 
 def test_audio_transcription_json_format_returns_text_and_usage(gateway: Gateway) -> None:
+    wav: Final = _WAV_BYTES + uuid.uuid4().bytes
+
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/audio/transcriptions"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == (("model", "whisper-1"), ("response_format", "json"))
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", _WAV_BYTES),)
+        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
         return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -265,7 +281,7 @@ def test_audio_transcription_json_format_returns_text_and_usage(gateway: Gateway
         with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
-                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                file=("a.wav", wav, "audio/wav"),
                 response_format="json",
             )
         assert response.status_code == 200, response.text
@@ -274,6 +290,8 @@ def test_audio_transcription_json_format_returns_text_and_usage(gateway: Gateway
 
 
 def test_audio_transcription_forwards_nested_and_repeated_bracket_fields_verbatim(gateway: Gateway) -> None:
+    wav: Final = _WAV_BYTES + uuid.uuid4().bytes
+
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/audio/transcriptions"
@@ -291,7 +309,7 @@ def test_audio_transcription_forwards_nested_and_repeated_bracket_fields_verbati
             ("model", "gpt-4o-transcribe"),
             ("response_format", "json"),
         )
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", _WAV_BYTES),)
+        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
         return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -306,7 +324,7 @@ def test_audio_transcription_forwards_nested_and_repeated_bracket_fields_verbati
         with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
-                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                file=("a.wav", wav, "audio/wav"),
                 response_format="json",
                 chunking_strategy={
                     "type": "server_vad",
@@ -327,13 +345,14 @@ def test_audio_transcription_stream_returns_server_sent_events(gateway: Gateway)
         "BUG: stream=true transcriptions reach the upstream but its SSE body comes back as application/json "
         '{"text": "data: ..."}, so OpenAI SDK stream=True callers get no transcript events'
     )
+    wav: Final = _WAV_BYTES + uuid.uuid4().bytes
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/audio/transcriptions"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == (("model", "gpt-4o-transcribe"), ("stream", "true"))
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", _WAV_BYTES),)
+        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
         return Reply(
             chunks=(
                 b'data: {"type":"transcript.text.delta","delta":"hello"}\n\n',
@@ -351,7 +370,7 @@ def test_audio_transcription_stream_returns_server_sent_events(gateway: Gateway)
         with _sdk(gateway, "/v1", gateway.key) as sdk:
             with sdk.audio.transcriptions.with_streaming_response.create(
                 model=model,
-                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                file=("a.wav", wav, "audio/wav"),
                 stream=True,
             ) as raw:
                 assert raw.headers["content-type"].startswith("text/event-stream")
@@ -359,7 +378,7 @@ def test_audio_transcription_stream_returns_server_sent_events(gateway: Gateway)
                 event.to_dict()
                 for event in sdk.audio.transcriptions.create(
                     model=model,
-                    file=("a.wav", _WAV_BYTES, "audio/wav"),
+                    file=("a.wav", wav, "audio/wav"),
                     stream=True,
                 )
             )
@@ -385,6 +404,7 @@ def test_audio_transcription_stream_returns_server_sent_events(gateway: Gateway)
 
 def test_audio_transcription_applies_json_string_metadata_without_forwarding_it(gateway: Gateway) -> None:
     tag: Final = f"audio-metadata-{uuid.uuid4().hex}"
+    wav: Final = _WAV_BYTES + uuid.uuid4().bytes
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
@@ -392,7 +412,7 @@ def test_audio_transcription_applies_json_string_metadata_without_forwarding_it(
         assert request.headers["authorization"] == "Bearer synthetic-openai-key"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == (("model", "whisper-1"), ("response_format", "json"))
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", _WAV_BYTES),)
+        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
         return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -406,7 +426,7 @@ def test_audio_transcription_applies_json_string_metadata_without_forwarding_it(
                 "response_format": "json",
                 "metadata": json.dumps({"tags": [tag]}),
             },
-            {"file": ("a.wav", _WAV_BYTES, "audio/wav")},
+            {"file": ("a.wav", wav, "audio/wav")},
         )
         assert response.status_code == 200, response.text
         assert response.json() == _JSON_TRANSCRIPT, response.text
@@ -428,12 +448,14 @@ def test_audio_transcription_applies_json_string_metadata_without_forwarding_it(
 
 @pytest.mark.parametrize("response_format", ("text", "srt", "vtt"))
 def test_audio_transcription_forwards_plain_response_format_to_upstream(gateway: Gateway, response_format: str) -> None:
+    wav: Final = _WAV_BYTES + uuid.uuid4().bytes
+
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/v1/audio/transcriptions"
         parts: Final = _multipart_parts(request)
         assert _text_parts(parts) == (("model", "whisper-1"), ("response_format", response_format))
-        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", _WAV_BYTES),)
+        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
         return Reply(body=_PLAIN_TRANSCRIPTS[response_format].encode(), content_type="text/plain")
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -443,7 +465,7 @@ def test_audio_transcription_forwards_plain_response_format_to_upstream(gateway:
         with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
-                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                file=("a.wav", wav, "audio/wav"),
                 response_format=response_format,
             )
         assert response.status_code == 200, response.text
@@ -458,6 +480,7 @@ def test_audio_transcription_plain_response_format_returns_the_raw_transcript(
         "BUG: response_format=text/srt/vtt transcriptions return application/json "
         '{"text": ...} instead of the raw transcript, so the OpenAI SDK returns a JSON string as the transcript'
     )
+    wav: Final = _WAV_BYTES + uuid.uuid4().bytes
 
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
@@ -471,13 +494,179 @@ def test_audio_transcription_plain_response_format_returns_the_raw_transcript(
         with _sdk(gateway, "/v1", gateway.key) as sdk:
             response: Final = sdk.audio.transcriptions.with_raw_response.create(
                 model=model,
-                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                file=("a.wav", wav, "audio/wav"),
                 response_format=response_format,
             )
             assert response.headers["content-type"].startswith("text/plain"), response.text
             transcript: Final = sdk.audio.transcriptions.create(
                 model=model,
-                file=("a.wav", _WAV_BYTES, "audio/wav"),
+                file=("a.wav", wav, "audio/wav"),
                 response_format=response_format,
             )
         assert transcript == _PLAIN_TRANSCRIPTS[response_format]
+
+
+def test_audio_transcription_applies_json_string_litellm_metadata_without_forwarding_it(
+    gateway: Gateway,
+) -> None:
+    tag: Final = f"audio-metadata-{uuid.uuid4().hex}"
+    wav: Final = _WAV_BYTES + uuid.uuid4().bytes
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/audio/transcriptions"
+        assert request.headers["authorization"] == "Bearer synthetic-openai-key"
+        parts: Final = _multipart_parts(request)
+        assert _text_parts(parts) == (("model", "whisper-1"), ("response_format", "json"))
+        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
+        return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request_multipart(
+            "/v1/audio/transcriptions",
+            {
+                "model": model,
+                "response_format": "json",
+                "litellm_metadata": json.dumps({"tags": [tag]}),
+            },
+            {"file": ("a.wav", wav, "audio/wav")},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == _JSON_TRANSCRIPT, response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/transcriptions")]
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_tags FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
+                (response.headers["x-litellm-call-id"],),
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        request_tags: Final = rows[0]["request_tags"]
+        assert isinstance(request_tags, list), rows
+        assert tuple(
+            value for value in request_tags if isinstance(value, str) and not value.startswith("User-Agent: ")
+        ) == (tag,), rows
+
+
+@pytest.mark.parametrize("metadata_field", ("metadata", "litellm_metadata"))
+def test_audio_transcription_consumes_bracketed_form_metadata_tags(gateway: Gateway, metadata_field: str) -> None:
+    pytest.skip(
+        "BUG: multipart metadata[tags]/litellm_metadata[tags] on /v1/audio/transcriptions reaches the upstream "
+        "as an extra text part and the tag never lands in LiteLLM_SpendLogs.request_tags"
+    )
+    tag: Final = f"audio-metadata-{uuid.uuid4().hex}"
+    wav: Final = _WAV_BYTES + uuid.uuid4().bytes
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/audio/transcriptions"
+        parts: Final = _multipart_parts(request)
+        assert _text_parts(parts) == (("model", "whisper-1"), ("response_format", "json"))
+        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
+        return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request_multipart(
+            "/v1/audio/transcriptions",
+            {
+                "model": model,
+                "response_format": "json",
+                f"{metadata_field}[tags]": tag,
+            },
+            {"file": ("a.wav", wav, "audio/wav")},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == _JSON_TRANSCRIPT, response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/transcriptions")]
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_tags FROM "LiteLLM_SpendLogs" WHERE request_id = %s',
+                (response.headers["x-litellm-call-id"],),
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        request_tags: Final = rows[0]["request_tags"]
+        assert isinstance(request_tags, list), rows
+        assert tuple(
+            value for value in request_tags if isinstance(value, str) and not value.startswith("User-Agent: ")
+        ) == (tag,), rows
+
+
+def test_audio_transcription_preserves_the_client_file_content_type(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: the proxy discards the client's file part content type and re-derives it from the filename, "
+        "so file=('recording', ..., 'audio/wav') reaches the upstream as application/octet-stream"
+    )
+    wav: Final = _WAV_BYTES + uuid.uuid4().bytes
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/audio/transcriptions"
+        parts: Final = _multipart_parts(request)
+        assert _file_parts(parts) == (("file", "recording", "audio/wav", wav),)
+        return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/whisper-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request_multipart(
+            "/v1/audio/transcriptions",
+            {"model": model, "response_format": "json"},
+            {"file": ("recording", wav, "audio/wav")},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == _JSON_TRANSCRIPT, response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/transcriptions")]
+
+
+def test_audio_transcription_bills_audio_tokens_at_the_input_rate_when_no_audio_rate_is_set(
+    gateway: Gateway,
+) -> None:
+    pytest.skip(
+        "BUG: with only input_cost_per_token set, transcription audio tokens are billed at 0, so "
+        "x-litellm-response-cost is 1e-05 instead of 2e-05 for 10 audio, 2 text and 4 output tokens"
+    )
+    wav: Final = _WAV_BYTES + uuid.uuid4().bytes
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/audio/transcriptions"
+        parts: Final = _multipart_parts(request)
+        assert _text_parts(parts) == (("model", "whisper-1"), ("response_format", "json"))
+        assert _file_parts(parts) == (("file", "a.wav", "audio/x-wav", wav),)
+        return Reply(body=json.dumps(_JSON_TRANSCRIPT).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/whisper-1",
+            api_base=f"{wire.url}/v1",
+            api_key="synthetic-openai-key",
+            input_cost_per_token=0.000001,
+            output_cost_per_token=0.000002,
+        )
+        response: Final = gateway.request_multipart(
+            "/v1/audio/transcriptions",
+            {"model": model, "response_format": "json"},
+            {"file": ("a.wav", wav, "audio/wav")},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == _JSON_TRANSCRIPT, response.text
+        usage: Final = cast("dict[str, object]", _JSON_TRANSCRIPT["usage"])
+        token_details: Final = cast("dict[str, int]", usage["input_token_details"])
+        assert math.isclose(
+            float(response.headers["x-litellm-response-cost"]),
+            token_details["audio_tokens"] * 0.000001
+            + token_details["text_tokens"] * 0.000001
+            + cast(int, usage["output_tokens"]) * 0.000002,
+            rel_tol=1e-9,
+        ), response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/transcriptions")]

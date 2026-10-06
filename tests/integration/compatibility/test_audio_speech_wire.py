@@ -115,3 +115,70 @@ def test_audio_speech_derives_the_media_type_from_the_requested_format(
         assert response.headers["content-type"] == media_type
         assert response.content == _SPEECH_BYTES
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/speech")]
+
+
+def test_audio_speech_forwards_stream_format_sse(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: speech stream_format='sse' is dropped from the upstream JSON body, which arrives as "
+        "{input, model, voice}, and the SSE reply is relabelled audio/mpeg"
+    )
+    sse_body: Final = (
+        b'data: {"type":"speech.audio.delta","audio":"aGVsbG8="}\n\ndata: {"type":"speech.audio.done"}\n\n'
+    )
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/audio/speech"
+        assert json.loads(request.body) == {
+            "model": "gpt-4o-mini-tts",
+            "input": "hello",
+            "voice": "alloy",
+            "stream_format": "sse",
+        }
+        return Reply(chunks=(sse_body,), content_type="text/event-stream")
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/gpt-4o-mini-tts", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        with _sdk(gateway, "/v1", gateway.key) as sdk:
+            response: Final = sdk.audio.speech.with_raw_response.create(
+                model=model,
+                input="hello",
+                voice="alloy",
+                stream_format="sse",
+            )
+        assert response.status_code == 200, response.read()
+        assert response.headers["content-type"].startswith("text/event-stream"), response.read()
+        assert response.content == sse_body
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/speech")]
+
+
+def test_audio_speech_forwards_object_form_voice(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: speech voice={'id': 'voice_123'} is rejected with 400 \"'voice' is required to be passed "
+        'as a string for OpenAI TTS" and never reaches the upstream'
+    )
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/audio/speech"
+        assert json.loads(request.body) == {
+            "model": "gpt-4o-mini-tts",
+            "input": "hello",
+            "voice": {"id": "voice_123"},
+        }
+        return Reply(body=_SPEECH_BYTES, content_type="audio/mpeg")
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/gpt-4o-mini-tts", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/audio/speech",
+            {"model": model, "input": "hello", "voice": {"id": "voice_123"}},
+        )
+        assert response.status_code == 200, response.text
+        assert response.content == _SPEECH_BYTES
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/audio/speech")]
