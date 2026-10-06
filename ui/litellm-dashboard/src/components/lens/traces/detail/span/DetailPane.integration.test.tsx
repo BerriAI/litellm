@@ -305,6 +305,13 @@ describe("DetailPane", () => {
     expect(await screen.findByText(reason, { selector: "p" })).toBeInTheDocument();
   });
 
+  it("keeps the Cost fact for a priced step that has no single spend log to link", () => {
+    const pricedFromRetries: SpanFields = { ...llmFields, spend: 0.0005, spend_log_request_id: null };
+    renderPane(spanRow(span(pricedFromRetries)));
+    expect(screen.queryByRole("button", { name: /Open LiteLLM spend log/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Cost").parentElement).toHaveTextContent("Cost$0.0005");
+  });
+
   it("summarizes a ×N group with its failure pattern", () => {
     const members = Array.from({ length: 12 }, (_, i) => {
       const timedOut: SpanFields = {
