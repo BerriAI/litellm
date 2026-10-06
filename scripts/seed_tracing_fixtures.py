@@ -42,6 +42,7 @@ SPEND_ROWS: Final = TypeAdapter(tuple[SpendLogRecord, ...])
 TRACE: Final = TypeAdapter(Trace)
 NANOSECOND_FIELDS: Final = frozenset({"startTimeUnixNano", "endTimeUnixNano", "timeUnixNano"})
 TRACE_ID_FIELDS: Final = frozenset({"traceId", "trace_id", "session_id"})
+TRACE_ID_ATTRIBUTES: Final = frozenset({"session.id"})
 SPAN_ID_FIELDS: Final = frozenset({"spanId", "parentSpanId", "span_id"})
 COPY_WINDOW_MS: Final = 24 * 60 * 60 * 1000
 LONG_SESSION_SOURCE: Final = "openai_agents_swarm"
@@ -191,6 +192,32 @@ def rebase(
     if isinstance(value, list):
         return [rebase(item, offset_ns, namespace, response_pattern) for item in value]
     if isinstance(value, dict):
+        attribute_key: Final = value.get("key")
+        attribute_value: Final = value.get("value")
+        session_id: Final = (
+            attribute_value.get("stringValue") if isinstance(attribute_value, dict) else None
+        )
+        if (
+            isinstance(attribute_key, str)
+            and attribute_key in TRACE_ID_ATTRIBUTES
+            and isinstance(attribute_value, dict)
+            and isinstance(session_id, str)
+        ):
+            return {
+                **{
+                    key: rebase(item, offset_ns, namespace, response_pattern, key)
+                    for key, item in value.items()
+                    if key != "value"
+                },
+                "value": {
+                    **{
+                        key: rebase(item, offset_ns, namespace, response_pattern, key)
+                        for key, item in attribute_value.items()
+                        if key != "stringValue"
+                    },
+                    "stringValue": seed_id(session_id, namespace, 32),
+                },
+            }
         return {key: rebase(item, offset_ns, namespace, response_pattern, key) for key, item in value.items()}
     return value
 

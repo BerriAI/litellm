@@ -2,38 +2,39 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Final, Literal
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm.proxy.roi_calculator.github import GitHubIssueSettings, GitHubPullListItem, SourceError, request_github
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.roi_calculator import ROISettings
 from litellm.types.roi_observed import ObservedIssue
 
 
-class _PageInfo(BaseModel):
+class _PageInfo(LiteLLMBaseModel):
     hasNextPage: bool = False
     endCursor: str | None = None
 
 
-class _Author(BaseModel):
+class _Author(LiteLLMBaseModel):
     login: str
     kind: str = Field(alias="__typename")
     email: str | None = None
 
 
-class _Repository(BaseModel):
+class _Repository(LiteLLMBaseModel):
     nameWithOwner: str
 
 
-class _Label(BaseModel):
+class _Label(LiteLLMBaseModel):
     name: str
 
 
-class _Labels(BaseModel):
+class _Labels(LiteLLMBaseModel):
     nodes: tuple[_Label, ...] = ()
     pageInfo: _PageInfo = Field(default_factory=_PageInfo)
 
 
-class _Node(BaseModel):
+class _Node(LiteLLMBaseModel):
     number: int
     url: str
     title: str
@@ -69,17 +70,17 @@ class _Node(BaseModel):
         )
 
 
-class _Search(BaseModel):
+class _Search(LiteLLMBaseModel):
     issueCount: int
     pageInfo: _PageInfo
     nodes: tuple[_Node, ...]
 
 
-class _Data(BaseModel):
+class _Data(LiteLLMBaseModel):
     search: _Search
 
 
-class _Response(BaseModel):
+class _Response(LiteLLMBaseModel):
     data: _Data | None = None
     errors: tuple[object, ...] = ()
 

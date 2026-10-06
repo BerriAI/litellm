@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Annotated, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class TraceDetailRequest(BaseModel):
+class TraceDetailRequest(LiteLLMBaseModel):
     model_config = ConfigDict(
         frozen=True,
     )
@@ -17,7 +19,7 @@ class TraceDetailRequest(BaseModel):
     page_size: int | None = Field(None, ge=1, le=500)
 
 
-class TraceErrorPageRequest(BaseModel):
+class TraceErrorPageRequest(LiteLLMBaseModel):
     model_config = ConfigDict(
         frozen=True,
     )
@@ -26,7 +28,7 @@ class TraceErrorPageRequest(BaseModel):
     cursor: str | None = Field(None, max_length=512)
 
 
-class TraceListRequest(BaseModel):
+class TraceListRequest(LiteLLMBaseModel):
     model_config = ConfigDict(
         frozen=True,
     )
@@ -36,7 +38,7 @@ class TraceListRequest(BaseModel):
     cursor: str | None = Field(None, max_length=512)
 
 
-class TraceQueryRequest(BaseModel):
+class TraceQueryRequest(LiteLLMBaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -45,7 +47,7 @@ class TraceQueryRequest(BaseModel):
     sql: str
 
 
-class TraceSpanRequest(BaseModel):
+class TraceSpanRequest(LiteLLMBaseModel):
     model_config = ConfigDict(
         frozen=True,
     )

@@ -14,10 +14,12 @@ macro_rules_attribute.workspace = true
 schemars = { workspace = true, optional = true }
 indexmap = { version = "2", features = ["serde"] }
 litellm-llms-types.workspace = true
-opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "trace", "with-serde"] }
+opentelemetry-proto = { workspace = true, features = ["gen-tonic-messages", "trace", "logs", "with-serde"] }
 prost.workspace = true
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
+serde_with.workspace = true
+sha2.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 time.workspace = true
