@@ -1,7 +1,7 @@
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class ComplianceCheckResult(BaseModel):
+class ComplianceCheckResult(LiteLLMBaseModel):
     """Result of a single compliance check."""
 
     check_name: str
@@ -10,7 +10,7 @@ class ComplianceCheckResult(BaseModel):
     detail: str
 
 
-class ComplianceResponse(BaseModel):
+class ComplianceResponse(LiteLLMBaseModel):
     """Response from a compliance check endpoint."""
 
     compliant: bool
@@ -18,7 +18,7 @@ class ComplianceResponse(BaseModel):
     checks: list[ComplianceCheckResult]
 
 
-class ComplianceCheckRequest(BaseModel):
+class ComplianceCheckRequest(LiteLLMBaseModel):
     """Request payload for compliance check endpoints.
 
     Mirrors the spend log fields needed for compliance evaluation.

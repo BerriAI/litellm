@@ -13,16 +13,17 @@ from math import isfinite
 from types import MappingProxyType
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from litellm.llms.anthropic.prompt_cache_prediction import CountedBreakpoint, CountedPromptCachePlan
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import CacheCreationTokenDetails, PromptTokensDetailsWrapper, Usage
 
 MAX_CACHE_TTL: Final = 3600
 MAX_CACHE_ENTRIES: Final = 1024
 
 
-class BaselineObservation(BaseModel):
+class BaselineObservation(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     version: Literal[3] = 3
