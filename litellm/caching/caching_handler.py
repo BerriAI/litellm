@@ -110,12 +110,19 @@ def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
     return "choices" in cached_result
 
 
-def _is_completion_without_choices(result: object) -> bool:
+def _is_response_without_output(result: object) -> bool:
     if isinstance(result, (ModelResponse, TextCompletionResponse)):
         return len(result.choices) == 0
-    if isinstance(result, dict):
-        choices: Final = result.get("choices")
-        return isinstance(choices, list) and len(choices) == 0
+    if isinstance(result, ResponsesAPIResponse):
+        return len(result.output) == 0
+    if not isinstance(result, dict):
+        return False
+    if "choices" in result:
+        return result["choices"] == []
+    if result.get("object") == "response":
+        return result.get("output") == []
+    if result.get("type") == "message":
+        return result.get("content") == []
     return False
 
 
@@ -406,8 +413,8 @@ class LLMCachingHandler:
             print_verbose("Checking Sync Cache")
             with response_cache_phase("get"):
                 cached_result = litellm.cache.get_cache(**new_kwargs)
-            if _is_completion_without_choices(cached_result):
-                verbose_logger.debug("LiteLLM Cache: cached completion has no choices, treating it as a miss")
+            if _is_response_without_output(cached_result):
+                verbose_logger.debug("LiteLLM Cache: cached response has no output, treating it as a miss")
                 return CachingHandlerResponse(cached_result=None)
             if cached_result is not None:
                 if "detail" in cached_result:
@@ -847,8 +854,8 @@ class LLMCachingHandler:
                         cache_key=self.preset_cache_key,
                         **request_kwargs,
                     )
-        if _is_completion_without_choices(cached_result):
-            verbose_logger.debug("LiteLLM Cache: cached completion has no choices, treating it as a miss")
+        if _is_response_without_output(cached_result):
+            verbose_logger.debug("LiteLLM Cache: cached response has no output, treating it as a miss")
             return None
         return cached_result
 
@@ -1077,8 +1084,8 @@ class LLMCachingHandler:
 
         if litellm.cache is None:
             return
-        if _is_completion_without_choices(result):
-            verbose_logger.debug("LiteLLM Cache: not caching a completion with no choices")
+        if _is_response_without_output(result):
+            verbose_logger.debug("LiteLLM Cache: not caching a response with no output")
             return
         cache: Final = litellm.cache
 
@@ -1132,8 +1139,8 @@ class LLMCachingHandler:
         """
         if litellm.cache is None:
             return
-        if _is_completion_without_choices(result):
-            verbose_logger.debug("LiteLLM Cache: not caching a completion with no choices")
+        if _is_response_without_output(result):
+            verbose_logger.debug("LiteLLM Cache: not caching a response with no output")
             return
 
         new_kwargs: Final = kwargs.copy()

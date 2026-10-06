@@ -34,6 +34,7 @@ from litellm.types.utils import (
     Embedding,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from collections.abc import Awaitable, Callable
 from datetime import timedelta, datetime
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -2331,18 +2332,50 @@ def _unique_messages() -> list[dict[str, str]]:
     return [{"role": "user", "content": f"no choices {uuid.uuid4()}"}]
 
 
+async def aanthropic_messages(**kwargs: object) -> None:
+    return None
+
+
+def _responses_api_response_without_output() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id=f"resp_{uuid.uuid4()}", created_at=int(time.time()), status="incomplete", model="gpt-4o", object="response", output=[]
+    )
+
+
+def _anthropic_message_without_content() -> dict[str, object]:
+    return {"id": f"msg_{uuid.uuid4()}", "type": "message", "role": "assistant", "model": "claude-sonnet-5", "content": []}
+
+
+EmptyResult = ModelResponse | TextCompletionResponse | ResponsesAPIResponse | dict[str, object]
+EmptyResponseCase = tuple[EmptyResult, Callable[..., Awaitable[object]], str, dict[str, object]]
+
+
+def _empty_response_cases() -> list[EmptyResponseCase]:
+    return [
+        (litellm.ModelResponse(choices=[]), litellm.acompletion, CallTypes.acompletion.value, {"messages": _unique_messages()}),
+        (
+            litellm.TextCompletionResponse(choices=[]),
+            litellm.atext_completion,
+            CallTypes.atext_completion.value,
+            {"prompt": str(uuid.uuid4())},
+        ),
+        (_responses_api_response_without_output(), aresponses, CallTypes.aresponses.value, {"input": str(uuid.uuid4())}),
+        (
+            _anthropic_message_without_content(),
+            aanthropic_messages,
+            CallTypes.aanthropic_messages.value,
+            {"messages": _unique_messages(), "max_tokens": 16},
+        ),
+    ]
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "empty_result, original_function, call_type",
-    [
-        (litellm.ModelResponse(choices=[]), litellm.acompletion, CallTypes.acompletion.value),
-        (litellm.TextCompletionResponse(choices=[]), litellm.atext_completion, CallTypes.atext_completion.value),
-    ],
-)
-async def test_async_set_cache_skips_completion_without_choices(empty_result, original_function, call_type):
+@pytest.mark.parametrize("empty_result, original_function, call_type, kwargs", _empty_response_cases())
+async def test_async_set_cache_skips_response_without_output(
+    empty_result: EmptyResult, original_function: Callable[..., Awaitable[object]], call_type: str, kwargs: dict[str, object]
+):
     setup_cache()
     handler = LLMCachingHandler(original_function=original_function, request_kwargs={}, start_time=datetime.now())
-    kwargs = {"messages": _unique_messages()} if call_type == CallTypes.acompletion.value else {"prompt": str(uuid.uuid4())}
 
     await handler.async_set_cache(result=empty_result, original_function=original_function, kwargs=kwargs)
     await asyncio.gather(*_PENDING_CACHE_WRITES)
@@ -2360,7 +2393,29 @@ async def test_async_set_cache_skips_completion_without_choices(empty_result, or
 
 
 @pytest.mark.asyncio
-async def test_async_get_cache_treats_stored_completion_without_choices_as_miss():
+@pytest.mark.parametrize("empty_result, original_function, call_type, kwargs", _empty_response_cases())
+async def test_async_get_cache_treats_stored_response_without_output_as_miss(
+    empty_result: EmptyResult, original_function: Callable[..., Awaitable[object]], call_type: str, kwargs: dict[str, object]
+):
+    setup_cache()
+    stored = empty_result.model_dump_json() if hasattr(empty_result, "model_dump_json") else empty_result
+    await litellm.cache.async_add_cache(stored, **kwargs)
+    assert await litellm.cache.async_get_cache(**kwargs) is not None
+
+    handler = LLMCachingHandler(original_function=original_function, request_kwargs={}, start_time=datetime.now())
+    lookup = await handler._async_get_cache(
+        model="gpt-3.5-turbo",
+        original_function=original_function,
+        logging_obj=_completion_logging_obj(call_type),
+        start_time=datetime.now(),
+        call_type=call_type,
+        kwargs=kwargs,
+    )
+    assert lookup.cached_result is None
+
+
+@pytest.mark.asyncio
+async def test_async_get_cache_heals_stored_completion_without_choices():
     setup_cache()
     handler = LLMCachingHandler(original_function=litellm.acompletion, request_kwargs={}, start_time=datetime.now())
     kwargs = {"messages": _unique_messages()}
@@ -2387,7 +2442,7 @@ async def test_async_get_cache_treats_stored_completion_without_choices_as_miss(
     assert healed.choices[0].message.content == chat_completion_response.choices[0].message.content
 
 
-def test_sync_set_cache_skips_completion_without_choices():
+def test_sync_set_cache_skips_response_without_output():
     setup_cache()
     handler = LLMCachingHandler(original_function=completion, request_kwargs={}, start_time=datetime.now())
     kwargs = {"messages": _unique_messages()}
@@ -2406,7 +2461,7 @@ def test_sync_set_cache_skips_completion_without_choices():
     assert lookup.cached_result is None
 
 
-def test_sync_get_cache_treats_stored_completion_without_choices_as_miss():
+def test_sync_get_cache_heals_stored_completion_without_choices():
     setup_cache()
     handler = LLMCachingHandler(original_function=completion, request_kwargs={}, start_time=datetime.now())
     kwargs = {"messages": _unique_messages()}
