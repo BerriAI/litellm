@@ -1,6 +1,7 @@
 import json
 from unittest.mock import Mock, patch
 
+import httpx
 import pytest
 
 import litellm
@@ -236,3 +237,25 @@ def test_litellm_search_end_to_end(api_key, path: str, auth):
     assert call["headers"].get("Authorization") == auth
     assert call["json"] == {"query": "rust release", "max_results": 3}
     assert response.results[0].snippet == "Test page text"
+
+
+def test_litellm_search_surfaces_the_api_error_message():
+    # A non-2xx answer must reach the caller as Keenable's own message, never as a schema mismatch.
+    request = httpx.Request("POST", f"{DEFAULT_ROOT}/search/public")
+    rate_limited = httpx.Response(
+        429,
+        json={"error": "Rate limit exceeded", "message": "Public API hourly limit reached"},
+        request=request,
+    )
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+            side_effect=httpx.HTTPStatusError("429", request=request, response=rate_limited),
+        ),
+        pytest.raises(litellm.RateLimitError) as excinfo,
+    ):
+        litellm.search(query="rust release", search_provider="keenable")
+
+    assert "Public API hourly limit reached" in str(excinfo.value)
+    assert "set KEENABLE_API_KEY" in str(excinfo.value)
+    assert "does not match" not in str(excinfo.value)
