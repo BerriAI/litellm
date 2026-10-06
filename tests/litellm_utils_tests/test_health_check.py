@@ -79,73 +79,8 @@ async def test_openai_img_gen_health_check():
 # asyncio.run(test_openai_img_gen_health_check())
 
 
-@pytest.mark.skip(
-    reason="Azure DALL-E 3 model deployment is deprecated (410 ModelDeprecated)"
-)
-@pytest.mark.asyncio
-async def test_azure_img_gen_health_check():
-    """
-    Test Azure image generation health check with retry logic for transient errors.
-    Azure sometimes returns internal server errors which are transient and not something we can control.
-    """
-    litellm.turn_on_debug()
-    max_retries = 3
-    retry_delay = 1  # Start with 1 second delay
-
-    for attempt in range(max_retries):
-        response = await litellm.ahealth_check(
-            model_params={
-                "model": "azure/gpt-image-1",
-                "api_base": os.getenv("AZURE_AI_API_BASE"),
-                "api_key": os.getenv("AZURE_AI_API_KEY"),
-            },
-            mode="image_generation",
-            prompt="cute baby sea otter",
-        )
-
-        # Check if response is successful (no error)
-        if isinstance(response, dict) and "error" not in response:
-            return response
-
-        # Check if error is a transient Azure internal server error
-        error_str = str(response.get("error", "")).lower()
-        is_transient_error = (
-            "internalservererror" in error_str
-            or "internal server error" in error_str
-            or "internalfailure" in error_str
-            or "internal failure" in error_str
-        )
-
-        # If it's the last attempt or not a transient error, fail the test
-        if attempt == max_retries - 1 or not is_transient_error:
-            assert (
-                isinstance(response, dict) and "error" not in response
-            ), f"Health check failed: {response.get('error', 'Unknown error')}"
-            return response
-
-        # Wait before retrying with exponential backoff
-        await asyncio.sleep(retry_delay)
-        retry_delay *= 2  # Exponential backoff
-
-    # Should not reach here, but just in case
-    pytest.fail("Health check failed after all retries")
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
-@pytest.mark.asyncio
-async def test_sagemaker_embedding_health_check():
-    response = await litellm.ahealth_check(
-        model_params={
-            "model": "sagemaker/berri-benchmarking-gpt-j-6b-fp16",
-            "messages": [{"role": "user", "content": "Hey, how's it going?"}],
-        },
-        mode="embedding",
-        input=["test from litellm"],
-    )
-    print(f"response: {response}")
-
-    assert isinstance(response, dict)
-    return response
 
 
 # asyncio.run(test_sagemaker_embedding_health_check())

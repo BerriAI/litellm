@@ -19,50 +19,6 @@ from litellm import APIConnectionError, Router
 from unittest.mock import ANY
 
 
-@pytest.mark.skip(
-    reason="This test is not relevant to the current codebase. The default Azure AD workflow is used."
-)
-@patch("litellm.secret_managers.get_azure_ad_token_provider.os")
-def test_router_init_with_neither_api_key_nor_azure_service_principal_with_secret(
-    mocked_os_lib: MagicMock,
-) -> None:
-    """
-    Test router initialization with neither API key nor using Azure Service Principal with Secret authentication
-    workflow (having not provided environment variables).
-    """
-    litellm.enable_azure_ad_token_refresh = True
-    # mock EMPTY environment variables
-    environment_variables_expected_to_use: Dict = {}
-    mocked_environ = PropertyMock(return_value=environment_variables_expected_to_use)
-    # Because of the way mock attributes are stored you can’t directly attach a PropertyMock to a mock object.
-    # https://docs.python.org/3.11/library/unittest.mock.html#unittest.mock.PropertyMock
-    type(mocked_os_lib).environ = mocked_environ
-
-    # define the model list
-    model_list = [
-        {
-            # test case for Azure Service Principal with Secret authentication
-            "model_name": "gpt-4o",
-            "litellm_params": {
-                # checkout there is no api_key here -
-                # AZURE_CLIENT_ID, AZURE_CLIENT_SECRET and AZURE_TENANT_ID environment variables should be used instead
-                "model": "gpt-4o",
-                "base_model": "gpt-4o",
-                "api_base": "test_api_base",
-                "api_version": "2024-01-01-preview",
-                "custom_llm_provider": "azure",
-            },
-            "model_info": {"mode": "completion"},
-        },
-    ]
-
-    # initialize the router
-    with pytest.raises(OpenAIError):
-        # it would raise an error, because environment variables were not provided => azure_ad_token_provider is None
-        Router(model_list=model_list)
-
-    # check if the mocked environment variables were reached
-    mocked_environ.assert_called()
 
 
 @patch("azure.identity.get_bearer_token_provider")

@@ -265,22 +265,3 @@ class TestReplicateOutputFormats:
 
 
 # Integration test (requires actual API key - skip in CI)
-@pytest.mark.skip(reason="Requires REPLICATE_API_KEY environment variable")
-def test_replicate_deepseek_integration():
-    """Integration test with actual DeepSeek model on Replicate"""
-    try:
-        response = completion(
-            model="replicate/deepseek-ai/deepseek-v3",
-            messages=[
-                {"role": "user", "content": "Say 'Hello World' and nothing else"}
-            ],
-            max_tokens=20,
-        )
-
-        assert response is not None
-        assert response.choices[0].message.content is not None
-        assert len(response.choices[0].message.content) > 0
-        print(f"Response: {response.choices[0].message.content}")
-
-    except Exception as e:
-        pytest.fail(f"Integration test failed: {e}")

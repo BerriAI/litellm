@@ -71,15 +71,6 @@ def _mock_response():
     return response
 
 
-@pytest.mark.skip(reason="Local only tested search providers")
-class TestBingGroundingSearch(BaseSearchTest):
-    """
-    E2E tests for Grounding with Bing Search that make real API calls.
-    Inherits from BaseSearchTest to run standard search tests.
-    """
-
-    def get_search_provider(self) -> str:
-        return "bing_grounding"
 
 
 class TestBingGroundingSearchTransformation:

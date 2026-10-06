@@ -834,23 +834,6 @@ def test_embeddings_uses_databricks_sdk_if_api_key_and_base_not_specified(monkey
         )
 
 
-@pytest.mark.skip(reason="Databricks rate limit errors")
-class TestDatabricksCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
-    def get_base_completion_call_args(self) -> dict:
-        return {"model": "databricks/databricks-claude-3-7-sonnet"}
-
-    def get_base_completion_call_args_with_thinking(self) -> dict:
-        return {
-            "model": "databricks/databricks-claude-3-7-sonnet",
-            "thinking": {"type": "enabled", "budget_tokens": 1024},
-        }
-
-    def test_pdf_handling(self, pdf_messages):
-        pytest.skip("Databricks does not support PDF handling")
-
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pytest.skip("Databricks is openai compatible")
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

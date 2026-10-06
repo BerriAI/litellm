@@ -966,28 +966,6 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
     assert cost_1 > cost_2
 
 
-@pytest.mark.flaky(retries=6, delay=2)
-@pytest.mark.parametrize(
-    "model",
-    [
-        "databricks/databricks-meta-llama-3.2-3b-instruct",
-        "databricks/databricks-meta-llama-3-70b-instruct",
-        "databricks/databricks-dbrx-instruct",
-        # "databricks/databricks-mixtral-8x7b-instruct",
-    ],
-)
-@pytest.mark.skip(reason="databricks is having an active outage")
-def test_completion_cost_databricks(model):
-    litellm.turn_on_debug()
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    messages = [{"role": "user", "content": "What is 2+2?"}]
-
-    resp = litellm.completion(model=model, messages=messages)  # works fine
-
-    print(resp)
-    print(f"hidden_params: {resp._hidden_params}")
-    assert resp._hidden_params["response_cost"] > 0
 
 
 @pytest.mark.parametrize(
@@ -2449,69 +2427,6 @@ def test_add_known_models():
     )
 
 
-@pytest.mark.skip(reason="flaky test")
-def test_bedrock_cost_calc_with_region():
-
-    from litellm import ModelResponse
-
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
-    litellm.add_known_models()
-
-    hidden_params = {
-        "custom_llm_provider": "bedrock",
-        "region_name": "us-east-1",
-        "optional_params": {},
-        "litellm_call_id": "cf371a5d-679b-410f-b862-8084676d6d59",
-        "model_id": None,
-        "api_base": None,
-        "response_cost": 0.0005639999999999999,
-        "additional_headers": {},
-    }
-
-    litellm.set_verbose = True
-
-    bedrock_models = litellm.bedrock_models + litellm.bedrock_converse_models
-
-    for model in bedrock_models:
-        if litellm.model_cost[model]["mode"] == "chat":
-            response = {
-                "id": "cmpl-55db75e0b05344058b0bd8ee4e00bf84",
-                "choices": [
-                    {
-                        "finish_reason": "stop",
-                        "index": 0,
-                        "logprobs": None,
-                        "message": {
-                            "content": 'Here\'s one:\n\nWhy did the Linux kernel go to therapy?\n\nBecause it had a lot of "core" issues!\n\nHope that one made you laugh!',
-                            "refusal": None,
-                            "role": "assistant",
-                            "audio": None,
-                            "function_call": None,
-                            "tool_calls": [],
-                        },
-                    }
-                ],
-                "created": 1729243714,
-                "model": model,
-                "object": "chat.completion",
-                "service_tier": None,
-                "system_fingerprint": None,
-                "usage": {
-                    "completion_tokens": 32,
-                    "prompt_tokens": 16,
-                    "total_tokens": 48,
-                    "completion_tokens_details": None,
-                    "prompt_tokens_details": None,
-                },
-            }
-
-            model_response = ModelResponse(**response)
-            model_response._hidden_params = hidden_params
-            cost = completion_cost(model_response, custom_llm_provider="bedrock")
-
-            assert cost > 0
 
 
 # @pytest.mark.parametrize(

@@ -103,43 +103,6 @@ async def test_basic_rerank(sync_mode):
     print("response", response.model_dump_json(indent=4))
 
 
-@pytest.mark.asyncio()
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.skip(reason="Skipping test due to 503 Service Temporarily Unavailable")
-async def test_basic_rerank_together_ai(sync_mode):
-    try:
-        if sync_mode is True:
-            response = litellm.rerank(
-                model="together_ai/Salesforce/Llama-Rank-V1",
-                query="hello",
-                documents=["hello", "world"],
-                top_n=3,
-            )
-
-            print("re rank response: ", response)
-
-            assert response.id is not None
-            assert response.results is not None
-
-            assert_response_shape(response, custom_llm_provider="together_ai")
-        else:
-            response = await litellm.arerank(
-                model="together_ai/Salesforce/Llama-Rank-V1",
-                query="hello",
-                documents=["hello", "world"],
-                top_n=3,
-            )
-
-            print("async re rank response: ", response)
-
-            assert response.id is not None
-            assert response.results is not None
-
-            assert_response_shape(response, custom_llm_provider="together_ai")
-    except Exception as e:
-        if "Service unavailable" in str(e):
-            pytest.skip("Skipping test due to 503 Service Temporarily Unavailable")
-        raise e
 
 
 @pytest.mark.asyncio()

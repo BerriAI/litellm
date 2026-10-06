@@ -11,18 +11,6 @@ import litellm
 from tests.search_tests.base_search_unit_tests import BaseSearchTest
 
 
-@pytest.mark.skip(reason="Local only tested search providers")
-class TestLinkupSearch(BaseSearchTest):
-    """
-    E2E tests for Linkup Search functionality that make real API calls.
-    Inherits from BaseSearchTest to run standard search tests.
-    """
-
-    def get_search_provider(self) -> str:
-        """
-        Return search_provider for Linkup Search.
-        """
-        return "linkup"
 
 
 class TestLinkupSearchTransformation:

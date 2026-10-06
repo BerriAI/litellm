@@ -30,8 +30,6 @@ user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
 
-def logger_fn(user_model_dict):
-    print(f"user_model_dict: {user_model_dict}")
 
 
 @pytest.fixture(autouse=True)
@@ -43,20 +41,6 @@ def reset_callbacks():
     litellm.callbacks = []
 
 
-@pytest.mark.skip(reason="Local test")
-def test_response_model_none():
-    """
-    Addresses:https://github.com/BerriAI/litellm/issues/2972
-    """
-    x = completion(
-        model="mymodel",
-        custom_llm_provider="openai",
-        messages=[{"role": "user", "content": "Hello!"}],
-        api_base="http://0.0.0.0:8080",
-        api_key="my-api-key",
-    )
-    print(f"x: {x}")
-    assert isinstance(x, litellm.ModelResponse)
 
 
 def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
@@ -163,33 +147,6 @@ def predibase_mock_post(url, data=None, json=None, headers=None, timeout=None):
 # test_completion_claude()
 
 
-@pytest.mark.skip(reason="No empower api key")
-def test_completion_empower():
-    litellm.set_verbose = True
-    messages = [
-        {
-            "role": "user",
-            "content": "\nWhat is the query for `console.log` => `console.error`\n",
-        },
-        {
-            "role": "assistant",
-            "content": "\nThis is the GritQL query for the given before/after examples:\n<gritql>\n`console.log` => `console.error`\n</gritql>\n",
-        },
-        {
-            "role": "user",
-            "content": "\nWhat is the query for `console.info` => `consdole.heaven`\n",
-        },
-    ]
-    try:
-        # test without max tokens
-        response = completion(
-            model="empower/empower-functions-small",
-            messages=messages,
-        )
-        # Add any assertions, here to check response args
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.asyncio
@@ -387,33 +344,6 @@ def test_completion_mistral_api():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="backend api unavailable")
-@pytest.mark.asyncio
-async def test_completion_codestral_chat_api():
-    try:
-        litellm.set_verbose = True
-        response = await litellm.acompletion(
-            model="codestral/codestral-latest",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Hey, how's it going?",
-                }
-            ],
-            temperature=0.0,
-            top_p=1,
-            max_tokens=10,
-            safe_prompt=False,
-            seed=12,
-        )
-        # Add any assertions here to-check the response
-        print(response)
-
-        # cost = litellm.completion_cost(completion_response=response)
-        # print("cost to make mistral completion=", cost)
-        # assert cost > 0.0
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_mistral_api_mistral_large_function_call():
@@ -488,29 +418,6 @@ def test_completion_mistral_api_mistral_large_function_call():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(
-    reason="Since we already test mistral/mistral-tiny in test_completion_mistral_api. This is only for locally verifying azure mistral works"
-)
-def test_completion_mistral_azure():
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="mistral/Mistral-large-nmefg",
-            api_key=os.environ["MISTRAL_AZURE_AI_API_KEY"],
-            api_base=os.environ["MISTRAL_AZURE_AI_API_BASE"],
-            max_tokens=5,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Hi from litellm",
-                }
-            ],
-        )
-        # Add any assertions here to check, the response
-        print(response)
-
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_mistral_api()
@@ -542,35 +449,6 @@ def test_completion_mistral_api_modified_input():
             pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="this test is flaky")
-def test_completion_gpt4_vision():
-    import openai
-
-    try:
-        litellm.set_verbose = True
-        response = completion(
-            model="gpt-4-vision-preview",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Whats in this image?"},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
-                            },
-                        },
-                    ],
-                }
-            ],
-        )
-        print(response)
-    except openai.RateLimitError:
-        print("got a rate liimt error")
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_azure_gpt4_vision()
@@ -793,7 +671,6 @@ def test_completion_fireworks_ai_dynamic_params(api_key, api_base):
         pass
 
 
-# @pytest.mark.skip(reason="this test is flaky")
 def test_completion_perplexity_api():
     try:
         response_object = {
@@ -868,25 +745,6 @@ def test_completion_perplexity_api():
 # test_completion_perplexity_api()
 
 
-@pytest.mark.skip(reason="this test is flaky")
-def test_completion_perplexity_api_2():
-    try:
-        # litellm.set_verbose=True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(model="perplexity/mistral-7b-instruct", messages=messages)
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_perplexity_api_2()
@@ -1486,226 +1344,17 @@ def test_completion_openai_litellm_key():
 # test_ completion_openai_litellm_key()
 
 
-@pytest.mark.skip(reason="Unresponsive endpoint.[TODO] Rehost this somewhere else")
-def test_completion_ollama_hosted():
-    import openai
-
-    try:
-        litellm.request_timeout = 20  # give ollama 20 seconds to response
-        litellm.set_verbose = True
-        response = completion(
-            model="ollama/phi",
-            messages=messages,
-            max_tokens=20,
-            # api_base="https://test-ollama-endpoint.onrender.com",
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except openai.APITimeoutError as e:
-        print("got a timeout error. Passed ! ")
-        litellm.request_timeout = None
-        pass
-    except Exception as e:
-        if "try pulling it first" in str(e):
-            return
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_ollama_hosted()
 
 
-@pytest.mark.skip(reason="Local test")
-@pytest.mark.parametrize(
-    ("model"),
-    [
-        "ollama/llama2",
-        "ollama_chat/llama2",
-    ],
-)
-def test_completion_ollama_function_call(model):
-    messages = [
-        {"role": "user", "content": "What's the weather like in San Francisco?"}
-    ]
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-    try:
-        litellm.set_verbose = True
-        response = litellm.completion(model=model, messages=messages, tools=tools)
-        print(response)
-        assert response.choices[0].message.tool_calls
-        assert (
-            response.choices[0].message.tool_calls[0].function.name
-            == "get_current_weather"
-        )
-        assert response.choices[0].finish_reason == "tool_calls"
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="Local test")
-@pytest.mark.parametrize(
-    ("model"),
-    [
-        "ollama/llama2",
-        "ollama_chat/llama2",
-    ],
-)
-def test_completion_ollama_function_call_stream(model):
-    messages = [
-        {"role": "user", "content": "What's the weather like in San Francisco?"}
-    ]
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-    try:
-        litellm.set_verbose = True
-        response = litellm.completion(
-            model=model, messages=messages, tools=tools, stream=True
-        )
-        print(response)
-        first_chunk = next(response)
-        assert first_chunk.choices[0].delta.tool_calls
-        assert (
-            first_chunk.choices[0].delta.tool_calls[0].function.name
-            == "get_current_weather"
-        )
-        assert first_chunk.choices[0].finish_reason == "tool_calls"
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="local test")
-@pytest.mark.parametrize(
-    ("model"),
-    [
-        "ollama/llama2",
-        "ollama_chat/llama2",
-    ],
-)
-@pytest.mark.asyncio
-async def test_acompletion_ollama_function_call(model):
-    messages = [
-        {"role": "user", "content": "What's the weather like in San Francisco?"}
-    ]
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-    try:
-        litellm.set_verbose = True
-        response = await litellm.acompletion(
-            model=model, messages=messages, tools=tools
-        )
-        print(response)
-        assert response.choices[0].message.tool_calls
-        assert (
-            response.choices[0].message.tool_calls[0].function.name
-            == "get_current_weather"
-        )
-        assert response.choices[0].finish_reason == "tool_calls"
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="local test")
-@pytest.mark.parametrize(
-    ("model"),
-    [
-        "ollama/llama2",
-        "ollama_chat/llama2",
-    ],
-)
-@pytest.mark.asyncio
-async def test_acompletion_ollama_function_call_stream(model):
-    messages = [
-        {"role": "user", "content": "What's the weather like in San Francisco?"}
-    ]
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-    try:
-        litellm.set_verbose = True
-        response = await litellm.acompletion(
-            model=model, messages=messages, tools=tools, stream=True
-        )
-        print(response)
-        first_chunk = await anext(response)
-        assert first_chunk.choices[0].delta.tool_calls
-        assert (
-            first_chunk.choices[0].delta.tool_calls[0].function.name
-            == "get_current_weather"
-        )
-        assert first_chunk.choices[0].finish_reason == "tool_calls"
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_openrouter_reasoning_effort():
@@ -1975,44 +1624,6 @@ async def test_re_use_azure_async_client():
         pytest.fail("got Exception", e)
 
 
-@pytest.mark.skip(
-    reason="this is bad test. It doesn't actually fail if the token is not set in the header. "
-)
-def test_azure_openai_ad_token():
-    import time
-
-    # this tests if the azure ad token is set in the request header
-    # the request can fail since azure ad tokens expire after 30 mins, but the header MUST have the azure ad token
-    # we use litellm.input_callbacks for this test
-    def tester(
-        kwargs,  # kwargs to completion
-    ):
-        print("inside kwargs")
-        print(kwargs["additional_args"])
-        if kwargs["additional_args"]["headers"]["Authorization"] != "Bearer gm":
-            pytest.fail("AZURE AD TOKEN Passed but not set in request header")
-        return
-
-    litellm.input_callback = [tester]
-    try:
-        response = litellm.completion(
-            model="azure/gpt-4.1-mini",  # e.g. gpt-35-instant
-            messages=[
-                {
-                    "role": "user",
-                    "content": "what is your name",
-                },
-            ],
-            azure_ad_token="gm",
-        )
-        print("azure ad token respoonse\n")
-        print(response)
-        litellm.input_callback = []
-    except Exception as e:
-        litellm.input_callback = []
-        pass
-
-    time.sleep(1)
 
 
 # test_azure_openai_ad_token()
@@ -2142,59 +1753,8 @@ def test_completion_azure_with_litellm_key():
 import asyncio
 
 
-@pytest.mark.skip(reason="replicate endpoints are extremely flaky")
-@pytest.mark.parametrize("sync_mode", [False, True])
-@pytest.mark.asyncio
-async def test_completion_replicate_llama3(sync_mode):
-    litellm.set_verbose = True
-    model_name = "replicate/meta/meta-llama-3-8b-instruct"
-    try:
-        if sync_mode:
-            response = completion(
-                model=model_name,
-                messages=messages,
-                max_tokens=10,
-            )
-        else:
-            response = await litellm.acompletion(
-                model=model_name,
-                messages=messages,
-                max_tokens=10,
-            )
-            print(f"ASYNC REPLICATE RESPONSE - {response}")
-        print(f"REPLICATE RESPONSE - {response}")
-        # Add any assertions here to check the response
-        assert isinstance(response, litellm.ModelResponse)
-        assert len(response.choices[0].message.content.strip()) > 0
-        response_format_tests(response=response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="replicate endpoints take +2 mins just for this request")
-def test_completion_replicate_vicuna():
-    print("TESTING REPLICATE")
-    litellm.set_verbose = True
-    model_name = "replicate/meta/llama-2-7b-chat:f1d50bb24186c52daae319ca8366e53debdaa9e0ae7ff976e918df752732ccc4"
-    try:
-        response = completion(
-            model=model_name,
-            messages=messages,
-            temperature=0.5,
-            top_k=20,
-            repetition_penalty=1,
-            min_tokens=1,
-            seed=-1,
-            max_tokens=2,
-        )
-        print(response)
-        # Add any assertions here to check the response
-        response_str = response["choices"][0]["message"]["content"]
-        print("RESPONSE STRING\n", response_str)
-        if type(response_str) != str:
-            pytest.fail(f"Expected a string response, got {type(response_str)}: {response_str}")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_replicate_vicuna()
@@ -2395,36 +1955,6 @@ def test_bedrock_deepseek_known_tokenizer_config(monkeypatch):
 
 
 ######## Test TogetherAI ########
-@pytest.mark.skip(reason="Skip flaky test")
-def test_completion_together_ai_mixtral():
-    model_name = "together_ai/DiscoResearch/DiscoLM-mixtral-8x7b-v2"
-    try:
-        messages = [
-            {"role": "user", "content": "Who are you"},
-            {"role": "assistant", "content": "I am your helpful assistant."},
-            {"role": "user", "content": "Tell me a joke"},
-        ]
-        response = completion(
-            model=model_name,
-            messages=messages,
-            max_tokens=256,
-            n=1,
-            logger_fn=logger_fn,
-        )
-        # Add any assertions here to check the response
-        print(response)
-        cost = completion_cost(completion_response=response)
-        assert cost > 0.0
-        print(
-            "Cost for completion call together-computer/llama-2-70b: ",
-            f"${float(cost):.10f}",
-        )
-    except litellm.Timeout as e:
-        pass
-    except litellm.ServiceUnavailableError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_together_ai_mixtral()
@@ -2690,41 +2220,8 @@ def test_completion_anthropic_hanging():
             assert msg["role"] != converted_messages[i + 1]["role"]
 
 
-@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
-def test_completion_anyscale_api():
-    try:
-        # litellm.set_verbose = True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(
-            model="anyscale/meta-llama/Llama-2-7b-chat-hf",
-            messages=messages,
-        )
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
-def test_mistral_anyscale_stream():
-    litellm.set_verbose = False
-    response = completion(
-        model="anyscale/mistralai/Mistral-7B-Instruct-v0.1",
-        messages=[{"content": "hello, good morning", "role": "user"}],
-        stream=True,
-    )
-    for chunk in response:
-        # print(chunk)
-        print(chunk["choices"][0]["delta"].get("content", ""), end="")
 
 
 # test_completion_with_fallbacks_multiple_keys()
@@ -2970,28 +2467,6 @@ def test_completion_deep_infra_mistral():
 # test_completion_deep_infra_mistral()
 
 
-@pytest.mark.skip(reason="Local test - don't have a volcengine account as yet")
-def test_completion_volcengine():
-    litellm.set_verbose = True
-    model_name = "volcengine/<OUR_ENDPOINT_ID>"
-    try:
-        response = completion(
-            model=model_name,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "What's the weather like in Boston today in Fahrenheit?",
-                }
-            ],
-            api_key="<OUR_API_KEY>",
-        )
-        # Add any assertions here to check the response
-        print(response)
-
-    except litellm.exceptions.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # Gemini tests
@@ -3051,45 +2526,8 @@ def test_completion_gemini(model):
 
 
 # Deepseek tests
-@pytest.mark.skip(reason="Account deleted by IBM.")
-def test_completion_watsonx_error():
-    litellm.set_verbose = True
-    model_name = "watsonx_text/ibm/granite-13b-chat-v2"
-
-    response = completion(
-        model=model_name,
-        messages=messages,
-        stop=["stop"],
-        max_tokens=20,
-        stream=True,
-    )
-
-    for chunk in response:
-        print(chunk)
-    # Add any assertions here to check the response
-    print(response)
 
 
-@pytest.mark.skip(reason="Skip test. account deleted.")
-def test_completion_stream_watsonx():
-    litellm.set_verbose = True
-    model_name = "watsonx/ibm/granite-13b-chat-v2"
-    try:
-        response = completion(
-            model=model_name,
-            messages=messages,
-            stop=["stop"],
-            max_tokens=20,
-            stream=True,
-        )
-        for chunk in response:
-            print(chunk)
-    except litellm.APIError as e:
-        pass
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize(
@@ -3138,48 +2576,8 @@ def test_unified_auth_params(provider, model, project, region_name, token):
         assert value in translated_optional_params
 
 
-@pytest.mark.skip(reason="Local test")
-@pytest.mark.asyncio
-async def test_acompletion_watsonx():
-    litellm.set_verbose = True
-    model_name = "watsonx/ibm/granite-13b-chat-v2"
-    print("testing watsonx")
-    try:
-        response = await litellm.acompletion(
-            model=model_name,
-            messages=messages,
-            temperature=0.2,
-            max_tokens=80,
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skip(reason="Local test")
-@pytest.mark.asyncio
-async def test_acompletion_stream_watsonx():
-    litellm.set_verbose = True
-    model_name = "watsonx/ibm/granite-13b-chat-v2"
-    print("testing watsonx")
-    try:
-        response = await litellm.acompletion(
-            model=model_name,
-            messages=messages,
-            temperature=0.2,
-            max_tokens=80,
-            stream=True,
-        )
-        # Add any assertions here to check the response
-        async for chunk in response:
-            print(chunk)
-    except litellm.RateLimitError as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 # test_completion_palm_stream()

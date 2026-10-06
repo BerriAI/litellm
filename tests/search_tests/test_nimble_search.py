@@ -44,15 +44,6 @@ def _mock_response():
     return response
 
 
-@pytest.mark.skip(reason="Local only tested search providers")
-class TestNimbleSearch(BaseSearchTest):
-    """
-    E2E tests for Nimble Search functionality that make real API calls.
-    Inherits from BaseSearchTest to run standard search tests.
-    """
-
-    def get_search_provider(self) -> str:
-        return "nimble"
 
 
 class TestNimbleSearchTransformation:

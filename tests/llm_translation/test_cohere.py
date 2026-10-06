@@ -106,7 +106,6 @@ def test_completion_cohere_command_r_plus_function_call():
         pytest.fail(f"Error occurred: {e}")
 
 
-# @pytest.mark.skip(reason="flaky test, times out frequently")
 @pytest.mark.flaky(retries=6, delay=1)
 def test_completion_cohere():
     try:

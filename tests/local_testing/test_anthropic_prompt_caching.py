@@ -693,63 +693,9 @@ def test_is_prompt_caching_enabled(anthropic_messages):
     )
 
 
-@pytest.mark.parametrize(
-    "messages, expected_model_id",
-    [("anthropic_messages", True), ("normal_messages", False)],
-)
-@pytest.mark.asyncio()
-@pytest.mark.skip(
-    reason="BETA FEATURE - skipping since this led to a latency impact, beta feature that is not used as yet"
-)
-async def test_router_prompt_caching_model_stored(
-    messages, expected_model_id, anthropic_messages
-):
-    """
-    If a model is called with prompt caching supported, then the model id should be stored in the router cache.
-    """
-    import asyncio
-    from litellm.router import Router
-    from litellm.router_utils.prompt_caching_cache import PromptCachingCache
-
-    router = Router(
-        model_list=[
-            {
-                "model_name": "claude-model",
-                "litellm_params": {
-                    "model": "anthropic/claude-sonnet-4-5-20250929",
-                    "api_key": os.environ.get("ANTHROPIC_API_KEY"),
-                },
-                "model_info": {"id": "1234"},
-            }
-        ]
-    )
-
-    if messages == "anthropic_messages":
-        _messages = anthropic_messages
-    else:
-        _messages = [{"role": "user", "content": "Hello"}]
-
-    await router.acompletion(
-        model="claude-model",
-        messages=_messages,
-        mock_response="The sky is blue.",
-    )
-    await asyncio.sleep(1)
-    cache = PromptCachingCache(
-        cache=router.cache,
-    )
-
-    cached_model_id = cache.get_model_id(messages=_messages, tools=None)
-
-    if expected_model_id:
-        assert cached_model_id["model_id"] == "1234"
-    else:
-        assert cached_model_id is None
 
 
 @pytest.mark.asyncio()
-# @pytest.mark.skip(
-#     reason="BETA FEATURE - skipping since this led to a latency impact, beta feature that is not used as yet"
 # )
 async def test_router_with_prompt_caching(anthropic_messages):
     """

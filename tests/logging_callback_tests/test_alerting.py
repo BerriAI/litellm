@@ -324,45 +324,6 @@ async def test_daily_reports_completion(slack_alerting):
         mock_send_alert.assert_awaited()
 
 
-@pytest.mark.asyncio
-@pytest.mark.skip(reason="Local test. Test if slack alerts are sent.")
-async def test_send_llm_exception_to_slack():
-
-    # on async success
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt-5-mini",
-                "litellm_params": {
-                    "model": "gpt-5-mini",
-                    "api_key": "bad_key",
-                },
-            },
-            {
-                "model_name": "gpt-5-good",
-                "litellm_params": {
-                    "model": "gpt-5-mini",
-                },
-            },
-        ],
-        alerting_config=AlertingConfig(
-            alerting_threshold=0.5, webhook_url=os.getenv("SLACK_WEBHOOK_URL")
-        ),
-    )
-    try:
-        await router.acompletion(
-            model="gpt-5-mini",
-            messages=[{"role": "user", "content": "Hey, how's it going?"}],
-        )
-    except Exception:
-        pass
-
-    await router.acompletion(
-        model="gpt-5-good",
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-    )
-
-    await asyncio.sleep(3)
 
 
 # test models with 0 metrics are ignored

@@ -127,51 +127,6 @@ def test_sync_opik_logging_http_request():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.asyncio
-@pytest.mark.skip(reason="local-only test, to test if everything works fine.")
-async def test_opik_logging():
-    try:
-        from litellm.integrations.opik.opik import OpikLogger
-
-        # Initialize OpikLogger
-        test_opik_logger = OpikLogger()
-        litellm.callbacks = [test_opik_logger]
-        litellm.set_verbose = True
-
-        # Log a chat completion call
-        response = await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": "What LLM are you ?"}],
-            max_tokens=10,
-            temperature=0.2,
-            metadata={"opik": {"custom_field": "custom_value"}},
-        )
-        print("Non-streaming response:", response)
-
-        # Log a streaming completion call
-        stream_response = await litellm.acompletion(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "user", "content": "Stream = True - What llm are you ?"}
-            ],
-            max_tokens=10,
-            temperature=0.2,
-            stream=True,
-            metadata={"opik": {"custom_field": "custom_value"}},
-        )
-        print("Streaming response:")
-        async for chunk in stream_response:
-            print(chunk.choices[0].delta.content, end="", flush=True)
-        print()  # New line after streaming response
-
-        await asyncio.sleep(2)
-
-        assert len(test_opik_logger.log_queue) == 4
-
-        await asyncio.sleep(test_opik_logger.flush_interval + 1)
-        assert len(test_opik_logger.log_queue) == 0
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 def test_opik_attach_to_existing_trace():

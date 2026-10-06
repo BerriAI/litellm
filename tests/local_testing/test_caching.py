@@ -139,7 +139,6 @@ async def test_batch_get_cache_with_none_keys(sync_mode):
     assert result == expected_result
 
 
-# @pytest.mark.skip(reason="")
 def test_caching_dynamic_args():  # test in memory cache
     try:
         litellm.set_verbose = True
@@ -1139,84 +1138,8 @@ def test_sync_cluster_authenticates_with_gcp_credentials(
             assert client.get("iam-regression") == b"success"
 
 
-@pytest.mark.skip(reason="Local test. Requires running redis cluster locally.")
-@pytest.mark.asyncio
-async def test_redis_cache_cluster_init_unit_test():
-    try:
-        from redis.asyncio import RedisCluster as AsyncRedisCluster
-        from redis.cluster import RedisCluster
-
-        from litellm.caching.caching import RedisCache
-
-        litellm.set_verbose = True
-
-        # List of startup nodes
-        startup_nodes = [
-            {"host": "127.0.0.1", "port": "7001"},
-        ]
-
-        resp = RedisCache(startup_nodes=startup_nodes)
-
-        assert isinstance(resp.redis_client, RedisCluster)
-        assert isinstance(resp.init_async_client(), AsyncRedisCluster)
-
-        resp = litellm.Cache(type="redis", redis_startup_nodes=startup_nodes)
-
-        assert isinstance(resp.cache, RedisCache)
-        assert isinstance(resp.cache.redis_client, RedisCluster)
-        assert isinstance(resp.cache.init_async_client(), AsyncRedisCluster)
-
-    except Exception as e:
-        print(f"{str(e)}\n\n{traceback.format_exc()}")
-        raise e
 
 
-@pytest.mark.asyncio
-@pytest.mark.skip(reason="Local test. Requires running redis cluster locally.")
-async def test_redis_cache_cluster_init_with_env_vars_unit_test():
-    try:
-        import json
-
-        from redis.asyncio import RedisCluster as AsyncRedisCluster
-        from redis.cluster import RedisCluster
-
-        from litellm.caching.caching import RedisCache
-
-        litellm.set_verbose = True
-
-        # List of startup nodes
-        startup_nodes = [
-            {"host": "127.0.0.1", "port": "7001"},
-            {"host": "127.0.0.1", "port": "7003"},
-            {"host": "127.0.0.1", "port": "7004"},
-            {"host": "127.0.0.1", "port": "7005"},
-            {"host": "127.0.0.1", "port": "7006"},
-            {"host": "127.0.0.1", "port": "7007"},
-        ]
-
-        # set startup nodes in environment variables
-        os.environ["REDIS_CLUSTER_NODES"] = json.dumps(startup_nodes)
-        print("REDIS_CLUSTER_NODES", os.environ["REDIS_CLUSTER_NODES"])
-
-        # unser REDIS_HOST, REDIS_PORT, REDIS_PASSWORD
-        os.environ.pop("REDIS_HOST", None)
-        os.environ.pop("REDIS_PORT", None)
-        os.environ.pop("REDIS_PASSWORD", None)
-
-        resp = RedisCache()
-        print("response from redis cache", resp)
-        assert isinstance(resp.redis_client, RedisCluster)
-        assert isinstance(resp.init_async_client(), AsyncRedisCluster)
-
-        resp = litellm.Cache(type="redis")
-
-        assert isinstance(resp.cache, RedisCache)
-        assert isinstance(resp.cache.redis_client, RedisCluster)
-        assert isinstance(resp.cache.init_async_client(), AsyncRedisCluster)
-
-    except Exception as e:
-        print(f"{str(e)}\n\n{traceback.format_exc()}")
-        raise e
 
 
 @pytest.mark.asyncio
@@ -1379,7 +1302,6 @@ async def test_redis_cache_acompletion_stream_bedrock():
         raise e
 
 
-# @pytest.mark.skip(reason="AWS Suspended Account")
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_s3_cache_stream_azure(sync_mode):
@@ -1490,59 +1412,6 @@ async def test_s3_cache_stream_azure(sync_mode):
 # test_s3_cache_acompletion_stream_azure()
 
 
-@pytest.mark.skip(reason="AWS Suspended Account")
-@pytest.mark.asyncio
-async def test_s3_cache_acompletion_azure():
-    import asyncio
-    import logging
-    import tracemalloc
-
-    tracemalloc.start()
-    logging.basicConfig(level=logging.DEBUG)
-
-    try:
-        litellm.set_verbose = True
-        random_word = generate_random_word()
-        messages = [
-            {
-                "role": "user",
-                "content": f"write a one sentence poem about: {random_word}",
-            }
-        ]
-        litellm.cache = Cache(
-            type="s3",
-            s3_bucket_name="litellm-my-test-bucket-2",
-            s3_region_name="us-east-1",
-        )
-        print("s3 Cache: test for caching, streaming + completion")
-
-        response1 = await litellm.acompletion(
-            model="azure/gpt-4.1-mini",
-            messages=messages,
-            max_tokens=40,
-            temperature=1,
-        )
-        print(response1)
-
-        time.sleep(2)
-
-        response2 = await litellm.acompletion(
-            model="azure/gpt-4.1-mini",
-            messages=messages,
-            max_tokens=40,
-            temperature=1,
-        )
-
-        print(response2)
-
-        assert response1.id == response2.id
-
-        litellm.cache = None
-        litellm.success_callback = []
-        litellm._async_success_callback = []
-    except Exception as e:
-        print(e)
-        raise e
 
 
 # test_redis_cache_acompletion_stream_bedrock()
@@ -2161,58 +2030,6 @@ async def test_cache_default_off_acompletion():
     assert response3.id == response4.id
 
 
-@pytest.mark.skip(reason="local test. Requires sentinel setup.")
-@pytest.mark.asyncio
-async def test_redis_sentinel_caching():
-    """
-    Init redis client
-    - write to client
-    - read from client
-    """
-    litellm.set_verbose = False
-
-    random_number = random.randint(
-        1, 100000
-    )  # add a random number to ensure it's always adding / reading from cache
-    messages = [
-        {"role": "user", "content": f"write a one sentence poem about: {random_number}"}
-    ]
-
-    litellm.cache = Cache(
-        type="redis",
-        # host=os.environ["REDIS_HOST"],
-        # port=os.environ["REDIS_PORT"],
-        # password=os.environ["REDIS_PASSWORD"],
-        service_name="mymaster",
-        sentinel_nodes=[("localhost", 26379)],
-    )
-    response1 = completion(
-        model="gpt-3.5-turbo",
-        messages=messages,
-    )
-
-    cache_key = litellm.cache.get_cache_key(
-        model="gpt-3.5-turbo",
-        messages=messages,
-    )
-    print(f"cache_key: {cache_key}")
-    litellm.cache.add_cache(result=response1, cache_key=cache_key)
-    print(f"cache key pre async get: {cache_key}")
-    stored_val = litellm.cache.get_cache(
-        model="gpt-3.5-turbo",
-        messages=messages,
-    )
-
-    print(f"stored_val: {stored_val}")
-    assert stored_val["id"] == response1.id
-
-    stored_val_2 = await litellm.cache.async_get_cache(
-        model="gpt-3.5-turbo",
-        messages=messages,
-    )
-
-    print(f"stored_val: {stored_val}")
-    assert stored_val_2["id"] == response1.id
 
 
 @pytest.mark.asyncio
@@ -2405,33 +2222,6 @@ async def test_caching_kwargs_input(sync_mode):
         await llm_caching_handler.async_set_cache(**input)
 
 
-@pytest.mark.skip(reason="audio caching not supported yet")
-@pytest.mark.parametrize("stream", [False])  # True,
-@pytest.mark.asyncio()
-async def test_audio_caching(stream):
-    litellm.cache = Cache(type="local")
-
-    ## CALL 1 - no cache hit
-    completion = await litellm.acompletion(
-        model="gpt-4o-audio-preview",
-        modalities=["text", "audio"],
-        audio={"voice": "alloy", "format": "pcm16"},
-        messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
-        stream=stream,
-    )
-
-    assert "cache_hit" not in completion._hidden_params
-
-    ## CALL 2 - cache hit
-    completion = await litellm.acompletion(
-        model="gpt-4o-audio-preview",
-        modalities=["text", "audio"],
-        audio={"voice": "alloy", "format": "pcm16"},
-        messages=[{"role": "user", "content": "response in 1 word - yes or no"}],
-        stream=stream,
-    )
-
-    assert "cache_hit" in completion._hidden_params
 
 
 def test_redis_caching_default_ttl():

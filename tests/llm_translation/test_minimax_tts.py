@@ -215,57 +215,7 @@ class TestMinimaxTextToSpeechConfig:
 class TestMinimaxSpeechIntegration:
     """Integration tests for MiniMax TTS via litellm.speech()"""
 
-    @pytest.mark.skip(reason="Requires MiniMax API key")
-    def test_speech_basic(self):
-        """Test basic speech synthesis call"""
-        # This test requires a real API key
-        os.environ["MINIMAX_API_KEY"] = "your-api-key-here"
 
-        speech_file_path = Path(__file__).parent / "test_minimax_speech.mp3"
-
-        response = speech(
-            model="minimax/speech-2.6-hd",
-            voice="alloy",
-            input="Hello, this is a test of MiniMax text to speech.",
-        )
-
-        response.stream_to_file(speech_file_path)
-
-        # Verify file was created
-        assert speech_file_path.exists()
-        assert speech_file_path.stat().st_size > 0
-
-        # Clean up
-        speech_file_path.unlink()
-
-    @pytest.mark.skip(reason="Requires MiniMax API key")
-    def test_speech_with_custom_params(self):
-        """Test speech synthesis with custom parameters"""
-        os.environ["MINIMAX_API_KEY"] = "your-api-key-here"
-
-        speech_file_path = Path(__file__).parent / "test_minimax_speech_custom.mp3"
-
-        response = speech(
-            model="minimax/speech-2.6-turbo",
-            voice="nova",
-            input="Testing custom parameters.",
-            speed=1.5,
-            response_format="mp3",
-            extra_body={
-                "vol": 1.2,
-                "pitch": 1,
-                "sample_rate": 24000,
-            },
-        )
-
-        response.stream_to_file(speech_file_path)
-
-        # Verify file was created
-        assert speech_file_path.exists()
-        assert speech_file_path.stat().st_size > 0
-
-        # Clean up
-        speech_file_path.unlink()
 
     def test_speech_mock_response(self):
         """Test speech synthesis with mocked response"""

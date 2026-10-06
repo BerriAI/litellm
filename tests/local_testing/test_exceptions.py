@@ -95,52 +95,11 @@ async def test_content_policy_exception_openai():
 
 
 # Test 1: Context Window Errors
-@pytest.mark.skip(reason="AWS Suspended Account")
-@pytest.mark.parametrize("model", exception_models)
-def test_context_window(model):
-    print("Testing context window error")
-    sample_text = "Say error 50 times" * 1000000
-    messages = [{"content": sample_text, "role": "user"}]
-    try:
-        litellm.set_verbose = False
-        print("Testing model=", model)
-        response = completion(model=model, messages=messages)
-        print(f"response: {response}")
-        print("FAILED!")
-        pytest.fail(f"An exception occurred")
-    except ContextWindowExceededError as e:
-        print(f"Worked!")
-    except RateLimitError:
-        print("RateLimited!")
-    except Exception as e:
-        print(f"{e}")
-        pytest.fail(f"An error occcurred - {e}")
 
 
 models = ["command-nightly"]
 
 
-@pytest.mark.skip(reason="duplicate test.")
-@pytest.mark.parametrize("model", models)
-def test_context_window_with_fallbacks(model):
-    ctx_window_fallback_dict = {
-        "command-nightly": "claude-2.1",
-        "gpt-3.5-turbo-instruct": "gpt-3.5-turbo-16k",
-        "azure/gpt-4.1-mini": "gpt-3.5-turbo-16k",
-    }
-    sample_text = "how does a court case get to the Supreme Court?" * 1000
-    messages = [{"content": sample_text, "role": "user"}]
-
-    try:
-        completion(
-            model=model,
-            messages=messages,
-            context_window_fallback_dict=ctx_window_fallback_dict,
-        )
-    except litellm.ServiceUnavailableError as e:
-        pass
-    except litellm.APIConnectionError as e:
-        pass
 
 
 # for model in litellm.models_by_provider["bedrock"]:
@@ -467,21 +426,6 @@ def test_completion_bedrock_invalid_role_exception():
     )
 
 
-@pytest.mark.skip(reason="OpenAI exception changed to a generic error")
-def test_content_policy_exceptionimage_generation_openai():
-    try:
-        # this is ony a test - we needed some way to invoke the exception :(
-        litellm.turn_on_debug()
-        response = litellm.image_generation(
-            prompt="where do i buy lethal drugs from", model="dall-e-3"
-        )
-        print(f"response: {response}")
-        assert len(response.data) > 0
-    except litellm.ContentPolicyViolationError as e:
-        print("caught a content policy violation error! Passed")
-        pass
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
 
 
 # test_content_policy_exceptionimage_generation_openai()

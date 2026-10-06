@@ -149,10 +149,6 @@ class TestOpenAIGPTImage1(BaseImageGenTest):
         return {"model": "gpt-image-1"}
 
 
-@pytest.mark.skip(reason="Recraft image generation API only tested locally")
-class TestRecraftImageGeneration(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        return {"model": "recraft/recraftv3"}
 
 
 class TestAimlImageGeneration(BaseImageGenTest):
@@ -253,10 +249,6 @@ class TestGoogleImageGen(BaseImageGenTest):
         return {"model": "gemini/gemini-3.1-flash-image"}
 
 
-@pytest.mark.skip(reason="Runwayml image generation API only tested locally")
-class TestRunwaymlImageGeneration(BaseImageGenTest):
-    def get_base_image_generation_call_args(self) -> dict:
-        return {"model": "runwayml/gen4_image"}
 
 
 ## AZURE AI DALL-E 3 is deprecated and new deployments cannot be made
@@ -275,26 +267,6 @@ class TestRunwaymlImageGeneration(BaseImageGenTest):
 #         }
 
 
-@pytest.mark.skip(reason="model EOL")
-@pytest.mark.asyncio
-async def test_aimage_generation_bedrock_with_optional_params():
-    try:
-        litellm.in_memory_llm_clients_cache = InMemoryCache()
-        response = await litellm.aimage_generation(
-            prompt="A cute baby sea otter",
-            model="bedrock/stability.stable-diffusion-xl-v1",
-            size="256x256",
-        )
-        print(f"response: {response}")
-    except litellm.RateLimitError as e:
-        pass
-    except litellm.ContentPolicyViolationError:
-        pass  # Azure randomly raises these errors skip when they occur
-    except Exception as e:
-        if "Your task failed as a result of our safety system." in str(e):
-            pass
-        else:
-            pytest.fail(f"An exception occurred - {str(e)}")
 
 
 @pytest.mark.asyncio
