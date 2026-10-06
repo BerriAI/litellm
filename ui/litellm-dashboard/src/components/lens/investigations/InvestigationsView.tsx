@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { cn } from "@/lib/cva.config";
 import { useInvalidateLenses } from "../data/mutations";
 import { lensQueries } from "../data/queries";
 import { useLensApi } from "../data/LensServices";
-import { findFinding, findingKey, type OwnedFinding } from "../model/inbox";
+import { findFinding, findingKey, inboxRows, type InboxRow, type OwnedFinding } from "../model/inbox";
 import type { Finding, Lens, Settings } from "../model/types";
 import { useDialogRoute, useIssueRoute, useLensRoute } from "../route";
 import { InvestigationSetup } from "../setup/InvestigationSetup";
@@ -20,7 +20,8 @@ import { OnboardingSetup } from "../onboarding/OnboardingSetup";
 import { InvestigationDetail } from "./detail/InvestigationDetail";
 import { RunNowDialog } from "./detail/RunNowDialog";
 import { FindingPanelBody } from "./FindingDetails";
-import { InvestigationList, type InvestigationRow } from "./InvestigationList";
+import { findingRow, InvestigationList, type InvestigationRow } from "./InvestigationList";
+import { InboxDetail } from "./FindingInbox";
 import { investigationScreen, type Screen, type SetupScreen } from "./investigationScreen";
 import {
   InvestigationError,
@@ -30,7 +31,6 @@ import {
 } from "./InvestigationStates";
 import { ReadinessBanner } from "./ReadinessBanner";
 import { useInvestigationActions } from "./useInvestigationActions";
-import { WatchAllBanner } from "./WatchAllBanner";
 
 export interface InvestigationsViewProps {
   readonly readOnly?: boolean;
@@ -58,12 +58,13 @@ function Banners({ error, activityReady, flush, refresh }: BannersProps) {
 }
 
 export function InvestigationsView({ readOnly = false }: InvestigationsViewProps) {
+  const [reviewDraft, setReviewDraft] = useState<{ key: string; reason: string } | null>(null);
   const api = useLensApi();
   const invalidateLenses = useInvalidateLenses();
   const actions = useInvestigationActions();
   const { dialog, target, openDialog, closeDialog } = useDialogRoute();
   const { issueKey, setIssueKey } = useIssueRoute();
-  const { lensId, setLensId, setTab } = useLensRoute();
+  const { tab, lensId, setLensId, setTab } = useLensRoute();
   const list = useQuery(lensQueries.list(api));
   const status = useLensReadiness(true);
   const { connected } = status;
@@ -79,19 +80,37 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
   };
   const lens = lenses.find((candidate) => candidate.id === lensId);
   const peeked = issueKey ? findFinding(lenses, issueKey) ?? null : null;
+  const inbox = inboxRows(lenses);
+  const peekedInbox = inbox.find((row) =>
+    row.sources.some(({ lens, finding }) => findingKey(lens, finding) === issueKey),
+  );
   const selectedRow = (open: Lens | undefined): InvestigationRow | null => {
+    if (tab === "investigations" && !lensId && peekedInbox) return findingRow(peekedInbox);
     if (peeked) return { kind: "finding", ...peeked };
     return open ? { kind: "investigation", lens: open } : null;
   };
   const selectRow = (row: InvestigationRow | null) => {
-    if (row?.kind === "finding") setIssueKey(findingKey(row.lens, row.finding));
-    else if (row) setLensId(row.lens.id);
+    if (row?.kind === "finding") {
+      setTab("investigations");
+      setIssueKey(row.inbox?.key ?? findingKey(row.lens, row.finding));
+    } else if (row) setLensId(row.lens.id);
     else if (peeked) setIssueKey(null);
     else setLensId(null);
   };
   const reviewPeeked = async (owned: OwnedFinding, status: Finding["status"], reason: string) => {
     const saved = await actions.review(owned.lens, owned.finding, status, reason);
     if (saved) setIssueKey(null);
+  };
+  const reviewInbox = async (row: InboxRow, status: Finding["status"], reason: string) => {
+    const result = await actions.reviewInbox(row, status, reason);
+    if (result.ok) {
+      setReviewDraft(null);
+      setIssueKey(null);
+      return;
+    }
+    const key = findingKey(result.source.lens, result.source.finding);
+    setReviewDraft({ key, reason });
+    setIssueKey(key);
   };
   const dialogLens = target ? lenses.find((candidate) => candidate.id === target) : lens;
   const refresh = () => {
@@ -108,6 +127,31 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
   const bannerError = screen.kind === "failed" ? undefined : actions.error ?? list.error;
   const browsing = screen.kind === "list";
   const showReadiness = browsing && !readOnly && !status.ready;
+
+  const findingPanel = (row: Extract<InvestigationRow, { kind: "finding" }>) => {
+    if (row.inbox)
+      return (
+        <InboxDetail
+          row={row.inbox}
+          readOnly={readOnly}
+          busy={actions.busy}
+          reason={
+            reviewDraft && row.inbox.sources.some(({ lens, finding }) => findingKey(lens, finding) === reviewDraft.key)
+              ? reviewDraft.reason
+              : undefined
+          }
+          onReview={(row, status, reason) => void reviewInbox(row, status, reason)}
+        />
+      );
+    return (
+      <FindingPanelBody
+        owned={row}
+        readOnly={readOnly}
+        busy={actions.busy}
+        onReview={(owned, status, reason) => void reviewPeeked(owned, status, reason)}
+      />
+    );
+  };
 
   const content = (current: Screen): ReactNode => {
     switch (current.kind) {
@@ -130,6 +174,7 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
         return (
           <InvestigationList
             lenses={current.lenses}
+            inbox={inbox}
             connected={connected}
             readOnly={readOnly}
             selected={selectedRow(current.lens)}
@@ -138,23 +183,22 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
             onRunNow={(id) => openDialog("run_now", id)}
             actions={
               !readOnly && (
-                <>
-                  <WatchAllBanner lenses={current.lenses} />
-                  <Button size="sm" className="h-8" disabled={!status.ready} onClick={() => openDialog("new")}>
-                    <Plus className="size-4" /> New investigation
-                  </Button>
-                </>
+                <Button
+                  size="sm"
+                  className="my-auto mr-1.5 h-7"
+                  disabled={!status.ready}
+                  onClick={() => openDialog("new")}
+                  aria-label="New investigation"
+                >
+                  <Plus aria-hidden="true" className="size-3.5" />
+                  New
+                </Button>
               )
             }
           >
             {(row) =>
               row.kind === "finding" ? (
-                <FindingPanelBody
-                  owned={row}
-                  readOnly={readOnly}
-                  busy={actions.busy}
-                  onReview={(owned, reviewStatus, reason) => void reviewPeeked(owned, reviewStatus, reason)}
-                />
+                findingPanel(row)
               ) : (
                 <div className="min-h-0 flex-1 overflow-y-auto p-4">
                   <InvestigationDetail

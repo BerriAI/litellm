@@ -547,6 +547,52 @@ it("shows a centered failure with a retry when investigations cannot load, then 
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
+it.each([true, false])("opens new investigations from the toolbar only when ready (%s)", async (ready) => {
+  testQueryClient.clear();
+  proxy.get.mockImplementation(async (path) => {
+    if (path === "/lens")
+      return {
+        lenses: [lens],
+        tracing_enabled: true,
+        workers: ready
+          ? [
+              {
+                id: "worker",
+                name: "Worker",
+                revoked: false,
+                analysis_key_id: "a".repeat(64),
+                scope: lens.scope,
+                last_seen: new Date().toISOString(),
+              },
+            ]
+          : [],
+      };
+    if (path === "/lens/activity/available") return { traces: true, requests: false };
+    if (path === "/lens/agents") return [];
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  const onUrlUpdate = vi.fn();
+  renderWithProviders(<InvestigationsView />, { searchParams: "?tab=investigations", onUrlUpdate });
+  expect(await screen.findByRole("row", { name: lens.settings.name })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Turn all on" })).not.toBeInTheDocument();
+  const create = screen.getByRole("button", { name: "New investigation" });
+  expect(create).toHaveTextContent(/^New$/);
+  if (!ready) {
+    expect(create).toBeDisabled();
+    return;
+  }
+  await waitFor(() => expect(create).toBeEnabled());
+  const search = screen.getByRole("combobox", { name: "Search investigations" });
+  await user.type(search, "unmatched investigation");
+  expect(await screen.findByText("No investigations match your search.")).toBeVisible();
+  await user.clear(search);
+  expect(await screen.findByRole("row", { name: lens.settings.name })).toBeVisible();
+  await user.click(create);
+  expect(await screen.findByRole("region", { name: "New investigation" })).toBeVisible();
+  await waitFor(() => expect(onUrlUpdate.mock.lastCall?.[0].searchParams.get("dialog")).toBe("new"));
+});
+
 it("keeps saved investigations accessible when tracing is disabled", async () => {
   testQueryClient.clear();
   proxy.get.mockImplementation(async (path) => {
@@ -628,7 +674,7 @@ it("reopens a finding and a results section from shared links", async () => {
   expect(await screen.findByRole("tab", { name: "Criteria", selected: true })).toBeVisible();
 });
 
-it("walks the compact investigation list with J and K and closes with Escape", async () => {
+it("walks investigations and their findings with J and K and closes with Escape", async () => {
   testQueryClient.clear();
   const twin: Lens = { ...lens, id: "twin", settings: { ...lens.settings, name: "Twin reviews" } };
   proxy.get.mockImplementation(async (path) => {
@@ -642,34 +688,42 @@ it("walks the compact investigation list with J and K and closes with Escape", a
   renderWithProviders(<InvestigationsView />, { searchParams: "", onUrlUpdate });
   const lastLens = () => new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString ?? "")).get("lens");
   await user.click(await screen.findByRole("row", { name: lens.settings.name }));
-  expect(screen.getByRole("complementary", { name: "Investigation details" })).toHaveTextContent("1 / 2");
-  expect(screen.queryByRole("row", { name: issue.title })).not.toBeInTheDocument();
+  expect(screen.getByRole("complementary", { name: "Investigation details" })).toHaveTextContent("1 / 3");
+  expect(screen.getByRole("row", { name: issue.title })).toBeVisible();
+  await user.keyboard("j");
+  expect(await screen.findByRole("complementary", { name: "Finding details" })).toHaveTextContent(issue.title);
+  expect(screen.getByRole("row", { name: issue.title })).toHaveAttribute("aria-selected", "true");
   await user.keyboard("j");
   await waitFor(() => expect(lastLens()).toBe(twin.id));
   expect(screen.getByRole("row", { name: twin.settings.name })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("button", { name: "Next investigation (J)" })).toBeDisabled();
+  await user.keyboard("k");
+  expect(await screen.findByRole("complementary", { name: "Finding details" })).toHaveTextContent(issue.title);
   await user.keyboard("k");
   await waitFor(() => expect(lastLens()).toBe(lens.id));
   await user.keyboard("{Escape}");
   await waitFor(() => expect(lastLens()).toBeNull());
 });
 
-it("reviews only the owning investigation when following an existing finding link", async () => {
-  testQueryClient.clear();
-  const twin: Lens = { ...lens, id: "twin", settings: { ...lens.settings, name: "Twin reviews" } };
-  proxy.get.mockImplementation(async (path) => {
-    if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
-    return { data: [] };
-  });
-  proxy.patch.mockResolvedValue(undefined);
-  const user = userEvent.setup();
-  renderWithProviders(<InvestigationsView />, {
-    searchParams: `?issue=${encodeURIComponent(findingKey(twin, issue))}`,
-  });
-  await user.click(await screen.findByRole("button", { name: "Mark resolved" }));
-  await waitFor(() => expect(proxy.patch).toHaveBeenCalledTimes(1));
-  expect(proxy.patch.mock.calls[0][0]).toBe("/lens/twin/findings/issue");
-});
+it.each(["?issue=", "?tab=investigations&lens=twin&issue="])(
+  "reviews only the owner of an existing finding link (%s)",
+  async (link) => {
+    testQueryClient.clear();
+    const twin: Lens = { ...lens, id: "twin", settings: { ...lens.settings, name: "Twin reviews" } };
+    proxy.get.mockImplementation(async (path) => {
+      if (path === "/lens") return { lenses: [lens, twin], tracing_enabled: true, workers: [] };
+      return { data: [] };
+    });
+    proxy.patch.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderWithProviders(<InvestigationsView />, {
+      searchParams: `${link}${encodeURIComponent(findingKey(twin, issue))}`,
+    });
+    await user.click(await screen.findByRole("button", { name: "Mark resolved" }));
+    await waitFor(() => expect(proxy.patch).toHaveBeenCalledTimes(1));
+    expect(proxy.patch.mock.calls[0][0]).toBe("/lens/twin/findings/issue");
+  },
+);
 
 it("lists investigations without edit or run controls for read-only viewers", async () => {
   window.history.replaceState({}, "", "/lens/");

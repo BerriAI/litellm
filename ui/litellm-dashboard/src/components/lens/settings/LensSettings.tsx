@@ -10,7 +10,7 @@ import type { LensList } from "../model/types";
 
 const TRACING_DOCS = "https://docs.litellm.ai/docs/proxy/lens";
 
-function TracingSection({ enabled, onOpenTraces }: { enabled: boolean; onOpenTraces: () => void }) {
+function TracingSection({ enabled, onOpenTraces }: { enabled: boolean | undefined; onOpenTraces: () => void }) {
   return (
     <SettingsSection heading="Tracing" description="Where your agents send runs so Lens can read them.">
       <SettingsCard className="flex flex-wrap items-center justify-between gap-3">
@@ -18,7 +18,8 @@ function TracingSection({ enabled, onOpenTraces }: { enabled: boolean; onOpenTra
           <Activity aria-hidden="true" className="size-4 text-muted-foreground" />
           <span role="status" className="inline-flex items-center gap-2">
             <StatusDot state={enabled ? "ok" : "off"} />
-            {enabled ? "Tracing enabled" : "Tracing is not enabled"}
+            {enabled === undefined && "Tracing status is unavailable"}
+            {enabled !== undefined && (enabled ? "Tracing enabled" : "Tracing is not enabled")}
           </span>
         </div>
         <div className="flex items-center gap-3">
@@ -32,7 +33,7 @@ function TracingSection({ enabled, onOpenTraces }: { enabled: boolean; onOpenTra
             <ArrowUpRight aria-hidden="true" className="size-3" />
           </a>
           <Button variant="outline" size="sm" onClick={onOpenTraces}>
-            {enabled ? "Connect an agent" : "Enable tracing"}
+            {enabled !== false ? "Connect an agent" : "Enable tracing"}
           </Button>
         </div>
       </SettingsCard>
@@ -41,24 +42,28 @@ function TracingSection({ enabled, onOpenTraces }: { enabled: boolean; onOpenTra
 }
 
 export function LensSettings({
-  list,
+  tracingEnabled,
+  workers,
   workerReadyAction,
   onOpenTraces,
 }: {
-  list: LensList;
+  tracingEnabled: boolean | undefined;
+  workers: LensList["workers"] | null;
   /** Replaces the worker install card's Done button once the new worker connects. */
   workerReadyAction?: ReactNode;
   onOpenTraces: () => void;
 }) {
   return (
     <div aria-label="Settings" role="region" className="flex w-full flex-col divide-y divide-border">
-      <TracingSection enabled={list.tracing_enabled} onOpenTraces={onOpenTraces} />
-      <SettingsSection
-        heading="Analysis worker"
-        description="Runs investigations on your server and bills model usage to an analysis key."
-      >
-        <WorkerSettings workers={list.workers} readyAction={workerReadyAction} />
-      </SettingsSection>
+      <TracingSection enabled={tracingEnabled} onOpenTraces={onOpenTraces} />
+      {workers && (
+        <SettingsSection
+          heading="Analysis worker"
+          description="Runs investigations on your server and bills model usage to an analysis key."
+        >
+          <WorkerSettings workers={workers} readyAction={workerReadyAction} />
+        </SettingsSection>
+      )}
     </div>
   );
 }

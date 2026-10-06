@@ -1,12 +1,11 @@
 "use client";
 
-import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
+import { createParser, parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useCallback } from "react";
 import { OPEN_TRACE_PARSERS, RUN_FILTER_PARSERS } from "@/components/lens/traces/routing";
 
 export const LENS_TABS = {
   traces: "Traces",
-  findings: "Findings",
   investigations: "Investigations",
   settings: "Settings",
 } as const;
@@ -20,7 +19,10 @@ export const LENS_DIALOGS = ["new", "edit", "duplicate", "run_now", "monitoring"
 export type LensDialog = (typeof LENS_DIALOGS)[number];
 
 const LENS_PARSERS = {
-  tab: parseAsStringLiteral(lensTabs),
+  tab: createParser<LensTab>({
+    parse: (value) => (value === "findings" ? "investigations" : parseAsStringLiteral(lensTabs).parse(value)),
+    serialize: (value) => value,
+  }),
   lens: parseAsString,
   demo: parseAsBoolean.withDefault(false),
   setup: parseAsStringLiteral(["lens"]),

@@ -176,7 +176,7 @@ function SetupEditor({
           >
             <label className="grid gap-2 text-sm font-medium">
               Investigation name
-              <Input {...register("name")} placeholder="e.g. Support quality" />
+              <Input {...register("name")} placeholder="e.g. Support quality" data-1p-ignore />
             </label>
             <ScopeFields {...activity.scope} />
             <SampleFields />

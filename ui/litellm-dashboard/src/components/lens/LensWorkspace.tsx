@@ -15,7 +15,6 @@ import { LensSettings } from "./settings/LensSettings";
 import { createLensDemo } from "./data/demo/createLensDemo";
 import { lensQueries } from "./data/queries";
 import { LensModeSwitch } from "./LensModeSwitch";
-import { FindingsView } from "./investigations/FindingsView";
 import { investigationActivity, listPollInterval } from "./model/status";
 import { cn } from "@/lib/cva.config";
 import { useDialogRoute, useIssueRoute, useLensRoute, type LensDialog, type LensTab } from "./route";
@@ -88,7 +87,7 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
   const isAdmin = isProxyAdminRole(userRole);
   const canConfigure = canViewInvestigations && !readOnly;
   const defaultTab = lensId ? "investigations" : "traces";
-  const activeTab = tab === "settings" && !canConfigure ? defaultTab : tab ?? defaultTab;
+  const activeTab = tab ?? defaultTab;
   const setupState = useLensReadiness(canViewInvestigations);
   const setupLocation = {
     tab: activeTab,
@@ -197,13 +196,6 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                     canViewFindings={canViewInvestigations}
                   />
                 </TabsContent>
-                <TabsContent value="findings" className={PANEL}>
-                  {canViewInvestigations ? (
-                    <FindingsView readOnly={readOnly || !isAdmin} />
-                  ) : (
-                    <p className="py-6 text-sm text-muted-foreground">Findings require proxy administrator access.</p>
-                  )}
-                </TabsContent>
                 <TabsContent value="investigations" className={PANEL}>
                   {canViewInvestigations ? (
                     <InvestigationsView readOnly={readOnly || !isAdmin} />
@@ -215,21 +207,20 @@ function LensContent({ userRole, readOnly }: Omit<WorkspaceProps, "accessToken">
                 </TabsContent>
               </>
             )}
-            {workers && list && (
-              <TabsContent value="settings" keepMounted className={cn(PANEL, "p-3 sm:p-5")}>
-                <LensSettings
-                  list={list}
-                  workerReadyAction={
-                    list.lenses.length === 0 ? (
-                      <Button className="w-full" onClick={startFirstInvestigation}>
-                        New investigation
-                      </Button>
-                    ) : undefined
-                  }
-                  onOpenTraces={() => setTab("traces")}
-                />
-              </TabsContent>
-            )}
+            <TabsContent value="settings" keepMounted className={cn(PANEL, "p-3 sm:p-5")}>
+              <LensSettings
+                tracingEnabled={list?.tracing_enabled}
+                workers={workers}
+                workerReadyAction={
+                  list?.lenses.length === 0 ? (
+                    <Button className="w-full" onClick={startFirstInvestigation}>
+                      New investigation
+                    </Button>
+                  ) : undefined
+                }
+                onOpenTraces={() => setTab("traces")}
+              />
+            </TabsContent>
           </div>
         </Tabs>
       </main>
