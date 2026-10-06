@@ -9447,7 +9447,7 @@ export interface paths {
          *     - `none`: the team has no member budget
          *
          *     ```
-         *     curl --globoff 'http://0.0.0.0:4000/management/v1/teams/team-1/members?q=acme&filter[role]=admin' -H 'Authorization: Bearer sk-1234'
+         *     curl --globoff 'http://0.0.0.0:4000/management/v1/teams/team-1/members?q=acme&filter[role]=admin' -H "Authorization: Bearer $LITELLM_MASTER_KEY"
          *     ```
          */
         get: operations["list_team_members_management_v1_teams__team_id__members_get"];
