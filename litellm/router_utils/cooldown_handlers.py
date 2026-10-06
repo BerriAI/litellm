@@ -358,6 +358,10 @@ def _should_cooldown_deployment(
             or litellm_router_instance.team_model_has_alternatives(deployment)
         )
 
+    exception_status_int: Final = cast_exception_status_to_int(exception_status)
+    if is_single_deployment_model_group and exception_status_int == 402:
+        return False
+
     ## CHECK DEPLOYMENT-LEVEL POLICY FIRST (overrides router-level)
     dep_policy, dep_allowed_fails = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
     if dep_policy is not None or dep_allowed_fails is not None:
@@ -394,7 +398,6 @@ def _should_cooldown_deployment(
             num_fails_this_minute,
         )
 
-        exception_status_int: Final = cast_exception_status_to_int(exception_status)
         if exception_status_int == 429 and not is_single_deployment_model_group:
             return True
         elif percent_fails == 1.0 and total_requests_this_minute >= SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD:
@@ -408,7 +411,7 @@ def _should_cooldown_deployment(
             # Only apply error rate cooldown when we have enough requests to make the percentage meaningful
             return True
 
-        elif litellm._should_retry(status_code=cast_exception_status_to_int(exception_status)) is False:
+        elif litellm._should_retry(status_code=exception_status_int) is False:
             return True
 
         return False
