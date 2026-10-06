@@ -297,8 +297,7 @@ RUNWAYML_DEFAULT_API_VERSION: Final = str(os.getenv("RUNWAYML_DEFAULT_API_VERSIO
 RUNWAYML_POLLING_TIMEOUT = int(os.getenv("RUNWAYML_POLLING_TIMEOUT", 600))  # 10 minutes default for image generation
 
 ########## Networking constants ##############################################################
-DEFAULT_TTL_FOR_HTTPX_CLIENTS: Final = 3600  # 1 hour, re-use the same httpx client for 1 hour
-_DEFAULT_TTL_FOR_HTTPX_CLIENTS = DEFAULT_TTL_FOR_HTTPX_CLIENTS
+_DEFAULT_TTL_FOR_HTTPX_CLIENTS: Final = 3600  # 1 hour, re-use the same httpx client for 1 hour
 
 # The earliest an evicted, litellm-created client may be closed. A request handed the
 # client just before eviction is still using it, so nothing is closed inside this window;
@@ -494,8 +493,7 @@ REPEATED_STREAMING_CHUNK_LIMIT: Final = int(
 # Shared maxsize for functools.lru_cache usage across hot paths.
 # Defaulted to 64 to avoid cache thrash in multi-model production workloads.
 DEFAULT_MAX_LRU_CACHE_SIZE: Final = int(os.getenv("DEFAULT_MAX_LRU_CACHE_SIZE", 64))
-REALTIME_BODY_CACHE_SIZE = 1000  # Keep realtime helper caches bounded; workloads rarely exceed 1k models/intents
-_REALTIME_BODY_CACHE_SIZE = REALTIME_BODY_CACHE_SIZE
+_REALTIME_BODY_CACHE_SIZE = 1000  # Keep realtime helper caches bounded; workloads rarely exceed 1k models/intents
 INITIAL_RETRY_DELAY: Final = float(os.getenv("INITIAL_RETRY_DELAY", 0.5))
 MAX_RETRY_DELAY: Final = float(os.getenv("MAX_RETRY_DELAY", 8.0))
 JITTER: Final = float(os.getenv("JITTER", 0.75))
@@ -1076,13 +1074,12 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "hyperbolic",
     "wandb",
 ]
-openai_like_providers: Final[list[str]] = [
+_openai_like_providers: Final[list[str]] = [
     "predibase",
     "databricks",
     "lemonade",
     "watsonx",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
-_openai_like_providers = openai_like_providers
 # well supported replicate llms
 replicate_models: Final[set] = set(
     [

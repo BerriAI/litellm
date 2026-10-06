@@ -70,12 +70,11 @@ if set_verbose is True:
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
 
-ENABLE_SECRET_REDACTION: Final = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
-_ENABLE_SECRET_REDACTION = ENABLE_SECRET_REDACTION
+_ENABLE_SECRET_REDACTION: Final = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
 
 
 def redact_string(value: str) -> str:
-    if not ENABLE_SECRET_REDACTION:
+    if not _ENABLE_SECRET_REDACTION:
         return value
     return redact_secret_string(value)
 
@@ -118,7 +117,7 @@ def redact_secrets(value: str) -> str:
     content for privacy — this function redacts credential patterns (API keys,
     PEM blocks, tokens, etc.) by shape.
     """
-    if not ENABLE_SECRET_REDACTION:
+    if not _ENABLE_SECRET_REDACTION:
         return value
     return redact_string(value)
 
@@ -126,7 +125,7 @@ def redact_secrets(value: str) -> str:
 def redact_internal_details_from_client_message(value: str) -> str:
     """Public API: redact_secrets() plus filesystem paths, internal hostnames, and an
     embedded traceback, for a string about to leave the process in an HTTP response."""
-    if not ENABLE_SECRET_REDACTION:
+    if not _ENABLE_SECRET_REDACTION:
         return value
     return redact_internal_details(value)
 
@@ -152,11 +151,10 @@ def _substituted_color_message(record: logging.LogRecord) -> str | None:
 class SecretRedactionFilter(logging.Filter):
     """Scrubs known secret/credential patterns from log records."""
 
-    formatter = logging.Formatter()
-    _formatter = formatter
+    _formatter = logging.Formatter()
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if not ENABLE_SECRET_REDACTION or _is_redacted(record):
+        if not _ENABLE_SECRET_REDACTION or _is_redacted(record):
             return True
         return _process_record(record, base64_limit=0, text_limit=0, redact=True)
 
@@ -216,7 +214,7 @@ class AccessLogRedactionFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if not ENABLE_SECRET_REDACTION:
+        if not _ENABLE_SECRET_REDACTION:
             return True
         if isinstance(record.args, tuple) and record.args:
             strings: Final = tuple(arg for arg in record.args if isinstance(arg, str))
@@ -419,7 +417,7 @@ def _render_exception(record: logging.LogRecord) -> str | None:
     if not isinstance(record.exc_info, tuple) or len(record.exc_info) < 2 or record.exc_info[1] is None:
         return None
     try:
-        return record.exc_text or SecretRedactionFilter.formatter.formatException(record.exc_info)
+        return record.exc_text or SecretRedactionFilter._formatter.formatException(record.exc_info)
     except Exception:
         return "REDACTED"
 
@@ -559,7 +557,7 @@ class DiagnosticProcessingFilter(StdoutLogTruncationFilter):
             record,
             base64_limit=_get_max_base64_length_stdout_log(),
             text_limit=_get_max_string_length_stdout_log() if record.levelno >= logging.INFO else 0,
-            redact=ENABLE_SECRET_REDACTION,
+            redact=_ENABLE_SECRET_REDACTION,
         )
 
 
@@ -785,7 +783,7 @@ class JsonFormatter(Formatter):
             json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
         return safe_dumps(
-            json_record if _is_redacted(record) or not ENABLE_SECRET_REDACTION else _redact_json_record(json_record)
+            json_record if _is_redacted(record) or not _ENABLE_SECRET_REDACTION else _redact_json_record(json_record)
         )
 
 

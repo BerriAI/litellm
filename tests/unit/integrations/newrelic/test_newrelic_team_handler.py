@@ -141,11 +141,11 @@ class TestNewRelicHandler:
 
     def test_team_callback_params_are_blocked_for_requests(self):
         from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
-            request_blocked_callback_params,
+            _request_blocked_callback_params,
         )
 
-        assert "newrelic_api_key" in request_blocked_callback_params
-        assert "newrelic_region" in request_blocked_callback_params
+        assert "newrelic_api_key" in _request_blocked_callback_params
+        assert "newrelic_region" in _request_blocked_callback_params
 
 
 class TestDynamicCredentialDetection:

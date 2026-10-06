@@ -29,7 +29,7 @@ import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
-    DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
     get_ssl_configuration,
     http2_enabled,
@@ -254,7 +254,7 @@ class BaseOpenAILLM:
         litellm.in_memory_llm_clients_cache.set_cache(
             key=_cache_key,
             value=openai_client,
-            ttl=DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+            ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
             litellm_owned_client=litellm_owned_client,
         )
 

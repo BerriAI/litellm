@@ -40,7 +40,7 @@ class DataDogHandler:
 
         Note: This handler is only called when team-scoped DD credentials are present.
         The global (env-var based) DataDogLogger is managed separately by
-        _init_custom_logger_compatible_class via in_memory_loggers.
+        _init_custom_logger_compatible_class via _in_memory_loggers.
         """
         _credentials: Final = DataDogHandler.get_dynamic_datadog_logging_config(
             standard_callback_dynamic_params=standard_callback_dynamic_params,

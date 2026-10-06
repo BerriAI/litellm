@@ -30,7 +30,7 @@ SECRET = "sk-proj-abc123def456ghi789jklmnopqrst"
 @pytest.fixture(autouse=True)
 def _enable_redaction():
     """Ensure secret redaction is on (the default) for all tests in this module."""
-    with patch("litellm._logging.ENABLE_SECRET_REDACTION", True):
+    with patch("litellm._logging._ENABLE_SECRET_REDACTION", True):
         yield
 
 
@@ -276,7 +276,7 @@ def test_filter_redacts_secrets_substituted_into_color_message():
 
 def test_disable_redaction_passes_secrets_through():
     """When LITELLM_DISABLE_REDACT_SECRETS=true, secrets pass through."""
-    with patch("litellm._logging.ENABLE_SECRET_REDACTION", False):
+    with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):
         record = logging.LogRecord(
             name="test",
             level=logging.DEBUG,
@@ -753,6 +753,6 @@ def test_redact_internal_details_drops_embedded_traceback():
 
 
 def test_redact_internal_details_from_client_message_respects_disable_flag():
-    with patch("litellm._logging.ENABLE_SECRET_REDACTION", False):  # test-quality-ok: the opt-out flag is the SUT
+    with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):  # test-quality-ok: the opt-out flag is the SUT
         text = "config file /etc/litellm/secrets/db.yaml"
         assert redact_internal_details_from_client_message(text) == text

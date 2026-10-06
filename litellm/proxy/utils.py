@@ -49,7 +49,7 @@ from typing import (
 
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm import custom_logger_compatible_callbacks_literal
+from litellm import _custom_logger_compatible_callbacks_literal
 from litellm.constants import (
     DEFAULT_MODEL_CREATED_AT_TIME,
     FILE_USAGE_MAX_TRACKED_COUNTERS,
@@ -601,7 +601,7 @@ def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple
     resolved: Final = tuple(
         litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
             cast(  # cast-ok: the resolver returns None for unknown names, filtered below
-                custom_logger_compatible_callbacks_literal, callback
+                _custom_logger_compatible_callbacks_literal, callback
             )
         )
         if isinstance(callback, str)
@@ -1405,7 +1405,7 @@ class ProxyLogging:
         for idx, callback in enumerate(litellm.callbacks):
             if isinstance(callback, str):
                 initialized_callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
-                    cast(custom_logger_compatible_callbacks_literal, callback),
+                    cast(_custom_logger_compatible_callbacks_literal, callback),
                     internal_usage_cache=self.internal_usage_cache.dual_cache,
                     llm_router=llm_router,
                 )
@@ -2843,7 +2843,7 @@ class ProxyLogging:
         for callback in callbacks:
             if isinstance(callback, str):
                 resolved = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                    cast(custom_logger_compatible_callbacks_literal, callback)
+                    cast(_custom_logger_compatible_callbacks_literal, callback)
                 )
             else:
                 resolved = callback
@@ -3325,7 +3325,7 @@ class ProxyLogging:
                 _callback: CustomLogger | None = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        cast(custom_logger_compatible_callbacks_literal, callback)
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback
@@ -3787,7 +3787,7 @@ class ProxyLogging:
                 _callback: CustomLogger | None = None
                 if isinstance(callback, str):
                     _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        cast(custom_logger_compatible_callbacks_literal, callback)
+                        cast(_custom_logger_compatible_callbacks_literal, callback)
                     )
                 else:
                     _callback = callback
@@ -3921,7 +3921,7 @@ class ProxyLogging:
                             continue
                     if isinstance(callback, str):
                         _callback = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                            cast(custom_logger_compatible_callbacks_literal, callback)
+                            cast(_custom_logger_compatible_callbacks_literal, callback)
                         )
                     else:
                         _callback = callback

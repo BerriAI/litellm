@@ -1740,12 +1740,12 @@ async def test_datadog_logger_not_shadowed_by_llm_obs(monkeypatch):
     from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module.in_memory_loggers.clear()
+    logging_module._in_memory_loggers.clear()
 
     try:
         # Cache an LLM Obs logger first to mirror callbacks=["datadog_llm_observability", ...]
         obs_logger = DataDogLLMObsLogger()
-        logging_module.in_memory_loggers.append(obs_logger)
+        logging_module._in_memory_loggers.append(obs_logger)
 
         datadog_logger = logging_module._init_custom_logger_compatible_class(
             logging_integration="datadog",
@@ -1756,10 +1756,10 @@ async def test_datadog_logger_not_shadowed_by_llm_obs(monkeypatch):
 
         # Regression check: we expect a distinct DataDogLogger, not the LLM Obs logger
         assert type(datadog_logger) is DataDogLogger
-        assert any(isinstance(cb, DataDogLLMObsLogger) for cb in logging_module.in_memory_loggers)
-        assert any(type(cb) is DataDogLogger for cb in logging_module.in_memory_loggers)
+        assert any(isinstance(cb, DataDogLLMObsLogger) for cb in logging_module._in_memory_loggers)
+        assert any(type(cb) is DataDogLogger for cb in logging_module._in_memory_loggers)
     finally:
-        logging_module.in_memory_loggers.clear()
+        logging_module._in_memory_loggers.clear()
 
 
 @pytest.mark.asyncio
@@ -1774,7 +1774,7 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
     from litellm.integrations.opentelemetry import OpenTelemetry  # logger class
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module.in_memory_loggers.clear()
+    logging_module._in_memory_loggers.clear()
 
     try:
         # Instantiate via the same mechanism LiteLLM uses for callbacks=["logfire"]
@@ -1787,7 +1787,7 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
 
         # Sanity: we got the right logger type and it is cached
         assert type(logger) is OpenTelemetry
-        assert any(type(cb) is OpenTelemetry for cb in logging_module.in_memory_loggers)
+        assert any(type(cb) is OpenTelemetry for cb in logging_module._in_memory_loggers)
 
         # Core regression check: base URL env var should influence the exporter endpoint.
         #
@@ -1806,7 +1806,7 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
         assert endpoint == "https://logfire-api-custom.pydantic.dev/v1/traces"
 
     finally:
-        logging_module.in_memory_loggers.clear()
+        logging_module._in_memory_loggers.clear()
 
 
 @pytest.mark.parametrize(
@@ -1833,7 +1833,7 @@ def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", raising=False)
     if api_host is not None:
         monkeypatch.setenv("LANGTRACE_API_HOST", api_host)
-    logging_module.in_memory_loggers.clear()
+    logging_module._in_memory_loggers.clear()
     try:
         logger: Final = logging_module._init_custom_logger_compatible_class(
             logging_integration="langtrace",
@@ -1848,7 +1848,7 @@ def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
         assert exporter._headers == {"x-api-key": api_key}
         assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
     finally:
-        logging_module.in_memory_loggers.clear()
+        logging_module._in_memory_loggers.clear()
 
 
 @pytest.mark.asyncio
@@ -7535,7 +7535,7 @@ def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module.in_memory_loggers.clear()
+    logging_module._in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     monkeypatch.setenv("NEW_RELIC_LICENSE_KEY", "test-license-key")
     is_otel_v2_enabled.cache_clear()
@@ -7557,7 +7557,7 @@ def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
         )
         assert again is v2_logger
     finally:
-        logging_module.in_memory_loggers.clear()
+        logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
 
@@ -7567,7 +7567,7 @@ def test_newrelic_dispatch_keeps_legacy_agent_when_flag_off(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module.in_memory_loggers.clear()
+    logging_module._in_memory_loggers.clear()
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
     is_otel_v2_enabled.cache_clear()
     try:
@@ -7579,7 +7579,7 @@ def test_newrelic_dispatch_keeps_legacy_agent_when_flag_off(monkeypatch):
         )
         assert isinstance(legacy, NewRelicLogger)
     finally:
-        logging_module.in_memory_loggers.clear()
+        logging_module._in_memory_loggers.clear()
         is_otel_v2_enabled.cache_clear()
 
 
@@ -7590,7 +7590,7 @@ def test_get_custom_logger_compatible_class_finds_v2_newrelic(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module.in_memory_loggers.clear()
+    logging_module._in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     monkeypatch.setenv("NEW_RELIC_LICENSE_KEY", "test-license-key")
     is_otel_v2_enabled.cache_clear()
@@ -7604,7 +7604,7 @@ def test_get_custom_logger_compatible_class_finds_v2_newrelic(monkeypatch):
         found = logging_module.get_custom_logger_compatible_class("newrelic")
         assert found is created
     finally:
-        logging_module.in_memory_loggers.clear()
+        logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
 
@@ -9334,7 +9334,7 @@ def test_signoz_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
     from litellm.integrations.otel.model.config import ExporterOwner, is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module.in_memory_loggers.clear()
+    logging_module._in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "https://ingest.eu.signoz.cloud:443")
     monkeypatch.setenv("SIGNOZ_INGESTION_KEY", "test-key")
@@ -9359,7 +9359,7 @@ def test_signoz_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
         )
         assert again is v2_logger
     finally:
-        logging_module.in_memory_loggers.clear()
+        logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
 
@@ -9369,7 +9369,7 @@ def test_signoz_dispatch_keeps_legacy_otel_when_flag_off(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module.in_memory_loggers.clear()
+    logging_module._in_memory_loggers.clear()
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
     monkeypatch.setenv("SIGNOZ_INGESTION_ENDPOINT", "http://signoz-collector.internal:4318")
     monkeypatch.setenv("SIGNOZ_INGESTION_KEY", "legacy-key")
@@ -9396,7 +9396,7 @@ def test_signoz_dispatch_keeps_legacy_otel_when_flag_off(monkeypatch):
         )
         assert again is legacy
     finally:
-        logging_module.in_memory_loggers.clear()
+        logging_module._in_memory_loggers.clear()
         is_otel_v2_enabled.cache_clear()
 
 
@@ -9404,7 +9404,7 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
-    logging_module.in_memory_loggers.clear()
+    logging_module._in_memory_loggers.clear()
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
     monkeypatch.delenv("SIGNOZ_INGESTION_ENDPOINT", raising=False)
     monkeypatch.delenv("SIGNOZ_INGESTION_KEY", raising=False)
@@ -9418,10 +9418,10 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         )
         assert created is None
         assert not [
-            cb for cb in logging_module.in_memory_loggers if getattr(cb, "callback_name", None) == "signoz"
+            cb for cb in logging_module._in_memory_loggers if getattr(cb, "callback_name", None) == "signoz"
         ]
     finally:
-        logging_module.in_memory_loggers.clear()
+        logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
 

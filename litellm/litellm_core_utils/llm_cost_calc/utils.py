@@ -67,7 +67,7 @@ _SERVICE_TIER_SUFFIXES: Final[tuple[str, ...]] = tuple(
     sorted((f"_{st.value}" for st in ServiceTier), key=len, reverse=True)
 )
 
-SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
+_SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
     {
         ServiceTier.FLEX.value: ServiceTier.FLEX.value,
         ServiceTier.BALANCED.value: ServiceTier.BALANCED.value,
@@ -76,9 +76,8 @@ SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
         ServiceTier.ULTRAFAST.value: ServiceTier.ULTRAFAST.value,
     }
 )
-_SERVICE_TIER_TO_COST_KEY_SUFFIX = SERVICE_TIER_TO_COST_KEY_SUFFIX
 SERVICE_TIER_COST_KEY_SUFFIXES: Final[tuple[str, ...]] = tuple(
-    sorted(frozenset(f"_{suffix}" for suffix in SERVICE_TIER_TO_COST_KEY_SUFFIX.values()))
+    sorted(frozenset(f"_{suffix}" for suffix in _SERVICE_TIER_TO_COST_KEY_SUFFIX.values()))
 )
 
 _INCLUSIVE_THRESHOLD_PROVIDERS: Final = frozenset({"xai"})
@@ -271,7 +270,7 @@ def get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
     if service_tier is None:
         return base_key
 
-    suffix: Final = SERVICE_TIER_TO_COST_KEY_SUFFIX.get(service_tier.lower())
+    suffix: Final = _SERVICE_TIER_TO_COST_KEY_SUFFIX.get(service_tier.lower())
     if suffix is None:
         return base_key
 

@@ -82,7 +82,7 @@ def validate_langfuse_span_scope_value(value: str) -> None:
 
 
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict
-supported_callback_params: Final[tuple[str, ...]] = (
+_supported_callback_params: Final[tuple[str, ...]] = (
     "langfuse_public_key",
     "langfuse_secret",
     "langfuse_secret_key",
@@ -117,9 +117,8 @@ supported_callback_params: Final[tuple[str, ...]] = (
     "signoz_ingestion_key",
     "turn_off_message_logging",
 )
-_supported_callback_params = supported_callback_params
 
-request_blocked_callback_params: Final = frozenset(
+_request_blocked_callback_params: Final = frozenset(
     {
         "gcs_bucket_name",
         "gcs_path_service_account",
@@ -133,7 +132,6 @@ request_blocked_callback_params: Final = frozenset(
         "signoz_ingestion_key",
     }
 )
-_request_blocked_callback_params = request_blocked_callback_params
 
 # Request-blocked params that must still reach ``standard_callback_dynamic_params``
 # when the proxy itself stamped them from admin-configured team/key callback
@@ -178,8 +176,8 @@ def initialize_standard_callback_dynamic_params(
     standard_callback_dynamic_params: Final = StandardCallbackDynamicParams()
     if kwargs:
         # 1. Check top-level kwargs
-        for param in supported_callback_params:
-            if param in request_blocked_callback_params:
+        for param in _supported_callback_params:
+            if param in _request_blocked_callback_params:
                 continue
             if param in kwargs:
                 _param_value = kwargs.get(param)
@@ -189,8 +187,8 @@ def initialize_standard_callback_dynamic_params(
                 )
 
         for slot_label, metadata in iter_client_callback_metadata_dicts(kwargs):
-            for param in supported_callback_params:
-                if param in request_blocked_callback_params:
+            for param in _supported_callback_params:
+                if param in _request_blocked_callback_params:
                     continue
                 if param not in standard_callback_dynamic_params and param in metadata:
                     _param_value = metadata.get(param)

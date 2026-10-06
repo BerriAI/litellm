@@ -24,6 +24,7 @@ from httpx._utils import get_environment_proxies
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import (
+    _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
     AIOHTTP_KEEPALIVE_TIMEOUT,
@@ -35,7 +36,6 @@ from litellm.constants import (
     AIOHTTP_TTL_DNS_CACHE,
     COMPLETION_HTTP_FALLBACK_SECONDS,
     DEFAULT_SSL_CIPHERS,
-    DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -1760,7 +1760,7 @@ def get_async_httpx_client(
     cache.set_cache(
         key=_cache_key_name,
         value=_new_client,
-        ttl=DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+        ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
         litellm_owned_client=True,
     )
     return _new_client
@@ -1806,7 +1806,7 @@ def _get_httpx_client(params: dict | None = None) -> HTTPHandler:
     cache.set_cache(
         key=_cache_key_name,
         value=_new_client,
-        ttl=DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+        ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
         litellm_owned_client=True,
     )
     return _new_client

@@ -3324,7 +3324,7 @@ class TestObservabilityCallbackBans:
     metadata blob (multipart/``extra_body`` path).
 
     The ban list is derived from
-    ``litellm.litellm_core_utils.initialize_dynamic_callback_params.supported_callback_params``
+    ``litellm.litellm_core_utils.initialize_dynamic_callback_params._supported_callback_params``
     minus a small ``_SAFE_CLIENT_CALLBACK_PARAMS`` allow-list, plus
     ``_EXTRA_BANNED_OBSERVABILITY_PARAMS`` for fields integrations read but
     that are not yet in the canonical allow-list. The derivation keeps the
@@ -3535,14 +3535,14 @@ def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
 
 def test_observability_ban_covers_canonical_supported_callback_params():
     """Guard test: every entry in the canonical
-    ``supported_callback_params`` allow-list must end up either banned by
+    ``_supported_callback_params`` allow-list must end up either banned by
     the proxy or explicitly safe-listed. New integrations added to that
     list are banned by default (the safe failure mode); flagging them as
     safe is an explicit decision recorded in
     ``_SAFE_CLIENT_CALLBACK_PARAMS``."""
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
-        request_blocked_callback_params,
-        supported_callback_params,
+        _request_blocked_callback_params,
+        _supported_callback_params,
     )
     from litellm.proxy.auth.auth_utils import (
         _BANNED_REQUEST_BODY_PARAMS,
@@ -3550,16 +3550,16 @@ def test_observability_ban_covers_canonical_supported_callback_params():
     )
 
     banned = set(_BANNED_REQUEST_BODY_PARAMS)
-    for param in supported_callback_params:
+    for param in _supported_callback_params:
         assert param in banned or param in _SAFE_CLIENT_CALLBACK_PARAMS, (
-            f"{param} is in supported_callback_params but neither banned nor "
+            f"{param} is in _supported_callback_params but neither banned nor "
             f"safe-listed. Add it to _SAFE_CLIENT_CALLBACK_PARAMS if it is an "
             f"informational per-request field; otherwise the derivation will "
             f"ban it automatically."
         )
-    for param in request_blocked_callback_params:
+    for param in _request_blocked_callback_params:
         assert param in banned, (
-            f"{param} is in request_blocked_callback_params but is not banned at the proxy request-body boundary."
+            f"{param} is in _request_blocked_callback_params but is not banned at the proxy request-body boundary."
         )
 
 

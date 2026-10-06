@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
-from litellm._logging import ENABLE_SECRET_REDACTION, redact_string
+from litellm._logging import _ENABLE_SECRET_REDACTION, redact_string
 
 
 class TestRedactStringFunction:
@@ -40,7 +40,7 @@ class TestRedactStringFunction:
         assert redact_string(text) == text
 
     @pytest.mark.skipif(
-        not ENABLE_SECRET_REDACTION, reason="redaction disabled via env var"
+        not _ENABLE_SECRET_REDACTION, reason="redaction disabled via env var"
     )
     def test_redaction_enabled_by_default(self):
         text = "Bearer sk-1234567890abcdefghij"

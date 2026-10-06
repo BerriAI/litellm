@@ -10,9 +10,9 @@ from litellm.integrations.generic_api.generic_api_callback import GenericAPILogg
 from litellm.types.utils import CallbacksByType
 
 if TYPE_CHECKING:
-    from litellm import custom_logger_compatible_callbacks_literal
+    from litellm import _custom_logger_compatible_callbacks_literal
 else:
-    custom_logger_compatible_callbacks_literal = str
+    _custom_logger_compatible_callbacks_literal = str
 
 _generic_api_logger_cache: Final[dict[str, GenericAPILogger]] = {}
 
@@ -479,7 +479,7 @@ class LoggingCallbackManager:
 
     def get_active_custom_logger_for_callback_name(
         self,
-        callback_name: custom_logger_compatible_callbacks_literal,
+        callback_name: _custom_logger_compatible_callbacks_literal,
     ) -> CustomLogger | None:
         """
         Get the active custom logger for a given callback name

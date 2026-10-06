@@ -503,7 +503,7 @@ def image_generation(
                 api_base=api_base,
                 api_key=api_key,
             )
-        elif custom_llm_provider in litellm.custom_providers:  # Assume custom LLM provider
+        elif custom_llm_provider in litellm._custom_providers:  # Assume custom LLM provider
             # Get the Custom Handler
             custom_handler: CustomLLM | None = None
             for item in litellm.custom_provider_map:
@@ -780,7 +780,7 @@ def image_edit(
         )
 
         # Check for custom provider
-        if custom_llm_provider in litellm.custom_providers:
+        if custom_llm_provider in litellm._custom_providers:
             custom_handler: CustomLLM | None = None
             for item in litellm.custom_provider_map:
                 if item["provider"] == custom_llm_provider:

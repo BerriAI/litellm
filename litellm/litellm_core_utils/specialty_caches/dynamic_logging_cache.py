@@ -12,7 +12,7 @@ from typing import Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import DEFAULT_TTL_FOR_HTTPX_CLIENTS
+from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 
 from ...caching import InMemoryCache
 
@@ -57,7 +57,7 @@ class DynamicLoggingCache:
     """
 
     def __init__(self) -> None:
-        self.cache = LangfuseInMemoryCache(default_ttl=DEFAULT_TTL_FOR_HTTPX_CLIENTS)
+        self.cache = LangfuseInMemoryCache(default_ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS)
 
     def get_cache_key(self, args: dict) -> str:
         args_str: Final = json.dumps(args, sort_keys=True)

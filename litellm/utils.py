@@ -573,15 +573,15 @@ def custom_llm_setup():
         if custom_llm["provider"] not in litellm.provider_list:
             litellm.provider_list.append(custom_llm["provider"])
 
-        if custom_llm["provider"] not in litellm.custom_providers:
-            litellm.custom_providers.append(custom_llm["provider"])
+        if custom_llm["provider"] not in litellm._custom_providers:
+            litellm._custom_providers.append(custom_llm["provider"])
 
 
 def add_custom_logger_callback_to_specific_event(callback: str, logging_event: Literal["success", "failure"]) -> None:
     """
     Add a custom logger callback to the specific event
     """
-    from litellm import custom_logger_compatible_callbacks_literal
+    from litellm import _custom_logger_compatible_callbacks_literal
     from litellm.litellm_core_utils.litellm_logging import (
         _init_custom_logger_compatible_class,
     )
@@ -595,7 +595,7 @@ def add_custom_logger_callback_to_specific_event(callback: str, logging_event: L
         return
 
     callback_class: Final = _init_custom_logger_compatible_class(
-        cast(custom_logger_compatible_callbacks_literal, callback),
+        cast(_custom_logger_compatible_callbacks_literal, callback),
         internal_usage_cache=None,
         llm_router=None,
     )

@@ -1676,7 +1676,7 @@ def registered_custom_provider(monkeypatch: pytest.MonkeyPatch) -> str:
         litellm, "custom_provider_map", [{"provider": "test-onprem-llm", "custom_handler": OnPremLLM()}]
     )
     monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
-    monkeypatch.setattr(litellm, "custom_providers", list(litellm.custom_providers))
+    monkeypatch.setattr(litellm, "_custom_providers", list(litellm._custom_providers))
     return "test-onprem-llm"
 
 

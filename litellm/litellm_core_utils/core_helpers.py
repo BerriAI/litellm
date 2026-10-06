@@ -194,7 +194,7 @@ def coerce_token_limit(value: object) -> int | None:
     return None
 
 
-FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
+_FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     # Anthropic
     "stop_sequence": "stop",
     "end_turn": "stop",
@@ -248,11 +248,10 @@ FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     # emit lowercase "error" when a provider fails mid-stream)
     "error": "stop",
 }
-_FINISH_REASON_MAP = FINISH_REASON_MAP
 
 
 def map_finish_reason(finish_reason: str) -> OpenAIChatCompletionFinishReason:
-    mapped: Final = FINISH_REASON_MAP.get(finish_reason)
+    mapped: Final = _FINISH_REASON_MAP.get(finish_reason)
     if mapped is None:
         verbose_logger.warning("Unmapped finish_reason '%s', defaulting to 'stop'", finish_reason)
         return "stop"

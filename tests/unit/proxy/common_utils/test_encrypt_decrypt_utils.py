@@ -162,7 +162,7 @@ def test_decrypt_failure_debug_log_omits_raw_value(monkeypatch):
     import litellm._logging as _logging_module
     from litellm._logging import verbose_proxy_logger
 
-    monkeypatch.setattr(_logging_module, "ENABLE_SECRET_REDACTION", False)
+    monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
 
     secret = "postgresql://leak_user:leak_pw_decrypt@leak-host:5432/leak_db"
 

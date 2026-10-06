@@ -243,9 +243,8 @@ class CompletionDispatchContext:
 _CompletionDispatchContext = CompletionDispatchContext
 
 
-CompletionDispatchResult = Union[
+_CompletionDispatchResult = Union[
     Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
     "ModelResponse",
     "CustomStreamWrapper",
 ]
-_CompletionDispatchResult = CompletionDispatchResult

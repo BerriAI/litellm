@@ -103,8 +103,7 @@ class _ResponseWithUsageView(TypedDict, total=False):
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 # Cap on credential-scoped providers held at once; each one owns an exporter thread.
-MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
-_MAX_DYNAMIC_TRACER_PROVIDERS = MAX_DYNAMIC_TRACER_PROVIDERS
+_MAX_DYNAMIC_TRACER_PROVIDERS: Final = 256
 
 # Dedicated so a slow exporter shutdown cannot starve the shared logging executor.
 _PROVIDER_SHUTDOWN_EXECUTOR: Final = ThreadPoolExecutor(max_workers=4, thread_name_prefix="OtelProviderShutdown")
@@ -401,7 +400,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         tracer_provider: object | None = None,
         logger_provider: object | None = None,
         meter_provider: object | None = None,
-        max_dynamic_tracer_providers: int = MAX_DYNAMIC_TRACER_PROVIDERS,
+        max_dynamic_tracer_providers: int = _MAX_DYNAMIC_TRACER_PROVIDERS,
         **kwargs,
     ):
         team_metadata_keys_override: Final = kwargs.pop("baggage_team_metadata_keys", None)

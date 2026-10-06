@@ -2250,7 +2250,7 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
     embedder = RecordingEmbedder()
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "recording-embedder", "custom_handler": embedder}])
     monkeypatch.setattr(litellm, "provider_list", [*litellm.provider_list, "recording-embedder"])
-    monkeypatch.setattr(litellm, "custom_providers", [*litellm.custom_providers, "recording-embedder"])
+    monkeypatch.setattr(litellm, "_custom_providers", [*litellm._custom_providers, "recording-embedder"])
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
 
     await litellm.aembedding(model="recording-embedder/m", input=["aa", "bbbb"])

@@ -342,7 +342,7 @@ def test_langfuse_e2e_sync(monkeypatch):
     monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
     monkeypatch.setattr(litellm_logging, "langFuseLogger", None)
     monkeypatch.setattr(litellm_logging, "in_memory_dynamic_logger_cache", DynamicLoggingCache())
-    monkeypatch.setattr(litellm_logging, "in_memory_loggers", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
     langfuse_client_init.cache_clear()
 
     try:

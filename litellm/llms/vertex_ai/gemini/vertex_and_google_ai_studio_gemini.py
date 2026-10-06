@@ -1336,9 +1336,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Return Dictionary of Gemini/Vertex AI finish reasons and their
         OpenAI-compatible mappings.
         """
-        from litellm.litellm_core_utils.core_helpers import FINISH_REASON_MAP
+        from litellm.litellm_core_utils.core_helpers import _FINISH_REASON_MAP
 
-        return {k: v for k, v in FINISH_REASON_MAP.items() if k in VertexGeminiConfig._GEMINI_FINISH_REASON_KEYS}
+        return {k: v for k, v in _FINISH_REASON_MAP.items() if k in VertexGeminiConfig._GEMINI_FINISH_REASON_KEYS}
 
     def translate_exception_str(self, exception_string: str):
         if (

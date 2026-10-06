@@ -26,7 +26,7 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
     TranscriptionUsageObjectTransformation,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
-    SERVICE_TIER_TO_COST_KEY_SUFFIX,
+    _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
     calculate_cost_component,
@@ -986,7 +986,7 @@ _BASE_PRICING_SERVICE_TIERS: Final[frozenset[str]] = frozenset({"default", "stan
 def _resolve_billable_service_tier(requested: object, served: object) -> str | None:
     """Served tier wins when it names a priced tier or explicitly says base pricing; otherwise the request decides."""
     served_lower: Final = served.lower() if isinstance(served, str) else None
-    if served_lower is not None and served_lower in SERVICE_TIER_TO_COST_KEY_SUFFIX:
+    if served_lower is not None and served_lower in _SERVICE_TIER_TO_COST_KEY_SUFFIX:
         return served_lower
     if served_lower in _BASE_PRICING_SERVICE_TIERS:
         return None

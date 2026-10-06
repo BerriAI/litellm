@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.constants import DEFAULT_TTL_FOR_HTTPX_CLIENTS
+from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.integrations.azure_storage.azure_storage import (
     AzureBlobStorageLogger,
     _cached_credential_chain_token_provider,
@@ -399,7 +399,7 @@ async def test_service_client_is_reused_until_its_ttl_elapses(mock_env_vars):
 @pytest.mark.asyncio
 async def test_service_client_is_replaced_once_its_ttl_elapses(mock_env_vars):
     fake_aio_module = _fake_datalake_module()
-    ticks = iter((1_000_000.0, 1_000_000.0 + DEFAULT_TTL_FOR_HTTPX_CLIENTS + 1, 2_000_000.0))
+    ticks = iter((1_000_000.0, 1_000_000.0 + _DEFAULT_TTL_FOR_HTTPX_CLIENTS + 1, 2_000_000.0))
 
     with patch.dict(sys.modules, {"azure.storage.filedatalake.aio": fake_aio_module}):
         logger = AzureBlobStorageLogger(clock=lambda: next(ticks))
@@ -415,7 +415,7 @@ async def test_service_client_is_replaced_once_its_ttl_elapses(mock_env_vars):
 @pytest.mark.asyncio
 async def test_service_client_is_replaced_at_the_exact_ttl_boundary(mock_env_vars):
     fake_aio_module = _fake_datalake_module()
-    ticks = iter((1_000_000.0, 1_000_000.0 + DEFAULT_TTL_FOR_HTTPX_CLIENTS, 2_000_000.0))
+    ticks = iter((1_000_000.0, 1_000_000.0 + _DEFAULT_TTL_FOR_HTTPX_CLIENTS, 2_000_000.0))
 
     with patch.dict(sys.modules, {"azure.storage.filedatalake.aio": fake_aio_module}):
         logger = AzureBlobStorageLogger(clock=lambda: next(ticks))

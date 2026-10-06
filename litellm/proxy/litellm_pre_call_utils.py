@@ -36,8 +36,8 @@ from litellm.litellm_core_utils.core_helpers import is_codex_user_agent
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     TRUSTED_CALLBACK_VARS_FIELD,
+    _request_blocked_callback_params,
     iter_client_callback_metadata_dicts,
-    request_blocked_callback_params,
 )
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -579,11 +579,11 @@ def _strip_client_callback_credentials(
     stripped: Final = tuple(
         f"{label}.{field}"
         for label, container in containers
-        for field in request_blocked_callback_params
+        for field in _request_blocked_callback_params
         if field in container
     )
     for _, container in containers:
-        for field in request_blocked_callback_params:
+        for field in _request_blocked_callback_params:
             container.pop(field, None)
     data.pop(TRUSTED_CALLBACK_VARS_FIELD, None)
     if stripped:

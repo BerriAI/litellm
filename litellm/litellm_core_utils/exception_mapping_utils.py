@@ -9,7 +9,7 @@ from typing import Final, Protocol, cast
 import httpx
 
 import litellm
-from litellm._logging import ENABLE_SECRET_REDACTION, redact_string, verbose_logger
+from litellm._logging import _ENABLE_SECRET_REDACTION, redact_string, verbose_logger
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
@@ -2380,14 +2380,14 @@ def exception_type(
     litellm_response_headers: Final = _get_response_headers(original_exception=original_exception)
     try:
         error_str = (
-            redact_secret_string(str(original_exception)) if ENABLE_SECRET_REDACTION else str(original_exception)
+            redact_secret_string(str(original_exception)) if _ENABLE_SECRET_REDACTION else str(original_exception)
         )
         extra_information = ""
         if model or custom_llm_provider:
             if hasattr(original_exception, "message"):
                 error_str = (
                     redact_secret_string(str(original_exception.message))
-                    if ENABLE_SECRET_REDACTION
+                    if _ENABLE_SECRET_REDACTION
                     else str(original_exception.message)
                 )
             if isinstance(original_exception, BaseException):
@@ -2502,7 +2502,7 @@ def exception_type(
                     exception_provider=exception_provider,
                     extra_information=extra_information,
                 )
-            elif custom_llm_provider in litellm.openai_like_providers:
+            elif custom_llm_provider in litellm._openai_like_providers:
                 _map_openai_like_exception(
                     model=model,
                     original_exception=mappable_exception,

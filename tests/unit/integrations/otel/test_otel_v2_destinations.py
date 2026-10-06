@@ -1602,7 +1602,7 @@ class TestProviderWiring:
         ``callback_settings.otel`` rather than the preset's env-only config."""
         from litellm.litellm_core_utils import litellm_logging as logging_module
 
-        logging_module.in_memory_loggers.clear()
+        logging_module._in_memory_loggers.clear()
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
@@ -1624,12 +1624,12 @@ class TestProviderWiring:
 
             assert isinstance(preset, OpenTelemetryV2)
             assert otel_cb is preset
-            v2_loggers = [cb for cb in logging_module.in_memory_loggers if isinstance(cb, OpenTelemetryV2)]
+            v2_loggers = [cb for cb in logging_module._in_memory_loggers if isinstance(cb, OpenTelemetryV2)]
             assert v2_loggers == [preset], v2_loggers
-            publish_global_otel_v2_provider(logging_module.in_memory_loggers, lambda _p: None, registered=preset)
+            publish_global_otel_v2_provider(logging_module._in_memory_loggers, lambda _p: None, registered=preset)
             assert self._fan_out_of(preset)._excluded_db_systems == frozenset({"postgresql"})
         finally:
-            logging_module.in_memory_loggers.clear()
+            logging_module._in_memory_loggers.clear()
             is_otel_v2_enabled.cache_clear()
 
     @pytest.mark.parametrize("canonical", ["langfuse_otel", "arize"])
@@ -1710,7 +1710,7 @@ class TestProviderWiring:
     def test_a_legacy_v1_logger_holding_the_registered_slot_does_not_hide_the_fan_out(self, monkeypatch):
         """The proxy publishes with ``registered=None`` when ``open_telemetry_logger``
         holds a v1 logger, so the fan-out lands on a v2 logger taken from
-        ``in_memory_loggers``. Reading the registered slot finds no v2 logger there and
+        ``_in_memory_loggers``. Reading the registered slot finds no v2 logger there and
         the OTel global belongs to v1, so both detours refuse every destination the
         published provider delivers."""
         from litellm.integrations.opentelemetry import OpenTelemetry

@@ -1111,7 +1111,7 @@ class CustomStreamWrapper:
         if (
             isinstance(chunk, ModelResponseStream)
             and self.custom_llm_provider is not None
-            and self.custom_llm_provider in litellm.custom_providers
+            and self.custom_llm_provider in litellm._custom_providers
         ):
             _has_content: Final = bool(
                 chunk.choices
@@ -1134,7 +1134,7 @@ class CustomStreamWrapper:
         if (
             isinstance(chunk, dict)
             and generic_chunk_has_all_required_fields(chunk=chunk)  # check if chunk is a generic streaming chunk
-        ) or (self.custom_llm_provider and self.custom_llm_provider in litellm.custom_providers):
+        ) or (self.custom_llm_provider and self.custom_llm_provider in litellm._custom_providers):
             if self.received_finish_reason is not None:
                 _chunk_has_content: Final = isinstance(chunk, dict) and (
                     bool(chunk.get("text", ""))

@@ -280,6 +280,7 @@ from litellm.caching.redis_batch import (
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.constants import (
+    _REALTIME_BODY_CACHE_SIZE,
     APSCHEDULER_COALESCE,
     APSCHEDULER_MAX_INSTANCES,
     APSCHEDULER_MISFIRE_GRACE_TIME,
@@ -300,7 +301,6 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
-    REALTIME_BODY_CACHE_SIZE,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
@@ -1480,11 +1480,11 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                 OpenTelemetryV2,
                 publish_global_otel_v2_provider,
             )
-            from litellm.litellm_core_utils.litellm_logging import in_memory_loggers
+            from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
 
             registered: Final = open_telemetry_logger if isinstance(open_telemetry_logger, OpenTelemetryV2) else None
             publish_global_otel_v2_provider(
-                in_memory_loggers,  # any-ok: pre-existing untyped List[Any] global
+                _in_memory_loggers,  # any-ok: pre-existing untyped List[Any] global
                 _otel_trace.set_tracer_provider,
                 registered=registered,
             )
@@ -6692,14 +6692,14 @@ class ProxyConfig:
                     if key in {"s3_audit_callback_params", "s3_callback_params"}:
                         from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
                         from litellm.litellm_core_utils.litellm_logging import (
-                            in_memory_loggers,
+                            _in_memory_loggers,
                         )
                         from litellm.proxy.management_helpers.audit_logs import (
                             reset_audit_log_callback_cache,
                         )
 
                         reset_audit_log_callback_cache()
-                        in_memory_loggers[:] = [cb for cb in in_memory_loggers if not isinstance(cb, S3V2Logger)]
+                        _in_memory_loggers[:] = [cb for cb in _in_memory_loggers if not isinstance(cb, S3V2Logger)]
 
         if redis_usage_cache is None:
             env_coordination_redis_cache: Final = await self._init_coordination_redis_env_fallback(
@@ -12955,7 +12955,7 @@ async def vertex_ai_live_passthrough_endpoint(
 ######################################################################
 
 
-@lru_cache(maxsize=REALTIME_BODY_CACHE_SIZE)
+@lru_cache(maxsize=_REALTIME_BODY_CACHE_SIZE)
 def _realtime_query_params_template(model: str | None, intent: str | None) -> tuple[tuple[str, str], ...]:
     """
     Build a hashable representation of the realtime query params so we can cache

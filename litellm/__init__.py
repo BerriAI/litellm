@@ -76,7 +76,7 @@ from litellm.constants import (
     openai_compatible_endpoints,
     openai_compatible_providers,
     openai_text_completion_compatible_providers,
-    openai_like_providers,
+    _openai_like_providers,
     replicate_models,
     clarifai_models,
     huggingface_models,
@@ -118,7 +118,7 @@ failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
 audit_log_callbacks: List[CALLBACK_TYPES] = []
 # logging_callback_manager is lazy-loaded via __getattr__
-custom_logger_compatible_callbacks_literal = Literal[
+_custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
     "logfire",
@@ -175,10 +175,9 @@ custom_logger_compatible_callbacks_literal = Literal[
     "newrelic",
     "signoz",
 ]
-_custom_logger_compatible_callbacks_literal = custom_logger_compatible_callbacks_literal
-cold_storage_custom_logger: Optional[custom_logger_compatible_callbacks_literal] = None
+cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
-_known_custom_logger_compatible_callbacks: List[str] = list(get_args(custom_logger_compatible_callbacks_literal))
+_known_custom_logger_compatible_callbacks: List[str] = list(get_args(_custom_logger_compatible_callbacks_literal))
 callbacks: List[
     Union[Callable[..., object], str, "CustomLogger"]  # CustomLogger is lazy-loaded
 ] = []
@@ -1531,11 +1530,9 @@ from .types.llms.custom_llm import CustomLLMItem
 
 _turn_on_debug = turn_on_debug
 _turn_on_json = turn_on_json
-_openai_like_providers = openai_like_providers
 
 custom_provider_map: List[CustomLLMItem] = []
-custom_providers: List[str] = []  # internal helper util, used to track names of custom providers
-_custom_providers = custom_providers
+_custom_providers: List[str] = []  # internal helper util, used to track names of custom providers
 disable_hf_tokenizer_download: Optional[bool] = (
     None  # disable huggingface tokenizer download. Defaults to openai clk100
 )

@@ -1,5 +1,5 @@
 from importlib import import_module
-from types import MappingProxyType, MethodType
+from types import MethodType
 from typing import Final
 
 import pytest
@@ -48,17 +48,12 @@ ALIAS_CASES: Final = (
         False,
     ),
     ("litellm", "", "_calculate_retry_after", "calculate_retry_after", False),
-    ("litellm", "", "_custom_logger_compatible_callbacks_literal", "custom_logger_compatible_callbacks_literal", False),
-    ("litellm", "", "_custom_providers", "custom_providers", False),
-    ("litellm", "", "_openai_like_providers", "openai_like_providers", False),
     ("litellm", "", "_turn_on_debug", "turn_on_debug", False),
     ("litellm", "", "_turn_on_json", "turn_on_json", False),
     ("litellm._lazy_imports", "", "_get_default_encoding", "get_default_encoding", False),
     ("litellm._lazy_imports", "", "_get_lazy_import_registry", "get_lazy_import_registry", False),
     ("litellm._lazy_imports", "", "_get_messages_reach_token_count", "get_messages_reach_token_count", False),
     ("litellm._lazy_imports", "", "_get_token_counter_new", "get_token_counter_new", False),
-    ("litellm._logging", "SecretRedactionFilter", "_formatter", "formatter", False),
-    ("litellm._logging", "", "_ENABLE_SECRET_REDACTION", "ENABLE_SECRET_REDACTION", False),
     ("litellm._logging", "", "_is_debugging_on", "is_debugging_on", False),
     ("litellm._logging", "", "_redact_string", "redact_string", False),
     ("litellm._logging", "", "_turn_on_debug", "turn_on_debug", False),
@@ -124,9 +119,6 @@ ALIAS_CASES: Final = (
         "map_reasoning_effort",
         False,
     ),
-    ("litellm.constants", "", "_DEFAULT_TTL_FOR_HTTPX_CLIENTS", "DEFAULT_TTL_FOR_HTTPX_CLIENTS", False),
-    ("litellm.constants", "", "_REALTIME_BODY_CACHE_SIZE", "REALTIME_BODY_CACHE_SIZE", False),
-    ("litellm.constants", "", "_openai_like_providers", "openai_like_providers", False),
     ("litellm.cost_calculator", "", "_infer_call_type", "infer_call_type", False),
     ("litellm.cost_calculator", "", "_select_model_name_for_cost_calc", "select_model_name_for_cost_calc", False),
     (
@@ -186,7 +178,6 @@ ALIAS_CASES: Final = (
         "load_prompt_from_gitlab",
         False,
     ),
-    ("litellm.integrations.opentelemetry", "", "_MAX_DYNAMIC_TRACER_PROVIDERS", "MAX_DYNAMIC_TRACER_PROVIDERS", False),
     (
         "litellm.integrations.opentelemetry",
         "",
@@ -230,7 +221,6 @@ ALIAS_CASES: Final = (
         "get_weave_authorization_header",
         False,
     ),
-    ("litellm.litellm_core_utils.core_helpers", "", "_FINISH_REASON_MAP", "FINISH_REASON_MAP", False),
     (
         "litellm.litellm_core_utils.core_helpers",
         "",
@@ -281,20 +271,6 @@ ALIAS_CASES: Final = (
         "create_health_check_response",
         False,
     ),
-    (
-        "litellm.litellm_core_utils.initialize_dynamic_callback_params",
-        "",
-        "_request_blocked_callback_params",
-        "request_blocked_callback_params",
-        False,
-    ),
-    (
-        "litellm.litellm_core_utils.initialize_dynamic_callback_params",
-        "",
-        "_supported_callback_params",
-        "supported_callback_params",
-        False,
-    ),
     ("litellm.litellm_core_utils.litellm_logging", "Logging", "_defer_async_logging", "defer_async_logging", True),
     (
         "litellm.litellm_core_utils.litellm_logging",
@@ -341,7 +317,6 @@ ALIAS_CASES: Final = (
         False,
     ),
     ("litellm.litellm_core_utils.litellm_logging", "", "_get_masked_values", "get_masked_values", False),
-    ("litellm.litellm_core_utils.litellm_logging", "", "_in_memory_loggers", "in_memory_loggers", False),
     (
         "litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking",
         "StandardBuiltInToolCostTracking",
@@ -361,13 +336,6 @@ ALIAS_CASES: Final = (
         "CostCalculatorUtils",
         "_call_type_has_image_response",
         "call_type_has_image_response",
-        False,
-    ),
-    (
-        "litellm.litellm_core_utils.llm_cost_calc.utils",
-        "",
-        "_SERVICE_TIER_TO_COST_KEY_SUFFIX",
-        "SERVICE_TIER_TO_COST_KEY_SUFFIX",
         False,
     ),
     (
@@ -913,7 +881,6 @@ ALIAS_CASES: Final = (
     ),
     ("litellm.types.agents", "", "_normalize_a2a_jsonrpc_response", "normalize_a2a_jsonrpc_response", False),
     ("litellm.types.completion", "", "_CompletionDispatchContext", "CompletionDispatchContext", False),
-    ("litellm.types.completion", "", "_CompletionDispatchResult", "CompletionDispatchResult", False),
     (
         "litellm.types.integrations.prometheus",
         "",
@@ -969,20 +936,6 @@ ALIAS_CASES: Final = (
         "get_vector_stores_from_db",
         False,
     ),
-)
-
-_LITELLM_MODULE: Final = import_module("litellm")
-_LITELLM_MUTABLE_ALIAS_VALUES: Final = MappingProxyType(
-    {
-        "_custom_providers": (
-            getattr(_LITELLM_MODULE, "_custom_providers"),
-            getattr(_LITELLM_MODULE, "custom_providers"),
-        ),
-        "_openai_like_providers": (
-            getattr(_LITELLM_MODULE, "_openai_like_providers"),
-            getattr(_LITELLM_MODULE, "openai_like_providers"),
-        ),
-    }
 )
 
 PROPERTY_CASES: Final = (
@@ -1047,11 +1000,7 @@ def test_public_aliases(
 ) -> None:
     resolved_owner: Final = _get_owner(module_path, owner_name)
     alias_owner: Final = _get_instance(resolved_owner, new_name) if use_instance else resolved_owner
-    old_value, new_value = (
-        _LITELLM_MUTABLE_ALIAS_VALUES[old_name]
-        if module_path == "litellm" and old_name in _LITELLM_MUTABLE_ALIAS_VALUES
-        else (getattr(alias_owner, old_name), getattr(alias_owner, new_name))
-    )
+    old_value, new_value = getattr(alias_owner, old_name), getattr(alias_owner, new_name)
     if isinstance(old_value, MethodType) and isinstance(new_value, MethodType):
         assert old_value.__func__ is new_value.__func__
     else:

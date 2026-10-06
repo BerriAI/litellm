@@ -3599,7 +3599,7 @@ async def test_startup_initializes_string_callbacks_after_all_litellm_settings_l
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
     monkeypatch.setattr(litellm, "callbacks", [])
     monkeypatch.setattr(litellm, "s3_callback_params", None)
-    monkeypatch.setattr(litellm_logging, "in_memory_loggers", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
 
     await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
     ProxyLogging(user_api_key_cache=MagicMock())._init_litellm_callbacks(llm_router=None)
@@ -12033,7 +12033,7 @@ async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(mon
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
     monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm_logging, "in_memory_loggers", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
 
     db_row = {
         "success_callback": ["datadog"],
@@ -12056,7 +12056,7 @@ def _reset_runtime_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
     for list_name in ("success_callback", "_async_success_callback", "failure_callback", "_async_failure_callback"):
         monkeypatch.setattr(litellm, list_name, [])
     monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr(litellm_logging, "in_memory_loggers", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
     monkeypatch.setenv("HUMANLOOP_API_KEY", "test-key")
