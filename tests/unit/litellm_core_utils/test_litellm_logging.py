@@ -9543,9 +9543,10 @@ def test_get_custom_logger_compatible_class_does_not_match_generic_api_logger(
 async def test_concurrent_async_success_handlers_log_once_when_handler_yields(monkeypatch, yield_point):
     """
     Nested @client wrappers (chat over the Responses bridge) schedule two async success
-    tasks on one logging object. Any await between the dedup check and the callbacks
-    (the worker-thread base64 offload for large prompts, logging hooks) lets the second
-    task pass the same check, so the flag has to be claimed before the first await.
+    tasks on one logging object. A per-object asyncio.Lock serialises the non-streaming
+    handlers, so an await in the first one (the worker-thread base64 offload for large
+    prompts, logging hooks) makes the second wait instead of passing the dedup check;
+    once the first has logged, the second sees the flag and skips.
     """
     from litellm.litellm_core_utils import litellm_logging
 
@@ -9580,7 +9581,7 @@ async def test_concurrent_async_success_handlers_log_once_when_handler_yields(mo
         messages=messages,
         stream=False,
         call_type="acompletion",
-        start_time=time.time(),
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc).timestamp(),
         litellm_call_id="bridge-call-id",
         function_id="bridge-fn-id",
     )
@@ -9593,7 +9594,7 @@ async def test_concurrent_async_success_handlers_log_once_when_handler_yields(mo
     )
     inner_result: Final = ModelResponse(id="inner")
     outer_result: Final = ModelResponse(id="outer")
-    now: Final = datetime.datetime.now()
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
 
     await asyncio.gather(
         logging_obj.async_success_handler(result=inner_result, start_time=now, end_time=now),
@@ -9643,7 +9644,7 @@ async def test_concurrent_async_success_handler_logs_when_first_is_cancelled_bef
         messages=messages,
         stream=False,
         call_type="acompletion",
-        start_time=time.time(),
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc).timestamp(),
         litellm_call_id="bridge-call-id-cancel",
         function_id="bridge-fn-id-cancel",
     )
@@ -9656,11 +9657,15 @@ async def test_concurrent_async_success_handler_logs_when_first_is_cancelled_bef
     )
     inner_result: Final = ModelResponse(id="inner")
     outer_result: Final = ModelResponse(id="outer")
-    now: Final = datetime.datetime.now()
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
 
-    first: Final = asyncio.create_task(logging_obj.async_success_handler(result=inner_result, start_time=now, end_time=now))
+    first: Final = asyncio.create_task(
+        logging_obj.async_success_handler(result=inner_result, start_time=now, end_time=now)
+    )
     await first_entered.wait()
-    second: Final = asyncio.create_task(logging_obj.async_success_handler(result=outer_result, start_time=now, end_time=now))
+    second: Final = asyncio.create_task(
+        logging_obj.async_success_handler(result=outer_result, start_time=now, end_time=now)
+    )
     await asyncio.sleep(0)
     first.cancel()
     with pytest.raises(asyncio.CancelledError):
