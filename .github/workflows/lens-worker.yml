@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Build Lens worker
@@ -110,7 +110,7 @@ jobs:
             -c 'python -m coverage combine && python -m coverage xml'
       - name: Upload native worker coverage
         if: always() && env.LENS_COVERAGE_DIRECTORY != ''
-        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           use_oidc: true
           files: ${{ env.LENS_COVERAGE_DIRECTORY }}/lens-worker.xml
