@@ -22,7 +22,7 @@ fn optional(value: &str) -> Option<String> {
 
 fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span {
     let row = resolution.row(index);
-    let requests = resolution.requests(index).complete_requests();
+    let requests = resolution.requests(index);
     Span {
         span_id: row.span_id.clone(),
         parent_span_id: optional(&row.parent_span_id),
@@ -86,6 +86,7 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
                 .filter(|(owner, _)| *owner == name)
                 .map(|(_, requests)| requests.clone())
                 .collect();
+            let priced = total(&owned_calls);
             AgentNode {
                 name: name.to_owned(),
                 parent_agent,
@@ -100,7 +101,8 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
                     .map(|span| graph.rows[*span].duration_ns)
                     .sum::<u64>() as f64
                     / NANOS_PER_MS,
-                spend: total(&owned_calls),
+                spend: priced.spend,
+                priced_calls: priced.priced_calls,
             }
         })
         .collect()
@@ -159,6 +161,12 @@ pub fn resolve_trace(
     } else {
         calls.iter().map(|call| &rows[*call]).collect()
     };
+    let priced = total(
+        &calls
+            .iter()
+            .map(|call| resolution.call_requests(*call))
+            .collect::<Vec<_>>(),
+    );
     let first_input = spans
         .iter()
         .zip(rows)
@@ -199,12 +207,8 @@ pub fn resolve_trace(
         input_tokens: counted.iter().map(|row| u64::from(row.input_tokens)).sum(),
         output_tokens: counted.iter().map(|row| u64::from(row.output_tokens)).sum(),
         models: sorted_unique(calls.iter().map(|call| rows[*call].model.as_str())),
-        spend: total(
-            &calls
-                .iter()
-                .map(|call| resolution.call_requests(*call))
-                .collect::<Vec<_>>(),
-        ),
+        spend: priced.spend,
+        priced_calls: priced.priced_calls,
     };
     Some(Trace {
         summary,
@@ -241,5 +245,6 @@ pub fn listed_summary(row: &ListTracesRow) -> TraceSummary {
         output_tokens: row.output_tokens,
         models: row.models.clone(),
         spend: None,
+        priced_calls: 0,
     }
 }

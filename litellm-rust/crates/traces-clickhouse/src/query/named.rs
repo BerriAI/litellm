@@ -181,8 +181,6 @@ struct SpendByResponseIdsParamsEncoding {
     #[serde(flatten)]
     pub access: contracts::ReadAccessParams,
     pub response_ids: Vec<String>,
-    pub request_ids: Vec<String>,
-    pub trace_ids: Vec<String>,
     #[serde(deserialize_with = "super::number::deserialize")]
     pub start_ms: i64,
     #[serde(deserialize_with = "super::number::deserialize")]
@@ -204,14 +202,9 @@ impl From<contracts::SpendByResponseIdsParams> for SpendByResponseIdsParams {
 #[serde(remote = "contracts::SpendByResponseIdsRow")]
 struct SpendByResponseIdsRowEncoding {
     pub request_id: String,
-    pub litellm_call_id: String,
     pub response_id: String,
     pub upstream_response_id: String,
-    pub trace_id: String,
-    pub span_id: String,
     pub team_id: String,
-    pub api_key: String,
-    pub user: String,
     #[serde(deserialize_with = "super::number::optional_finite")]
     pub spend: Option<f64>,
     #[serde(deserialize_with = "super::number::deserialize")]
@@ -356,7 +349,7 @@ mod tests {
             quoted,
         );
         round_trip::<SpendByResponseIdsRow>(
-            json!({"request_id": "request", "litellm_call_id": "gateway", "response_id": "response", "upstream_response_id": "upstream", "trace_id": "trace", "span_id": "span", "team_id": "team", "api_key": "key", "user": "user", "spend": 0.125, "start_ms": -1}),
+            json!({"request_id": "request", "response_id": "response", "upstream_response_id": "upstream", "team_id": "team", "spend": 0.125, "start_ms": -1}),
             quoted,
         );
     }
@@ -374,7 +367,7 @@ mod tests {
             quoted,
         );
         round_trip::<SpendByResponseIdsParams>(
-            json!({"all_teams": 0, "user_id": "user", "team_ids": ["team-a", "team-b"], "response_ids": ["response"], "request_ids": ["request"], "trace_ids": ["trace"], "start_ms": -1, "end_ms": 10}),
+            json!({"all_teams": 0, "user_id": "user", "team_ids": ["team-a", "team-b"], "response_ids": ["response"], "start_ms": -1, "end_ms": 10}),
             quoted,
         );
     }
@@ -387,9 +380,8 @@ mod tests {
         #[case] expected: Option<f64>,
     ) {
         let row: SpendByResponseIdsRow = serde_json::from_value(json!({
-            "request_id": "request", "litellm_call_id": "gateway", "response_id": "response", "upstream_response_id": "",
-            "trace_id": "trace", "span_id": "span", "team_id": "team", "api_key": "key",
-            "user": "user", "spend": cost, "start_ms": 0
+            "request_id": "request", "response_id": "response", "upstream_response_id": "",
+            "team_id": "team", "spend": cost, "start_ms": 0
         }))
         .unwrap();
         assert_eq!(row.0.spend, expected);
@@ -400,9 +392,8 @@ mod tests {
     #[case::boolean(json!(true))]
     fn spend_rows_reject_invalid_cost(#[case] cost: serde_json::Value) {
         let row = serde_json::from_value::<SpendByResponseIdsRow>(json!({
-            "request_id": "request", "litellm_call_id": "gateway", "response_id": "response", "upstream_response_id": "",
-            "trace_id": "trace", "span_id": "span", "team_id": "team", "api_key": "key",
-            "user": "user", "spend": cost, "start_ms": 0
+            "request_id": "request", "response_id": "response", "upstream_response_id": "",
+            "team_id": "team", "spend": cost, "start_ms": 0
         }));
         assert!(row.is_err());
     }

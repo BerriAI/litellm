@@ -50,6 +50,7 @@ pub struct AgentNode {
     pub tool_calls: u64,
     pub duration_ms: f64,
     pub spend: Option<f64>,
+    pub priced_calls: u64,
 }
 
 #[macro_rules_attribute::apply(response_type)]
@@ -80,6 +81,7 @@ pub struct TraceSummary {
     pub output_tokens: u64,
     pub models: Vec<String>,
     pub spend: Option<f64>,
+    pub priced_calls: u64,
 }
 
 #[macro_rules_attribute::apply(response_type)]
