@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use litellm_http::Client;
 use litellm_traces::query::named::ReadAccessParams;
-use litellm_traces_cache::{ReadError, TraceReader};
+use litellm_traces_cache::{ReadError, TraceReader, TraceStore};
 use litellm_traces_clickhouse::{
     ClickHouseTraces, Connection, InsertTable, QueryScope, insert_rows,
 };
