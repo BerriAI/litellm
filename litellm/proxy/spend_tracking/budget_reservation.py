@@ -273,7 +273,11 @@ async def reserve_budget_for_request(
     if _is_unbilled_route(route):
         return None
     invocation_cost: Final = valid_token.agent_invocation_cost
-    if invocation_cost is None and get_model_from_request(request_body, route, llm_router=llm_router) is None:
+    if (
+        invocation_cost is None
+        and not _invoked_agent_models(valid_token)
+        and get_model_from_request(request_body, route, llm_router=llm_router) is None
+    ):
         return None
 
     counters: Final = await _get_budget_counters(
@@ -316,7 +320,13 @@ async def reserve_budget_for_request(
         invocation_cost is None
         and valid_token.invoked_agent_policy is not None
         and any(counter.entity_type == "Agent" for counter in counters)
-        and _request_has_positive_price(request_body=request_body, route=route, llm_router=llm_router)
+        and _models_have_positive_price(
+            models=(
+                *_get_request_models(request_body=request_body, route=route, llm_router=llm_router),
+                *_invoked_agent_models(valid_token),
+            ),
+            llm_router=llm_router,
+        )
     ):
         from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
         from litellm.types.proxy.agent_identity import AgentIdentityFailure
@@ -1775,9 +1785,16 @@ def _cost_info_has_positive_price(cost_info: object) -> bool:
     )
 
 
-def _request_has_positive_price(
-    request_body: dict,
-    route: str,
+def _invoked_agent_models(
+    valid_token: UserAPIKeyAuth,
+) -> tuple[str, ...]:
+    policy: Final = valid_token.invoked_agent_policy
+    model: Final = (policy.litellm_params or MappingProxyType({})).get("model") if policy is not None else None
+    return (model,) if isinstance(model, str) else ()
+
+
+def _models_have_positive_price(
+    models: Sequence[str],
     llm_router: Router | None,
 ) -> bool:
     return any(
@@ -1785,7 +1802,7 @@ def _request_has_positive_price(
             _cost_info_has_positive_price(cost_info)
             for cost_info in _get_model_cost_infos(model=model, llm_router=llm_router)
         )
-        for model in _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
+        for model in models
     )
 
 

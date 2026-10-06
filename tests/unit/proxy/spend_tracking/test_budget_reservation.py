@@ -384,6 +384,96 @@ async def test_agent_invocation_over_budget_is_rejected_and_reservation_is_refun
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("priced", (True, False))
+async def test_native_a2a_invoked_agent_model_requires_fixed_fee_for_token_pricing(
+    monkeypatch: pytest.MonkeyPatch,
+    priced: bool,
+) -> None:
+    from litellm.types.agents import AgentResponse
+
+    model: Final = "native-agent-budget-pricing-test"
+    model_cost: Final = {
+        **litellm.model_cost,
+        **(
+            {
+                model: {
+                    "input_cost_per_token": 0.001,
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                }
+            }
+            if priced
+            else {}
+        ),
+    }
+    monkeypatch.setattr(litellm, "model_cost", model_cost)
+    litellm.get_model_info.cache_clear()
+
+    agent: Final = AgentResponse(
+        agent_id="target-agent",
+        agent_name="Target agent",
+        agent_card_params={},
+        litellm_params={"model": model},
+        litellm_budget_table={"budget_id": "target-budget", "max_budget": 1.0},
+    )
+    counter_key: Final = agent.budget_counter_key
+    cache: Final = DualCache()
+    cache.set_cache(counter_key, 0.0)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+    auth: Final = UserAPIKeyAuth()
+    auth.invoked_agent_policy = agent
+    auth.target_agent_budget_policy = agent
+    auth.agent_invocation_cost = None
+    request_body: Final = {"jsonrpc": "2.0", "method": "message/send"}
+    route: Final = "/a2a/target-agent"
+
+    input_token_counts: Final = await count_request_input_tokens(
+        request_body=request_body,
+        route=route,
+        llm_router=None,
+    )
+    assert input_token_counts == {}
+    assert estimate_request_max_cost(
+        request_body=request_body,
+        route=route,
+        llm_router=None,
+        input_token_counts=input_token_counts,
+    ) is None
+
+    if priced:
+        with pytest.raises(HTTPException) as error:
+            await reserve_budget_for_request(
+                request_body=request_body,
+                route=route,
+                llm_router=None,
+                valid_token=auth,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=UserApiKeyCache(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+            )
+        assert error.value.status_code == 503
+        assert error.value.detail == (
+            "Budgeted token-priced agent invocations require a fixed cost_per_query before execution"
+        )
+    else:
+        reservation: Final = await reserve_budget_for_request(
+            request_body=request_body,
+            route=route,
+            llm_router=None,
+            valid_token=auth,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+        assert reservation is None
+    assert await cache.async_get_cache(counter_key) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
 async def test_reservation_starts_unbound_to_any_callback():
     reservation: Final = await _reserve("/v1/responses")
 
