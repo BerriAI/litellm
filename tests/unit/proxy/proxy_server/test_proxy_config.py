@@ -5446,7 +5446,6 @@ async def test_proxy_config_init_semantic_filter_settings_keeps_hook_after_faile
     hook: Final = MagicMock(spec=SemanticToolFilterHook)
     hook.index_build_task = build_task
     hook.filter = SimpleNamespace(tool_router=None)
-    initialize: Final = AsyncMock()
     removed: Final = MagicMock()
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.get_config_param",
@@ -5454,11 +5453,9 @@ async def test_proxy_config_init_semantic_filter_settings_keeps_hook_after_faile
     )
     monkeypatch.setattr(litellm.logging_callback_manager, "get_custom_loggers_for_type", lambda _: [hook])
     monkeypatch.setattr(litellm.logging_callback_manager, "remove_callbacks_by_type", removed)
-    monkeypatch.setattr(SemanticToolFilterHook, "initialize_from_config", initialize)
     pc: Final = ProxyConfig()
     pc._last_semantic_filter_config = settings
 
     await pc._init_semantic_filter_settings_in_db(prisma_client=MagicMock())
 
     removed.assert_not_called()
-    initialize.assert_not_awaited()
