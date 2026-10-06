@@ -269,6 +269,12 @@ fn access() -> ReadAccessParams {
 
 fn span(index: usize) -> TraceSpansRow {
     TraceSpansRow {
+        native_agent_id: String::new(),
+        native_parent_agent_id: String::new(),
+        session_id: String::new(),
+        query_source: String::new(),
+        has_output: false,
+        capture_warning: false,
         trace_id: "trace".into(),
         original_trace_id: String::new(),
         span_id: format!("span-{index}"),
@@ -496,6 +502,76 @@ async fn list_run_budget_halves_the_limit_and_cursor_requires_a_full_page() {
 }
 
 #[rstest]
+#[case::small_response(4096)]
+#[case::larger_response(8192)]
+#[tokio::test]
+async fn actor_metadata_pages_with_spans_without_losing_trace_totals(
+    #[case] response_bytes: usize,
+) {
+    let rows = (0..120)
+        .map(|index| TraceSpansRow {
+            framework: "claude-code".into(),
+            session_id: "native-session".into(),
+            native_agent_id: format!("actor-{}", index / 2),
+            parent_span_id: String::new(),
+            kind: if index % 2 == 0 {
+                ObservationType::Llm
+            } else {
+                ObservationType::Framework
+            },
+            name: if index % 2 == 0 {
+                "claude_code.llm_request"
+            } else {
+                "claude_code.assistant_response"
+            }
+            .into(),
+            ..span(index)
+        })
+        .collect();
+    let store = FakeStore::with_spans("ref", rows);
+    let reader = TraceReader::new(response_bytes);
+    let access = access();
+    let mut cursor = None;
+    let mut actors = HashSet::new();
+    let mut spans = HashSet::new();
+    loop {
+        let page = reader
+            .get_trace_page(&store, &access, "trace", "ref", cursor.as_deref(), 200)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(serde_json::to_vec(&page).unwrap().len() <= response_bytes);
+        assert_eq!(page.summary.agent_count, 60);
+        assert_eq!(page.summary.span_count, 120);
+        let coverage = page.capture.unwrap();
+        assert_eq!(coverage.content_events, 60);
+        let page_actors: HashSet<_> = page
+            .spans
+            .iter()
+            .filter_map(|span| span.actor_id.as_deref())
+            .collect();
+        assert_eq!(page.agents.len(), page_actors.len());
+        assert_eq!(coverage.actors.len(), page_actors.len());
+        for actor in coverage.actors {
+            assert!(page_actors.contains(actor.actor_id.as_str()));
+            assert_eq!(actor.llm_calls, 1);
+            assert_eq!(actor.reply_events, 1);
+            actors.insert(actor.actor_id);
+        }
+        for span in page.spans {
+            assert!(spans.insert(span.span_id));
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(actors.len(), 60);
+    assert_eq!(spans.len(), 120);
+    assert_eq!(store.calls(Operation::TraceSpans), 1);
+}
+
+#[rstest]
 #[tokio::test]
 async fn oversized_run_batch_falls_back_to_each_run_and_keeps_listed_summaries() {
     let store = FakeStore::with_spans("ref-good", vec![span(0)]);
@@ -714,6 +790,54 @@ async fn failed_reads_are_not_cached() {
         .unwrap();
     assert_eq!(trace.spans.len(), 1);
     assert_eq!(store.calls(Operation::TraceSpans), 2);
+}
+
+#[rstest]
+#[case::claude_code("claude-code")]
+#[case::claude_agent_sdk("claude-agent-sdk")]
+#[tokio::test]
+async fn resumed_native_sessions_refresh_after_live_ttl(#[case] framework: &str) {
+    let original = TraceSpansRow {
+        framework: framework.into(),
+        ..span(0)
+    };
+    let store = FakeStore::with_spans("ref", vec![original.clone()]);
+    let reader = TraceReader::new(usize::MAX);
+    let access = access();
+    let first = reader
+        .get_trace(&store, &access, "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.spans.len(), 1);
+
+    store.state.lock().unwrap().trace_spans.insert(
+        "ref".into(),
+        vec![
+            original,
+            TraceSpansRow {
+                start_ns: now_ns(),
+                ..span(1)
+            },
+        ],
+    );
+    let cached = reader
+        .get_trace(&store, &access, "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(cached.spans.len(), 1);
+    assert_eq!(store.calls(Operation::TraceSpans), 1);
+
+    tokio::time::sleep(LIVE_TTL + Duration::from_millis(200)).await;
+    let resumed = reader
+        .get_trace(&store, &access, "trace", "ref")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resumed.spans.len(), 2);
+    assert_eq!(store.calls(Operation::TraceSpans), 2);
+    assert_eq!(first.spans.len(), 1);
 }
 
 #[rstest]

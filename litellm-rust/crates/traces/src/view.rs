@@ -25,6 +25,13 @@ pub struct Span {
     #[serde(rename = "type")]
     pub kind: crate::ObservationType,
     pub agent: String,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub actor_id: Option<String>,
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub actor_unassigned: bool,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub parent_actor_id: Option<String>,
     pub framework: String,
     pub start_offset_ms: f64,
     pub duration_ms: f64,
@@ -56,6 +63,10 @@ pub enum SpendMatch {
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentNode {
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub actor_id: Option<String>,
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub parent_actor_id: Option<String>,
     pub name: String,
     pub parent_agent: Option<String>,
     pub invocations: u64,
@@ -100,6 +111,9 @@ pub struct TraceSummary {
 #[macro_rules_attribute::apply(response_type)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trace {
+    #[serde(default)]
+    #[cfg_attr(feature = "schema", schemars(extend("x-python-optional" = true)))]
+    pub capture: Option<TraceCapture>,
     pub summary: TraceSummary,
     pub agents: Vec<AgentNode>,
     pub spans: Vec<Span>,
@@ -132,4 +146,25 @@ pub struct SpanErrorPage {
     pub message: String,
     pub total_chars: u64,
     pub next_cursor: Option<String>,
+}
+
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ActorCapture {
+    pub actor_id: String,
+    pub name: String,
+    pub llm_calls: u64,
+    pub tool_calls: u64,
+    pub reply_events: u64,
+    pub model_outputs: u64,
+    pub content_events: u64,
+}
+
+#[macro_rules_attribute::apply(response_type)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TraceCapture {
+    pub actors: Vec<ActorCapture>,
+    pub content_events: u64,
+    pub unassigned_events: u64,
+    pub warning_events: u64,
 }

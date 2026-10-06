@@ -64,6 +64,43 @@ impl<'a> Graph<'a> {
         found
     }
 
+    pub(super) fn nearest_ancestors(&self, matches: &[bool]) -> Vec<Option<usize>> {
+        let mut nearest: Vec<_> = matches
+            .iter()
+            .enumerate()
+            .map(|(index, found)| found.then_some(index))
+            .collect();
+        let mut resolved = matches.to_vec();
+        let mut visiting = vec![false; self.rows.len()];
+        for index in 0..self.rows.len() {
+            let mut path = Vec::new();
+            let mut current = Some(index);
+            let found = loop {
+                let Some(node) = current else { break None };
+                if resolved[node] {
+                    break nearest[node];
+                }
+                if visiting[node] {
+                    break None;
+                }
+                visiting[node] = true;
+                path.push(node);
+                current = self.parent(node);
+            };
+            for node in path {
+                nearest[node] = found;
+                resolved[node] = true;
+            }
+        }
+        (0..self.rows.len())
+            .map(|index| {
+                self.parent(index)
+                    .and_then(|parent| nearest[parent])
+                    .filter(|found| *found != index)
+            })
+            .collect()
+    }
+
     pub(super) fn descendants(&self, index: usize) -> Vec<usize> {
         let children = |index: usize| {
             self.children
@@ -139,6 +176,33 @@ mod tests {
         assert_eq!(descendants, ["leaf", "middle", "sibling"].into());
         assert!(graph.is_root(3));
         assert!(!graph.is_root(0));
+    }
+
+    #[rstest]
+    #[case::root(vec![false, false, false, true], vec![Some(3), Some(3), Some(3), None])]
+    #[case::nearer(vec![false, false, true, true], vec![Some(2), Some(3), Some(3), None])]
+    #[case::unassigned(vec![false; 4], vec![None; 4])]
+    fn nearest_candidates_follow_unordered_links(
+        unordered_rows: Vec<TraceSpansRow>,
+        #[case] candidates: Vec<bool>,
+        #[case] expected: Vec<Option<usize>>,
+    ) {
+        assert_eq!(
+            Graph::new(&unordered_rows).nearest_ancestors(&candidates),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::unassigned(vec![false, false], vec![None, None])]
+    #[case::one_candidate(vec![true, false], vec![None, Some(0)])]
+    #[case::both_candidates(vec![true, true], vec![Some(1), Some(0)])]
+    fn nearest_candidates_do_not_revisit_cycles(
+        #[case] candidates: Vec<bool>,
+        #[case] expected: Vec<Option<usize>>,
+    ) {
+        let rows = [row("first", "second"), row("second", "first")];
+        assert_eq!(Graph::new(&rows).nearest_ancestors(&candidates), expected);
     }
 
     #[rstest]

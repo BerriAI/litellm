@@ -48,10 +48,22 @@ class SpanErrorPage(typing_extensions.TypedDict):
     next_cursor: ReadOnly[str | None]
 
 
+class ActorCapture(typing_extensions.TypedDict):
+    actor_id: ReadOnly[str]
+    name: ReadOnly[str]
+    llm_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    tool_calls: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    reply_events: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    model_outputs: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    content_events: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+
+
 SpanStatus: TypeAlias = Literal["ok", "error", "unset"]
 
 
 class AgentNode(typing_extensions.TypedDict):
+    actor_id: ReadOnly[NotRequired[str | None]]
+    parent_actor_id: ReadOnly[NotRequired[str | None]]
     name: ReadOnly[str]
     parent_agent: ReadOnly[str | None]
     invocations: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
@@ -102,6 +114,13 @@ class UIMessage(typing_extensions.TypedDict):
     tool_calls: ReadOnly[NotRequired[tuple[UIToolCall, ...]]]
 
 
+class TraceCapture(typing_extensions.TypedDict):
+    actors: ReadOnly[tuple[ActorCapture, ...]]
+    content_events: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    unassigned_events: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+    warning_events: ReadOnly[Annotated[int, Field(ge=0, le=18446744073709551615)]]
+
+
 class TraceSummary(typing_extensions.TypedDict):
     resolution_limited: ReadOnly[NotRequired[bool]]
     trace_id: ReadOnly[str]
@@ -133,6 +152,9 @@ class Span(typing_extensions.TypedDict):
     name: ReadOnly[str]
     type: ReadOnly[SpanType]
     agent: ReadOnly[str]
+    actor_id: ReadOnly[NotRequired[str | None]]
+    actor_unassigned: ReadOnly[NotRequired[bool]]
+    parent_actor_id: ReadOnly[NotRequired[str | None]]
     framework: ReadOnly[str]
     start_offset_ms: ReadOnly[float]
     duration_ms: ReadOnly[float]
@@ -150,6 +172,7 @@ class Span(typing_extensions.TypedDict):
 
 
 class Trace(typing_extensions.TypedDict):
+    capture: ReadOnly[NotRequired[TraceCapture | None | None]]
     summary: ReadOnly[TraceSummary]
     agents: ReadOnly[tuple[AgentNode, ...]]
     spans: ReadOnly[tuple[Span, ...]]

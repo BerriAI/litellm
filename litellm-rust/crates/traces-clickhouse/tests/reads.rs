@@ -1052,3 +1052,274 @@ async fn native_tool_content_agrees_between_single_and_bulk_reads(
     assert_eq!(bulk[1].attributes["lens.content.output_source"], "reply");
     Ok(())
 }
+
+#[rstest]
+#[tokio::test]
+async fn historical_native_actors_are_resolved_from_raw_attributes_with_tenant_isolation(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let client = &fixture.database.client;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let start_ms = 1_790_000_000_000_i64;
+    let records = [
+        ("root", "", "agent", "", "", "team-a"),
+        ("first", "root", "llm", "first", "", "team-a"),
+        ("second", "root", "llm", "second", "", "team-a"),
+        ("nested", "root", "llm", "nested", "first", "team-a"),
+        ("tool", "root", "tool", "first", "", "team-a"),
+        ("foreign", "root", "llm", "foreign", "", "team-b"),
+    ];
+    let rows = records.iter().enumerate().map(|(index, (id, parent, kind, actor, parent_actor, team))| {
+        BTreeMap::from([
+            ("Timestamp".into(), json!((start_ms + index as i64) * 1_000_000)),
+            ("TraceId".into(), json!("native-run")),
+            ("SpanId".into(), json!(id)),
+            ("ParentSpanId".into(), json!(parent)),
+            ("SpanName".into(), json!(if *kind == "agent" { "claude_code.interaction" } else { kind })),
+            ("ObservationType".into(), json!(kind)),
+            ("Output".into(), json!(if *id == "first" { "completed" } else { "" })),
+            ("Framework".into(), json!("claude-code")),
+            ("AgentName".into(), json!("claude-code")),
+            ("SpanAttributes".into(), json!({
+                "lens.capture.warning": if *id == "nested" { "synthetic warning" } else { "" },
+                "session.id": "historical-session", "agent_id": actor, "parent_agent_id": parent_actor,
+                "query_source_safe": if actor.is_empty() { "repl_main_thread" } else { "agent.builtin.general-purpose" },
+            })),
+            ("TeamId".into(), json!(team)),
+            ("ApiKeyHash".into(), json!("key-a")),
+            ("Duration".into(), json!(1_000_000)),
+        ])
+    }).collect();
+    insert_rows(client, &writer, DATABASE, InsertTable::OtelTraces, rows).await?;
+    let connection = fixture
+        .readers
+        .connection(client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let (reader, store) = make_reader(client, connection);
+    let access = ReadAccessParams {
+        all_teams: false,
+        user_id: String::new(),
+        team_ids: vec!["team-a".into()],
+    };
+    let listed = store
+        .list_runs(&litellm_traces::query::named::ListTracesParams {
+            access: access.clone(),
+            start_ms: 0,
+            end_ms: 2_000_000_000_000,
+            cursor_ms: 0,
+            cursor_trace_id: String::new(),
+            limit: 50,
+        })
+        .await?;
+    assert_eq!(listed[0].agent_count, 4);
+    assert_eq!(listed[0].agent_invocations, 4);
+    let page = reader
+        .list_traces(&store, &access, 0, 2_000_000_000_000, None, 50)
+        .await?;
+    assert_eq!(page.data.len(), 1);
+    assert_eq!(page.data[0].agent_count, 4);
+    let trace = reader
+        .get_trace(&store, &access, "native-run", &page.data[0].trace_ref)
+        .await?
+        .ok_or("missing trace")?;
+    assert_eq!(trace.summary.agent_count, 4);
+    assert_eq!(trace.summary.agent_invocations, 4);
+    assert_eq!(
+        trace
+            .agents
+            .iter()
+            .map(|actor| actor.llm_calls)
+            .sum::<u64>(),
+        3
+    );
+    assert_eq!(
+        trace
+            .agents
+            .iter()
+            .map(|actor| actor.tool_calls)
+            .sum::<u64>(),
+        1
+    );
+    let capture = trace.capture.as_ref().ok_or("missing capture coverage")?;
+    assert_eq!(capture.warning_events, 1);
+    assert_eq!(
+        capture
+            .actors
+            .iter()
+            .map(|actor| actor.model_outputs)
+            .sum::<u64>(),
+        1
+    );
+    assert_eq!(
+        capture
+            .actors
+            .iter()
+            .map(|actor| actor.llm_calls)
+            .sum::<u64>(),
+        3
+    );
+    assert!(!trace.spans.iter().any(|span| span.span_id == "foreign"));
+    let first = trace
+        .spans
+        .iter()
+        .find(|span| span.span_id == "first")
+        .ok_or("missing first actor")?;
+    let nested = trace
+        .spans
+        .iter()
+        .find(|span| span.span_id == "nested")
+        .ok_or("missing nested actor")?;
+    assert!(first.actor_id.is_some());
+    assert_eq!(nested.parent_actor_id, first.actor_id);
+    Ok(())
+}
+
+#[rstest]
+#[case::claude_code("claude-code")]
+#[case::agent_sdk("claude-agent-sdk")]
+#[tokio::test]
+async fn native_list_counts_each_root_session_and_does_not_count_children_as_roots(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] framework: &str,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let client = &fixture.database.client;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let records = [
+        ("first", "session-a", "", "agent", "claude_code.interaction"),
+        (
+            "second",
+            "session-a",
+            "",
+            "agent",
+            "claude_code.interaction",
+        ),
+        ("pending", "session-b", "", "llm", "claude_code.llm_request"),
+        (
+            "child",
+            "session-a",
+            "child",
+            "agent",
+            "claude_code.interaction",
+        ),
+        (
+            "child-resumed",
+            "session-a",
+            "child",
+            "agent",
+            "claude_code.interaction",
+        ),
+        (
+            "legacy-sdk",
+            "sdk-session",
+            "",
+            "agent",
+            "ClaudeAgentSDK.query",
+        ),
+    ];
+    insert_rows(client, &writer, DATABASE, InsertTable::OtelTraces, records.into_iter().map(|(id, session, actor, kind, name)| BTreeMap::from([
+        ("Timestamp".into(), json!(1_790_000_000_000_000_000_i64)),
+        ("TraceId".into(), json!("mixed-sessions")),
+        ("SpanId".into(), json!(id)),
+        ("SpanName".into(), json!(name)),
+        ("ObservationType".into(), json!(kind)),
+        ("Framework".into(), json!(if id == "legacy-sdk" { "claude-agent-sdk" } else { framework })),
+        ("AgentName".into(), json!("assistant")),
+        ("SpanAttributes".into(), json!({"session.id": session, "agent_id": actor, "query_source_safe": if id == "legacy-sdk" { "" } else { "sdk" }})),
+        ("TeamId".into(), json!("team-a")),
+        ("ApiKeyHash".into(), json!("key-a")),
+    ])).collect()).await?;
+    let connection = fixture
+        .readers
+        .connection(client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let (reader, store) = make_reader(client, connection);
+    let access = ReadAccessParams {
+        all_teams: true,
+        user_id: String::new(),
+        team_ids: Vec::new(),
+    };
+    let listed = store
+        .list_runs(&litellm_traces::query::named::ListTracesParams {
+            access: access.clone(),
+            start_ms: 0,
+            end_ms: 2_000_000_000_000,
+            cursor_ms: 0,
+            cursor_trace_id: String::new(),
+            limit: 50,
+        })
+        .await?;
+    let summary = &listed[0];
+    let detail = reader
+        .get_trace(&store, &access, "mixed-sessions", &summary.trace_ref)
+        .await?
+        .ok_or("missing trace")?;
+    assert_eq!((summary.agent_count, summary.agent_invocations), (4, 6));
+    assert_eq!(
+        (detail.summary.agent_count, detail.summary.agent_invocations),
+        (4, 6)
+    );
+    Ok(())
+}
+
+#[rstest]
+#[case::root_sessions(false)]
+#[case::child_actors(true)]
+#[tokio::test]
+async fn many_native_invocations_are_aggregated_by_identity(
+    #[future(awt)] migrated_database: TestResult<SeededDatabase>,
+    #[case] children: bool,
+) -> TestResult {
+    let fixture = migrated_database?;
+    let client = &fixture.database.client;
+    let writer = Connection::writer(&fixture.database.url)?;
+    let rows = (0..50_000)
+        .map(|index| {
+            BTreeMap::from([
+                ("Timestamp".into(), json!(1_790_000_000_000_000_000_i64)),
+                ("TraceId".into(), json!("many-invocations")),
+                ("SpanId".into(), json!(index.to_string())),
+                ("SpanName".into(), json!("claude_code.interaction")),
+                ("ObservationType".into(), json!("agent")),
+                ("Framework".into(), json!("claude-code")),
+                ("AgentName".into(), json!("assistant")),
+                (
+                    "SpanAttributes".into(),
+                    json!({
+                        "session.id": if children { "shared".into() } else { index.to_string() },
+                        "agent_id": if children { index.to_string() } else { String::new() },
+                    }),
+                ),
+                ("TeamId".into(), json!("team-a")),
+                ("ApiKeyHash".into(), json!("key-a")),
+            ])
+        })
+        .collect();
+    insert_rows(client, &writer, DATABASE, InsertTable::OtelTraces, rows).await?;
+    let connection = fixture
+        .readers
+        .connection(client, &QueryScope::All, "fixture-secret")
+        .await?;
+    let (_, store) = make_reader(client, connection);
+    let listed = store
+        .list_runs(&litellm_traces::query::named::ListTracesParams {
+            access: ReadAccessParams {
+                all_teams: true,
+                user_id: String::new(),
+                team_ids: Vec::new(),
+            },
+            start_ms: 0,
+            end_ms: 2_000_000_000_000,
+            cursor_ms: 0,
+            cursor_trace_id: String::new(),
+            limit: 50,
+        })
+        .await?;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        (listed[0].agent_count, listed[0].agent_invocations),
+        (50_000, 50_000)
+    );
+    Ok(())
+}

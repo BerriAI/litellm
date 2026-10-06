@@ -1,6 +1,12 @@
 SELECT * FROM (
 SELECT o.TraceId AS trace_id, o.SpanAttributes['lens.original_trace_id'] AS original_trace_id, o.SpanId AS span_id, o.ParentSpanId AS parent_span_id, o.SpanName AS name,
        o.ObservationType AS type, toUInt8(o.WrapperCandidate) AS wrapper_candidate, o.AgentName AS agent,
+       o.SpanAttributes['agent_id'] AS native_agent_id,
+       o.SpanAttributes['parent_agent_id'] AS native_parent_agent_id,
+       o.SpanAttributes['session.id'] AS session_id,
+       coalesce(nullIf(o.SpanAttributes['query_source_safe'], ''), o.SpanAttributes['query_source']) AS query_source,
+       o.Output != '' AS has_output,
+       o.SpanAttributes['lens.capture.warning'] != '' AS capture_warning,
        o.Framework AS framework, o.StatusCode AS status,
        substringUTF8(o.StatusMessage, 1, 128) AS status_message,
        lengthUTF8(o.StatusMessage) > 128 AS error_truncated,

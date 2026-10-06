@@ -177,6 +177,25 @@ fn trace_span(span: DecodedSpan) -> TraceSpansRow {
         })
         .unwrap_or_default();
     TraceSpansRow {
+        has_output: !normalized.output.is_empty(),
+        capture_warning: span.attributes.contains_key("lens.capture.warning"),
+        native_agent_id: span.attributes.get("agent_id").cloned().unwrap_or_default(),
+        native_parent_agent_id: span
+            .attributes
+            .get("parent_agent_id")
+            .cloned()
+            .unwrap_or_default(),
+        session_id: span
+            .attributes
+            .get("session.id")
+            .cloned()
+            .unwrap_or_default(),
+        query_source: span
+            .attributes
+            .get("query_source_safe")
+            .or_else(|| span.attributes.get("query_source"))
+            .cloned()
+            .unwrap_or_default(),
         trace_id: span.trace_id,
         original_trace_id: String::new(),
         span_id: span.span_id,
@@ -268,6 +287,12 @@ fn unrelated_transport(call: &TraceSpansRow) -> TraceSpansRow {
         i64::try_from(i128::from(call.start_ns) + i128::from(call.duration_ns) + 1_000_000)
             .expect("valid unrelated transport timestamp");
     TraceSpansRow {
+        native_agent_id: String::new(),
+        native_parent_agent_id: String::new(),
+        session_id: String::new(),
+        query_source: String::new(),
+        has_output: false,
+        capture_warning: false,
         trace_id: call.trace_id.clone(),
         original_trace_id: call.original_trace_id.clone(),
         span_id: format!("unrelated-transport-{}", call.span_id),

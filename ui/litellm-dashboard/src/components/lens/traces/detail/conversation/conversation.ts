@@ -27,18 +27,20 @@ export function pendingConversationBranches(
   const pageBoundary = spans.reduce((latest, span) => Math.max(latest, span.start_offset_ms), -Infinity);
   const pending = spans.filter((span) => {
     const missingDetail = steps.has(span.span_id) && !details.has(span.span_id);
-    const mayHaveLaterChildren = hasMoreSpans && span.start_offset_ms + span.duration_ms >= pageBoundary;
+    const mayHaveLaterChildren =
+      hasMoreSpans && (Boolean(span.actor_id) || span.start_offset_ms + span.duration_ms >= pageBoundary);
     return missingDetail || mayHaveLaterChildren;
   });
   const initial = {
-    pending: new Set(pending.map((span) => span.span_id)),
+    pending: new Set(pending.flatMap((span) => [span.span_id, ...(span.actor_id ? [span.actor_id] : [])])),
     ancestors: new Map(
-      spans.flatMap((span) =>
-        span.parent_span_id && byId.has(span.parent_span_id) ? [[span.span_id, span.parent_span_id] as const] : [],
-      ),
+      spans.flatMap((span) => [
+        ...(span.parent_span_id && byId.has(span.parent_span_id) ? [[span.span_id, span.parent_span_id] as const] : []),
+        ...(span.actor_id && span.parent_actor_id ? [[span.actor_id, span.parent_actor_id] as const] : []),
+      ]),
     ),
   };
-  const doublingPasses = Math.ceil(Math.log2(Math.max(1, spans.length)));
+  const doublingPasses = Math.ceil(Math.log2(Math.max(1, initial.ancestors.size + 1)));
   return Array.from({ length: doublingPasses }).reduce<typeof initial>((state) => {
     if (!state.pending.size || !state.ancestors.size) return state;
     return {
@@ -281,6 +283,8 @@ function isNativeAgent(span: Span): boolean {
 }
 
 function conversationBranch(span: Span, byId: ReadonlyMap<string, Span>): string {
+  if (span.actor_id) return span.actor_id;
+  if (span.actor_unassigned) return `unassigned:${span.span_id}`;
   if (span.type === "agent" || span.parent_span_id === null) return span.span_id;
   let parent = span.parent_span_id ? byId.get(span.parent_span_id) : undefined;
   const visited = new Set<string>();
@@ -293,20 +297,21 @@ function conversationBranch(span: Span, byId: ReadonlyMap<string, Span>): string
 }
 
 function agentIdentity(span: Span, details: ReadonlyMap<string, SpanDetail>): string {
-  return isNativeAgent(span) ? span.span_id : details.get(span.span_id)?.attributes["gen_ai.agent.id"] || span.span_id;
+  return (
+    span.actor_id ||
+    (isNativeAgent(span) ? span.span_id : details.get(span.span_id)?.attributes["gen_ai.agent.id"] || span.span_id)
+  );
 }
 
 function agentLabels(agents: readonly Span[], details: ReadonlyMap<string, SpanDetail>): ReadonlyMap<string, string> {
   const identity = (agent: Span): string => agentIdentity(agent, details);
-  const unique = agents.filter(
-    (agent, index) => agents.findIndex((other) => identity(other) === identity(agent)) === index,
-  );
+  const unique = [...new Map(agents.toReversed().map((agent) => [identity(agent), agent])).values()];
   const named = unique.map((agent) => {
     const detail = details.get(agent.span_id);
     const args = detail && isNativeAgent(agent) ? toolInput(detail.input, detail.input_ui) : undefined;
     const description = args && typeof args === "object" && "description" in args ? args.description : undefined;
     const name =
-      agent.framework === "claude-code" && !isNativeAgent(agent)
+      agent.actor_id || (agent.framework === "claude-code" && !isNativeAgent(agent))
         ? agent.agent || agent.name || "Agent"
         : agent.name || agent.agent || "Agent";
     return { agent, name: typeof description === "string" && description ? description : name };
@@ -413,22 +418,31 @@ export function buildConversation(
     };
     if (combined.length || item.showError) items.push(item);
   }
+  const byBranch = new Map(
+    spans
+      .filter((span) => span.actor_id || span.actor_unassigned)
+      .sort((a, b) => b.start_offset_ms - a.start_offset_ms)
+      .map((span) => [branch(span), span]),
+  );
   const agents = [...new Set(conversationSteps(spans).map(branch))].flatMap((id) => {
-    const span = byId.get(id);
+    const span = byId.get(id) ?? byBranch.get(id);
     return span ? [span] : [];
   });
   const labels = agentLabels(agents, details);
   const actor = (id: string): string => {
-    const span = byId.get(id);
+    const span = byId.get(id) ?? byBranch.get(id);
+    if (span?.actor_unassigned) return id;
     return span ? agentIdentity(span, details) : id;
   };
   return items
     .map((item) => ({
       ...item,
       agentId: actor(branch(item.span)),
-      agentName: labels.get(actor(branch(item.span))) || item.span.agent,
+      agentName: item.span.actor_unassigned ? "Unassigned" : labels.get(actor(branch(item.span))) || item.span.agent,
       branchId: branch(item.span),
       parentBranchId: (() => {
+        if (item.span.actor_id) return item.span.parent_actor_id || undefined;
+        if (item.span.actor_unassigned) return undefined;
         const parentId = byId.get(branch(item.span))?.parent_span_id;
         const parent = parentId ? byId.get(parentId) : undefined;
         return parent ? branch(parent) : undefined;
@@ -457,6 +471,8 @@ export function groupConversation(items: readonly ConversationItem[], spans: rea
   const byId = new Map(spans.map((span) => [span.span_id, span]));
   const parentById = new Map(
     conversationSteps(spans).flatMap((span) => {
+      if (span.actor_id) return [[span.actor_id, span.parent_actor_id || undefined] as const];
+      if (span.actor_unassigned) return [[conversationBranch(span, byId), undefined] as const];
       const branch = byId.get(conversationBranch(span, byId));
       if (!branch) return [];
       const parent = branch.parent_span_id ? byId.get(branch.parent_span_id) : undefined;

@@ -27,6 +27,48 @@ const detail = (span_id: string, input: unknown, output: unknown): SpanDetail =>
 });
 
 describe("trace conversation", () => {
+  it.each([false, true])("keeps native actor branches pending across details and pages (%s)", (hasMore) => {
+    const child = { ...root, span_id: "child", actor_id: "child-actor", parent_actor_id: "root-actor", duration_ms: 1 };
+    const later = { ...root, span_id: "later", actor_id: "root-actor", start_offset_ms: 100 };
+    const details = new Map([
+      [later.span_id, detail(later.span_id, [], [])],
+      ...(hasMore ? [[child.span_id, detail(child.span_id, [], [])] as const] : []),
+    ]);
+    const pending = pendingConversationBranches([child, later], details, hasMore);
+    expect(pending.has("child-actor")).toBe(true);
+    expect(pending.has("root-actor")).toBe(true);
+    expect(pending.has("child")).toBe(true);
+  });
+
+  it("builds a conversation below 20,000 hidden framework spans", () => {
+    const chain = Array.from(
+      { length: 20_000 },
+      (_, index): Span => ({
+        ...root,
+        span_id: `hidden-${index}`,
+        parent_span_id: index ? `hidden-${index - 1}` : root.span_id,
+        type: "framework",
+        name: "internal",
+        start_offset_ms: 1,
+      }),
+    );
+    const tool: Span = {
+      ...root,
+      span_id: "tool",
+      parent_span_id: "hidden-19999",
+      type: "tool",
+      name: "Read",
+      start_offset_ms: 2,
+    };
+    const details = new Map([
+      [root.span_id, detail(root.span_id, "Read file", "")],
+      [tool.span_id, detail(tool.span_id, { path: "alpha.txt" }, "value")],
+    ]);
+    const items = buildConversation([root, ...chain, tool], details, true);
+    expect(items.map((item) => item.span.span_id)).toEqual([root.span_id, tool.span_id]);
+    expect(items[1].toolResult).toBe("value");
+  });
+
   it("keeps missing nested details pending through framework and native agent ancestors", () => {
     const agent = {
       ...root,
@@ -716,4 +758,82 @@ describe("coding sessions", () => {
     details.set("reply", { ...detail("reply", [], "Hello"), attributes: { "event.name": "assistant_response" } });
     expect(conversationWarnings(details, true)).toEqual([]);
   });
+});
+
+it.each(["claude-code", "claude-agent-sdk"])(
+  "keeps explicit %s actors separate across workflow branches and background resumes",
+  (framework) => {
+    const span = (id: string, actor: string, parentActor: string | null, offset: number): Span => ({
+      ...root,
+      span_id: id,
+      name: "claude_code.llm_request",
+      type: "llm",
+      framework,
+      parent_span_id: "root",
+      actor_id: actor,
+      parent_actor_id: parentActor,
+      agent: "general-purpose",
+      start_offset_ms: offset,
+    });
+    const spans = [
+      { ...root, framework, actor_id: "root-actor", parent_actor_id: null, agent: "claude-code" },
+      span("first", "actor-one", "root-actor", 1),
+      span("second", "actor-two", "root-actor", 2),
+      span("nested", "actor-three", "actor-one", 3),
+      { ...span("resumed", "actor-one", "root-actor", 4), parent_span_id: null },
+    ];
+    const details = new Map(spans.map((span) => [span.span_id, detail(span.span_id, "", `Reply ${span.span_id}`)]));
+    const items = buildConversation(spans, details, true);
+    expect(items.filter((item) => item.span.span_id === "resumed").map((item) => item.agentId)).toEqual(["actor-one"]);
+    const groups = groupConversation(items, spans);
+    const branches = groups.filter((group) => group.kind === "branch");
+    expect(branches.map((group) => group.id)).toEqual(["actor-one", "actor-two"]);
+    expect(branches[0].children.map((group) => (group.kind === "branch" ? group.id : group.item.span.span_id))).toEqual(
+      ["first", "actor-three", "resumed"],
+    );
+    expect(
+      items.filter((item) => ["first", "resumed"].includes(item.span.span_id)).map((item) => item.agentName),
+    ).toEqual(["general-purpose (1)", "general-purpose (1)"]);
+  },
+);
+
+it.each([false, true])("preserves legacy history while isolating unconfirmed actors (%s)", (unassigned) => {
+  const spans: Span[] = [
+    { ...root, framework: "claude-code", actor_id: null, actor_unassigned: false },
+    {
+      ...root,
+      span_id: "first",
+      type: "llm",
+      framework: "claude-code",
+      parent_span_id: root.span_id,
+      actor_id: null,
+      actor_unassigned: unassigned,
+      start_offset_ms: 1,
+    },
+    {
+      ...root,
+      span_id: "second",
+      type: "llm",
+      framework: "claude-code",
+      parent_span_id: root.span_id,
+      actor_id: null,
+      actor_unassigned: unassigned,
+      start_offset_ms: 2,
+    },
+  ];
+  const user = { role: "user", content: "Read this" };
+  const answer = { role: "assistant", content: "First answer" };
+  const details = new Map([
+    [root.span_id, detail(root.span_id, [], [])],
+    ["first", detail("first", [user], [answer])],
+    ["second", detail("second", [user, answer], [{ role: "assistant", content: "Second answer" }])],
+  ]);
+  const items = buildConversation(spans, details, true);
+  expect(items.map((item) => item.branchId)).toEqual(
+    unassigned ? ["unassigned:first", "unassigned:second"] : [root.span_id, root.span_id],
+  );
+  expect(items[1].messages.map((message) => message.content)).toEqual(
+    unassigned ? ["Read this", "First answer", "Second answer"] : ["Second answer"],
+  );
+  expect(items.every((item) => item.agentName === "Unassigned")).toBe(unassigned);
 });

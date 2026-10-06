@@ -113,7 +113,8 @@ export function errorSource(span: Span): ErrorSource | null {
 
 type GroupOrSpan = Span | { group: Span[] };
 
-const groupKey = (span: Pick<Span, "name" | "type" | "agent">): string => `${span.agent}|${span.name}|${span.type}`;
+const groupKey = (span: Pick<Span, "name" | "type" | "agent" | "actor_id">): string =>
+  `${span.actor_id ?? span.agent}|${span.name}|${span.type}`;
 
 function groupChildren(children: readonly Span[]): GroupOrSpan[] {
   const runs: Span[][] = [];

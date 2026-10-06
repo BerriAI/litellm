@@ -40,7 +40,16 @@ fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span 
         parent_span_id: optional(&row.parent_span_id),
         name: row.name.clone(),
         kind: resolution.kind(index),
-        agent: row.agent.clone(),
+        actor_id: resolution.actors.owner(index).map(|actor| actor.id.clone()),
+        actor_unassigned: super::actors::native(row) && resolution.actors.owner(index).is_none(),
+        parent_actor_id: resolution
+            .actors
+            .owner(index)
+            .and_then(|actor| actor.parent.clone()),
+        agent: resolution
+            .actors
+            .owner(index)
+            .map_or_else(|| row.agent.clone(), |actor| actor.name.clone()),
         framework: row.framework.clone(),
         start_offset_ms: (i128::from(row.start_ns) - i128::from(trace_start_ns)) as f64
             / NANOS_PER_MS,
@@ -62,7 +71,11 @@ fn span(resolution: &Resolution<'_>, index: usize, trace_start_ns: i64) -> Span 
 fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
     let graph = &resolution.graph;
     let mut entries: IndexMap<&str, Vec<usize>> = IndexMap::new();
-    for index in (0..graph.rows.len()).filter(|index| resolution.is_agent(*index)) {
+    for index in (0..graph.rows.len()).filter(|index| {
+        resolution.is_agent(*index)
+            && !super::actors::native(resolution.row(*index))
+            && resolution.actors.owner(*index).is_none()
+    }) {
         entries
             .entry(agent_label(resolution.row(index)))
             .or_default()
@@ -73,7 +86,9 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
         let parent_agent = graph
             .parent(index)
             .map(|parent| graph.rows[parent].agent.as_str());
-        if !row.agent.is_empty()
+        if !super::actors::native(row)
+            && resolution.actors.owner(index).is_none()
+            && !row.agent.is_empty()
             && !explicit.contains(row.agent.as_str())
             && parent_agent != Some(row.agent.as_str())
         {
@@ -83,40 +98,100 @@ fn agents(resolution: &Resolution<'_>) -> Vec<AgentNode> {
     let calls: Vec<(&str, Option<Requests<'_>>)> = resolution
         .model_calls
         .iter()
+        .filter(|call| {
+            !super::actors::native(resolution.row(**call))
+                && resolution.actors.owner(**call).is_none()
+        })
         .map(|call| (resolution.owner(*call), resolution.call_requests(*call)))
         .collect();
     let tools = resolution.unique_tools();
-    entries
-        .into_iter()
-        .map(|(name, spans)| {
-            let parent_agent = graph.ancestors(spans[0]).into_iter().find_map(|ancestor| {
-                let label = agent_label(resolution.row(ancestor));
-                (resolution.is_agent(ancestor) && label != name).then(|| label.to_owned())
-            });
-            let owned_calls: Vec<Option<Requests<'_>>> = calls
+    let legacy = entries.into_iter().map(|(name, spans)| {
+        let parent_agent = graph.ancestors(spans[0]).into_iter().find_map(|ancestor| {
+            let label = agent_label(resolution.row(ancestor));
+            (resolution.is_agent(ancestor) && label != name).then(|| label.to_owned())
+        });
+        let owned_calls: Vec<Option<Requests<'_>>> = calls
+            .iter()
+            .filter(|(owner, _)| *owner == name)
+            .map(|(_, requests)| requests.clone())
+            .collect();
+        let priced = total(&owned_calls);
+        AgentNode {
+            actor_id: None,
+            parent_actor_id: None,
+            name: name.to_owned(),
+            parent_agent,
+            invocations: spans.len() as u64,
+            llm_calls: owned_calls.len() as u64,
+            tool_calls: tools
                 .iter()
-                .filter(|(owner, _)| *owner == name)
-                .map(|(_, requests)| requests.clone())
+                .filter(|tool| {
+                    !super::actors::native(resolution.row(**tool))
+                        && resolution.actors.owner(**tool).is_none()
+                        && resolution.owner(**tool) == name
+                })
+                .count() as u64,
+            duration_ms: spans
+                .iter()
+                .map(|span| graph.rows[*span].duration_ns)
+                .sum::<u64>() as f64
+                / NANOS_PER_MS,
+            spend: priced.spend,
+            priced_calls: priced.priced_calls,
+        }
+    });
+    let model_calls: HashSet<_> = resolution.model_calls.iter().copied().collect();
+    let native_tools: HashSet<_> = tools.iter().copied().collect();
+    legacy
+        .chain(resolution.actors.entries.values().map(|actor| {
+            let calls: Vec<_> = actor
+                .spans
+                .iter()
+                .filter(|index| model_calls.contains(index))
+                .map(|index| resolution.call_requests(*index))
                 .collect();
-            let priced = total(&owned_calls);
+            let start = actor
+                .spans
+                .iter()
+                .map(|index| i128::from(graph.rows[*index].start_ns))
+                .min()
+                .unwrap_or_default();
+            let end = actor
+                .spans
+                .iter()
+                .map(|index| {
+                    i128::from(graph.rows[*index].start_ns)
+                        + i128::from(graph.rows[*index].duration_ns)
+                })
+                .max()
+                .unwrap_or(start);
+            let priced = total(&calls);
             AgentNode {
-                name: name.to_owned(),
-                parent_agent,
-                invocations: spans.len() as u64,
-                llm_calls: owned_calls.len() as u64,
-                tool_calls: tools
+                actor_id: Some(actor.id.clone()),
+                parent_actor_id: actor.parent.clone(),
+                name: actor.name.clone(),
+                parent_agent: actor
+                    .parent
+                    .as_ref()
+                    .and_then(|id| resolution.actors.entries.get(id))
+                    .map(|parent| parent.name.clone()),
+                invocations: actor
+                    .spans
                     .iter()
-                    .filter(|tool| resolution.owner(**tool) == name)
+                    .filter(|index| graph.rows[**index].name == "claude_code.interaction")
+                    .count()
+                    .max(1) as u64,
+                llm_calls: calls.len() as u64,
+                tool_calls: actor
+                    .spans
+                    .iter()
+                    .filter(|index| native_tools.contains(index))
                     .count() as u64,
-                duration_ms: spans
-                    .iter()
-                    .map(|span| graph.rows[*span].duration_ns)
-                    .sum::<u64>() as f64
-                    / NANOS_PER_MS,
+                duration_ms: (end - start) as f64 / NANOS_PER_MS,
                 spend: priced.spend,
                 priced_calls: priced.priced_calls,
             }
-        })
+        }))
         .collect()
 }
 
@@ -231,6 +306,7 @@ pub fn resolve_trace(
         priced_calls: priced.priced_calls,
     };
     Some(Trace {
+        capture: super::capture::coverage(&resolution),
         summary,
         agents,
         spans,

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, Copy, Link } from "lucide-react";
+import { ArrowLeft, Check, Copy, Link, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { useTimeout } from "usehooks-ts";
 
@@ -52,13 +52,14 @@ function Stat({ label, value, error = false }: { label: string; value: string; e
 function StatusPill({ failed }: { failed: boolean }) {
   return (
     <span
+      title="Status of received spans. More spans may still arrive."
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-medium",
         failed ? "bg-destructive/10 text-destructive" : "bg-trace-ok text-trace-ok-glyph",
       )}
     >
       <span className={cn("size-1.5 rounded-full", failed ? "bg-destructive" : "bg-trace-ok-glyph")} />
-      {failed ? "Failed" : "Completed"}
+      {failed ? "Errors recorded" : "Recorded"}
     </span>
   );
 }
@@ -83,10 +84,25 @@ interface RunHeaderProps {
   handoff: TraceHandoff;
   onBack: () => void;
   embedded: boolean;
+  refreshing: boolean;
+  onRefresh: () => void;
+  live: boolean;
+  canLive: boolean;
+  onLiveChange: () => void;
 }
 
 /** Run identity, view switch and totals in two tight rows. */
-export function RunHeader({ trace, handoff, onBack, embedded }: RunHeaderProps) {
+export function RunHeader({
+  trace,
+  handoff,
+  onBack,
+  embedded,
+  refreshing,
+  onRefresh,
+  live,
+  canLive,
+  onLiveChange,
+}: RunHeaderProps) {
   const { summary } = trace;
   const failed = summary.status === "error";
   const cost = runCost(summary);
@@ -113,6 +129,20 @@ export function RunHeader({ trace, handoff, onBack, embedded }: RunHeaderProps) 
             </TabsTrigger>
           </TabsList>
           <div className="flex items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="xs"
+              aria-pressed={live}
+              disabled={!canLive}
+              onClick={onLiveChange}
+              aria-label="Live updates"
+            >
+              Live
+            </Button>
+            <Button variant="outline" size="xs" disabled={refreshing} onClick={onRefresh} aria-label="Refresh run">
+              <RefreshCw className={cn("size-3", refreshing && "animate-spin")} />
+              Refresh
+            </Button>
             <CopyButton
               label="Copy link"
               icon={Link}

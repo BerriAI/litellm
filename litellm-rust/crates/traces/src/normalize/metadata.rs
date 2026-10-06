@@ -71,6 +71,12 @@ impl From<Integration> for String {
 #[serde(default)]
 pub struct AgentMetadata {
     #[serde(deserialize_with = "optional")]
+    pub agent_id: Option<String>,
+    #[serde(deserialize_with = "optional")]
+    pub parent_agent_id: Option<String>,
+    #[serde(deserialize_with = "optional")]
+    pub session_id: Option<String>,
+    #[serde(deserialize_with = "optional")]
     pub lc_agent_name: Option<String>,
     #[serde(deserialize_with = "optional")]
     pub ls_integration: Option<Integration>,
@@ -109,6 +115,9 @@ pub struct AgentMetadata {
 impl AgentMetadata {
     pub(crate) fn byte_len(&self) -> usize {
         let strings = [
+            &self.agent_id,
+            &self.parent_agent_id,
+            &self.session_id,
             &self.lc_agent_name,
             &self.ls_agent_purpose,
             &self.ls_agent_runtime,
@@ -140,6 +149,10 @@ impl AgentMetadata {
 #[derive(strum::EnumString, strum::IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
 enum MetadataField {
+    AgentId,
+    ParentAgentId,
+    #[strum(serialize = "session.id", to_string = "session_id")]
+    SessionId,
     LcAgentName,
     LsIntegration,
     LsAgentType,

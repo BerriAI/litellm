@@ -25469,6 +25469,23 @@ export interface components {
              */
             team_id: string;
         };
+        /** ActorCapture */
+        ActorCapture: {
+            /** Actor Id */
+            actor_id: string;
+            /** Content Events */
+            content_events: number;
+            /** Llm Calls */
+            llm_calls: number;
+            /** Model Outputs */
+            model_outputs: number;
+            /** Name */
+            name: string;
+            /** Reply Events */
+            reply_events: number;
+            /** Tool Calls */
+            tool_calls: number;
+        };
         /** AdaptiveRouterWeights */
         AdaptiveRouterWeights: {
             /**
@@ -25826,6 +25843,8 @@ export interface components {
         };
         /** AgentNode */
         AgentNode: {
+            /** Actor Id */
+            actor_id?: string | null;
             /** Duration Ms */
             duration_ms: number;
             /** Invocations */
@@ -25834,6 +25853,8 @@ export interface components {
             llm_calls: number;
             /** Name */
             name: string;
+            /** Parent Actor Id */
+            parent_actor_id?: string | null;
             /** Parent Agent */
             parent_agent: string | null;
             /** Priced Calls */
@@ -45261,6 +45282,10 @@ export interface components {
         };
         /** Span */
         Span: {
+            /** Actor Id */
+            actor_id?: string | null;
+            /** Actor Unassigned */
+            actor_unassigned?: boolean;
             /** Agent */
             agent: string;
             /** Duration Ms */
@@ -45283,6 +45308,8 @@ export interface components {
             name: string;
             /** Output Tokens */
             output_tokens: number;
+            /** Parent Actor Id */
+            parent_actor_id?: string | null;
             /** Parent Span Id */
             parent_span_id: string | null;
             /** Span Id */
@@ -47189,11 +47216,23 @@ export interface components {
         Trace: {
             /** Agents */
             agents: components["schemas"]["AgentNode"][];
+            capture?: components["schemas"]["TraceCapture"] | null;
             /** Next Cursor */
             next_cursor?: string | null;
             /** Spans */
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
+        };
+        /** TraceCapture */
+        TraceCapture: {
+            /** Actors */
+            actors: components["schemas"]["ActorCapture"][];
+            /** Content Events */
+            content_events: number;
+            /** Unassigned Events */
+            unassigned_events: number;
+            /** Warning Events */
+            warning_events: number;
         };
         /** TraceFindingCount */
         TraceFindingCount: {
