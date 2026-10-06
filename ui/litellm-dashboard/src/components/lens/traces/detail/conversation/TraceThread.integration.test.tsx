@@ -90,4 +90,119 @@ describe("TraceThread", () => {
     expect(await within(thread).findByText("The release is ready")).toBeVisible();
     expect(within(thread).queryByRole("alert")).not.toBeInTheDocument();
   });
+
+  it("offers only Steps and Thread, and an old conversation link opens on Steps", async () => {
+    window.history.replaceState(null, "", "/?view=conversation");
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    const views = await screen.findByRole("tablist", { name: "Trace view" });
+    expect(
+      within(views)
+        .getAllByRole("tab")
+        .map((tab) => tab.textContent),
+    ).toEqual(["Steps", "Thread"]);
+    expect(within(views).getByRole("tab", { name: "Steps" })).toHaveAttribute("aria-selected", "true");
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("shows a failed shell command's output inside the Worked bar and in the step details", async () => {
+    const user = userEvent.setup();
+    const command = "npm test -- checkout";
+    const terminal = { ...tool, name: "terminal", status: "error", error: null };
+    vi.mocked(agentTraceCall).mockResolvedValue({ ...trace, spans: [root, llm, terminal] } as Trace);
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) =>
+      id === "tool"
+        ? {
+            span_id: "tool",
+            input: JSON.stringify({ command }),
+            output: JSON.stringify({ output: "FAIL checkout.test.ts", exit_code: 1 }),
+            input_ui: { kind: "fields", fields: [{ key: "command", value: command }] },
+            output_ui: {
+              kind: "fields",
+              fields: [
+                { key: "output", value: "FAIL checkout.test.ts" },
+                { key: "exit_code", value: "1" },
+              ],
+            },
+            attributes: {},
+          }
+        : details[id],
+    );
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Thread" }));
+    const thread = await screen.findByRole("region", { name: "Trace thread" });
+    const worked = await within(thread).findByRole("button", { name: /^Worked/ });
+    expect(within(worked).getByLabelText("A step failed")).toBeVisible();
+    await user.click(worked);
+    expect(await within(thread).findByText(/FAIL checkout.test.ts/, { selector: "pre" })).toBeVisible();
+    expect(within(thread).getByText("exit_code")).toBeVisible();
+    await user.click(within(thread).getByRole("button", { name: "Inspect step terminal" }));
+    const pane = screen.getByRole("complementary", { name: "Span details" });
+    expect(await within(pane).findByText(command, { selector: "pre" })).toBeVisible();
+  });
+
+  it("shows an agent failure once even when the run never replied", async () => {
+    const user = userEvent.setup();
+    const failedRoot = { ...root, status: "error", error: "Agent exceeded its execution limit" };
+    vi.mocked(agentTraceCall).mockResolvedValue({ ...trace, spans: [failedRoot, llm, tool] } as Trace);
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) =>
+      id === "root" ? { ...details.root, output: "" } : details[id],
+    );
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Thread" }));
+    const thread = await screen.findByRole("region", { name: "Trace thread" });
+    expect(await within(thread).findByText("End of thread")).toBeVisible();
+    expect(within(thread).getAllByText("Agent exceeded its execution limit")).toHaveLength(1);
+  });
+
+  it("warns when a Claude Code trace recorded no assistant replies", async () => {
+    const user = userEvent.setup();
+    vi.mocked(agentTraceCall).mockResolvedValue({ ...trace, spans: [root] } as Trace);
+    vi.mocked(agentTraceSpanCall).mockResolvedValue({
+      ...details.root,
+      output: "",
+      attributes: { "span.type": "llm_request" },
+    });
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Thread" }));
+    expect(await screen.findByText(/no recorded assistant replies/)).toBeVisible();
+    expect(screen.getByText("Read the release notes")).toBeVisible();
+  });
+
+  it("nests a failed subagent's work inside the Worked bar and shows its error once", async () => {
+    const user = userEvent.setup();
+    const child = {
+      ...root,
+      span_id: "child",
+      parent_span_id: "root",
+      name: "Investigate release",
+      start_offset_ms: 20,
+      duration_ms: 10,
+      status: "error",
+      error: "Investigation timed out",
+    };
+    const childTool = { ...tool, span_id: "child-tool", parent_span_id: "child", start_offset_ms: 22, duration_ms: 2 };
+    vi.mocked(agentTraceCall).mockResolvedValue({ ...trace, spans: [root, llm, child, childTool] } as Trace);
+    vi.mocked(agentTraceSpanCall).mockImplementation(async (_token, _trace, id) => {
+      if (id === "child") return { ...details.root, span_id: id, input: "Investigate failed checks", output: "" };
+      if (id === "child-tool") return { ...details.tool, span_id: id };
+      return details[id];
+    });
+    renderWithProviders(
+      <RoutedRunView traceId={trace.summary.trace_id} accessToken="test" onBack={vi.fn()} embedded />,
+    );
+    await user.click(await screen.findByRole("tab", { name: "Thread" }));
+    const thread = await screen.findByRole("region", { name: "Trace thread" });
+    await user.click(await within(thread).findByRole("button", { name: /^Worked/ }));
+    await user.click(within(thread).getByText("Subagent: Investigate release", { exact: true }));
+    expect(within(thread).getByText("Investigate failed checks")).toBeVisible();
+    expect(within(thread).getAllByText("Investigation timed out")).toHaveLength(1);
+  });
 });
