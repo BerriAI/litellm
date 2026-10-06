@@ -59,13 +59,14 @@ def stage_core_distribution(source: Path, destination: Path) -> None:
     subprocess.run(["uv", "version", version, "--frozen"], cwd=destination, check=True)
 
 
-def build_core_distribution(output: Path) -> None:
+def build_core_distribution(output: Path, *, sdist_only: bool = False) -> None:
     output_path: Final = output.resolve()
     with tempfile.TemporaryDirectory(prefix="litellm-core-") as temporary:
         stage: Final = Path(temporary)
         stage_core_distribution(ROOT, stage)
         subprocess.run(
-            ["uv", "build", "--python", sys.executable, "--out-dir", str(output_path)],
+            ["uv", "build", "--python", sys.executable, "--out-dir", str(output_path)]
+            + (["--sdist"] if sdist_only else []),
             cwd=stage,
             check=True,
         )
@@ -74,8 +75,11 @@ def build_core_distribution(output: Path) -> None:
 def main() -> None:
     parser: Final = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path, default=ROOT / "dist/core")
+    parser.add_argument(
+        "--sdist-only", action="store_true", help="Build only the source archive, without compiling a wheel"
+    )
     args: Final = parser.parse_args()
-    build_core_distribution(Path(args.out_dir))
+    build_core_distribution(Path(args.out_dir), sdist_only=args.sdist_only)
 
 
 if __name__ == "__main__":
