@@ -70,8 +70,7 @@ def _team_members(gateway: Gateway, team_id: str) -> list[dict[str, JsonValue]]:
 
 def _has_team_member(gateway: Gateway, team_id: str, user_id: str) -> bool:
     return any(
-        member.get("user_id") == user_id and member.get("role") == "user"
-        for member in _team_members(gateway, team_id)
+        member.get("user_id") == user_id and member.get("role") == "user" for member in _team_members(gateway, team_id)
     )
 
 
@@ -220,17 +219,21 @@ def test_scim_create_adopts_an_existing_user_by_email_and_keeps_its_key_and_team
         readback_user: Final = ScimUserResponse.model_validate(readback.json())
         assert readback_user.id == existing_user, readback.text
         assert readback_user.groups == [ScimGroupRef(value=team, display=team_alias)], readback.text
-        assert len(
-            read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_email = %s', (user_email,))
-        ) == 1
-        assert read_rows(
-            'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s',
-            (idp_user_name,),
-        ) == []
-        assert read_rows(
-            'SELECT user_id, user_email, user_role, teams FROM "LiteLLM_UserTable" WHERE user_id = %s',
-            (existing_user,),
-        ) == user_before
+        assert len(read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_email = %s', (user_email,))) == 1
+        assert (
+            read_rows(
+                'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s',
+                (idp_user_name,),
+            )
+            == []
+        )
+        assert (
+            read_rows(
+                'SELECT user_id, user_email, user_role, teams FROM "LiteLLM_UserTable" WHERE user_id = %s',
+                (existing_user,),
+            )
+            == user_before
+        )
         assert _team_members(gateway, team) == team_before
         _assert_serving(gateway, model, key)
 
@@ -287,9 +290,9 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         )
         assert without_groups_readback.status_code == 200, without_groups_readback.text
         without_groups_readback_user: Final = ScimUserResponse.model_validate(without_groups_readback.json())
-        assert without_groups_readback_user.groups == [
-            ScimGroupRef(value=team_a, display=alias_a)
-        ], without_groups_readback.text
+        assert without_groups_readback_user.groups == [ScimGroupRef(value=team_a, display=alias_a)], (
+            without_groups_readback.text
+        )
         assert _has_team_member(gateway, team_a, user_name), _team_members(gateway, team_a)
         _assert_serving(gateway, model_a, key_a)
 
@@ -305,9 +308,9 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         empty_groups_readback: Final = _scim_request(gateway, "GET", f"/scim/v2/Users/{user_name}")
         assert empty_groups_readback.status_code == 200, empty_groups_readback.text
         empty_groups_readback_user: Final = ScimUserResponse.model_validate(empty_groups_readback.json())
-        assert empty_groups_readback_user.groups == [
-            ScimGroupRef(value=team_a, display=alias_a)
-        ], empty_groups_readback.text
+        assert empty_groups_readback_user.groups == [ScimGroupRef(value=team_a, display=alias_a)], (
+            empty_groups_readback.text
+        )
         assert _has_team_member(gateway, team_a, user_name), _team_members(gateway, team_a)
         _assert_serving(gateway, model_a, key_a)
 
@@ -425,6 +428,21 @@ def test_okta_username_filter_finds_users_by_email_and_by_id(gateway: Gateway) -
             1,
             [(existing, email_a)],
         ), existing_text
+
+        existing_id_results, existing_id_text = lookup(existing)
+        assert (
+            existing_id_results.schemas,
+            existing_id_results.totalResults,
+            existing_id_results.startIndex,
+            existing_id_results.itemsPerPage,
+            [(resource.id, resource.userName) for resource in existing_id_results.Resources],
+        ) == (
+            ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+            1,
+            1,
+            1,
+            [(existing, email_a)],
+        ), existing_id_text
 
         scim_results, scim_text = lookup(email_b)
         assert (

@@ -8,7 +8,7 @@ import yaml
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 SCIM_HEADERS: Final = {"Content-Type": "application/scim+json"}
 SCIM_CORE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:User"
@@ -17,10 +17,31 @@ SCIM_PATCH_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 SCIM_CONFIG: Final = TypeAdapter(dict[str, JsonValue])
 
 
+class ScimGroupMeta(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resourceType: str
+    created: str
+    lastModified: str
+
+
+class ScimGroupMember(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: str
+    display: str
+    type: str
+
+
 class ScimGroupResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     schemas: list[str]
     id: str
+    externalId: str | None = None
+    meta: ScimGroupMeta
     displayName: str
+    members: list[ScimGroupMember]
 
 
 class ScimUserResponse(BaseModel):
@@ -73,6 +94,48 @@ def _database_user_role(user_id: str) -> str:
     return string_value(rows[0]["user_role"])
 
 
+def _expected_scim_write_denial(route: str, user_id: str, user_role: str) -> dict[str, JsonValue]:
+    masked_user_id: Final = f"{user_id[:6]}{'*' * (len(user_id) - 8)}{user_id[-2:]}"
+    return {
+        "error": {
+            "message": (
+                "Authentication Error, Only proxy admin can be used to generate, delete, update info for new "
+                f"keys/users/teams. Route={route}. Your role={user_role}. Your user_id={masked_user_id}"
+            ),
+            "type": "auth_error",
+            "param": "None",
+            "code": "401",
+        }
+    }
+
+
+def _assert_scim_group_resource(
+    response: httpx.Response,
+    group_id: str,
+    display_name: str,
+    members: list[ScimGroupMember],
+    expected_created: str | None,
+) -> ScimGroupResponse:
+    actual: Final = ScimGroupResponse.model_validate(response.json())
+    created: Final = actual.meta.created if expected_created is None else expected_created
+    assert isinstance(created, str), response.text
+    assert isinstance(actual.meta.lastModified, str), response.text
+    expected: Final = ScimGroupResponse(
+        schemas=[SCIM_CORE_GROUP_SCHEMA],
+        id=group_id,
+        externalId=None,
+        meta=ScimGroupMeta(
+            resourceType="Group",
+            created=created,
+            lastModified=actual.meta.lastModified,
+        ),
+        displayName=display_name,
+        members=members,
+    )
+    assert actual == expected, response.text
+    return actual
+
+
 def _group_membership_operations(
     user_id: str,
     spelling: Literal["okta", "entra"],
@@ -88,9 +151,7 @@ def _group_membership_operations(
     )
 
 
-def _generate_key_for_user(
-    scenario: Scenario, user_key: str, target_user: str
-) -> httpx.Response:
+def _generate_key_for_user(scenario: Scenario, user_key: str, target_user: str) -> httpx.Response:
     response: Final = scenario.gateway.request(
         "POST",
         "/key/generate",
@@ -126,8 +187,13 @@ def test_scim_admin_group_promotes_and_demotes_group_members(
             headers=SCIM_HEADERS,
         )
         assert group_response.status_code == 201, group_response.text
-        created_group: Final = ScimGroupResponse.model_validate(group_response.json())
-        assert created_group.id == group_id and created_group.displayName == group_name, group_response.text
+        created_group: Final = _assert_scim_group_resource(
+            group_response,
+            group_id,
+            group_name,
+            [],
+            None,
+        )
         scenario.cleanups.callback(_delete_group_if_present, owned.gateway, group_id)
 
         user: Final = f"scim-admin-user-{uuid.uuid4().hex}"
@@ -147,10 +213,21 @@ def test_scim_admin_group_promotes_and_demotes_group_members(
         assert created_user_response.id == user, created_user.text
         default_role: Final = _database_user_role(user)
         assert _user_role(owned.gateway, user) == default_role
+        member_rows: Final = read_rows(
+            'SELECT user_email FROM "LiteLLM_UserTable" WHERE user_id = %s',
+            (user,),
+        )
+        member_email: Final = member_rows[0]["user_email"]
+        member_display: Final = member_email if isinstance(member_email, str) and member_email else user
         user_key: Final = scenario.key(user_id=user)
         other_user: Final = scenario.user(user_role="internal_user")
         initial_denial: Final = _generate_key_for_user(scenario, user_key, other_user)
         assert initial_denial.status_code == 401, initial_denial.text
+        assert object_value(initial_denial.json()) == _expected_scim_write_denial(
+            "/key/generate",
+            user,
+            default_role,
+        ), initial_denial.text
 
         add_op, remove_op = _group_membership_operations(user, spelling)
         added: Final = owned.gateway.request(
@@ -163,6 +240,27 @@ def test_scim_admin_group_promotes_and_demotes_group_members(
             headers=SCIM_HEADERS,
         )
         assert added.status_code == 200, added.text
+        expected_member: Final = ScimGroupMember(value=user, display=member_display, type="User")
+        added_group: Final = _assert_scim_group_resource(
+            added,
+            group_id,
+            group_name,
+            [expected_member],
+            created_group.meta.created,
+        )
+        added_readback: Final = owned.gateway.request(
+            "GET",
+            f"/scim/v2/Groups/{group_id}",
+            headers={"Accept": "application/scim+json"},
+        )
+        assert added_readback.status_code == 200, added_readback.text
+        _assert_scim_group_resource(
+            added_readback,
+            group_id,
+            group_name,
+            [expected_member],
+            created_group.meta.created,
+        )
         assert eventually(lambda: _user_role(owned.gateway, user), lambda role: role == "proxy_admin") == "proxy_admin"
         assert eventually(lambda: _database_user_role(user), lambda role: role == "proxy_admin") == "proxy_admin"
         allowed: Final = eventually(
@@ -181,6 +279,26 @@ def test_scim_admin_group_promotes_and_demotes_group_members(
             headers=SCIM_HEADERS,
         )
         assert removed.status_code == 200, removed.text
+        _assert_scim_group_resource(
+            removed,
+            group_id,
+            group_name,
+            [],
+            created_group.meta.created,
+        )
+        removed_readback: Final = owned.gateway.request(
+            "GET",
+            f"/scim/v2/Groups/{group_id}",
+            headers={"Accept": "application/scim+json"},
+        )
+        assert removed_readback.status_code == 200, removed_readback.text
+        _assert_scim_group_resource(
+            removed_readback,
+            group_id,
+            group_name,
+            [],
+            created_group.meta.created,
+        )
         assert eventually(lambda: _user_role(owned.gateway, user), lambda role: role == default_role) == default_role
         assert eventually(lambda: _database_user_role(user), lambda role: role == default_role) == default_role
         refused_again: Final = eventually(
@@ -188,6 +306,11 @@ def test_scim_admin_group_promotes_and_demotes_group_members(
             lambda response: response.status_code == 401,
         )
         assert refused_again.status_code == 401, refused_again.text
+        assert object_value(refused_again.json()) == _expected_scim_write_denial(
+            "/key/generate",
+            user,
+            default_role,
+        ), refused_again.text
 
         second_user: Final = f"scim-admin-user-{uuid.uuid4().hex}"
         created_second_user: Final = owned.gateway.request(
@@ -232,7 +355,9 @@ def test_scim_admin_group_promotes_and_demotes_group_members(
 
 @pytest.mark.timeout(300)
 def test_scim_admin_group_delete_revokes_the_members_admin_key(gateway: Gateway, tmp_path: Path) -> None:
-    pytest.skip("BUG: DELETE /scim/v2/Groups/{id} demotes the admin group's members in the DB but their existing keys keep proxy_admin access on /key/generate")
+    pytest.skip(
+        "BUG: DELETE /scim/v2/Groups/{id} demotes the admin group's members in the DB but their existing keys keep proxy_admin access on /key/generate"
+    )
     group_name: Final = f"scim-admin-delete-{uuid.uuid4().hex}"
     config: Final = _owned_scim_config(tmp_path / "scim-admin-group-delete.yaml", {"scim_admin_group": group_name})
     with owned_proxy_process(gateway, tmp_path, {}, config=config) as owned, owned.gateway.scenario() as scenario:
