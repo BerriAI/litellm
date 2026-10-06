@@ -1,3 +1,4 @@
+import json
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
@@ -99,6 +100,8 @@ _CHAT_SPELLINGS: Final = (
     pytest.param("x-litellm-customer-id", id="header-x-litellm-customer-id"),
     pytest.param("litellm_metadata.user", id="body-litellm_metadata-user"),
     pytest.param("metadata.user_id", id="body-metadata-user_id"),
+    pytest.param("litellm_metadata.user:json-string", id="body-litellm_metadata-json-string-user"),
+    pytest.param("metadata.user_id:json-string", id="body-metadata-json-string-user_id"),
 )
 
 
@@ -112,6 +115,10 @@ def _chat_request(gateway: Gateway, model: str, key: str, spelling: str, end_use
         headers[spelling] = end_user
     elif spelling == "litellm_metadata.user":
         body["litellm_metadata"] = {"user": end_user}
+    elif spelling == "litellm_metadata.user:json-string":
+        body["litellm_metadata"] = json.dumps({"user": end_user})
+    elif spelling == "metadata.user_id:json-string":
+        body["metadata"] = json.dumps({"user_id": end_user})
     else:
         body["metadata"] = {"user_id": end_user}
     return gateway.request("POST", "/v1/chat/completions", body, key=key, headers=headers)

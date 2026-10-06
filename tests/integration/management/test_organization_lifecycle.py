@@ -195,7 +195,7 @@ def test_organization_delete_revokes_org_and_team_keys_on_gateway_and_peer(gatew
             refused_peer: Final = eventually(
                 lambda k=key: _chat(peer, model, k, f"refused {uuid.uuid4().hex}"),
                 lambda response: response.status_code == 401,
-                seconds=75,
+                seconds=10,
             )
             assert refused_peer.json() == _token_not_found_error(key), refused_peer.text
         _observed(upstream)

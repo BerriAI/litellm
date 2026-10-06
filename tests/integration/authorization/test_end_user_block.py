@@ -246,13 +246,13 @@ def test_blocked_end_user_is_refused_on_every_proxy_and_unblock_restores(
 
             assert (
                 eventually(
-                    lambda: call(rig.first), lambda response: response.status_code == 200, seconds=75
+                    lambda: call(rig.first), lambda response: response.status_code == 200, seconds=10
                 ).status_code
                 == 200
             )
             assert (
                 eventually(
-                    lambda: call(rig.second), lambda response: response.status_code == 200, seconds=75
+                    lambda: call(rig.second), lambda response: response.status_code == 200, seconds=10
                 ).status_code
                 == 200
             )
