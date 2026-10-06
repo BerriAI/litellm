@@ -15,7 +15,7 @@ import click
 import httpx
 from click.core import ParameterSource
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
@@ -26,6 +26,7 @@ from litellm.proxy.db.pgbouncer import (
     start_in_container_pgbouncer,
 )
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -97,7 +98,7 @@ def _build_db_connection_url_params(
     return params
 
 
-class DatabaseTimeoutSettings(BaseModel):
+class DatabaseTimeoutSettings(LiteLLMBaseModel):
     """The `general_settings` keys that bound how long a statement may hold locks.
 
     Validated at the boundary so a mistyped value fails at startup with a clear
@@ -687,14 +688,16 @@ class ProxyInitializationHelpers:
         """
         import tempfile
 
-        if prometheus_metrics_port is None and (
-            num_workers <= 1 or not ProxyInitializationHelpers._prometheus_callback_configured(litellm_settings)
-        ):
-            return None
-
         from litellm.proxy.prometheus_cleanup import wipe_directory
 
         configured_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR") or os.environ.get("prometheus_multiproc_dir")
+        if prometheus_metrics_port is None and (
+            num_workers <= 1 or not ProxyInitializationHelpers._prometheus_callback_configured(litellm_settings)
+        ):
+            if configured_dir:
+                wipe_directory(configured_dir)
+            return None
+
         multiproc_dir: Final = configured_dir or os.path.join(tempfile.gettempdir(), "litellm_prometheus_multiproc")
         os.environ["PROMETHEUS_MULTIPROC_DIR"] = multiproc_dir
 
@@ -1503,17 +1506,17 @@ def run_server(
 
         os.environ["NUM_WORKERS"] = str(num_workers)
 
+        # Skip server startup if requested (after all setup is done)
+        if skip_server_startup:
+            print("LiteLLM: Setup complete. Skipping server startup as requested.")
+            return
+
         # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
         prometheus_multiproc_dir: Final = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(
             num_workers=num_workers,
             litellm_settings=litellm_settings if config else None,
             prometheus_metrics_port=prometheus_metrics_port,
         )
-
-        # Skip server startup if requested (after all setup is done)
-        if skip_server_startup:
-            print("LiteLLM: Setup complete. Skipping server startup as requested.")
-            return
 
         if prometheus_metrics_port is not None and prometheus_multiproc_dir is not None:
             from litellm.proxy.prometheus_metrics_server import MetricsServerStartupError, start_metrics_server_process

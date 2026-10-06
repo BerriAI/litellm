@@ -18,7 +18,9 @@ from typing import Final
 
 import click
 import requests
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
+from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from ...http_client import HTTPClient
 from ._cli_context import cli_context_values
@@ -44,7 +46,7 @@ class DebugFailure:
     message: str
 
 
-class ErrorInformation(BaseModel):
+class ErrorInformation(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     error_code: str | None = None
@@ -53,14 +55,14 @@ class ErrorInformation(BaseModel):
     llm_provider: str | None = None
 
 
-class SpendLogMetadata(BaseModel):
+class SpendLogMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     status: str | None = None
     error_information: ErrorInformation | None = None
 
 
-class SpendLogRow(BaseModel):
+class SpendLogRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore", populate_by_name=True)
 
     request_id: str
@@ -96,7 +98,7 @@ class SpendLogRow(BaseModel):
         return self.metadata.error_information
 
 
-class SessionLogsPage(BaseModel):
+class SessionLogsPage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     data: tuple[SpendLogRow, ...]
@@ -104,7 +106,7 @@ class SessionLogsPage(BaseModel):
     total_pages: int
 
 
-class RequestResponsePayload(BaseModel):
+class RequestResponsePayload(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     proxy_server_request: JsonValue = None

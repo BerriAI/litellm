@@ -10,4 +10,4 @@ The templates preserve tuple conversion, immutable tuple defaults, and bounded `
 
 Changing the public request contract requires a separate behavior-change PR
 
-Edit the owning Rust contract, schema annotation, or generation configuration, then regenerate. Never edit `litellm/rust_bridge/trace/generated/` manually. The SQL response envelope remains handwritten in `queries.py`
+Edit the owning Rust contract, schema annotation, or generation configuration, then regenerate. Never edit `litellm/rust_bridge/trace/generated/` manually. `responses.py` holds the generated SQL response, and `queries.py` keeps the ClickHouse envelope as an internal validator
