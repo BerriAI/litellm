@@ -20,5 +20,4 @@ from integration.translation.runner import run
 def test_chat_completions_basic_openai_responses(
     case: TranslationTestCase, gateway: Gateway, provider: SharedProvider
 ) -> None:
-    pytest.skip("BUG: LIT-9196 no-cache ignored on chat completions bridged to responses")
     run(case, gateway, provider)
