@@ -3,6 +3,7 @@
 import argparse
 import subprocess
 import sys
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Final
 
@@ -20,10 +21,13 @@ def check_cli(profile: str) -> str:
         from litellm.proxy.proxy_cli import run_server
 
         _require(litellm.run_server is run_server, "public server command identity changed")
+    server_help_available: Final = all(
+        find_spec(module) is not None for module in ("click", "dotenv", "pydantic_settings")
+    )
     for command, extra in (("litellm", "proxy"), ("lite", "cli"), ("litellm-proxy", "cli")):
         executable: Final = Path(sys.executable).parent / command
         result: Final = subprocess.run((str(executable), "--help"), capture_output=True, text=True, timeout=30)
-        if profile in ("cli", "proxy") or (command == "litellm" and get_distribution_name() == "litellm"):
+        if profile in ("cli", "proxy") or (command == "litellm" and server_help_available):
             _require(result.returncode == 0, f"{command} failed: {result.stderr}")
             _require("Usage:" in result.stdout, f"{command} did not display help")
         else:
