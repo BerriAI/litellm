@@ -442,9 +442,7 @@ def test_sdk_calls_create_redeems_token_with_raw_upstream_secret(gateway: Gatewa
         assert http_response.status_code == CALLS_STATUS, http_response.text
         assert http_response.content == ANSWER, http_response.text
         assert http_response.headers["content-type"] == "application/sdp", http_response.headers
-        assert [
-            (request.method, request.target, request.headers["authorization"]) for request in wire.drain()
-        ] == [
+        assert [(request.method, request.target, request.headers["authorization"]) for request in wire.drain()] == [
             ("POST", f"{scenario_path}/v1/realtime/client_secrets", f"Bearer {DEPLOYMENT_KEY}"),
             ("POST", f"{scenario_path}/v1/realtime/calls", f"Bearer {raw}"),
         ]
@@ -506,9 +504,7 @@ def _beta_transcription_reply(raw: str, expires_at: int) -> dict[str, JsonValue]
     }
 
 
-def _mint_transcription_and_redeem(
-    gateway: Gateway, mint_spelling: str
-) -> tuple[str, dict[str, JsonValue]]:
+def _mint_transcription_and_redeem(gateway: Gateway, mint_spelling: str) -> tuple[str, dict[str, JsonValue]]:
     raw: Final = _raw_secret()
     scenario_path: Final = f"/{uuid.uuid4().hex}"
     is_beta: Final = mint_spelling == "beta"
