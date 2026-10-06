@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 import pytest
 import yaml
+from integration._support.database import read_rows
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value, string_value
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -154,6 +155,7 @@ class Rig:
     intruder: str
     intruder_user: str
     managed_file: str
+    provider_file: str
     managed_job: str
     created_text: str
     deployment_id: str
@@ -202,6 +204,7 @@ def _rig(directory: Path, litellm_settings: dict[str, JsonValue], file_id: str, 
                 intruder,
                 intruder_user,
                 managed_file,
+                file_id,
                 Job.model_validate_json(created.text).id,
                 created.text,
                 deployment_id,
@@ -224,6 +227,39 @@ def default_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         tmp_path_factory.mktemp("fine-tuning-managed-ids-default"), {}, DEFAULT_PROVIDER_FILE, DEFAULT_PROVIDER_JOB
     ) as built:
         yield built
+
+
+@pytest.mark.parametrize("fixture", ["rig", "default_rig"])
+def test_managed_file_and_job_rows_record_the_owner(fixture: str, request: pytest.FixtureRequest) -> None:
+    built: Final[Rig] = request.getfixturevalue(fixture)
+    file_rows: Final = read_rows(
+        'SELECT model_mappings, flat_model_file_ids, created_by, team_id FROM "LiteLLM_ManagedFileTable" WHERE unified_file_id = %s',
+        (built.managed_file,),
+    )
+    assert file_rows == [
+        {
+            "model_mappings": {built.deployment_id: built.provider_file},
+            "flat_model_file_ids": [built.provider_file],
+            "created_by": built.owner_user,
+            "team_id": None,
+        }
+    ], file_rows
+    job_rows: Final = eventually(
+        lambda: read_rows(
+            'SELECT unified_object_id, model_object_id, file_purpose, created_by, team_id FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id = %s',
+            (built.managed_job,),
+        ),
+        lambda rows: len(rows) == 1,
+    )
+    assert job_rows == [
+        {
+            "unified_object_id": built.managed_job,
+            "model_object_id": built.provider_job,
+            "file_purpose": "fine-tune",
+            "created_by": built.owner_user,
+            "team_id": None,
+        }
+    ], job_rows
 
 
 def _refused(response: httpx.Response, wire: Wire, detail: str) -> None:
