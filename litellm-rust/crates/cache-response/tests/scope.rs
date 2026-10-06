@@ -9,7 +9,7 @@ use std::{
 use litellm_cache::ExactCacheContext;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheEntry, CacheKeyInput, CacheKeyRequest, CacheOptions, CacheScope, RequestRewrite,
+    CacheAccess, CacheEntry, CacheKeyInput, CacheKeyRequest, CacheOptions, CacheScope, RequestRewrite,
     ResponseCache, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService, get_cache_key,
 };
 use rstest::rstest;
@@ -91,8 +91,7 @@ fn policy_does_not_change_logical_identity() {
     assert_eq!(get_cache_key(&original.key), get_cache_key(&controlled.key));
     assert_eq!(controlled.context.ttl, Some(Duration::from_secs(9)));
     assert_eq!(controlled.max_age, Some(Duration::from_secs(3)));
-    assert!(!controlled.controls.reads());
-    assert!(!controlled.controls.writes());
+    assert_eq!(controlled.access, CacheAccess::NONE);
 }
 
 #[rstest]

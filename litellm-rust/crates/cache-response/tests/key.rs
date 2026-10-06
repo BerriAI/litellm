@@ -1,6 +1,6 @@
 use litellm_cache_response::{
-    CacheControls, CacheKeyContext, CacheKeyField, CacheKeyInput, CacheKeyParticipation,
-    CacheKeyRequest, CacheKeyTransport, get_cache_key, should_use_cache,
+    CacheKeyContext, CacheKeyField, CacheKeyInput, CacheKeyParticipation,
+    CacheKeyRequest, CacheKeyTransport, get_cache_key,
 };
 use rstest::rstest;
 use sha2::{Digest, Sha256};
@@ -114,21 +114,18 @@ fn keys_hash_api_and_opted_in_provider_parameters(
 }
 
 #[rstest]
-#[case::api(true, false, CacheKeyParticipation::Always, true, true)]
-#[case::api_and_internal(true, true, CacheKeyParticipation::Always, true, true)]
-#[case::provider(false, false, CacheKeyParticipation::ProviderOptIn, false, true)]
-#[case::internal(false, true, CacheKeyParticipation::Never, false, false)]
-fn legacy_flags_preserve_key_participation(
-    #[case] api_parameter: bool,
-    #[case] internal_parameter: bool,
+#[case::always("always", CacheKeyParticipation::Always, true, true)]
+#[case::provider_opt_in("provider_opt_in", CacheKeyParticipation::ProviderOptIn, false, true)]
+#[case::never("never", CacheKeyParticipation::Never, false, false)]
+fn decoded_participation_controls_key_inclusion(
+    #[case] wire: &str,
     #[case] participation: CacheKeyParticipation,
     #[case] included_without_opt_in: bool,
     #[case] included_with_opt_in: bool,
     #[values(false, true)] include_provider_parameters: bool,
 ) {
     let decoded: CacheKeyField = serde_json::from_value(serde_json::json!({
-        "name": "extra", "value": "x", "api_parameter": api_parameter,
-        "internal_parameter": internal_parameter,
+        "name": "extra", "value": "x", "participation": wire,
     }))
     .unwrap();
     assert_eq!(decoded.participation, participation);
@@ -147,32 +144,6 @@ fn legacy_flags_preserve_key_participation(
     };
     let expected = hash(preimage);
     assert_eq!(get_cache_key(&input), expected);
-    let round_trip: CacheKeyInput =
-        serde_json::from_value(serde_json::to_value(&input).unwrap()).unwrap();
-    assert_eq!(get_cache_key(&round_trip), expected);
-}
-
-#[rstest]
-#[case::always(CacheKeyParticipation::Always, true, false)]
-#[case::provider(CacheKeyParticipation::ProviderOptIn, false, false)]
-#[case::never(CacheKeyParticipation::Never, false, true)]
-fn participation_serializes_to_compatible_python_fields(
-    #[case] participation: CacheKeyParticipation,
-    #[case] api_parameter: bool,
-    #[case] internal_parameter: bool,
-) {
-    let field = CacheKeyField {
-        name: "extra".into(),
-        value: Some("x".into()),
-        participation,
-    };
-    assert_eq!(
-        serde_json::to_value(field).unwrap(),
-        serde_json::json!({
-            "name": "extra", "value": "x", "api_parameter": api_parameter,
-            "internal_parameter": internal_parameter,
-        })
-    );
 }
 
 #[rstest]

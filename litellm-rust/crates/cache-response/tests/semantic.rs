@@ -14,7 +14,7 @@ use litellm_cache::{
 };
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheControls, CacheEntry, CacheKeyField, CacheKeyInput, CacheKeyParticipation, PendingWrite,
+    CacheAccess, CacheEntry, CacheKeyField, CacheKeyInput, CacheKeyParticipation, PendingWrite,
     ResponseCache, ResponseCacheRequest, WriteBuffer, get_cache_key,
 };
 use redis_test::MockCmd;
@@ -210,7 +210,7 @@ async fn semantic_lookup_applies_freshness_to_the_value_only(
     let cache = ResponseCache::new(Arc::new(ScoredBackend(backend)));
     let mut request = request.with_context(SemanticCacheContext::default());
     request.max_age = Some(Duration::from_secs(10));
-    request.controls.no_cache = !reads;
+    request.access.reads = reads;
     let now = Duration::from_secs(100);
 
     let lookup = if asynchronous {

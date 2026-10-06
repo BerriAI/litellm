@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CacheKeyParticipation {
     Always,
     ProviderOptIn,
@@ -12,14 +13,6 @@ pub enum CacheKeyParticipation {
 }
 
 impl CacheKeyParticipation {
-    pub fn from_legacy_flags(api_parameter: bool, internal_parameter: bool) -> Self {
-        match (api_parameter, internal_parameter) {
-            (true, _) => Self::Always,
-            (false, false) => Self::ProviderOptIn,
-            (false, true) => Self::Never,
-        }
-    }
-
     pub fn includes(self, include_provider_parameters: bool) -> bool {
         match self {
             Self::Always => true,
@@ -29,49 +22,11 @@ impl CacheKeyParticipation {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(from = "LegacyCacheKeyField", into = "LegacyCacheKeyField")]
+#[derive(Clone, Debug, Deserialize)]
 pub struct CacheKeyField {
     pub name: String,
     pub value: Option<String>,
     pub participation: CacheKeyParticipation,
-}
-
-#[derive(Deserialize, Serialize)]
-struct LegacyCacheKeyField {
-    name: String,
-    value: Option<String>,
-    api_parameter: bool,
-    internal_parameter: bool,
-}
-
-impl From<LegacyCacheKeyField> for CacheKeyField {
-    fn from(field: LegacyCacheKeyField) -> Self {
-        Self {
-            name: field.name,
-            value: field.value,
-            participation: CacheKeyParticipation::from_legacy_flags(
-                field.api_parameter,
-                field.internal_parameter,
-            ),
-        }
-    }
-}
-
-impl From<CacheKeyField> for LegacyCacheKeyField {
-    fn from(field: CacheKeyField) -> Self {
-        let (api_parameter, internal_parameter) = match field.participation {
-            CacheKeyParticipation::Always => (true, false),
-            CacheKeyParticipation::ProviderOptIn => (false, false),
-            CacheKeyParticipation::Never => (false, true),
-        };
-        Self {
-            name: field.name,
-            value: field.value,
-            api_parameter,
-            internal_parameter,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -88,7 +43,7 @@ pub struct CacheKeyRequest {
     pub body: Value,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct CacheKeyInput {
     pub fields: Vec<CacheKeyField>,

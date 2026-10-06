@@ -705,6 +705,8 @@ async fn messages_cache_identity_includes_provider_native_parameters(
 
 struct UnavailableCache;
 
+impl litellm_cache::BatchCache for UnavailableCache {}
+
 impl litellm_cache::BaseCache for UnavailableCache {
     type Value = litellm_cache_response::CacheEntry;
     type Context = litellm_cache::ExactCacheContext;

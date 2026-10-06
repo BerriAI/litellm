@@ -1,4 +1,5 @@
 mod future;
+mod key;
 mod native;
 mod python;
 mod selection;

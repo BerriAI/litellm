@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use futures_util::future::BoxFuture;
-use litellm_cache::{BaseCache, Error, ExactCacheContext};
+use futures_util::{StreamExt, TryStreamExt, future::BoxFuture};
+use litellm_cache::{BaseCache, BatchCache, Error, ExactCacheContext};
 use serde_json::Value;
 
-use crate::{CacheEntry, ResponseCache, ResponseCacheRequest, get_cache_key};
+use crate::{BatchLookup, CacheEntry, ResponseCache, ResponseCacheRequest, get_cache_key};
 
 type CacheFuture<'a, T> = BoxFuture<'a, Result<T, Error>>;
 
@@ -36,6 +36,20 @@ pub trait ResponseCacheService: Send + Sync {
         now: Duration,
     ) -> CacheFuture<'a, Option<Value>>;
 
+    fn lookup_batch<'a>(
+        &'a self,
+        requests: &'a [ResponseCacheRequest],
+        now: Duration,
+    ) -> CacheFuture<'a, BatchLookup<Value>> {
+        Box::pin(async move {
+            let values = futures_util::stream::iter(requests)
+                .then(|request| self.lookup(request, now))
+                .try_collect()
+                .await?;
+            Ok(BatchLookup { values })
+        })
+    }
+
     fn store<'a>(
         &'a self,
         request: &'a ResponseCacheRequest,
@@ -46,7 +60,7 @@ pub trait ResponseCacheService: Send + Sync {
 
 impl<B> ResponseCacheService for ResponseCache<B>
 where
-    B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>,
+    B: BaseCache<Value = CacheEntry, Context = ExactCacheContext> + BatchCache,
 {
     fn config(&self) -> &ResponseCacheConfig {
         self.config()
@@ -58,6 +72,14 @@ where
         now: Duration,
     ) -> CacheFuture<'a, Option<Value>> {
         Box::pin(self.async_lookup(request, now))
+    }
+
+    fn lookup_batch<'a>(
+        &'a self,
+        requests: &'a [ResponseCacheRequest],
+        now: Duration,
+    ) -> CacheFuture<'a, BatchLookup<Value>> {
+        Box::pin(self.async_lookup_batch(requests, now))
     }
 
     fn store<'a>(

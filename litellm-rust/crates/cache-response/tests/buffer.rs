@@ -14,7 +14,7 @@ use litellm_cache::{
 };
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheControls, CacheEntry, CacheKeyField, CacheKeyInput, CacheKeyParticipation, PendingWrite,
+    CacheAccess, CacheEntry, CacheKeyField, CacheKeyInput, CacheKeyParticipation, PendingWrite,
     ResponseCache, ResponseCacheRequest, WriteBuffer, get_cache_key,
 };
 use redis_test::MockCmd;

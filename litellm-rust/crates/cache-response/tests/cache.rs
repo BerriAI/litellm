@@ -14,7 +14,7 @@ use litellm_cache::{
 };
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheControls, CacheEntry, CacheKeyField, CacheKeyInput, CacheKeyParticipation, PendingWrite,
+    CacheAccess, CacheEntry, CacheKeyField, CacheKeyInput, CacheKeyParticipation, PendingWrite,
     ResponseCache, ResponseCacheRequest, WriteBuffer, get_cache_key,
 };
 use redis_test::MockCmd;
@@ -87,61 +87,41 @@ async fn sync_and_async_consumers_share_keys_ttls_and_freshness(mut request: Res
     );
 }
 
-#[derive(Clone, Copy, Debug)]
-enum Directive {
-    Plain,
-    NoCache,
-    NoStore,
-    DefaultOff,
-    UseCache,
-    CachingOff,
-    Unsupported,
-}
-
-impl Directive {
-    fn apply(self, controls: &mut CacheControls) {
-        match self {
-            Self::Plain => {}
-            Self::NoCache => controls.no_cache = true,
-            Self::NoStore => controls.no_store = true,
-            Self::DefaultOff => controls.default_on = false,
-            Self::UseCache => {
-                controls.default_on = false;
-                controls.use_cache = true;
-            }
-            Self::CachingOff => controls.caching = Some(false),
-            Self::Unsupported => controls.supported_call_type = false,
-        }
-    }
-}
+const WRITE_ONLY: CacheAccess = CacheAccess {
+    reads: false,
+    writes: true,
+};
+const READ_ONLY: CacheAccess = CacheAccess {
+    reads: true,
+    writes: false,
+};
 
 #[rstest]
-#[case::plain(Directive::Plain, Directive::Plain, true)]
-#[case::no_store_skips_the_write(Directive::NoStore, Directive::Plain, false)]
-#[case::no_store_keeps_reads(Directive::Plain, Directive::NoStore, true)]
-#[case::no_cache_keeps_writes(Directive::NoCache, Directive::Plain, true)]
-#[case::no_cache_skips_the_read(Directive::Plain, Directive::NoCache, false)]
-#[case::default_off_skips_the_write(Directive::DefaultOff, Directive::Plain, false)]
-#[case::default_off_skips_the_read(Directive::Plain, Directive::DefaultOff, false)]
-#[case::use_cache_opts_in_under_default_off(Directive::UseCache, Directive::UseCache, true)]
-#[case::caching_off_skips_the_write(Directive::CachingOff, Directive::Plain, false)]
-#[case::caching_off_skips_the_read(Directive::Plain, Directive::CachingOff, false)]
-#[case::unsupported_call_type_skips_the_write(Directive::Unsupported, Directive::Plain, false)]
-#[case::unsupported_call_type_skips_the_read(Directive::Plain, Directive::Unsupported, false)]
+#[case::read_write(CacheAccess::READ_WRITE, CacheAccess::READ_WRITE, true)]
+#[case::read_only_writer_skips_the_write(READ_ONLY, CacheAccess::READ_WRITE, false)]
+#[case::read_only_reader_still_reads(CacheAccess::READ_WRITE, READ_ONLY, true)]
+#[case::write_only_writer_still_writes(WRITE_ONLY, CacheAccess::READ_WRITE, true)]
+#[case::write_only_reader_skips_the_read(CacheAccess::READ_WRITE, WRITE_ONLY, false)]
+#[case::no_access_writer_skips_the_write(CacheAccess::NONE, CacheAccess::READ_WRITE, false)]
+#[case::no_access_reader_skips_the_read(CacheAccess::READ_WRITE, CacheAccess::NONE, false)]
 #[tokio::test]
-async fn directives_skip_io_and_keep_reads_and_writes_independent(
+async fn access_skips_io_and_keeps_reads_and_writes_independent(
     memory: Memory,
     request: ResponseCacheRequest,
-    #[case] write: Directive,
-    #[case] read: Directive,
+    #[case] write: CacheAccess,
+    #[case] read: CacheAccess,
     #[case] hit: bool,
     #[values(false, true)] asynchronous: bool,
 ) {
     let now = Duration::from_secs(100);
-    let mut writer = request.clone();
-    write.apply(&mut writer.controls);
-    let mut reader = request;
-    read.apply(&mut reader.controls);
+    let writer = ResponseCacheRequest {
+        access: write,
+        ..request.clone()
+    };
+    let reader = ResponseCacheRequest {
+        access: read,
+        ..request
+    };
 
     if asynchronous {
         memory
@@ -228,9 +208,9 @@ async fn invalid_entries_are_misses_and_disabled_reads_do_not_touch_redis(
         )],
         None,
     );
-    request.controls.no_cache = true;
+    request.access.reads = false;
     assert_eq!(cache.lookup(&request, Duration::ZERO).unwrap(), None);
-    request.controls.no_cache = false;
+    request.access.reads = true;
     assert_eq!(
         cache.async_lookup(&request, Duration::ZERO).await.unwrap(),
         None

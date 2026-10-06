@@ -7,7 +7,7 @@ use litellm_cache::{
 };
 use serde_json::Value;
 
-use crate::{CacheEntry, PartialHits, PendingWrite, ResponseCache, ResponseCacheRequest};
+use crate::{BatchLookup, CacheEntry, PendingWrite, ResponseCache, ResponseCacheRequest};
 
 /// Object-safe view of a `ResponseCache` over an exact-match backend, so hosts can hold every
 /// exact backend behind one pointer without erasing which backend it is elsewhere.
@@ -28,7 +28,7 @@ pub trait ExactResponseCache: Send + Sync {
         &self,
         requests: &[ResponseCacheRequest],
         now: Duration,
-    ) -> Result<PartialHits, Error>;
+    ) -> Result<BatchLookup<Value>, Error>;
 
     fn async_lookup<'a>(
         &'a self,
@@ -47,7 +47,7 @@ pub trait ExactResponseCache: Send + Sync {
         &'a self,
         requests: &'a [ResponseCacheRequest],
         now: Duration,
-    ) -> BoxFuture<'a, Result<PartialHits, Error>>;
+    ) -> BoxFuture<'a, Result<BatchLookup<Value>, Error>>;
 
     fn async_store_batch<'a>(
         &'a self,
@@ -109,7 +109,7 @@ where
         &self,
         requests: &[ResponseCacheRequest],
         now: Duration,
-    ) -> Result<PartialHits, Error> {
+    ) -> Result<BatchLookup<Value>, Error> {
         ResponseCache::lookup_batch(self, requests, now)
     }
 
@@ -134,7 +134,7 @@ where
         &'a self,
         requests: &'a [ResponseCacheRequest],
         now: Duration,
-    ) -> BoxFuture<'a, Result<PartialHits, Error>> {
+    ) -> BoxFuture<'a, Result<BatchLookup<Value>, Error>> {
         Box::pin(ResponseCache::async_lookup_batch(self, requests, now))
     }
 

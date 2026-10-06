@@ -20,7 +20,7 @@ where
         request: &ResponseCacheRequest<B::Context>,
         now: Duration,
     ) -> Result<SemanticLookup<Value>, Error> {
-        if !request.controls.reads() {
+        if !request.access.reads {
             return Ok(SemanticLookup::miss(None));
         }
         let lookup = self
@@ -34,7 +34,7 @@ where
         request: &ResponseCacheRequest<B::Context>,
         now: Duration,
     ) -> Result<SemanticLookup<Value>, Error> {
-        if !request.controls.reads() {
+        if !request.access.reads {
             return Ok(SemanticLookup::miss(None));
         }
         let lookup = self
@@ -52,7 +52,9 @@ fn fresh_semantic(
 ) -> Result<SemanticLookup<Value>, Error> {
     match lookup {
         Ok(lookup) => Ok(SemanticLookup {
-            value: lookup.value.and_then(|entry| entry.into_fresh(now, max_age)),
+            value: lookup
+                .value
+                .and_then(|entry| entry.into_fresh(now, max_age)),
             similarity: lookup.similarity,
         }),
         Err(Error::InvalidEntry) => Ok(SemanticLookup::miss(None)),

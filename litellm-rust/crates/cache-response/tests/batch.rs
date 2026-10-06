@@ -1,25 +1,13 @@
 mod support;
 
-use std::{
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
-use litellm_cache::{
-    BaseCache, Error, SemanticCacheContext,
-    semantic::{SemanticCache, SemanticLookup},
-};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheControls, CacheEntry, CacheKeyField, CacheKeyInput, CacheKeyParticipation, PendingWrite,
-    ResponseCache, ResponseCacheRequest, WriteBuffer, get_cache_key,
+    BatchLookup, CacheAccess, CacheEntry, PendingWrite, ResponseCache, ResponseCacheRequest,
 };
-use redis_test::MockCmd;
-use rstest::{fixture, rstest};
-use serde_json::{Value, json};
+use rstest::rstest;
+use serde_json::json;
 use support::{keyed, memory, redis, request};
 
 type Memory = Arc<ResponseCache<InMemoryCache<CacheEntry>>>;
@@ -35,7 +23,7 @@ async fn batch_lookup_reports_partial_hits_and_batch_store_populates_misses(
     memory
         .store(&requests[0], json!({"value": 1}), now)
         .unwrap();
-    requests[2].controls.caching = Some(false);
+    requests[2].access = CacheAccess::NONE;
 
     let partial = if asynchronous {
         memory.async_lookup_batch(&requests, now).await.unwrap()
@@ -59,7 +47,7 @@ async fn batch_lookup_reports_partial_hits_and_batch_store_populates_misses(
         memory.lookup(&requests[1], now).unwrap(),
         Some(json!({"value": 2}))
     );
-    requests[2].controls.caching = None;
+    requests[2].access = CacheAccess::READ_WRITE;
     assert_eq!(memory.lookup(&requests[2], now).unwrap(), None);
 }
 
@@ -70,7 +58,7 @@ async fn batch_lookup_with_no_readable_request_skips_the_backend(
 ) {
     let cache = redis(Vec::new(), None);
     let mut request = keyed("key");
-    request.controls.no_cache = true;
+    request.access.reads = false;
     let requests = [request.clone(), request];
     let partial = if asynchronous {
         cache
@@ -107,5 +95,19 @@ async fn deferred_entries_keep_the_time_they_were_produced(
     assert_eq!(
         memory.lookup(&request, Duration::from_secs(111)).unwrap(),
         None
+    );
+}
+
+#[rstest]
+fn generic_batch_results_do_not_require_clone() {
+    struct NonClone;
+    let misses = BatchLookup::<NonClone>::misses(3);
+    assert_eq!(misses.missing_indices(), vec![0, 1, 2]);
+    let mixed = BatchLookup {
+        values: vec![Some(7_u32), None, Some(9)],
+    };
+    assert_eq!(
+        serde_json::to_value(mixed).unwrap(),
+        json!({"values": [7, null, 9], "missing_indices": [1]}),
     );
 }

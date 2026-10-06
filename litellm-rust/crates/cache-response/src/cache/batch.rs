@@ -7,14 +7,14 @@ use serde_json::Value;
 use crate::{CacheEntry, ResponseCache, ResponseCacheRequest, get_cache_key};
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct PartialHits {
-    pub values: Vec<Option<Value>>,
+pub struct BatchLookup<T> {
+    pub values: Vec<Option<T>>,
 }
 
-impl PartialHits {
+impl<T> BatchLookup<T> {
     pub fn misses(len: usize) -> Self {
         Self {
-            values: vec![None; len],
+            values: std::iter::repeat_with(|| None).take(len).collect(),
         }
     }
 
@@ -27,9 +27,9 @@ impl PartialHits {
     }
 }
 
-impl Serialize for PartialHits {
+impl<T: Serialize> Serialize for BatchLookup<T> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut hits = serializer.serialize_struct("PartialHits", 2)?;
+        let mut hits = serializer.serialize_struct("BatchLookup", 2)?;
         hits.serialize_field("values", &self.values)?;
         hits.serialize_field("missing_indices", &self.missing_indices())?;
         hits.end()
@@ -51,7 +51,7 @@ where
         &self,
         requests: &[ResponseCacheRequest<B::Context>],
         now: Duration,
-    ) -> Result<PartialHits, Error> {
+    ) -> Result<BatchLookup<Value>, Error> {
         let readable = readable(requests);
         let entries = match readable.first() {
             Some((_, request)) => self
@@ -59,14 +59,14 @@ where
                 .batch_get_cache(&keys(&readable), &request.context)?,
             None => Vec::new(),
         };
-        partial_hits(requests.len(), readable, entries, now)
+        batch_lookup(requests.len(), readable, entries, now)
     }
 
     pub async fn async_lookup_batch(
         &self,
         requests: &[ResponseCacheRequest<B::Context>],
         now: Duration,
-    ) -> Result<PartialHits, Error> {
+    ) -> Result<BatchLookup<Value>, Error> {
         let readable = readable(requests);
         let entries = match readable.first() {
             Some((_, request)) => {
@@ -76,7 +76,7 @@ where
             }
             None => Vec::new(),
         };
-        partial_hits(requests.len(), readable, entries, now)
+        batch_lookup(requests.len(), readable, entries, now)
     }
 }
 
@@ -145,7 +145,7 @@ fn readable<C: CacheContext>(
     requests
         .iter()
         .enumerate()
-        .filter(|(_, request)| request.controls.reads())
+        .filter(|(_, request)| request.access.reads)
         .collect()
 }
 
@@ -156,16 +156,16 @@ fn keys<C: CacheContext>(readable: &[(usize, &ResponseCacheRequest<C>)]) -> Vec<
         .collect()
 }
 
-fn partial_hits<C: CacheContext>(
+fn batch_lookup<C: CacheContext>(
     len: usize,
     readable: Vec<(usize, &ResponseCacheRequest<C>)>,
     entries: Vec<BatchEntry<CacheEntry>>,
     now: Duration,
-) -> Result<PartialHits, Error> {
+) -> Result<BatchLookup<Value>, Error> {
     if readable.len() != entries.len() {
         return Err(Error::Unavailable);
     }
-    let mut hits = PartialHits::misses(len);
+    let mut hits = BatchLookup::misses(len);
     for ((index, request), entry) in readable.into_iter().zip(entries) {
         if let BatchEntry::Hit(entry) = entry {
             hits.values[index] = entry.into_fresh(now, request.max_age);

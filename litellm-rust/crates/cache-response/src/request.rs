@@ -1,8 +1,27 @@
 use std::time::Duration;
 
 use litellm_cache::{CacheContext, ExactCacheContext};
+use serde::Deserialize;
 
-use crate::{CacheControls, CacheKeyInput};
+use crate::CacheKeyInput;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheAccess {
+    pub reads: bool,
+    pub writes: bool,
+}
+
+impl CacheAccess {
+    pub const READ_WRITE: Self = Self {
+        reads: true,
+        writes: true,
+    };
+    pub const NONE: Self = Self {
+        reads: false,
+        writes: false,
+    };
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RequestRewrite {
@@ -23,7 +42,7 @@ impl From<&CacheKeyInput> for RequestRewrite {
 #[derive(Clone)]
 pub struct ResponseCacheRequest<C: CacheContext = ExactCacheContext> {
     pub key: CacheKeyInput,
-    pub controls: CacheControls,
+    pub access: CacheAccess,
     pub context: C,
     pub max_age: Option<Duration>,
     pub rewrite: RequestRewrite,
@@ -34,7 +53,7 @@ impl<C: CacheContext + Default> ResponseCacheRequest<C> {
         Self {
             rewrite: RequestRewrite::from(&key),
             key,
-            controls: CacheControls::enabled(),
+            access: CacheAccess::READ_WRITE,
             context: C::default(),
             max_age: None,
         }
@@ -45,7 +64,7 @@ impl<C: CacheContext> ResponseCacheRequest<C> {
     pub fn with_context<D: CacheContext>(self, context: D) -> ResponseCacheRequest<D> {
         ResponseCacheRequest {
             key: self.key,
-            controls: self.controls,
+            access: self.access,
             context,
             max_age: self.max_age,
             rewrite: self.rewrite,

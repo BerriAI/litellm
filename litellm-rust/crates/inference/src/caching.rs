@@ -159,7 +159,7 @@ impl CacheSession {
         };
         let ResponseCacheRequest {
             key: input,
-            controls,
+            access,
             context,
             max_age,
             rewrite,
@@ -169,7 +169,7 @@ impl CacheSession {
                 preset: Some(key.clone()),
                 ..input
             },
-            controls,
+            access,
             context,
             max_age,
             rewrite,
@@ -185,7 +185,7 @@ impl CacheSession {
     where
         P::Response: DeserializeOwned,
     {
-        if !self.request.controls.reads() {
+        if !self.request.access.reads {
             return None;
         }
         match self.service.lookup(&self.request, now()).await {
@@ -203,7 +203,7 @@ impl CacheSession {
     }
 
     async fn store(&self, entry: Value) {
-        if !self.request.controls.writes() {
+        if !self.request.access.writes {
             return;
         }
         if self
@@ -220,7 +220,7 @@ impl CacheSession {
     where
         P::Response: Serialize,
     {
-        if !self.request.controls.writes() || !P::reusable(response) {
+        if !self.request.access.writes || !P::reusable(response) {
             return;
         }
         if let Ok(value) = serde_json::to_value(response)
@@ -364,7 +364,7 @@ impl<P: StreamCachable> CallCache<P> {
         P::Response: Serialize,
     {
         let Some(session) = self.session.filter(|session| {
-            *source == ResultSource::Provider && session.request.controls.writes()
+            *source == ResultSource::Provider && session.request.access.writes
         }) else {
             return output;
         };

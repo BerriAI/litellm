@@ -4,7 +4,7 @@ use litellm_cache::ExactCacheContext;
 use serde_json::Value;
 
 use crate::{
-    CacheControls, CacheKeyContext, CacheKeyField, CacheKeyInput, CacheKeyParticipation,
+    CacheAccess, CacheKeyContext, CacheKeyField, CacheKeyInput, CacheKeyParticipation,
     RequestRewrite, ResponseCacheRequest, ResponseCacheService,
 };
 
@@ -24,8 +24,16 @@ pub struct CachePolicy {
 }
 
 impl CachePolicy {
+    pub fn access(&self) -> CacheAccess {
+        let active = self.caching != Some(false);
+        CacheAccess {
+            reads: active && !self.no_cache,
+            writes: active && !self.no_store,
+        }
+    }
+
     pub fn enabled(&self) -> bool {
-        self.caching != Some(false) && !(self.no_cache && self.no_store)
+        self.access() != CacheAccess::NONE
     }
 }
 
@@ -113,12 +121,7 @@ impl CacheOptions {
                     .chain(fields)
                     .collect(),
             },
-            controls: CacheControls {
-                caching: self.policy.caching,
-                no_cache: self.policy.no_cache,
-                no_store: self.policy.no_store,
-                ..CacheControls::enabled()
-            },
+            access: self.policy.access(),
             context: ExactCacheContext {
                 ttl: self.policy.ttl,
             },

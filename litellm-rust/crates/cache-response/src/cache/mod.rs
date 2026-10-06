@@ -3,7 +3,7 @@ mod semantic;
 
 use std::{sync::Arc, time::Duration};
 
-pub use batch::{PartialHits, PendingWrite};
+pub use batch::{BatchLookup, PendingWrite};
 use litellm_cache::{BaseCache, CacheConnectionResult, ConnectionCache, Error, FlushCache};
 use serde_json::Value;
 
@@ -64,7 +64,7 @@ where
         request: &ResponseCacheRequest<B::Context>,
         now: Duration,
     ) -> Result<Option<Value>, Error> {
-        if !request.controls.reads() {
+        if !request.access.reads {
             return Ok(None);
         }
         let entry = self
@@ -78,7 +78,7 @@ where
         request: &ResponseCacheRequest<B::Context>,
         now: Duration,
     ) -> Result<Option<Value>, Error> {
-        if !request.controls.reads() {
+        if !request.access.reads {
             return Ok(None);
         }
         let entry = self
@@ -120,7 +120,7 @@ where
         response: Value,
         produced_at: Duration,
     ) -> Option<(String, CacheEntry)> {
-        (request.controls.writes() && self.fits(&response)).then(|| {
+        (request.access.writes && self.fits(&response)).then(|| {
             (
                 get_cache_key(&request.key),
                 CacheEntry::produced_at(response, produced_at),
