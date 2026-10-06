@@ -1321,7 +1321,7 @@ _BUDGET_NUMERIC_KEYS = frozenset(
 
 
 def _key_expiration_exceeds_limit(
-    data: GenerateKeyRequest | UpdateKeyRequest, maximum_duration: str, fill_defaults: bool
+    data: GenerateKeyRequest | UpdateKeyRequest, maximum_duration: str, fill_defaults: bool, now: datetime
 ) -> bool:
     if data.duration:
         return False
@@ -1330,13 +1330,15 @@ def _key_expiration_exceeds_limit(
     if data.expires is None:
         return not fill_defaults and "expires" in data.model_fields_set
     expires: Final = data.expires if data.expires.tzinfo is not None else data.expires.replace(tzinfo=timezone.utc)
-    maximum_expiration: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(maximum_duration))
+    maximum_expiration: Final = now + timedelta(seconds=duration_in_seconds(maximum_duration))
     return expires > maximum_expiration
 
 
 def _enforce_upperbound_key_params(
     data: GenerateKeyRequest | UpdateKeyRequest,
     fill_defaults: bool = True,
+    *,
+    now: datetime | None = None,
 ) -> None:
     """
     Enforce upperbound limits on key parameters.
@@ -1361,7 +1363,9 @@ def _enforce_upperbound_key_params(
         return
 
     maximum_duration: Final = litellm.upperbound_key_generate_params.duration
-    if maximum_duration is not None and _key_expiration_exceeds_limit(data, maximum_duration, fill_defaults):
+    if maximum_duration is not None and _key_expiration_exceeds_limit(
+        data, maximum_duration, fill_defaults, now if now is not None else datetime.now(timezone.utc)
+    ):
         raise HTTPException(
             status_code=400,
             detail={"error": f"expires is over max limit set in config - max_duration={maximum_duration}"},
@@ -1433,6 +1437,8 @@ async def _common_key_generation_helper(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None,
     team_table: LiteLLM_TeamTableCachedObj | None,
+    *,
+    now: datetime | None = None,
 ) -> GenerateKeyResponse:
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
@@ -1540,7 +1546,7 @@ async def _common_key_generation_helper(
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
 
     # check if user set upperbound key/generate params on config.yaml
-    _enforce_upperbound_key_params(data, fill_defaults=True)
+    _enforce_upperbound_key_params(data, fill_defaults=True, now=now)
 
     _enforce_budget_delegation_ceiling(
         requested_max_budget=_requested_max_budget,
@@ -6065,6 +6071,7 @@ async def _execute_virtual_key_regeneration(
     litellm_changed_by: str | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    now: datetime | None = None,
 ) -> GenerateKeyResponse:
     """Generate new token, update DB, invalidate cache, and return response."""
     from litellm.proxy import proxy_server
@@ -6126,7 +6133,7 @@ async def _execute_virtual_key_regeneration(
         if update_request is not None:
             await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=update_request)
         # Enforce upperbound key params on regenerate (don't fill defaults)
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, fill_defaults=False, now=now)
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=key_in_db, prisma_client=prisma_client, llm_router=llm_router
         )
