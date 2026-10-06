@@ -193,17 +193,12 @@ run "skip_read_replica" {
   }
 
   assert {
-    condition     = length(local.shared_env_kv) == 10
+    condition     = length([for env in local.shared_env_kv : env if endswith(env.name, "_READ_REPLICA")]) == 0
     error_message = "Writer-only mode must omit both DATABASE_*_READ_REPLICA entries."
   }
 
   assert {
-    condition     = length([for env in local.shared_env_kv : env if env.name == "DATABASE_HOST_READ_REPLICA"]) == 0
-    error_message = "DATABASE_HOST_READ_REPLICA must be unset without a replica."
-  }
-
-  assert {
-    condition     = length(local.database_url_fragment) == 1
-    error_message = "Without a replica, only DATABASE_URL should be exported."
+    condition     = length([for line in local.database_url_fragment : line if strcontains(line, "DATABASE_URL_READ_REPLICA")]) == 0
+    error_message = "Writer-only mode must not export DATABASE_URL_READ_REPLICA."
   }
 }

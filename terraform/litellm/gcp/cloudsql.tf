@@ -1,5 +1,4 @@
-# Cloud SQL for PostgreSQL — one primary + optional read replica
-# (create_read_replica, default true).
+# Cloud SQL for PostgreSQL — one primary + an optional read replica.
 #
 # Note on auth: LiteLLM's IAM-auth helper (rds_iam_token.py) mints AWS RDS
 # tokens via boto3 and doesn't speak GCP IAM. Cloud SQL IAM auth from Cloud
@@ -7,8 +6,7 @@
 # Cloud Run service spec. We instead use password auth: a random password
 # lives in Secret Manager and is injected into the Cloud Run services as
 # DATABASE_PASSWORD. The writer's DATABASE_URL is assembled inside the
-# container at startup; the reader URL is built from the replica's IP
-# when a replica exists.
+# container at startup; the reader URL is built from the replica's IP.
 
 resource "google_sql_database_instance" "writer" {
   name             = local.name

@@ -1,7 +1,7 @@
 {
   "title": "LiteLLM on GCP (Cloud Run)",
   "name": "litellm-gcp",
-  "description": "Deploys the LiteLLM proxy on GCP: Cloud Run gateway/backend/UI, Cloud SQL with an optional read replica, Memorystore Redis, a GCS bucket, Secret Manager entries, and an external HTTPS load balancer. Takes ~20-25 minutes on the first apply.",
+  "description": "Deploys the LiteLLM proxy on GCP: Cloud Run gateway/backend/UI, Cloud SQL with a read replica, Memorystore Redis, a GCS bucket, Secret Manager entries, and an external HTTPS load balancer. Takes ~20-25 minutes on the first apply.",
   "duration": 25,
   "documentation_link": "https://github.com/BerriAI/litellm/blob/main/terraform/litellm/gcp/README.md",
   "collect_project": true,

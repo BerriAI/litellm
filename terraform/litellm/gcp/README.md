@@ -592,9 +592,9 @@ Flip `cloudsql_deletion_protection` to `false` or `gcs_force_destroy` to
 
 Setting `create_read_replica = false` on an existing stack destroys the
 replica, so that apply also needs `cloudsql_deletion_protection = false`;
-set it back to `true` afterwards. Terraform deletes the replica before it
-rolls the Cloud Run revisions that drop `DATABASE_URL_READ_REPLICA`, so
-reads routed to the replica can fail until the new revisions are serving
+set it back to `true` afterwards. The replica can be gone before the Cloud
+Run revisions that drop `DATABASE_URL_READ_REPLICA` are serving, so reads
+routed to the replica can fail during that apply
 
 ## Redis encryption
 
