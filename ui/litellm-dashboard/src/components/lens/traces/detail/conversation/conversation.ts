@@ -451,17 +451,23 @@ export function groupConversation(items: readonly ConversationItem[], spans: rea
   return build();
 }
 
-export function conversationWarnings(details: ReadonlyMap<string, SpanDetail>, complete: boolean): string[] {
+export function conversationWarnings(
+  details: ReadonlyMap<string, SpanDetail>,
+  complete: boolean,
+  toolSpanIds: ReadonlySet<string> = new Set(),
+): string[] {
   const warnings = [
     ...claudeCaptureWarnings(details),
     ...[...details.values()].flatMap((detail) =>
       detail.attributes["lens.capture.warning"] ? [detail.attributes["lens.capture.warning"]] : [],
     ),
   ];
-  const hasAssistantText = [...details.values()].some((detail) =>
-    messages(detail.output, detail.output_ui, "assistant").some(
-      (message) => message.role === "assistant" && message.content.trim(),
-    ),
+  const hasAssistantText = [...details.values()].some(
+    (detail) =>
+      !toolSpanIds.has(detail.span_id) &&
+      messages(detail.output, detail.output_ui, "assistant").some(
+        (message) => message.role === "assistant" && message.content.trim(),
+      ),
   );
   const hasReplyEvent = [...details.values()].some(
     (detail) => detail.attributes["event.name"] === "assistant_response",
