@@ -98,6 +98,7 @@ export function LiveStrip({
 }) {
   const now = useNow(5000);
   const recent = newestFirst(reviews, RECENT);
+  const finished = state.kind === "done" || state.kind === "failed";
   return (
     <section
       aria-label="Live trace results"
@@ -112,7 +113,8 @@ export function LiveStrip({
           </span>
           {reused > 0 && (
             <span>
-              {reused} reused without review cost · {Math.max(0, selected - reused)} need review
+              {reused} reused without review cost · {Math.max(0, (finished ? reviewed : selected) - reused)}{" "}
+              {finished ? "newly reviewed" : "need review"}
             </span>
           )}
         </div>

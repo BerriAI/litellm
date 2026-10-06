@@ -118,7 +118,7 @@ it("keeps older workers' reading lanes but stops calling grouping work reading",
   expect(drawer.getByRole("status")).toHaveTextContent("Grouping observations");
 });
 
-it("shows the reuse plan beside cost before any new traces are reviewed", () => {
+it.each(["completed", "cancelled", "failed"] as const)("shows planned reuse and actual reviews once %s", (status) => {
   const initial = job();
   const plan: Partial<Job> = {
     stage: "Reuse plan ready",
@@ -127,8 +127,12 @@ it("shows the reuse plan beside cost before any new traces are reviewed", () => 
     coverage: { ...initial.coverage, selected: 38, reused: 30 },
   };
   const planned = job(plan);
-  renderWithLens(<LiveRun job={planned} reviews={[]} name="Task quality" />);
+  const { rerender } = renderWithLens(<LiveRun job={planned} reviews={[]} name="Task quality" />);
   const strip = within(screen.getByRole("region", { name: "Live trace results" }));
   expect(strip.getByText("30 reused without review cost · 8 need review")).toBeVisible();
   expect(strip.getByText(/0 of 38 traces/)).toHaveTextContent("$0");
+  const finished = { ...planned, status, reviewed: 35, coverage: { ...planned.coverage, screened: 35 } };
+  rerender(<LiveRun job={finished} reviews={[]} name="Task quality" />);
+  expect(strip.getByText("30 reused without review cost · 5 newly reviewed")).toBeVisible();
+  expect(strip.queryByText(/need review/)).not.toBeInTheDocument();
 });
