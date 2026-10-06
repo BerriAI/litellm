@@ -22,17 +22,17 @@ vi.mock("../../../../logs/detail", () => ({
     open,
     logEntry,
     onClose,
-    backLabel,
+    backTo,
   }: {
     open: boolean;
     logEntry: { request_id: string } | null;
     onClose: () => void;
-    backLabel?: string;
+    backTo?: { label: string };
   }) =>
     open && logEntry ? (
       <div role="dialog" aria-label="Request log">
         {logEntry.request_id}
-        {backLabel && <button onClick={onClose}>Back to {backLabel}</button>}
+        {backTo && <button onClick={onClose}>Back to {backTo.label}</button>}
       </div>
     ) : null,
 }));
@@ -287,7 +287,7 @@ describe("DetailPane", () => {
     renderPane(spanRow(llm));
     await user.click(screen.getByRole("button", { name: "Open LiteLLM spend log req_7f3a9c2e1b44" }));
     const drawer = await screen.findByRole("dialog", { name: "Request log" });
-    await user.click(within(drawer).getByRole("button", { name: "Back to support_triage_agent trace" }));
+    await user.click(within(drawer).getByRole("button", { name: "Back to Lens trace" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Request log" })).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Open LiteLLM spend log req_7f3a9c2e1b44" })).toBeVisible();
   });

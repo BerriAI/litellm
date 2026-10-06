@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { ArrowLeft, Check, ChevronDown, ChevronUp, Copy, X } from "lucide-react";
 import moment from "moment";
 import { Badge } from "@/components/ui/badge";
@@ -29,7 +29,12 @@ interface DrawerHeaderProps {
   environment: string;
   isSidebarCollapsed: boolean;
   onToggleSidebar: () => void;
-  backLabel?: string;
+  backTo?: DrawerBackTo;
+}
+
+export interface DrawerBackTo {
+  label: string;
+  icon: ReactNode;
 }
 
 /**
@@ -46,7 +51,7 @@ export function DrawerHeader({
   environment,
   isSidebarCollapsed,
   onToggleSidebar,
-  backLabel,
+  backTo,
 }: DrawerHeaderProps) {
   const provider = log.custom_llm_provider || "";
   const providerInfo = provider ? getProviderLogoAndName(provider) : null;
@@ -66,16 +71,11 @@ export function DrawerHeader({
         top: 0,
       }}
     >
-      {backLabel && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onClose}
-          className="mb-3 max-w-full"
-          aria-label={`Back to ${backLabel}`}
-        >
+      {backTo && (
+        <Button variant="outline" size="sm" onClick={onClose} className="mb-3 max-w-full">
           <ArrowLeft data-icon="inline-start" />
-          <span className="truncate">Back to {backLabel}</span>
+          {backTo.icon}
+          <span className="truncate">Back to {backTo.label}</span>
         </Button>
       )}
       {/* Row 0: Model + Provider with Logo */}

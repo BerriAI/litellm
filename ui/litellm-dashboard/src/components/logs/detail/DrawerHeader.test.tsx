@@ -1,5 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { render } from "../../../../tests/test-utils";
@@ -85,7 +86,7 @@ describe("DrawerHeader sidebar toggle", () => {
 });
 
 describe("DrawerHeader back link", () => {
-  const renderWithBack = (backLabel?: string) => {
+  const renderWithBack = (backTo?: { label: string; icon: ReactNode }) => {
     const onClose = vi.fn();
     render(
       <DrawerHeader
@@ -98,15 +99,17 @@ describe("DrawerHeader back link", () => {
         statusLabel="Success"
         statusColor="success"
         environment="default"
-        backLabel={backLabel}
+        backTo={backTo}
       />,
     );
     return onClose;
   };
 
   it("names where the drawer was opened from and closes back to it", async () => {
-    const onClose = renderWithBack("moyai-devin trace");
-    await userEvent.click(screen.getByRole("button", { name: "Back to moyai-devin trace" }));
+    const onClose = renderWithBack({ label: "Lens trace", icon: <svg data-testid="lens-icon" /> });
+    const back = screen.getByRole("button", { name: "Back to Lens trace" });
+    expect(within(back).getByTestId("lens-icon")).toBeInTheDocument();
+    await userEvent.click(back);
     expect(onClose).toHaveBeenCalledOnce();
   });
 

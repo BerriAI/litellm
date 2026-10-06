@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUpRight } from "lucide-react";
+import { Aperture, ArrowUpRight } from "lucide-react";
 import { useState } from "react";
 
 import litellmMonogram from "../../../../../../public/assets/logos/litellm_monogram.svg";
@@ -16,6 +16,8 @@ const UNMATCHED_REASON: Record<Exclude<NonNullable<Span["spend_match"]>, "matche
   no_spend_log: "No spend log carries this step's id",
   ambiguous: "More than one spend log carries this step's id",
 };
+
+const LENS_TRACE = { label: "Lens trace", icon: <Aperture aria-hidden /> };
 
 export const unmatchedReason = (span: Span): string | null =>
   span.spend_match && span.spend_match !== "matched" ? UNMATCHED_REASON[span.spend_match] : null;
@@ -66,7 +68,7 @@ export function SpendLogLink({
         onClose={() => setOpen(false)}
         logEntry={logQuery.data ?? null}
         accessToken={accessToken}
-        backLabel={span.agent ? `${span.agent} trace` : "agent trace"}
+        backTo={LENS_TRACE}
       />
     </>
   );
