@@ -29358,6 +29358,7 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3.1-flash-image": {
+        "deprecation_date": "2026-10-29",
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
         "litellm_provider": "gemini",
@@ -80352,5 +80353,46 @@
         "mode": "audio_transcription",
         "output_cost_per_second": 0.0001,
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
+    },
+    "gemini/gemini-nano-banana-2.1": {
+        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token_batches": 7.5e-07,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0336,
+        "output_cost_per_image_token": 3e-05,
+        "output_cost_per_token": 7.5e-06,
+        "output_cost_per_token_batches": 3.75e-06,
+        "rpm": 1000.0,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/images/generations",
+            "/v1/images/edits",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_function_calling": false,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": false,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_system_messages": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "tpm": 4000000.0,
+        "web_search_billing_unit": "per_query"
     }
 }
