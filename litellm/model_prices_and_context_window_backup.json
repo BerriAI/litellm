@@ -61898,6 +61898,7 @@
         "supports_function_calling": true,
         "supports_native_streaming": true,
         "supports_prompt_caching": true,
+        "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true
     },
