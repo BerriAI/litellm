@@ -232,7 +232,15 @@ def test_dated_variants_carry_base_alias_service_tier_pricing(prices: dict):
     )
 
 
+# Azure Foundry GPT-6.1 Sol announcement, 2026-09-29: https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-gpt-6-1-sol-in-microsoft-foundry-advanced-intelligence-optimized-for/4560811
 AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM: Final = MappingProxyType({"us": 1.1, "eu": 1.2, "apac": 1.2})
+
+
+@pytest.mark.parametrize("region", sorted(AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM))
+def test_azure_gpt_6_1_sol_data_zone_rows_charge_the_global_web_search_price(prices: dict, region: str):
+    global_search_cost = prices["azure/gpt-6.1-sol"]["search_context_cost_per_query"]
+    assert global_search_cost
+    assert prices[f"azure/{region}/gpt-6.1-sol"].get("search_context_cost_per_query") == global_search_cost
 
 
 @pytest.mark.parametrize("region", sorted(AZURE_GPT_6_1_SOL_REGIONAL_PREMIUM))
