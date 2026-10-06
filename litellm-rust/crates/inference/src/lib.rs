@@ -2,7 +2,6 @@ pub mod context;
 pub mod diagnostic;
 
 pub mod caching;
-pub mod constants;
 pub mod error;
 pub mod outbound;
 pub mod provider;
