@@ -41,9 +41,32 @@ sys.meta_path.insert(0, ImportTracer())
 import litellm
 print("litellm.__file__:", litellm.__file__)
 print("_types loaded:", "litellm.proxy._types" in sys.modules)
-"""
+    """
     return subprocess.run(
-        [sys.executable, "-c", program],
+        [sys.executable, "-I", "-c", program],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _run_proxy_types_attribute_access(repo_root: Path) -> subprocess.CompletedProcess[str]:
+    program: Final = """
+import sys
+import litellm
+
+assert "litellm.proxy._types" not in sys.modules
+print("_types loaded before attribute access: False")
+user_api_key_auth = litellm.proxy._types.UserAPIKeyAuth
+assert "litellm.proxy._types" in sys.modules
+proxy_types = sys.modules["litellm.proxy._types"]
+assert user_api_key_auth is proxy_types.UserAPIKeyAuth
+print("_types loaded after attribute access: True")
+print("UserAPIKeyAuth identity: True")
+    """
+    return subprocess.run(
+        [sys.executable, "-I", "-c", program],
         cwd=repo_root,
         capture_output=True,
         text=True,
@@ -58,21 +81,34 @@ def test_import_litellm_does_not_load_proxy_types(block_enterprise: bool) -> Non
     assert "_types loaded: False" in result.stdout, result.stdout + result.stderr
 
 
+def test_proxy_types_attribute_access_still_works() -> None:
+    result: Final = _run_proxy_types_attribute_access(_REPO_ROOT)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "_types loaded before attribute access: False" in result.stdout
+    assert "_types loaded after attribute access: True" in result.stdout
+    assert "UserAPIKeyAuth identity: True" in result.stdout
+
+
 def main(repo_root: Path = _REPO_ROOT) -> None:
     results: Final = (
-        (False, _run_import_check(False, repo_root)),
-        (True, _run_import_check(True, repo_root)),
+        ("enterprise blocked: False", _run_import_check(False, repo_root), "_types loaded: False"),
+        ("enterprise blocked: True", _run_import_check(True, repo_root), "_types loaded: False"),
+        (
+            "proxy._types attribute access",
+            _run_proxy_types_attribute_access(repo_root),
+            "UserAPIKeyAuth identity: True",
+        ),
     )
-    has_failures = False
-    for block_enterprise, result in results:
-        print(f"enterprise blocked: {block_enterprise}")
+    for label, result, expected_output in results:
+        print(label)
         print(result.stdout, end="")
         if result.stderr:
             print(result.stderr, file=sys.stderr, end="")
-        if result.returncode != 0 or "_types loaded: False" not in result.stdout:
-            has_failures = True
 
-    if has_failures:
+    if any(
+        result.returncode != 0 or expected_output not in result.stdout
+        for _, result, expected_output in results
+    ):
         sys.exit(1)
 
 
