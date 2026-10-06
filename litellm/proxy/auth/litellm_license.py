@@ -89,8 +89,6 @@ class LicenseCheck:
             )
             return premium
         except Exception as e:
-            # HTTP exception messages/tracebacks can contain the license-bearing URL.
-            # Log only diagnostic metadata, never the exception or response body.
             verbose_proxy_logger.error(
                 "litellm.proxy.auth.litellm_license.py::_verify - Unable to verify license via api. "
                 "error_type=%s status_code=%s",

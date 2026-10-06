@@ -161,17 +161,15 @@ def test_is_premium_follows_the_license_server_reply_for_an_unsigned_license(
 
 
 @pytest.fixture
-def license_logs(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture):
-    # Capture raw records without LiteLLM's global redaction filters: the verifier
-    # must not hand license material to logging in the first place.
-    logger = logging.getLogger("test.license_verification")
+def license_logs(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> pytest.LogCaptureFixture:
+    logger: Final = logging.getLogger("test.license_verification")
     monkeypatch.setattr("litellm.proxy.auth.litellm_license.verbose_proxy_logger", logger)
     caplog.set_level(logging.DEBUG, logger=logger.name)
     return caplog
 
 
 def _assert_no_license_in_logs(caplog: pytest.LogCaptureFixture, license_value: str) -> None:
-    records = [record for record in caplog.records if record.name == "test.license_verification"]
+    records: Final = tuple(record for record in caplog.records if record.name == "test.license_verification")
     assert records
     for record in records:
         assert license_value not in logging.Formatter().format(record)
@@ -187,11 +185,11 @@ def test_license_success_logs_do_not_include_license(
     configured_at_init: bool,
     premium: bool,
 ) -> None:
-    license_value = "test-only-private-license-marker"
+    license_value: Final = "test-only-private-license-marker"
     monkeypatch.delenv("LITELLM_LICENSE", raising=False)
     if configured_at_init:
         monkeypatch.setenv("LITELLM_LICENSE", license_value)
-    license_check = LicenseCheck()
+    license_check: Final = LicenseCheck()
     monkeypatch.setenv("LITELLM_LICENSE", license_value)
     with httpx.Client(
         transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"verify": premium}))
@@ -208,8 +206,8 @@ def test_license_http_error_logs_preserve_status_without_license(
     license_logs: pytest.LogCaptureFixture,
     status_code: int,
 ) -> None:
-    license_value = "test-only-private-license-marker"
-    license_check = LicenseCheck()
+    license_value: Final = "test-only-private-license-marker"
+    license_check: Final = LicenseCheck()
     with httpx.Client(
         transport=httpx.MockTransport(lambda request: httpx.Response(status_code, text=license_value))
     ) as client:
@@ -224,11 +222,10 @@ def test_license_exception_logs_omit_secret_message_and_traceback(
     license_logs: pytest.LogCaptureFixture,
     error_class: type[Exception],
 ) -> None:
-    license_value = "test-only-private-license-marker"
-    license_check = LicenseCheck()
+    license_value: Final = "test-only-private-license-marker"
+    license_check: Final = LicenseCheck()
 
     def fail(request: httpx.Request) -> httpx.Response:
-        # Include a chained exception too: logging.exception would expose both.
         try:
             raise RuntimeError(license_value)
         except RuntimeError as cause:
@@ -244,8 +241,8 @@ def test_license_exception_logs_omit_secret_message_and_traceback(
 def test_license_malformed_response_does_not_log_echoed_license(
     license_logs: pytest.LogCaptureFixture,
 ) -> None:
-    license_value = "test-only-private-license-marker"
-    license_check = LicenseCheck()
+    license_value: Final = "test-only-private-license-marker"
+    license_check: Final = LicenseCheck()
     with httpx.Client(
         transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"verify": license_value}))
     ) as client:
@@ -259,10 +256,10 @@ def test_local_license_logs_omit_signed_payload_and_validation_errors(
     license_logs: pytest.LogCaptureFixture,
     expiration_date: str,
 ) -> None:
-    payload_marker = "test-only-private-payload-marker"
+    payload_marker: Final = "test-only-private-payload-marker"
     public_key, license_value = _signed_license(expiration_date, allowed_features=(payload_marker,))
-    license_check = LicenseCheck()
-    result = license_check.verify_license_without_api_request(public_key, license_value)
+    license_check: Final = LicenseCheck()
+    result: Final = license_check.verify_license_without_api_request(public_key, license_value)
     assert (result is True) is (expiration_date == "2999-01-01")
     _assert_no_license_in_logs(license_logs, license_value)
     assert payload_marker not in license_logs.text
@@ -273,9 +270,9 @@ def test_local_license_exception_does_not_log_license(
     license_logs: pytest.LogCaptureFixture,
 ) -> None:
     _public_key, license_value = _signed_license("2999-01-01")
-    failing_public_key = MagicMock()
+    failing_public_key: Final = MagicMock()
     failing_public_key.verify.side_effect = ValueError(license_value)
-    license_check = LicenseCheck()
+    license_check: Final = LicenseCheck()
     assert license_check.verify_license_without_api_request(failing_public_key, license_value) is False
     assert "error_type=ValueError" in license_logs.text
     _assert_no_license_in_logs(license_logs, license_value)
