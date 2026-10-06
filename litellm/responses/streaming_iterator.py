@@ -433,23 +433,7 @@ class BaseResponsesAPIStreamingIterator:
                             custom_llm_provider=self.custom_llm_provider,
                             model_id=_stream_model_id,
                         )
-                if _event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
-                    _done_item: Final[object] = getattr(openai_responses_api_chunk, "item", None)
-                    if _done_item is not None:
-                        _output_index: Final = getattr(openai_responses_api_chunk, "output_index", None)
-                        if (
-                            isinstance(_output_index, int)
-                            and not isinstance(_output_index, bool)
-                            and _output_index not in self._streamed_output_items
-                        ):
-                            self._streamed_output_items[_output_index] = _done_item
-                        else:
-                            # missing/invalid/duplicate index: append after the highest known
-                            # index so the fallback can never collide with a real index and
-                            # silently discard a streamed item
-                            _fallback_index: Final = max(self._streamed_output_items.keys(), default=-1) + 1
-                            self._streamed_output_items[_fallback_index] = _done_item
-                elif _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
+                if _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED:
                     _annotation: Final[object] = getattr(openai_responses_api_chunk, "annotation", None)
                     if _annotation is not None:
                         ResponsesAPIRequestUtils._encode_container_id_on_output_item(
@@ -550,6 +534,34 @@ class BaseResponsesAPIStreamingIterator:
             # This ensures failures are logged even when _process_chunk is called directly
             self._handle_failure(e)
             raise
+
+    def _collect_output_item_from_chunk(self, openai_responses_api_chunk: ResponsesAPIStreamingResponse) -> None:
+        """
+        Record an output_item.done chunk's item for the empty-terminal-output rebuild.
+
+        Called after the post-streaming deployment hook has run so the rebuild
+        accumulates the post-hook item: a DLP / content-policy callback that
+        replaces the chunk must not be bypassed by reconstruction.
+        """
+        _event_type: Final = getattr(openai_responses_api_chunk, "type", None)
+        if _event_type != ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+            return
+        _done_item: Final[object] = getattr(openai_responses_api_chunk, "item", None)
+        if _done_item is None:
+            return
+        _output_index: Final = getattr(openai_responses_api_chunk, "output_index", None)
+        if (
+            isinstance(_output_index, int)
+            and not isinstance(_output_index, bool)
+            and _output_index not in self._streamed_output_items
+        ):
+            self._streamed_output_items[_output_index] = _done_item
+        else:
+            # missing/invalid/duplicate index: append after the highest known
+            # index so the fallback can never collide with a real index and
+            # silently discard a streamed item
+            _fallback_index: Final = max(self._streamed_output_items.keys(), default=-1) + 1
+            self._streamed_output_items[_fallback_index] = _done_item
 
     def get_streamed_output_items(self) -> list[object]:  # mutable-ok: response.output takes a real list
         """
@@ -1101,6 +1113,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     result = await self._call_post_streaming_deployment_hook(
                         chunk=result,
                     )
+                    self._collect_output_item_from_chunk(result)
                     self._note_yielded_event(result)
                     return result
                 # If result is None, continue the loop to get the next chunk
@@ -1184,6 +1197,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                         async_function=self._call_post_streaming_deployment_hook,
                         chunk=result,
                     )
+                    self._collect_output_item_from_chunk(result)
                     self._note_yielded_event(result)
                     return result
                 # If result is None, continue the loop to get the next chunk
