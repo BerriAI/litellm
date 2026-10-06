@@ -78,7 +78,7 @@ SpanType: TypeAlias = Literal[
 ]
 
 
-SpendMatch: TypeAlias = Literal["matched"] | Literal["no_call_id"] | Literal["no_spend_log"] | Literal["ambiguous"]
+SpendMatch: TypeAlias = Literal["matched", "no_call_id", "no_spend_log", "ambiguous"]
 
 
 class TraceScope(typing_extensions.TypedDict):

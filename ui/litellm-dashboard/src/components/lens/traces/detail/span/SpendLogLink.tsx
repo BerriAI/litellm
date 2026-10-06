@@ -22,7 +22,6 @@ const LENS_TRACE = { label: "Lens trace", icon: <Aperture aria-hidden /> };
 export const unmatchedReason = (span: Span): string | null =>
   span.spend_match && span.spend_match !== "matched" ? UNMATCHED_REASON[span.spend_match] : null;
 
-/** The spend log a model call was priced from, opened in the request log drawer over the run. */
 export function SpendLogLink({
   span,
   accessToken,

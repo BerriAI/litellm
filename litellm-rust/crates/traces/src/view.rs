@@ -37,9 +37,7 @@ pub struct Span {
     pub output_tokens: u32,
     pub litellm_request_id: Option<String>,
     pub spend: Option<f64>,
-    /// `spend_logs.request_id` of the request this model call was priced from.
     pub spend_log_request_id: Option<String>,
-    /// Why a model call is or is not priced; absent on spans that are not model calls.
     pub spend_match: Option<SpendMatch>,
 }
 
@@ -48,11 +46,8 @@ pub struct Span {
 #[serde(rename_all = "snake_case")]
 pub enum SpendMatch {
     Matched,
-    /// The span records no id LiteLLM assigned to the call.
     NoCallId,
-    /// No visible spend log carries the id the span records.
     NoSpendLog,
-    /// The span's ids name more than one spend log, or a log without a cost.
     Ambiguous,
 }
 

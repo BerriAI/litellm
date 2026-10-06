@@ -7,8 +7,6 @@ use crate::{
     query::named::{SpendByResponseIdsRow as SpendRow, TraceSpansRow},
 };
 
-/// The ids LiteLLM assigned to the calls a set of spans recorded: `gen_ai.response.id` values
-/// (`spend_logs.response_id`) and `litellm.call_id` values (`spend_logs.litellm_call_id`).
 #[derive(Debug, Default, PartialEq)]
 pub struct SpendLookup {
     pub response_ids: Vec<String>,

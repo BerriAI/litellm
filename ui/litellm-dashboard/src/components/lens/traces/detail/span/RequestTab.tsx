@@ -17,7 +17,6 @@ interface RequestTabProps {
   traceStartMs: number;
 }
 
-/** Usage and the spend log an LLM span was priced from, opened in the request drawer over the run. */
 export function RequestTab({ span, accessToken, traceStartMs }: RequestTabProps) {
   if (span.type !== "llm") {
     return <div className="py-16 text-center text-sm text-muted-foreground">This span is not a model request.</div>;

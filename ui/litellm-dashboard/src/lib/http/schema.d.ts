@@ -45087,7 +45087,7 @@ export interface components {
             /** Spend Log Request Id */
             spend_log_request_id: string | null;
             /** Spend Match */
-            spend_match: "matched" | "no_call_id" | "no_spend_log" | "ambiguous" | null;
+            spend_match: ("matched" | "no_call_id" | "no_spend_log" | "ambiguous") | null;
             /** Start Offset Ms */
             start_offset_ms: number;
             /**
