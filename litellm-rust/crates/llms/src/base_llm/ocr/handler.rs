@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
 use litellm_auth::AuthServices;
-use litellm_host::event::WireRequest;
+use litellm_host::interceptors::WireRequest;
 use litellm_http::{
     Client, ClientVariant, HttpClientConfig, HttpClientPool,
     media::{MediaFetcher, UrlPolicy},
@@ -17,16 +17,17 @@ use crate::base_llm::ocr::{
     error::Error,
     settings::OcrSettings,
     transformation::{
-        BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OcrDocument, OcrResponseContext,
-        PreparedOcrRequest, decode_request_value, decode_response,
+        BaseOcrConfig, DecodedOcrResponse, OcrResponseContext, PreparedOcrRequest,
+        decode_request_value, decode_response,
     },
 };
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument};
 use litellm_secrets::source::SecretSource;
 
 /// The route's view of one call, handed to provider code that has to reach the
 /// caller's hooks mid-flight (guardrails on the outgoing body, raw response events).
 pub trait CallHooks<E>: Send + Sync {
-    fn before_send(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, E>>;
+    fn before_provider_request(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, E>>;
 
     fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), E>>;
 }
@@ -226,7 +227,7 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     )?;
     config.validate_request_body(&composed)?;
     let changed = hooks
-        .before_send(wire_request(url, headers, composed))
+        .before_provider_request(wire_request(url, headers, composed))
         .await?;
     if !changed.body.is_object() {
         return Err(Error::RequestField {
@@ -278,7 +279,9 @@ pub async fn guardrail_document(
     let body = serde_json::to_value(&request.document).map_err(|_| Error::RequestField {
         path: "document".into(),
     })?;
-    let changed = hooks.before_send(wire_request(url, headers, body)).await?;
+    let changed = hooks
+        .before_provider_request(wire_request(url, headers, body))
+        .await?;
     let document = decode_request_value(changed.body, "guardrail.document")?;
     Ok((document, changed.headers))
 }
@@ -304,6 +307,7 @@ mod tests {
 
     use super::*;
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn request_timeout_has_an_http_408_status() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

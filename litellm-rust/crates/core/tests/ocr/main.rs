@@ -1,16 +1,18 @@
 use litellm_core::ocr::{
+    OcrRoute,
     document::prepare_document,
-    route::{LocalOcrHost, ocr_machine},
-    types::LiteLLMOcrRequest,
+    route::{Ocr, OcrCall, OcrOp},
+    types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, decode_request},
 };
-use litellm_http::Client;
-use litellm_llms::base_llm::ocr::{
-    error::Error,
-    handler::OcrClient,
-    transformation::{LiteLLMOcrResponse, OcrDocument},
+use litellm_host::{
+    interceptors::{RequestContext, WireRequest},
+    lifecycle::CallEvent,
 };
+use litellm_llms::base_llm::ocr::{error::Error, settings::OcrSettings};
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument};
 use serde_json::{Map, Value, json};
+use std::sync::Mutex;
 use wiremock::{MockServer, ResponseTemplate};
 
 #[path = "../support/mod.rs"]
@@ -37,16 +39,40 @@ fn object(value: Value) -> Map<String, Value> {
     map
 }
 
-fn ocr_client() -> OcrClient {
-    OcrClient::for_test(Client::plain_for_test(), Client::no_redirect_for_test())
+fn ocr_route() -> OcrRoute {
+    ocr_route_with(OcrSettings::default())
+}
+
+fn ocr_route_with(settings: OcrSettings) -> OcrRoute {
+    build_ocr_route(
+        &resources(),
+        &http_config(),
+        litellm_http::media::UrlPolicy {
+            validate: false,
+            allowed_hosts: Vec::new(),
+        },
+        settings,
+        no_secrets(),
+    )
 }
 
 async fn perform(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
-    litellm_core::ocr::client::perform(&ocr_client(), request).await
+    ocr_route().execute(request, &(), None).await
 }
 
 async fn perform_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
-    litellm_host::run::run(ocr_machine(ocr_client()), &host).await
+    let result = litellm_host_native::in_process::run_hosted(
+        ocr_route().machine(host.request()?, None),
+        host.runtime(),
+    )
+    .await
+    .map(completed);
+    if let Some(observer) = &host.observer {
+        for event in host.events.0.lock().unwrap().iter() {
+            observer(event);
+        }
+    }
+    result
 }
 
 fn wire(model: &str, base: &str, document: Value, options: Value) -> OcrWireRequest {
@@ -119,4 +145,120 @@ fn accepted(server: &MockServer, body: Value) -> ResponseTemplate {
     ResponseTemplate::new(202)
         .insert_header("Operation-Location", format!("{}/operation", server.uri()))
         .set_body_json(body)
+}
+
+fn completed(
+    result: litellm_host::call::HostedCompletion<LiteLLMOcrResponse>,
+) -> LiteLLMOcrResponse {
+    match result {
+        litellm_host::call::HostedCompletion::Complete(response) => response,
+        other => panic!("unexpected OCR completion: {other:?}"),
+    }
+}
+
+type BeforeSend =
+    Box<dyn Fn(WireRequest, &RequestContext) -> Result<WireRequest, Error> + Send + Sync>;
+type Observer = Box<dyn Fn(&CallEvent) + Send + Sync>;
+
+struct LocalOcrHost {
+    request: Mutex<Option<LiteLLMOcrRequest<OcrDocumentInput>>>,
+    before_provider_request: Option<BeforeSend>,
+    observer: Option<Observer>,
+    events: support::CallEvents,
+}
+
+impl LocalOcrHost {
+    fn new(request: LiteLLMOcrRequest<OcrDocumentInput>) -> Self {
+        Self {
+            request: Mutex::new(Some(request)),
+            before_provider_request: None,
+            observer: None,
+            events: support::CallEvents::default(),
+        }
+    }
+
+    fn with_before_send(
+        self,
+        before_provider_request: impl Fn(WireRequest, &RequestContext) -> Result<WireRequest, Error>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            before_provider_request: Some(Box::new(before_provider_request)),
+            ..self
+        }
+    }
+
+    fn with_observer(self, observer: impl Fn(&CallEvent) + Send + Sync + 'static) -> Self {
+        Self {
+            observer: Some(Box::new(observer)),
+            ..self
+        }
+    }
+}
+
+impl LocalOcrHost {
+    pub fn request(&self) -> Result<OcrCall, Error> {
+        self.request
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .map(|request| OcrCall {
+                request,
+                caller_token: false,
+            })
+            .ok_or_else(|| Error::InvalidRequest("OCR request was already projected".into()))
+    }
+    pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, Self, Self, ()> {
+        litellm_host_native::in_process::Host {
+            services: self,
+            interceptors: self,
+            stream: &(),
+            observers: Some(&self.events.0.sender),
+        }
+    }
+}
+impl litellm_host_native::services::HostCallHandler<Ocr> for LocalOcrHost {
+    async fn handle_host_call(&self, op: OcrOp) -> Result<(), Error> {
+        match op {
+            OcrOp::AcquireAzureAdToken(_) => {
+                Err(Error::Auth(litellm_auth::Error::CredentialAcquisition(
+                    "OCR host has no Azure AD token provider".into(),
+                )))
+            }
+        }
+    }
+}
+
+impl litellm_host::lifecycle::CallObserver for LocalOcrHost {
+    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
+        self.events.0.sender.emit(event);
+    }
+}
+impl litellm_host::interceptors::Interceptors<<Ocr as litellm_host::protocol::Protocol>::Error>
+    for LocalOcrHost
+{
+    async fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        context: RequestContext,
+    ) -> Result<WireRequest, Error> {
+        match &self.before_provider_request {
+            Some(before_provider_request) => before_provider_request(wire, &context),
+            None => Ok(wire),
+        }
+    }
+    async fn after_provider_response(
+        &self,
+        raw: litellm_host::interceptors::RawResponse,
+    ) -> Result<(), <Ocr as litellm_host::protocol::Protocol>::Error> {
+        litellm_host::lifecycle::CallObserver::observe(
+            self,
+            litellm_host::lifecycle::CallEvent::Execution(
+                litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
+            ),
+        );
+        Ok(())
+    }
 }

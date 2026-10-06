@@ -2,6 +2,10 @@
 Test filter_out_litellm_params helper function.
 """
 
+from typing import Final
+
+
+import litellm
 from litellm.utils import filter_out_litellm_params
 
 
@@ -34,3 +38,19 @@ def test_filter_out_litellm_params():
     assert "litellm_trace_id" not in filtered
     assert "proxy_server_request" not in filtered
     assert "secret_fields" not in filtered
+
+
+def test_filter_out_litellm_params_also_drops_the_excluded_names():
+    kwargs = {"temperature": 0.2, "top_k": 5, "litellm_trace_id": "trace-1", "_litellm_control": object()}
+
+    assert filter_out_litellm_params(kwargs, excluding=("temperature",)) == {"top_k": 5}
+
+
+def test_filter_out_litellm_params_sees_a_name_appended_to_the_public_list_after_import():
+    litellm.all_litellm_params.append("registered_later")
+    try:
+        filtered: Final = filter_out_litellm_params({"registered_later": 1, "top_k": 2})
+    finally:
+        litellm.all_litellm_params.remove("registered_later")
+
+    assert filtered == {"top_k": 2}

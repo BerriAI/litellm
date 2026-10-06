@@ -73,6 +73,17 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
         ("provider-harness", ["tests/e2e/quota_management/test_quota.py"], "skip"),
         ("provider-harness", ["litellm/main.py"], "skip"),
         ("provider-harness", ["ui/litellm-dashboard/src/App.tsx"], "skip"),
+        ("windows-release", ["litellm-rust/crates/core/src/lib.rs"], "run"),
+        ("windows-release", ["litellm/rust_bridge/dispatch.py"], "run"),
+        ("windows-release", ["rust-toolchain.toml"], "run"),
+        ("windows-release", ["pyproject.toml"], "run"),
+        ("windows-release", ["uv.lock"], "run"),
+        ("windows-release", ["tests/windows_tests/check_windows_wheel_install.py"], "run"),
+        ("windows-release", [".circleci/config.yml"], "run"),
+        ("windows-release", ["litellm/main.py"], "skip"),
+        ("windows-release", ["tests/unit/test_utils.py"], "skip"),
+        ("windows-release", ["ui/litellm-dashboard/src/App.tsx"], "skip"),
+        ("windows-release", ["docs/my-website/docs/index.md"], "skip"),
         # docs-only: skip everything
         ("backend", DOCS, "skip"),
         ("client", DOCS, "skip"),
@@ -124,6 +135,21 @@ CI = [".github/workflows/test-litellm-ui-unit.yml"]
 )
 def test_classify_decisions(category: str, changed: list[str], expected: str) -> None:
     assert classify(category, changed) == expected
+
+
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    (
+        ("litellm/caching/redis_cache.py", "run"),
+        ("tests/unit/caching/test_redis_cluster_cache.py", "run"),
+        (".circleci/config.yml", "run"),
+        ("uv.lock", "run"),
+        ("litellm/router.py", "skip"),
+        ("docs/my-website/redis.md", "skip"),
+    ),
+)
+def test_redis_compat_path_filter(changed: str, expected: str) -> None:
+    assert classify("redis-compat", [changed]) == expected
 
 
 def test_markdown_under_ui_counts_as_client_not_docs() -> None:

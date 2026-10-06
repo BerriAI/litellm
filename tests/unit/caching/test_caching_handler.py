@@ -43,6 +43,7 @@ import json
 import httpx
 import respx
 from fastapi.testclient import TestClient
+from litellm._internal_context import current_service_target, in_post_response_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 
 
@@ -2073,6 +2074,37 @@ def test_async_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypatc
     assert len(writes) == 1
 
 
+def test_async_cache_write_runs_in_the_post_response_phase_without_leaking_it(monkeypatch):
+    """The response-cache write happens after the response is handed to the caller, so the
+    service spans it logs must detach from the request trace even while the server span is
+    still open. The marker must stay inside the write task and not leak into the request."""
+    import litellm
+
+    phases = []
+
+    class _PhaseRecordingCache:
+        supported_call_types = ["acompletion"]
+        cache = None
+
+        async def async_add_cache(self, result, dynamic_cache_object=None, **kwargs):
+            phases.append(in_post_response_phase())
+
+    async def acompletion(**kwargs):
+        return None
+
+    handler = LLMCachingHandler(original_function=acompletion, request_kwargs={}, start_time=datetime.now())
+    monkeypatch.setattr(litellm, "cache", _PhaseRecordingCache())
+
+    async def _request():
+        await handler.async_set_cache(result=litellm.ModelResponse(), original_function=acompletion, kwargs={})
+        leaked = in_post_response_phase()
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        return leaked
+
+    assert asyncio.run(_request()) is False, "the phase must not leak into the request task"
+    assert phases == [True], "async_add_cache must observe the post-response phase"
+
+
 @pytest.mark.asyncio
 async def test_cache_hit_records_the_looked_up_key_as_the_preset_cache_key(monkeypatch):
     """The spend log for a cache hit must reuse the key the lookup already computed instead of hashing again."""
@@ -2236,3 +2268,48 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
 
     assert len(embedder.provider_inputs) == 2, embedder.provider_inputs
     assert [item["embedding"] for item in repeat.data] == [[float(len(text))] for text in mixed_input]
+
+
+@pytest.mark.asyncio
+async def test_response_cache_lookup_and_write_declare_the_llm_response_target(monkeypatch):
+    """Both the lookup and the write run under ``service_target("llm_response")`` so the
+    datastore spans they issue read ``redis.get llm_response`` / ``redis.set llm_response``
+    rather than by the cache method name."""
+    seen: dict[str, str | None] = {}
+
+    class _TargetRecordingCache:
+        supported_call_types = ["acompletion"]
+        cache = None
+
+        def get_cache_key(self, **kwargs):
+            return "k"
+
+        def _supports_async(self):
+            return True
+
+        async def async_get_cache(self, **kwargs):
+            seen["get"] = current_service_target()
+            return None
+
+        async def async_add_cache(self, result, dynamic_cache_object=None, **kwargs):
+            seen["set"] = current_service_target()
+
+    async def acompletion(**kwargs):
+        return None
+
+    handler = LLMCachingHandler(original_function=acompletion, request_kwargs={}, start_time=datetime.now())
+    monkeypatch.setattr(litellm, "cache", _TargetRecordingCache())
+
+    await handler._async_get_cache(
+        model="gpt-3.5-turbo",
+        original_function=acompletion,
+        logging_obj=MagicMock(),
+        start_time=datetime.now(),
+        call_type=CallTypes.acompletion.value,
+        kwargs={"messages": [{"role": "user", "content": "hi"}]},
+    )
+    await handler.async_set_cache(result=litellm.ModelResponse(), original_function=acompletion, kwargs={})
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    assert seen == {"get": "llm_response", "set": "llm_response"}
+    assert current_service_target() is None

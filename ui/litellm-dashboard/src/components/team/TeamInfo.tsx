@@ -2,6 +2,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import type { components } from "@/lib/http/schema";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { invalidateTeamQueries } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useQueryClient } from "@tanstack/react-query";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
@@ -18,7 +19,7 @@ import {
 } from "@/components/networking";
 import { useGuardrails, GuardrailListItem } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import { numberOrNull } from "@/lib/forms/numberOrNull";
 import type { ObjectPermission } from "@/components/object_permission_types";
 import { isProxyAdminRole } from "@/utils/roles";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
@@ -47,7 +48,7 @@ import { toast } from "@/lib/toast";
 import { CheckIcon, ChevronDown, CircleMinus, CopyIcon, Info, Pencil, Plus, Save } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { useFieldArray } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 import GuardrailsSelect from "./GuardrailsSelect";
 import {
   type CallerEditAccess,
@@ -325,7 +326,7 @@ export interface TeamData {
     object_permission?: ObjectPermission | null;
     caller_edit_access?: CallerEditAccess;
     team_member_budget_table: {
-      max_budget: number;
+      max_budget: number | null;
       budget_duration: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
@@ -915,7 +916,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const persistTeamUpdate = async (token: string, updateData: Record<string, unknown>) => {
     await teamUpdateCall(token, updateData);
-    queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+    void queryClient.invalidateQueries({ queryKey: organizationKeys.all });
+    void invalidateTeamQueries(queryClient);
     setIsEditing(false);
   };
 
@@ -978,14 +980,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         }
       }
 
-      const sanitizeNumeric = (v: any) => {
-        if (v === null || v === undefined) return null;
-        if (typeof v === "string" && v.trim() === "") return null;
-        if (typeof v === "number" && Number.isNaN(v)) return null;
-        return v;
-      };
-
-      const estimatedOutputTokens = sanitizeNumeric(values.default_estimated_output_tokens);
+      const estimatedOutputTokens = numberOrNull(values.default_estimated_output_tokens);
 
       let estimatedOutputTokensPerModel: Record<string, number> | undefined;
       if (typeof values.default_estimated_output_tokens_per_model === "string") {
@@ -1035,13 +1030,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         team_id: teamId,
         team_alias: values.team_alias,
         models: normalizeTeamModelSelection(values.models),
-        tpm_limit: sanitizeNumeric(values.tpm_limit),
-        rpm_limit: sanitizeNumeric(values.rpm_limit),
-        tpd_limit: sanitizeNumeric(values.tpd_limit),
+        tpm_limit: numberOrNull(values.tpm_limit),
+        rpm_limit: numberOrNull(values.rpm_limit),
+        tpd_limit: numberOrNull(values.tpd_limit),
         model_tpm_limit: modelTpmLimit,
         model_rpm_limit: modelRpmLimit,
-        max_budget: values.max_budget,
-        soft_budget: sanitizeNumeric(values.soft_budget),
+        max_budget: numberOrNull(values.max_budget),
+        soft_budget: numberOrNull(values.soft_budget),
         budget_duration: values.budget_duration ?? null,
         metadata: {
           ...parsedMetadata,
@@ -1050,7 +1045,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
           disable_global_guardrails: killSwitchOnAtSave,
-          ...(estimatedOutputTokens !== null ? { default_estimated_output_tokens: Number(estimatedOutputTokens) } : {}),
+          ...(estimatedOutputTokens !== null ? { default_estimated_output_tokens: estimatedOutputTokens } : {}),
           ...(estimatedOutputTokensPerModel !== undefined
             ? { default_estimated_output_tokens_per_model: estimatedOutputTokensPerModel }
             : {}),
@@ -1068,11 +1063,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         ...(values.organization_id !== info.organization_id ? { organization_id: values.organization_id ?? null } : {}),
       };
 
-      updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
       updateData.team_member_budget_duration = values.team_member_budget_duration;
 
       const newTeamMemberBudget =
-        values.team_member_budget !== undefined ? Number(values.team_member_budget) : undefined;
+        values.team_member_budget !== undefined ? numberOrNull(values.team_member_budget) : undefined;
       if (newTeamMemberBudget !== undefined) {
         updateData.team_member_budget = newTeamMemberBudget;
       }
@@ -1082,8 +1076,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
 
       if (values.team_member_tpm_limit !== undefined || values.team_member_rpm_limit !== undefined) {
-        updateData.team_member_tpm_limit = sanitizeNumeric(values.team_member_tpm_limit);
-        updateData.team_member_rpm_limit = sanitizeNumeric(values.team_member_rpm_limit);
+        updateData.team_member_tpm_limit = numberOrNull(values.team_member_tpm_limit);
+        updateData.team_member_rpm_limit = numberOrNull(values.team_member_rpm_limit);
       }
 
       // Handle object_permission updates
@@ -1222,7 +1216,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       const customBudgetUserIds = customBudgetMemberUserIds(teamData?.team_memberships ?? []);
       if (
-        newTeamMemberBudget !== undefined &&
+        typeof newTeamMemberBudget === "number" &&
         shouldPromptMemberBudgetReset(
           newTeamMemberBudget,
           info.team_member_budget_table?.max_budget,

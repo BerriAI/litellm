@@ -6,7 +6,7 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -169,6 +169,26 @@ def _log_background_task_failure(task: asyncio.Task[object], *, task_name: str) 
         verbose_logger.error("%s failed: %s", task_name, exception)
 
 
+_PENDING_LOGGING_TASKS: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: strong refs to pending logging tasks
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+def _spawn_logging_task(
+    running_loop: asyncio.AbstractEventLoop, coroutine: Coroutine[object, object, object], *, task_name: str
+) -> asyncio.Task[object]:
+    task: Final = running_loop.create_task(coroutine)
+    _PENDING_LOGGING_TASKS.add(task)
+    task.add_done_callback(_PENDING_LOGGING_TASKS.discard)
+    task.add_done_callback(lambda done: _log_background_task_failure(done, task_name=task_name))
+    return task
+
+
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
     {
         "server_error": 500,
@@ -275,6 +295,8 @@ class BaseResponsesAPIStreamingIterator:
     This class contains shared logic for both synchronous and asynchronous iterators.
     """
 
+    _pending_logging_tasks: tuple[asyncio.Task[object], ...] = ()
+
     def __init__(
         self,
         response: httpx.Response,
@@ -324,9 +346,7 @@ class BaseResponsesAPIStreamingIterator:
         self._hidden_params["additional_headers"] = process_response_headers(
             self.response.headers or {}
         )  # GUARANTEE OPENAI HEADERS IN RESPONSE
-        self._raw_response_headers: Mapping[str, str] = MappingProxyType(
-            dict(self.response.headers or {})  # mutable-ok: immediately frozen by MappingProxyType
-        )
+        self._raw_response_headers: Mapping[str, str] = MappingProxyType(dict(self.response.headers or {}))
 
     def _check_max_streaming_duration(self) -> None:
         """Raise litellm.Timeout if the stream has exceeded LITELLM_MAX_STREAMING_DURATION_SECONDS."""
@@ -579,9 +599,9 @@ class BaseResponsesAPIStreamingIterator:
         raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else EMPTY_MAPPING
         # rebuild by value and let existing keys win: sharing the source dicts would alias what the proxy
         # splats into the client's HTTP headers, and copying non-header keys would carry response_cost
-        target._hidden_params = {  # mutable-ok: the cost calculator writes optional_params into _hidden_params
-            "additional_headers": {**headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
-            "headers": {**raw_headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
+        target._hidden_params = {
+            "additional_headers": {**headers},
+            "headers": {**raw_headers},
             **existing,
         }
 
@@ -839,8 +859,21 @@ class BaseResponsesAPIStreamingIterator:
             except Exception:
                 typed_call_type = None
 
+        running_loop: Final = _running_loop()
+        if running_loop is not None:
+            self._record_pending_logging_task(
+                _spawn_logging_task(
+                    running_loop,
+                    async_post_call_success_deployment_hook(
+                        request_data=request_payload,
+                        response=self.completed_response,
+                        call_type=typed_call_type,
+                    ),
+                    task_name="Responses stream post-call success hook",
+                )
+            )
+            return
         try:
-            # Call synchronously; async hook will be executed via asyncio.run in a new loop
             run_async_function(
                 async_function=async_post_call_success_deployment_hook,
                 request_data=request_payload,
@@ -861,27 +894,62 @@ class BaseResponsesAPIStreamingIterator:
         self._failure_handled = True
 
         traceback_exception: Final = traceback.format_exc()
+        end_time: Final = datetime.now()
+        running_loop: Final = _running_loop()
+        if running_loop is not None:
+            self._record_pending_logging_task(
+                _spawn_logging_task(
+                    running_loop,
+                    self._run_failure_handlers_in_order(exception, traceback_exception, end_time),
+                    task_name="Responses stream failure logging",
+                )
+            )
+            return
         try:
             run_async_function(
                 async_function=self.logging_obj.async_failure_handler,
                 exception=exception,
                 traceback_exception=traceback_exception,
                 start_time=self.start_time,
-                end_time=datetime.now(),
+                end_time=end_time,
             )
         except Exception:
             pass
+        self._submit_sync_failure_handler(exception, traceback_exception, end_time)
 
+    async def _run_failure_handlers_in_order(
+        self, exception: Exception, traceback_exception: str, end_time: datetime
+    ) -> None:
+        try:
+            await self.logging_obj.async_failure_handler(
+                exception=exception,
+                traceback_exception=traceback_exception,
+                start_time=self.start_time,
+                end_time=end_time,
+            )
+        finally:
+            self._submit_sync_failure_handler(exception, traceback_exception, end_time)
+
+    def _submit_sync_failure_handler(self, exception: Exception, traceback_exception: str, end_time: datetime) -> None:
         try:
             executor.submit(
                 self.logging_obj.failure_handler,
                 exception,
                 traceback_exception,
                 self.start_time,
-                datetime.now(),
+                end_time,
             )
         except Exception:
             pass
+
+    def _record_pending_logging_task(self, task: asyncio.Task[object]) -> None:
+        self._pending_logging_tasks = (*self._pending_logging_tasks, task)
+
+    async def _await_pending_logging(self) -> None:
+        pending: Final = self._pending_logging_tasks
+        self._pending_logging_tasks = ()
+        if pending:
+            await asyncio.wait(pending)
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True
@@ -970,6 +1038,13 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         return self
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
+        try:
+            return await self._next_event()
+        except Exception:
+            await self._await_pending_logging()
+            raise
+
+    async def _next_event(self) -> ResponsesAPIStreamingResponse:
         try:
             self._check_max_streaming_duration()
             while True:
@@ -1747,6 +1822,8 @@ RESPONSES_WS_LOGGED_EVENT_TYPES: Final = [
     "error",
 ]
 
+_HISTORY_TERMINAL_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete"})
+
 RESPONSES_WS_MASKABLE_TEXT_BLOCK_TYPES: Final = frozenset({"input_text", "output_text", "text"})
 
 _RESPONSES_WS_FAILURE_EVENT_TYPES: Final = frozenset({"error", "response.failed"})
@@ -2347,9 +2424,9 @@ class ResponsesWebSocketStreaming:
             try:
                 await self.websocket.send_text(
                     json.dumps(
-                        {  # mutable-ok: WebSocket wire payload requires JSON objects
+                        {
                             "type": "error",
-                            "error": {  # mutable-ok: nested WebSocket error object
+                            "error": {
                                 "type": "rate_limit_exceeded",
                                 "message": str(e),
                             },
@@ -2530,7 +2607,7 @@ class ManagedResponsesWebSocketHandler:
     @staticmethod
     def _extract_response_id(completed_event: _MutableJsonObject) -> str | None:
         """
-        Pull the raw (decoded) response ID out of a ``response.completed`` event.
+        Pull the raw (decoded) response ID out of a terminal (``response.completed`` or ``response.incomplete``) event.
         Returns *None* if the event doesn't contain a usable ID.
         """
         resp_obj: Final = completed_event.get("response", {})
@@ -2546,8 +2623,8 @@ class ManagedResponsesWebSocketHandler:
         completed_event: _MutableJsonObject,
     ) -> list[dict[str, object]]:
         """
-        Convert the output items in a ``response.completed`` event into
-        Responses API message dicts suitable for the next turn's ``input``.
+        Convert output items in a terminal (``response.completed`` or ``response.incomplete``) event into Responses
+        API message dicts suitable for the next turn's ``input``.
         """
         resp_obj: Final = completed_event.get("response", {})
         if not isinstance(resp_obj, dict):
@@ -2788,11 +2865,11 @@ class ManagedResponsesWebSocketHandler:
         """
         Stream ``litellm.aresponses`` and forward every chunk over the WebSocket.
 
-        Captures the ``response.completed`` event type from the chunk object
-        directly (before serialization) to avoid a redundant JSON round-trip on
-        every chunk.  Returns the completed event dict, or ``None``.
+        Captures the first terminal (``response.completed`` or ``response.incomplete``) event from the chunk object
+        directly (before serialization) to avoid a redundant JSON round-trip on every chunk. Returns the terminal
+        event dict, or ``None``.
         """
-        completed_event: _MutableJsonObject | None = None
+        terminal_event: _MutableJsonObject | None = None
         stream_response: Final = await litellm.aresponses(model=model, **call_kwargs)
         async for chunk in stream_response:
             if chunk is None:
@@ -2802,31 +2879,31 @@ class ManagedResponsesWebSocketHandler:
             serialized = self._serialize_chunk(chunk)
             if serialized is None:
                 continue
-            if chunk_type == "response.completed" and completed_event is None:
+            if chunk_type in _HISTORY_TERMINAL_EVENT_TYPES and terminal_event is None:
                 try:
-                    completed_event = _load_json_object(serialized)
+                    terminal_event = _load_json_object(serialized)
                 except Exception:
                     pass
             try:
                 await self.websocket.send_text(serialized)
             except Exception as send_exc:
                 verbose_logger.debug("ManagedResponsesWS: error sending chunk to client: %s", send_exc)
-                return completed_event  # Client disconnected
-        return completed_event
+                return terminal_event  # Client disconnected
+        return terminal_event
 
     def _save_turn_history(
         self,
-        completed_event: _MutableJsonObject | None,
+        terminal_event: _MutableJsonObject | None,
         prior_history: list[dict[str, object]],
         current_messages: list[dict[str, object]],
     ) -> None:
-        """Store this turn in in-memory history for future previous_response_id lookups."""
-        if completed_event is None:
+        """Store this terminal (``response.completed`` or ``response.incomplete``) event for future history lookups."""
+        if terminal_event is None:
             return
-        new_response_id: Final = self._extract_response_id(completed_event)
+        new_response_id: Final = self._extract_response_id(terminal_event)
         if not new_response_id:
             return
-        output_msgs: Final = self._extract_output_messages(completed_event)
+        output_msgs: Final = self._extract_output_messages(terminal_event)
         all_messages: Final = prior_history + current_messages + output_msgs
         self._store_history(new_response_id, all_messages)
         verbose_logger.debug(
@@ -2852,7 +2929,8 @@ class ManagedResponsesWebSocketHandler:
         2. Prepend those messages to the current ``input`` so the model has full
            conversation context.
         3. After the stream completes, extract the new response ID and output
-           messages from ``response.completed`` and store them in
+           messages from the terminal (``response.completed`` or
+           ``response.incomplete``) event and store them in
            ``self._session_history`` for the next turn.
 
         This in-memory approach avoids the async DB-write race condition that
@@ -2906,13 +2984,13 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs.update(self.extra_kwargs)
 
         try:
-            completed_event: Final = await self._stream_and_forward(model, call_kwargs)
+            terminal_event: Final = await self._stream_and_forward(model, call_kwargs)
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
             await self._send_error(str(exc))
             return
 
-        self._save_turn_history(completed_event, prior_history, current_messages)
+        self._save_turn_history(terminal_event, prior_history, current_messages)
 
     # ------------------------------------------------------------------
     # Main entry point
