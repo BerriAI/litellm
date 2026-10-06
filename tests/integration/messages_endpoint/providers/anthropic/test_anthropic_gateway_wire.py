@@ -20,7 +20,9 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _MESSAGE: Final = TypeAdapter(Message)
 
 
-def _expected_stream_events(stream_reply: tuple[bytes, ...], model: str) -> tuple[tuple[str, dict[str, JsonValue]], ...]:
+def _expected_stream_events(
+    stream_reply: tuple[bytes, ...], model: str
+) -> tuple[tuple[str, dict[str, JsonValue]], ...]:
     return tuple(
         (
             event,
@@ -43,7 +45,9 @@ def _expected_stream_events(stream_reply: tuple[bytes, ...], model: str) -> tupl
 
 
 def _owned_config(path: Path) -> Path:
-    config: Final = _JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    config: Final = _JSON_OBJECT.validate_python(
+        yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    )
     general_settings: Final = _JSON_OBJECT.validate_python(config.get("general_settings", {}))
     litellm_settings: Final = _JSON_OBJECT.validate_python(config.get("litellm_settings", {}))
     path.write_text(
@@ -74,19 +78,26 @@ def enabled_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gatewa
             yield owned.gateway
 
 
-def test_shared_gateway_route_is_disabled_without_reaching_provider(gateway: Gateway) -> None:
+@pytest.mark.parametrize(
+    "path",
+    ["/claude_code_gateway/v1/messages?beta=true", "/claude_code_gateway/v1/messages/count_tokens?beta=true"],
+    ids=["messages", "count_tokens"],
+)
+def test_shared_gateway_route_is_disabled_without_reaching_provider(gateway: Gateway, path: str) -> None:
     def respond(request: Request) -> Reply:
         raise AssertionError(f"disabled gateway must not reach the provider: {request.target}")
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.client.post(
-            "/claude_code_gateway/v1/messages",
+            path,
             json={"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "disabled control"}]},
             headers=_cli_bearer_headers(gateway.key),
         )
         assert response.status_code == 404, response.text
-        assert "not enabled" in response.text.lower(), response.text
+        assert _JSON_OBJECT.validate_json(response.content) == {"detail": "Claude Code gateway is not enabled"}, (
+            response.text
+        )
         assert wire.drain() == ()
 
 
@@ -194,10 +205,77 @@ def test_enabled_gateway_matches_native_messages_route(enabled_gateway: Gateway,
         assert gateway_request.method == messages_request.method == "POST"
         assert gateway_request.target == messages_request.target == "/v1/messages"
         assert gateway_request.headers["x-api-key"] == messages_request.headers["x-api-key"] == _API_KEY
-        assert gateway_request.headers["anthropic-version"] == messages_request.headers["anthropic-version"] == "2023-06-01"
+        assert (
+            gateway_request.headers["anthropic-version"]
+            == messages_request.headers["anthropic-version"]
+            == "2023-06-01"
+        )
         assert gateway_request.headers["anthropic-beta"] == messages_request.headers["anthropic-beta"] == expected_beta
         assert _JSON_OBJECT.validate_json(gateway_request.body) == expected_provider_body, gateway_request.body
         assert _JSON_OBJECT.validate_json(messages_request.body) == expected_provider_body, messages_request.body
+
+
+@pytest.mark.timeout(300)
+def test_enabled_gateway_count_tokens_alias_matches_native_count_tokens_route(enabled_gateway: Gateway) -> None:
+    messages: Final = [{"role": "user", "content": "Count this gateway request."}]
+    system: Final = [{"type": "text", "text": "Count the gateway message and tool."}]
+    tools: Final = [
+        {
+            "name": "lookup",
+            "description": "Look up a synthetic record.",
+            "input_schema": {"type": "object", "properties": {"record_id": {"type": "string"}}},
+        }
+    ]
+    expected_provider_body: Final = {"model": _BACKEND, "messages": messages, "system": system, "tools": tools}
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST" and request.target == "/v1/messages/count_tokens", request.target
+        assert request.headers["x-api-key"] == _API_KEY, request.headers
+        assert request.headers["anthropic-version"] == "2023-06-01", request.headers
+        assert request.headers["anthropic-beta"] == "token-counting-2024-11-01", request.headers
+        assert "authorization" not in request.headers, request.headers
+        assert _JSON_OBJECT.validate_json(request.body) == expected_provider_body, request.body
+        return Reply(body=b'{"input_tokens": 41}')
+
+    with enabled_gateway.scenario() as scenario, wire_server(respond) as wire:
+        model: Final = scenario.model(model=f"anthropic/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        restricted_model: Final = scenario.model(model=f"anthropic/{_BACKEND}", api_base=wire.url, api_key=_API_KEY)
+        key: Final = scenario.key(models=[model])
+        body: Final = {"model": model, "messages": messages, "system": system, "tools": tools}
+        headers: Final = {**_cli_bearer_headers(key), "anthropic-beta": "token-counting-2024-11-01"}
+        gateway_response: Final = enabled_gateway.client.post(
+            "/claude_code_gateway/v1/messages/count_tokens?beta=true", json=body, headers=headers
+        )
+        assert gateway_response.status_code == 200, gateway_response.text
+        assert _JSON_OBJECT.validate_json(gateway_response.content) == {"input_tokens": 41}, gateway_response.text
+        native_response: Final = enabled_gateway.client.post(
+            "/v1/messages/count_tokens?beta=true", json=body, headers=headers
+        )
+        assert native_response.status_code == 200, native_response.text
+        assert native_response.content == gateway_response.content, (native_response.text, gateway_response.text)
+        assert tuple((request.method, request.target) for request in wire.drain()) == (
+            ("POST", "/v1/messages/count_tokens"),
+            ("POST", "/v1/messages/count_tokens"),
+        )
+
+        restricted_response: Final = enabled_gateway.client.post(
+            "/claude_code_gateway/v1/messages/count_tokens?beta=true",
+            json={**body, "model": restricted_model},
+            headers=headers,
+        )
+        assert restricted_response.status_code == 403, restricted_response.text
+        assert _JSON_OBJECT.validate_json(restricted_response.content) == {
+            "error": {
+                "message": (
+                    f"The requested model '{restricted_model}' is not available for this API key, or the model name "
+                    "is invalid. Check the models available to you and try again."
+                ),
+                "type": "key_model_access_denied",
+                "param": "model",
+                "code": "403",
+            }
+        }, restricted_response.text
+        assert wire.drain() == ()
 
 
 @pytest.mark.timeout(300)

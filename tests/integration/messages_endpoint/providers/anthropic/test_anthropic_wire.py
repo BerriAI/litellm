@@ -215,9 +215,7 @@ def test_anthropic_messages_slow_upstream_is_cut_off_at_the_deployment_request_t
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
-def test_anthropic_messages_preserves_cli_beta_safeguards_and_result(
-    gateway: Gateway, stream: bool
-) -> None:
+def test_anthropic_messages_preserves_cli_beta_safeguards_and_result(gateway: Gateway, stream: bool) -> None:
     identity: Final = "anthropic-safeguards-" + uuid.uuid4().hex
     beta: Final = cc.CLI_BETA + ",made-up-future-beta-2099-01-01"
     expected_beta: Final = ",".join(
@@ -225,9 +223,7 @@ def test_anthropic_messages_preserves_cli_beta_safeguards_and_result(
     )
     safeguards: Final = {"mode": "strict", "policies": ["sensitive-data"]}
     safeguard_results: Final = {"status": "allowed", "policy": "sensitive-data"}
-    system: Final = [
-        {"type": "text", "text": "Synthetic policy.", "cache_control": {"type": "ephemeral"}}
-    ]
+    system: Final = [{"type": "text", "text": "Synthetic policy.", "cache_control": {"type": "ephemeral"}}]
     tools: Final = [
         {
             "name": "lookup",
@@ -398,11 +394,14 @@ def test_anthropic_messages_preserves_upstream_error_status_and_body(
             api_base=wire.url,
             api_key="synthetic-anthropic-key",
         )
-        with anthropic.Anthropic(
-            base_url=str(gateway.client.base_url),
-            api_key=gateway.key,
-            max_retries=0,
-        ) as client, pytest.raises(error_class) as caught:
+        with (
+            anthropic.Anthropic(
+                base_url=str(gateway.client.base_url),
+                api_key=gateway.key,
+                max_retries=0,
+            ) as client,
+            pytest.raises(error_class) as caught,
+        ):
             client.messages.create(
                 model=model,
                 max_tokens=16,
@@ -448,11 +447,14 @@ def test_anthropic_messages_preserves_upstream_rate_limit_retry_after(gateway: G
             api_base=wire.url,
             api_key="synthetic-anthropic-key",
         )
-        with anthropic.Anthropic(
-            base_url=str(gateway.client.base_url),
-            api_key=gateway.key,
-            max_retries=0,
-        ) as client, pytest.raises(anthropic.RateLimitError) as caught:
+        with (
+            anthropic.Anthropic(
+                base_url=str(gateway.client.base_url),
+                api_key=gateway.key,
+                max_retries=0,
+            ) as client,
+            pytest.raises(anthropic.RateLimitError) as caught,
+        ):
             client.messages.create(
                 model=model,
                 max_tokens=16,
@@ -498,11 +500,14 @@ def test_anthropic_messages_preserves_upstream_overloaded_error(gateway: Gateway
             api_base=wire.url,
             api_key="synthetic-anthropic-key",
         )
-        with anthropic.Anthropic(
-            base_url=str(gateway.client.base_url),
-            api_key=gateway.key,
-            max_retries=0,
-        ) as client, pytest.raises(anthropic.InternalServerError) as caught:
+        with (
+            anthropic.Anthropic(
+                base_url=str(gateway.client.base_url),
+                api_key=gateway.key,
+                max_retries=0,
+            ) as client,
+            pytest.raises(anthropic.InternalServerError) as caught,
+        ):
             client.messages.create(
                 model=model,
                 max_tokens=16,
@@ -510,9 +515,7 @@ def test_anthropic_messages_preserves_upstream_overloaded_error(gateway: Gateway
             )
         assert caught.value.status_code == 529, caught.value.response.text
         response_body: Final = _JSON_OBJECT.validate_json(caught.value.response.content)
-        error_body: Final = response_body.get("error")
-        assert response_body.get("type") == "error" and isinstance(error_body, dict), caught.value.response.text
-        assert error_body.get("type") == "overloaded_error", caught.value.response.text
+        assert response_body == upstream_error, caught.value.response.text
         assert len(wire.drain()) == 1
 
 
@@ -571,9 +574,25 @@ def test_anthropic_messages_stream_surfaces_upstream_error_event(gateway: Gatewa
             headers=cc.cli_headers(gateway.key),
         )
         assert response.status_code == 200, response.text
-        events: Final = cc.sse_events(response.text)
-        assert ("error", error) in events, response.text
-        assert not any(event == "message_stop" for event, _ in events), response.text
+        assert cc.sse_events(response.text) == (
+            (
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_stream_error",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": model,
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 5, "output_tokens": 0},
+                    },
+                },
+            ),
+            ("error", error),
+        ), response.text
         assert len(wire.drain()) == 1
 
 

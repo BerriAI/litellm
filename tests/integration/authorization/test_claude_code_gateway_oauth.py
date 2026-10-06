@@ -4,6 +4,8 @@ import html
 import json
 import os
 import re
+import uuid
+from collections import deque
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Final, Literal
@@ -13,7 +15,8 @@ import pytest
 import yaml
 from anthropic.types import Message
 from integration._support import claude_code as cc
-from integration._support.client import Gateway, gateway_from_environment
+from integration._support.client import Gateway, eventually, gateway_from_environment
+from integration._support.database import read_rows
 from integration._support.process import owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import BaseModel, JsonValue, TypeAdapter
@@ -50,7 +53,9 @@ class _AccessToken(BaseModel):
 
 
 def _owned_config(path: Path) -> Path:
-    config: Final = _JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
+    config: Final = _JSON_OBJECT.validate_python(
+        yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    )
     general_settings: Final = _JSON_OBJECT.validate_python(config.get("general_settings", {}))
     path.write_text(
         yaml.safe_dump(
@@ -98,14 +103,25 @@ def _identity_provider(request: Request) -> Reply:
     raise AssertionError(f"unexpected scripted IdP request: {request.method} {request.target}")
 
 
-def _anthropic_reply(request: Request, expected_body: dict[str, JsonValue], reply: bytes) -> Reply:
+_REPLY_CONTENT: Final = ({"type": "text", "text": "authorized"},)
+_REPLY_USAGE: Final = {"input_tokens": 5, "output_tokens": 1}
+
+
+def _anthropic_reply(request: Request, expected_body: dict[str, JsonValue], message_id: str) -> Reply:
     assert request.method == "POST" and request.target == "/v1/messages", request.target
     assert request.headers["x-api-key"] == _API_KEY, request.headers
     assert request.headers["anthropic-version"] == "2023-06-01", request.headers
     assert request.headers["anthropic-beta"] == _EXPECTED_BETA, request.headers
     assert "authorization" not in request.headers, request.headers
-    assert _JSON_OBJECT.validate_json(request.body) == expected_body, request.body
-    return Reply(body=reply)
+    body: Final = _JSON_OBJECT.validate_json(request.body)
+    streamed: Final = body.get("stream") is True
+    assert body == {**expected_body, "stream": streamed}, request.body
+    if streamed:
+        return Reply(
+            chunks=cc.message_stream(message_id, _BACKEND, _REPLY_CONTENT, _REPLY_USAGE),
+            content_type="text/event-stream",
+        )
+    return Reply(body=cc.message_reply(message_id, _BACKEND, _REPLY_CONTENT, _REPLY_USAGE))
 
 
 @pytest.fixture(scope="module")
@@ -115,9 +131,7 @@ def identity_provider() -> Iterator[Wire]:
 
 
 @pytest.fixture(scope="module")
-def enabled_gateway(
-    identity_provider: Wire, tmp_path_factory: pytest.TempPathFactory
-) -> Iterator[Gateway]:
+def enabled_gateway(identity_provider: Wire, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
     assert os.environ.get("LITELLM_LICENSE"), "LITELLM_LICENSE is required for the generic SSO integration test"
     with gateway_from_environment() as base_gateway:
         directory: Final = tmp_path_factory.mktemp("claude-code-gateway-oauth")
@@ -154,26 +168,26 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
         "stream": False,
     }
     expected_body: Final = {**request_template, "model": _BACKEND}
-    reply_bytes: Final = cc.message_reply(
-        "msg_oauth_gateway",
-        _BACKEND,
-        ({"type": "text", "text": "authorized"},),
-        {"input_tokens": 5, "output_tokens": 1},
-    )
+    run_id: Final = uuid.uuid4().hex
+    message_ids: Final = (f"msg_oauth_{run_id}_a", f"msg_oauth_{run_id}_a_stream", f"msg_oauth_{run_id}_c")
+    pending_message_ids: Final = deque(message_ids)
 
     with enabled_gateway.scenario() as scenario:
-        with wire_server(lambda request: _anthropic_reply(request, expected_body, reply_bytes)) as upstream:
-            model_a: Final = scenario.model(
-                model=f"anthropic/{_BACKEND}", api_base=upstream.url, api_key=_API_KEY
-            )
-            model_b: Final = scenario.model(
-                model=f"anthropic/{_BACKEND}", api_base=upstream.url, api_key=_API_KEY
-            )
+        with wire_server(
+            lambda request: _anthropic_reply(request, expected_body, pending_message_ids.popleft())
+        ) as upstream:
+            model_a: Final = scenario.model(model=f"anthropic/{_BACKEND}", api_base=upstream.url, api_key=_API_KEY)
+            model_b: Final = scenario.model(model=f"anthropic/{_BACKEND}", api_base=upstream.url, api_key=_API_KEY)
+            model_c: Final = scenario.model(model=f"anthropic/{_BACKEND}", api_base=upstream.url, api_key=_API_KEY)
             user_id: Final = scenario.user(
                 user_id=_USER_ID,
                 user_email=_USER_EMAIL,
                 user_role="internal_user",
-                models=[model_a],
+                models=[model_a, model_b],
+            )
+            team_id: Final = scenario.team(models=[model_a, model_c])
+            enabled_gateway.post(
+                "/team/member_add", {"team_id": team_id, "member": {"role": "user", "user_id": user_id}}
             )
 
             authorization_response: Final = enabled_gateway.client.post(
@@ -221,7 +235,7 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
                 authorization.verification_uri,
                 follow_redirects=False,
             )
-            assert verification_response.status_code in (302, 303), verification_response.text
+            assert verification_response.status_code == 303, verification_response.text
             assert "litellm_oauth_state" in verification_response.headers.get("set-cookie", ""), (
                 verification_response.headers,
             )
@@ -232,7 +246,7 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
                 verification_response.headers["location"],
                 follow_redirects=False,
             )
-            assert identity_provider_response.status_code in (302, 303), identity_provider_response.text
+            assert identity_provider_response.status_code == 302, identity_provider_response.text
             callback_location: Final = identity_provider_response.headers["location"]
             callback_parts: Final = urlsplit(callback_location)
             assert callback_parts.path == "/sso/callback", callback_location
@@ -256,6 +270,28 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
             assert still_pending.status_code == 400, still_pending.text
             assert _JSON_OBJECT.validate_json(still_pending.content) == {"error": "authorization_pending"}, (
                 still_pending.text,
+            )
+
+            wrong_code_completion: Final = enabled_gateway.client.post(
+                f"/sso/cli/complete/{login_id}",
+                data={"user_code": "WRONG-CODE", "browser_complete_token": browser_complete_token},
+            )
+            assert wrong_code_completion.status_code == 400, wrong_code_completion.text
+            assert _JSON_OBJECT.validate_json(wrong_code_completion.content) == {
+                "detail": "Invalid verification code"
+            }, wrong_code_completion.text
+
+            pending_after_wrong_code: Final = enabled_gateway.client.post(
+                "/claude_code_gateway/oauth/token",
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                    "device_code": authorization.device_code,
+                    "client_id": _CLIENT_ID,
+                },
+            )
+            assert pending_after_wrong_code.status_code == 400, pending_after_wrong_code.text
+            assert _JSON_OBJECT.validate_json(pending_after_wrong_code.content) == {"error": "authorization_pending"}, (
+                pending_after_wrong_code.text
             )
 
             verification_complete: Final = enabled_gateway.client.post(
@@ -310,19 +346,23 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
                 "error_description": "This gateway does not issue refresh tokens; sign in again",
             }, refresh.text
 
+            bearer_headers: Final = {
+                "authorization": f"Bearer {access_token.access_token}",
+                "anthropic-version": "2023-06-01",
+                "anthropic-beta": cc.CLI_BETA,
+                "x-claude-code-session-id": f"oauth-{user_id}",
+            }
             request_body: Final = {**request_template, "model": model_a}
             expected_message: Final = _MESSAGE.validate_python(
-                {**_JSON_OBJECT.validate_json(reply_bytes), "model": model_a}
+                {
+                    **_JSON_OBJECT.validate_json(
+                        cc.message_reply(message_ids[0], _BACKEND, _REPLY_CONTENT, _REPLY_USAGE)
+                    ),
+                    "model": model_a,
+                }
             )
             model_a_response: Final = enabled_gateway.client.post(
-                "/claude_code_gateway/v1/messages",
-                json=request_body,
-                headers={
-                    "authorization": f"Bearer {access_token.access_token}",
-                    "anthropic-version": "2023-06-01",
-                    "anthropic-beta": cc.CLI_BETA,
-                    "x-claude-code-session-id": f"oauth-{user_id}",
-                },
+                "/claude_code_gateway/v1/messages", json=request_body, headers=bearer_headers
             )
             assert model_a_response.status_code == 200, model_a_response.text
             parsed_message: Final = _MESSAGE.validate_json(model_a_response.content)
@@ -330,40 +370,84 @@ def test_device_authorization_polls_complete_sso_and_mints_a_model_restricted_be
                 model_a_response.text,
             )
 
+            model_a_stream: Final = enabled_gateway.client.post(
+                "/claude_code_gateway/v1/messages?beta=true",
+                json={**request_body, "stream": True},
+                headers=bearer_headers,
+            )
+            assert model_a_stream.status_code == 200, model_a_stream.text
+            expected_stream_events: Final = tuple(
+                (
+                    event,
+                    {**data, "message": {**_JSON_OBJECT.validate_python(data["message"]), "model": model_a}}
+                    if event == "message_start"
+                    else data,
+                )
+                for event, data in cc.sse_events(
+                    b"".join(cc.message_stream(message_ids[1], _BACKEND, _REPLY_CONTENT, _REPLY_USAGE)).decode()
+                )
+            )
+            assert cc.sse_events(model_a_stream.text) == expected_stream_events, model_a_stream.text
+
             upstream_requests: Final = upstream.drain()
-            assert len(upstream_requests) == 1, upstream_requests
-            provider_request: Final = upstream_requests[0]
-            assert provider_request.method == "POST" and provider_request.target == "/v1/messages", provider_request
-            assert provider_request.headers["x-api-key"] == _API_KEY, provider_request.headers
-            assert provider_request.headers["anthropic-beta"] == _EXPECTED_BETA, provider_request.headers
-            assert "authorization" not in provider_request.headers, provider_request.headers
-            assert _JSON_OBJECT.validate_json(provider_request.body) == expected_body, provider_request.body
+            assert len(upstream_requests) == 2, upstream_requests
+            assert tuple(
+                (request.method, request.target, _JSON_OBJECT.validate_json(request.body))
+                for request in upstream_requests
+            ) == (
+                ("POST", "/v1/messages", expected_body),
+                ("POST", "/v1/messages", {**expected_body, "stream": True}),
+            ), upstream_requests
 
             model_b_response: Final = enabled_gateway.client.post(
-                "/claude_code_gateway/v1/messages",
-                json={**request_body, "model": model_b},
-                headers={
-                    "authorization": f"Bearer {access_token.access_token}",
-                    "anthropic-version": "2023-06-01",
-                    "anthropic-beta": cc.CLI_BETA,
-                    "x-claude-code-session-id": f"oauth-{user_id}",
-                },
+                "/claude_code_gateway/v1/messages", json={**request_body, "model": model_b}, headers=bearer_headers
             )
-            assert model_b_response.status_code in (401, 403), model_b_response.text
-            model_b_error: Final = _JSON_OBJECT.validate_json(model_b_response.content)
-            assert model_b_error == {
+            assert model_b_response.status_code == 403, model_b_response.text
+            assert _JSON_OBJECT.validate_json(model_b_response.content) == {
                 "error": {
                     "message": (
                         f"The requested model '{model_b}' is not available for this API key, or the model name is "
                         "invalid. Check the models available to you and try again."
                     ),
-                    "type": "key_model_access_denied",
+                    "type": "team_model_access_denied",
                     "param": "model",
                     "code": "403",
                 }
             }, model_b_response.text
             assert upstream.drain() == ()
 
+            model_c_response: Final = enabled_gateway.client.post(
+                "/claude_code_gateway/v1/messages", json={**request_body, "model": model_c}, headers=bearer_headers
+            )
+            assert model_c_response.status_code == 200, model_c_response.text
+            assert _MESSAGE.validate_json(model_c_response.content).model_dump(mode="json") == (
+                expected_message.model_copy(update={"id": message_ids[2], "model": model_c}).model_dump(mode="json")
+            ), model_c_response.text
+            assert tuple(
+                (request.method, request.target, _JSON_OBJECT.validate_json(request.body))
+                for request in upstream.drain()
+            ) == (("POST", "/v1/messages", expected_body),)
+
+            spend_rows: Final = eventually(
+                lambda: read_rows(
+                    'SELECT request_id, "user", team_id, model_group, call_type FROM "LiteLLM_SpendLogs" '
+                    "WHERE team_id=%s AND status='success' ORDER BY \"startTime\"",
+                    (team_id,),
+                ),
+                lambda rows: len(rows) == 3,
+                seconds=70,
+                return_last_on_timeout=True,
+            )
+            assert spend_rows == [
+                {
+                    "request_id": message_id,
+                    "user": _USER_ID,
+                    "team_id": team_id,
+                    "model_group": model,
+                    "call_type": "anthropic_messages",
+                }
+                for message_id, model in zip(message_ids, (model_a, model_a, model_c), strict=True)
+            ], spend_rows
             idp_requests: Final = identity_provider.drain()
             assert len(idp_requests) == 3, idp_requests
             (authorization_request, token_request, userinfo_request) = idp_requests
