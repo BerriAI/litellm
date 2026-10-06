@@ -2,7 +2,7 @@ import copy
 import functools
 import os
 import uuid
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # **kwargs forwards verbatim to CustomGuardrail.__init__
@@ -79,6 +79,14 @@ _DEPLOYMENT_RESTORE_KEY: Final = "llm_shield_restore_at_deployment"
 _VAULT_PREFIX: Final = f"litellm-{uuid.uuid4().hex}"
 
 _DEFAULT_TIMEOUT_SECONDS: Final = 10.0
+
+
+def _string_tool_arguments(calls: Sequence[object]) -> Iterator[tuple[object, str]]:
+    for call in calls:
+        function = read_field(call, "function")
+        arguments = read_field(function, "arguments") if function is not None else None
+        if isinstance(arguments, str) and arguments:
+            yield function, arguments
 
 
 class LLMShieldProxyGuardrail(CustomGuardrail):
@@ -718,27 +726,18 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             return inputs
 
         restored_calls: Final[list[object]] = [copy.deepcopy(call) for call in tool_calls]  # mutable-ok: a new list.
-        spans: Final[list[str]] = list(text_list)  # mutable-ok: ordered batch, frozen before the call.
-        writers: Final[list[Callable[[str], None]]] = []  # mutable-ok: one per span appended below.
-        for call in restored_calls:
-            function = read_field(call, "function")
-            arguments = read_field(function, "arguments") if function is not None else None
-            if isinstance(arguments, str) and arguments:
-                spans.append(arguments)
-                writers.append(functools.partial(write_field, function, "arguments"))
-
+        argument_fields: Final = tuple(_string_tool_arguments(restored_calls))
+        spans: Final = (*text_list, *(arguments for _, arguments in argument_fields))
         replaced: Final = (
-            await self._redact(tuple(spans), self._mint_session_id(request_data))
+            await self._redact(spans, self._mint_session_id(request_data))
             if input_type == "request"
-            else await self._rehydrate(tuple(spans), self._session_id(request_data))
+            else await self._rehydrate(spans, self._session_id(request_data))
         )
-        restored_values: Final[list[str]] = list(replaced)  # mutable-ok: sliced into the texts list.
-
-        for write, replacement in zip(writers, restored_values[len(text_list) :]):
-            write(replacement)
+        for (function, _), replacement in zip(argument_fields, replaced[len(text_list) :]):
+            write_field(function, "arguments", replacement)
         merged: Final[JsonBody] = {**inputs}
         if text_list:
-            merged["texts"] = restored_values[: len(text_list)]
+            merged["texts"] = list(replaced[: len(text_list)])
         if restored_calls:
             merged["tool_calls"] = restored_calls
         return merged
