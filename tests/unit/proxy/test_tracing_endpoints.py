@@ -198,6 +198,7 @@ def receiver(client) -> MagicMock:
     fake.list_traces = AsyncMock(return_value={"data": [], "next_cursor": None})
     fake.get_trace = AsyncMock(return_value=None)
     fake.get_span = AsyncMock(return_value=None)
+    fake.get_spans = AsyncMock(return_value=None)
     client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: fake
     return fake
 
@@ -480,6 +481,7 @@ def test_trace_read_routes_ignore_unknown_query_parameters(client: TestClient, r
         ("/v1/traces/t1", "get_trace"),
         ("/v1/traces/t1/spans/s1", "get_span"),
         ("/v1/traces/t1/spans/s1/error", "get_span_error"),
+        ("/v1/traces/t1/spans", "get_spans"),
     ),
 )
 @pytest.mark.parametrize(
@@ -517,7 +519,7 @@ def test_read_failures_carry_a_code_per_kind_without_exposing_database_details(
     message: str,
 ) -> None:
     getattr(receiver, method).side_effect = error
-    response: Final = client.get(path)
+    response: Final = client.post(path, json={"span_ids": ["s1"]}) if method == "get_spans" else client.get(path)
     assert response.status_code == status
     assert response.json() == {"detail": {"code": code, "message": message}}
     retry_after: Final = response.headers.get("Retry-After")
@@ -990,7 +992,12 @@ class _NativeConfig:
 
 
 class _NativeReturningHelp(ModuleType):
-    def __init__(self, help_payload: Mapping[str, object], trace_payload: Mapping[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        help_payload: Mapping[str, object],
+        trace_payload: Mapping[str, object] | None = None,
+        spans_payload: JsonValue = None,
+    ) -> None:
         super().__init__("native_traces")
 
         class Storage:
@@ -1001,8 +1008,10 @@ class _NativeReturningHelp(ModuleType):
                 return help_payload
 
             get_trace = AsyncMock(return_value=trace_payload)
+            get_spans = AsyncMock(return_value=spans_payload)
 
         self.trace_read: Final = Storage.get_trace
+        self.spans_read: Final = Storage.get_spans
         self.NativeTraceConfig: Final = _NativeConfig
         self.NativeTraceStorage: Final = Storage
         self.trace_encode_error: Final = bytes
@@ -1077,3 +1086,30 @@ def test_bulk_span_details_preserves_scope_and_canonical_content(client: TestCli
     receiver.get_spans.return_value = None
     assert client.post("/v1/traces/missing/spans", json={"span_ids": ["s1"]}).status_code == 404
     assert client.post("/v1/traces/t1/spans", json={"span_ids": ["s1"], "unexpected": True}).status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("payload", "status"),
+    (
+        pytest.param([SPAN_DETAIL_RESPONSE], 200, id="recorded"),
+        pytest.param([], 200, id="no_matching_spans"),
+        pytest.param(None, 404, id="missing_trace"),
+        pytest.param([{"span_id": "s1"}], 503, id="invalid_native_shape"),
+    ),
+)
+def test_bulk_span_details_validates_native_response_and_scoped_read(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, payload: JsonValue, status: int
+) -> None:
+    native: Final = _NativeReturningHelp(QUERY_HELP, spans_payload=payload)
+    monkeypatch.setattr(loader, "_cached_bridge", native)
+    storage: Final = ClickHouseStorage(TraceStorageConfig("http://clickhouse:8123"))
+    client.app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(storage)
+    response: Final = client.post("/v1/traces/t1/spans", json={"span_ids": ["s1"], "trace_ref": "run-one"})
+    assert response.status_code == status, response.text
+    native.spans_read.assert_awaited_once_with(
+        "t1", ("s1",), {"all_teams": 0, "user_id": "user", "team_ids": ()}, "run-one"
+    )
+    if status == 200:
+        assert response.json() == payload
+    elif status == 503:
+        assert response.json()["detail"]["code"] == "unavailable"
