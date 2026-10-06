@@ -244,6 +244,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def get_config(cls):
         return super().get_config()
 
+    def _should_enforce_tool_parameters_object_root(self) -> bool:
+        return True
+
     def get_json_schema_from_pydantic_object(self, response_format: type["BaseModel"] | dict | None) -> dict | None:
         """
         Override to use Pydantic's model_json_schema() instead of OpenAI's
@@ -625,7 +628,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     and _openai_function_object["parameters"] is not None
                     and isinstance(_openai_function_object["parameters"], dict)
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
-                    _openai_function_object["parameters"] = _build_vertex_schema(_openai_function_object["parameters"])
+                    _openai_function_object["parameters"] = _build_vertex_schema(
+                        _openai_function_object["parameters"],
+                        enforce_object_root=self._should_enforce_tool_parameters_object_root(),
+                    )
 
                 openai_function_object = _openai_function_object
 
