@@ -6,6 +6,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.databricks.cost_calculator import cost_per_token
 from litellm.types.utils import ModelInfo, Usage
 
@@ -105,6 +106,8 @@ ENTRIES_STORING_LIST_RATE_DESPITE_PROMOTION: Final = (
     "databricks/databricks-gemini-3-1-flash-lite",
 )
 CACHE_FIELDS: Final = ("cache_creation_input_token_cost", "cache_read_input_token_cost")
+UNITY_CATALOG_PREFIX: Final = "databricks/system.ai."
+ENDPOINT_PREFIX: Final = "databricks/databricks-"
 
 
 def _model_info(model: str) -> ModelInfo:
@@ -203,7 +206,7 @@ def test_every_model_without_published_cache_dbu_bills_cache_at_its_own_input_ra
     without_published_rates: Final = [
         model
         for model, info in litellm.model_cost.items()
-        if model.startswith("databricks/")
+        if model.startswith(ENDPOINT_PREFIX)
         and info.get("input_cost_per_token")
         and model not in PUBLISHED_DBU_PER_MILLION
     ]
@@ -255,3 +258,32 @@ def test_cost_per_token_bills_the_served_priority_tier(
     prompt_cost, completion_cost = cost_per_token(model="databricks/dbrx-tiered-test", usage=usage)
     assert prompt_cost == pytest.approx(30 * 0.001)
     assert completion_cost == pytest.approx(40 * 0.002)
+
+
+def test_every_databricks_endpoint_has_an_identical_unity_catalog_twin(local_model_cost_map: None) -> None:
+    endpoints: Final = {model: info for model, info in litellm.model_cost.items() if model.startswith(ENDPOINT_PREFIX)}
+    twins: Final = {model: info for model, info in litellm.model_cost.items() if model.startswith(UNITY_CATALOG_PREFIX)}
+
+    assert endpoints
+    assert {model.removeprefix(ENDPOINT_PREFIX) for model in endpoints} == {
+        model.removeprefix(UNITY_CATALOG_PREFIX) for model in twins
+    }
+    assert all(twins[model.replace(ENDPOINT_PREFIX, UNITY_CATALOG_PREFIX)] == info for model, info in endpoints.items())
+
+
+def test_unity_catalog_name_routes_to_databricks_and_bills_like_its_endpoint(local_model_cost_map: None) -> None:
+    unity_model: Final = "databricks/system.ai.claude-opus-5"
+    endpoint_model: Final = "databricks/databricks-claude-opus-5"
+    usage: Final = Usage(
+        prompt_tokens=11000,
+        completion_tokens=500,
+        total_tokens=11500,
+        cache_creation_input_tokens=2000,
+        cache_read_input_tokens=8000,
+    )
+
+    routed_model, provider, _, _ = get_llm_provider(model=unity_model)
+
+    assert (routed_model, provider) == ("system.ai.claude-opus-5", "databricks")
+    assert cost_per_token(model=unity_model, usage=usage) == cost_per_token(model=endpoint_model, usage=usage)
+    assert all(cost > 0 for cost in cost_per_token(model=unity_model, usage=usage))
