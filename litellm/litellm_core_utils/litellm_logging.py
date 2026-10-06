@@ -1,7 +1,6 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
-import asyncio
 import copy
 import datetime
 import functools
@@ -12,7 +11,6 @@ import subprocess
 import sys
 import time
 import traceback
-import weakref
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
@@ -291,10 +289,6 @@ if TYPE_CHECKING:
 else:
     _GENERIC_API_LOGGER_CLS: Final = GenericAPILogger
 _in_memory_loggers: Final[list[CustomLogger]] = []
-
-# Nested @client wrappers log one request from two concurrent tasks; the lock serialises them so the
-# dedup flag holds. Off-instance so Logging stays copyable.
-_async_success_dedup_locks: Final["weakref.WeakKeyDictionary[Logging, asyncio.Lock]"] = weakref.WeakKeyDictionary()
 
 _STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(("used_client_oauth_token",))
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
@@ -729,6 +723,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # enqueue closure here instead of firing it immediately.
         self._defer_async_logging: bool = False
         self._enqueue_deferred_logging: Callable[[], None] | None = None
+        self._async_success_scheduled: bool = False
         self._on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -2267,6 +2262,14 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception:
             return True
 
+    def claim_async_success_log(self) -> bool:
+        """One async success log per request: the first @client wrapper to exit claims it, and a
+        nested wrapper sharing this object gets False and schedules nothing."""
+        if self._async_success_scheduled:
+            return False
+        self._async_success_scheduled = True
+        return True
+
     def mark_logging_complete(
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
@@ -2688,13 +2691,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if isinstance(settled_hidden_params, dict):
             for poll_scoped_key in ("response_cost", "model_id", "litellm_model_name"):
                 settled_hidden_params.pop(poll_scoped_key, None)
-        try:
-            with post_response_phase():
-                async with self._async_success_dedup_lock():
-                    self._reset_success_emission_dedupe()
-                    await self._async_success_handler_body(result=result)
-        finally:
-            self._restore_correlation_context()
+        self._reset_success_emission_dedupe()
+        await self.async_success_handler(result=result)
 
     def _reset_success_emission_dedupe(self) -> None:
         """
@@ -3225,19 +3223,11 @@ class Logging(LiteLLMLoggingBaseClass):
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
             with post_response_phase():
-                if self.stream is True or self._is_assembled_stream_success(result):
-                    return await self._async_success_handler_body(
-                        result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
-                    )
-                async with self._async_success_dedup_lock():
-                    return await self._async_success_handler_body(
-                        result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
-                    )
+                return await self._async_success_handler_body(
+                    result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+                )
         finally:
             self._restore_correlation_context()
-
-    def _async_success_dedup_lock(self) -> asyncio.Lock:
-        return _async_success_dedup_locks.setdefault(self, asyncio.Lock())
 
     async def _async_success_handler_body(
         self,
