@@ -2,12 +2,11 @@ import enum
 import heapq
 from typing import Final
 
-from pydantic import BaseModel
-
 from litellm import print_verbose
 from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.constants import DEFAULT_IN_MEMORY_TTL, DEFAULT_POLLING_INTERVAL
+from litellm.types.llms.base import LiteLLMBaseModel
 
 SCHEDULER_QUEUE_TARGET: Final = "scheduler_queue"
 
@@ -17,7 +16,7 @@ class SchedulerCacheKeys(enum.Enum):
     default_in_memory_ttl = DEFAULT_IN_MEMORY_TTL  # cache queue in-memory for 5s when redis cache available
 
 
-class FlowItem(BaseModel):
+class FlowItem(LiteLLMBaseModel):
     priority: int  # Priority between 0 and 255
     request_id: str
     model_name: str

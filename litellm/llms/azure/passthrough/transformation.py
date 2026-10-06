@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Final, Optional
 
 import httpx
 from httpx import Response
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure.common_utils import BaseAzureLLM
@@ -17,6 +17,7 @@ from litellm.llms.base_llm.passthrough.transformation import (
     strip_leading_model_segment,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse, ResponsesTerminalEvent
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, EmbeddingResponse, ImageResponse
@@ -27,11 +28,11 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.passthrough.transformation import LoggedRelayResponse
 
 
-class RelayedChatRequest(BaseModel):
+class RelayedChatRequest(LiteLLMBaseModel):
     messages: Sequence[Mapping[str, object]] | None = None
 
 
-class RelayedCallDetails(BaseModel):
+class RelayedCallDetails(LiteLLMBaseModel):
     request_data: RelayedChatRequest | None = None
 
 

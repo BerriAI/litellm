@@ -18,10 +18,11 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from typing import Final, Protocol
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
 from litellm.proxy.auth.auth_checks import _delete_cache_access_object
 from litellm.proxy.db.db_span import db_span
+from litellm.types.llms.base import LiteLLMBaseModel
 
 # hashtext collisions only cost two unrelated teams a little serialization, and the
 # lock is never taken by the access-group endpoints as a SELECT ... FOR UPDATE row lock,
@@ -58,11 +59,11 @@ RETURNING access_group_id
 """
 
 
-class _AffectedGroup(BaseModel):
+class _AffectedGroup(LiteLLMBaseModel):
     access_group_id: str
 
 
-class _TeamGroups(BaseModel):
+class _TeamGroups(LiteLLMBaseModel):
     access_group_ids: tuple[str, ...] | None = None
 
 

@@ -10,6 +10,7 @@ import type { GroupRowData, LoadMoreRowData, SpanRowData } from "../../tree";
 import type { SpanType } from "../../types";
 import { fmtMs, previewText, type TreeGuide } from "../../utils";
 import { groupFacts, SpanHoverCard, spanFacts } from "./SpanHoverCard";
+import { toolSummary } from "../content/payload";
 import { BAR_TRACK, barGeometry } from "./timeline";
 
 export type TreeLayout = "tree" | "waterfall";
@@ -146,6 +147,7 @@ const readablePreview = (preview: string): string => {
 
 const subtitle = (row: SpanRowData, filtering: boolean): string => {
   const { span } = row;
+  if (span.type === "tool") return toolSummary(span.input_preview);
   if (filtering) return readablePreview(span.input_preview) || span.agent;
   return span.type === "agent" && span.parent_span_id ? readablePreview(span.input_preview) : "";
 };

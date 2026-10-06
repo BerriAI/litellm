@@ -146,6 +146,74 @@ class HeldStatementRelay:
         )
 
 
+class TriggerScanner:
+    def __init__(self, trigger: bytes) -> None:
+        self._trigger: Final = trigger
+        self._tail: bytes = b""
+
+    def feed(self, chunk: bytes) -> bool:
+        window: Final = self._tail + chunk
+        self._tail = window[-(len(self._trigger) - 1) :]
+        return self._trigger in window
+
+
+class DroppedConnectionRelay:
+    def __init__(self, upstream_host: str, upstream_port: int, trigger: bytes) -> None:
+        self.port: Final = _free_port()
+        self._upstream_host: Final = upstream_host
+        self._upstream_port: Final = upstream_port
+        self._trigger: Final = trigger
+        self._loop: Final = asyncio.new_event_loop()
+        self._armed: Final = threading.Event()
+        self.dropped: Final = threading.Event()
+        self._ready: Final = threading.Event()
+        self._thread: Final = threading.Thread(target=self._run, daemon=True)
+
+    def arm(self) -> None:
+        self._armed.set()
+
+    def disarm(self) -> None:
+        self._armed.clear()
+
+    def start(self) -> None:
+        self._thread.start()
+        assert self._ready.wait(10), "Database relay did not start"
+
+    def stop(self) -> None:
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(10)
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_until_complete(asyncio.start_server(self._serve, "127.0.0.1", self.port))
+        self._ready.set()
+        self._loop.run_forever()
+
+    async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
+        server_reader, server_writer = await asyncio.open_connection(self._upstream_host, self._upstream_port)
+
+        async def forward(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, inspect: bool) -> None:
+            scanner: Final = TriggerScanner(self._trigger)
+            try:
+                while chunk := await reader.read(65536):
+                    matched: Final = scanner.feed(chunk)
+                    if inspect and self._armed.is_set() and matched:
+                        self.dropped.set()
+                        client_writer.close()
+                        return
+                    writer.write(chunk)
+                    await writer.drain()
+            except (ConnectionError, asyncio.IncompleteReadError):
+                return
+            finally:
+                writer.close()
+
+        await asyncio.gather(
+            forward(client_reader, server_writer, True),
+            forward(server_reader, client_writer, False),
+        )
+
+
 def _relayed_url(database_url: str, port: int) -> str:
     parts: Final = urlsplit(database_url)
     credentials: Final = f"{parts.username}:{parts.password}@" if parts.username else ""
@@ -169,6 +237,18 @@ def held_statement_relay(database_url: str, trigger: bytes) -> Generator[tuple[H
     parts: Final = urlsplit(database_url)
     assert parts.hostname is not None and parts.port is not None, database_url
     relay: Final = HeldStatementRelay(parts.hostname, parts.port, trigger)
+    relay.start()
+    try:
+        yield relay, _relayed_url(database_url, relay.port)
+    finally:
+        relay.stop()
+
+
+@contextmanager
+def dropped_connection_relay(database_url: str, trigger: bytes) -> Generator[tuple[DroppedConnectionRelay, str]]:
+    parts: Final = urlsplit(database_url)
+    assert parts.hostname is not None and parts.port is not None, database_url
+    relay: Final = DroppedConnectionRelay(parts.hostname, parts.port, trigger)
     relay.start()
     try:
         yield relay, _relayed_url(database_url, relay.port)
