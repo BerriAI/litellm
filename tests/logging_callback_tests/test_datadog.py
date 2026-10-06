@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime as datetime_class, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -117,8 +117,8 @@ async def test_create_datadog_logging_payload():
     dd_payload = dd_logger.create_datadog_logging_payload(
         kwargs=kwargs,
         response_obj=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=datetime_class.now(),
+        end_time=datetime_class.now(),
     )
 
     # Verify payload structure
@@ -144,8 +144,8 @@ async def test_datadog_failure_logging():
     dd_payload = dd_logger.create_datadog_logging_payload(
         kwargs=kwargs,
         response_obj=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=datetime_class.now(),
+        end_time=datetime_class.now(),
     )
 
     assert (
@@ -481,8 +481,8 @@ async def test_datadog_payload_environment_variables():
             dd_payload = dd_logger.create_datadog_logging_payload(
                 kwargs={"standard_logging_object": standard_payload},
                 response_obj=None,
-                start_time=datetime.now(),
-                end_time=datetime.now(),
+                start_time=datetime_class.now(),
+                end_time=datetime_class.now(),
             )
 
             print("dd payload=", json.dumps(dd_payload, indent=2))
@@ -539,8 +539,8 @@ async def test_datadog_payload_content_truncation():
     dd_payload = dd_logger.create_datadog_logging_payload(
         kwargs={"standard_logging_object": standard_payload},
         response_obj=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=datetime_class.now(),
+        end_time=datetime_class.now(),
     )
 
     print("dd_payload", json.dumps(dd_payload, indent=2))
@@ -576,8 +576,8 @@ async def test_datadog_payload_truncation_leaves_shared_payload_intact(monkeypat
     dd_payload = dd_logger.create_datadog_logging_payload(
         kwargs=kwargs,
         response_obj=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=datetime_class.now(),
+        end_time=datetime_class.now(),
     )
 
     assert kwargs["standard_logging_object"]["messages"] is original_messages
@@ -640,7 +640,7 @@ async def test_datadog_non_serializable_messages():
 
     # Create payload with non-serializable content
     standard_payload = create_standard_logging_payload()
-    non_serializable_obj = datetime.now()  # datetime objects aren't JSON serializable
+    non_serializable_obj = datetime_class.now()  # datetime objects aren't JSON serializable
     standard_payload["messages"] = [{"role": "user", "content": non_serializable_obj}]
     standard_payload["response"] = {
         "choices": [{"message": {"content": non_serializable_obj}}]
@@ -652,8 +652,8 @@ async def test_datadog_non_serializable_messages():
     dd_payload = dd_logger.create_datadog_logging_payload(
         kwargs=kwargs,
         response_obj=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=datetime_class.now(),
+        end_time=datetime_class.now(),
     )
 
     # Verify payload can be serialized
