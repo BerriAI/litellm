@@ -42,25 +42,18 @@ async def list_team_members(
     team_access: Annotated[TeamAccess, Depends(get_team_access)],
 ) -> ListResponse[TeamMemberListItem]:
     """
-    One page of a team's members, with each member's spend in the team and the limits on their budget row.
+    One page of a team's members with each member's spend and budget limits in the team.
 
-    Readable by whoever can read `/team/info` for the team: proxy admins and admin viewers, a key issued to
-    the team, any member of the team, and admins of the team's organization. An unknown team is a 404.
+    Same readers as `/team/info`: proxy admins, admin viewers, the team's keys, its members and its org admins.
+    An unknown team is a 404.
 
-    Members come in the order they joined unless `sort` names a comma-separated list of `user_alias`,
-    `user_email`, `user_id`, `role`, `spend`, `total_spend`, `max_budget_in_team` or `budget_reset_at`,
-    each optionally prefixed with `-` for descending. `q` is a case-insensitive substring match on
-    `user_id` or `user_email`, and `filter[role]=admin` or `filter[role][in]=admin,user` filters by role.
-    `page_size` defaults to 50 and is capped at 100. `meta.total_count` counts the members matching `q`
-    and the filters.
+    `q` matches `user_id` or `user_email`, `filter[role]=admin` or `filter[role][in]=admin,user` filters by role,
+    `sort` takes `user_alias`, `user_email`, `user_id`, `role`, `spend`, `total_spend`, `max_budget_in_team` or
+    `budget_reset_at` with `-` for descending, and `page_size` defaults to 50, max 100. `budget_source` is
+    `custom` (own budget row), `team_default` (follows the team's member budget) or `none`.
 
-    `budget_source` is `custom` when the member has their own budget row, `team_default` when they follow
-    the team's member budget, and `none` when the team has no member budget.
-
-    Example curl:
     ```
-    curl --location --globoff 'http://0.0.0.0:4000/management/v1/teams/team-1/members?q=acme&filter[role]=admin&page_size=25' \
-        --header 'Authorization: Bearer sk-1234'
+    curl --globoff 'http://0.0.0.0:4000/management/v1/teams/team-1/members?q=acme&filter[role]=admin' -H 'Authorization: Bearer sk-1234'
     ```
     """
     try:
