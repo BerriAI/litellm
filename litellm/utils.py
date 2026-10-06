@@ -1373,11 +1373,14 @@ def _schedule_async_success_logging(
 
     Nested @client wrappers (Anthropic Messages over the chat adapter, chat over the Responses
     bridge) each exit through here with the same logging object and their own shape of the same
-    response. The immediate path already logs one request once, since the first task marks
-    ``has_logged_async_success`` and the later ones skip. The deferred slot keeps the same
-    first-wins rule: the innermost wrapper's provider-shaped result is the one the spend log
-    reads usage from, and a later wrapper never swaps in its client-shaped translation.
+    response. The innermost wrapper always exits first, since the outer one is awaiting it, so it
+    claims the async success log here, synchronously, and the outer wrapper returns without
+    enqueuing: one request queues one handler, whatever the handler tasks do later. The deferred
+    slot keeps the same innermost-wins rule: the provider-shaped result is the one the spend log
+    reads usage from, and the outer wrapper never swaps in its client-shaped translation.
     """
+    if not logging_obj.claim_async_success_log():
+        return
 
     def _enqueue_async_logging() -> None:
         asyncio.create_task(
