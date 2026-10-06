@@ -30,6 +30,16 @@ _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobu
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 
 
+def resolve_realtime_route_model(model: str | None, intent: str | None, is_translation: bool) -> str | None:
+    if model is not None:
+        return model
+    if is_translation:
+        return "gpt-realtime-translate"
+    if intent == "transcription":
+        return "gpt-realtime-whisper"
+    return None
+
+
 def resolve_inference_model(
     body_model: object,
     settings: Mapping[str, object],
@@ -475,14 +485,16 @@ async def get_form_data(request: Request) -> dict[str, Any]:
     Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
     """
     form: Final = await request.form()
-    parsed_form_data: Final[dict[str, Any]] = {}
-    for key, value in form.multi_items():  # not dict(form), which keeps only the last repeat
-        if key.endswith("[]"):
-            clean_key = key[:-2]
-            parsed_form_data.setdefault(clean_key, []).append(value)
-        else:
-            parsed_form_data[key] = value
-    return parsed_form_data
+    form_items: Final = tuple(form.multi_items() if hasattr(form, "multi_items") else form.items())
+    array_keys: Final = frozenset(key[:-2] for key, _ in form_items if key.endswith("[]"))
+    normalized_items: Final = tuple((key.removesuffix("[]"), value) for key, value in form_items)
+    normalized_keys: Final = frozenset(key for key, _ in normalized_items)
+    return {
+        key: [value for item_key, value in normalized_items if item_key == key]
+        if key in array_keys
+        else next(value for item_key, value in reversed(normalized_items) if item_key == key)
+        for key in normalized_keys
+    }
 
 
 async def convert_upload_files_to_file_data(

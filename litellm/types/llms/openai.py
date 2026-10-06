@@ -1163,9 +1163,12 @@ AllEmbeddingInputValues = str | list[str] | list[int] | list[list[int]]
 
 OpenAIAudioTranscriptionOptionalParams = Literal[
     "language",
+    "languages",
+    "keywords",
     "prompt",
     "temperature",
     "response_format",
+    "stream",
     "timestamp_granularities",
     "include",
 ]
@@ -2317,6 +2320,17 @@ class OpenAIRealtimeResponseUsage(TypedDict):
     output_token_details: NotRequired[ReadOnly[OpenAIRealtimeUsageTokenDetails]]
 
 
+class OpenAIRealtimeTranslationDurationUsage(TypedDict):
+    type: ReadOnly[Literal["duration"]]
+    output_seconds: NotRequired[ReadOnly[float]]
+    input_seconds: NotRequired[ReadOnly[float]]
+
+
+class OpenAIRealtimeTranslationClosedEvent(TypedDict):
+    type: ReadOnly[Literal["session.closed"]]
+    usage: ReadOnly[OpenAIRealtimeTranslationDurationUsage]
+
+
 class OpenAIRealtimeEventTypes(Enum):
     SESSION_CREATED = "session.created"
     # Beta delta event names
@@ -2359,6 +2373,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeInputAudioTranscriptionCompleted
     | OpenAIRealtimeTranscriptionSessionCreated
     | OpenAIRealtimeErrorEvent
+    | OpenAIRealtimeTranslationClosedEvent
 )
 
 OpenAIRealtimeStreamList = list[OpenAIRealtimeEvents]

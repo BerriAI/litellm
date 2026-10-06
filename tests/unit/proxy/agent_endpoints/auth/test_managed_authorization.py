@@ -364,6 +364,10 @@ async def test_unknown_invocation_target_leaves_billing_unset(monkeypatch: pytes
         ("/v1beta/models/gemini-model:generateContent", "POST", True),
         ("/v1/realtime", "GET", True),
         ("/v1/realtime", "POST", False),
+        ("/v1/realtime/translations", "GET", True),
+        ("/v1/realtime/translations", "POST", False),
+        ("/v1/realtime/translations/client_secrets", "POST", False),
+        ("/v1/realtime/translations/calls", "POST", False),
         ("/v1/realtime/client_secrets", "POST", False),
         ("/mcp/tools/call", "POST", True),
         ("/a2a/target/message/send", "POST", True),
@@ -437,7 +441,14 @@ def test_managed_inference_ignores_unsupported_query_model():
     )
 
 
-@pytest.mark.parametrize("route", ["/realtime", "/v1/realtime", "/openai/v1/realtime"])
+@pytest.mark.parametrize(
+    "route",
+    (
+        "/realtime",
+        "/v1/realtime",
+        "/openai/v1/realtime",
+    ),
+)
 def test_managed_realtime_requires_a_model_and_ignores_completion_defaults(route: str) -> None:
     from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
 
@@ -449,6 +460,35 @@ def test_managed_realtime_requires_a_model_and_ignores_completion_defaults(route
         ]
         == "requested"
     )
+
+
+@pytest.mark.parametrize(
+    "route", ("/realtime/translations", "/v1/realtime/translations", "/openai/v1/realtime/translations")
+)
+@pytest.mark.parametrize("query_model", (None, "requested"))
+def test_managed_translation_authorizes_the_same_model_as_the_endpoint(route: str, query_model: str | None) -> None:
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
+    from litellm.proxy.common_utils.http_parsing_utils import resolve_realtime_route_model
+
+    admitted: Final = managed_inference_request(
+        route, {}, {"completion_model": "unrelated-default"}, "cli", query_model=query_model
+    )
+
+    assert admitted["model"] == resolve_realtime_route_model(query_model, None, is_translation=True)
+    assert isinstance(admitted["model"], str) and admitted["model"]
+
+
+@pytest.mark.parametrize("route", ("/realtime", "/v1/realtime", "/openai/v1/realtime"))
+def test_managed_transcription_authorizes_the_same_model_as_the_endpoint(route: str) -> None:
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_inference_request
+    from litellm.proxy.common_utils.http_parsing_utils import resolve_realtime_route_model
+
+    admitted: Final = managed_inference_request(
+        route, {}, {"completion_model": "unrelated-default"}, "cli", intent="transcription"
+    )
+
+    assert admitted["model"] == resolve_realtime_route_model(None, "transcription", is_translation=False)
+    assert isinstance(admitted["model"], str) and admitted["model"]
 
 
 @pytest.mark.parametrize("mode,user", [("autonomous", None), ("delegated", "verified-human")])
@@ -559,21 +599,41 @@ async def test_ordinary_agent_admission_preserves_legacy_authentication(
 
 @pytest.mark.parametrize(
     "route",
-    tuple(dict.fromkeys(
-        LiteLLMRoutes.openai_routes.value
-        + LiteLLMRoutes.anthropic_routes.value
-        + LiteLLMRoutes.google_routes.value
-    )),
+    tuple(
+        dict.fromkeys(
+            LiteLLMRoutes.openai_routes.value + LiteLLMRoutes.anthropic_routes.value + LiteLLMRoutes.google_routes.value
+        )
+    ),
 )
 def test_registered_inference_routes_have_an_explicit_managed_access_decision(route: str) -> None:
     from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_route_allowed
 
     normalized: Final = route.removeprefix("/openai").removeprefix("/v1beta").removeprefix("/v1")
-    unsupported: Final = normalized.startswith((
-        "/videos", "/batches", "/files", "/fine_tuning", "/assistants", "/threads", "/utils/",
-        "/vector_stores", "/vector_store/", "/search", "/containers", "/skills", "/claude-code/",
-        "/interactions", "/agents", "/responses/{", "/responses/input_tokens",
-        "/realtime/client_secrets", "/realtime/calls", "/realtime/transcription_sessions",
-    )) or normalized in ("/models", "/cursor/models", "/cursor/v1/models")
+    unsupported: Final = normalized.startswith(
+        (
+            "/videos",
+            "/batches",
+            "/files",
+            "/fine_tuning",
+            "/assistants",
+            "/threads",
+            "/utils/",
+            "/vector_stores",
+            "/vector_store/",
+            "/search",
+            "/containers",
+            "/skills",
+            "/claude-code/",
+            "/interactions",
+            "/agents",
+            "/responses/{",
+            "/responses/input_tokens",
+            "/realtime/client_secrets",
+            "/realtime/calls",
+            "/realtime/transcription_sessions",
+            "/realtime/translations/client_secrets",
+            "/realtime/translations/calls",
+        )
+    ) or normalized in ("/models", "/cursor/models", "/cursor/v1/models")
     concrete: Final = route.split("?")[0].replace("{model}", "model").replace("{model_name:path}", "model")
     assert managed_agent_route_allowed(concrete, None) is not unsupported, route

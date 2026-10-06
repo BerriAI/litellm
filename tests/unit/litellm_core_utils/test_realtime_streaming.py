@@ -1,8 +1,10 @@
 import asyncio
+import base64
 import json
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from dataclasses import dataclass
-from typing import Final
+from datetime import UTC, datetime
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,12 +14,18 @@ from websockets.frames import Close
 import litellm
 from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import _apply_resolved_guardrails_to_metadata
+from litellm.realtime_api.main import _build_litellm_metadata
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyMatchContext
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 
 
 def _make_transcript_event(text: str, item_id: str = "item_x") -> bytes:
@@ -602,6 +610,50 @@ async def test_client_ack_messages_keeps_beta_session_shape_for_beta_backend():
     assert "audio" not in session
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("beta_client", (False, True))
+async def test_translation_session_update_omits_session_type(beta_client: bool) -> None:
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")] if beta_client else []}
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "type": "translation",
+                        "input_audio_format": "g711_ulaw",
+                        "output_audio_format": "pcm16",
+                        "audio": {"output": {"language": "fr"}},
+                    },
+                }
+            ),
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        translation_session=True,
+    )
+
+    await streaming.client_ack_messages()
+
+    sent_to_backend = json.loads(backend_ws.send.call_args_list[0].args[0])
+    assert "type" not in sent_to_backend["session"]
+    assert sent_to_backend["session"]["audio"]["output"]["language"] == "fr"
+    assert sent_to_backend["session"]["audio"]["input"]["format"]["type"] == "audio/pcmu", (
+        "OpenAI Realtime audio formats, checked 2026-10-06: "
+        "https://github.com/openai/openai-python/blob/v2.33.0/src/openai/types/realtime/realtime_audio_formats.py"
+    )
+    assert sent_to_backend["session"]["audio"]["output"]["format"]["type"] == "audio/pcm"
+
+
 def test_translate_event_to_beta_renames_delta_types():
     ev = RealTimeStreaming._translate_event_to_beta(
         {"type": "response.output_audio.delta", "delta": "abc", "event_id": "e1"}
@@ -1021,6 +1073,93 @@ async def test_transcription_session_update_enforces_authorized_nested_model():
         "rate": 24000,
     }
     assert streaming._is_transcription_session is True
+
+
+@pytest.mark.asyncio
+async def test_translation_session_update_rejects_disallowed_nested_transcription_model() -> None:
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming = RealTimeStreaming(
+        MagicMock(),
+        backend_ws,
+        MagicMock(),
+        model="gpt-realtime-translate",
+        user_api_key_dict=UserAPIKeyAuth(models=["gpt-realtime-translate"]),
+        translation_session=True,
+    )
+
+    with pytest.raises(Exception, match=r"gpt-live-transcribe.*not available"):
+        await streaming._send_to_backend(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "type": "translation",
+                        "audio": {
+                            "input": {
+                                "transcription": {"model": "gpt-live-transcribe"},
+                            }
+                        },
+                    },
+                }
+            )
+        )
+    backend_ws.send.assert_not_awaited()
+    assert streaming._is_transcription_session is False
+
+
+@pytest.mark.asyncio
+async def test_translation_session_update_binds_nested_transcription_model() -> None:
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    streaming = RealTimeStreaming(
+        MagicMock(),
+        backend_ws,
+        MagicMock(),
+        model="gpt-realtime-translate",
+        user_api_key_dict=UserAPIKeyAuth(models=["gpt-realtime-translate", "gpt-realtime-whisper"]),
+        translation_session=True,
+    )
+
+    await streaming._send_to_backend(
+        json.dumps(
+            {
+                "type": "session.update",
+                "session": {
+                    "type": "translation",
+                    "audio": {
+                        "input": {
+                            "transcription": {"model": "gpt-realtime-whisper", "language": "en"},
+                        }
+                    },
+                },
+            }
+        )
+    )
+    await streaming._send_to_backend(
+        json.dumps(
+            {
+                "type": "session.update",
+                "session": {
+                    "type": "translation",
+                    "audio": {
+                        "input": {
+                            "transcription": {"model": "gpt-live-transcribe", "language": "fr"},
+                        }
+                    },
+                },
+            }
+        )
+    )
+
+    first_sent = json.loads(backend_ws.send.await_args_list[0].args[0])
+    second_sent = json.loads(backend_ws.send.await_args_list[1].args[0])
+    assert first_sent["session"]["audio"]["input"]["transcription"]["model"] == "gpt-realtime-whisper"
+    assert second_sent["session"]["audio"]["input"]["transcription"] == {
+        "model": "gpt-realtime-whisper",
+        "language": "fr",
+    }
+    assert streaming._is_transcription_session is False
 
 
 @pytest.mark.asyncio
@@ -2784,6 +2923,490 @@ def test_store_message_skips_pydantic_for_unlogged_audio_delta():
         streaming.store_message({"type": "response.output_audio.delta", "delta": "x"})
     base_obj.assert_not_called()
     assert streaming.messages == []
+
+
+@pytest.mark.parametrize(
+    "event_type", ["session.output_audio.delta", "response.output_audio.delta", "response.audio.delta"]
+)
+def test_translation_audio_duration_is_finalized_once(event_type: str):
+    import base64
+
+    streaming = RealTimeStreaming(
+        websocket=MagicMock(),
+        backend_ws=MagicMock(),
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    payload = base64.b64encode(bytes(48000)).decode()
+    streaming._capture_translation_output_audio({"type": event_type, "delta": payload})
+    streaming._finalize_translation_usage()
+    streaming._finalize_translation_usage()
+
+    closed_events = [event for event in streaming.messages if event.get("type") == "session.closed"]
+    assert len(closed_events) == 1
+    assert closed_events[0]["usage"] == {"type": "duration", "output_seconds": 1.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output_bytes", (0, 48000))
+@pytest.mark.parametrize("format_event_type", ("session.created", "session.updated"))
+@pytest.mark.parametrize(
+    "audio_format,bytes_per_second",
+    (
+        ("pcm16", 48000),
+        ("g711_ulaw", 8000),
+        ("g711_alaw", 8000),
+        ({"type": "audio/pcm", "rate": 24000}, 48000),
+        ({"type": "audio/pcmu", "rate": 8000}, 8000),
+        ({"type": "audio/pcma", "rate": 8000}, 8000),
+        ({"type": "audio/pcmu"}, 8000),
+        ({"type": "audio/pcma"}, 8000),
+    ),
+)
+async def test_translation_disconnect_bills_sent_input_audio(
+    output_bytes: int, format_event_type: str, audio_format: str | Mapping[str, object], bytes_per_second: int
+) -> None:
+    import base64
+
+    backend: Final = MagicMock()
+    backend.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(),
+        backend_ws=backend,
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    format_event: Final = {
+        "type": format_event_type,
+        "session": {"audio": {"input": {"format": audio_format}}},
+    }
+    streaming._capture_translation_output_audio(format_event)
+    await streaming._send_to_backend(
+        json.dumps(
+            {
+                "type": "session.input_audio_buffer.append",
+                "audio": base64.b64encode(bytes(bytes_per_second * 2)).decode(),
+            }
+        )
+    )
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(output_bytes)).decode()}
+    )
+    streaming._finalize_translation_usage()
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == [
+        {
+            "type": "session.closed",
+            "usage": {"type": "duration", "input_seconds": 2.0, "output_seconds": output_bytes / 48000},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rate", (24000, 1, 0, -1, float("nan"), float("inf")))
+async def test_translation_client_format_updates_do_not_change_billed_duration(rate: int | float) -> None:
+    backend: Final = MagicMock()
+    backend.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=MagicMock(), translation_session=True
+    )
+    streaming._capture_translation_output_audio(
+        {
+            "type": "session.created",
+            "session": {"audio": {"input": {"format": "g711_ulaw"}, "output": {"format": "g711_ulaw"}}},
+        }
+    )
+    input_event: Final = json.dumps(
+        {"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(8000)).decode()}
+    )
+    output_event: Final = {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(8000)).decode()}
+    await streaming._send_to_backend(input_event)
+    streaming._capture_translation_output_audio(output_event)
+    await streaming._send_to_backend(
+        json.dumps(
+            {
+                "type": "session.update",
+                "session": {
+                    "audio": {
+                        "input": {"format": {"type": "audio/pcm", "rate": rate}},
+                        "output": {"format": {"type": "audio/pcm", "rate": rate}},
+                    }
+                },
+            }
+        )
+    )
+    await streaming._send_to_backend(input_event)
+    streaming._capture_translation_output_audio(output_event)
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == [
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 2.0, "output_seconds": 2.0}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_translation_confirmed_format_changes_preserve_previous_audio_duration() -> None:
+    backend: Final = MagicMock()
+    backend.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=MagicMock(), translation_session=True
+    )
+    await streaming._send_to_backend(
+        json.dumps({"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(48000)).decode()})
+    )
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(48000)).decode()}
+    )
+    streaming._capture_translation_output_audio(
+        {
+            "type": "session.updated",
+            "session": {"audio": {"input": {"format": "g711_alaw"}, "output": {"format": "g711_alaw"}}},
+        }
+    )
+    await streaming._send_to_backend(
+        json.dumps({"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(8000)).decode()})
+    )
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(8000)).decode()}
+    )
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == [
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 2.0, "output_seconds": 2.0}}
+    ]
+
+
+@pytest.mark.parametrize("rate", (1, 0, -1, float("nan"), float("inf"), 10**400))
+def test_translation_invalid_provider_format_preserves_audio_duration(rate: int | float) -> None:
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(), backend_ws=MagicMock(), logging_obj=MagicMock(), translation_session=True
+    )
+    output_event: Final = {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(48000)).decode()}
+    streaming._capture_translation_output_audio(output_event)
+    streaming._capture_translation_output_audio(
+        {"type": "session.updated", "session": {"audio": {"output": {"format": {"type": "audio/pcm", "rate": rate}}}}}
+    )
+    streaming._capture_translation_output_audio(output_event)
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == [{"type": "session.closed", "usage": {"type": "duration", "output_seconds": 2.0}}]
+
+
+@pytest.mark.asyncio
+async def test_translation_failed_audio_send_is_not_billed() -> None:
+    backend: Final = MagicMock()
+    backend.send = AsyncMock(side_effect=RuntimeError("send failed"))
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=MagicMock(), translation_session=True
+    )
+
+    with pytest.raises(RuntimeError, match="send failed"):
+        await streaming._send_to_backend(json.dumps({"type": "session.input_audio_buffer.append", "audio": "AAAA"}))
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("default_on,requested", ((False, False), (True, False), (False, True)))
+@pytest.mark.parametrize(
+    "event_hook",
+    (GuardrailEventHooks.realtime_input_transcription, GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call),
+)
+async def test_translation_rejects_applicable_guardrails_before_forwarding_audio(
+    monkeypatch: pytest.MonkeyPatch, default_on: bool, requested: bool, event_hook: GuardrailEventHooks
+) -> None:
+    guardrail: Final = CustomGuardrail(guardrail_name="speech-policy", event_hook=event_hook, default_on=default_on)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    input_event: Final = json.dumps(
+        {"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(4800)).decode()}
+    )
+    output_event: Final = {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(4800)).decode()}
+    client: Final = _ga_client_ws()
+    client.receive_text = AsyncMock(side_effect=[input_event, ConnectionClosed(None, None)])
+    client.send_text = AsyncMock()
+    client.close = AsyncMock()
+    backend: Final = MagicMock()
+    backend.send = AsyncMock()
+    backend.recv = AsyncMock(side_effect=[json.dumps(output_event), ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        websocket=client,
+        backend_ws=backend,
+        logging_obj=MagicMock(),
+        translation_session=True,
+        request_data={"litellm_metadata": {"guardrails": ["speech-policy"] if requested else []}},
+    )
+
+    await streaming.bidirectional_forward()
+
+    messages: Final = tuple(json.loads(call.args[0]) for call in client.send_text.await_args_list)
+    if default_on or requested:
+        assert messages[0]["error"]["type"] == "guardrail_error"
+        client.close.assert_awaited_once_with(
+            code=1008, reason="Translation sessions cannot enforce configured realtime guardrails"
+        )
+        backend.send.assert_not_awaited()
+    else:
+        assert output_event in messages
+        backend.send.assert_awaited_once_with(input_event)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_bucket", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("mode", ("pre_call", "post_call"))
+@pytest.mark.parametrize("selected,condition_matches", ((True, True), (True, False), (False, True)))
+async def test_translation_rejects_selected_pipeline_guardrails_before_forwarding_audio(
+    monkeypatch: pytest.MonkeyPatch,
+    metadata_bucket: str,
+    mode: Literal["pre_call", "post_call"],
+    selected: bool,
+    condition_matches: bool,
+) -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="speech-policy", event_hook=GuardrailEventHooks(mode), default_on=False
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    request_data: Final[dict[str, object]] = {"metadata": {}, "litellm_metadata": {"user_id": "qa-user"}}
+    _apply_resolved_guardrails_to_metadata(
+        data=request_data,
+        metadata_variable_name=metadata_bucket,
+        context=PolicyMatchContext(model="qa-translation"),
+        policy_names=["translation-policy"] if selected else [],
+        policies={
+            "translation-policy": Policy(
+                condition=PolicyCondition(model="qa-translation" if condition_matches else "unrelated-model"),
+                pipeline=GuardrailPipeline(mode=mode, steps=[PipelineStep(guardrail="speech-policy", on_fail="block")]),
+            )
+        },
+    )
+    input_event: Final = json.dumps(
+        {"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(4800)).decode()}
+    )
+    output_event: Final = {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(4800)).decode()}
+    client: Final = _ga_client_ws()
+    client.receive_text = AsyncMock(side_effect=[input_event, ConnectionClosed(None, None)])
+    client.send_text = AsyncMock()
+    client.close = AsyncMock()
+    backend: Final = MagicMock()
+    backend.send = AsyncMock()
+    backend.recv = AsyncMock(side_effect=[json.dumps(output_event), ConnectionClosed(None, None)])
+    logging_obj: Final = Logging(
+        model="gpt-realtime-translate",
+        messages=[],
+        stream=True,
+        call_type="_arealtime",
+        start_time=datetime(2026, 1, 1, tzinfo=UTC),
+        litellm_call_id="pipeline-rejection",
+        function_id="pipeline-rejection",
+    )
+    worker: Final = _InlineLoggingWorker()
+    streaming: Final = RealTimeStreaming(
+        websocket=client,
+        backend_ws=backend,
+        logging_obj=logging_obj,
+        translation_session=True,
+        request_data={"litellm_metadata": _build_litellm_metadata(request_data)},
+        logging_worker=worker,
+    )
+
+    await streaming.bidirectional_forward()
+    await worker.drain()
+
+    messages: Final = tuple(json.loads(call.args[0]) for call in client.send_text.await_args_list)
+    if selected and condition_matches:
+        assert messages[0]["error"]["type"] == "guardrail_error"
+        client.close.assert_awaited_once_with(
+            code=1008, reason="Translation sessions cannot enforce configured realtime guardrails"
+        )
+        backend.send.assert_not_awaited()
+    else:
+        assert output_event in messages
+        backend.send.assert_awaited_once_with(input_event)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retain_close", (False, True))
+@pytest.mark.parametrize("reported_input,expected_input", [(None, 2.0), (0.0, 0.0), (0.25, 0.25)])
+async def test_translation_terminal_usage_fills_only_missing_input_duration(
+    monkeypatch: pytest.MonkeyPatch, retain_close: bool, reported_input: float | None, expected_input: float
+) -> None:
+    import base64
+
+    monkeypatch.setattr(litellm, "logged_real_time_event_types", "*" if retain_close else None)
+    backend: Final = MagicMock()
+    backend.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=MagicMock(), translation_session=True
+    )
+    await streaming._send_to_backend(
+        json.dumps({"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(96000)).decode()})
+    )
+    close_event: Final = {
+        "type": "session.closed",
+        "usage": {
+            "type": "duration",
+            "output_seconds": 0.5,
+            **({"input_seconds": reported_input} if reported_input is not None else {}),
+        },
+    }
+    streaming._capture_translation_output_audio(close_event)
+    streaming.store_message(close_event)
+    streaming._finalize_translation_usage()
+
+    usage: Final = tuple(event["usage"] for event in streaming.messages if event.get("type") == "session.closed")
+    assert sum(item.get("input_seconds") or 0.0 for item in usage) == expected_input
+    assert sum(item.get("output_seconds") or 0.0 for item in usage) == 0.5
+
+
+def test_translation_audio_duration_uses_session_output_format():
+    import base64
+
+    streaming = RealTimeStreaming(
+        websocket=MagicMock(),
+        backend_ws=MagicMock(),
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    streaming._capture_translation_output_audio(
+        {
+            "type": "session.created",
+            "session": {"audio": {"output": {"format": {"type": "audio/pcmu", "rate": 8000}}}},
+        }
+    )
+    streaming._capture_translation_output_audio(
+        {
+            "type": "session.output_audio.delta",
+            "delta": base64.b64encode(bytes(8000)).decode(),
+        }
+    )
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages[-1]["usage"] == {"type": "duration", "output_seconds": 1.0}
+
+
+def test_translation_does_not_duplicate_provider_duration_usage():
+    streaming = RealTimeStreaming(
+        websocket=MagicMock(),
+        backend_ws=MagicMock(),
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(48000)).decode()}
+    )
+    streaming.messages.append({"type": "session.closed", "usage": {"type": "duration", "output_seconds": 0.5}})
+    streaming._finalize_translation_usage()
+
+    closed_events = [event for event in streaming.messages if event.get("type") == "session.closed"]
+    assert len(closed_events) == 1
+
+
+def test_translation_prefers_provider_duration_over_audio_byte_estimate():
+    import base64
+
+    streaming = RealTimeStreaming(
+        websocket=MagicMock(),
+        backend_ws=MagicMock(),
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(48000)).decode()}
+    )
+    streaming._capture_translation_output_audio(
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 0.25, "output_seconds": 0.5}}
+    )
+    streaming._finalize_translation_usage()
+
+    closed_events = [event for event in streaming.messages if event.get("type") == "session.closed"]
+    assert len(closed_events) == 1
+    assert closed_events[0]["usage"] == {"type": "duration", "input_seconds": 0.25, "output_seconds": 0.5}
+
+
+@pytest.mark.parametrize(
+    ("output_audio_bytes", "expected_usage"),
+    [
+        (0, {"type": "duration", "input_seconds": 0.25, "output_seconds": 0.0}),
+        (48000, {"type": "duration", "input_seconds": 0.25, "output_seconds": 1.0}),
+    ],
+)
+def test_translation_preserves_input_only_provider_usage(
+    output_audio_bytes: int, expected_usage: Mapping[str, str | float]
+) -> None:
+    streaming = RealTimeStreaming(
+        websocket=MagicMock(),
+        backend_ws=MagicMock(),
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(output_audio_bytes)).decode()}
+    )
+    streaming._capture_translation_output_audio(
+        {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 0.25}}
+    )
+    streaming._finalize_translation_usage()
+
+    closed_events = [event for event in streaming.messages if event.get("type") == "session.closed"]
+    assert len(closed_events) == 1
+    assert closed_events[0]["usage"] == expected_usage
+
+
+def test_translation_retained_input_only_close_event_bills_captured_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "logged_real_time_event_types", "*")
+    streaming = RealTimeStreaming(
+        websocket=MagicMock(),
+        backend_ws=MagicMock(),
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(48000)).decode()}
+    )
+    close_event: Final = {"type": "session.closed", "usage": {"type": "duration", "input_seconds": 0.25}}
+
+    streaming._capture_translation_output_audio(close_event)
+    streaming.store_message(close_event)
+    streaming._finalize_translation_usage()
+
+    usage_events: Final = tuple(event["usage"] for event in streaming.messages if event.get("type") == "session.closed")
+    assert len(usage_events) == 2
+    assert sum(usage.get("input_seconds", 0.0) for usage in usage_events) == 0.25
+    assert sum(usage.get("output_seconds", 0.0) for usage in usage_events) == 1.0
+
+
+@pytest.mark.parametrize("malformed_output", [-1.0, float("nan"), float("inf"), 10**1000])
+def test_translation_malformed_provider_duration_uses_captured_audio(malformed_output: float | int) -> None:
+    streaming = RealTimeStreaming(
+        websocket=MagicMock(),
+        backend_ws=MagicMock(),
+        logging_obj=MagicMock(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+    )
+    streaming._capture_translation_output_audio(
+        {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(48000)).decode()}
+    )
+
+    streaming._capture_translation_output_audio(
+        {
+            "type": "session.closed",
+            "usage": {"type": "duration", "input_seconds": 0.25, "output_seconds": malformed_output},
+        }
+    )
+    streaming._finalize_translation_usage()
+
+    close_events: Final = tuple(event for event in streaming.messages if event.get("type") == "session.closed")
+    assert len(close_events) == 1
+    assert close_events[0]["usage"] == {"type": "duration", "input_seconds": 0.25, "output_seconds": 1.0}
 
 
 @pytest.mark.asyncio

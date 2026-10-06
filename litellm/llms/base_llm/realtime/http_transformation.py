@@ -7,9 +7,12 @@ These are HTTP (not WebSocket) endpoints used by the WebRTC flow:
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
+
+from litellm.types.router import GenericLiteLLMParams
 
 
 class BaseRealtimeHTTPConfig(ABC):
@@ -49,6 +52,14 @@ class BaseRealtimeHTTPConfig(ABC):
           explicit api_key → litellm.api_key → env var → ""
         """
 
+    def get_extra_headers(
+        self,
+        litellm_params: GenericLiteLLMParams,
+        api_key: str,
+        extra_headers: Mapping[str, object] | None,
+    ) -> Mapping[str, object] | None:
+        return extra_headers
+
     # ------------------------------------------------------------------ #
     # client_secrets endpoint                                              #
     # ------------------------------------------------------------------ #
@@ -62,6 +73,12 @@ class BaseRealtimeHTTPConfig(ABC):
         base = (api_base or "").rstrip("/")
         base = base.removesuffix("/v1")
         return f"{base}/v1/realtime/transcription_sessions"
+
+    def get_translation_client_secret_url(
+        self, api_base: str | None, model: str, api_version: str | None = None
+    ) -> str:
+        base: Final = (api_base or "").rstrip("/")
+        return f"{base}/v1/realtime/translations/client_secrets"
 
     @abstractmethod
     def validate_environment(
@@ -85,6 +102,10 @@ class BaseRealtimeHTTPConfig(ABC):
         """Return the full URL for POST /realtime/calls (SDP exchange)."""
         base: Final = (api_base or "").rstrip("/")
         return f"{base}/v1/realtime/calls"
+
+    def get_translation_calls_url(self, api_base: str | None, model: str, api_version: str | None = None) -> str:
+        base: Final = (api_base or "").rstrip("/")
+        return f"{base}/v1/realtime/translations/calls"
 
     def get_realtime_calls_headers(self, ephemeral_key: str) -> dict:
         """

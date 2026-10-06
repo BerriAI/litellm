@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import traceback
 from collections.abc import Coroutine, Mapping, Sequence
@@ -6,11 +7,14 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, TypedDict, cast
 
+from openai.types.realtime.realtime_audio_formats import AudioPCM, AudioPCMA, AudioPCMU, RealtimeAudioFormats
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import redact_internal_details_from_client_message, verbose_logger
 from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
+from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.types.llms.openai import (
@@ -19,6 +23,8 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeResponseDelta,
     OpenAIRealtimeStreamResponseBaseObject,
     OpenAIRealtimeStreamSessionEvents,
+    OpenAIRealtimeTranslationClosedEvent,
+    OpenAIRealtimeTranslationDurationUsage,
 )
 from litellm.types.realtime import ALL_DELTA_TYPES
 
@@ -108,6 +114,20 @@ def _decode_json_object(payload: str) -> Mapping[str, object]:
     return json.loads(payload)
 
 
+_TRANSLATION_AUDIO_FORMAT: Final = TypeAdapter(str | RealtimeAudioFormats | None)
+
+
+def _translation_audio_bytes_per_second(audio_format: str | RealtimeAudioFormats | None) -> float | None:
+    match audio_format:
+        case "pcm16" | AudioPCM():
+            return 48000.0
+        case "g711_ulaw" | "g711_alaw" | AudioPCMU() | AudioPCMA():
+            return 8000.0
+        case _:
+            pass
+    return None
+
+
 class RealtimeEventNormalizer(Protocol):
     def should_drop(self, event: object) -> bool: ...
     def normalize(self, event: dict) -> dict: ...
@@ -132,11 +152,12 @@ class RealTimeStreaming:
         provider_config: BaseRealtimeConfig | None = None,
         model: str = "",
         user_api_key_dict: object | None = None,
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
         backend_uses_beta_protocol: bool | None = None,
         force_transcription_model: str | None = None,
         event_normalizer: RealtimeEventNormalizer | None = None,
         logging_worker: _LoggingWorker = GLOBAL_LOGGING_WORKER,
+        translation_session: bool = False,
     ):
         self.websocket: _ClientWebSocket = websocket
         self.backend_ws = backend_ws
@@ -148,10 +169,16 @@ class RealTimeStreaming:
         self.input_messages: list[dict[str, str]] = []
         self.session_tools: list[dict] = []
         self.tool_calls: list[dict] = []
+        self._is_translation_session = translation_session
+        self._translation_input_seconds = 0.0
+        self._translation_input_bytes_per_second = 48000.0
+        self._translation_output_seconds = 0.0
+        self._translation_output_bytes_per_second = 48000.0
+        self._translation_usage_finalized = False
 
         # Detect whether the client is explicitly opting into the beta protocol.
         self._client_wants_beta = self._detect_beta_header(websocket)
-        self._backend_uses_beta_protocol = (
+        self._backend_uses_beta_protocol = not translation_session and (
             self._client_wants_beta if backend_uses_beta_protocol is None else backend_uses_beta_protocol
         )
 
@@ -170,7 +197,7 @@ class RealTimeStreaming:
         self.current_delta_type: ALL_DELTA_TYPES | None = None
         self.session_configuration_request: str | None = None
         self.user_api_key_dict = user_api_key_dict
-        self.request_data: dict = request_data or {}
+        self.request_data: Mapping[str, object] = request_data or {}
         # Violation counter for end_session_after_n_fails support
         self._violation_count: int = 0
         # When a text message is blocked, hold the guardrail reason so the next
@@ -196,6 +223,7 @@ class RealTimeStreaming:
         # their input_audio_transcription.completed usage drives duration-based cost.
         self._force_transcription_model = force_transcription_model
         self._is_transcription_session: bool = force_transcription_model is not None
+        self._bound_nested_transcription_model: str | None = None
         # Optional per-provider GA event normalizer (e.g. XAIRealtimeNormalizer).
         self._event_normalizer = event_normalizer
 
@@ -215,8 +243,8 @@ class RealTimeStreaming:
     _CLIENT_AUDIO_BUFFER_COMMIT_TYPES = frozenset(["input_audio_buffer.commit", "input_audio_buffer.end"])
     _AUDIO_FORMAT_MAP: dict[str, dict[str, str | int]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
-        "g711_ulaw": {"type": "audio/G711-ulaw", "rate": 8000},
-        "g711_alaw": {"type": "audio/G711-alaw", "rate": 8000},
+        "g711_ulaw": {"type": "audio/pcmu"},
+        "g711_alaw": {"type": "audio/pcma"},
     }
     # GA name → beta name (when client WebSocket includes OpenAI-Beta: realtime=v1)
     _GA_TO_BETA_EVENT_TYPES: dict[str, str] = {
@@ -410,6 +438,7 @@ class RealTimeStreaming:
 
     async def log_messages(self):
         """Log messages in list"""
+        self._finalize_translation_usage()
         if self.logging_obj:
             if self.input_messages:
                 self.logging_obj.model_call_details["messages"] = self.input_messages
@@ -424,6 +453,143 @@ class RealTimeStreaming:
             )
             self.logging_obj.model_call_details[REALTIME_SESSION_SUCCESS_LOGGED_KEY] = True
 
+    def _capture_translation_output_audio(self, event_obj: Mapping[str, object]) -> None:
+        if not self._is_translation_session:
+            return
+        if event_obj.get("type") == "session.closed":
+            usage: Final = event_obj.get("usage")
+            output_seconds: Final = (
+                normalized_audio_duration_seconds(usage.get("output_seconds")) if isinstance(usage, dict) else None
+            )
+            reported_input_seconds: Final = (
+                normalized_audio_duration_seconds(usage.get("input_seconds")) if isinstance(usage, dict) else None
+            )
+            input_seconds: Final = (
+                reported_input_seconds
+                if reported_input_seconds is not None
+                else self._translation_input_seconds or None
+            )
+            synthetic_output_seconds: Final = self._translation_output_seconds or None
+            resolved_output_seconds: Final = output_seconds if output_seconds is not None else synthetic_output_seconds
+            if input_seconds is not None or resolved_output_seconds is not None:
+                if self._should_store_message(event_obj):
+                    supplemental_usage: Final = OpenAIRealtimeTranslationDurationUsage(
+                        type="duration",
+                        input_seconds=float(input_seconds or 0.0) if reported_input_seconds is None else 0.0,
+                        output_seconds=float(synthetic_output_seconds or 0.0) if output_seconds is None else 0.0,
+                    )
+                    if (
+                        supplemental_usage.get("input_seconds", 0.0) > 0
+                        or supplemental_usage.get("output_seconds", 0.0) > 0
+                    ):
+                        self.messages.append(
+                            OpenAIRealtimeTranslationClosedEvent(
+                                type="session.closed",
+                                usage=supplemental_usage,
+                            )
+                        )
+                else:
+                    normalized_usage: Final = (
+                        OpenAIRealtimeTranslationDurationUsage(
+                            type="duration",
+                            input_seconds=input_seconds,
+                            output_seconds=float(resolved_output_seconds or 0.0),
+                        )
+                        if input_seconds is not None
+                        else OpenAIRealtimeTranslationDurationUsage(
+                            type="duration", output_seconds=float(resolved_output_seconds or 0.0)
+                        )
+                    )
+                    self.messages.append(
+                        OpenAIRealtimeTranslationClosedEvent(type="session.closed", usage=normalized_usage)
+                    )
+                self._translation_usage_finalized = True
+            return
+        self._capture_translation_audio_formats(event_obj)
+        if event_obj.get("type") not in (
+            "session.output_audio.delta",
+            "response.output_audio.delta",
+            "response.audio.delta",
+        ):
+            return
+        delta: Final = event_obj.get("delta")
+        if not isinstance(delta, str):
+            return
+        try:
+            decoded: Final = base64.b64decode(delta, validate=True)
+        except (ValueError, TypeError):
+            return
+        self._translation_output_seconds += len(decoded) / self._translation_output_bytes_per_second
+
+    def _capture_translation_input_audio(self, message: str) -> None:
+        if not self._is_translation_session:
+            return
+        try:
+            event: Final = _decode_json_object(message)
+        except (json.JSONDecodeError, TypeError):
+            return
+        if event.get("type") != "session.input_audio_buffer.append" or not isinstance(audio := event.get("audio"), str):
+            return
+        try:
+            decoded: Final = base64.b64decode(audio, validate=True)
+        except (ValueError, TypeError):
+            return
+        self._translation_input_seconds += len(decoded) / self._translation_input_bytes_per_second
+
+    def _capture_translation_audio_formats(self, event_obj: Mapping[str, object]) -> None:
+        if event_obj.get("type") not in ("session.created", "session.updated"):
+            return
+        session: Final = event_obj.get("session")
+        if not isinstance(session, dict):
+            return
+        audio: Final = session.get("audio")
+        if not isinstance(audio, dict):
+            return
+        for direction, configuration in (("input", audio.get("input")), ("output", audio.get("output"))):
+            if not isinstance(configuration, dict):
+                continue
+            try:
+                if (
+                    bytes_per_second := _translation_audio_bytes_per_second(
+                        _TRANSLATION_AUDIO_FORMAT.validate_python(configuration.get("format"))
+                    )
+                ) is None:
+                    continue
+            except ValidationError:
+                continue
+            if direction == "input":
+                self._translation_input_bytes_per_second = bytes_per_second
+            else:
+                self._translation_output_bytes_per_second = bytes_per_second
+
+    def _finalize_translation_usage(self) -> None:
+        if self._translation_usage_finalized:
+            return
+        for event in self.messages:
+            if event.get("type") != "session.closed":
+                continue
+            if (
+                isinstance(event_usage := event.get("usage"), dict)
+                and normalized_audio_duration_seconds(event_usage.get("output_seconds")) is not None
+            ):
+                self._translation_usage_finalized = True
+                return
+        if self._translation_output_seconds == 0 and self._translation_input_seconds == 0:
+            return
+        synthetic_usage: Final = (
+            OpenAIRealtimeTranslationDurationUsage(
+                type="duration",
+                input_seconds=self._translation_input_seconds,
+                output_seconds=self._translation_output_seconds,
+            )
+            if self._translation_input_seconds > 0
+            else OpenAIRealtimeTranslationDurationUsage(
+                type="duration", output_seconds=self._translation_output_seconds
+            )
+        )
+        self.messages.append(OpenAIRealtimeTranslationClosedEvent(type="session.closed", usage=synthetic_usage))
+        self._translation_usage_finalized = True
+
     async def _send_to_backend(self, message: str) -> bool:
         """Send a message to the backend WebSocket.
 
@@ -436,7 +602,7 @@ class RealTimeStreaming:
         backend, False if the provider transformation produced no output and
         the message was effectively dropped.
         """
-        message = self._enforce_transcription_session_model(message)
+        message = await self._apply_nested_transcription_model_policy(message)
         if self.provider_config:
             transformed: Final = self.provider_config.transform_realtime_request(
                 message, self.model, self.session_configuration_request
@@ -474,9 +640,96 @@ class RealTimeStreaming:
                     if is_content_message:
                         self._content_sent_after_setup = True
                     sent = True
+            if sent:
+                self._capture_translation_input_audio(message)
             return sent
         await self.backend_ws.send(message)
+        self._capture_translation_input_audio(message)
         return True
+
+    async def _apply_nested_transcription_model_policy(self, message: str) -> str:
+        if self._force_transcription_model is not None:
+            return self._enforce_transcription_session_model(message)
+        if self._is_translation_session:
+            return await self._enforce_translation_nested_transcription_model(message)
+        return message
+
+    def _session_update_message_obj(self, message: str) -> Mapping[str, object] | None:
+        try:
+            message_obj: Final = _decode_json_object(message)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if message_obj.get("type") not in (
+            "session.update",
+            "transcription_session.update",
+        ):
+            return None
+        return message_obj
+
+    def _nested_transcription_models_from_session(
+        self,
+        session: Mapping[str, object],
+    ) -> tuple[str, ...]:
+        audio: Final = session.get("audio")
+        audio_input: Final = audio.get("input") if isinstance(audio, dict) else None
+        nested_transcription: Final = audio_input.get("transcription") if isinstance(audio_input, dict) else None
+        nested_model: Final = self._transcription_model_value(nested_transcription)
+        flat_model: Final = self._transcription_model_value(session.get("input_audio_transcription"))
+        return tuple(dict.fromkeys(model for model in (nested_model, flat_model) if model is not None))
+
+    def _transcription_model_value(self, transcription_config: object) -> str | None:
+        if not isinstance(transcription_config, dict):
+            return None
+        model: Final = transcription_config.get("model")
+        if isinstance(model, str) and model:
+            return model
+        return None
+
+    def _rewrite_session_update_transcription_model(self, message: str, authorized_model: str) -> str:
+        message_obj: Final = self._session_update_message_obj(message)
+        if message_obj is None:
+            return message
+        session: Final = message_obj.get("session")
+        if not isinstance(session, dict):
+            return message
+
+        transcription: Final = session.get("input_audio_transcription")
+        rewrite_flat: Final = isinstance(transcription, dict) and transcription.get("model") != authorized_model
+        if isinstance(transcription, dict) and rewrite_flat:
+            session["input_audio_transcription"] = {
+                **transcription,
+                "model": authorized_model,
+            }
+
+        audio: Final = session.get("audio")
+        audio_input: Final = audio.get("input") if isinstance(audio, dict) else None
+        nested_transcription: Final = audio_input.get("transcription") if isinstance(audio_input, dict) else None
+        rewrite_nested: Final = (
+            isinstance(audio, dict)
+            and isinstance(audio_input, dict)
+            and isinstance(nested_transcription, dict)
+            and nested_transcription.get("model") != authorized_model
+        )
+        if (
+            isinstance(audio, dict)
+            and isinstance(audio_input, dict)
+            and isinstance(nested_transcription, dict)
+            and rewrite_nested
+        ):
+            session["audio"] = {
+                **audio,
+                "input": {
+                    **audio_input,
+                    "transcription": {
+                        **nested_transcription,
+                        "model": authorized_model,
+                    },
+                },
+            }
+
+        if not rewrite_flat and not rewrite_nested:
+            return message
+        return json.dumps(message_obj)
 
     def _enforce_transcription_session_model(self, message: str) -> str:
         """Force client transcription session updates to the authorized model.
@@ -495,56 +748,49 @@ class RealTimeStreaming:
         if self._force_transcription_model is None:
             return message
 
-        try:
-            message_obj: Final = _decode_json_object(message)
-        except (json.JSONDecodeError, TypeError):
+        message_obj: Final = self._session_update_message_obj(message)
+        if message_obj is None:
             return message
+        session: Final = message_obj.get("session")
+        if isinstance(session, dict) and session.get("type") == "transcription":
+            self._is_transcription_session = True
+        return self._rewrite_session_update_transcription_model(message, self._force_transcription_model)
 
-        if message_obj.get("type") not in (
-            "session.update",
-            "transcription_session.update",
-        ):
+    async def _enforce_translation_nested_transcription_model(self, message: str) -> str:
+        if self._bound_nested_transcription_model is not None:
+            return self._rewrite_session_update_transcription_model(message, self._bound_nested_transcription_model)
+
+        message_obj: Final = self._session_update_message_obj(message)
+        if message_obj is None:
             return message
-
         session: Final = message_obj.get("session")
         if not isinstance(session, dict):
             return message
-
-        if session.get("type") == "transcription":
-            self._is_transcription_session = True
-
-        authorized_model: Final = self._force_transcription_model
-        changed = False
-
-        transcription: Final = session.get("input_audio_transcription")
-        if isinstance(transcription, dict) and transcription.get("model") != authorized_model:
-            session["input_audio_transcription"] = {
-                **transcription,
-                "model": authorized_model,
-            }
-            changed = True
-
-        audio: Final = session.get("audio")
-        if isinstance(audio, dict):
-            audio_input: Final = audio.get("input")
-            if isinstance(audio_input, dict):
-                nested_transcription: Final = audio_input.get("transcription")
-                if isinstance(nested_transcription, dict) and nested_transcription.get("model") != authorized_model:
-                    session["audio"] = {
-                        **audio,
-                        "input": {
-                            **audio_input,
-                            "transcription": {
-                                **nested_transcription,
-                                "model": authorized_model,
-                            },
-                        },
-                    }
-                    changed = True
-
-        if not changed:
+        nested_models: Final = self._nested_transcription_models_from_session(session)
+        if not nested_models:
             return message
-        return json.dumps(message_obj)
+
+        valid_token: Final = self.user_api_key_dict
+        if valid_token is None:
+            return message
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+        from litellm.proxy.proxy_server import llm_model_list, llm_router
+
+        if not isinstance(valid_token, UserAPIKeyAuth):
+            return message
+
+        for nested_model in nested_models:
+            await can_key_call_resolved_model(
+                model=nested_model,
+                valid_token=valid_token,
+                llm_model_list=llm_model_list,
+                llm_router=llm_router,
+            )
+        bound_model: Final = nested_models[0]
+        self._bound_nested_transcription_model = bound_model
+        return self._rewrite_session_update_transcription_model(message, bound_model)
 
     def _uses_deferred_backend_setup(self) -> bool:
         """True when setup is deferred until the client's first session.update."""
@@ -784,9 +1030,18 @@ class RealTimeStreaming:
         )
 
     def _has_realtime_guardrails(self) -> bool:
-        """Return True if any callback is registered for realtime guardrail event types."""
         from litellm.types.guardrails import GuardrailEventHooks
 
+        if any(
+            isinstance(bucket, Mapping) and "_guardrail_pipelines" in bucket
+            for bucket in (self.request_data.get("metadata"), self.request_data.get("litellm_metadata"))
+        ):
+            from litellm.proxy.utils import pipeline_managed_guardrail_names
+
+            if pipeline_managed_guardrail_names(self.request_data, "pre_call") or pipeline_managed_guardrail_names(
+                self.request_data, "post_call"
+            ):
+                return True
         return self._has_realtime_guardrails_for_event_hooks(
             [
                 GuardrailEventHooks.realtime_input_transcription,
@@ -942,7 +1197,10 @@ class RealTimeStreaming:
 
     async def _handle_provider_config_message(self, raw_response: str) -> None:
         """Process a backend message when a provider_config is set (transformed path)."""
-        returned_object: Final = self.provider_config.transform_realtime_response(
+        provider_config: Final = self.provider_config
+        if provider_config is None:
+            raise RuntimeError("Provider response handling requires a provider configuration")
+        returned_object: Final = provider_config.transform_realtime_response(
             raw_response,
             self.model,
             self.logging_obj,
@@ -969,6 +1227,8 @@ class RealTimeStreaming:
         for event in events:
             if self._should_drop_event_from_client(event):
                 continue
+            if isinstance(event, dict):
+                self._capture_translation_output_audio(event)
             is_session_created_event = isinstance(event, dict) and event.get("type") == "session.created"
             if is_session_created_event:
                 if self._uses_deferred_backend_setup() and not self._backend_setup_complete:
@@ -1103,6 +1363,7 @@ class RealTimeStreaming:
                 if self._should_drop_event_from_client(event):
                     continue
 
+                self._capture_translation_output_audio(event)
                 if await self._handle_raw_backend_message(event, raw_response):
                     continue
 
@@ -1507,6 +1768,8 @@ class RealTimeStreaming:
                         session = client_event.get("session", {})
                         if isinstance(session, dict):
                             session = self._remap_beta_session_to_ga(session)
+                            if self._is_translation_session:
+                                session.pop("type", None)
                             msg_obj["session"] = session
                             message = json.dumps(msg_obj)
 
@@ -1563,6 +1826,16 @@ class RealTimeStreaming:
             return ClientLoopExit.CLIENT_DISCONNECTED
 
     async def bidirectional_forward(self) -> None:
+        if self._is_translation_session and self._has_realtime_guardrails():
+            await self.websocket.send_text(
+                realtime_error_event(
+                    "Translation sessions cannot enforce configured realtime guardrails", error_type="guardrail_error"
+                )
+            )
+            await self.websocket.close(
+                code=1008, reason="Translation sessions cannot enforce configured realtime guardrails"
+            )
+            return
         forward_task: Final = asyncio.create_task(self.backend_to_client_send_messages())
         client_task: Final = asyncio.create_task(self.client_ack_messages())
         try:
