@@ -1520,7 +1520,6 @@ class TestGenericGuardrailAPIResponseParsing:
         assert response.stream_holdback_chars == [3, 0, 0, 0]
 
     def test_from_dict_parses_tool_calls(self):
-        """``tool_calls`` goes out on the request, so the response has to carry it back."""
         from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
             GenericGuardrailAPIResponse,
         )
@@ -2046,13 +2045,6 @@ class TestToolSupport:
 
     @pytest.mark.asyncio
     async def test_guardrail_returned_tool_calls_flow_back_to_inputs(self, generic_guardrail):
-        """A guardrail that rewrites tool arguments has to be able to return them.
-
-        ``tool_calls`` is sent on the request, so the matching response field is what closes
-        the loop. Without it the calls were dropped on the floor and the caller silently
-        kept the values it sent in -- for a rewriting guardrail (reversible redaction, for
-        instance) the rewritten arguments never reached the client.
-        """
         guardrailed_tool_calls = [
             {
                 "id": "call_1",
@@ -2078,12 +2070,6 @@ class TestToolSupport:
         assert result["tool_calls"] == guardrailed_tool_calls
 
     def test_guardrail_tool_calls_take_precedence_over_the_sent_ones(self, generic_guardrail):
-        """The returned calls win over the ones that went out.
-
-        Built through ``_build_guardrail_return_inputs`` rather than ``apply_guardrail`` so
-        the assertion is about this mapping, not about request-model coercion of the calls
-        the caller supplied.
-        """
         from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
             GenericGuardrailAPIResponse,
         )
@@ -2113,12 +2099,6 @@ class TestToolSupport:
 
     @pytest.mark.asyncio
     async def test_untouched_tool_calls_are_echoed_not_dropped(self, generic_guardrail):
-        """A guardrail that ignores tool calls must not blank them out.
-
-        The handlers compare what comes back against what they sent and fall back to their
-        own copy when the lengths differ, and the Responses handler logs a warning when no
-        list comes back. Echoing the unchanged list keeps both quiet.
-        """
         sent = [
             {
                 "id": "call_1",
@@ -2141,12 +2121,6 @@ class TestToolSupport:
 
     @pytest.mark.asyncio
     async def test_malformed_returned_tool_calls_are_discarded(self, generic_guardrail):
-        """A same-length list with no function block must not reach chat handling.
-
-        The chat handlers index ``function.name`` and ``function.arguments`` on whatever the
-        guardrail returns, so forwarding an unusable list raises there instead of returning a
-        response. The calls that were sent are kept instead.
-        """
         sent = [{"id": "call_1", "type": "function", "function": {"name": "send_email", "arguments": "{}"}}]
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -2180,7 +2154,6 @@ class TestToolSupport:
         assert response.tool_calls is None
 
     def test_no_tool_calls_on_either_side_stay_absent(self, generic_guardrail):
-        """An empty list is not the same as no list: the key must stay out of the result."""
         from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
             GenericGuardrailAPIResponse,
         )

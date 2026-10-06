@@ -170,7 +170,6 @@ def structured_messages_from_response(value: object) -> Sequence[AllMessageValue
 
 
 def _json_object(value: object) -> Mapping[str, object] | None:
-    """`value` as a JSON object, or None; the keys of a JSON object are strings."""
     if not isinstance(value, Mapping):
         return None
     return cast("Mapping[str, object]", value)  # cast-ok: isinstance leaves a Mapping's item types unknown
@@ -182,7 +181,6 @@ def _json_field(container: object, key: str) -> object:
 
 
 def _is_usable_tool_call(row: object) -> bool:
-    """Whether a returned tool call carries what the chat handlers index: a function name and string arguments."""
     function: Final = _json_field(row, "function")
     return isinstance(_json_field(function, "name"), str) and isinstance(_json_field(function, "arguments"), str)
 
@@ -194,7 +192,6 @@ def _json_array(value: object) -> Sequence[object] | None:
 
 
 def tool_calls_from_response(value: object) -> Sequence[ChatCompletionToolCallChunk] | None:
-    """The tool calls a guardrail handed back, or None when absent or when any row is unusable."""
     rows: Final = _json_array(value)
     if rows is None:
         return None

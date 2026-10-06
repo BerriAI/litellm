@@ -340,7 +340,6 @@ class GenericGuardrailAPI(CustomGuardrail):
     def _echo_sent_tool_calls(
         guardrailed: GenericGuardrailAPIInputs, *, sent: GenericGuardrailAPIInputs
     ) -> GenericGuardrailAPIInputs:
-        """Keep the tool calls the guardrail did not return, so the handlers do not report them missing."""
         sent_tool_calls: Final = sent.get("tool_calls")
         if not sent_tool_calls or "tool_calls" in guardrailed:
             return guardrailed
