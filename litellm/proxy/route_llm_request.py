@@ -76,6 +76,21 @@ def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: object,
         )
 
 
+def _get_eval_deployment_credentials(llm_router: LitellmRouter | None, model: str) -> Mapping[str, object] | None:
+    if llm_router is None:
+        return None
+    try:
+        deployment_creds: Final = llm_router.get_deployment_credentials(model_id=model)
+        if deployment_creds:
+            return deployment_creds
+        deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+        if deployment is None or deployment.litellm_params is None or llm_router._is_deployment_blocked(deployment):
+            return None
+        return deployment.litellm_params.model_dump(exclude_none=True)
+    except Exception:
+        return None
+
+
 ROUTE_ENDPOINT_MAPPING: Final = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
@@ -677,26 +692,18 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
         ]:
             # If a model is provided, get its credentials from the router
             model: Final = data.get("model")
-            if model and llm_router:
-                try:
-                    # Try to get deployment credentials for this model
-                    deployment_creds = llm_router.get_deployment_credentials(model_id=model)
-                    if not deployment_creds:
-                        # Try by model group name
-                        deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=model)
-                        if (
-                            deployment
-                            and deployment.litellm_params
-                            and not llm_router._is_deployment_blocked(deployment)
-                        ):
-                            deployment_creds = deployment.litellm_params.model_dump(exclude_none=True)
+            if isinstance(model, str) and model:
+                deployment_creds: Final = _get_eval_deployment_credentials(llm_router, model)
+                if deployment_creds is None:
+                    from litellm.proxy import proxy_server
+                    from litellm.proxy.common_utils.registry_read_through import model_registry_read_through
 
-                    # If we found credentials, merge them into data (but don't override user-provided values)
-                    if deployment_creds:
-                        data.update(deployment_creds)
-                except Exception:
-                    # If we can't get deployment creds, continue without them
-                    pass
+                    if await model_registry_read_through.attempt(model):
+                        read_through_creds: Final = _get_eval_deployment_credentials(proxy_server.llm_router, model)
+                        if read_through_creds is not None:
+                            data.update(read_through_creds)
+                else:
+                    data.update(deployment_creds)
 
             return getattr(litellm, f"{route_type}")(**data)
         # Skip model-based routing for container operations

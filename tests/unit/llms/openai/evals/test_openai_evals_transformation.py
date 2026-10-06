@@ -69,6 +69,13 @@ def test_get_complete_url_without_eval_id(config: OpenAIEvalsConfig):
     assert url == "https://api.openai.com/v1/evals"
 
 
+@pytest.mark.parametrize("api_base", ["https://api.openai.com/v1", "https://api.openai.com/v1/"])
+def test_get_complete_url_with_v1_api_base(config: OpenAIEvalsConfig, api_base: str):
+    url = config.get_complete_url(api_base=api_base, endpoint="evals")
+
+    assert url == "https://api.openai.com/v1/evals"
+
+
 def test_transform_create_eval_request(config: OpenAIEvalsConfig):
     """Test transformation of create eval request"""
     create_request = {
@@ -274,7 +281,7 @@ def test_transform_run_requests_encode_eval_and_run_ids(config: OpenAIEvalsConfi
         headers={},
     )
 
-    assert url == "https://api.openai.com/v1/evals/..%2F..%2Fevals%3Fx%3D1%23frag/runs/..%2Fruns%23other/cancel"
+    assert url == "https://api.openai.com/v1/evals/..%2F..%2Fevals%3Fx%3D1%23frag/runs/..%2Fruns%23other"
     assert request_body == {}
 
 
@@ -400,7 +407,7 @@ def test_transform_cancel_run_response(config: OpenAIEvalsConfig):
         json={"id": "evalrun_123", "object": "eval.run", "status": "cancelled"},
         request=httpx.Request(
             "POST",
-            "https://api.openai.com/v1/evals/eval_123/runs/evalrun_123/cancel",
+            "https://api.openai.com/v1/evals/eval_123/runs/evalrun_123",
         ),
     )
 

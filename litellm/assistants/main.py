@@ -11,6 +11,7 @@ import httpx
 from openai import AsyncOpenAI, OpenAI
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
+from openai.types.beta.threads.run_create_params import RunCreateParamsBase
 
 import litellm
 from litellm.types.router import GenericLiteLLMParams
@@ -31,6 +32,15 @@ from .utils import get_optional_params_add_message
 ####### ENVIRONMENT VARIABLES ###################
 openai_assistants_api: Final = OpenAIAssistantsAPI()
 azure_assistants_api: Final = AzureAssistantsAPI()
+_RUN_OPTION_FIELDS: Final = (RunCreateParamsBase.__required_keys__ | RunCreateParamsBase.__optional_keys__) - {
+    "assistant_id",
+    "additional_instructions",
+    "instructions",
+    "metadata",
+    "model",
+    "tools",
+    "include",
+}
 
 ### ASSISTANTS ###
 
@@ -632,6 +642,7 @@ def create_thread(
         response = openai_assistants_api.create_thread(
             messages=messages,
             metadata=metadata,
+            tool_resources=tool_resources,
             api_base=api_base,
             api_key=api_key,
             timeout=timeout,
@@ -1273,6 +1284,9 @@ def run_thread(
 
     response: Run | None = None
     if custom_llm_provider == "openai":
+        run_options: Final = {
+            name: value for name, value in kwargs.items() if name in _RUN_OPTION_FIELDS and value is not None
+        }
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
             or litellm.api_base
@@ -1303,6 +1317,7 @@ def run_thread(
             model=model,
             stream=stream,
             tools=tools,
+            run_options=run_options,
             api_base=api_base,
             api_key=api_key,
             timeout=timeout,

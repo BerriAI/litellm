@@ -9365,17 +9365,13 @@ async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKe
                 data=request_data,
             )
 
-            # chunk = chunk.model_dump_json(exclude_none=True)
             async for c in chunk:
-                c = c.model_dump_json(exclude_none=True)
                 try:
-                    yield f"data: {c}\n\n"
+                    yield f"event: {c.event}\ndata: {c.data.model_dump_json(exclude_unset=True)}\n\n"
                 except Exception as e:
                     yield f"data: {e}\n\n"
 
-        # Streaming is done, yield the [DONE] chunk
-        done_message: Final = "[DONE]"
-        yield f"data: {done_message}\n\n"
+        yield "event: done\ndata: [DONE]\n\n"
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.async_assistants_data_generator(): Exception occured - %s", e
@@ -13173,9 +13169,6 @@ async def get_assistants(
     global proxy_logging_obj
     data: dict = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        await request.body()
-
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -13443,7 +13436,8 @@ async def create_threads(
     data: dict = {}
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
-        await request.body()
+        body: Final = await request.body()
+        data = orjson.loads(body) if body else {}
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(

@@ -164,9 +164,19 @@ class _FakeAssistantsStream:
         return _gen()
 
 
+class _AssistantsEventData(BaseModel):
+    id: str
+    omitted: str | None = None
+
+
+class _AssistantsEvent(BaseModel):
+    event: str
+    data: _AssistantsEventData
+
+
 @pytest.mark.asyncio
 async def test_async_assistants_data_generator_yields_sse_and_done(monkeypatch):
-    chunk = _simple_chunk(content="hello")
+    chunk = _AssistantsEvent(event="thread.run.created", data=_AssistantsEventData(id="run_abc"))
 
     async def _passthrough_hook(*, user_api_key_dict, response, data, **kwargs):
         return response
@@ -186,20 +196,10 @@ async def test_async_assistants_data_generator_yields_sse_and_done(monkeypatch):
     ):
         out.append(line)
 
-    assert out[-1] == "data: [DONE]\n\n"
-    body = json.loads(out[0].removeprefix("data: ").rstrip("\n\n"))
-    assert normalize(body) == {
-        "id": "<VOLATILE>",
-        "created": "<VOLATILE>",
-        "model": "gpt-4",
-        "object": "chat.completion.chunk",
-        "choices": [
-            {
-                "index": 0,
-                "delta": {"content": "hello", "role": "assistant"},
-            }
-        ],
-    }
+    assert out == [
+        'event: thread.run.created\ndata: {"id":"run_abc"}\n\n',
+        "event: done\ndata: [DONE]\n\n",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1950,7 +1950,7 @@ async def test_run_thread_pings_while_the_assistants_run_is_still_silent(monkeyp
 
     assert chunks[0] == b": ping\n\n"
     assert chunks.count(b": ping\n\n") >= 3
-    assert chunks[-1] == b"data: [DONE]\n\n"
+    assert chunks[-1] == b"event: done\ndata: [DONE]\n\n"
 
 
 @pytest.mark.asyncio
@@ -1990,7 +1990,7 @@ async def test_run_thread_stream_is_untouched_while_keepalives_are_unconfigured(
     chunks = [chunk async for chunk in response.body_iterator]
 
     assert not any(chunk.startswith(": ping") for chunk in chunks)
-    assert chunks[-1] == "data: [DONE]\n\n"
+    assert chunks[-1] == "event: done\ndata: [DONE]\n\n"
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,7 @@
-import pytest
-
-
 from typing import Final
 from unittest.mock import MagicMock
 
+import pytest
 from fastapi import HTTPException
 
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
@@ -1351,6 +1349,53 @@ async def test_route_request_read_through_recovers_model_created_on_sibling_repl
     assert response.choices[0].message.content == "hello-from-db"
     assert len(table.find_many_wheres) == 1
     assert table.find_many_wheres[0] == {"model_name": model_name}
+
+
+@pytest.mark.asyncio
+async def test_route_request_eval_read_through_uses_deployment_credentials(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    import litellm
+    from litellm.proxy import proxy_server
+
+    model_name: Final = "e2e-eval-sibling-replica-model"
+    api_key: Final = "eval-key-loaded-from-db"
+    api_base: Final = "https://eval-provider.example/v1"
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "some-other-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"},
+            }
+        ]
+    )
+    db_row: Final = SimpleNamespace(
+        model_id=f"{model_name}-id",
+        model_name=model_name,
+        litellm_params={"model": "openai/gpt-4o", "api_key": api_key, "api_base": api_base},
+        model_info={},
+        blocked=False,
+    )
+    fake_prisma, table = _fake_prisma_client_with_models([db_row])
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    data: Final = {
+        "model": model_name,
+        "data_source_config": {"type": "custom"},
+        "testing_criteria": [],
+    }
+
+    eval_call: Final = AsyncMock(return_value="eval-response")
+    with patch.object(litellm, "acreate_eval", new=eval_call):
+        eval_result: Final = await route_request(data, router, None, "acreate_eval")
+        assert await eval_result == "eval-response"
+
+    eval_call.assert_awaited_once()
+    assert eval_call.await_args.kwargs["api_key"] == api_key
+    assert eval_call.await_args.kwargs["api_base"] == api_base
+    assert table.find_many_wheres == [{"model_name": model_name}]
 
 
 @pytest.mark.asyncio

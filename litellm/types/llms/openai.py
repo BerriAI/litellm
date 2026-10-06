@@ -301,6 +301,8 @@ class Thread(BaseModel):
     object: Literal["thread"]
     """The object type, which is always `thread`."""
 
+    tool_resources: object | None = None
+
 
 OpenAICreateFileRequestOptionalParams = Literal["purpose"]
 
