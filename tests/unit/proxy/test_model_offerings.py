@@ -2,6 +2,8 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import pytest
+from openai import AsyncOpenAI
 import yaml
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -270,3 +272,66 @@ async def test_changed_inventory_interval_refreshes_without_retaining_old_deadli
         assert await manager.reload()
         assert manager.router.latest_snapshot().available_models == set()
         assert manager.next_inventory_refresh == 1.0
+
+
+@pytest.mark.parametrize("authorization_name", (None, "authorization", "AUTHORIZATION"))
+async def test_native_client_forwards_one_supplier_authorization_value(
+    tmp_path: Path, authorization_name: str | None
+) -> None:
+    path: Final = tmp_path / "offerings.yaml"
+    api_key: Final = "supplier-fixture-key.with-symbols="
+    expected_authorization: Final = (
+        "Bearer explicit-fixture-override" if authorization_name is not None else f"Bearer {api_key}"
+    )
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "providers": {
+                    "supplier": {
+                        "provider": "openai",
+                        "api_base": "https://supplier.test/v1",
+                        "api_key": api_key,
+                        "headers": (
+                            {authorization_name: expected_authorization} if authorization_name is not None else {}
+                        ),
+                    }
+                },
+                "offerings": [
+                    {
+                        "model_name": "selected",
+                        "source": "manual",
+                        "provider": "supplier",
+                        "upstream_model": "fixture-backend",
+                    }
+                ],
+            }
+        )
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get_list("authorization") == [expected_authorization]
+        return httpx.Response(
+            200,
+            json={
+                "id": "fixture-response",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "fixture-backend",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "accepted"}, "finish_reason": "stop"}
+                ],
+            },
+        )
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        handler.client = http_client
+        manager: Final = ModelOfferingsManager(path=path, template=Router(model_list=[], num_retries=0), client=handler)
+        assert await manager.reload(initial=True)
+        async with AsyncOpenAI(api_key=api_key, http_client=http_client, max_retries=0) as sdk_client:
+            response: Final = await manager.router.acompletion(
+                model="selected", messages=[{"role": "user", "content": "authenticate"}], client=sdk_client
+            )
+        assert response.choices[0].message.content == "accepted"

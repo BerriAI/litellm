@@ -183,7 +183,16 @@ def _deployment(offering: ModelOffering, state: _ProviderState) -> Mapping[str, 
                 "model": f"{connection.provider}/{offering.upstream_model}",
                 **({"api_base": connection.api_base} if connection.api_base is not None else {}),
                 **({"api_key": connection.api_key} if connection.api_key is not None else {}),
-                **({"extra_headers": dict(connection.headers)} if connection.headers else {}),
+                **(
+                    {
+                        "extra_headers": {
+                            "Authorization" if name == "authorization" else name: value
+                            for name, value in connection.headers.items()
+                        }
+                    }
+                    if connection.headers
+                    else {}
+                ),
             },
             "model_info": {**metadata, "id": deployment_id, "blocked": reason is not None},
         }
