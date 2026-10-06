@@ -1949,6 +1949,44 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
             expected,
         )
 
+    @parameterized.expand(
+        [
+            ("https://app.langtrace.ai/api/trace", "https://app.langtrace.ai/api/trace"),
+            ("https://app.langtrace.ai/api/trace/", "https://app.langtrace.ai/api/trace"),
+            ("http://localhost:3000/api/trace", "http://localhost:3000/api/trace"),
+        ]
+    )
+    def test_langtrace_callback_keeps_api_trace_endpoint_unchanged(self, input_url: str, expected: str) -> None:
+        """Langtrace ingests OTLP at the complete /api/trace path, so no /v1/traces is appended."""
+        otel = OpenTelemetry(callback_name="langtrace")
+        self.assertEqual(otel._normalize_otel_endpoint(input_url, "traces"), expected)
+
+    @parameterized.expand(
+        [
+            (None, "https://app.langtrace.ai/api/trace", "https://app.langtrace.ai/api/trace/v1/traces"),
+            ("otel", "https://app.langtrace.ai/api/trace", "https://app.langtrace.ai/api/trace/v1/traces"),
+            ("otel", "https://collector.example.com/api/trace", "https://collector.example.com/api/trace/v1/traces"),
+            ("langtrace", "https://app.langtrace.ai", "https://app.langtrace.ai/v1/traces"),
+        ]
+    )
+    def test_api_trace_exemption_is_scoped_to_langtrace_callback(
+        self, callback_name: str | None, input_url: str, expected: str
+    ) -> None:
+        """Any other callback, or a Langtrace host without the /api/trace path, keeps OTLP normalization."""
+        otel = OpenTelemetry(callback_name=callback_name)
+        self.assertEqual(otel._normalize_otel_endpoint(input_url, "traces"), expected)
+
+    def test_langtrace_callback_still_normalizes_logs_and_metrics(self) -> None:
+        otel = OpenTelemetry(callback_name="langtrace")
+        self.assertEqual(
+            otel._normalize_otel_endpoint("https://app.langtrace.ai/api/trace", "logs"),
+            "https://app.langtrace.ai/api/trace/v1/logs",
+        )
+        self.assertEqual(
+            otel._normalize_otel_endpoint("https://app.langtrace.ai/api/trace", "metrics"),
+            "https://app.langtrace.ai/api/trace/v1/metrics",
+        )
+
     def test_normalize_endpoint_none(self):
         """Test that None endpoint returns None"""
         otel = OpenTelemetry()
@@ -6724,3 +6762,37 @@ class TestOpenTelemetryNonInferenceUsage(unittest.TestCase):
         self.assertEqual(
             self._time_per_output_token_calls("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ), 1
         )
+
+
+def _raw_response_span_attributes(original_response: str) -> dict[str, object]:
+    span_exporter = InMemorySpanExporter()
+    tracer_provider = TracerProvider()
+    tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+    span = tracer_provider.get_tracer(__name__).start_span("raw_gen_ai_request")
+
+    OpenTelemetry(tracer_provider=tracer_provider).set_raw_request_attributes(
+        span,
+        {"litellm_params": {"custom_llm_provider": "vertex_ai"}, "original_response": original_response},
+        None,
+    )
+    span.end()
+
+    return dict(span_exporter.get_finished_spans()[0].attributes or {})
+
+
+@pytest.mark.parametrize(
+    ("original_response", "expected"),
+    [
+        ('{"id": "r1", "model": "m"}', {"llm.vertex_ai.id": "r1", "llm.vertex_ai.model": "m"}),
+        ("{}", {}),
+        ("not json", {"llm.vertex_ai.stringified_raw_response": "not json"}),
+        ("[1, 2]", {}),
+        ('"text"', {}),
+        ("7", {}),
+        ("null", {}),
+    ],
+)
+def test_set_raw_request_attributes_stamps_only_json_object_responses(
+    original_response: str, expected: dict[str, object]
+):
+    assert _raw_response_span_attributes(original_response) == expected

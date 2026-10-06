@@ -5,7 +5,10 @@ from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequenc
 from dataclasses import dataclass, field, fields, is_dataclass
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
+
+from pydantic import BeforeValidator, Field
+from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 if TYPE_CHECKING:
     import httpx
@@ -102,9 +105,40 @@ class BedrockBatchConnection:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class AnthropicFederationConnection:
+    anthropic_federation_rule_id: str | None = None
+    anthropic_organization_id: str | None = None
+    anthropic_service_account_id: str | None = None
+    anthropic_federation_workspace_id: str | None = None
+    anthropic_identity_token_file: str | None = None
+    anthropic_identity_token: str | None = None
+    anthropic_identity_source: str | None = None
+    anthropic_issuer_url: str | None = None
+    anthropic_issuer_subject: str | None = None
+    anthropic_issuer_audience: str | None = None
+    anthropic_issuer_ttl_seconds: int | None = None
+    anthropic_issuer_signing_key_ref: str | None = None
+    anthropic_keycloak_token_url: str | None = None
+    anthropic_keycloak_client_id: str | None = None
+    anthropic_keycloak_auth_method: str | None = None
+    anthropic_keycloak_client_secret_ref: str | None = None
+    anthropic_keycloak_scope: str | None = None
+    anthropic_disable_workload_identity_federation: bool | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OpenAIFederationConnection:
+    openai_identity_provider_id: str | None = None
+    openai_service_account_id: str | None = None
+    openai_identity_token_file: str | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ConnectionSettings:
     provider: ProviderConnection
     bedrock_batch: BedrockBatchConnection
+    anthropic_federation: AnthropicFederationConnection
+    openai_federation: OpenAIFederationConnection
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -148,6 +182,7 @@ class DeploymentOptions:
     order: int | None = None
     tag_regex: Sequence[str] | None = None
     max_file_size_mb: float | None = None
+    silent_model: str | Sequence[str] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -196,6 +231,7 @@ class ObservabilityOptions:
     logger_fn: Callable[[Mapping[str, object]], None] | None = None
     verbose: bool | None = None
     no_log: bool | None = field(default=None, metadata=wire("no-log"))
+    log_client_error_tracebacks: bool | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -234,9 +270,29 @@ class ResponseOptions:
     merge_reasoning_content_in_choices: bool | None = None
     enable_json_schema_validation: bool | None = None
     complete_response: bool | None = None
-    stream_chunk_size: int | None = None
     keepalive_seconds: float | None = None
     allow_client_keepalive_override: bool | None = None
+
+
+MAX_CONTROL_INT_DIGITS: Final = 18
+
+
+def _int_from_decimal_string(value: object) -> object:
+    if isinstance(value, str) and value.isascii() and value.isdecimal() and len(value) <= MAX_CONTROL_INT_DIGITS:
+        return int(value)
+    return value
+
+
+@pydantic_dataclass(frozen=True, slots=True, kw_only=True)
+class ControlOptions:
+    stream_chunk_size: (
+        Annotated[
+            int,
+            BeforeValidator(_int_from_decimal_string),
+            Field(strict=True, gt=0, lt=10**MAX_CONTROL_INT_DIGITS),
+        ]
+        | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -258,6 +314,7 @@ class LiteLLMOptions:
     guardrails: GuardrailOptions
     prompt: PromptOptions
     response: ResponseOptions
+    control: ControlOptions
     mock: MockOptions
 
 

@@ -7,15 +7,49 @@ Ensures backward compatibility after sparse kwargs extraction optimization.
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
+from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.litellm_core_utils.get_litellm_params import (
     _OPTIONAL_KWARGS_KEYS,
+    InvalidControlOption,
     _get_base_model_from_litellm_call_metadata,
     get_litellm_params,
+    parse_control_options,
+    stored_control_options,
 )
+from litellm.types.litellm_params import ControlOptions
+
+
+def _funnel_kwargs_completion_forwards(monkeypatch, wif_kwargs: dict[str, object]) -> dict[str, object]:
+    """completion() names its get_litellm_params arguments one by one, so a key the funnel knows
+    is still dropped unless that call site forwards it from its own kwargs."""
+    from unittest.mock import MagicMock
+
+    import litellm
+    import litellm.main as litellm_main
+
+    spy = MagicMock(wraps=litellm_main.get_litellm_params)
+    monkeypatch.setattr(  # test-quality-ok: completion() has no injection seam for its kwargs funnel
+        litellm_main, "get_litellm_params", spy
+    )
+    litellm.completion(
+        model="anthropic/claude-sonnet-5",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="ok",
+        **wif_kwargs,
+    )
+    return spy.call_args.kwargs
+
 
 NAMED_PRICE_PARAMS: Final = frozenset(
-    {"input_cost_per_token", "output_cost_per_token", "input_cost_per_second", "output_cost_per_second"}
+    {
+        "input_cost_per_token",
+        "output_cost_per_token",
+        "cost_per_second",
+        "input_cost_per_second",
+        "output_cost_per_second",
+    }
 )
 
 
@@ -90,9 +124,8 @@ class TestGetLitellmParamsKwargsExtraction:
         assert "s3_endpoint_url" not in result_without_s3_kwargs
         assert "s3_region_name" not in result_without_s3_kwargs
 
-    def test_stream_chunk_size_is_carried_as_a_litellm_param(self) -> None:
-        assert get_litellm_params(stream_chunk_size=64)["stream_chunk_size"] == 64
-        assert get_litellm_params()["stream_chunk_size"] is None
+    def test_a_caller_supplied_control_options_key_is_not_carried(self) -> None:
+        assert CONTROL_OPTIONS_KEY not in get_litellm_params(**{CONTROL_OPTIONS_KEY: {"stream_chunk_size": 64}})
 
     def test_s3_credential_kwargs_are_forwarded_for_s3_signing(self):
         result = get_litellm_params(s3_access_key_id="s3-key", s3_secret_access_key="s3-secret")
@@ -120,6 +153,79 @@ class TestGetLitellmParamsKwargsExtraction:
         result = get_litellm_params(**kwargs)
         for key in _OPTIONAL_KWARGS_KEYS:
             assert result[key] == f"val_{key}"
+
+
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        ({"stream_chunk_size": 64, "temperature": 0.2}, ControlOptions(stream_chunk_size=64)),
+        ({"stream_chunk_size": "64"}, ControlOptions(stream_chunk_size=64)),
+        ({"stream_chunk_size": None}, ControlOptions()),
+        ({"temperature": 0.2}, ControlOptions()),
+    ],
+)
+def test_control_options_are_read_from_the_request_kwargs(kwargs: dict[str, object], expected: ControlOptions) -> None:
+    assert parse_control_options(kwargs) == expected
+
+
+@pytest.mark.parametrize(
+    "raw,shown",
+    [
+        ("sixty-four", "'sixty-four'"),
+        (" 64", "' 64'"),
+        ("-1", "'-1'"),
+        ("\uff16\uff14", "'\uff16\uff14'"),
+        ("x" * 500, "'xxxxxxxxxxxx...xxxxxxxxxxxxx'"),
+        pytest.param(-(10**5000), "<int of 16610 bits>", id="huge_negative_int"),
+        pytest.param(-(2**64 - 1), "-18446744073709551615", id="64_bit_negative_int"),
+        pytest.param(-(2**64), "<int of 65 bits>", id="65_bit_negative_int"),
+        pytest.param([-(10**5000)], "[<int of 16610 bits>]", id="nested_huge_int"),
+        pytest.param(10**18, "1000000000000000000", id="19_digit_int"),
+        pytest.param("1" + "0" * 18, "'1000000000000000000'", id="19_digit_string"),
+        pytest.param("9" * 5000, "'999999999999...9999999999999'", id="5000_digit_string"),
+        pytest.param("0" * 18 + "1", "'0000000000000000001'", id="19_digit_string_with_leading_zeros"),
+        (64.0, "64.0"),
+        (True, "True"),
+        (0, "0"),
+        ("0", "'0'"),
+        (-1, "-1"),
+    ],
+)
+def test_control_options_reject_a_stream_chunk_size_that_is_not_a_positive_int(raw: object, shown: str) -> None:
+    assert parse_control_options({"stream_chunk_size": raw}) == InvalidControlOption(
+        param="stream_chunk_size",
+        message=f"Invalid stream_chunk_size={shown}: expected a positive integer of at most 18 digits",
+    )
+
+
+@pytest.mark.parametrize("raw", [10**18 - 1, "9" * 18], ids=["int", "digit_string"])
+def test_control_options_accept_the_largest_18_digit_value(raw: object) -> None:
+    assert parse_control_options({"stream_chunk_size": raw}) == ControlOptions(stream_chunk_size=10**18 - 1)
+
+
+def test_control_options_accept_an_18_digit_string_with_leading_zeros() -> None:
+    assert parse_control_options({"stream_chunk_size": "0" * 17 + "1"}) == ControlOptions(stream_chunk_size=1)
+
+
+@pytest.mark.parametrize("raw", [0, -1, "sixty-four", 64.0, True])
+def test_control_options_enforce_their_rule_at_construction(raw: object) -> None:
+    with pytest.raises(ValidationError):
+        ControlOptions(stream_chunk_size=raw)  # pyright: ignore[reportArgumentType]  # the invalid type is the input
+
+
+@pytest.mark.parametrize(
+    "litellm_params,expected",
+    [
+        ({CONTROL_OPTIONS_KEY: ControlOptions(stream_chunk_size=64)}, ControlOptions(stream_chunk_size=64)),
+        ({}, ControlOptions()),
+        ({CONTROL_OPTIONS_KEY: {"stream_chunk_size": 64}}, ControlOptions()),
+        ({"stream_chunk_size": 64}, ControlOptions()),
+    ],
+)
+def test_stored_control_options_reads_only_the_validated_options(
+    litellm_params: dict[str, object], expected: ControlOptions
+) -> None:
+    assert stored_control_options(litellm_params) == expected
 
 
 class TestGetLitellmParamsBaseModel:
@@ -273,3 +379,126 @@ def test_drop_params_strings_reach_litellm_params_as_flags(
     value: str | bool | None, expected: bool | None
 ) -> None:
     assert get_litellm_params(drop_params=value)["drop_params"] is expected
+
+
+class TestAnthropicWifKeys:
+    """The six anthropic_* WIF keys need dual registration: carried by the kwargs
+    funnel into litellm_params (where the Anthropic auth tier reads them) AND
+    listed in all_litellm_params (so the extra_body sweep never sends them to
+    /v1/messages)."""
+
+    SIX_KEYS = {
+        "anthropic_federation_rule_id": "fdrl_1",
+        "anthropic_organization_id": "org-1",
+        "anthropic_service_account_id": "svcacct_1",
+        "anthropic_federation_workspace_id": "wrkspc_1",
+        "anthropic_identity_token_file": "/var/run/secrets/tok",
+        "anthropic_identity_token": "oidc/env/TOK",
+    }
+
+    def test_keys_survive_into_litellm_params(self):
+        params = get_litellm_params(**self.SIX_KEYS)
+        for key, value in self.SIX_KEYS.items():
+            assert params[key] == value
+
+    def test_keys_are_forwarded_from_completion_kwargs(self, monkeypatch):
+        forwarded = _funnel_kwargs_completion_forwards(monkeypatch, self.SIX_KEYS)
+        assert {key: forwarded[key] for key in self.SIX_KEYS} == self.SIX_KEYS
+
+    def test_keys_stay_out_of_the_provider_body(self):
+        from litellm.types.utils import all_litellm_params
+
+        for key in self.SIX_KEYS:
+            assert key in all_litellm_params
+
+    def test_keys_absent_when_not_configured(self):
+        params = get_litellm_params()
+        for key in self.SIX_KEYS:
+            assert key not in params
+
+
+class TestAnthropicWifIdentitySourceKeys:
+    """Phase 1 adds 11 more anthropic_* WIF keys (the anthropic_identity_source discriminator
+    plus the internal_issuer/keycloak identity-source fields) that need the same dual
+    registration as the original six tested above."""
+
+    NEW_KEYS = {
+        "anthropic_identity_source": "keycloak",
+        "anthropic_issuer_url": "https://issuer.example",
+        "anthropic_issuer_subject": "svc-account",
+        "anthropic_issuer_audience": "https://api.anthropic.com",
+        "anthropic_issuer_ttl_seconds": "300",
+        "anthropic_issuer_signing_key_ref": "oidc/env/ISSUER_KEY",
+        "anthropic_keycloak_token_url": "https://kc.example/realms/r/protocol/openid-connect/token",
+        "anthropic_keycloak_client_id": "litellm",
+        "anthropic_keycloak_auth_method": "client_secret_basic",
+        "anthropic_keycloak_client_secret_ref": "oidc/env/KC_SECRET",
+        "anthropic_keycloak_scope": "anthropic-wif",
+        # Server-set when a client redirects api_base; carried here so it is not dropped in transit
+        "anthropic_disable_workload_identity_federation": True,
+    }
+
+    def test_new_keys_are_exactly_the_non_legacy_registered_set(self):
+        """Fails the moment a key is added to ANTHROPIC_WIF_KWARGS_KEYS without a matching entry
+        here (or vice versa), catching drift between what wif.py dispatches on and what this
+        test (and the funnel/provider-body tests below) actually exercises."""
+        from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
+
+        assert set(self.NEW_KEYS) == ANTHROPIC_WIF_KWARGS_KEYS - set(TestAnthropicWifKeys.SIX_KEYS)
+
+    def test_keys_survive_into_litellm_params(self):
+        params = get_litellm_params(**self.NEW_KEYS)
+        for key, value in self.NEW_KEYS.items():
+            assert params[key] == value
+
+    def test_keys_are_forwarded_from_completion_kwargs(self, monkeypatch):
+        forwarded = _funnel_kwargs_completion_forwards(monkeypatch, self.NEW_KEYS)
+        assert {key: forwarded[key] for key in self.NEW_KEYS} == self.NEW_KEYS
+
+    def test_keys_stay_out_of_the_provider_body(self):
+        from litellm.types.utils import all_litellm_params
+
+        for key in self.NEW_KEYS:
+            assert key in all_litellm_params
+
+    def test_keys_absent_when_not_configured(self):
+        params = get_litellm_params()
+        for key in self.NEW_KEYS:
+            assert key not in params
+
+
+class TestOpenAIWifKeys:
+    """The three openai_* WIF keys carry a deployment's federation identity through the kwargs
+    funnel into litellm_params (where the OpenAI client factory reads them) and stay out of the
+    provider body, exactly like the anthropic_* keys above."""
+
+    THREE_KEYS = {
+        "openai_identity_provider_id": "idp_1",
+        "openai_service_account_id": "user-1",
+        "openai_identity_token_file": "/var/run/secrets/tokens/openai",
+    }
+
+    def test_keys_are_exactly_the_registered_set(self):
+        from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
+
+        assert set(self.THREE_KEYS) == OPENAI_WIF_KWARGS_KEYS
+
+    def test_keys_survive_into_litellm_params(self):
+        params = get_litellm_params(**self.THREE_KEYS)
+        for key, value in self.THREE_KEYS.items():
+            assert params[key] == value
+
+    def test_keys_are_forwarded_from_completion_kwargs(self, monkeypatch):
+        forwarded = _funnel_kwargs_completion_forwards(monkeypatch, self.THREE_KEYS)
+        assert {key: forwarded[key] for key in self.THREE_KEYS} == self.THREE_KEYS
+
+    def test_keys_stay_out_of_the_provider_body(self):
+        from litellm.types.utils import all_litellm_params
+
+        for key in self.THREE_KEYS:
+            assert key in all_litellm_params
+
+    def test_keys_absent_when_not_configured(self):
+        params = get_litellm_params()
+        for key in self.THREE_KEYS:
+            assert key not in params

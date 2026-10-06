@@ -647,6 +647,7 @@ async def test_negation_with_positive_tag():
 @pytest.mark.asyncio()
 async def test_negation_all_excluded_raises():
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "gpt-4",
@@ -907,6 +908,7 @@ async def test_positive_tags_unchanged_by_negation():
 @pytest.mark.asyncio()
 async def test_negation_skips_banned_group_and_uses_fallback():
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "primary",
@@ -943,6 +945,7 @@ async def test_negation_skips_banned_group_and_uses_fallback():
 @pytest.mark.asyncio()
 async def test_negation_exhausts_entire_fallback_chain():
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "primary",
@@ -1696,6 +1699,7 @@ async def test_required_and_single_tag_matches_trivially():
 async def test_required_and_unmatched_raises_by_default():
     # allow_fail_open unset -> unmatched required-AND raises, same as today's "!" behavior.
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "gpt-4",
@@ -1728,6 +1732,7 @@ async def test_required_and_combined_with_positive_unmatched_raises_by_default()
     # &A eliminates every candidate before the positive-tag preference even runs;
     # this must be gated by allow_fail_open too, not just the required-AND-only path.
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "gpt-4",
@@ -1858,6 +1863,7 @@ async def test_allow_fail_open_per_hop_across_fallback_chain():
     # required-AND fail-open must be re-evaluated fresh on every hop, the same
     # per-hop guarantee the negation feature already established.
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "primary",
@@ -1950,6 +1956,7 @@ async def test_allow_fail_open_resolves_locally_without_triggering_external_fall
 @pytest.mark.asyncio()
 async def test_negation_combined_with_positive_unmatched_raises_by_default():
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "gpt-4",
@@ -2287,6 +2294,7 @@ async def test_required_and_exhausts_primary_group_falls_through_to_fallback_gro
     # where the tag is satisfiable. No allow_fail_open involved; this is the plain
     # fallback-chain mechanics already established for "!" extended to "&".
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "primary",
@@ -2332,6 +2340,7 @@ async def test_required_and_negation_and_allow_fail_open_combine_across_three_mo
     #   carrier is legitimately excluded, not hidden behind an invented tag, so the
     #   opted-in allow_fail_open falls back to the group's own default deployment.
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "primary",
@@ -2393,6 +2402,7 @@ async def test_unknown_tag_denial_is_scoped_per_hop_not_leaked_across_fallback_g
     # discover what its own group knows; a deny decision from a prior hop's group
     # must not leak forward and block a later hop that has no relevant knowledge.
     router = litellm.Router(
+        num_retries=0,
         model_list=[
             {
                 "model_name": "primary",
@@ -2868,6 +2878,7 @@ def _tagged_marker_router(tier_tags=None):
             },
         ],
         enable_tag_filtering=True,
+        num_retries=0,
     )
     router.auto_routers = {
         "gpt4o": [TaggedPreRoutingStrategy(tags=("route",), strategy=_RewriteToTierStrategy("gemini-flash"))]

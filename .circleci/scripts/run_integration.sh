@@ -26,6 +26,7 @@ guard_created=false
 guard_installed=false
 guard6_created=false
 guard6_installed=false
+egress_cgroup=litellm-integration
 cleanup() {
   original_status=$?
   trap - EXIT INT TERM
@@ -47,14 +48,14 @@ cleanup() {
     fi
   done
   if [ "$guard_installed" = true ]; then
-    sudo iptables -D OUTPUT -m owner --uid-owner "$(id -u)" -j integration_only || original_status=1
+    sudo iptables -D OUTPUT -m cgroup --path "$egress_cgroup" -j integration_only || original_status=1
   fi
   if [ "$guard_created" = true ]; then
     sudo iptables -F integration_only || original_status=1
     sudo iptables -X integration_only || original_status=1
   fi
   if [ "$guard6_installed" = true ]; then
-    sudo ip6tables -D OUTPUT -m owner --uid-owner "$(id -u)" -j integration_only || original_status=1
+    sudo ip6tables -D OUTPUT -m cgroup --path "$egress_cgroup" -j integration_only || original_status=1
   fi
   if [ "$guard6_created" = true ]; then
     sudo ip6tables -F integration_only || original_status=1
@@ -100,6 +101,8 @@ if [ "$mode" = parity ]; then
   export INTEGRATION_ROUTING=capture
 fi
 
+sudo mkdir -p "/sys/fs/cgroup/$egress_cgroup"
+echo "$$" | sudo tee "/sys/fs/cgroup/$egress_cgroup/cgroup.procs" > /dev/null
 sudo iptables -N integration_only
 guard_created=true
 sudo iptables -A integration_only -o lo -j ACCEPT
@@ -109,13 +112,13 @@ for service in postgres-db redis-cache; do
   sudo iptables -A integration_only -d "$address" -j ACCEPT
 done
 sudo iptables -A integration_only -j REJECT
-sudo iptables -I OUTPUT 1 -m owner --uid-owner "$(id -u)" -j integration_only
+sudo iptables -I OUTPUT 1 -m cgroup --path "$egress_cgroup" -j integration_only
 guard_installed=true
 sudo ip6tables -N integration_only
 guard6_created=true
 sudo ip6tables -A integration_only -o lo -j ACCEPT
 sudo ip6tables -A integration_only -j REJECT
-sudo ip6tables -I OUTPUT 1 -m owner --uid-owner "$(id -u)" -j integration_only
+sudo ip6tables -I OUTPUT 1 -m cgroup --path "$egress_cgroup" -j integration_only
 guard6_installed=true
 
 if curl --noproxy '*' --connect-timeout 2 -s http://198.51.100.1 >/dev/null 2>&1; then
@@ -165,11 +168,12 @@ start_proxy() {
     "${database_env[@]}" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
     INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
     LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" LITELLM_UI_PATH="$LITELLM_UI_PATH" PROXY_BASE_URL="http://127.0.0.1:$port" \
-    LITELLM_MODE=PRODUCTION STORE_MODEL_IN_DB=True "${cost_map_env[@]}" \
+    LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
+    LITELLM_MODE=PRODUCTION STORE_MODEL_IN_DB=True LITELLM_ENABLE_MCP_STDIO=true "${cost_map_env[@]}" \
     AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 COVERAGE_FILE="$coverage_data" \
     "${proxy_command[@]}" --config tests/integration/proxy_config.yaml \
     --host 127.0.0.1 --port "$port" --num_workers 1 --telemetry False \
-    --use_prisma_db_push --enforce_prisma_migration_check \
+    --use_prisma_db_push \
     > "$results/$log_name" 2>&1 &
   launched_pid=$!
 }
@@ -187,7 +191,7 @@ if [ "$suite" = management ] || [ "$suite" = mcp ]; then
 fi
 
 if [ "$suite" = providers ]; then
-  INTEGRATION_RUN_ID="$integration_identity" .venv/bin/python -m pytest --noconftest -o addopts= \
+  INTEGRATION_RUN_ID="$integration_identity" .venv/bin/python -m pytest --tb=short --noconftest -o addopts= \
     --strict-markers --strict-config -p no:pytest-retry -p no:rerunfailures --timeout=30 \
     tests/e2e/test_provider_edge.py::TestReplayMode::test_content_drift_returns_the_miss_status_naming_both_keys \
     tests/e2e/test_provider_edge.py::TestReplayMode::test_exhausted_key_returns_the_miss_status \
@@ -209,6 +213,15 @@ if [ "$suite" = browser ]; then
   exit 0
 fi
 
+node_files=()
+if [ "${CIRCLE_NODE_TOTAL:-1}" -gt 1 ]; then
+  split="$(.venv/bin/python tests/integration/run.py "$suite" --list \
+    | circleci tests split --split-by=timings --timings-type=filename)"
+  read -r -a node_files <<< "$(printf '%s' "$split" | tr '\n' ' ')"
+  test "${#node_files[@]}" -gt 0
+  printf '%s\n' "${node_files[@]}" > "$results/node-files.txt"
+fi
+
 env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_RUN_ID="$integration_identity" \
   DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
@@ -216,13 +229,14 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
   INTEGRATION_WORKERS="${INTEGRATION_WORKERS:-1}" \
   INTEGRATION_MASTER_KEY="$INTEGRATION_MASTER_KEY" LITELLM_MODE=PRODUCTION \
+  LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
   INTEGRATION_SEED="$INTEGRATION_SEED" \
   INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \
   LITELLM_LOCAL_MODEL_COST_MAP=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
   INTEGRATION_PROXY_DATABASE_URL="$INTEGRATION_PROXY_DATABASE_URL" \
   INTEGRATION_PROXY_READ_REPLICA_URL="$INTEGRATION_PROXY_READ_REPLICA_URL" \
   INTEGRATION_ROUTING="$INTEGRATION_ROUTING" \
-  .venv/bin/python tests/integration/run.py "$suite" --results "$results"
+  .venv/bin/python tests/integration/run.py "$suite" --results "$results" "${node_files[@]}"
 
 if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
   for covered_pid in "$proxy_pid" "$peer_pid"; do

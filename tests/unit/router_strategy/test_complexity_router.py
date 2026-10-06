@@ -1671,6 +1671,40 @@ class TestRouterComplexityDeploymentMethods:
         router.init_complexity_router_deployment(deployment)
         assert "auto_router/complexity_router/test-router" in router.complexity_routers
 
+    @pytest.mark.parametrize("tier_models", ("custom-model", ["custom-model", "other-model"]))
+    @pytest.mark.parametrize("explicit,expected", ((None, "configured-model"), ("top-model", "top-model")))
+    def test_custom_default_resolution_preserves_explicit_precedence(self, tier_models, explicit, expected):
+        from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
+
+        config: Final = ComplexityRouterConfig.model_validate({
+            "tiers": {"CUSTOM": tier_models, "OTHER": "other-model"},
+            "tier_definitions": [
+                {"name": "CUSTOM", "description": "Custom work"},
+                {"name": "OTHER", "description": "Other work"},
+            ],
+            "fallback_tier": " CUSTOM ",
+            "classifier_type": "llm",
+            "classifier_llm_config": {"model": "classifier"},
+            "default_model": "configured-model",
+        })
+        assert config.resolve_default_model(explicit) == expected
+        inferred: Final = config.model_copy(update={"default_model": None})
+        assert inferred.resolve_default_model() == "custom-model"
+        assert config.default_model == "configured-model"
+
+    @pytest.mark.parametrize("config", (None, {}))
+    def test_absent_deployment_config_still_requires_explicit_default(self, config):
+        from litellm.types.router import Deployment
+
+        router: Final = Router(model_list=[])
+        deployment: Final = Deployment(
+            model_name="no-default",
+            litellm_params={"model": "auto_router/complexity_router", "complexity_router_config": config},
+            model_info={"id": "no-default"},
+        )
+        with pytest.raises(ValueError, match="complexity_router_default_model is required"):
+            router.init_complexity_router_deployment(deployment)
+
     @staticmethod
     def _forecast_row(model_name: str, model_id: str, classifier_type: str) -> dict[str, object]:
         settings: Final = (
@@ -5043,6 +5077,7 @@ class TestRouterPreRoutingAliasOverrides:
                         "model": "auto_router/complexity_router",
                         "input_cost_per_token": 0.0,
                         "output_cost_per_token": 0.0,
+                        "cost_per_second": 0.0,
                         "input_cost_per_second": 0.0,
                         "drop_params": True,
                         "complexity_router_config": {"tiers": {"SIMPLE": "gpt-4o-mini"}},
@@ -5064,7 +5099,12 @@ class TestRouterPreRoutingAliasOverrides:
         assert result is not None
         # Non-pricing alias params still carry over.
         assert request_kwargs["drop_params"] is True
-        for field in ("input_cost_per_token", "output_cost_per_token", "input_cost_per_second"):
+        for field in (
+            "input_cost_per_token",
+            "output_cost_per_token",
+            "cost_per_second",
+            "input_cost_per_second",
+        ):
             assert field not in request_kwargs
 
     @pytest.mark.asyncio
@@ -14120,6 +14160,7 @@ class TestContextWindowEscalation:
         assert result.routing_decision["context_escalated"] is True
 
     @pytest.mark.asyncio
+    @pytest.mark.usefixtures("local_model_cost_map")
     @pytest.mark.parametrize(
         "deployments,tiers,expected_model",
         [

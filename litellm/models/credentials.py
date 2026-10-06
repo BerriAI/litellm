@@ -7,16 +7,22 @@ layer; ``litellm.types.utils`` re-exports them for backwards compatibility.
 
 from collections.abc import Mapping
 
-from pydantic import BaseModel, model_validator
+from pydantic import Field, model_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
-class CredentialBase(BaseModel):
+class CredentialBase(LiteLLMBaseModel):
     credential_name: str
     credential_info: dict
 
 
 class CredentialItem(CredentialBase):
     credential_values: dict
+    # PATCH-only instruction naming keys to drop from the stored credential_values. It describes an
+    # edit rather than the credential, so it stays out of dumps: those feed config loading, the DB
+    # write, and the in-memory list, none of which have a place for it.
+    credential_values_to_delete: tuple[str, ...] | None = Field(default=None, exclude=True)
 
 
 class CreateCredentialItem(CredentialBase):
@@ -31,8 +37,9 @@ class CreateCredentialItem(CredentialBase):
         return values
 
 
-class UpdateCredentialItem(BaseModel):
+class UpdateCredentialItem(LiteLLMBaseModel):
     credential_name: str
     credential_info: Mapping[str, object]
     credential_values: Mapping[str, object] | None = None
     model_id: str | None = None
+    credential_values_to_delete: tuple[str, ...] | None = None

@@ -26,6 +26,7 @@ impl CyberArkSecretManager {
             token,
             secrets,
             authentication_lock: Arc::new(tokio::sync::Mutex::new(())),
+            policy_load_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -173,16 +174,23 @@ fn normalize_endpoint(mut endpoint: reqwest::Url) -> reqwest::Url {
 mod tests {
     use std::path::PathBuf;
 
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn cyberark_verification_does_not_follow_a_host_that_disabled_it() {
-        let bundle = Verify::CaBundle(PathBuf::from("/ca.pem"));
-        assert_eq!(
-            effective_verify(true, &Verify::Disabled),
-            Verify::BuiltInRoots
-        );
-        assert_eq!(effective_verify(true, &bundle), bundle);
-        assert_eq!(effective_verify(false, &bundle), Verify::Disabled);
+    #[rstest]
+    #[case::host_disabled(true, Verify::Disabled, Verify::BuiltInRoots)]
+    #[case::host_bundle(
+        true,
+        Verify::CaBundle(PathBuf::from("/ca.pem")),
+        Verify::CaBundle(PathBuf::from("/ca.pem"))
+    )]
+    #[case::cyberark_disabled(false, Verify::CaBundle(PathBuf::from("/ca.pem")), Verify::Disabled)]
+    fn cyberark_verification_uses_its_configured_policy(
+        #[case] cyberark_verify: bool,
+        #[case] host_verify: Verify,
+        #[case] expected: Verify,
+    ) {
+        assert_eq!(effective_verify(cyberark_verify, &host_verify), expected);
     }
 }
