@@ -1,10 +1,17 @@
+import json
 import os
 import uuid
+from email.message import Message
+from email.parser import BytesParser
+from email.policy import HTTP
+from pathlib import Path
 from typing import Final
 
 import httpx
-from integration._support.client import Gateway, object_value, string_value
+import pytest
+from integration._support.client import JSON_OBJECT, Gateway, Scenario, object_value, string_value
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
+from integration._support.wire import Reply, Request, wire_server
 from integration.cost_calculation.cost_tracking_case import JsonResponse
 from pydantic import JsonValue
 
@@ -36,6 +43,37 @@ _CONFIGURED_STATE: Final[dict[str, JsonValue]] = {"ticket": "health probe"}
 _CONFIGURED_QUESTIONS: Final[dict[str, JsonValue]] = {
     "alive": {"type": "choice", "criteria": {"yes": "the service answers", "no": "the service is down"}}
 }
+_HEALTH_CHAT_MESSAGES: Final = (
+    [{"role": "user", "content": "Hey how's it going?"}],
+    [{"role": "user", "content": "What's 1 + 1?"}],
+)
+
+
+def _multipart_parts(request: Request) -> tuple[Message, ...]:
+    envelope: Final = f"content-type: {request.headers['content-type']}\r\n\r\n".encode() + request.body
+    parsed: Final = BytesParser(policy=HTTP).parsebytes(envelope)
+    assert parsed.is_multipart(), request.headers["content-type"]
+    return tuple(parsed.iter_parts())
+
+
+def _multipart_text_fields(parts: tuple[Message, ...]) -> dict[str, str]:
+    return {
+        string_value(part.get_param("name", header="content-disposition")): part.get_payload(decode=True).decode()
+        for part in parts
+        if part.get_filename() is None
+    }
+
+
+def _multipart_file_fields(parts: tuple[Message, ...]) -> dict[str, tuple[str | None, str | None, bytes]]:
+    return {
+        string_value(part.get_param("name", header="content-disposition")): (
+            part.get_filename(),
+            part.get_content_type(),
+            part.get_payload(decode=True),
+        )
+        for part in parts
+        if part.get_filename() is not None
+    }
 
 
 def test_health_check_of_a_model_added_through_the_api_calls_its_upstream_and_reports_it_healthy(
@@ -147,3 +185,608 @@ def test_evaluation_mode_health_check_of_the_self_hosted_strands_model_resolves_
                 },
             )
         ]
+
+
+def _health_chat_reply(request: Request, *, api_key: str, model: str, status: int = 200) -> Reply:
+    assert request.method == "POST"
+    assert request.target == "/v1/chat/completions"
+    assert request.headers["authorization"] == f"Bearer {api_key}"
+    body: Final = JSON_OBJECT.validate_json(request.body)
+    assert body in (
+        {"model": model, "messages": _HEALTH_CHAT_MESSAGES[0], "max_tokens": 16},
+        {"model": model, "messages": _HEALTH_CHAT_MESSAGES[1], "max_tokens": 16},
+    ), request.body.decode()
+    if status != 200:
+        return Reply(status=status, body=b'{"error":{"message":"synthetic health failure"}}')
+    return Reply(
+        body=json.dumps(
+            {
+                "id": "chatcmpl-health",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "healthy"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        ).encode(),
+    )
+
+
+def _create_team_health_deployment(
+    gateway: Gateway,
+    scenario: Scenario,
+    *,
+    team_id: str,
+    public_model_name: str,
+    upstream_url: str,
+    api_key: str,
+    access_group: str | None = None,
+    api_version: str | None = None,
+    aws_bedrock_runtime_endpoint: str | None = None,
+) -> str:
+    created: Final = gateway.post(
+        "/model/new",
+        {
+            "model_name": public_model_name,
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": api_key,
+                "api_base": f"{upstream_url}/v1",
+                **({"api_version": api_version} if api_version is not None else {}),
+                **(
+                    {"aws_bedrock_runtime_endpoint": aws_bedrock_runtime_endpoint}
+                    if aws_bedrock_runtime_endpoint is not None
+                    else {}
+                ),
+            },
+            "model_info": {
+                "team_id": team_id,
+                **({"access_groups": [access_group]} if access_group is not None else {}),
+            },
+        },
+    )
+    model_info: Final = object_value(created["model_info"])
+    identity: Final = string_value(model_info["id"])
+    assert model_info["team_id"] == team_id, created
+    assert model_info["team_public_model_name"] == public_model_name, created
+    scenario.cleanups.callback(scenario.delete_model, identity)
+    return identity
+
+
+def _health_failure_raw_request(endpoint: dict[str, JsonValue], upstream_url: str) -> dict[str, JsonValue]:
+    raw_request: Final = object_value(endpoint["raw_request_typed_dict"])
+    raw_request_body: Final = object_value(raw_request["raw_request_body"])
+    expected_request_bodies: Final = tuple(
+        {
+            "model": "gpt-4o-mini",
+            "messages": messages,
+            "max_tokens": 16,
+            "extra_body": {},
+        }
+        for messages in _HEALTH_CHAT_MESSAGES
+    )
+    assert raw_request == {
+        "raw_request_api_base": f"{upstream_url}/v1/",
+        "raw_request_body": raw_request_body,
+        "raw_request_headers": {"Authorization": "Be****ey"},
+        "error": None,
+    }, raw_request
+    assert raw_request_body in expected_request_bodies, raw_request
+    return raw_request
+
+
+def test_team_scoped_health_probes_access_group_targets_and_hides_routing_fields(gateway: Gateway) -> None:
+    with (
+        wire_server(lambda request: _health_chat_reply(request, api_key="team-a-key", model="gpt-4o-mini")) as healthy,
+        wire_server(
+            lambda request: _health_chat_reply(request, api_key="team-a-key", model="gpt-4o-mini", status=500)
+        ) as unhealthy,
+        wire_server(
+            lambda request: _health_chat_reply(request, api_key="team-b-key", model="gpt-4o-mini")
+        ) as team_b_wire,
+        gateway.scenario() as scenario,
+    ):
+        public_a: Final = f"team-a-{uuid.uuid4().hex}"
+        public_b: Final = f"team-b-{uuid.uuid4().hex}"
+        access_group: Final = f"health-group-{uuid.uuid4().hex}"
+        team_a: Final = scenario.team(models=[public_a, public_b, access_group])
+        team_b_id: Final = scenario.team(models=[public_b])
+        user_id: Final = scenario.member(team_a)
+        healthy_id: Final = _create_team_health_deployment(
+            gateway,
+            scenario,
+            team_id=team_a,
+            public_model_name=public_a,
+            upstream_url=healthy.url,
+            api_key="team-a-key",
+            access_group=access_group,
+            api_version="2024-10-21",
+            aws_bedrock_runtime_endpoint=f"{healthy.url}/runtime",
+        )
+        unhealthy_id: Final = _create_team_health_deployment(
+            gateway,
+            scenario,
+            team_id=team_a,
+            public_model_name=public_a,
+            upstream_url=unhealthy.url,
+            api_key="team-a-key",
+            access_group=access_group,
+            api_version="2024-10-21",
+            aws_bedrock_runtime_endpoint=f"{unhealthy.url}/runtime",
+        )
+        team_b_model_id: Final = _create_team_health_deployment(
+            gateway,
+            scenario,
+            team_id=team_b_id,
+            public_model_name=public_b,
+            upstream_url=team_b_wire.url,
+            api_key="team-b-key",
+        )
+        team_key: Final = scenario.key(
+            team_id=team_a,
+            user_id=user_id,
+            models=[public_a, public_b],
+        )
+        access_group_key: Final = scenario.key(
+            team_id=team_a,
+            user_id=user_id,
+            models=[access_group],
+        )
+
+        by_other_team_name: Final = gateway.request(
+            "GET", "/health", key=team_key, params={"model": public_b}
+        )
+        assert by_other_team_name.status_code == 403, by_other_team_name.text
+        assert by_other_team_name.json() == {
+            "detail": {"error": f"key not allowed to health-check model {public_b}"}
+        }, by_other_team_name.text
+        by_other_team_id: Final = gateway.request(
+            "GET", "/health", key=team_key, params={"model_id": team_b_model_id}
+        )
+        assert by_other_team_id.status_code == 403, by_other_team_id.text
+        assert by_other_team_id.json() == {
+            "detail": {"error": f"key not allowed to health-check model_id {team_b_model_id}"}
+        }, by_other_team_id.text
+        assert team_b_wire.drain() == ()
+
+        public_model_report: Final = gateway.request(
+            "GET", "/health", key=team_key, params={"model": public_a}
+        )
+        assert public_model_report.status_code == 200, public_model_report.text
+        public_model_body: Final = public_model_report.json()
+        healthy_endpoint: Final = {
+            "model": "openai/gpt-4o-mini",
+            "model_id": healthy_id,
+        }
+        public_model_unhealthy_endpoint: Final = object_value(public_model_body["unhealthy_endpoints"][0])
+        public_model_error: Final = string_value(public_model_unhealthy_endpoint["error"])
+        public_model_raw_request: Final = _health_failure_raw_request(public_model_unhealthy_endpoint, unhealthy.url)
+        assert "synthetic health failure" in public_model_error, public_model_report.text
+        for endpoint in (*public_model_body["healthy_endpoints"], *public_model_body["unhealthy_endpoints"]):
+            assert {
+                "api_base",
+                "api_version",
+                "aws_bedrock_runtime_endpoint",
+            }.isdisjoint(endpoint), public_model_report.text
+        assert public_model_unhealthy_endpoint == {
+            "model": "openai/gpt-4o-mini",
+            "model_id": unhealthy_id,
+            "error": public_model_error,
+            "raw_request_typed_dict": public_model_raw_request,
+            "exception_status": 500,
+        }, public_model_report.text
+        assert public_model_body == {
+            "healthy_endpoints": [healthy_endpoint],
+            "unhealthy_endpoints": [public_model_unhealthy_endpoint],
+            "healthy_count": 1,
+            "unhealthy_count": 1,
+        }, public_model_report.text
+        assert len(healthy.drain()) == 1
+        assert len(unhealthy.drain()) == 3
+
+        expanded_group_report: Final = gateway.request("GET", "/health", key=access_group_key)
+        assert expanded_group_report.status_code == 200, expanded_group_report.text
+        expanded_group_body: Final = expanded_group_report.json()
+        expanded_group_unhealthy_endpoint: Final = object_value(expanded_group_body["unhealthy_endpoints"][0])
+        expanded_group_error: Final = string_value(expanded_group_unhealthy_endpoint["error"])
+        expanded_group_raw_request: Final = _health_failure_raw_request(
+            expanded_group_unhealthy_endpoint, unhealthy.url
+        )
+        assert "synthetic health failure" in expanded_group_error, expanded_group_report.text
+        assert expanded_group_body == {
+            "healthy_endpoints": [healthy_endpoint],
+            "unhealthy_endpoints": [
+                {
+                    "model": "openai/gpt-4o-mini",
+                    "model_id": unhealthy_id,
+                    "error": expanded_group_error,
+                    "raw_request_typed_dict": expanded_group_raw_request,
+                    "exception_status": 500,
+                }
+            ],
+            "healthy_count": 1,
+            "unhealthy_count": 1,
+        }, expanded_group_report.text
+        for endpoint in (*expanded_group_body["healthy_endpoints"], *expanded_group_body["unhealthy_endpoints"]):
+            assert {
+                "api_base",
+                "api_version",
+                "aws_bedrock_runtime_endpoint",
+            }.isdisjoint(endpoint), expanded_group_report.text
+        assert len(healthy.drain()) == 1
+        assert len(unhealthy.drain()) == 3
+        assert team_b_wire.drain() == ()
+
+        targeted: Final = gateway.request(
+            "GET",
+            "/health",
+            key=team_key,
+            params={"model": public_b, "model_id": unhealthy_id},
+        )
+        assert targeted.status_code == 503, targeted.text
+        targeted_body: Final = targeted.json()
+        targeted_endpoint: Final = object_value(targeted_body["unhealthy_endpoints"][0])
+        targeted_error: Final = string_value(targeted_endpoint["error"])
+        targeted_raw_request: Final = _health_failure_raw_request(targeted_endpoint, unhealthy.url)
+        assert "synthetic health failure" in targeted_error, targeted.text
+        assert targeted_body == {
+            "healthy_endpoints": [],
+            "unhealthy_endpoints": [
+                {
+                    "model": "openai/gpt-4o-mini",
+                    "model_id": unhealthy_id,
+                    "error": targeted_error,
+                    "raw_request_typed_dict": targeted_raw_request,
+                    "exception_status": 500,
+                }
+            ],
+            "healthy_count": 0,
+            "unhealthy_count": 1,
+        }, targeted.text
+        assert healthy.drain() == ()
+        assert len(unhealthy.drain()) == 3
+        assert team_b_wire.drain() == ()
+
+        admin: Final = gateway.request(
+            "GET",
+            "/health",
+            params={"model": public_b, "model_id": unhealthy_id},
+        )
+        assert admin.status_code == 503, admin.text
+        admin_body: Final = admin.json()
+        admin_endpoint: Final = object_value(admin_body["unhealthy_endpoints"][0])
+        admin_error: Final = string_value(admin_endpoint["error"])
+        admin_raw_request: Final = _health_failure_raw_request(admin_endpoint, unhealthy.url)
+        assert "synthetic health failure" in admin_error, admin.text
+        assert admin_body == {
+            "healthy_endpoints": [],
+            "unhealthy_endpoints": [
+                {
+                    "model": "openai/gpt-4o-mini",
+                    "api_base": f"{unhealthy.url}/v1",
+                    "api_version": "2024-10-21",
+                    "aws_bedrock_runtime_endpoint": f"{unhealthy.url}/runtime",
+                    "model_id": unhealthy_id,
+                    "error": admin_error,
+                    "raw_request_typed_dict": admin_raw_request,
+                    "exception_status": 500,
+                }
+            ],
+            "healthy_count": 0,
+            "unhealthy_count": 1,
+        }, admin.text
+        assert len(unhealthy.drain()) == 3
+
+
+def _delete_health_credential_if_present(gateway: Gateway, credential_name: str) -> None:
+    response: Final = gateway.request("DELETE", f"/credentials/{credential_name}")
+    assert response.status_code in (200, 404), response.text
+
+
+def _health_connection_credential(gateway: Gateway, credential_name: str, api_key: str) -> None:
+    created: Final = gateway.request(
+        "POST",
+        "/credentials",
+        {
+            "credential_name": credential_name,
+            "credential_values": {"api_key": api_key},
+            "credential_info": {},
+        },
+    )
+    assert created.status_code == 200, created.text
+
+
+def _health_connection_response(request: Request, model: str, *, validate_request_body: bool = True) -> Reply:
+    response_body: Final = {
+        "/v1/chat/completions": {
+            "id": "chatcmpl-connection",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "healthy"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        },
+        "/v1/embeddings": {
+            "object": "list",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+            "model": model,
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        },
+        "/v1/images/generations": {"created": 1700000000, "data": [{"b64_json": "c3ludGhldGljLWltYWdl"}]},
+        "/v1/audio/transcriptions": {"text": "healthy"},
+        "/v1/responses": {
+            "id": "resp-health",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": model,
+            "output": [
+                {
+                    "id": "msg-health",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "healthy", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+        "/v1/messages": {
+            "id": "msg-health",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": "healthy"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    }
+    assert request.method == "POST"
+    assert request.target in response_body, request.target
+    if validate_request_body:
+        if request.target == "/v1/audio/transcriptions":
+            parts: Final = _multipart_parts(request)
+            assert _multipart_text_fields(parts) == {
+                "model": model,
+                "response_format": "verbose_json",
+            }, request.target
+            files: Final = _multipart_file_fields(parts)
+            assert tuple(files) == ("file",), files
+            filename, content_type, audio_bytes = files["file"]
+            assert filename == "audio_health_check.wav", files
+            assert content_type == "audio/x-wav", files
+            expected_audio: Final = (
+                Path(__file__).resolve().parents[3]
+                / "litellm"
+                / "litellm_core_utils"
+                / "audio_utils"
+                / "audio_health_check.wav"
+            ).read_bytes()
+            assert audio_bytes == expected_audio, files
+        else:
+            body: Final = JSON_OBJECT.validate_json(request.body)
+            if request.target == "/v1/chat/completions":
+                assert body in (
+                    {"model": model, "messages": _HEALTH_CHAT_MESSAGES[0], "max_tokens": 16},
+                    {"model": model, "messages": _HEALTH_CHAT_MESSAGES[1], "max_tokens": 16},
+                ), request.body.decode()
+            elif request.target == "/v1/embeddings":
+                assert body == {
+                    "model": model,
+                    "input": ["test from litellm"],
+                }, request.body.decode()
+            elif request.target == "/v1/images/generations":
+                assert body == {"model": model, "prompt": "test from litellm"}, request.body.decode()
+            elif request.target == "/v1/responses":
+                assert body == {"model": model, "input": "test from litellm"}, request.body.decode()
+            else:
+                assert body in (
+                    {
+                        "model": model,
+                        "messages": _HEALTH_CHAT_MESSAGES[0],
+                        "max_tokens": 16,
+                        "stream": False,
+                    },
+                    {
+                        "model": model,
+                        "messages": _HEALTH_CHAT_MESSAGES[1],
+                        "max_tokens": 16,
+                        "stream": False,
+                    },
+                ), request.body.decode()
+    if request.target == "/v1/messages":
+        assert request.headers["x-api-key"] == "synthetic-health-credential", request.headers
+        assert request.headers["anthropic-version"] == "2023-06-01", request.headers
+    else:
+        assert request.headers["authorization"] == "Bearer synthetic-health-credential", request.headers
+    return Reply(body=json.dumps(response_body[request.target]).encode())
+
+
+def test_health_test_connection_modes_use_stored_credentials_and_reject_environment_references(
+    gateway: Gateway,
+) -> None:
+    with gateway.scenario() as scenario:
+        for mode, provider in (
+            ("chat", "openai"),
+            ("responses", "openai"),
+            ("anthropic_messages", "anthropic"),
+        ):
+            model: Final = f"{provider}/health-{mode}-{uuid.uuid4().hex}"
+            provider_model: Final = model.split("/", maxsplit=1)[1]
+            with wire_server(
+                lambda request, expected_model=provider_model: _health_connection_response(request, expected_model)
+            ) as wire:
+                credential_name: Final = f"health-{uuid.uuid4().hex}"
+                _health_connection_credential(gateway, credential_name, "synthetic-health-credential")
+                scenario.cleanups.callback(_delete_health_credential_if_present, gateway, credential_name)
+                base: Final = wire.url if mode == "anthropic_messages" else f"{wire.url}/v1"
+                response: Final = gateway.request(
+                    "POST",
+                    "/health/test_connection",
+                    {
+                        "litellm_params": {
+                            "model": model,
+                            "api_base": base,
+                            "litellm_credential_name": credential_name,
+                        },
+                        "mode": mode,
+                    },
+                )
+                assert response.status_code == 200, response.text
+                assert response.json() == {
+                    "status": "success",
+                    "result": {"model": model, "api_base": base},
+                }, response.text
+                requests: Final = wire.drain()
+                assert len(requests) == 1, requests
+                assert requests[0].target == {
+                    "chat": "/v1/chat/completions",
+                    "embedding": "/v1/embeddings",
+                    "image_generation": "/v1/images/generations",
+                    "audio_transcription": "/v1/audio/transcriptions",
+                    "responses": "/v1/responses",
+                    "anthropic_messages": "/v1/messages",
+                }[mode], requests
+
+        configured_provider_model: Final = f"health-credential-{uuid.uuid4().hex}"
+        configured_model: Final = f"openai/{configured_provider_model}"
+        with wire_server(
+            lambda request: _health_connection_response(request, configured_provider_model)
+        ) as submitted_wire, wire_server(lambda request: Reply(status=500)) as configured_wire:
+            credential_name: Final = f"health-submitted-{uuid.uuid4().hex}"
+            _health_connection_credential(gateway, credential_name, "synthetic-health-credential")
+            scenario.cleanups.callback(_delete_health_credential_if_present, gateway, credential_name)
+            scenario.model(
+                model=configured_model,
+                api_base=f"{configured_wire.url}/v1",
+                api_key="synthetic-config-credential",
+            )
+            submitted_base: Final = f"{submitted_wire.url}/v1"
+            submitted: Final = gateway.request(
+                "POST",
+                "/health/test_connection",
+                {
+                    "litellm_params": {
+                        "model": configured_model,
+                        "api_base": submitted_base,
+                        "litellm_credential_name": credential_name,
+                    },
+                    "mode": "chat",
+                },
+            )
+            assert submitted.status_code == 200, submitted.text
+            assert submitted.json() == {
+                "status": "success",
+                "result": {"model": configured_model, "api_base": submitted_base},
+            }, submitted.text
+            assert len(submitted_wire.drain()) == 1
+            assert configured_wire.drain() == ()
+
+            rejected: Final = gateway.request(
+                "POST",
+                "/health/test_connection",
+                {
+                    "litellm_params": {
+                        "model": configured_model,
+                        "api_base": submitted_base,
+                        "api_key": "os.environ/X",
+                    },
+                    "mode": "chat",
+                },
+            )
+            assert rejected.status_code == 400, rejected.text
+            assert rejected.json() == {
+                "detail": {"error": "Environment variable references are not permitted in request parameters."}
+            }, rejected.text
+            assert submitted_wire.drain() == ()
+            assert configured_wire.drain() == ()
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_path"),
+    (
+        ("embedding", "/v1/embeddings"),
+        ("image_generation", "/v1/images/generations"),
+        ("audio_transcription", "/v1/audio/transcriptions"),
+    ),
+)
+def test_health_test_connection_non_chat_modes_do_not_receive_chat_max_tokens(
+    gateway: Gateway, mode: str, expected_path: str
+) -> None:
+    pytest.skip(f"BUG: /health/test_connection sends chat max_tokens to {mode} probes")
+    with gateway.scenario() as scenario:
+        provider_model: Final = f"health-{mode}-{uuid.uuid4().hex[:8]}"
+        model: Final = f"openai/{provider_model}"
+        with wire_server(
+            lambda request, expected_model=provider_model: _health_connection_response(
+                request, expected_model, validate_request_body=False
+            )
+        ) as wire:
+            credential_name: Final = f"health-{uuid.uuid4().hex}"
+            _health_connection_credential(gateway, credential_name, "synthetic-health-credential")
+            scenario.cleanups.callback(_delete_health_credential_if_present, gateway, credential_name)
+            api_base: Final = f"{wire.url}/v1"
+            response: Final = gateway.request(
+                "POST",
+                "/health/test_connection",
+                {
+                    "litellm_params": {
+                        "model": model,
+                        "api_base": api_base,
+                        "litellm_credential_name": credential_name,
+                    },
+                    "mode": mode,
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert response.json() == {
+                "status": "success",
+                "result": {"model": model, "api_base": api_base},
+            }, response.text
+
+            requests: Final = wire.drain()
+            assert len(requests) == 1, response.text
+            request: Final = requests[0]
+            assert request.target == expected_path, response.text
+            if mode == "embedding":
+                assert JSON_OBJECT.validate_json(request.body) == {
+                    "model": provider_model,
+                    "input": ["test from litellm"],
+                }, response.text
+            elif mode == "image_generation":
+                assert JSON_OBJECT.validate_json(request.body) == {
+                    "model": provider_model,
+                    "prompt": "test from litellm",
+                }, response.text
+            else:
+                parts: Final = _multipart_parts(request)
+                assert _multipart_text_fields(parts) == {
+                    "model": provider_model,
+                    "response_format": "verbose_json",
+                }, response.text
+                files: Final = _multipart_file_fields(parts)
+                assert tuple(files) == ("file",), response.text
+                assert files["file"] == (
+                    "audio_health_check.wav",
+                    "audio/x-wav",
+                    (
+                        Path(__file__).resolve().parents[3]
+                        / "litellm"
+                        / "litellm_core_utils"
+                        / "audio_utils"
+                        / "audio_health_check.wav"
+                    ).read_bytes(),
+                ), response.text

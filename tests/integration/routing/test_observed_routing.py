@@ -1,13 +1,15 @@
 import json
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+from queue import SimpleQueue
 from typing import Final
 
 import httpx
 import pytest
 import yaml
-
 from integration._support.client import Gateway, object_value
+from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, wire_server
 
 
@@ -96,3 +98,169 @@ def test_saved_deployment_target_update_changes_wire_and_preserves_control(gatew
                 assert gateway.chat(alias, text=f"{prefix} generation {generation}")["usage"]["total_tokens"] == 40
             requests: Final = upstream.get("/__observations").json()["requests"]
             assert [request["body"]["model"] for request in requests] == [prefix + "-" + suffix, prefix + "-control"]
+
+
+@pytest.mark.parametrize(
+    (
+        "case",
+        "primary_error",
+        "body_flag",
+        "expected_sequence",
+        "expected_model",
+        "expected_status",
+        "expected_attempted_fallbacks",
+    ),
+    (
+        ("context", "context", None, ("primary-up", "big-up"), "big-up", 200, "1"),
+        ("content-policy", "content-policy", None, ("primary-up", "safe-up"), "safe-up", 200, "1"),
+        ("server-error", "server-error", None, ("primary-up", "general-up"), "general-up", 200, "1"),
+        ("disabled-context", "context", "disable_fallbacks", ("primary-up",), "primary-up", 400, None),
+        ("mock-context", None, "mock_testing_context_fallbacks", ("big-up",), "big-up", 200, "1"),
+        ("mock-content-policy", None, "mock_testing_content_policy_fallbacks", ("safe-up",), "safe-up", 200, "1"),
+        ("mock-server-error", None, "mock_testing_fallbacks", ("general-up",), "general-up", 200, "1"),
+    ),
+)
+def test_health_routing_fallbacks_preserve_error_specific_targets_and_request_controls(
+    gateway: Gateway,
+    tmp_path: Path,
+    case: str,
+    primary_error: str | None,
+    body_flag: str | None,
+    expected_sequence: tuple[str, ...],
+    expected_model: str,
+    expected_status: int,
+    expected_attempted_fallbacks: str | None,
+) -> None:
+    prompt: Final = f"health-routing-{case}-{uuid.uuid4().hex}"
+    call_order: Final = SimpleQueue[str]()
+
+    def respond(model: str) -> Reply:
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "response-" + model,
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "served " + model},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15},
+                }
+            ).encode()
+        )
+
+    def handler(model: str) -> Callable[[Request], Reply]:
+        def handle(request: Request) -> Reply:
+            if request.method == "GET":
+                return Reply(body=b'{"object":"list","data":[]}')
+            actual_body: Final = json.loads(request.body)
+            assert request.target == "/v1/chat/completions", request.target
+            assert actual_body == {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+            }, request.body.decode()
+            call_order.put(model)
+            if model == "primary-up" and primary_error == "context":
+                return Reply(
+                    status=400,
+                    body=b'{"error":{"message":"This model\'s maximum context length is 4096 tokens","type":"invalid_request_error","code":"context_length_exceeded"}}',
+                )
+            if model == "primary-up" and primary_error == "content-policy":
+                return Reply(
+                    status=400,
+                    body=b'{"error":{"message":"synthetic content policy rejection","type":"invalid_request_error","code":"content_policy_violation"}}',
+                )
+            if model == "primary-up" and primary_error == "server-error":
+                return Reply(
+                    status=500,
+                    body=b'{"error":{"message":"synthetic upstream failure","type":"api_error","code":"500"}}',
+                )
+            return respond(model)
+
+        return handle
+
+    with (
+        wire_server(handler("primary-up")) as primary,
+        wire_server(handler("big-up")) as big,
+        wire_server(handler("safe-up")) as safe,
+        wire_server(handler("general-up")) as general,
+    ):
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["model_list"] = [
+            {
+                "model_name": alias,
+                "litellm_params": {
+                    "model": f"openai/{upstream_model}",
+                    "api_base": wire.url + "/v1",
+                    "api_key": "synthetic-health-routing-key",
+                },
+            }
+            for alias, upstream_model, wire in (
+                ("primary", "primary-up", primary),
+                ("big", "big-up", big),
+                ("safe", "safe-up", safe),
+                ("general", "general-up", general),
+            )
+        ]
+        config["router_settings"] = {
+            "num_retries": 0,
+            "disable_cooldowns": True,
+            "context_window_fallbacks": [{"primary": ["big"]}],
+            "content_policy_fallbacks": [{"primary": ["safe"]}],
+            "fallbacks": [{"primary": ["general"]}],
+        }
+        config["general_settings"] = {
+            **config.get("general_settings", {}),
+            "dangerously_allow_mock_testing_request_params": True,
+        }
+        path: Final = tmp_path / f"health-routing-{case}.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate:
+            request_body: Final = {
+                "model": "primary",
+                "messages": [{"role": "user", "content": prompt}],
+                **({body_flag: True} if body_flag is not None else {}),
+            }
+            response: Final = candidate.request("POST", "/v1/chat/completions", request_body)
+            assert response.status_code == expected_status, response.text
+            observed_order: Final = tuple(call_order.get_nowait() for _ in range(call_order.qsize()))
+            assert observed_order == expected_sequence
+            assert response.headers.get("x-litellm-attempted-fallbacks") == expected_attempted_fallbacks, response.text
+            if expected_status == 400:
+                assert response.json() == {
+                    "error": {
+                        "message": (
+                            "litellm.ContextWindowExceededError: litellm.BadRequestError: "
+                            "ContextWindowExceededError: OpenAIException - This model's maximum context length is "
+                            "4096 tokens"
+                        ),
+                        "type": "invalid_request_error",
+                        "param": None,
+                        "code": "400",
+                    }
+                }, response.text
+            else:
+                assert response.json() == {
+                    "id": "response-" + expected_model,
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": expected_model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "served " + expected_model,
+                                "provider_specific_fields": {"refusal": None},
+                            },
+                            "finish_reason": "stop",
+                            "provider_specific_fields": {},
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 11, "completion_tokens": 4, "total_tokens": 15},
+                }, response.text

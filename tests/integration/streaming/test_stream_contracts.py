@@ -2,7 +2,9 @@ import asyncio
 import json
 import threading
 import uuid
+from collections.abc import Callable
 from pathlib import Path
+from queue import SimpleQueue
 from typing import Final
 
 import pytest
@@ -12,7 +14,7 @@ from hypothesis import strategies as st
 from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, wire_server
+from integration._support.wire import Reply, Request, wire_server
 from openai import OpenAI
 
 
@@ -434,6 +436,102 @@ def sse_data_lines(text: str) -> tuple[str, ...]:
     return tuple(line.removeprefix("data: ") for line in text.splitlines() if line.startswith("data: "))
 
 
+def _native_anthropic_message(model: str, identity: str, text: str) -> dict[str, object]:
+    return {
+        "id": identity,
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": text}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 11, "output_tokens": 4},
+    }
+
+
+def _native_responses_response(model: str, identity: str, text: str) -> dict[str, object]:
+    return {
+        "id": identity,
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": model,
+        "output": [
+            {
+                "id": "msg_" + identity,
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": text, "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 11, "output_tokens": 4, "total_tokens": 15},
+    }
+
+
+def _native_sse_event(event: dict[str, object]) -> bytes:
+    return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
+
+
+def _native_anthropic_stream(model: str, identity: str, text: str) -> tuple[bytes, ...]:
+    return (
+        _native_sse_event(
+            {
+                "type": "message_start",
+                "message": {
+                    **_native_anthropic_message(model, identity, ""),
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 11, "output_tokens": 0},
+                },
+            }
+        ),
+        _native_sse_event(
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        ),
+        _native_sse_event(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": text},
+            }
+        ),
+        _native_sse_event({"type": "content_block_stop", "index": 0}),
+        _native_sse_event(
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 4},
+            }
+        ),
+        _native_sse_event({"type": "message_stop"}),
+    )
+
+
+def _native_responses_stream(model: str, identity: str, text: str) -> tuple[bytes, ...]:
+    response: Final = _native_responses_response(model, identity, text)
+    return (
+        _native_sse_event(
+            {
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {**response, "status": "in_progress", "output": []},
+            }
+        ),
+        _native_sse_event(
+            {
+                "type": "response.output_text.delta",
+                "sequence_number": 1,
+                "item_id": "msg_" + identity,
+                "output_index": 0,
+                "content_index": 0,
+                "delta": text,
+            }
+        ),
+        _native_sse_event({"type": "response.completed", "sequence_number": 2, "response": response}),
+    )
+
+
 @pytest.mark.covers("other.streaming.usage.provider_cost_object_completes_stream_and_bills_total_cost")
 def test_perplexity_stream_with_cost_breakdown_object_completes_and_bills_total_cost(gateway: Gateway) -> None:
     identity: Final = "stream-cost-object-" + uuid.uuid4().hex
@@ -591,6 +689,246 @@ def test_primary_stream_with_empty_first_chunk_then_disconnect_falls_back_and_bi
             assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"], rows[0]["status"]) == (11, 4, "success"), (
                 rows
             )
+            assert float(rows[0]["spend"]) == pytest.approx(0.019), rows
+
+
+@pytest.mark.parametrize(
+    ("route", "failure_mode"),
+    (
+        ("messages", "non-streaming"),
+        ("messages", "before-first-byte"),
+        ("messages", "mid-stream"),
+        ("messages", "request-body-fallbacks"),
+        ("responses", "non-streaming"),
+        ("responses", "before-first-byte"),
+        ("responses", "mid-stream"),
+        ("responses", "request-body-fallbacks"),
+    ),
+)
+def test_native_messages_and_responses_routes_fall_back_and_bill_the_fallback(
+    gateway: Gateway,
+    tmp_path: Path,
+    route: str,
+    failure_mode: str,
+) -> None:
+    identity: Final = f"native-fallback-{route}-{failure_mode}-{uuid.uuid4().hex}"
+    is_messages: Final = route == "messages"
+    path: Final = "/v1/messages" if is_messages else "/v1/responses"
+    primary_model: Final = "claude-sonnet-4-5-20250929" if is_messages else "gpt-5.6"
+    fallback_model: Final = "claude-opus-4-5-20251101" if is_messages else "gpt-5.6"
+    stream: Final = failure_mode in ("before-first-byte", "mid-stream")
+    client_body: Final = (
+        {
+            "model": "primary",
+            "max_tokens": 12,
+            "messages": [{"role": "user", "content": identity}],
+            "stream": stream,
+            **({"fallbacks": ["fallback"]} if failure_mode == "request-body-fallbacks" else {}),
+        }
+        if is_messages
+        else {
+            "model": "primary",
+            "input": identity,
+            "stream": stream,
+            **({"fallbacks": ["fallback"]} if failure_mode == "request-body-fallbacks" else {}),
+        }
+    )
+    primary_body: Final = (
+        {
+            "model": primary_model,
+            "max_tokens": 12,
+            "messages": [{"role": "user", "content": identity}],
+            "stream": stream,
+        }
+        if is_messages
+        else {"model": primary_model, "input": identity, "stream": stream}
+    )
+    fallback_body: Final = {**primary_body, "model": fallback_model}
+    call_order: Final[SimpleQueue[str]] = SimpleQueue()
+    received: Final[SimpleQueue[tuple[str, Request]]] = SimpleQueue()
+    fallback_text: Final = f"fallback response {identity}"
+    primary_text: Final = f"primary response {identity}"
+
+    def response_for(model: str, text: str) -> Reply:
+        if is_messages:
+            if stream:
+                return Reply(content_type="text/event-stream", chunks=_native_anthropic_stream(model, identity, text))
+            return Reply(body=json.dumps(_native_anthropic_message(model, identity, text)).encode())
+        if stream:
+            return Reply(content_type="text/event-stream", chunks=_native_responses_stream(model, identity, text))
+        return Reply(body=json.dumps(_native_responses_response(model, identity, text)).encode())
+
+    def upstream(name: str, model: str) -> Callable[[Request], Reply]:
+        def handle(request: Request) -> Reply:
+            if request.method == "GET":
+                return Reply(body=b'{"object":"list","data":[]}')
+            assert request.method == "POST" and request.target == path, (request.method, request.target)
+            expected_body: Final = primary_body if name == "primary" else fallback_body
+            assert json.loads(request.body) == expected_body, request.body.decode()
+            call_order.put(name)
+            received.put((name, request))
+            if name == "primary" and failure_mode == "mid-stream":
+                first_event: Final = (
+                    _native_anthropic_stream(primary_model, identity + "-primary", primary_text)[0]
+                    if is_messages
+                    else _native_responses_stream(primary_model, identity + "-primary", primary_text)[0]
+                )
+                return Reply(
+                    content_type="text/event-stream",
+                    chunks=(first_event, b"data: incomplete\n\n"),
+                    abort_after=1,
+                )
+            if name == "primary" and failure_mode in (
+                "non-streaming",
+                "before-first-byte",
+                "request-body-fallbacks",
+            ):
+                return Reply(
+                    status=500,
+                    body=b'{"error":{"message":"synthetic primary failure","type":"server_error","code":"internal_error"}}',
+                )
+            return response_for(model, fallback_text if name == "fallback" else primary_text)
+
+        return handle
+
+    with wire_server(upstream("primary", primary_model)) as primary, wire_server(
+        upstream("fallback", fallback_model)
+    ) as fallback:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["model_list"] = [
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": f"{'anthropic' if is_messages else 'openai'}/{model}",
+                    "api_key": "synthetic-native-fallback-key",
+                    "api_base": server.url if is_messages else server.url + "/v1",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                },
+            }
+            for model_group, model, server in (
+                ("primary", primary_model, primary),
+                ("fallback", fallback_model, fallback),
+            )
+        ]
+        config["router_settings"] = {
+            "num_retries": 0,
+            "disable_cooldowns": True,
+            "fallbacks": [] if failure_mode == "request-body-fallbacks" else [{"primary": ["fallback"]}],
+        }
+        proxy_config: Final = tmp_path / f"native-{route}-{failure_mode}.yaml"
+        proxy_config.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=proxy_config) as candidate:
+            request_headers: Final = {
+                "Authorization": f"Bearer {candidate.key}",
+                "x-litellm-call-id": identity,
+                **({"anthropic-version": "2023-06-01"} if is_messages else {}),
+            }
+            with candidate.client.stream("POST", path, json=client_body, headers=request_headers) as response:
+                response_text: Final = response.read().decode()
+            assert response.status_code == 200, response_text
+            assert response.headers.get("x-litellm-attempted-fallbacks") == "1", response_text
+            assert tuple(call_order.get_nowait() for _ in range(call_order.qsize())) == ("primary", "fallback")
+            assert tuple(
+                (name, request.method, request.target, json.loads(request.body))
+                for name, request in (received.get_nowait() for _ in range(received.qsize()))
+            ) == (("primary", "POST", path, primary_body), ("fallback", "POST", path, fallback_body))
+            if stream:
+                event_lines: Final = tuple(line for line in sse_data_lines(response_text) if line != "[DONE]")
+                events: Final = tuple(json.loads(line) for line in event_lines)
+                event_types: Final = tuple(event["type"] for event in events)
+                expected_types: Final = (
+                    (
+                        "message_start",
+                        "content_block_start",
+                        "content_block_delta",
+                        "content_block_stop",
+                        "message_delta",
+                        "message_stop",
+                    )
+                    if is_messages
+                    else ("response.created", "response.output_text.delta", "response.completed")
+                )
+                assert event_types == expected_types, response_text
+                assert event_types.count("message_start" if is_messages else "response.created") == 1, response_text
+                assert event_types[-1] == ("message_stop" if is_messages else "response.completed"), response_text
+                output_text: Final = (
+                    "".join(event["delta"]["text"] for event in events if event["type"] == "content_block_delta")
+                    if is_messages
+                    else "".join(
+                        event["delta"] for event in events if event["type"] == "response.output_text.delta"
+                    )
+                )
+                assert output_text == fallback_text, response_text
+            else:
+                response_body: Final = response.json()
+                expected_response: Final = (
+                    _native_anthropic_message(fallback_model, identity, fallback_text)
+                    if is_messages
+                    else {
+                        "id": response_body["id"],
+                        "created_at": 1,
+                        "error": None,
+                        "incomplete_details": None,
+                        "instructions": None,
+                        "metadata": None,
+                        "model": fallback_model,
+                        "object": "response",
+                        "output": [
+                            {
+                                "id": "msg_" + identity,
+                                "content": [
+                                    {
+                                        "annotations": [],
+                                        "text": fallback_text,
+                                        "type": "output_text",
+                                        "logprobs": None,
+                                    }
+                                ],
+                                "role": "assistant",
+                                "status": "completed",
+                                "type": "message",
+                                "phase": None,
+                            }
+                        ],
+                        "parallel_tool_calls": None,
+                        "temperature": None,
+                        "tool_choice": None,
+                        "tools": None,
+                        "top_p": None,
+                        "max_output_tokens": None,
+                        "previous_response_id": None,
+                        "reasoning": None,
+                        "status": "completed",
+                        "text": None,
+                        "truncation": None,
+                        "usage": {
+                            "input_tokens": 11,
+                            "input_tokens_details": None,
+                            "output_tokens": 4,
+                            "output_tokens_details": None,
+                            "total_tokens": 15,
+                            "cost": None,
+                        },
+                        "user": None,
+                        "store": None,
+                    }
+                )
+                assert response_body == expected_response, response_text
+                if not is_messages:
+                    assert response_body["id"].startswith("resp_"), response_text
+            rows: Final = eventually(
+                lambda: read_rows(
+                    'SELECT model, model_group, spend, prompt_tokens, completion_tokens, status '
+                    'FROM "LiteLLM_SpendLogs" WHERE request_id=%s OR litellm_call_id=%s',
+                    (identity, identity),
+                ),
+                lambda values: len(values) == 1,
+                seconds=70,
+            )
+            assert rows[0]["model_group"] == "fallback", rows
+            assert rows[0]["status"] == "success", rows
+            assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == (11, 4), rows
             assert float(rows[0]["spend"]) == pytest.approx(0.019), rows
 
 
