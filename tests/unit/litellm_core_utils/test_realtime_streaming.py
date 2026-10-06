@@ -3607,13 +3607,11 @@ async def test_transcription_session_guardrail_block_only_reports_violation(
     client_ws: Final = MagicMock()
     client_ws.send_text = AsyncMock()
     backend_ws: Final = MagicMock()
-    backend_ws.recv = AsyncMock(
-        side_effect=[
-            _make_transcript_event("a blocked transcript", item_id="item_1"),
-            _make_transcript_event("a clean follow-up", item_id="item_2"),
-            ConnectionClosed(None, None),
-        ]
+    blocked_event: Final = _make_transcript_event("a blocked transcript", item_id="item_1")
+    follow_up_events: Final = (
+        () if expect_session_closed else (_make_transcript_event("a clean follow-up", item_id="item_2"),)
     )
+    backend_ws.recv = AsyncMock(side_effect=[blocked_event, *follow_up_events, ConnectionClosed(None, None)])
     backend_ws.send = AsyncMock()
     backend_ws.close = AsyncMock()
     streaming: Final = RealTimeStreaming(
@@ -3628,9 +3626,13 @@ async def test_transcription_session_guardrail_block_only_reports_violation(
     await streaming.backend_to_client_send_messages()
 
     sent_to_client: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
-    assert [event["type"] for event in sent_to_client] == [completed_type, "error", completed_type], sent_to_client
+    expected_follow_up: Final = () if expect_session_closed else ((completed_type, "a clean follow-up"),)
+    assert [(event["type"], event.get("transcript")) for event in sent_to_client] == [
+        (completed_type, "a blocked transcript"),
+        ("error", None),
+        *expected_follow_up,
+    ], sent_to_client
     assert sent_to_client[1]["error"]["type"] == "guardrail_violation", sent_to_client
-    assert sent_to_client[2]["transcript"] == "a clean follow-up", sent_to_client
     assert streaming._violation_count == 1
     sent_to_backend: Final = [call.args[0] for call in backend_ws.send.await_args_list]
     assert sent_to_backend == [], sent_to_backend
