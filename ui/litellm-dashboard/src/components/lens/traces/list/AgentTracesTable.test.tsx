@@ -120,7 +120,7 @@ describe("runCost", () => {
       spend: 0.38,
       priced_calls: 18,
       llm_calls: 20,
-      expected: { label: "≥ $0.38", partial: "18 of 20 calls priced" },
+      expected: { label: "≥ $0.38", partial: { short: "18/20 priced", long: "18 of 20 calls priced" } },
     },
     { spend: null, priced_calls: 0, llm_calls: 20, expected: null },
     { spend: 0, priced_calls: 0, llm_calls: 0, expected: null },
@@ -156,6 +156,7 @@ describe("AgentTracesTable cost cell", () => {
   it("marks a partial cost as a lower bound and says how many calls were priced", () => {
     const cell = costCell({ spend: 0.38, priced_calls: 18 });
     expect(cell).toHaveTextContent("≥ $0.38");
+    expect(cell).toHaveTextContent("18/20 priced");
     expect(within(cell).getByTitle("18 of 20 calls priced")).toBeInTheDocument();
   });
 

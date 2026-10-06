@@ -13,10 +13,20 @@ import type { Span, SpanDetail, SpanErrorPage, Trace } from "../../types";
 vi.mock("../../../../networking", () => ({
   agentTraceSpanCall: vi.fn(),
   agentTraceSpanErrorCall: vi.fn(),
+  uiSpendLogsCall: vi.fn(),
   getProxyBaseUrl: () => "http://proxy.test/",
 }));
 
-import { agentTraceSpanCall, agentTraceSpanErrorCall } from "../../../../networking";
+vi.mock("../../../../logs/detail", () => ({
+  LogDetailsDrawer: ({ open, logEntry }: { open: boolean; logEntry: { request_id: string } | null }) =>
+    open && logEntry ? (
+      <div role="dialog" aria-label="Request log">
+        {logEntry.request_id}
+      </div>
+    ) : null,
+}));
+
+import { agentTraceSpanCall, agentTraceSpanErrorCall, uiSpendLogsCall } from "../../../../networking";
 
 type SpanFields = Partial<Span> & Pick<Span, "span_id">;
 
@@ -37,6 +47,8 @@ const span = (overrides: SpanFields): Span => ({
   output_tokens: 0,
   litellm_request_id: null,
   spend: null,
+  spend_log_request_id: null,
+  spend_match: null,
   ...overrides,
 });
 
@@ -49,6 +61,9 @@ const llmFields: SpanFields = {
   input_tokens: 659,
   output_tokens: 60,
   litellm_request_id: "chatcmpl-abc",
+  spend: 0.0002,
+  spend_log_request_id: "req_7f3a9c2e1b44",
+  spend_match: "matched",
 };
 const failedToolFields: SpanFields = {
   span_id: "tool1",
@@ -244,13 +259,28 @@ describe("DetailPane", () => {
     expect(input).toHaveTextContent("acme-404");
   });
 
-  it("shows the LiteLLM request facts on the Request tab", async () => {
+  it("links a priced LLM step to its spend log in the header and opens it by that request id", async () => {
     const user = userEvent.setup();
+    vi.mocked(uiSpendLogsCall).mockResolvedValue({ data: [{ request_id: "req_7f3a9c2e1b44" }] });
     renderPane(spanRow(llm));
+    const link = screen.getByRole("button", { name: "Open spend log req_7f3a9c2e1b44" });
+    expect(link).toHaveTextContent("Spend log·req_7f3a9c…·$0.0002");
+    await user.click(link);
+    expect(await screen.findByRole("dialog", { name: "Request log" })).toHaveTextContent("req_7f3a9c2e1b44");
+    expect(vi.mocked(uiSpendLogsCall).mock.calls[0][0].params).toEqual({ request_id: "req_7f3a9c2e1b44" });
+  });
+
+  it.each([
+    { spend_match: "no_call_id" as const, reason: "This step records no gen_ai.response.id or litellm.call_id" },
+    { spend_match: "no_spend_log" as const, reason: "No spend log carries this step's id" },
+  ])("says why an unpriced LLM step has no cost ($spend_match)", async ({ spend_match, reason }) => {
+    const user = userEvent.setup();
+    const unpriced: SpanFields = { ...llmFields, spend: null, spend_log_request_id: null, spend_match };
+    renderPane(spanRow(span(unpriced)));
+    expect(screen.getByTitle(reason)).toHaveTextContent("Cost not matched");
+    expect(screen.queryByRole("button", { name: /Open spend log/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "Request" }));
-    expect(await screen.findByText("chatcmpl-abc")).toBeInTheDocument();
-    expect(screen.getByText("659")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Open request log/ })).toBeInTheDocument();
+    expect(await screen.findByText(reason, { selector: "p" })).toBeInTheDocument();
   });
 
   it("summarizes a ×N group with its failure pattern", () => {
