@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, Copy, Link, RefreshCw } from "lucide-react";
+import { ArrowLeft, Check, Copy, Link, ListTree, MessagesSquare, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { useTimeout } from "usehooks-ts";
 
@@ -122,11 +122,13 @@ export function RunHeader({
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 @xl/run-header:ml-auto">
           <TabsList aria-label="Trace view" className="group-data-horizontal/tabs:h-7">
-            <TabsTrigger value="steps" className="px-2.5 text-xs">
+            <TabsTrigger value="steps" className="gap-1.5 px-2.5 text-xs">
+              <ListTree className="size-3.5" />
               Steps
             </TabsTrigger>
-            <TabsTrigger value="conversation" className="px-2.5 text-xs">
-              Conversation
+            <TabsTrigger value="thread" className="gap-1.5 px-2.5 text-xs">
+              <MessagesSquare className="size-3.5" />
+              Thread
             </TabsTrigger>
           </TabsList>
           <div className="flex items-center gap-1.5">

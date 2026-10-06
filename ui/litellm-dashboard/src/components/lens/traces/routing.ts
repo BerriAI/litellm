@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 import { TIME_RANGE_PARSERS } from "@/components/shared/timeRange/routing";
 import type { TraceSummary } from "./types";
 
-export const TRACE_VIEWS = ["steps", "conversation"] as const;
+export const TRACE_VIEWS = ["steps", "thread"] as const;
 export type TraceView = (typeof TRACE_VIEWS)[number];
 
 export const SPAN_TABS = ["content", "request", "attributes"] as const;

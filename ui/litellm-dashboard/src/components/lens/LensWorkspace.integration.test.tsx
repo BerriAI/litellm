@@ -85,8 +85,8 @@ describe("Lens interactive demo", () => {
     expect(lastUrl(onUrlUpdate).get("trace")).toBe(openRun.get("trace"));
     await user.click(within(drawer).getByRole("tab", { name: "Attributes" }));
     await expectUrl(onUrlUpdate, (url) => expect(url.get("span_tab")).toBe("attributes"));
-    await user.click(within(drawer).getByRole("tab", { name: "Conversation" }));
-    await expectUrl(onUrlUpdate, (url) => expect(url.get("view")).toBe("conversation"));
+    await user.click(within(drawer).getByRole("tab", { name: "Thread" }));
+    await expectUrl(onUrlUpdate, (url) => expect(url.get("view")).toBe("thread"));
     expect(network).not.toHaveBeenCalled();
     await user.click(screen.getByRole("switch", { name: "Demo data" }));
     expect(await screen.findByRole("region", { name: "Get started with Lens" })).toBeVisible();
