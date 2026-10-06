@@ -32456,7 +32456,7 @@ export interface components {
                 [key: string]: number;
             } | null;
             /** Denied Passthrough Routes */
-            denied_passthrough_routes?: unknown[] | null;
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -32624,7 +32624,7 @@ export interface components {
                 [key: string]: number;
             } | null;
             /** Denied Passthrough Routes */
-            denied_passthrough_routes?: unknown[] | null;
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -38982,7 +38982,7 @@ export interface components {
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             /** Denied Passthrough Routes */
-            denied_passthrough_routes?: unknown[] | null;
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Enforced Batch Output Expires After */
@@ -39278,7 +39278,7 @@ export interface components {
                 [key: string]: number;
             } | null;
             /** Denied Passthrough Routes */
-            denied_passthrough_routes?: unknown[] | null;
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -40080,7 +40080,7 @@ export interface components {
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             /** Denied Passthrough Routes */
-            denied_passthrough_routes?: unknown[] | null;
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Enforced Batch Output Expires After */
@@ -41656,7 +41656,7 @@ export interface components {
                 [key: string]: number;
             } | null;
             /** Denied Passthrough Routes */
-            denied_passthrough_routes?: unknown[] | null;
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -47633,7 +47633,7 @@ export interface components {
                 [key: string]: number;
             } | null;
             /** Denied Passthrough Routes */
-            denied_passthrough_routes?: unknown[] | null;
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Duration */
@@ -48129,7 +48129,7 @@ export interface components {
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             /** Denied Passthrough Routes */
-            denied_passthrough_routes?: unknown[] | null;
+            denied_passthrough_routes?: string[] | null;
             /** Disable Global Guardrails */
             disable_global_guardrails?: boolean | null;
             /** Enforced Batch Output Expires After */
