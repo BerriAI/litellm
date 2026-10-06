@@ -3325,16 +3325,14 @@ def test_chunk_creator_drops_empty_finish_chunk(
     ("chunk_model", "expected_model"),
     [(None, "azure/request-model"), ("azure/chunk-model", "azure/chunk-model")],
 )
-def test_azure_chunk_model_preserves_or_updates_request_model(
-    chunk_model: str | None, expected_model: str
-):
-    wrapper = CustomStreamWrapper(
+def test_azure_chunk_model_preserves_or_updates_request_model(chunk_model: str | None, expected_model: str):
+    wrapper: Final = CustomStreamWrapper(
         completion_stream=None,
         model="azure/request-model",
         logging_obj=MagicMock(),
         custom_llm_provider="azure",
     )
-    chunk = ModelResponseStream(
+    chunk: Final = ModelResponseStream(
         model=chunk_model,
         choices=[
             StreamingChoices(
