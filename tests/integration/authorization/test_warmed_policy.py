@@ -646,22 +646,26 @@ def test_non_admin_keys_cannot_write_scim_users_or_groups(gateway: Gateway, team
         )
         assert response.status_code == 401, response.text
         assert object_value(response.json()) == _expected_scim_write_denial(route, caller, caller_role), response.text
-        assert (
-            read_rows(
-                'SELECT user_role, metadata, teams FROM "LiteLLM_UserTable" WHERE user_id = %s',
-                (caller,),
-            )
-            == user_before
+        user_after: Final = read_rows(
+            'SELECT user_role, metadata, teams FROM "LiteLLM_UserTable" WHERE user_id = %s',
+            (caller,),
         )
-        assert (
-            read_rows(
-                'SELECT team_alias, members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s',
-                (team,),
-            )
-            == team_before
+        team_after: Final = read_rows(
+            'SELECT team_alias, members_with_roles FROM "LiteLLM_TeamTable" WHERE team_id = %s',
+            (team,),
         )
-        assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (new_user,)) == []
-        assert read_rows('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id = %s', (new_group,)) == []
+        new_user_rows: Final = read_rows(
+            'SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s',
+            (new_user,),
+        )
+        new_group_rows: Final = read_rows(
+            'SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_id = %s',
+            (new_group,),
+        )
+        assert user_after == user_before, (user_after, response.text)
+        assert team_after == team_before, (team_after, response.text)
+        assert new_user_rows == [], (new_user_rows, response.text)
+        assert new_group_rows == [], (new_group_rows, response.text)
 
 
 @pytest.mark.covers("mgmt.team.member_update.demoted_role_cannot_write")

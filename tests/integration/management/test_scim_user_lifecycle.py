@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Final
 
@@ -6,43 +7,94 @@ import httpx
 import pytest
 from integration._support.client import Gateway, Scenario, object_value, string_value
 from integration._support.database import read_rows
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 SCIM_HEADERS: Final = {"Content-Type": "application/scim+json"}
 SCIM_CORE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:core:2.0:User"
 SCIM_ENTERPRISE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
+SCIM_LIST_RESPONSE_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
 
 
-class ScimName(BaseModel):
-    givenName: str | None = None
+class ScimResponseModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class ScimName(ScimResponseModel):
     familyName: str | None = None
+    givenName: str | None = None
+    formatted: str | None = None
+    middleName: str | None = None
+    honorificPrefix: str | None = None
+    honorificSuffix: str | None = None
 
 
-class ScimEmail(BaseModel):
+class ScimEmail(ScimResponseModel):
     value: str
+    type: str | None = None
     primary: bool | None = None
 
 
-class ScimGroupRef(BaseModel):
+class ScimGroupRef(ScimResponseModel):
     value: str
     display: str | None = None
+    type: str | None = None
 
 
-class ScimUserResponse(BaseModel):
+class ScimUserMeta(ScimResponseModel):
+    resourceType: str
+    created: str | None = None
+    lastModified: str | None = None
+
+
+class ScimManager(ScimResponseModel):
+    value: str | None = None
+    displayName: str | None = None
+    ref: str | None = Field(default=None, alias="$ref")
+
+
+class ScimEnterpriseUser(ScimResponseModel):
+    employeeNumber: str | None = None
+    costCenter: str | None = None
+    organization: str | None = None
+    division: str | None = None
+    department: str | None = None
+    manager: ScimManager | None = None
+
+
+class ScimMultiValuedAttribute(ScimResponseModel):
+    value: str
+    display: str | None = None
+    type: str | None = None
+    primary: bool | None = None
+
+
+class ScimUserResponse(ScimResponseModel):
+    schemas: list[str]
     id: str
+    externalId: str | None = None
     userName: str
+    displayName: str | None = None
     name: ScimName | None = None
     emails: list[ScimEmail] | None = None
     groups: list[ScimGroupRef] | None = None
+    entitlements: list[ScimMultiValuedAttribute] | None = None
+    roles: list[ScimMultiValuedAttribute] | None = None
     active: bool
+    meta: ScimUserMeta
+    enterprise: ScimEnterpriseUser | None = Field(default=None, alias=SCIM_ENTERPRISE_USER_SCHEMA)
 
 
-class ScimListResponse(BaseModel):
+class ScimListResponse(ScimResponseModel):
     schemas: list[str]
     totalResults: int
     startIndex: int
     itemsPerPage: int
     Resources: list[ScimUserResponse]
+
+
+def _utc_datetime(value: str) -> datetime:
+    parsed: Final = datetime.fromisoformat(value)
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
 
 
 def _scim_request(
@@ -134,19 +186,65 @@ def test_okta_create_provisions_the_user_into_its_group_and_rejects_a_duplicate(
         scenario.cleanups.callback(_delete_user_if_present, gateway, user_name)
         assert created.status_code == 201, created.text
         expected_user: Final = ScimUserResponse(
+            schemas=schemas,
             id=user_name,
+            externalId=None,
             userName=user_name,
-            name=ScimName(givenName="SCIM", familyName="Provisioned"),
-            emails=[ScimEmail(value=user_email, primary=True)],
-            groups=[ScimGroupRef(value=team, display=team_alias)],
+            displayName=user_name,
             active=True,
+            meta=ScimUserMeta(resourceType="User"),
+            name=ScimName(givenName="SCIM", familyName="Provisioned"),
+            emails=[ScimEmail(value=user_email, type=None, primary=True)],
+            groups=[ScimGroupRef(value=team, display=team_alias, type="direct")],
+            enterprise=ScimEnterpriseUser(
+                employeeNumber=f"employee-{suffix}",
+                department="Research",
+                manager=ScimManager(value=manager_id),
+            ),
         )
         created_user: Final = ScimUserResponse.model_validate(created.json())
-        assert created_user == expected_user, created.text
+        create_exclude: Final = {"externalId": True, "meta": {"created": True, "lastModified": True}}
+        assert created_user.model_dump(by_alias=True, exclude=create_exclude) == expected_user.model_dump(
+            by_alias=True,
+            exclude=create_exclude,
+        ), created.text
         readback_response: Final = _scim_request(gateway, "GET", f"/scim/v2/Users/{user_name}")
         assert readback_response.status_code == 200, readback_response.text
         readback_user: Final = ScimUserResponse.model_validate(readback_response.json())
-        assert readback_user == expected_user, readback_response.text
+        metadata_rows: Final = read_rows(
+            'SELECT created_at::text AS created_at, updated_at::text AS updated_at '
+            'FROM "LiteLLM_UserTable" WHERE user_id = %s',
+            (user_name,),
+        )
+        assert len(metadata_rows) == 1, (metadata_rows, readback_response.text)
+        created_at: Final = string_value(metadata_rows[0]["created_at"])
+        updated_at: Final = string_value(metadata_rows[0]["updated_at"])
+        created_at_utc: Final = _utc_datetime(created_at)
+        updated_at_utc: Final = _utc_datetime(updated_at)
+        assert readback_user.meta.created is not None, readback_response.text
+        assert readback_user.meta.lastModified is not None, readback_response.text
+        assert _utc_datetime(readback_user.meta.created) == created_at_utc, (
+            created_at,
+            readback_user.meta.created,
+            readback_response.text,
+        )
+        assert _utc_datetime(readback_user.meta.lastModified) == updated_at_utc, (
+            updated_at,
+            readback_user.meta.lastModified,
+            readback_response.text,
+        )
+        expected_readback_user: Final = expected_user.model_copy(
+            update={
+                "meta": ScimUserMeta(
+                    resourceType="User",
+                    created=created_at_utc.isoformat(),
+                    lastModified=updated_at_utc.isoformat(),
+                )
+            }
+        )
+        assert readback_user.model_dump(by_alias=True, exclude={"externalId": True}) == (
+            expected_readback_user.model_dump(by_alias=True, exclude={"externalId": True})
+        ), readback_response.text
 
         user_rows: Final = read_rows(
             'SELECT user_id, user_email, user_role, teams, metadata FROM "LiteLLM_UserTable" WHERE user_id = %s',
@@ -218,7 +316,9 @@ def test_scim_create_adopts_an_existing_user_by_email_and_keeps_its_key_and_team
         assert readback.status_code == 200, readback.text
         readback_user: Final = ScimUserResponse.model_validate(readback.json())
         assert readback_user.id == existing_user, readback.text
-        assert readback_user.groups == [ScimGroupRef(value=team, display=team_alias)], readback.text
+        assert readback_user.groups == [
+            ScimGroupRef(value=team, display=team_alias, type="direct")
+        ], readback.text
         assert len(read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_email = %s', (user_email,))) == 1
         assert (
             read_rows(
@@ -268,7 +368,9 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         scenario.cleanups.callback(_delete_user_if_present, gateway, user_name)
         assert created.status_code == 201, created.text
         created_user: Final = ScimUserResponse.model_validate(created.json())
-        assert created_user.groups == [ScimGroupRef(value=team_a, display=alias_a)], created.text
+        assert created_user.groups == [
+            ScimGroupRef(value=team_a, display=alias_a, type="direct")
+        ], created.text
         key_a: Final = _key_with_cleanup(scenario, user_id=user_name, team_id=team_a, models=[model_a])
         _assert_serving(gateway, model_a, key_a)
 
@@ -282,7 +384,9 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
             external_id
         ), without_groups.text
         without_groups_user: Final = ScimUserResponse.model_validate(without_groups.json())
-        assert without_groups_user.groups == [ScimGroupRef(value=team_a, display=alias_a)], without_groups.text
+        assert without_groups_user.groups == [
+            ScimGroupRef(value=team_a, display=alias_a, type="direct")
+        ], without_groups.text
         without_groups_readback: Final = _scim_request(
             gateway,
             "GET",
@@ -290,7 +394,9 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         )
         assert without_groups_readback.status_code == 200, without_groups_readback.text
         without_groups_readback_user: Final = ScimUserResponse.model_validate(without_groups_readback.json())
-        assert without_groups_readback_user.groups == [ScimGroupRef(value=team_a, display=alias_a)], (
+        assert without_groups_readback_user.groups == [
+            ScimGroupRef(value=team_a, display=alias_a, type="direct")
+        ], (
             without_groups_readback.text
         )
         assert _has_team_member(gateway, team_a, user_name), _team_members(gateway, team_a)
@@ -304,11 +410,15 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         )
         assert empty_groups.status_code == 200, empty_groups.text
         empty_groups_user: Final = ScimUserResponse.model_validate(empty_groups.json())
-        assert empty_groups_user.groups == [ScimGroupRef(value=team_a, display=alias_a)], empty_groups.text
+        assert empty_groups_user.groups == [
+            ScimGroupRef(value=team_a, display=alias_a, type="direct")
+        ], empty_groups.text
         empty_groups_readback: Final = _scim_request(gateway, "GET", f"/scim/v2/Users/{user_name}")
         assert empty_groups_readback.status_code == 200, empty_groups_readback.text
         empty_groups_readback_user: Final = ScimUserResponse.model_validate(empty_groups_readback.json())
-        assert empty_groups_readback_user.groups == [ScimGroupRef(value=team_a, display=alias_a)], (
+        assert empty_groups_readback_user.groups == [
+            ScimGroupRef(value=team_a, display=alias_a, type="direct")
+        ], (
             empty_groups_readback.text
         )
         assert _has_team_member(gateway, team_a, user_name), _team_members(gateway, team_a)
@@ -322,11 +432,15 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
         )
         assert moved.status_code == 200, moved.text
         moved_user: Final = ScimUserResponse.model_validate(moved.json())
-        assert moved_user.groups == [ScimGroupRef(value=team_b, display=alias_b)], moved.text
+        assert moved_user.groups == [
+            ScimGroupRef(value=team_b, display=alias_b, type="direct")
+        ], moved.text
         moved_readback: Final = _scim_request(gateway, "GET", f"/scim/v2/Users/{user_name}")
         assert moved_readback.status_code == 200, moved_readback.text
         moved_readback_user: Final = ScimUserResponse.model_validate(moved_readback.json())
-        assert moved_readback_user.groups == [ScimGroupRef(value=team_b, display=alias_b)], moved_readback.text
+        assert moved_readback_user.groups == [
+            ScimGroupRef(value=team_b, display=alias_b, type="direct")
+        ], moved_readback.text
         assert not _has_team_member(gateway, team_a, user_name), _team_members(gateway, team_a)
         assert _has_team_member(gateway, team_b, user_name), _team_members(gateway, team_b)
         refused: Final = gateway.request(
@@ -355,8 +469,8 @@ def test_profile_put_without_groups_keeps_memberships_and_a_new_groups_list_move
 
 def test_scim_create_persists_external_id_as_the_sso_user_id(gateway: Gateway) -> None:
     pytest.skip(
-        "BUG: POST /scim/v2/Users drops externalId, so the created user's sso_user_id is NULL and "
-        "/user/info returns sso_user_id null"
+        "BUG: POST /scim/v2/Users drops externalId, so the 201 resource and GET readback return externalId null and "
+        "the user's sso_user_id stays NULL"
     )
     with gateway.scenario() as scenario:
         suffix: Final = uuid.uuid4().hex
@@ -376,6 +490,12 @@ def test_scim_create_persists_external_id_as_the_sso_user_id(gateway: Gateway) -
         )
         scenario.cleanups.callback(_delete_user_if_present, gateway, user_name)
         assert created.status_code == 201, created.text
+        created_user: Final = ScimUserResponse.model_validate(created.json())
+        assert created_user.externalId == external_id, created.text
+        readback: Final = _scim_request(gateway, "GET", f"/scim/v2/Users/{user_name}")
+        assert readback.status_code == 200, readback.text
+        readback_user: Final = ScimUserResponse.model_validate(readback.json())
+        assert readback_user.externalId == external_id, readback.text
         assert read_rows(
             'SELECT sso_user_id FROM "LiteLLM_UserTable" WHERE user_id = %s',
             (user_name,),
@@ -422,7 +542,7 @@ def test_okta_username_filter_finds_users_by_email_and_by_id(gateway: Gateway) -
             existing_results.itemsPerPage,
             [(resource.id, resource.userName) for resource in existing_results.Resources],
         ) == (
-            ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+            [SCIM_LIST_RESPONSE_SCHEMA],
             1,
             1,
             1,
