@@ -41,6 +41,12 @@ EXCLUDED_INTERNAL_TUNING_VARS = {
     "DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY",
 }
 
+# Pydantic schema-build switch. Defaults on as a workaround for
+# https://github.com/pydantic/pydantic/issues/13647. Not a proxy operator setting.
+EXCLUDED_LIBRARY_SWITCHES = {
+    "DEFER_PYDANTIC_BUILD",
+}
+
 EXCLUDED_TERMINAL_VARS = {
     "TERM",
     "TERM_PROGRAM",
@@ -59,7 +65,11 @@ EXCLUDED_TERMINAL_VARS = {
 }
 
 EXCLUDED_KEYS = frozenset(
-    EXCLUDED_TERMINAL_VARS | EXCLUDED_GUARD_ONLY_VARS | EXCLUDED_ROLLOUT_FLAGS | EXCLUDED_INTERNAL_TUNING_VARS
+    EXCLUDED_TERMINAL_VARS
+    | EXCLUDED_GUARD_ONLY_VARS
+    | EXCLUDED_ROLLOUT_FLAGS
+    | EXCLUDED_INTERNAL_TUNING_VARS
+    | EXCLUDED_LIBRARY_SWITCHES
 )
 
 # Directories to skip (dependencies, venvs, caches) - only scan litellm source
