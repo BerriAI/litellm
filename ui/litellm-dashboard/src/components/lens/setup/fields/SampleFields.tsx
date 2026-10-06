@@ -22,18 +22,22 @@ interface RunCountProps {
   readonly cap: number | null;
   /** Sampled runs before any cap; undefined while the preview loads. */
   readonly sampled: number | undefined;
+  /** False while a newer preview count is loading, so `sampled` may be stale. */
+  readonly settled: boolean;
   readonly onCapChange: (cap: number | null) => void;
   readonly onBlur: () => void;
 }
 
-/** Shows how many runs will be analyzed; typing a smaller number caps it. A larger cap stays, since the count it is compared against can be stale. */
-function RunCount({ cap, sampled, onCapChange, onBlur }: RunCountProps) {
+/** Shows how many runs will be analyzed; typing a smaller number caps it. */
+function RunCount({ cap, sampled, settled, onCapChange, onBlur }: RunCountProps) {
   const [typing, setTyping] = useState<string | null>(null);
   const analyzed = sampled === undefined ? cap : Math.min(sampled, cap ?? Infinity);
   const capped = cap != null && (sampled === undefined || cap < sampled);
   const shown = typing ?? analyzed?.toLocaleString() ?? "";
   const finishTyping = () => {
     setTyping(null);
+    const limitsNothing = cap != null && sampled !== undefined && cap >= sampled;
+    if (settled && limitsNothing) onCapChange(null);
     onBlur();
   };
   return (
@@ -73,9 +77,11 @@ function RunCount({ cap, sampled, onCapChange, onBlur }: RunCountProps) {
 export interface SampleFieldsProps {
   /** Runs the search matches; undefined while the preview loads. */
   readonly eligible: number | undefined;
+  /** False while a newer preview count is loading. */
+  readonly settled: boolean;
 }
 
-export function SampleFields({ eligible }: SampleFieldsProps) {
+export function SampleFields({ eligible, settled }: SampleFieldsProps) {
   const {
     control,
     formState: { errors },
@@ -120,6 +126,7 @@ export function SampleFields({ eligible }: SampleFieldsProps) {
               <RunCount
                 cap={field.value ?? null}
                 sampled={sampled}
+                settled={settled}
                 onCapChange={field.onChange}
                 onBlur={field.onBlur}
               />

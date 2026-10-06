@@ -199,7 +199,7 @@ function SetupEditor({
             summary={<ActivitySummary />}
           >
             <ScopeFields {...activity.scope} />
-            <SampleFields eligible={activity.preview.page.eligible} />
+            <SampleFields eligible={activity.preview.page.eligible} settled={activity.preview.status.ready} />
             <StepFooter>
               <Button onClick={() => void next()}>Continue</Button>
             </StepFooter>

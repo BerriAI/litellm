@@ -602,7 +602,7 @@ describe("Sample", () => {
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ sample_percent: 3, sample_size: 25 }));
   });
 
-  it("shows a cap that limits nothing as the sampled count without the capped badge", async () => {
+  it("drops a cap that no longer limits anything once the field is left", async () => {
     const user = userEvent.setup();
     proxy.post.mockResolvedValue({ eligible: 40, selected: 40, executions: [run("one")] });
     renderWithProviders(<InvestigationSetup mode="new" onClose={vi.fn()} onSave={vi.fn()} />);
