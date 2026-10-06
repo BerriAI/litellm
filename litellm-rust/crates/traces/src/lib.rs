@@ -44,5 +44,6 @@ pub use tenant::Tenant;
 pub use truncate::{truncate_messages, truncate_value};
 pub use ui::{ChatRole, UiContent, UiField, UiMessage, UiToolCall, to_ui_content};
 pub use view::{
-    AgentNode, Span, SpanDetail, SpanErrorPage, SpanStatus, Trace, TracePage, TraceSummary,
+    AgentNode, Span, SpanDetail, SpanErrorPage, SpanStatus, SpendMatch, Trace, TracePage,
+    TraceSummary,
 };
