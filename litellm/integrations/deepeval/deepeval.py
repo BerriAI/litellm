@@ -1,5 +1,8 @@
 import os
+from collections.abc import Mapping
 from typing import Final
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -15,6 +18,21 @@ from litellm.integrations.deepeval.utils import (
     to_zod_compatible_iso,
     validate_environment,
 )
+
+_STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    return _STR_MAPPING.validate_python(value) if isinstance(value, dict) else None
+
+
+def _as_list(value: object) -> list[object]:
+    return _OBJECT_LIST.validate_python(value) if isinstance(value, list) else []
+
+
+def _dict_items(value: object) -> tuple[Mapping[str, object], ...]:
+    return tuple(mapping for item in _as_list(value) if (mapping := _as_mapping(item)) is not None)
 
 
 # This file includes the custom callbacks for LiteLLM Proxy
@@ -97,16 +115,40 @@ class DeepEvalLogger(CustomLogger):
 
         verbose_logger.debug("DeepEvalLogger: async_event_handler: Api response %s", response)
 
+    @staticmethod
+    def _get_success_output(response: object) -> str | list[object] | None:
+        """Chat completions read ``choices``; Responses API payloads read ``output``."""
+        response_dict: Final = _as_mapping(response) or {}
+        choices: Final = _dict_items(response_dict.get("choices"))
+        if choices:
+            message: Final = _as_mapping(choices[0].get("message")) or {}
+            content: Final = message.get("content")
+            tool_calls: Final = _as_list(message.get("tool_calls"))
+            if content:
+                return content
+            if tool_calls:
+                return tool_calls
+            if isinstance(content, str):
+                return content
+            return _as_list(content) or None
+        output_items: Final = _as_list(response_dict.get("output"))
+        if output_items:
+            output_texts: Final = tuple(
+                text
+                for item in _dict_items(output_items)
+                if item.get("type") == "message"
+                for part in _dict_items(item.get("content"))
+                if part.get("type") == "output_text"
+                if isinstance(text := part.get("text"), str)
+            )
+            return "".join(output_texts) if output_texts else output_items
+        return "NO_OUTPUT"
+
     def _create_base_api_span(self, kwargs, standard_logging_object, start_time, end_time, is_success):
         # extract usage
         usage: Final = standard_logging_object.get("response", {}).get("usage", {})
         if is_success:
-            output = (
-                standard_logging_object.get("response", {})
-                .get("choices", [{}])[0]
-                .get("message", {})
-                .get("content", "NO_OUTPUT")
-            )
+            output = self._get_success_output(standard_logging_object.get("response", {}))
         else:
             output = str(standard_logging_object.get("error_string", ""))
         return BaseApiSpan(

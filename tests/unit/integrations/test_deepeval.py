@@ -94,6 +94,93 @@ class TestDeepEvalLogger(unittest.TestCase):
         self.assertEqual(llm_span["inputTokenCount"], 10)
         self.assertEqual(llm_span["outputTokenCount"], 20)
 
+    def _log_success_with_response(self, response: dict) -> dict:
+        kwargs = {
+            "input": self.input_str,
+            "standard_logging_object": {
+                "id": self.span_id,
+                "trace_id": self.trace_id,
+                "model": self.model,
+                "response": response,
+            },
+        }
+        self.logger.log_success_event(kwargs, self.mock_response_obj, self.start_time, self.end_time)
+        return self.mock_api_instance.send_request.call_args.kwargs["body"]["llmSpans"][0]
+
+    def test_log_success_event_tool_call_only_records_tool_calls(self):
+        tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Boston"}'},
+            }
+        ]
+        llm_span = self._log_success_with_response(
+            {
+                "usage": {"prompt_tokens": 12, "completion_tokens": 7},
+                "choices": [{"message": {"role": "assistant", "content": None, "tool_calls": tool_calls}}],
+            }
+        )
+
+        self.assertEqual(llm_span["output"], tool_calls)
+
+    def test_log_success_event_tool_call_with_empty_content_string(self):
+        tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": '{"city": "Boston"}'},
+            }
+        ]
+        llm_span = self._log_success_with_response(
+            {
+                "usage": {"prompt_tokens": 12, "completion_tokens": 7},
+                "choices": [{"message": {"role": "assistant", "content": "", "tool_calls": tool_calls}}],
+            }
+        )
+
+        self.assertEqual(llm_span["output"], tool_calls)
+
+    def test_log_success_event_responses_api_records_output_text(self):
+        llm_span = self._log_success_with_response(
+            {
+                "usage": {"prompt_tokens": 11, "completion_tokens": 5},
+                "output": [
+                    {"type": "reasoning", "id": "rs_1", "summary": []},
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "Hello ", "annotations": []},
+                            {"type": "output_text", "text": "from responses", "annotations": []},
+                        ],
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(llm_span["output"], "Hello from responses")
+
+    def test_log_success_event_responses_api_function_call_records_output_items(self):
+        output_items = [
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": '{"city": "Boston"}',
+            }
+        ]
+        llm_span = self._log_success_with_response({"usage": {}, "output": output_items})
+
+        self.assertEqual(llm_span["output"], output_items)
+
+    def test_log_success_event_empty_choices_does_not_raise(self):
+        llm_span = self._log_success_with_response({"usage": {}, "choices": []})
+
+        self.assertEqual(llm_span["output"], "NO_OUTPUT")
+
     def test_log_failure_event(self):
         error_message = "This is an error."
         kwargs = {
