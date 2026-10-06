@@ -1575,6 +1575,7 @@ def completion_cost(
                         optional_params=optional_params,
                         call_type=call_type,
                         model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
+                        vertex_location=vertex_location,
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###

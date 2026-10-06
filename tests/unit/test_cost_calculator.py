@@ -1522,6 +1522,51 @@ def test_vertex_regional_deployment_costs_uplift_over_global(monkeypatch):
         )
 
 
+@pytest.mark.parametrize(
+    "usage",
+    [
+        ImageUsage(
+            input_tokens=100,
+            input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=100),
+            output_tokens=1120,
+            total_tokens=1220,
+        ),
+        None,
+    ],
+    ids=["token-priced", "per-image-fallback"],
+)
+def test_vertex_regional_image_generation_costs_uplift_over_global(monkeypatch, usage):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.get_model_cost_map(url=""),
+            "vertex_ai/fake-regional-image-model": {
+                "litellm_provider": "vertex_ai-language-models",
+                "mode": "image_generation",
+                "input_cost_per_token": 5e-07,
+                "output_cost_per_token": 3e-06,
+                "output_cost_per_image_token": 6e-05,
+                "output_cost_per_image": 0.0672,
+                "regional_endpoint_uplift_multiplier": 1.1,
+            },
+        },
+    )
+
+    def image_cost(vertex_location: str) -> float:
+        return completion_cost(
+            completion_response=ImageResponse(data=[ImageObject(b64_json="img")], usage=usage),
+            model="vertex_ai/fake-regional-image-model",
+            call_type="image_generation",
+            vertex_location=vertex_location,
+        )
+
+    global_cost: Final = image_cost("global")
+    assert global_cost > 0
+    assert image_cost("us-central1") == pytest.approx(global_cost * 1.10, rel=1e-9)
+
+
 def test_vertex_uplift_composes_with_above_128k_pricing(monkeypatch):
     """The regional-endpoint uplift multiplies whatever rate the request priced at,
     including the above-128k dynamic rates, so a synthetic model carrying both keys

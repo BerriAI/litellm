@@ -7279,6 +7279,64 @@ def test_response_cost_calculator_prices_proxy_vertex_calls_on_the_configured_lo
     assert cost_at("us-east5") == pytest.approx(info["regional_endpoint_uplift_multiplier"] * expected_global)
 
 
+def test_response_cost_calculator_prices_proxy_vertex_image_calls_on_the_configured_location(monkeypatch):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+    from litellm.types.utils import ImageObject, ImageUsage, ImageUsageInputTokensDetails
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **get_model_cost_map(url=""),
+            "vertex_ai/fake-regional-image-model": {
+                "litellm_provider": "vertex_ai-language-models",
+                "mode": "image_generation",
+                "input_cost_per_token": 5e-07,
+                "output_cost_per_image_token": 6e-05,
+                "regional_endpoint_uplift_multiplier": 1.1,
+            },
+        },
+    )
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-east5")
+    monkeypatch.setattr(litellm, "vertex_location", None)
+
+    def cost_at(location):
+        logging_obj = LitellmLogging(
+            model="fake-regional-image-model",
+            messages=[],
+            stream=False,
+            call_type="image_generation",
+            start_time=datetime.now(),
+            litellm_call_id=f"vertex-image-loc-{location}",
+            function_id="f",
+        )
+        logging_obj.update_environment_variables(
+            model="fake-regional-image-model",
+            user="",
+            optional_params={"vertex_location": location},
+            litellm_params={"api_base": ""},
+            custom_llm_provider="vertex_ai",
+        )
+        response = ImageResponse(
+            data=[ImageObject(b64_json="img")],
+            usage=ImageUsage(
+                input_tokens=100,
+                input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=100),
+                output_tokens=1120,
+                total_tokens=1220,
+            ),
+        )
+        return logging_obj._response_cost_calculator(result=response)
+
+    expected_global = 100 * 5e-07 + 1120 * 6e-05
+
+    assert cost_at("global") == pytest.approx(expected_global)
+    assert cost_at("us-east5") == pytest.approx(1.1 * expected_global)
+
+
 def test_set_cost_breakdown_stores_vertex_location():
     """vertex_location is recorded in the pricing basis, None for non-vertex requests."""
     from datetime import datetime
