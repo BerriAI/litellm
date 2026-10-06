@@ -298,10 +298,7 @@ class RealTimeStreaming:
                 tools: Final = session.get("tools")
                 if tools and isinstance(tools, list):
                     self.session_tools = tools
-                # GA: session.type is required; log it for traceability but no action needed
                 verbose_logger.debug("Realtime session.type: %s", session.get("type"))
-                if session.get("type") == "transcription":
-                    self._is_transcription_session = True
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
@@ -724,7 +721,7 @@ class RealTimeStreaming:
         """Disable provider auto-response once when transcription guardrails are enabled."""
         if self._guardrail_turn_detection_update_sent:
             return
-        if not self._has_audio_transcription_guardrails():
+        if not self._should_disable_vad_auto_response():
             return
         sent: Final = await self._send_to_backend(self._make_disable_auto_response_message())
         # Only mark as sent when the provider transformation actually delivered
@@ -805,6 +802,10 @@ class RealTimeStreaming:
         from litellm.types.guardrails import GuardrailEventHooks
 
         return self._has_realtime_guardrails_for_event_hooks([GuardrailEventHooks.realtime_input_transcription])
+
+    def _should_disable_vad_auto_response(self) -> bool:
+        """Transcription-only sessions have no assistant turn to gate and reject realtime session updates."""
+        return not self._is_transcription_session and self._has_audio_transcription_guardrails()
 
     async def run_realtime_guardrails(
         self,
@@ -970,6 +971,8 @@ class RealTimeStreaming:
         for event in events:
             if self._should_drop_event_from_client(event):
                 continue
+            if isinstance(event, dict):
+                self._detect_transcription_session_from_backend(event)
             is_session_created_event = isinstance(event, dict) and event.get("type") == "session.created"
             if is_session_created_event:
                 if self._uses_deferred_backend_setup() and not self._backend_setup_complete:
@@ -1002,7 +1005,7 @@ class RealTimeStreaming:
             ## after a synthetic session.created from ``llm_http_handler`` in
             ## deferred-setup mode — still get a single chance to inject the
             ## update if a prior attempt was dropped by the provider transform.
-            if is_session_created_event and self._has_audio_transcription_guardrails():
+            if is_session_created_event and self._should_disable_vad_auto_response():
                 self.store_message(event_str)
                 await self._send_event_to_client(event, event_str)
                 await self._maybe_send_guardrail_turn_detection_update()
@@ -1046,7 +1049,7 @@ class RealTimeStreaming:
         # Send session.created to the client FIRST so it stays in sync, then inject
         # the disable-auto-response session.update; otherwise a backend error could
         # reach the client before it sees session.created.
-        if event_type == "session.created" and self._has_audio_transcription_guardrails():
+        if event_type == "session.created" and self._should_disable_vad_auto_response():
             self.store_message(event_obj)
             await self.websocket.send_text(self._event_to_client_json(event_obj))
             await self._send_to_backend(self._make_disable_auto_response_message())
@@ -1429,7 +1432,7 @@ class RealTimeStreaming:
                         msg_type == "session.update"
                         and self.session_configuration_request is None
                         and not self._guardrail_turn_detection_update_sent
-                        and self._has_audio_transcription_guardrails()
+                        and self._should_disable_vad_auto_response()
                     ):
                         session: Mapping[str, object] | None = msg_obj.setdefault("session", {})
                         if isinstance(session, dict):
@@ -1456,7 +1459,7 @@ class RealTimeStreaming:
                     if (
                         msg_type == "session.update"
                         and not guardrail_turn_detection_injected
-                        and self._has_audio_transcription_guardrails()
+                        and self._should_disable_vad_auto_response()
                     ):
                         session = client_event.get("session")
                         if isinstance(session, dict):
