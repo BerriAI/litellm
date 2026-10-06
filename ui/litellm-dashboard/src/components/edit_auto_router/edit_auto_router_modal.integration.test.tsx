@@ -84,6 +84,39 @@ describe("EditAutoRouterModal keyword matching", () => {
     modelPatchUpdateCall.mockClear();
   });
 
+  it("reopens saved cache settings and persists an explicit opt-out and cleared estimates", async () => {
+    const user = userEvent.setup();
+    renderModal({
+      modelData: {
+        ...MODEL_DATA,
+        litellm_params: {
+          ...MODEL_DATA.litellm_params,
+          complexity_router_config: {
+            ...STORED_CONFIG,
+            cache_aware_routing: true,
+            cache_aware_routing_output_tokens: 512,
+            cache_aware_routing_timeout_ms: 750,
+          },
+        },
+      },
+    });
+    await screen.findByRole("textbox", { name: "Auto Router Name" });
+    openAutoRouterAdvanced("Cache-aware routing");
+    const toggle = screen.getByRole("switch", { name: "Cache-aware routing" });
+    expect(toggle).toBeChecked();
+    expect(screen.getByLabelText("Expected output tokens")).toHaveValue(512);
+    expect(screen.getByLabelText("Prediction timeout (ms)")).toHaveValue(750);
+    fireEvent.change(screen.getByLabelText("Expected output tokens"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Prediction timeout (ms)"), { target: { value: "" } });
+    await user.click(toggle);
+    await waitFor(() => expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+    expect(savedConfig().cache_aware_routing).toBe(false);
+    expect(savedConfig()).not.toHaveProperty("cache_aware_routing_output_tokens");
+    expect(savedConfig()).not.toHaveProperty("cache_aware_routing_timeout_ms");
+  });
+
   it("saves a member's changed routing config without resending administrator settings", async () => {
     const user = userEvent.setup();
     renderModal({

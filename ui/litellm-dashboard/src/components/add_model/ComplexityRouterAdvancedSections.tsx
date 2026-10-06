@@ -5,6 +5,7 @@ import { Separator } from "@/components/ui/separator";
 import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
+import CacheAwareRoutingConfig from "./CacheAwareRoutingConfig";
 import ClassificationMethodConfig from "./ClassificationMethodConfig";
 import ForecastClassifierConfig from "./ForecastClassifierConfig";
 import ContextWindowEscalationConfig from "./ContextWindowEscalationConfig";
@@ -142,6 +143,11 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
       children: <AffinityControls value={value} onChange={onChange} />,
     },
     {
+      key: "cache-aware",
+      label: <strong className="text-foreground font-semibold">Cache-aware routing</strong>,
+      children: <CacheAwareRoutingConfig value={value} onChange={onChange} />,
+    },
+    {
       key: "modality",
       label: <strong className="text-foreground font-semibold">Modality Routing</strong>,
       children: <ModalityRoutingControls value={value} onChange={onChange} />,
@@ -253,7 +259,7 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
         "keyword-semantic",
       ],
     },
-    { label: "Sessions and efficiency", keys: ["affinity", "adaptive", "compression"] },
+    { label: "Sessions and efficiency", keys: ["affinity", "adaptive", "cache-aware", "compression"] },
     { label: "Compatibility", keys: ["response"] },
   ];
   const [openGroups, setOpenGroups] = React.useState<string[]>(() =>

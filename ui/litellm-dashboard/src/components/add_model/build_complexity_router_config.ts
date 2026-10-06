@@ -183,6 +183,9 @@ export interface StoredComplexityRouterConfig {
   return_raw_model_name?: boolean;
   enable_context_window_escalation?: unknown;
   context_window_escalation_buffer?: unknown;
+  cache_aware_routing?: unknown;
+  cache_aware_routing_output_tokens?: unknown;
+  cache_aware_routing_timeout_ms?: unknown;
   stall_escalation_enabled?: unknown;
   stall_escalation_window?: unknown;
   stall_escalation_repeat_threshold?: unknown;
@@ -247,6 +250,9 @@ export interface BuildComplexityRouterConfigParams {
   tierModelParams?: TierModelParamsByTier;
   enableContextWindowEscalation?: boolean;
   contextWindowEscalationBuffer?: number;
+  cacheAwareRouting?: boolean;
+  cacheAwareRoutingOutputTokens?: number;
+  cacheAwareRoutingTimeoutMs?: number;
   sessionAffinityTtlSeconds?: number;
   codeKeywords?: string[];
   reasoningKeywords?: string[];
@@ -277,7 +283,7 @@ export interface TierDefinitionPayload {
 }
 
 export interface ComplexityRouterConfigPayload {
-  tiers: ComplexityTiers | Record<string, string[]>;
+  tiers: Record<string, string | string[]>;
   enable_non_reasoning_tier?: boolean;
   tier_definitions?: TierDefinitionPayload[];
   fallback_tier?: string;
@@ -327,6 +333,9 @@ export interface ComplexityRouterConfigPayload {
   reasoning_override_min_score?: number;
   enable_context_window_escalation?: boolean;
   context_window_escalation_buffer?: number;
+  cache_aware_routing?: boolean;
+  cache_aware_routing_output_tokens?: number;
+  cache_aware_routing_timeout_ms?: number;
   tier_model_configs?: Record<string, { model_name: string; litellm_params: TierModelParams }[]>;
   code_keywords?: string[];
   reasoning_keywords?: string[];
@@ -697,6 +706,9 @@ export const buildComplexityRouterConfig = ({
   tierModelParams,
   enableContextWindowEscalation,
   contextWindowEscalationBuffer,
+  cacheAwareRouting,
+  cacheAwareRoutingOutputTokens,
+  cacheAwareRoutingTimeoutMs,
   sessionAffinityTtlSeconds,
   codeKeywords,
   reasoningKeywords,
@@ -765,8 +777,17 @@ export const buildComplexityRouterConfig = ({
     classifierPluginTimeoutMs > 0;
 
   const supportsOpeningPrompt = !customTierSet && !forecast && usesLlmClassifier(effectiveType);
+  const populatedTiers =
+    forecast || cacheAwareRouting
+      ? Object.fromEntries(Object.entries(tiers).filter(([, models]) => models.length > 0))
+      : tiers;
   const payload: ComplexityRouterConfigPayload = {
-    tiers: forecast ? Object.fromEntries(Object.entries(tiers).filter(([, models]) => models.length > 0)) : tiers,
+    tiers:
+      cacheAwareRouting && !customTierSet
+        ? Object.fromEntries(
+            Object.entries(populatedTiers).map(([tier, models]) => [tier, models.length === 1 ? models[0] : models]),
+          )
+        : populatedTiers,
     // The backend rejects the flag beside a custom tier set.
     ...(!customTierSet && enableNonReasoningTier && { enable_non_reasoning_tier: true }),
     ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
@@ -820,6 +841,11 @@ export const buildComplexityRouterConfig = ({
         adaptive_eligible: adaptiveEligible,
       }),
     ...(returnRawModelName && { return_raw_model_name: true }),
+    ...(cacheAwareRouting !== undefined && { cache_aware_routing: cacheAwareRouting }),
+    ...(cacheAwareRoutingOutputTokens !== undefined && {
+      cache_aware_routing_output_tokens: cacheAwareRoutingOutputTokens,
+    }),
+    ...(cacheAwareRoutingTimeoutMs !== undefined && { cache_aware_routing_timeout_ms: cacheAwareRoutingTimeoutMs }),
     ...((forecast || enableContextWindowEscalation !== undefined) && {
       enable_context_window_escalation: enableContextWindowEscalation ?? false,
     }),
