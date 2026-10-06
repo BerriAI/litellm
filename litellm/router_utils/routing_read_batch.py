@@ -15,27 +15,32 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
+from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import BatchResult, active_request_redis_batches
 from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2, PrefetchedUsage
-from litellm.router_utils.cooldown_cache import CooldownCache
+from litellm.router_utils.cooldown_cache import ROUTER_COOLDOWNS_TARGET, CooldownCache
 
 if TYPE_CHECKING:
-    from opentelemetry.trace import Span as _Span
+    from opentelemetry.trace import Span
 
-    from litellm.router import Router as _Router
-
-    LitellmRouter = _Router
-    Span = _Span
-else:
-    LitellmRouter = Any
-    Span = Any
+    from litellm.router import Router
 
 
+ROUTER_COOLDOWNS_USAGE_TARGET: Final = "router_cooldowns_usage"
+ROUTER_USAGE_TARGET: Final = "router_usage"
 _PREFETCH_SLOT: Final = "routing_read"
+
+
+def _routing_read_target(cooldown_keys: Sequence[str], usage_keys: Sequence[str]) -> str:
+    if not usage_keys:
+        return ROUTER_COOLDOWNS_TARGET
+    if not cooldown_keys:
+        return ROUTER_USAGE_TARGET
+    return ROUTER_COOLDOWNS_USAGE_TARGET
 
 
 async def _backfill_prefetched_cache(
@@ -43,10 +48,10 @@ async def _backfill_prefetched_cache(
     due_keys: tuple[str, ...],
     values: Mapping[str, object],
 ) -> None:
-    cache_keys: Final = list(due_keys)  # mutable-ok: _prepare_batch_get takes a list
+    cache_keys: Final = list(due_keys)
     prepare_batch_get: Final = cache._prepare_batch_get  # pyright: ignore[reportPrivateUsage]  # memory backfill
     pending: Final = await prepare_batch_get(cache_keys, local_only=True)
-    redis_values: Final = {  # mutable-ok: _apply_batch_get accepts a dictionary
+    redis_values: Final = {
         key: values[key]
         for key, local in zip(due_keys, pending.result)
         if local is None and values.get(key) is not None
@@ -89,7 +94,7 @@ class RoutingPrefetch:
 
     @staticmethod
     def arm(
-        litellm_router_instance: LitellmRouter,
+        litellm_router_instance: "Router",
         usage_selector: LowestTPMLoggingHandler_v2 | None,
         deployments: list,
     ) -> None:
@@ -120,7 +125,8 @@ class RoutingPrefetch:
         )
         if not due:
             return
-        result: Final = request.batch(redis_cache).mget(due)
+        with service_target(_routing_read_target(cooldown_due, usage_due)):
+            result: Final = request.batch(redis_cache).mget(due)
         prefetch: Final = RoutingPrefetch(
             keys=frozenset(keys), fetched=frozenset(due), result=result, reservations=reservations
         )
@@ -180,9 +186,9 @@ class RoutingReadBatch:
 
     async def async_get_cooldown_deployments(
         self,
-        litellm_router_instance: LitellmRouter,
+        litellm_router_instance: "Router",
         healthy_deployments: list,
-        parent_otel_span: Span | None,
+        parent_otel_span: "Span | None",
     ) -> list[str]:
         """
         `_async_get_cooldown_deployments`, with the strategy's tpm/rpm counters for
@@ -190,19 +196,20 @@ class RoutingReadBatch:
         """
         model_ids: Final = litellm_router_instance.get_model_ids()
         cooldown_keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
-        reads: Final[list[tuple[DualCache, list[str]]]] = [  # mutable-ok: the usage read is appended below
-            (litellm_router_instance.cooldown_cache.cooldown_store, cooldown_keys)
-        ]
-        usage_keys: list[str] = []  # mutable-ok: DualCache batch reads take a list
-        if self.usage_selector is not None:
-            tpm_keys, rpm_keys = self.usage_selector.usage_counter_keys(healthy_deployments)
-            usage_keys = tpm_keys + rpm_keys
-            reads.append((self.usage_selector.router_cache, usage_keys))
-        results: Final = await self._read_prefetched(reads) or await DualCache.async_batch_get_cache_shared(
-            reads, parent_otel_span=parent_otel_span
+        selector: Final = self.usage_selector
+        usage_keys: Final = (
+            () if selector is None else tuple(itertools.chain(*selector.usage_counter_keys(healthy_deployments)))
         )
+        reads: Final = (
+            (litellm_router_instance.cooldown_cache.cooldown_store, cooldown_keys),
+            *(() if selector is None else ((selector.router_cache, list(usage_keys)),)),
+        )
+        with service_target(_routing_read_target(cooldown_keys, usage_keys)):
+            results: Final = await self._read_prefetched(reads) or await DualCache.async_batch_get_cache_shared(
+                reads, parent_otel_span=parent_otel_span
+            )
         cooldown_results: Final = results[0]
-        if self.usage_selector is not None:
+        if selector is not None:
             usage_values: Final = results[1]
             self.prefetched_usage = PrefetchedUsage(
                 keys=frozenset(usage_keys),
@@ -217,7 +224,7 @@ class RoutingReadBatch:
 
     @staticmethod
     async def _read_prefetched(
-        reads: list[tuple[DualCache, list[str]]],
+        reads: Sequence[tuple[DualCache, list[str]]],
     ) -> list[list[object | None] | None] | None:
         """Serve the reads from the request's armed `RoutingPrefetch`, backfilling each cache's memory tier as
         its own batch read would. None when nothing usable was armed or the prefetch failed."""
@@ -236,8 +243,6 @@ class RoutingReadBatch:
                 key not in prefetch.fetched for key, local_value in zip(keys, pending.result) if local_value is None
             ):
                 return None
-            missed = {  # mutable-ok: _apply_batch_get takes a dict
-                key: values.get(key) for key, local in zip(keys, pending.result) if local is None
-            }
+            missed = {key: values.get(key) for key, local in zip(keys, pending.result) if local is None}
             results.append(await cache._apply_batch_get(pending, missed))  # pyright: ignore[reportPrivateUsage]  # same two-step read as async_batch_get_cache_shared
         return results

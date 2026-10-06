@@ -397,7 +397,7 @@ class DataDogLogger(
                 verbose_logger.debug("[DATADOG MOCK] Batch of %s events successfully mocked", len(batch_to_send))
 
         except BatchSendCancelled as cancelled:
-            self.log_queue = list(cancelled.undelivered) + self.log_queue  # mutable-ok: logger queue remains appendable
+            self.log_queue = list(cancelled.undelivered) + self.log_queue
             raise asyncio.CancelledError() from cancelled
         except Exception as e:
             self.log_queue = batch_to_send + self.log_queue
@@ -425,7 +425,7 @@ class DataDogLogger(
             drop_error_message=DD_ERRORS.DATADOG_413_ERROR.value,
             non_success_handler=requeue_after_http_error,
         )
-        return list(undelivered)  # mutable-ok: caller prepends records to the logger queue
+        return list(undelivered)
 
     @staticmethod
     def _exceeds_intake_limits(chunk: Sequence[DatadogPayload]) -> bool:

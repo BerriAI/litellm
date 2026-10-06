@@ -53,6 +53,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
@@ -91,7 +92,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 from litellm.proxy.common_utils.html_forms.native_client_consent import (
     render_native_client_consent_page,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+_DCR_CLAIMS_TARGET: Final = "mcp_dcr_claims"
 
 GATEWAY_DCR_CLIENT_ID_PREFIX: Final = "llm_dcrc_"
 """Marker prefix on every gateway-issued DCR client_id so the root authorize/token
@@ -169,7 +173,7 @@ credential that LLM routes accept, instead of the MCP-only session pair."""
 ProxyCredentialMintFailure = Literal[ReloadUserFailure, "not_a_member", "team_required"]
 
 
-class MintedProxyCredential(BaseModel):
+class MintedProxyCredential(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     key: str = Field(min_length=1)
     expires_in: int = Field(gt=0)
@@ -213,13 +217,13 @@ SUBJECT_TOKEN_TYPES: Final = frozenset(
 )
 
 
-class SubjectIdentity(BaseModel):
+class SubjectIdentity(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     user_id: str = Field(min_length=1)
     team_id: str | None = None
 
 
-class SubjectTokenRefusal(BaseModel):
+class SubjectTokenRefusal(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     error: Literal["unsupported_grant_type", "invalid_request", "temporarily_unavailable"]
     description: str = Field(min_length=1)
@@ -233,7 +237,7 @@ class ExchangeSubjectToken(Protocol):
     def __call__(self, subject_token: str, request: Request, /) -> Awaitable[SubjectIdentity | SubjectTokenRefusal]: ...
 
 
-class ConsentTeam(BaseModel):
+class ConsentTeam(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
     team_id: str = Field(min_length=1)
     team_alias: str | None = None
@@ -273,7 +277,7 @@ async def _unreachable_server(user_id: str, server_id: str) -> bool:
     return False
 
 
-class GatewayDcrClient(BaseModel):
+class GatewayDcrClient(LiteLLMBaseModel):
     """The registration record sealed into a gateway DCR ``client_id``.
 
     ``extra="forbid"`` so a sealed value of another type (an auth code, a connect flow)
@@ -286,7 +290,7 @@ class GatewayDcrClient(BaseModel):
     iat: int
 
 
-class _ConnectFlow(BaseModel):
+class _ConnectFlow(LiteLLMBaseModel):
     """One in-flight authorize: the SSO user it belongs to and the client parameters
     needed to mint the code at the finish step. Sealed into the per-flow cookie. ``jti``
     makes the flow single-use at complete; ``extra="forbid"`` rejects cross-type
@@ -304,7 +308,7 @@ class _ConnectFlow(BaseModel):
     audience: SessionAudience | None = None
 
 
-class _GatewayAuthCode(BaseModel):
+class _GatewayAuthCode(LiteLLMBaseModel):
     """The gateway-sealed authorization code: the user consent it represents and the
     bindings the token endpoint must verify (client, redirect URI, PKCE challenge),
     plus a ``jti`` for the single-use guard. ``extra="forbid"`` rejects cross-type
@@ -1017,6 +1021,7 @@ class _SingleUseGuard:
     def __init__(self, cache: DualCache) -> None:
         self._cache = cache
 
+    @with_service_target(_DCR_CLAIMS_TARGET)
     async def claim(self, key: str, ttl_seconds: int) -> ClaimOutcome:
         """Atomically claim ``key``. ``"first"`` iff this caller is the first (increment to 1),
         ``"replayed"`` on a replay (>1), and ``"unavailable"`` when the claim could not be recorded in
@@ -1045,6 +1050,7 @@ class _SingleUseGuard:
         count = await self._cache.async_increment_cache(key, 1, ttl=ttl_seconds, local_only=True)
         return "first" if count == 1 else "replayed"
 
+    @with_service_target(_DCR_CLAIMS_TARGET)
     async def peek(self, key: str) -> Literal["unclaimed", "claimed", "unavailable"]:
         """Read-only view of a single-use marker, resolved against the same shared authority as
         :meth:`claim` so introspection observes exactly the record redemption and revocation wrote.

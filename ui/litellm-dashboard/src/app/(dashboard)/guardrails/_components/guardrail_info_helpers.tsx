@@ -1,6 +1,7 @@
 import aimSecurityLogo from "../../../../../public/assets/logos/aim_security.jpeg";
 import aktoLogo from "../../../../../public/assets/logos/akto.svg";
 import aliceLogo from "../../../../../public/assets/logos/alice.svg";
+import llmShieldProxyLogo from "../../../../../public/assets/logos/llm_shield_proxy.svg";
 import conductLogo from "../../../../../public/assets/logos/conduct.png";
 import aporiaLogo from "../../../../../public/assets/logos/aporia.png";
 import bedrockLogo from "../../../../../public/assets/logos/bedrock.svg";
@@ -13,7 +14,7 @@ import guardrailsAiLogo from "../../../../../public/assets/logos/guardrails_ai.j
 import javelinLogo from "../../../../../public/assets/logos/javelin.png";
 import lakeraAiLogo from "../../../../../public/assets/logos/lakeraai.jpeg";
 import lassoLogo from "../../../../../public/assets/logos/lasso.png";
-import litellmLogo from "../../../../../public/assets/logos/litellm_logo.jpg";
+import litellmLogo from "../../../../../public/assets/logos/litellm_monogram.svg";
 import microsoftAzureLogo from "../../../../../public/assets/logos/microsoft_azure.svg";
 import nomaSecurityLogo from "../../../../../public/assets/logos/noma_security.png";
 import openaiSmallLogo from "../../../../../public/assets/logos/openai_small.svg";
@@ -86,6 +87,7 @@ export const guardrail_provider_map: Record<string, string> = {
   QostodianNexus: "qostodian_nexus",
   Repelloai: "repelloai",
   Alice: "alice",
+  "LLM Shield Proxy": "llm_shield_proxy",
   Conduct: "conduct",
 };
 
@@ -211,6 +213,7 @@ export const guardrailLogoMap = {
   Straiker: straikerLogo.src,
   Alice: aliceLogo.src,
   "Microsoft Agent 365": microsoftAzureLogo.src,
+  "LLM Shield Proxy": llmShieldProxyLogo.src,
   "Conduct Guard": conductLogo.src,
 } satisfies Record<string, string>;
 

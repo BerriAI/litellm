@@ -312,3 +312,10 @@ def test_prompts_only_payload_returns_copy_with_response_cleared():
     assert stripped["messages"] == TEST_MESSAGES
     assert stripped is not payload
     assert payload == snapshot
+
+
+def test_legacy_s3_logger_ignores_partition_granularity_and_keeps_daily_folder():
+    mock_s3_client = _run_log_event({"s3_bucket_name": "b", "s3_path": "logs", "s3_partition_granularity": "hour"})
+
+    key = mock_s3_client.put_object.call_args.kwargs["Key"]
+    assert key.startswith("logs/2026-07-30/time-12-00-00-")

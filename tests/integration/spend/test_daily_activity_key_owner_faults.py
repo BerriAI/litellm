@@ -161,7 +161,9 @@ def test_every_key_of_a_team_is_reported_with_its_own_user(gateway: Gateway) -> 
     )
     with daily_rows(rows):
         response: Final = gateway.request(
-            "GET", AGGREGATED_TEAM_ACTIVITY, params={"start_date": DAY, "end_date": DAY, "team_ids": team}
+            "GET",
+            AGGREGATED_TEAM_ACTIVITY,
+            params={"start_date": DAY, "end_date": DAY, "team_ids": team, "api_key_limit": KEYS_OF_ONE_TEAM},
         )
     assert response.status_code == 200, response.text
     body: Final = object_value(response.json())

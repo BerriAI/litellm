@@ -11,6 +11,7 @@ import httpx
 
 import litellm
 from litellm import token_counter
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -98,6 +99,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             default_sync_interval=0.1,
         )
 
+    @with_service_target("router_usage")
     def pre_call_check(self, deployment: dict) -> dict | None:
         """
         Pre-call check + update model rpm
@@ -173,6 +175,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 raise e
             return deployment  # don't fail calls if eg. redis fails to connect
 
+    @with_service_target("router_usage")
     async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict | None:
         """
         Pre-call check + update model rpm
@@ -249,6 +252,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 raise e
             return deployment  # don't fail calls if eg. redis fails to connect
 
+    @with_service_target("router_usage")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
@@ -291,6 +295,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::log_success_event(): Exception occured - %s", e
             )
 
+    @with_service_target("router_usage")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
@@ -454,19 +459,17 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     def usage_counter_keys(self, healthy_deployments: list) -> tuple[list[str], list[str]]:
         """The `<id>:<model>:tpm:<HH-MM>` and `<id>:<model>:rpm:<HH-MM>` counter keys selection reads."""
         current_minute: Final = get_utc_datetime().strftime("%H-%M")
+        prefixes: Final = tuple(
+            f"{m.get('model_info', {}).get('id')}:{m.get('litellm_params', {}).get('model')}"
+            for m in healthy_deployments
+            if isinstance(m, dict)
+        )
+        return (
+            [f"{prefix}:tpm:{current_minute}" for prefix in prefixes],
+            [f"{prefix}:rpm:{current_minute}" for prefix in prefixes],
+        )
 
-        tpm_keys: Final[list[str]] = []
-        rpm_keys: Final[list[str]] = []
-        for m in healthy_deployments:
-            if isinstance(m, dict):
-                id = m.get("model_info", {}).get(
-                    "id"
-                )  # a deployment should always have an 'id'. this is set in router.py
-                deployment_name = m.get("litellm_params", {}).get("model")
-                tpm_keys.append(f"{id}:{deployment_name}:tpm:{current_minute}")
-                rpm_keys.append(f"{id}:{deployment_name}:rpm:{current_minute}")
-        return tpm_keys, rpm_keys
-
+    @with_service_target("router_usage")
     async def async_get_available_deployments(
         self,
         model_group: str,
@@ -575,6 +578,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 ),
             )
 
+    @with_service_target("router_usage")
     def get_available_deployments(
         self,
         model_group: str,

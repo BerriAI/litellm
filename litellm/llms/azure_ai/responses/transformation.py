@@ -34,7 +34,7 @@ class AzureAIResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
             litellm_params=params.model_dump(),
             api_key_header=api_key_header_for_base(AzureFoundryModelInfo.get_api_base(params.api_base)),
         )
-        return {  # mutable-ok: the handler updates the returned headers in place per the dict contract
+        return {
             **headers,
             **auth_headers,
             "Content-Type": "application/json",
