@@ -43,7 +43,7 @@ fn named_requests_preserve_all_access_cases(
         json!({"trace_id": "trace", "trace_ref": "ref", "span_id": "span", "error_offset": u64::MAX, "error_version": "version"}),
     ));
     round_trip::<SpendByResponseIdsParams>(request(
-        json!({"response_ids": ["response"], "start_ms": -1, "end_ms": 10}),
+        json!({"response_ids": ["response"], "call_ids": ["gateway"], "start_ms": -1, "end_ms": 10}),
     ));
 }
 
@@ -62,6 +62,6 @@ fn result_contracts_preserve_public_field_names() {
         json!({"span_id": "span", "message": "error", "total_chars": u64::MAX, "version": "version"}),
     );
     round_trip::<SpendByResponseIdsRow>(
-        json!({"request_id": "request", "response_id": "response", "upstream_response_id": "upstream", "team_id": "team", "spend": 0.125, "start_ms": -1}),
+        json!({"request_id": "request", "litellm_call_id": "gateway", "response_id": "response", "upstream_response_id": "upstream", "team_id": "team", "spend": 0.125, "start_ms": -1}),
     );
 }

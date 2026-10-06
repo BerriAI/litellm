@@ -601,7 +601,7 @@ async fn an_oversized_span_keeps_the_run_list_available_with_partial_totals(
 
 #[rstest]
 #[tokio::test]
-async fn response_ids_join_spend_visible_to_the_reader_through_detail_and_batch_reads(
+async fn assigned_call_ids_join_spend_visible_to_the_reader_through_detail_and_batch_reads(
     #[future(awt)] migrated_database: TestResult<SeededDatabase>,
 ) -> TestResult {
     let fixture = migrated_database?;
@@ -631,12 +631,20 @@ async fn response_ids_join_spend_visible_to_the_reader_through_detail_and_batch_
             None,
         ),
         (
-            "gateway-only",
-            "litellm_request:gateway-only",
+            "call-id-other-key",
+            "litellm_request:call-id-other-key",
             "team-a",
+            "key-b",
+            Some(0.25),
+        ),
+        (
+            "call-id-foreign-team",
+            "litellm_request:call-id-foreign-team",
+            "team-b",
             "key-a",
             None,
         ),
+        ("transport-only", "transport:", "team-a", "key-a", None),
     ];
     insert_rows(
         client,

@@ -210,6 +210,7 @@ async fn schema_supports_span_rollups_and_spend_joins(
             "response_ids".into(),
             Parameter::Strings(vec!["response-1".into()]),
         ),
+        ("call_ids".into(), Parameter::Strings(Vec::new())),
         ("all_teams".into(), Parameter::Integer(0)),
         ("user_id".into(), Parameter::Text(String::new())),
         ("team_ids".into(), Parameter::Strings(vec!["team-1".into()])),
@@ -2221,6 +2222,7 @@ async fn named_and_sql_readers_share_request_log_visibility(
                 "api_key_hash": legacy_key.unwrap_or_default(),
             }))?,
             response_ids: vec!["shared-response".into()],
+            call_ids: Vec::new(),
             start_ms: timestamp / 1_000_000 - 1,
             end_ms: timestamp / 1_000_000 + 1,
         });

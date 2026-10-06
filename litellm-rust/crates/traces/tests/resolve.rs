@@ -58,6 +58,7 @@ fn llm(span_id: &str, parent: &str, agent: &str, response_id: &str) -> TraceSpan
 fn spend(request_id: &str, response_id: &str, cost: f64) -> SpendByResponseIdsRow {
     SpendByResponseIdsRow {
         request_id: request_id.into(),
+        litellm_call_id: String::new(),
         response_id: response_id.into(),
         upstream_response_id: String::new(),
         team_id: "team".into(),
@@ -427,28 +428,69 @@ fn no_priced_call_leaves_cost_unknown() {
     assert_eq!((trace.summary.spend, trace.summary.priced_calls), (None, 0));
 }
 
+fn gateway_logged(request_id: &str, call_id: &str, cost: f64) -> SpendByResponseIdsRow {
+    SpendByResponseIdsRow {
+        litellm_call_id: call_id.into(),
+        ..spend(request_id, &format!("chatcmpl-{request_id}"), cost)
+    }
+}
+
 #[rstest]
-#[case::gateway_call_id(litellm_traces::CallKey::LiteLlmRequest("gateway".into()))]
-#[case::transport(litellm_traces::CallKey::Transport)]
-#[case::gateway_attempt(litellm_traces::CallKey::GatewayAttempt)]
-fn only_response_ids_join_spend(#[case] key: litellm_traces::CallKey) {
+#[case::response_id(litellm_traces::CallKey::ProviderResponse("chatcmpl-request".into()), Some(0.25))]
+#[case::gateway_call_id(litellm_traces::CallKey::LiteLlmRequest("gateway".into()), Some(0.25))]
+#[case::other_call_id(litellm_traces::CallKey::LiteLlmRequest("other".into()), None)]
+#[case::request_id_is_not_a_call_id(litellm_traces::CallKey::LiteLlmRequest("request".into()), None)]
+#[case::transport(litellm_traces::CallKey::Transport, None)]
+#[case::gateway_attempt(litellm_traces::CallKey::GatewayAttempt, None)]
+fn only_ids_litellm_assigned_join_spend(
+    #[case] key: litellm_traces::CallKey,
+    #[case] expected: Option<f64>,
+) {
     let rows = [TraceSpansRow {
         trace_id: "trace".into(),
         call_keys: vec![key],
         call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
         ..llm("call", "", "agent", "")
     }];
-    let logs = [spend("gateway", "gateway", 0.25)];
+    let logs = [SpendByResponseIdsRow {
+        upstream_response_id: "trace".into(),
+        ..gateway_logged("request", "gateway", 0.25)
+    }];
     let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
-    assert_eq!((trace.summary.spend, trace.summary.priced_calls), (None, 0));
     assert_eq!(
-        litellm_traces::SpendLookup::new(&rows),
-        litellm_traces::SpendLookup::default()
+        (trace.summary.spend, trace.summary.priced_calls),
+        (expected, u64::from(expected.is_some()))
     );
 }
 
 #[rstest]
-fn spend_lookup_collects_only_response_ids() {
+#[case::same_request("gateway", Some(0.25))]
+#[case::two_requests("other", Some(0.75))]
+fn response_id_and_call_id_naming_one_request_count_it_once(
+    #[case] call_id: &str,
+    #[case] expected: Option<f64>,
+) {
+    let rows = [TraceSpansRow {
+        call_keys: vec![
+            litellm_traces::CallKey::ProviderResponse("chatcmpl-request".into()),
+            litellm_traces::CallKey::LiteLlmRequest(call_id.into()),
+        ],
+        call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
+        ..llm("call", "", "agent", "")
+    }];
+    let logs = [
+        gateway_logged("request", "gateway", 0.25),
+        gateway_logged("other-request", "other", 0.5),
+    ];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(
+        (trace.spans[0].spend, trace.summary.spend),
+        (expected, expected)
+    );
+}
+
+#[rstest]
+fn spend_lookup_collects_only_assigned_ids() {
     let recorded = TraceSpansRow {
         trace_id: "trace".to_owned(),
         call_keys: vec![
@@ -460,8 +502,11 @@ fn spend_lookup_collects_only_response_ids() {
         ..row("span", "", "operation", "llm", "")
     };
     assert_eq!(
-        litellm_traces::SpendLookup::new(&[recorded]).response_ids,
-        ["response"]
+        litellm_traces::SpendLookup::new(&[recorded]),
+        litellm_traces::SpendLookup {
+            response_ids: vec!["response".into()],
+            call_ids: vec!["request".into()],
+        }
     );
 }
 

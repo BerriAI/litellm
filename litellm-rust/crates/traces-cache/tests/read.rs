@@ -520,6 +520,7 @@ async fn oversized_run_batch_falls_back_to_each_run_and_keeps_listed_summaries()
 fn spend_row(response_id: &str, cost: f64) -> SpendByResponseIdsRow {
     SpendByResponseIdsRow {
         request_id: response_id.into(),
+        litellm_call_id: String::new(),
         response_id: response_id.into(),
         upstream_response_id: String::new(),
         team_id: "team".into(),

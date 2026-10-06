@@ -3,8 +3,7 @@ use std::path::{Path, PathBuf};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use litellm_traces::{
-    CallEvidence, CallEvidenceKind, CallKey, DecodedSpan, ObservationType, SpanStatus, SpendLookup,
-    decode_otlp,
+    CallEvidence, CallEvidenceKind, CallKey, DecodedSpan, ObservationType, SpanStatus, decode_otlp,
     query::named::{SpendByResponseIdsRow, TraceSpansRow},
     resolve_trace,
 };
@@ -54,6 +53,8 @@ fn capture_data(spend_log_path: &Path) -> CaptureData {
 #[derive(Deserialize)]
 struct CapturedSpend {
     request_id: String,
+    #[serde(default)]
+    litellm_call_id: String,
     response_id: String,
     team_id: String,
     spend: Option<f64>,
@@ -103,6 +104,7 @@ fn captured_spend_rows(spend_logs: &str) -> (FixtureCapture, Vec<SpendByResponse
             let upstream_response_id = upstream_response_id(&record.response_id);
             SpendByResponseIdsRow {
                 request_id: record.request_id,
+                litellm_call_id: record.litellm_call_id,
                 response_id: record.response_id,
                 upstream_response_id,
                 team_id: record.team_id,
@@ -312,6 +314,8 @@ fn append_response_id(document: &mut Value, trace_id: &str, span_id: &str, respo
     panic!("missing OTLP span {trace_id}/{span_id}");
 }
 
+const CALL_ID_ONLY_ON_SIBLING_GATEWAY_SPAN: [&str; 2] = ["mastra_simple", "mastra_swarm"];
+
 #[rstest]
 fn captured_trace_cost_matches_spend_logs(
     #[files("../traces-clickhouse/tests/fixtures/*_spend_logs.jsonl")] spend_logs: PathBuf,
@@ -319,18 +323,14 @@ fn captured_trace_cost_matches_spend_logs(
     let name = capture_name(&spend_logs);
     let (_, capture, rows, spends) = fixture(&spend_logs);
     let trace = resolve_trace(&capture.trace_id, "", &rows, &spends).expect("captured trace");
-    let recorded: BTreeSet<String> = SpendLookup::new(&rows).response_ids.into_iter().collect();
-    let joined: Vec<f64> = spends
-        .iter()
-        .filter(|row| {
-            recorded.contains(&row.response_id) || recorded.contains(&row.upstream_response_id)
-        })
-        .map(|row| row.spend.unwrap_or(0.0))
-        .collect();
-    let expected = (!joined.is_empty()).then(|| joined.iter().sum());
+    let priced = capture.spend_linked && !CALL_ID_ONLY_ON_SIBLING_GATEWAY_SPAN.contains(&name);
+    let expected = priced.then(|| spends.iter().map(|row| row.spend.unwrap_or(0.0)).sum());
     assert_spend_close(trace.summary.spend, expected, name);
-    if !capture.spend_linked {
-        assert_eq!(trace.summary.spend, None, "{name}");
+    if priced {
+        assert_eq!(
+            trace.summary.priced_calls, trace.summary.llm_calls,
+            "{name}"
+        );
     }
 }
 
