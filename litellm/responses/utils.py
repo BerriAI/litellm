@@ -68,7 +68,7 @@ def _is_chat_text_part(part: object) -> bool:
 
 def _as_input_text_part(part: object) -> object:
     if isinstance(part, dict) and part.get("type") == "text":
-        return {**part, "type": "input_text"}  # mutable-ok: fresh part so the caller's block keeps its chat type
+        return {**part, "type": "input_text"}
     return part
 
 
@@ -85,8 +85,8 @@ class ResponsesAPIRequestUtils:
         content: object = message.get("content")
         if not isinstance(content, list) or not any(_is_chat_text_part(part) for part in content):
             return message
-        shaped_content: Final = [_as_input_text_part(part) for part in content]  # mutable-ok: Responses-shaped copy
-        return {**message, "content": shaped_content}  # mutable-ok: copy, the hook's message stays untouched
+        shaped_content: Final = [_as_input_text_part(part) for part in content]
+        return {**message, "content": shaped_content}
 
     @staticmethod
     def responses_input_to_chat_messages(

@@ -1,4 +1,4 @@
-"""Shared fixtures for tests/test_litellm/proxy/utils/prisma_and_spend/.
+"""Shared fixtures for tests/unit/proxy/utils/prisma_and_spend/.
 
 All fixtures used by PR2 test files live here. Do NOT add fixtures inside
 individual test files; if a fixture is missing, add it here and update the
@@ -133,6 +133,8 @@ def mock_prisma_client() -> MagicMock:
     client.spend_log_write_lock = asyncio.Lock()
     client.tool_usage_transactions = []
     client._tool_usage_transactions_lock = asyncio.Lock()
+    client.model_usage_transactions = []
+    client._model_usage_transactions_lock = asyncio.Lock()
     client.jsonify_object = lambda data: dict(data)
     client.db.is_connected = MagicMock(return_value=False)
     client.db.connect = AsyncMock()

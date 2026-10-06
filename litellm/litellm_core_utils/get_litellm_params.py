@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.litellm_params import MAX_CONTROL_INT_DIGITS, ControlOptions
 from litellm.types.router import CustomPricingLiteLLMParams
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
@@ -70,6 +71,8 @@ OPTIONAL_KWARGS_KEYS: Final = (
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
+    | ANTHROPIC_WIF_KWARGS_KEYS
+    | OPENAI_WIF_KWARGS_KEYS
     | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
 
@@ -99,9 +102,7 @@ class InvalidControlOption:
 
 
 def parse_control_options(kwargs: Mapping[str, object]) -> ControlOptions | InvalidControlOption:
-    given: Final = {  # mutable-ok: TypeAdapter.validate_python takes a dict
-        name: kwargs[name] for name in _CONTROL_OPTION_NAMES if name in kwargs
-    }
+    given: Final = {name: kwargs[name] for name in _CONTROL_OPTION_NAMES if name in kwargs}
     try:
         return _CONTROL_OPTIONS.validate_python(given)
     except ValidationError as e:
@@ -118,8 +119,8 @@ def stored_control_options(litellm_params: Mapping[str, object]) -> ControlOptio
 
 def with_control_options(litellm_params: Mapping[str, object], control: ControlOptions) -> dict[str, object]:
     if control == ControlOptions():
-        return dict(litellm_params)  # mutable-ok: completion() hands litellm_params to provider code typed as dict
-    return {**litellm_params, CONTROL_OPTIONS_KEY: control}  # mutable-ok: same dict contract as above
+        return dict(litellm_params)
+    return {**litellm_params, CONTROL_OPTIONS_KEY: control}
 
 
 def _get_base_model_from_litellm_call_metadata(

@@ -18563,6 +18563,63 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
 
 
 @pytest.mark.asyncio
+async def test_rotate_master_key_rotates_search_tools(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_if_encrypted_with,
+        encrypt_value_helper,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_master_key,
+    )
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master-key")
+
+    class _Row(SimpleNamespace):
+        def __iter__(self):
+            return iter(vars(self).items())
+
+    row = _Row(
+        search_tool_id="search-tool-1",
+        litellm_params={"search_provider": "tavily", "api_key": encrypt_value_helper("tvly-secret")},
+    )
+
+    async def _update_many(where, data):
+        expected_litellm_params = json.loads(where["litellm_params"]["equals"])
+        if where["search_tool_id"] != row.search_tool_id or expected_litellm_params != row.litellm_params:
+            return 0
+        row.litellm_params = json.loads(data["litellm_params"])
+        return 1
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_searchtoolstable.find_many = AsyncMock(return_value=[row])
+    mock_prisma_client.db.litellm_searchtoolstable.update_many = AsyncMock(side_effect=_update_many)
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="test-user",
+    )
+
+    await _rotate_master_key(
+        prisma_client=mock_prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    assert decrypt_if_encrypted_with(row.litellm_params["api_key"], "sk-new-master-key") == "tvly-secret"
+    assert row.litellm_params["search_provider"] == "tavily"
+
+
+@pytest.mark.asyncio
 async def test_check_encryption_endpoint_rejects_proxy_admin_viewer():
     """The residual scan walks and decrypt-classifies every credential-bearing table,
     so it stays proxy_admin-only despite being read-only."""
@@ -18925,30 +18982,37 @@ async def test_regenerate_key_output_token_estimate_lowered_rejected_for_non_adm
 _BATCH_LIMIT = "batch_enqueued_token_limit"
 
 
+_UNTOUCHED = object()
+
+
 @pytest.mark.parametrize(
-    "label, request_body, existing_metadata, allowed",
+    "limit_key",
     [
-        ("set on a key with none stored", {"metadata": {_BATCH_LIMIT: 50000}}, None, False),
-        ("raised above the stored limit", {"metadata": {_BATCH_LIMIT: 200000}}, {_BATCH_LIMIT: 100000}, False),
-        ("cleared by replacing the blob", {"metadata": {}}, {_BATCH_LIMIT: 100000}, False),
-        ("resent unchanged", {"metadata": {_BATCH_LIMIT: 100000}}, {_BATCH_LIMIT: 100000}, True),
-        ("left untouched", {}, {_BATCH_LIMIT: 100000}, True),
+        "batch_enqueued_token_limit",
+        "max_batch_file_records",
+        "max_batch_file_uploads_per_day",
+        "max_file_downloads_per_minute",
     ],
 )
-def test_batch_enqueued_token_limit_admin_gate_matrix(label, request_body, existing_metadata, allowed):
-    """A non-admin may only leave a key's stored batch enqueued-token limit as it is.
-
-    When set, the limit replaces the standard RPM/TPM checks for batch
-    submissions, so a key holder writing it would pick their own batch quota.
-    Resending the stored value is what the edit form produces on every save
-    and has to stay allowed.
-    """
+@pytest.mark.parametrize(
+    "label, sent, stored, allowed",
+    [
+        ("set on a key with none stored", 50000, None, False),
+        ("raised above the stored limit", 200000, 100000, False),
+        ("cleared by replacing the blob", None, 100000, False),
+        ("resent unchanged", 100000, 100000, True),
+        ("left untouched", _UNTOUCHED, 100000, True),
+    ],
+)
+def test_batch_limits_admin_gate_matrix(limit_key, label, sent, stored, allowed):
+    request_body = {} if sent is _UNTOUCHED else {"metadata": {} if sent is None else {limit_key: sent}}
+    existing_metadata = None if stored is None else {limit_key: stored}
     from litellm.proxy.auth.auth_utils import (
-        enforce_batch_enqueued_token_limit_is_admin_only,
+        enforce_batch_limits_are_admin_only,
     )
 
     def _call(caller):
-        enforce_batch_enqueued_token_limit_is_admin_only(
+        enforce_batch_limits_are_admin_only(
             data=UpdateKeyRequest(key="sk-1", **request_body),
             existing_metadata=existing_metadata,
             user_api_key_dict=caller,
@@ -18966,7 +19030,7 @@ def test_batch_enqueued_token_limit_admin_gate_matrix(label, request_body, exist
         with pytest.raises(HTTPException) as exc:
             _call(non_admin)
         assert exc.value.status_code == 403
-        assert "Only proxy admins can set" in str(exc.value.detail)
+        assert f"Only proxy admins can set {limit_key}" in str(exc.value.detail)
 
     _call(
         UserAPIKeyAuth(
@@ -21097,3 +21161,59 @@ class TestTeamAdminMemberKeyBudgetUpdate:
             )
         assert exc.value.status_code == 403
         assert "member_key_budgets" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_registry import (
+        decrypt_guardrail_litellm_params,
+        encrypt_guardrail_litellm_params,
+    )
+    from litellm.proxy.management_endpoints import key_management_endpoints
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_master_key,
+    )
+
+    for rotator in (
+        "rotate_mcp_server_credentials_master_key",
+        "rotate_mcp_user_credentials_master_key",
+        "rotate_mcp_user_env_vars_master_key",
+        "rotate_sso_identity_assertions_master_key",
+    ):
+        monkeypatch.setattr(key_management_endpoints, rotator, AsyncMock())
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master-key")
+    guardrail_row = SimpleNamespace(
+        guardrail_id="g-1",
+        updated_at="t1",
+        litellm_params=encrypt_guardrail_litellm_params({"guardrail": "bedrock", "aws_secret_access_key": "aws-secret"}),
+    )
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[guardrail_row])
+    mock_prisma_client.db.litellm_guardrailstable.update_many = AsyncMock(return_value=1)
+
+    await _rotate_master_key(
+        prisma_client=mock_prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    write = mock_prisma_client.db.litellm_guardrailstable.update_many.call_args.kwargs
+    stored_params = json.loads(write["data"]["litellm_params"])
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-new-master-key")
+    assert write["where"] == {"guardrail_id": "g-1", "updated_at": "t1"}
+    assert stored_params["aws_secret_access_key"].startswith("litellm_enc::")
+    assert decrypt_guardrail_litellm_params(stored_params) == {
+        "guardrail": "bedrock",
+        "aws_secret_access_key": "aws-secret",
+    }

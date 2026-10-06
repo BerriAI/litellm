@@ -11,8 +11,10 @@ from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, cast
 
 from fastapi import HTTPException, status
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
@@ -27,6 +29,7 @@ from litellm.proxy.auth.auth_utils import get_model_from_request
 from litellm.proxy.auth.budget_throttle import should_throttle_budget_exceeded
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.user_api_key_cache import (
+    AUTH_OBJECTS_TARGET,
     UserApiKeyCache,
     end_user_cache_key,
     model_access_group_cache_key,
@@ -68,6 +71,9 @@ _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
     "Organization": Litellm_EntityType.ORGANIZATION.value,
     "Project": Litellm_EntityType.PROJECT.value,
 }
+
+_CACHED_VALUE: Final = TypeAdapter(object)
+_WINDOW_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class _CounterReservationUnavailable(Exception):
@@ -732,6 +738,7 @@ def _dedupe_tags(tags: list[str]) -> list[str]:
     return deduped_tags
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _get_team_member_budget_counter(
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
@@ -759,8 +766,8 @@ async def _get_team_member_budget_counter(
     else:
         default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
         if isinstance(default_budget_id, str):
-            default_budget: Final = await user_api_key_cache.async_get_cache(
-                key=f"team_member_default_budget:{default_budget_id}",
+            default_budget: Final = _CACHED_VALUE.validate_python(
+                await user_api_key_cache.async_get_cache(key=f"team_member_default_budget:{default_budget_id}")
             )
             default_cap: Final = _to_float(_get_value(default_budget, "max_budget"))
             if default_cap is not None and default_cap > 0:
@@ -782,6 +789,7 @@ async def _get_team_member_budget_counter(
     )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _get_org_budget_counter(
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
@@ -795,8 +803,8 @@ async def _get_org_budget_counter(
     if org_id is None:
         return None
 
-    org_table: Final = await user_api_key_cache.async_get_cache(
-        key=f"org_id:{org_id}:with_budget",
+    org_table: Final = _CACHED_VALUE.validate_python(
+        await user_api_key_cache.async_get_cache(key=f"org_id:{org_id}:with_budget")
     )
     if org_table is None:
         return None
@@ -820,6 +828,7 @@ async def _get_org_budget_counter(
     )
 
 
+@with_service_target(AUTH_OBJECTS_TARGET)
 async def _get_project_budget_counter(
     valid_token: UserAPIKeyAuth,
     user_api_key_cache: UserApiKeyCache,
@@ -828,7 +837,9 @@ async def _get_project_budget_counter(
         return None
 
     source_cache_key: Final = project_cache_key(valid_token.project_id)
-    project_object: Final = await user_api_key_cache.async_get_cache(key=source_cache_key)
+    project_object: Final = _CACHED_VALUE.validate_python(
+        await user_api_key_cache.async_get_cache(key=source_cache_key)
+    )
     if project_object is None:
         return None
 
@@ -896,10 +907,9 @@ def _coerce_window(window: object) -> Mapping[str, object]:
         return window
     if isinstance(window, str):
         try:
-            parsed: Final[object] = json.loads(window)
+            return _WINDOW_OBJECT.validate_python(json.loads(window))
         except Exception:
             return {}
-        return parsed if isinstance(parsed, Mapping) else {}
     model_dump: Final = getattr(window, "model_dump", None)
     if not callable(model_dump):
         return {}
@@ -1079,7 +1089,7 @@ async def _reserve_counters(
                     exc_info=True,
                 )
                 await _release_applied_entries_best_effort(
-                    entries=[entry],  # mutable-ok: the release takes the reservation's list of entries
+                    entries=[entry],
                     default_reserved_cost=reservation_cost,
                 )
         return None
@@ -1210,7 +1220,7 @@ async def _release_applied_entries_best_effort(
     for entry in entries:
         try:
             await _set_reserved_entries_actual_cost(
-                entries=[entry],  # mutable-ok: the reconcile takes the reservation's list of entries
+                entries=[entry],
                 actual_cost=0.0,
                 default_reserved_cost=default_reserved_cost,
             )

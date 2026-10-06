@@ -3,6 +3,7 @@
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 import copy
 import datetime
+import functools
 import json
 import os
 import re
@@ -14,7 +15,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
-from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Union, cast
 
 from httpx import Response
 from pydantic import BaseModel, JsonValue
@@ -112,11 +113,13 @@ from litellm.litellm_core_utils.served_output_texts import (
     SERVED_OUTPUT_TEXTS_KEY,
     overlay_served_output_texts,
 )
+from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.containers.main import ContainerObject
+from litellm.types.decisions import DecisionsResponse
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.interactions import (
     InteractionsAPIResponse,
@@ -175,7 +178,7 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.utils import _get_base_model_from_metadata, executor, print_verbose
+from litellm.utils import _get_base_model_from_metadata, print_verbose
 
 from ..integrations.argilla import ArgillaLogger
 from ..integrations.arize.arize_phoenix import ArizePhoenixLogger
@@ -238,18 +241,6 @@ try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
     )
-    from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
-        PagerDutyAlerting,
-    )
-    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
-        ResendEmailLogger,
-    )
-    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
-        SendGridEmailLogger,
-    )
-    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
-        SMTPEmailLogger,
-    )
     from litellm_enterprise.litellm_core_utils.litellm_logging import (
         StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
     )
@@ -262,28 +253,41 @@ try:
 except Exception as e:
     verbose_logger.debug("[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - %s", e)
     GenericAPILogger = CustomLogger
-    ResendEmailLogger = CustomLogger
-    SendGridEmailLogger = CustomLogger
-    SMTPEmailLogger = CustomLogger
-    PagerDutyAlerting = CustomLogger
     EnterpriseCallbackControls = None
     EnterpriseStandardLoggingPayloadSetupVAR = None
+
+
+class _EnterpriseAlertingLoggers(NamedTuple):
+    pagerduty: type[CustomLogger]
+    resend_email: type[CustomLogger]
+    sendgrid_email: type[CustomLogger]
+    smtp_email: type[CustomLogger]
+
+
+@functools.cache
+def _enterprise_alerting_loggers() -> _EnterpriseAlertingLoggers:
+    try:
+        from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
+        from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
+        from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import SendGridEmailLogger
+        from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
+    except Exception as e:
+        verbose_logger.debug(
+            "[Non-Blocking] Unable to import enterprise alerting loggers - LiteLLM Enterprise Feature - %s",
+            e,
+        )
+        return _EnterpriseAlertingLoggers(CustomLogger, CustomLogger, CustomLogger, CustomLogger)
+    return _EnterpriseAlertingLoggers(PagerDutyAlerting, ResendEmailLogger, SendGridEmailLogger, SMTPEmailLogger)
+
+
 if TYPE_CHECKING:
     from litellm.integrations.generic_api.generic_api_callback import (
         GenericAPILogger as _GenericAPILoggerCls,
     )
 
     _GENERIC_API_LOGGER_CLS: Final = _GenericAPILoggerCls
-    _RESEND_EMAIL_LOGGER_FACTORY: Final = CustomLogger
-    _SENDGRID_EMAIL_LOGGER_FACTORY: Final = CustomLogger
-    _SMTP_EMAIL_LOGGER_FACTORY: Final = CustomLogger
-    _PAGERDUTY_ALERTING_FACTORY: Final = CustomLogger
 else:
     _GENERIC_API_LOGGER_CLS: Final = GenericAPILogger
-    _RESEND_EMAIL_LOGGER_FACTORY: Final = ResendEmailLogger
-    _SENDGRID_EMAIL_LOGGER_FACTORY: Final = SendGridEmailLogger
-    _SMTP_EMAIL_LOGGER_FACTORY: Final = SMTPEmailLogger
-    _PAGERDUTY_ALERTING_FACTORY: Final = PagerDutyAlerting
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
 _STANDARD_LOGGING_METADATA_RESOLVED_KEYS: Final[frozenset[str]] = frozenset(("used_client_oauth_token",))
@@ -678,6 +682,9 @@ class Logging(LiteLLMLoggingBaseClass):
         self.truncated_messages_for_logging: str | list | dict | None = None  # mutable-ok: logged messages shape
         ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: datetime.datetime | None = None
+        # The model the proxy shows the client on streamed chunks. The logged streamed response carries it
+        # once that response is priced, the same way a non-streamed response is logged
+        self.client_facing_stream_model: str | None = None
         self.zero_cost_warned: bool = False
         self._llm_caching_handler: LLMCachingHandler | None = None
 
@@ -697,7 +704,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.caching_details: CachingDetails | None = None
         # Timing for results that cannot carry ``_hidden_params`` (plain-dict /v1/messages
         # responses and the bridge stream wrappers); see ``update_response_metadata``.
-        self.response_timing_metrics: Mapping[str, float] = {}  # mutable-ok: kept deep-copyable
+        self.response_timing_metrics: Mapping[str, float] = {}
 
         # Passthrough endpoint guardrails config for field targeting
         self.passthrough_guardrails_config: dict[str, object] | None = None
@@ -721,7 +728,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def set_response_timing_metrics(self, timing_metrics: Mapping[str, float]) -> None:
         """Keep ``_response_ms`` / ``litellm_overhead_time_ms`` for a result that has no ``_hidden_params``."""
-        self.response_timing_metrics = dict(timing_metrics)  # mutable-ok: kept deep-copyable
+        self.response_timing_metrics = dict(timing_metrics)
 
     def add_dynamic_callback(self, callback: CustomLogger) -> None:
         self.dynamic_input_callbacks = self._with_dynamic_callback(self.dynamic_input_callbacks, callback)
@@ -1811,6 +1818,7 @@ class Logging(LiteLLMLoggingBaseClass):
             LiteLLMRealtimeStreamLoggingObject,
             OpenAIModerationResponse,
             "SearchResponse",
+            DecisionsResponse,
             dict,
             list,
         ],
@@ -2253,17 +2261,24 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception:
             return True
 
-    def has_run_logging(
+    def mark_logging_complete(
         self,
         event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
     ) -> None:
-        if self.stream is not None and self.stream is True:
+        if self.stream is not None and self.stream is True and event_type in ["async_success", "sync_success"]:
             """
             Ignore check on stream, as there can be multiple chunks
             """
             return
         self.model_call_details[f"has_logged_{event_type}"] = True
         return
+
+    def has_run_logging(
+        self,
+        event_type: Literal["async_success", "sync_success", "async_failure", "sync_failure"],
+    ) -> None:
+        """Deprecated alias of mark_logging_complete, kept for callers of the old name"""
+        self.mark_logging_complete(event_type=event_type)
 
     def should_run_callback(self, callback: litellm.CALLBACK_TYPES, litellm_params: dict, event_hook: str) -> bool:
         if litellm.global_disable_no_log_param:
@@ -2481,6 +2496,15 @@ class Logging(LiteLLMLoggingBaseClass):
             setattr(result, "usage", transformed_usage)
         return result
 
+    def _with_client_facing_stream_model(
+        self,
+        response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
+    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
+        model: Final = self.client_facing_stream_model
+        if model is None or response.model in (None, model):
+            return response
+        return response.model_copy(update={"model": model})
+
     def _success_handler_helper_fn(
         self,
         result=None,
@@ -2587,6 +2611,7 @@ class Logging(LiteLLMLoggingBaseClass):
             or isinstance(logging_result, OpenAIModerationResponse)
             or isinstance(logging_result, OCRResponse)  # OCR
             or isinstance(logging_result, SearchResponse)  # Search API
+            or isinstance(logging_result, DecisionsResponse)
             or (
                 isinstance(logging_result, InteractionsAPIResponse)
                 and logging_result.usage is not None
@@ -2796,9 +2821,11 @@ class Logging(LiteLLMLoggingBaseClass):
                     result=complete_streaming_response
                 )
                 self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
+                logged_streaming_response: Final = self._with_client_facing_stream_model(complete_streaming_response)
+                self.model_call_details["complete_streaming_response"] = logged_streaming_response
                 ## STANDARDIZED LOGGING PAYLOAD
                 self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
-                    complete_streaming_response, start_time, end_time
+                    logged_streaming_response, start_time, end_time
                 )
                 standard_logging_payload: Final[StandardLoggingPayload | None] = self.model_call_details.get(
                     "standard_logging_object"
@@ -2844,7 +2871,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         call_type=self.call_type,
                     )
 
-            self.has_run_logging(event_type="sync_success")
+            self.mark_logging_complete(event_type="sync_success")
             for callback in callbacks:
                 try:
                     should_run = self.should_run_callback(
@@ -3337,10 +3364,13 @@ class Logging(LiteLLMLoggingBaseClass):
 
             await self._prepare_baseline_cache_estimate(complete_streaming_response)
 
+            logged_streaming_response: Final = self._with_client_facing_stream_model(complete_streaming_response)
+            self.model_call_details["async_complete_streaming_response"] = logged_streaming_response
+
             ## STANDARDIZED LOGGING PAYLOAD
             try:
                 self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
-                    complete_streaming_response, start_time, end_time
+                    logged_streaming_response, start_time, end_time
                 )
             except Exception:  # noqa: BLE001  # payload build must never block later callbacks (slot release)
                 verbose_logger.exception(
@@ -3422,7 +3452,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 self._handle_callback_failure(callback=callback)
 
-        self.has_run_logging(event_type="async_success")
+        self.mark_logging_complete(event_type="async_success")
 
         for callback in callbacks:
             # check if callback can run for this request
@@ -3715,7 +3745,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 model_call_details=(self.model_call_details if hasattr(self, "model_call_details") else {}),
                 result=result,
             )
-            self.has_run_logging(event_type="sync_failure")
+            self.mark_logging_complete(event_type="sync_failure")
             for callback in callbacks:
                 try:
                     should_run = self.should_run_callback(
@@ -3907,7 +3937,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         result: Final = None  # result sent to all loggers, init this to None incase it's not created
 
-        self.has_run_logging(event_type="async_failure")
+        self.mark_logging_complete(event_type="async_failure")
         for callback in callbacks:
             try:
                 litellm_params = self.model_call_details.get("litellm_params", {})
@@ -3970,7 +4000,7 @@ class Logging(LiteLLMLoggingBaseClass):
         result: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
-        cache_hit: object | None = None,
+        cache_hit: bool | None = None,
     ) -> None:
         """
         Handles calling success callbacks for Async calls.
@@ -4144,7 +4174,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if result.status == "completed":
             return InteractionsAPIResponse.model_validate(
                 result.model_dump(
-                    exclude={  # mutable-ok: pydantic types exclude as set[str], which a frozenset does not satisfy
+                    exclude={
                         "event_type",
                         "delta",
                         "index",
@@ -5034,10 +5064,11 @@ def _init_custom_logger_compatible_class(
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger
         elif logging_integration == "pagerduty":
+            pagerduty_loggers: Final = _enterprise_alerting_loggers()
             for callback in _in_memory_loggers:
-                if isinstance(callback, PagerDutyAlerting):
+                if isinstance(callback, pagerduty_loggers.pagerduty):
                     return callback
-            pagerduty_logger: Final = _PAGERDUTY_ALERTING_FACTORY(**custom_logger_init_args)
+            pagerduty_logger: Final = pagerduty_loggers.pagerduty(**custom_logger_init_args)
             _in_memory_loggers.append(pagerduty_logger)
             return pagerduty_logger
         elif logging_integration == "anthropic_cache_control_hook":
@@ -5073,24 +5104,27 @@ def _init_custom_logger_compatible_class(
             _in_memory_loggers.append(generic_api_logger)
             return generic_api_logger
         elif logging_integration == "resend_email":
+            resend_email_loggers: Final = _enterprise_alerting_loggers()
             for callback in _in_memory_loggers:
-                if isinstance(callback, ResendEmailLogger):
+                if isinstance(callback, resend_email_loggers.resend_email):
                     return callback
-            resend_email_logger: Final = _RESEND_EMAIL_LOGGER_FACTORY()
+            resend_email_logger: Final = resend_email_loggers.resend_email()
             _in_memory_loggers.append(resend_email_logger)
             return resend_email_logger
         elif logging_integration == "sendgrid_email":
+            sendgrid_email_loggers: Final = _enterprise_alerting_loggers()
             for callback in _in_memory_loggers:
-                if isinstance(callback, SendGridEmailLogger):
+                if isinstance(callback, sendgrid_email_loggers.sendgrid_email):
                     return callback
-            sendgrid_email_logger: Final = _SENDGRID_EMAIL_LOGGER_FACTORY()
+            sendgrid_email_logger: Final = sendgrid_email_loggers.sendgrid_email()
             _in_memory_loggers.append(sendgrid_email_logger)
             return sendgrid_email_logger
         elif logging_integration == "smtp_email":
+            smtp_email_loggers: Final = _enterprise_alerting_loggers()
             for callback in _in_memory_loggers:
-                if isinstance(callback, SMTPEmailLogger):
+                if isinstance(callback, smtp_email_loggers.smtp_email):
                     return callback
-            smtp_email_logger: Final = _SMTP_EMAIL_LOGGER_FACTORY()
+            smtp_email_logger: Final = smtp_email_loggers.smtp_email()
             _in_memory_loggers.append(smtp_email_logger)
             return smtp_email_logger
         elif logging_integration == "humanloop":
@@ -5180,13 +5214,18 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     Returns ``None`` when V2 is off OR when there's no preset registered for
     ``callback_name`` — callers should then fall through to the legacy path.
 
-    A preset that needs operator credentials it cannot find is allowed to build
-    only when this request has a key/team destination for that backend and another
-    V2 logger is already registered to carry the fan-out. The resulting logger keeps
-    only its credential-gated exporter, while the registered logger owns operator
-    delivery. Without that carrier, a preset that raises or that ends up with nothing
-    but its gated exporter and the default console placeholder returns ``None``, so the
-    caller falls through to the legacy path exactly as before V2 landed.
+    A logger built while another V2 logger is already registered keeps only the
+    exporters its own preset contributed, whether or not the operator holds
+    credentials for that backend and whether or not a destination is anchored: the
+    registered logger owns operator delivery, so a copy of the operator's base OTLP
+    exporters here would emit every LLM call a second time into the operator's sink.
+    A preset that contributes no exporter of its own (a mapper over the operator's
+    collector) keeps the base exporters, since it has nothing else to deliver through.
+    A preset that needs operator credentials it cannot find is allowed to build only
+    when it serves a key/team destination in that situation. Otherwise a preset that
+    raises or that ends up with nothing but its gated exporter and the default
+    console placeholder returns ``None``, so the caller falls through to the legacy
+    path exactly as before V2 landed.
     """
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
@@ -5218,7 +5257,7 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     gated: Final = _is_credential_gated(built)
     if gated and not carried and not _has_operator_exporter(built):
         return None
-    config: Final = _only_the_gated_exporter(built) if gated and carried else built
+    config: Final = _only_the_presets_own_exporters(built, callback_name) if has_v2_logger else built
     if _exports_nowhere(config):
         verbose_logger.warning(
             "OTel V2: no operator credentials for '%s'; only key/team destinations will receive its traces",
@@ -5246,10 +5285,10 @@ def _has_operator_exporter(config: "OpenTelemetryV2Config") -> bool:
     return any(not _is_gated(spec) and not is_unconfigured_placeholder(spec) for spec in config.exporters)
 
 
-def _only_the_gated_exporter(config: "OpenTelemetryV2Config") -> "OpenTelemetryV2Config":
-    return config.model_copy(
-        update={"exporters": [spec for spec in config.exporters if _is_gated(spec)]}  # mutable-ok: model_copy update
-    )
+def _only_the_presets_own_exporters(config: "OpenTelemetryV2Config", callback_name: str) -> "OpenTelemetryV2Config":
+    """A preset with no exporter of its own (Langtrace: a mapper over the operator's collector) keeps the base."""
+    own: Final = [spec for spec in config.exporters if spec.owner == callback_name]
+    return config.model_copy(update={"exporters": own}) if own else config
 
 
 def _is_gated(spec: "ExporterSpec") -> bool:
@@ -5474,8 +5513,9 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, MlflowLogger):
                     return callback
         elif logging_integration == "pagerduty":
+            pagerduty_loggers: Final = _enterprise_alerting_loggers()
             for callback in _in_memory_loggers:
-                if isinstance(callback, PagerDutyAlerting):
+                if isinstance(callback, pagerduty_loggers.pagerduty):
                     return callback
         elif logging_integration == "anthropic_cache_control_hook":
             for callback in _in_memory_loggers:
@@ -5498,16 +5538,19 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, _GENERIC_API_LOGGER_CLS):
                     return callback
         elif logging_integration == "resend_email":
+            resend_email_loggers: Final = _enterprise_alerting_loggers()
             for callback in _in_memory_loggers:
-                if isinstance(callback, ResendEmailLogger):
+                if isinstance(callback, resend_email_loggers.resend_email):
                     return callback
         elif logging_integration == "sendgrid_email":
+            sendgrid_email_loggers: Final = _enterprise_alerting_loggers()
             for callback in _in_memory_loggers:
-                if isinstance(callback, SendGridEmailLogger):
+                if isinstance(callback, sendgrid_email_loggers.sendgrid_email):
                     return callback
         elif logging_integration == "smtp_email":
+            smtp_email_loggers: Final = _enterprise_alerting_loggers()
             for callback in _in_memory_loggers:
-                if isinstance(callback, SMTPEmailLogger):
+                if isinstance(callback, smtp_email_loggers.smtp_email):
                     return callback
         elif logging_integration == "newrelic":
             from litellm.integrations.otel.logger import OpenTelemetryV2
@@ -5721,7 +5764,7 @@ class StandardLoggingPayloadSetup:
                 if key not in user_metadata
             }
         )
-        return {**user_metadata, **model_metadata}  # mutable-ok: function contract returns a plain dict
+        return {**user_metadata, **model_metadata}
 
     @staticmethod
     def get_standard_logging_metadata(
@@ -6583,9 +6626,7 @@ def get_standard_logging_object_payload(
         if clean_hidden_params["litellm_overhead_time_ms"] is None and status == "success":
             # /v1/messages dict results and the bridge stream wrappers keep it on the logging object;
             # failure payloads stay None like every response type that carries its own _hidden_params
-            timing_metrics: Final = (
-                getattr(logging_obj, "response_timing_metrics", None) or {}  # mutable-ok: empty fallback
-            )
+            timing_metrics: Final = getattr(logging_obj, "response_timing_metrics", None) or {}
             clean_hidden_params["litellm_overhead_time_ms"] = timing_metrics.get("litellm_overhead_time_ms")
 
         model_cost_information: Final = StandardLoggingPayloadSetup.get_model_cost_information(
@@ -6700,14 +6741,14 @@ def get_standard_logging_object_payload(
             cost_breakdown=request_cost_breakdown,
             autorouter_savings=autorouter_savings,
             autorouter_savings_estimate=(
-                {  # mutable-ok: spend-log JSON serialization requires plain mappings
+                {
                     "version": 3,
                     "status": "unknown",
                     "reason": "pending_projection",
                 }
                 if captured_baseline is not None
                 else (
-                    {  # mutable-ok: spend-log JSON serialization requires plain mappings
+                    {
                         "version": 1,
                         "status": "estimated" if autorouter_savings is not None else "unknown",
                         "reason": "uncached_usage" if autorouter_savings is not None else "baseline_unavailable",

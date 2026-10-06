@@ -1876,7 +1876,7 @@ class TestTemporaryMCPSessionEndpoints:
             url="https://temp.example.com",
             transport=MCPTransport.http,
         )
-        existing_server = MagicMock()
+        existing_server = MagicMock(dcr_issuer=None, dcr_server_url=None, token_endpoint_auth_method=None)
         existing_server.authentication_token = "token-abc"
         existing_server.client_id = "client-123"
         existing_server.client_secret = "secret-xyz"
@@ -1912,7 +1912,7 @@ class TestTemporaryMCPSessionEndpoints:
 
     @staticmethod
     def _inherit_with(payload_credentials, **server_overrides):
-        existing_server = MagicMock()
+        existing_server = MagicMock(dcr_issuer=None, dcr_server_url=None, token_endpoint_auth_method=None)
         existing_server.authentication_token = None
         existing_server.client_id = "client-123"
         existing_server.client_secret = "secret-xyz"
@@ -2616,6 +2616,9 @@ class TestTemporaryMCPSessionEndpoints:
             user_id="admin-user",
         )
         inherited_server = MagicMock(
+            dcr_issuer=None,
+            dcr_server_url=None,
+            token_endpoint_auth_method=None,
             authentication_token="token-abc",
             client_id="client-id",
             client_secret="client-secret",
@@ -4881,7 +4884,8 @@ class TestMCPApprovalWorkflow:
         assert "team" in str(exc_info.value.detail).lower()
 
     @pytest.mark.asyncio
-    async def test_register_mcp_server_rejects_stdio_transport(self):
+    async def test_register_mcp_server_rejects_stdio_transport(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
         # stdio servers spawn a local subprocess on the proxy host. Accepting
         # them from the non-admin submission endpoint would let a team member
         # propose a config that an admin could rubber-stamp into local code
@@ -11058,3 +11062,263 @@ class TestMCPServerResolutionCharacterization:
         health_check.assert_not_awaited()
         effects.assert_no_writes()
         assert httpx_mock.calls.call_count == 0
+
+
+@pytest.mark.parametrize("explicit_transport", [False, True])
+def test_modern_sse_create_is_rejected_before_persistence(explicit_transport: bool) -> None:
+    with pytest.raises(ValidationError, match="Modern MCP requires HTTP or stdio"):
+        NewMCPServerRequest.model_validate({
+            "url": "https://upstream.example/sse",
+            "mcp_info": {"protocol_version": "2026-07-28"},
+            **({"transport": "sse"} if explicit_transport else {}),
+        })
+
+
+@pytest.mark.parametrize("metadata", [False, True])
+def test_modern_sse_runtime_configuration_is_rejected(metadata: bool) -> None:
+    with pytest.raises(ValidationError, match="Modern MCP requires HTTP or stdio"):
+        MCPServer.model_validate({
+            "server_id": "modern", "name": "modern", "transport": "sse",
+            **({"mcp_info": {"protocol_version": "2026-07-28"}} if metadata else {"protocol_version": "2026-07-28"}),
+        })
+
+
+@pytest.mark.parametrize("transport,version", [("http", "2026-07-28"), ("stdio", "2026-07-28"), ("sse", "2025-11-25"), ("sse", "auto")])
+def test_supported_protocol_transport_configurations_remain_valid(transport: str, version: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
+    payload: Final = NewMCPServerRequest.model_validate({
+        "transport": transport, "url": "https://upstream.example/mcp", "command": "python", "args": ["peer.py"],
+        "mcp_info": {"protocol_version": version},
+    })
+    assert payload.transport == transport
+    assert payload.mcp_info == {"protocol_version": version}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protocol_only", [False, True])
+async def test_modern_sse_partial_update_rejected_without_writes(protocol_only: bool) -> None:
+    old_record: Final = LiteLLM_MCPServerTable(
+        server_id="srv-1", transport="sse" if protocol_only else "http",
+        mcp_info={"protocol_version": "auto" if protocol_only else "2026-07-28"},
+    )
+    payload: Final = UpdateMCPServerRequest.model_validate({
+        "server_id": "srv-1",
+        **({"mcp_info": {"protocol_version": "2026-07-28"}} if protocol_only else {"transport": "sse", "url": "https://upstream.example/sse"}),
+    })
+    update_mock: Final = AsyncMock(side_effect=HTTPException(status_code=418, detail="Unexpected persistence"))
+    p1, p2, p3, p4, p5 = _edit_endpoint_patches(old_record, update_mock)
+    with p1, p2, p3, p4, p5:
+        with pytest.raises(HTTPException) as error:
+            await mgmt_endpoints.edit_mcp_server(payload=payload, user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+    assert error.value.status_code == 400
+    assert "Modern MCP requires HTTP or stdio" in str(error.value.detail)
+    update_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_protocol_partial_update_fails_closed_when_stored_configuration_is_unreadable() -> None:
+    update_mock: Final = AsyncMock(side_effect=HTTPException(status_code=418, detail="Unexpected persistence"))
+    p1, p2, p3, p4, p5 = _edit_endpoint_patches(RuntimeError("db unavailable"), update_mock)
+    with p1, p2, p3, p4, p5:
+        with pytest.raises(HTTPException) as error:
+            await mgmt_endpoints.edit_mcp_server(
+                payload=UpdateMCPServerRequest(server_id="srv-1", mcp_info={"protocol_version": "2026-07-28"}),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+    assert error.value.status_code == 503
+    update_mock.assert_not_awaited()
+
+
+def test_modern_sse_complete_update_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="Modern MCP requires HTTP or stdio"):
+        UpdateMCPServerRequest(
+            server_id="server", transport=MCPTransport.sse, url="https://upstream.example/sse",
+            mcp_info={"protocol_version": "2026-07-28"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_protocol_update_on_missing_server_preserves_not_found() -> None:
+    update_mock: Final = AsyncMock(return_value=None)
+    p1, p2, p3, p4, p5 = _edit_endpoint_patches(None, update_mock)
+    with p1, p2, p3, p4, p5:
+        with pytest.raises(HTTPException) as error:
+            await mgmt_endpoints.edit_mcp_server(
+                payload=UpdateMCPServerRequest(server_id="missing", mcp_info={"protocol_version": "2026-07-28"}),
+                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+    assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_changed_upstream_session_gets_an_isolated_id_without_saved_client(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-upstream", name="saved", transport="http", auth_type="oauth2",
+        url="https://old.example/mcp", issuer="https://old.example",
+        client_id="old-client", client_secret="old-secret",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
+        oauth2_flow="authorization_code", url="https://new.example/mcp", issuer="https://new.example",
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert not (staged.credentials or {}).get("client_id")
+    assert not (staged.credentials or {}).get("client_secret")
+    assert await management._resolve_session_server_id(staged) != saved.server_id
+    assert saved.client_id == "old-client"
+
+
+def test_staged_url_edit_clears_resubmitted_issuer_and_endpoints(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-oauth", name="saved", transport="http", auth_type="oauth2",
+        url="https://old.example/mcp", issuer="https://old.example",
+        authorization_url="https://old.example/authorize", token_url="https://old.example/token",
+        registration_url="https://old.example/register", client_id="old-client",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
+        oauth2_flow="authorization_code", url="https://new.example/mcp", issuer=saved.issuer,
+        authorization_url=saved.authorization_url, token_url=saved.token_url, registration_url=saved.registration_url,
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert staged.issuer is None
+    assert staged.authorization_url is None
+    assert staged.token_url is None
+    assert staged.registration_url is None
+    assert staged.oauth2_flow == "authorization_code"
+    assert saved.issuer == "https://old.example"
+
+
+@pytest.mark.asyncio
+async def test_distinct_issuer_identifier_edit_isolates_session_client(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-oauth", name="saved", transport="http", auth_type="oauth2",
+        url="https://resource.example/mcp", issuer="https://idp.example",
+        client_id="saved-client", client_secret="saved-secret",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
+        url=saved.url, issuer="https://IDP.example:443/",
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert not (staged.credentials or {}).get("client_id")
+    assert not (staged.credentials or {}).get("client_secret")
+    assert await management._resolve_session_server_id(staged) != saved.server_id
+
+
+@pytest.mark.asyncio
+async def test_url_edit_stages_existing_client_with_previous_issuer_binding(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-oauth", name="saved", transport="http", auth_type="oauth2",
+        url="https://resource.example/mcp", issuer="https://idp.example",
+        client_id="static-client", client_secret="static-secret", authentication_token="old-token",
+        token_endpoint_auth_method="client_secret_basic",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
+        url=saved.url + "?v=2", issuer=saved.issuer,
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert staged.credentials["client_id"] == "static-client"
+    assert staged.credentials["client_secret"] == "static-secret"
+    assert staged.credentials["dcr_issuer"] == saved.issuer
+    assert staged.credentials["dcr_server_url"] == saved.url
+    assert staged.credentials["token_endpoint_auth_method"] == "client_secret_basic"
+    assert "auth_value" not in staged.credentials
+    assert staged.issuer is None
+    assert await management._resolve_session_server_id(staged) != saved.server_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_changed", [False, True])
+async def test_session_identity_checks_saved_row_when_registry_is_empty(monkeypatch, upstream_changed):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+
+    saved = generate_mock_mcp_server_db_record(server_id="saved-oauth-row")
+    saved.auth_type = "oauth2"
+    saved.url = "https://old.example/mcp"
+    saved.issuer = "https://old.example"
+    saved.approval_status = "approved"
+    monkeypatch.setattr(management.global_mcp_server_manager, "get_mcp_server_by_id", lambda _: None)
+    monkeypatch.setattr(management, "_get_prisma_client_or_none", lambda: MagicMock())
+    monkeypatch.setattr(management, "get_mcp_server", AsyncMock(return_value=saved))
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, auth_type="oauth2", transport="http",
+        url="https://new.example/mcp" if upstream_changed else saved.url,
+    )
+    resolved = await management._resolve_session_server_id(payload)
+    assert (resolved != saved.server_id) is upstream_changed
+
+
+def test_new_oauth_session_does_not_look_up_saved_credentials(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+
+    lookup = MagicMock()
+    monkeypatch.setattr(management.global_mcp_server_manager, "get_mcp_server_by_id", lookup)
+    payload = NewMCPServerRequest(url="https://new.example/mcp", auth_type="oauth2", transport="http")
+    assert management._inherit_credentials_from_existing_server(payload) is payload
+    assert not payload.credentials
+    lookup.assert_not_called()
+
+
+def test_edit_does_not_rebind_resubmitted_saved_client_to_new_issuer(monkeypatch):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-static", name="saved", transport="http", auth_type="oauth2",
+        url="https://old.example/mcp", issuer="https://old.example",
+        client_id="saved-client", client_secret="saved-secret",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, transport="http", auth_type="oauth2",
+        url="https://new.example/mcp", issuer="https://new.example",
+        credentials={"client_id": saved.client_id, "client_secret": saved.client_secret},
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert not (staged.credentials or {}).get("client_id")
+    assert not (staged.credentials or {}).get("client_secret")
+    assert saved.client_id == "saved-client"
+
+
+@pytest.mark.parametrize("replacement", [
+    {"client_secret": "replacement-secret"},
+    {"client_secret": "old-secret", "token_endpoint_auth_method": "client_secret_basic"},
+    {"client_secret": None},
+    {"dcr_issuer": "https://new.example", "dcr_server_url": "https://new.example/mcp"},
+])
+def test_staged_issuer_edit_preserves_replacement_with_same_client_id(monkeypatch, replacement):
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as management
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    saved = MCPServer(
+        server_id="saved-static", name="saved", transport="http", auth_type="oauth2",
+        url="https://old.example/mcp", issuer="https://old.example",
+        client_id="shared-client", client_secret="old-secret",
+    )
+    monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
+    submitted = {"client_id": "shared-client", **replacement}
+    payload = NewMCPServerRequest(
+        server_id=saved.server_id, transport="http", auth_type="oauth2",
+        url="https://new.example/mcp", issuer="https://new.example", credentials=submitted,
+    )
+    staged = management._inherit_credentials_from_existing_server(payload)
+    assert staged.credentials == submitted
+    assert saved.client_secret == "old-secret"
