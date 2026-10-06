@@ -242,7 +242,11 @@ e2e-dev = [
     "psutil==7.2.2",
     "mcp>=2.2.0,<3",
 ]
+admin-mcp = [
+    "litellm-admin-mcp @ https://github.com/BerriAI/liteadmin-mcp/archive/d35ec9c19c117d4c50cc1eccf6ce1296aac25a1a.tar.gz#sha256=86b930f6706fb2da10d53d1798ee7fd14e44fb0afdef0da122cf0e6bb88fa2c3 ; python_version >= '3.12'",
+]
 proxy-dev = [
+    { include-group = "admin-mcp" },
     "prisma==0.11.0",
     "hypercorn==0.17.3",
     "prometheus-client==0.20.0",
@@ -334,6 +338,14 @@ exclude = [
 ]
 
 [tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "rust-toolchain.toml" },
+    { file = ".cargo/config.toml" },
+    { file = "litellm-rust/Cargo.lock" },
+    { file = "litellm-rust/Cargo.toml" },
+    { file = "litellm-rust/crates/**/*" },
+]
 constraint-dependencies = [
     "tornado>=6.5.8",
     "aiohttp>=3.14.2,<4.0",

@@ -11,22 +11,18 @@ import { Inspector } from "@/components/shared/Inspector";
 import { Button } from "@/components/ui/button";
 
 import { AgentTracesTable } from "./AgentTracesTable";
-import {
-  type TraceRef,
-  traceKey,
-  traceRefOf,
-  useOpenTraceRouting,
-  useRunFilterRouting,
-  useZoomRouting,
-} from "../routing";
+import { useTraceFindings } from "./useTraceFindings";
+import { type TraceRef, traceKey, traceRefOf, useOpenTraceRouting, useRunFilterRouting } from "../routing";
 import type { TraceSummary } from "../types";
 import { RunView } from "../detail/run/RunView";
-import { TimeRangeControls } from "@/components/shared/timeline/TimeRangeControls";
+import { useZoomRouting } from "@/components/shared/timeRange/routing";
+import { type RelativeRange, type TimeWindow, timeWindow } from "@/components/shared/timeRange/timeRange";
+import { TimeRangeControls } from "@/components/shared/timeRange/TimeRangeControls";
+import type { RelativeRangeState } from "@/components/shared/timeRange/useRelativeRange";
 import { TracesTimeline } from "./TracesTimeline";
-import type { TimeWindow } from "@/components/shared/timeline/Timeline";
 import { TracingSetupCard } from "../../onboarding/tracing/TracingSetupCard";
 import { useTracesLive } from "../api";
-import { type AgentTracesResult, traceWindowStartMs, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
+import { type AgentTracesResult, useAgentTraces, useTraceAvailability } from "./useAgentTraces";
 
 const DRAWER_WIDTH_KEY = "litellm.agentTraces.drawerWidth";
 
@@ -36,23 +32,15 @@ const filterByWindow = (runs: TraceSummary[], range: TimeWindow): TraceSummary[]
     return t >= range.startMs && t < range.endMs;
   });
 
-export interface TimeControls {
-  rangeHours: number;
-  onRangeHoursChange: (hours: number) => void;
-  onLiveChange: (live: boolean) => void;
-}
-
 interface AgentTracesSectionProps {
   accessToken: string;
   isActive: boolean;
-  startTime: string;
-  endTime: string;
-  isCustomDate: boolean;
-  isLiveTail: boolean;
+  range: RelativeRange;
   /** Page-owned time range + live state; when given, the toolbar shows the range / Live control group. */
-  timeControls?: TimeControls;
+  timeControls?: RelativeRangeState;
   readOnly?: boolean;
   canMintTracingKey?: boolean;
+  canViewFindings?: boolean;
 }
 
 function useTracingSetup(traces: AgentTracesResult, isActive: boolean, rangeChanged: boolean) {
@@ -86,13 +74,11 @@ function TraceHistoryError({ history }: { history: ReturnType<typeof useTraceAva
 export function AgentTracesSection({
   accessToken,
   isActive,
-  startTime,
-  endTime,
-  isCustomDate,
-  isLiveTail,
+  range,
   timeControls,
   readOnly = false,
   canMintTracingKey = false,
+  canViewFindings,
 }: AgentTracesSectionProps) {
   const live = useTracesLive();
   const { trace: openTrace, openTrace: openRun, selection, fullScreen, setFullScreen } = useOpenTraceRouting();
@@ -100,7 +86,7 @@ export function AgentTracesSection({
   const [showSetup, setShowSetup] = useState(false);
   const [zoom, setZoom] = useZoomRouting();
   const [rangeChanged, setRangeChanged] = useState(false);
-  const traceQuery = { accessToken, startTime, endTime, isCustomDate, isLiveTail, enabled: isActive };
+  const traceQuery = { accessToken, range, enabled: isActive };
   const traces = useAgentTraces(traceQuery);
   const setup = useTracingSetup(traces, isActive, rangeChanged);
   const checkHistory = setup.isEmpty && !rangeChanged;
@@ -111,18 +97,18 @@ export function AgentTracesSection({
     if (setup.disabledDetail == null) void history.refetch();
   };
 
-  // Relative ranges end "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
-  const endMs = isCustomDate ? moment(endTime).valueOf() : moment().endOf("minute").valueOf();
-  const range = useMemo(
-    () => ({ startMs: traceWindowStartMs(startTime, endTime, isCustomDate, endMs), endMs }),
-    [startTime, endTime, isCustomDate, endMs],
-  );
+  // A live range ends "now" (the list query uses Date.now() too); round to the minute so the histogram is stable.
+  const minuteEndMs = moment().endOf("minute").valueOf();
+  const pickedWindow = useMemo(() => timeWindow(range, minuteEndMs), [range, minuteEndMs]);
+  // While the previous range's rows stay on screen, describe them with their own window.
+  const window = traces.isPlaceholder && traces.window ? traces.window : pickedWindow;
   const filtered = useMemo(
     () => filterRuns(traces.traces, query, { agent, status }),
     [traces.traces, query, agent, status],
   );
   const runs = useMemo(() => (zoom ? filterByWindow(filtered, zoom) : filtered), [filtered, zoom]);
   const runRefs = useMemo(() => runs.map(traceRefOf), [runs]);
+  const findings = useTraceFindings(accessToken, runs, isActive, canViewFindings);
 
   const changeRange = (hours: number, apply: (hours: number) => void) => {
     setZoom(null);
@@ -190,7 +176,13 @@ export function AgentTracesSection({
             />
           )}
         </Inspector.Panel>
-        <RunsToolbar query={query} onQueryChange={setQuery} runs={traces.traces} range={zoom ?? range}>
+        <RunsToolbar
+          query={query}
+          onQueryChange={setQuery}
+          runs={traces.traces}
+          range={zoom ?? window}
+          busy={traces.isPlaceholder}
+        >
           <TracingSetupAction available={traces.traces.length > 0} live={live} onSetup={() => setShowSetup(true)} />
           <Button
             variant="outline"
@@ -205,24 +197,26 @@ export function AgentTracesSection({
           {timeControls && (
             <div className="h-8 min-w-0 overflow-hidden rounded-md border [&>div]:h-full [&>div]:border-l-0">
               <TimeRangeControls
-                fixedRange={zoom ?? (isLiveTail ? null : range)}
-                rangeHours={timeControls.rangeHours}
-                onRangeHoursChange={(hours) => changeRange(hours, timeControls.onRangeHoursChange)}
-                live={isLiveTail}
+                range={range}
+                zoom={zoom}
+                onHoursChange={(hours) => changeRange(hours, timeControls.setHours)}
                 showLive={live}
-                onLiveChange={timeControls.onLiveChange}
+                onLiveChange={timeControls.setLive}
               />
             </div>
           )}
         </RunsToolbar>
         <TraceCounts runs={filtered} />
-        <TracesTimeline runs={filtered} range={range} selection={zoom} onSelect={setZoom} />
+        <TracesTimeline runs={filtered} range={window} selection={zoom} onSelect={setZoom} />
         <AgentTracesTable
           traces={runs}
+          findings={findings}
+          canViewFindings={canViewFindings}
           isLoading={traces.isLoading || (checkHistory && history.isLoading)}
           error={traces.error}
           hasMore={traces.hasMore}
           isFetching={traces.isFetching}
+          isPlaceholder={traces.isPlaceholder}
           onRetry={traces.hasMore ? traces.loadMore : traces.refetch}
           onLoadMore={traces.loadMore}
           rangeEmpty={traces.traces.length === 0}
@@ -244,13 +238,11 @@ function TracesReceived({ received }: { received: boolean }) {
 }
 
 function TraceCounts({ runs }: { runs: readonly TraceSummary[] }) {
-  const failed = runs.filter((run) => run.error_count > 0).length;
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-2 text-xs text-muted-foreground">
       <span>
         {runs.length} {runs.length === 1 ? "run" : "runs"} from {new Set(runs.flatMap(traceAgentNames)).size} agents
       </span>
-      {failed > 0 && <span className="text-destructive">{failed} with errors</span>}
     </div>
   );
 }
