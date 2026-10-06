@@ -4934,26 +4934,24 @@ class TestPatchModelBlockedAuthGate:
             "model_info": {"id": "m1", "team_id": "team-1"},
         }
         existing_row.model_dump_json.return_value = "{}"
+        team = LiteLLM_TeamTable(
+            team_id="team-1",
+            members_with_roles=[Member(user_id="member", role="user")],
+            team_member_permissions=[],
+        )
+        team_row = MagicMock()
+        team_row.model_dump.return_value = team.model_dump()
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
         mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
-        auto_router_refusal = AsyncMock(
-            side_effect=HTTPException(
-                status_code=403,
-                detail="This team does not allow you to manage your own auto routers.",
-            )
-        )
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
             patch("litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
             patch("litellm.proxy.proxy_server.premium_user", True),
-            patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
-                new=auto_router_refusal,
-            ),
         ):
             with pytest.raises(
                 ProxyException, match="Only proxy admins can change a model's blocked flag\\."
@@ -4966,7 +4964,6 @@ class TestPatchModelBlockedAuthGate:
 
         assert exc_info.value.code == "403"
         assert exc_info.value.param == "blocked"
-        auto_router_refusal.assert_not_awaited()
         mock_prisma.db.litellm_proxymodeltable.update.assert_not_awaited()
 
     @pytest.mark.asyncio
