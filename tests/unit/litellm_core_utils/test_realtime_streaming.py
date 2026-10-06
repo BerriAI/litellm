@@ -3550,3 +3550,83 @@ async def test_provider_bytes_are_sent_raw_after_pacing():
 
     assert [call.args[0] for call in backend_ws.send.await_args_list] == [b"\x00\x01", '{"type":"endStream"}']
     provider_config.pace_backend_send.assert_awaited_once_with(b"\x00\x01")
+
+
+def _transcription_config(completed_event: dict) -> MagicMock:
+    provider_config: Final = MagicMock()
+    provider_config.requires_session_configuration.return_value = False
+    provider_config.transform_realtime_response.return_value = {
+        "response": completed_event,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_delta_chunks": None,
+        "current_conversation_id": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+        "session_configuration_request": None,
+    }
+    provider_config.transform_realtime_request.side_effect = lambda msg, model, session_config: [msg]
+    return provider_config
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uses_provider_config", [False, True])
+@pytest.mark.parametrize(
+    ("violation_settings", "expect_session_closed"),
+    [
+        ({}, False),
+        ({"on_violation": "end_session"}, True),
+        ({"end_session_after_n_fails": 1}, True),
+    ],
+)
+async def test_transcription_session_guardrail_block_only_reports_violation(
+    monkeypatch: pytest.MonkeyPatch,
+    uses_provider_config: bool,
+    violation_settings: dict,
+    expect_session_closed: bool,
+):
+    class BlockingGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            raise ValueError("blocked transcript")
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            BlockingGuardrail(
+                guardrail_name="transcription-blocker",
+                event_hook=GuardrailEventHooks.realtime_input_transcription,
+                default_on=True,
+                **violation_settings,
+            )
+        ],
+    )
+    completed_event: Final = {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "item_id": "item_1",
+        "content_index": 0,
+        "transcript": "a blocked transcript",
+    }
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(side_effect=[json.dumps(completed_event).encode(), ConnectionClosed(None, None)])
+    backend_ws.send = AsyncMock()
+    backend_ws.close = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        MagicMock(),
+        provider_config=_transcription_config(completed_event) if uses_provider_config else None,
+        model="gpt-4o-transcribe",
+        force_transcription_model="gpt-4o-transcribe",
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    sent_to_client: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["type"] for event in sent_to_client] == [completed_event["type"], "error"], sent_to_client
+    assert sent_to_client[1]["error"]["type"] == "guardrail_violation", sent_to_client
+    sent_to_backend: Final = [call.args[0] for call in backend_ws.send.await_args_list]
+    assert sent_to_backend == [], sent_to_backend
+    assert backend_ws.close.await_count == (1 if expect_session_closed else 0)
