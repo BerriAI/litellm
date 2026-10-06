@@ -1046,13 +1046,17 @@ async def examine_executions(
 ) -> AsyncIterator[Examined]:
     reading: tuple[InFlight, ...] = ()  # rebind-ok: the in-flight set changes as each read starts and finishes
     screened = 0  # rebind-ok: counts finished reads for progress
+    reused = 0  # rebind-ok: counts reported reused reviews independently of the reuse plan
     reporting: Final = asyncio.Lock()
 
     async def report(change: Callable[[tuple[InFlight, ...]], tuple[InFlight, ...]], review: Review | None) -> None:
-        nonlocal reading
+        nonlocal reading, reused
         async with reporting:
             reading = change(reading)
-            coverage: Final = Coverage(eligible=sample.eligible, selected=len(sample.executions), screened=screened)
+            reused += int(review is not None and review.reused)
+            coverage: Final = Coverage(
+                eligible=sample.eligible, selected=len(sample.executions), screened=screened, reused=reused
+            )
             await progress("Reading executions", coverage, review, reading)
 
     async def examine(execution: Execution) -> tuple[Examined, Review]:

@@ -267,7 +267,7 @@ async def analyze_context(
     ) -> None:
         await progress(
             stage,
-            coverage.model_copy(update=MappingProxyType({"reused": reusable})) if coverage is not None else None,
+            coverage.model_copy(update=MappingProxyType({"reusable": reusable})) if coverage is not None else None,
             review,
             reading,
             activity,
@@ -355,6 +355,7 @@ async def analyze_context(
                 "unassessable": sum(review.cannot_assess for review in examined),
                 "failed_tasks": sum(bool(review.error) for review in examined),
                 "reused": sum(review.reused for review in examined),
+                "reusable": reusable,
             }
         )
     )

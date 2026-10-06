@@ -1210,7 +1210,8 @@ async def test_cached_reviews_skip_models_but_changed_trace_content_is_reviewed_
         /,
     ) -> None:
         if _stage == "Reuse plan ready" and _coverage is not None:
-            plans.put((_coverage.reused, calls.qsize()))
+            assert _coverage.reused == 0
+            plans.put((_coverage.reusable, calls.qsize()))
         if review and review.extraction is not None:
             checkpoints.put(review)
 
@@ -1229,6 +1230,61 @@ async def test_cached_reviews_skip_models_but_changed_trace_content_is_reviewed_
     assert calls.qsize() == 2
     assert updated.review_versions != first.review_versions
     assert tuple(plans.get_nowait() for _ in range(plans.qsize())) == ((0, 0), (1, 1), (0, 1))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("completed", (0, 1))
+async def test_cancelled_reuse_reports_only_recorded_reviews(completed: int) -> None:
+    import asyncio
+
+    runs: Final = tuple(execution(f"cached-{index}").model_copy(update={"root_seen": True}) for index in range(3))
+    sample: Final = Sample(executions=runs, eligible=len(runs))
+    claim: Final = Claim(lens_id="lens", job=queue_job(lens(), NOW, "job").jobs[0], findings=(), reviews=())
+    checkpoints: Final = SimpleQueue[Review]()
+    recorded: Final = SimpleQueue[Coverage]()
+
+    async def read(identity: str, _cursor: str, _offset: int) -> ExecutionContent:
+        return ExecutionContent(
+            execution=next(run for run in runs if run.id == identity),
+            parts=(TracePart(execution_id=identity, span_id="span", name="tool", kind="tool", content="original"),),
+        )
+
+    async def model(_request: ModelRequest) -> ModelResult:
+        return ModelResult(content=AgentTurn[Extraction](result=Extraction()).model_dump_json(), cost=0.1)
+
+    async def save(
+        _stage: str | None,
+        _coverage: Coverage | None,
+        review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        if review is not None:
+            checkpoints.put(review.model_copy(update={"consolidated": True}))
+
+    await analyze_sample(claim, sample, read, model, save)
+    cached: Final = claim.model_copy(update={"reviews": tuple(checkpoints.get_nowait() for _ in runs)})
+
+    async def no_model(_request: ModelRequest) -> ModelResult:
+        pytest.fail("Cancelled reuse must not make a model request")
+
+    async def cancel(
+        stage: str | None,
+        coverage: Coverage | None,
+        review: Review | None = None,
+        _reading: tuple[InFlight, ...] | None = None,
+        _activity: Activity | None = None,
+        /,
+    ) -> None:
+        if coverage is not None and ((completed == 0 and stage == "Reuse plan ready") or review is not None):
+            recorded.put(coverage)
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await analyze_sample(cached, sample, read, no_model, cancel)
+    stopped: Final = recorded.get_nowait()
+    assert (stopped.reusable, stopped.reused, stopped.screened) == (3, completed, completed)
 
 
 @pytest.mark.asyncio

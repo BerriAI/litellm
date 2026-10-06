@@ -30856,6 +30856,11 @@ export interface components {
              */
             partial: number;
             /**
+             * Reusable
+             * @default 0
+             */
+            reusable: number;
+            /**
              * Reused
              * @default 0
              */
@@ -33503,6 +33508,7 @@ export interface components {
              *       "inconclusive": 0,
              *       "investigated": 0,
              *       "partial": 0,
+             *       "reusable": 0,
              *       "reused": 0,
              *       "screened": 0,
              *       "selected": 0,

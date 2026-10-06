@@ -178,6 +178,7 @@ class Coverage(Record):
     unassessable: int = 0
     failed_tasks: int = Field(default=0, ge=0)
     reused: int = Field(default=0, ge=0)
+    reusable: int = Field(default=0, ge=0)
 
 
 class Execution(Record):

@@ -233,6 +233,83 @@ async def test_worker_reads_claimed_activity_and_reports_analysis_or_failure(mod
         assert result.error.startswith("Model request failed (HTTP 503).")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", (401, 402, 409, 503, "timeout"))
+async def test_model_failure_stops_remaining_traces_without_discarding_completed_reviews(failure: int | str) -> None:
+    initial: Final = lens()
+    configured: Final = initial.model_copy(update={"settings": initial.settings.model_copy(update={"concurrency": 1})})
+    claim: Final = Claim(lens_id="lens", job=queue_job(configured, NOW, "job").jobs[0], findings=())
+    executions: Final = tuple(
+        Execution(
+            id=identity,
+            source="traces",
+            trace_id=identity,
+            team_id="alpha",
+            name="review",
+            start_time="",
+            span_count=1,
+            root_seen=True,
+        )
+        for identity in ("healthy", "blocked", "unstarted")
+    )
+    requests: Final = SimpleQueue[str]()
+    checkpoints: Final = SimpleQueue[Progress]()
+    results: Final = SimpleQueue[Result]()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        match request.url.path.rsplit("/", 1)[-1]:
+            case "claim":
+                return httpx.Response(200, json=claim.model_dump(mode="json"))
+            case "reviews":
+                return httpx.Response(200, json=[])
+            case "sample":
+                return httpx.Response(200, json=Sample(executions=executions, eligible=3).model_dump(mode="json"))
+            case "content":
+                identity: Final = request.url.params["execution_id"]
+                content: Final = ExecutionContent(
+                    execution=next(execution for execution in executions if execution.id == identity),
+                    parts=(TracePart(execution_id=identity, span_id="span", name="tool", kind="tool", content="done"),),
+                )
+                return httpx.Response(200, json=content.model_dump(mode="json"))
+            case "model":
+                requests.put(request.url.path)
+                if requests.qsize() == 1:
+                    return httpx.Response(
+                        200,
+                        json=ModelResult(
+                            content=AgentTurn[Extraction](result=Extraction()).model_dump_json(), cost=0.01
+                        ).model_dump(),
+                    )
+                if failure == "timeout":
+                    raise httpx.ReadTimeout("private provider diagnostics", request=request)
+                return httpx.Response(int(failure))
+            case "progress":
+                progress: Final = Progress.model_validate_json(request.content)
+                if progress.review is not None:
+                    checkpoints.put(progress)
+                return httpx.Response(200, json=True)
+            case "result":
+                results.put(Result.model_validate_json(request.content))
+                return httpx.Response(200, json=True)
+            case _:
+                pytest.fail(f"Unexpected worker request: {request.url.path}")
+
+    async def no_delay(_seconds: float) -> None:
+        return None
+
+    async with httpx.AsyncClient(base_url="https://proxy.test", transport=httpx.MockTransport(handle)) as client:
+        assert await LensWorker(client, sleep=no_delay).run_once()
+    saved: Final = checkpoints.get_nowait()
+    assert saved.review is not None and saved.review.execution_id == "healthy"
+    assert saved.review.extraction is not None and saved.review.content_version
+    assert checkpoints.empty()
+    stopped: Final = results.get_nowait()
+    assert stopped.error and stopped.assessments == () and stopped.findings == ()
+    assert "private provider diagnostics" not in stopped.error
+    assert requests.qsize() == 2 + (MODEL_RETRIES if failure in (503, "timeout") else 0)
+    assert results.empty()
+
+
 @pytest.mark.parametrize("status", (400, 401, 402, 403, 404, 409, 429, 503))
 def test_failure_reports_action_and_status_without_private_response_content(status: int) -> None:
     request: Final = httpx.Request(

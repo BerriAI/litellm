@@ -60,6 +60,7 @@ export function LiveRun({
           reviewed={job.reviewed}
           selected={job.coverage.selected}
           reused={job.coverage.reused}
+          reusable={job.coverage.reusable}
           issues={issues}
           cost={job.cost}
           onOpen={open}

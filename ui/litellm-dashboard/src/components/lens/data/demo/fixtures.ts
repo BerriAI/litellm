@@ -336,6 +336,7 @@ export function createLensDemoData(now = Date.now()) {
           unassessable: 0,
           failed_tasks: 0,
           reused: 0,
+          reusable: 0,
         },
         status: "completed",
         stage: "Complete",
