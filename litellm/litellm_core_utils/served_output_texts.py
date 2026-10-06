@@ -6,8 +6,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Final, Literal
 
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
 SERVED_OUTPUT_TEXTS_KEY: Final = "served_output_texts"
@@ -19,27 +20,27 @@ _TEXTS: Final = TypeAdapter(tuple[str | None, ...])
 ServedTexts = tuple[str | None, ...]
 
 
-class _TextBlock(BaseModel):
+class _TextBlock(LiteLLMBaseModel):
     type: str
     text: str | None = None
 
 
-class _AnthropicMessage(BaseModel):
+class _AnthropicMessage(LiteLLMBaseModel):
     type: Literal["message"]
     content: list[_TextBlock]
 
 
-class _ResponsesOutputItem(BaseModel):
+class _ResponsesOutputItem(LiteLLMBaseModel):
     type: str
-    content: list[_TextBlock] = []
+    content: list[_TextBlock] = Field(default=[])
 
 
-class _ResponsesResponse(BaseModel):
+class _ResponsesResponse(LiteLLMBaseModel):
     object: Literal["response"]
     output: list[_ResponsesOutputItem]
 
 
-class _ChatChoices(BaseModel):
+class _ChatChoices(LiteLLMBaseModel):
     choices: list[object]
 
 

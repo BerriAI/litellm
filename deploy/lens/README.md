@@ -100,9 +100,9 @@ docker compose --env-file /path/to/lens.env -f compose.yaml up -d
 
 To work on Lens itself, `make lens-dev` runs the proxy, a worker from source and the hot-reload dashboard together; set `LENS_DEV_PROXY_PORT` / `LENS_DEV_UI_PORT` to move them off 4000/3000. For a local container build, set `LENS_WORKER_IMAGE=litellm-lens-worker:local` and `LITELLM_RELEASE_TAG` to the gateway's release tag, then use `docker compose -f deploy/lens/compose.yaml -f deploy/lens/compose.build.yaml up -d --build`
 
-The generated command gives the worker 1 GiB of temporary memory-backed storage, shared across parallel reviews. Change `size=1g` in the Docker command or set `LENS_WORKER_TMP_SIZE` with Compose to fit your server and workload. A storage failure marks the scan as failed, cleans up temporary traces, and leaves the worker available for other scans; it does not silently truncate the review. Existing workers must be recreated with the new image and mount options
+The generated command gives the worker 1 GiB of temporary memory-backed storage, shared across parallel reviews. Change `size=1g` in the Docker command or set `LENS_WORKER_TMP_SIZE` with Compose to fit your server and workload. Python reports storage failures to the reviewer and cleans up temporary files, so the reviewer can retry a smaller computation or report insufficient evidence. The worker remains available for other scans. Existing workers must be recreated with the new image and mount options
 
-The worker needs outbound HTTPS access to LiteLLM. It needs no inbound ports, provider keys, direct database access, or GPU. The proxy calls your selected model through its normal virtual-key authorization and inference pipeline; trace content reaches that model provider. Use a model with JSON output support and known token prices. One worker handles one scan at a time and can serve multiple lenses. For more throughput, start another worker with a separate credential
+The worker needs outbound HTTPS access to LiteLLM. It needs no inbound ports, provider keys, direct database access, or GPU. The proxy calls your selected model through its normal virtual-key authorization and inference pipeline; trace content reaches that model provider. Use a model with JSON output support and known token prices. One worker handles up to three investigations concurrently and can serve multiple lenses. For more throughput, start another worker with a separate credential
 
 If your deployment restricts `allowed_ips`, allow the worker's address. For workers behind a reverse proxy with `use_x_forwarded_for: true`, also configure `mcp_trusted_proxy_ranges` with that proxy's CIDRs and, when needed, `mcp_xff_num_trusted_hops`. Lens reuses these existing trusted-proxy settings. Forwarded addresses without an established trust boundary are rejected by the allowlist; accepting them would let a worker impersonate an allowed address
 
@@ -116,7 +116,7 @@ Describe how the agent should behave and optionally add specific checks. Select 
 
 Choose your analysis model, parallelism and monthly budget. Parallelism controls simultaneous model calls, not the number of runs selected. New lenses run once by default. Turn on monitoring to repeat the same setup at a custom interval. **Run now** uses the same saved settings immediately, including the same lookback window and sampling. Every scan recalculates the window, so overlapping windows can review the same activity again. Duplicate a lens when you want a separate investigation without changing an existing monitor
 
-Pausing stops future scheduled scans; cancel the active scan separately if needed. The worker polls every 10 seconds; creating a lens or clicking Run now queues a scan, and due schedules are queued when the worker polls. Scans for the same lens never overlap, and its next interval starts after completion. Closing the browser does not stop the worker. Configuration edits apply to the next scan. A running scan retains its settings and selected execution IDs across retries
+Pausing stops future scheduled scans; cancel the active scan separately if needed. The worker polls every two seconds; creating a lens or clicking Run now queues a scan, and due schedules are queued when the worker polls. Scans for the same lens never overlap, and its next interval starts after completion. Closing the browser does not stop the worker. Configuration edits apply to the next scan. A running scan retains its settings and selected execution IDs across retries
 
 ## Read the results
 
@@ -132,11 +132,13 @@ The proxy selects executions received or updated within the configured lookback 
 
 A trace is spans sharing a trace ID within one team, not an automatically reconstructed conversation session. Requests are individual LLM calls. When both sources are enabled, requests correlated to a recorded span by response ID are excluded to reduce double counting
 
-The worker reviews the selected executions in parallel. It pages through their recorded spans and gives the first reviewer a catalog, task and outcome excerpts. The reviewer can read more original content to resolve uncertainties. Large catalogs and groups of observations are processed in bounded context windows, with every page available. Grouping retains supporting run IDs in code, so a pattern occurring thousands of times does not require a model to repeat thousands of IDs. Candidate investigators can page through supporting observations, other runs and original evidence
+The worker prepares a workspace containing the selected execution metadata and reviews executions in parallel. Reviewers receive their assignment and use catalog, read, search and optional Python tools to inspect evidence, including nested agents and other sampled executions. Tools retrieve original content from the gateway when requested; the worker does not preload the sampled traces or inject them into each model request. Python receives selected evidence as streamed input. Completed reviews retain cited excerpts and metadata. Observation batches are grouped in parallel, reconciled, and investigated against the original evidence. Grouping retains supporting run IDs in code, so a pattern occurring thousands of times does not require a model to repeat thousands of IDs
 
-There is no fixed total run, span, candidate or investigation-turn cutoff. Repeated or empty evidence requests stop a stalled investigation. Context windows, the configured budget, available model capacity and recorded evidence still bound practical work. The dashboard reports completed work and gaps. The investigator has no shell, browsing, code-editing or production-action tools
+There is no fixed total run, span, candidate or investigation-turn cutoff. Agents can replace their active conversation with working notes. If a request exceeds the configured model's context window, the worker compacts the conversation automatically and resumes with references to its archived tool history. Original evidence remains accessible through the gateway while it is available and retained. Tool results and working notes remain accessible during the investigation; character ranges make even a single oversized result readable in pieces. A review reports an error if the task or its replacement notes cannot fit. Context windows, the configured budget, worker resources and recorded evidence still bound practical work. The investigator has no browsing, code-editing or production-action tools
 
-Each model response must match a bounded JSON schema. A malformed response gets one repair attempt through the same budget controls; repeated invalid output fails the scan. Both the worker and proxy validate quoted evidence. Findings retain exact quotes and open the source trace or request. Resolve a finding after a fix, or dismiss it with a reason. A resolved finding reopens when new execution IDs support the same pattern; dismissed findings remain dismissed
+The live review drawer shows loading, trace review, parallel grouping, reconciliation and candidate investigation. It reports current model and tool operations, including context compaction, and retains tool-call counts on completed trace reviews. These counts describe attempted calls, not successful executions. This progress channel contains operation metadata, not Python code or tool output. Preliminary observations remain separate from final findings; the final finding format and evidence links are unchanged
+
+Each model response must match its JSON schema. A malformed response gets one repair attempt through the same budget controls. A session review that remains invalid or cannot fit marks that execution unassessable while other reviews continue. Broken evidence pagination or missing content pages return tool errors so the agent can inspect narrower spans or other evidence. Unreadable citations receive repair feedback. Verified excerpts remain available without fetching their source again. The affected source counts as partial, including failures discovered during later investigations, while the reviewer owns its assessment. Candidate investigation errors preserve completed findings. Source and analysis errors remain visible and mark the final scan as failed; transport errors, cancellation and budget exhaustion stop the scan. Both the worker and proxy validate quoted evidence against original content. Per-run issue assessments follow supporting citations, including evidence found by another run's reviewer; counterexamples do not mark a run affected. Findings retain exact quotes and open the source trace or request. Resolve a finding after a fix, or dismiss it with a reason. A resolved finding reopens when new execution IDs support the same pattern; dismissed findings remain dismissed
 
 Coverage distinguishes eligible, sampled, reviewed, partial, and unassessable executions. Findings describe observations in the sample, not population-wide success rates or proven causes. A root span does not prove that a trace contains every expected span. Long, missing, redacted, or expired content limits the conclusions
 
@@ -215,7 +217,7 @@ python -m tests.proxy_behavior.lens.evaluate --api-base "$LITELLM_URL" \
 
 Set `LITELLM_API_KEY` privately. This makes paid model calls. Inspect missed and unexpected per-run labels, final findings and coverage; do not equate a passing dataset with guaranteed detection on arbitrary traces
 
-The worker uses temporary disk space for trace content while reviewing it, and removes those files after each review. The Docker command supplies a writable temporary mount while keeping the application filesystem read-only
+The default workspace retrieves trace content on demand. Python calls have temporary scratch space that is removed after execution. The Docker command supplies a writable temporary mount while keeping the application filesystem read-only
 
 To check that accepted behavior stays accepted without hiding new problems, run the evaluator with `--dataset tests/proxy_behavior/lens/feedback_cases.json`. Reports include elapsed time, model call count, reported cost when the proxy provides it, missed checks, unexpected checks, and inconclusive candidates
 
@@ -242,3 +244,42 @@ The hourly development pipeline pins all component images to the same selected c
 ## Worker dependencies
 
 The worker uses the same digest-pinned Wolfi base and Python version as the component images. Python dependencies and their hashes are locked in `deploy/lens/requirements.lock`. To update them, edit `deploy/lens/requirements.in`, then run `uv pip compile --universal --python-version 3.13 --generate-hashes --no-emit-index-url deploy/lens/requirements.in -o deploy/lens/requirements.lock`. The image installs only the locked wheels with hash verification. CI builds and scans both native architectures
+
+## Python analysis boundary
+
+The `python` tool runs ordinary CPython with the standard library in a fresh child process inside the existing worker container. It receives the selected evidence as `data` over stdin and has its own temporary working directory. It creates no additional container or service. Read and search tools remain available independently of Python
+
+The native worker image builds a syscall policy with libseccomp and includes the full `setpriv` launcher. Each child starts with no inherited worker secrets or open worker files, isolated Python startup, Landlock filesystem restrictions and a default-deny seccomp filter. It can read the Python runtime and its own scratch files. Worker source, installed worker packages, other jobs' files and `/proc` contents are unavailable. Network sockets, child processes, cross-process memory operations, signals to other processes and filesystem metadata mutation are denied, including calls made through `ctypes`. Some metadata inspection, such as `stat`, `access` and `readlink` of known paths, remains possible
+
+Python execution requires a native Linux worker with Landlock ABI 3 or later and seccomp filtering. Build the image for the host architecture. Missing policy files, an incompatible kernel, or an unsupported host such as a macOS source worker returns a clear tool error. There is no unrestricted execution fallback. Keep the container's non-root user, dropped capabilities, no-new-privileges setting, read-only root and writable temporary mount
+
+The worker permits two Python children at once across all investigations. Set `LENS_PYTHON_CONCURRENCY` to a positive integer to change this worker-wide pool. Queued calls consume no child process or scratch directory; cancelling a queued call does not start it. Model, read and search concurrency are separate
+
+| Per-call resource | Default |
+| --- | --- |
+| Elapsed execution time | 60 seconds |
+| CPU time | 30 seconds |
+| Process address space | 512 MiB |
+| Captured stdout or stderr | 8 MiB per stream |
+| Individual scratch file size | 16 MiB |
+| Monitored scratch storage | 64 MiB |
+| Monitored scratch entries | 2,048 |
+| Scratch directory depth | 128 |
+| Open file descriptors | 64 |
+
+Evidence is streamed from gateway pages into the confined child without building another complete selection in worker memory. The child decodes the selected data under its memory limit before running the code. The execution wall clock starts after input delivery; gateway fetches keep their HTTP timeouts and remain cancellable. CPU, address-space and file-size limits apply during input decoding as well as computation. Scratch usage is monitored every 50 milliseconds, so a call can temporarily overshoot its scratch allowance. The worker's shared temporary mount supplies the hard aggregate storage ceiling, 1 GiB by default. Accounting includes unlinked open files and files retained only by memory mappings. A mapped scratch inode without an open descriptor or directory entry is conservatively charged at the individual file-size limit, which may overcount small files. Cancellation and limit failures kill and reap the child before removing its scratch directory
+
+Results include `stdout`, `stderr`, `exit_code`, `error` and `output_complete`. Nonzero interpreter exits, confinement failures and resource failures set `error` and `output_complete=false`. Available traceback output is retained. An output-size failure delivers no partial stdout/stderr; the agent can narrow its computation and retry. A successful result retains all captured output without truncation
+
+This is a process boundary sharing the worker's Linux kernel. The checked-in smoke test verifies useful Python operations, filesystem and process restrictions, raw syscall attempts, resource failures, mapping accounting, cleanup and cancellation in the actual image. Run it on the deployment's native architecture and kernel:
+
+```bash
+docker build --build-arg LITELLM_RELEASE_TAG=lens-python-test \
+  -f deploy/lens/Dockerfile -t lens-worker:python-test .
+docker run --rm --pull never --read-only --cap-drop ALL \
+  --security-opt no-new-privileges --network none \
+  --tmpfs /tmp:rw,noexec,nosuid,size=1g --entrypoint python -i \
+  lens-worker:python-test - < tests/proxy_behavior/lens/worker_python_smoke.py
+```
+
+The same checks can run through pytest by setting `LENS_TEST_WORKER_IMAGE` to an already-built native image. The worker image CI runs the standalone smoke without adding pytest to the production image
