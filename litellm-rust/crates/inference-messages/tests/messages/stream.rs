@@ -5,11 +5,11 @@ use std::{
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
-use litellm_inference_testing::{RecordingSecrets, no_secrets};
 use litellm_inference_messages::{
     MessagesCallResponse,
     route::{Messages, MessagesStreamHead},
 };
+use litellm_inference_testing::{RecordingSecrets, no_secrets};
 use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::rstest;
 use tokio::{
