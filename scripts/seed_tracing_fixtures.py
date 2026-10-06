@@ -129,7 +129,7 @@ def rebased_response(value: str, namespace: str, pattern: re.Pattern[str]) -> st
             prefix, suffix = value.split("_", 1)
             return f"{prefix}_seed-{namespace}-{suffix}"
         return f"seed-{namespace}-{value}"
-    payload: Final = pattern.sub(lambda match: f"seed-{namespace}-{match.group()}", decoded)
+    payload: Final = pattern.sub(lambda match: rebased_response(match.group(), namespace, pattern), decoded)
     return "resp_" + base64.b64encode(payload.encode()).decode()
 
 
@@ -438,6 +438,7 @@ WHERE t.TraceId IN {{trace_ids:Array(String)}}
 SELECT s.* REPLACE (
     {clickhouse_call_id("s.request_id")} AS request_id,
     {clickhouse_call_id("s.response_id")} AS response_id,
+    {clickhouse_call_id("s.provider_request_id")} AS provider_request_id,
     {clickhouse_call_id("s.litellm_call_id")} AS litellm_call_id,
     {clickhouse_hash("s.trace_id", trace_salt, 32)} AS trace_id,
     {clickhouse_hash("s.session_id", trace_salt, 32)} AS session_id,
