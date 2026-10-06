@@ -168,6 +168,9 @@ jobs:
       - name: check_no_publicly_known_master_key
         run: uv run --no-sync python ./tests/code_coverage_tests/check_no_publicly_known_master_key.py
 
+      - name: test_check_no_publicly_known_master_key
+        run: uv run --no-sync pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_check_no_publicly_known_master_key.py
+
       - name: check_unbounded_in_lists (fails on findings not in the baseline)
         run: uv run --no-sync python ./tests/code_coverage_tests/check_unbounded_in_lists.py
 
