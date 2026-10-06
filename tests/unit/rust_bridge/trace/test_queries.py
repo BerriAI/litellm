@@ -46,7 +46,10 @@ def test_named_query_rejects_parameters_for_a_different_query() -> None:
 def test_named_query_rejects_rows_missing_required_result_fields() -> None:
     with pytest.raises(ValidationError) as error:
         LENS_CONTENT.response.validate_json('{"data":[{"span_id":"span","name":"name"}]}')
-    assert error.value.error_count() == 4
+    assert {(entry["type"], entry["loc"]) for entry in error.value.errors()} == {
+        ("missing", ("data", 0, field))
+        for field in ("parent_span_id", "kind", "start_time", "end_time", "content", "truncated")
+    }
 
 
 @pytest.mark.parametrize("count", (0, "9007199254740993", 2**64 - 1))

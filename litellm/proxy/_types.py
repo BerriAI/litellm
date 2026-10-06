@@ -545,6 +545,7 @@ class LiteLLMRoutes(enum.Enum):
         "/lens/workers/register",
         "/lens/workers/{worker_id}",
         "/v1/traces",
+        "/v1/logs",
         "/v1/traces/query",
         "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
@@ -1053,6 +1054,7 @@ class LiteLLMRoutes(enum.Enum):
     # updating this list — the default-allow behavior covers it automatically.
     admin_viewer_routes = (
         [
+            "/lens/traces/findings",
             "/user/list",
             "/user/available_users",
             "/user/available_roles",
@@ -2888,6 +2890,21 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     max_batch_file_size_mb: int | None = Field(
         None,
         description="max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider",
+    )
+    max_batch_file_records: int | None = Field(
+        None,
+        gt=0,
+        description="max records (non-blank lines) per batch input file for /v1/files uploads with purpose=batch, applied per key. A key's metadata can override it and a team's metadata adds a team cap on top, both set by a proxy admin; the lower of the key's value and the team's value wins. Unset means no limit",
+    )
+    max_batch_file_uploads_per_day: int | None = Field(
+        None,
+        gt=0,
+        description="max /v1/files uploads with purpose=batch per key (per user for JWT callers) per UTC day. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit",
+    )
+    max_file_downloads_per_minute: int | None = Field(
+        None,
+        gt=0,
+        description="max GET /v1/files/{file_id}/content calls per key (per user for JWT callers) per file per minute. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit",
     )
     max_file_size_mb: int | None = Field(
         None,

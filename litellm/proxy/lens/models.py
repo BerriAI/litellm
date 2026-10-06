@@ -1,7 +1,17 @@
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 
 
 def calendar_lookback(hours: int) -> int:
@@ -145,6 +155,7 @@ class Coverage(Record):
     candidates: int = 0
     partial: int = 0
     unassessable: int = 0
+    failed_tasks: int = Field(default=0, ge=0)
 
 
 class Execution(Record):
@@ -169,6 +180,8 @@ class TracePart(Record):
     kind: str
     content: str
     truncated: bool = False
+    start_time: str = ""
+    end_time: str = ""
 
 
 class ExecutionContent(Record):
@@ -193,6 +206,19 @@ class RunAssessment(Record):
     cannot_assess: bool = False
 
 
+class TraceIdentity(Record):
+    trace_id: str = Field(min_length=1, max_length=128)
+    trace_ref: str = Field(default="", max_length=512)
+
+
+class TraceFindingsRequest(Record):
+    traces: tuple[TraceIdentity, ...] = Field(min_length=1, max_length=500)
+
+
+class TraceFindingCount(TraceIdentity):
+    finding_count: int | None = Field(ge=0)
+
+
 MAX_STEPS = 200
 
 
@@ -208,6 +234,37 @@ class Step(Record):
 
 
 MAX_REVIEWS = 60
+
+
+ActivityOperation: TypeAlias = Literal[
+    "model",
+    "read",
+    "search",
+    "python",
+    "catalog",
+    "review_catalog",
+    "read_reviews",
+    "search_reviews",
+    "history",
+    "checkpoint",
+]
+ActivityPhase: TypeAlias = Literal["load", "review", "group", "reconcile", "investigate"]
+
+
+class ToolCount(Record):
+    name: ActivityOperation
+    calls: int = Field(ge=0)
+
+
+class Activity(Record):
+    id: str
+    phase: ActivityPhase
+    label: str
+    execution_ids: tuple[str, ...] = ()
+    started_at: datetime
+    operations: tuple[ActivityOperation, ...] = ()
+    tool_calls: tuple[ToolCount, ...] = ()
+    finished: bool = False
 
 
 class ReviewSpan(Record):
@@ -236,6 +293,7 @@ class Review(Record):
     model: str
     duration_ms: int = Field(ge=0)
     at: datetime
+    tool_calls: tuple[ToolCount, ...] = ()
 
 
 class ReviewPage(Record):
@@ -273,6 +331,7 @@ class Job(Record):
     reviews: tuple[Review, ...] = ()
     reviewed: int = 0
     reading: tuple[InFlight, ...] = ()
+    activities: tuple[Activity, ...] = ()
     trigger: Literal["schedule", "manual"] = "schedule"
 
 
@@ -351,10 +410,11 @@ class Claim(Record):
 
 
 class Progress(Record):
-    stage: str = Field()
-    coverage: Coverage = Coverage()
+    stage: str | None = None
+    coverage: Coverage | None = None
     review: Review | None = None
     reading: tuple[InFlight, ...] | None = None
+    activity: Activity | None = None
 
 
 class Result(Record):
@@ -364,12 +424,38 @@ class Result(Record):
     error: str = Field(default="")
 
 
+class ModelMessage(Record):
+    role: Literal["system", "user", "assistant"]
+    content: str
+
+
 class ModelRequest(Record):
     prompt: str = Field(min_length=1)
     purpose: Literal["extract", "cluster", "investigate"]
+    messages: tuple[ModelMessage, ...] = ()
+
+    def conversation(self) -> tuple[ModelMessage, ...]:
+        if self.messages:
+            return self.messages
+        try:
+            payload: Final = TypeAdapter(dict[str, JsonValue]).validate_json(self.prompt)
+        except ValidationError:
+            if self.prompt.lstrip().startswith(("{", "[")):
+                raise ValueError("Malformed legacy Lens prompt; send structured messages.") from None
+            return (ModelMessage(role="system", content=self.prompt), ModelMessage(role="user", content="{}"))
+        instruction_fields: Final = frozenset(
+            ("task", "navigation", "context", "checks", "questions", "response_schema")
+        )
+        instructions: Final = {key: value for key, value in payload.items() if key in instruction_fields}
+        evidence: Final = {key: value for key, value in payload.items() if key not in instruction_fields}
+        return (
+            ModelMessage(role="system", content=json.dumps(instructions, ensure_ascii=False)),
+            ModelMessage(role="user", content=json.dumps(evidence, ensure_ascii=False)),
+        )
 
 
 class ModelResult(Record):
     content: str
     cost: float
+    context_exceeded: bool = False
     finish_reason: Literal["length", "content_filter"] | None = Field(default=None, exclude=True)

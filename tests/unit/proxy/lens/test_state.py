@@ -7,8 +7,10 @@ import pytest
 from litellm.proxy.lens.models import (
     MAX_REVIEWS,
     MAX_STEPS,
+    Activity,
     AgentTestCase,
     Check,
+    Coverage,
     Evidence,
     Execution,
     FindingDraft,
@@ -19,7 +21,9 @@ from litellm.proxy.lens.models import (
     LensSettings,
     MetadataFilter,
     Progress,
+    Result,
     Review,
+    RunAssessment,
     Sample,
     Scope,
     Step,
@@ -39,11 +43,33 @@ from litellm.proxy.lens.state import (
     queue_job,
     renew_budget,
     replace_job,
+    result_status,
     reviews_after,
     summarized,
 )
 
 NOW: Final = datetime(2026, 1, 15, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    ("has_finding", "assessable", "error", "expected"),
+    (
+        (True, False, "One candidate exhausted its retries", "completed"),
+        (False, True, "One review exhausted its retries", "completed"),
+        (False, False, "Every review exhausted its retries", "failed"),
+        (False, False, "", "completed"),
+    ),
+)
+def test_partial_results_are_completed_while_total_failure_remains_failed(
+    has_finding: bool, assessable: bool, error: str, expected: str
+) -> None:
+    result: Final = Result(
+        findings=(finding("run"),) if has_finding else (),
+        assessments=(RunAssessment(execution_id="run", cannot_assess=not assessable),),
+        coverage=Coverage(screened=1, unassessable=int(not assessable)),
+        error=error,
+    )
+    assert result_status(result) == expected
 
 
 def lens() -> Lens:
@@ -485,3 +511,27 @@ def test_cancel_and_repeated_disconnects_clear_runs_in_flight() -> None:
     abandoned: Final = reading.model_copy(update={"jobs": (reading.jobs[0].model_copy(update={"attempts": 3}),)})
     expired: Final = claim_job(abandoned, worker(), NOW + timedelta(minutes=10)).jobs[0]
     assert (expired.status, expired.reading) == ("failed", ())
+
+
+def test_activity_updates_preserve_coverage_reviews_and_other_concurrent_lanes() -> None:
+    initial: Final = add_review(reading_job(), review(0))
+    first: Final = Activity(id="review:one", phase="review", label="Review one", execution_ids=("one",), started_at=NOW)
+    second: Final = Activity(id="group:one", phase="group", label="Compare batch", started_at=NOW)
+    started: Final = apply_progress(
+        apply_progress(initial, Progress(activity=first), NOW), Progress(activity=second), NOW
+    )
+    reading: Final = first.model_copy(update={"operations": ("python",)})
+    updated: Final = apply_progress(started, Progress(activity=reading), NOW)
+    assert updated.activities == (reading, second)
+    assert (updated.stage, updated.coverage, updated.reviews, updated.reading) == (
+        initial.stage,
+        initial.coverage,
+        initial.reviews,
+        initial.reading,
+    )
+    assert updated.reviewed == initial.reviewed
+    finished: Final = apply_progress(updated, Progress(activity=reading.model_copy(update={"finished": True})), NOW)
+    assert finished.activities == (second,)
+    assert end_job(updated, "cancelled", NOW).activities == ()
+    expired: Final = replace_job(queue_job(lens(), NOW, "job"), updated.model_copy(update={"lease_until": NOW}))
+    assert claim_job(expired, worker(), NOW).jobs[0].activities == ()

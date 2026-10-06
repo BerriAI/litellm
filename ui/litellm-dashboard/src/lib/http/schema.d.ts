@@ -9000,6 +9000,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/traces/findings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Trace Findings */
+        post: operations["trace_findings_lens_traces_findings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/watch-all": {
         parameters: {
             query?: never;
@@ -20368,6 +20385,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ingest Otlp Traces */
+        post: operations["ingest_otlp_traces_v1_logs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/access_groups": {
         parameters: {
             query?: never;
@@ -25310,6 +25344,43 @@ export interface components {
             /** Results */
             results: components["schemas"]["TagActiveUsersResponse"][];
         };
+        /** Activity */
+        Activity: {
+            /**
+             * Execution Ids
+             * @default []
+             */
+            execution_ids: string[];
+            /**
+             * Finished
+             * @default false
+             */
+            finished: boolean;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Operations
+             * @default []
+             */
+            operations: ("model" | "read" | "search" | "python" | "catalog" | "review_catalog" | "read_reviews" | "search_reviews" | "history" | "checkpoint")[];
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "load" | "review" | "group" | "reconcile" | "investigate";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["ToolCount"][];
+        };
         /** ActivityAvailability */
         ActivityAvailability: {
             /**
@@ -29696,10 +29767,20 @@ export interface components {
              */
             master_key?: string | null;
             /**
+             * Max Batch File Records
+             * @description max records (non-blank lines) per batch input file for /v1/files uploads with purpose=batch, applied per key. A key's metadata can override it and a team's metadata adds a team cap on top, both set by a proxy admin; the lower of the key's value and the team's value wins. Unset means no limit
+             */
+            max_batch_file_records?: number | null;
+            /**
              * Max Batch File Size Mb
              * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
              */
             max_batch_file_size_mb?: number | null;
+            /**
+             * Max Batch File Uploads Per Day
+             * @description max /v1/files uploads with purpose=batch per key (per user for JWT callers) per UTC day. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit
+             */
+            max_batch_file_uploads_per_day?: number | null;
             /**
              * Max Failed Login Attempts Per Source
              * @description Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Half this value, rounded down but at least 1, is the allowance for one username from that address; one more blocks that address for that username only, and its further failures stop counting toward the address limit, so a script stuck on one account does not block everyone behind a shared address. The per-address limit is only enforced when `trusted_proxy_ranges` is set: to the proxies in front of LiteLLM, or to an empty list when clients connect directly. Left unset, the peer address may be a shared ingress and only the per-username half runs. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10
@@ -29712,6 +29793,11 @@ export interface components {
             max_failed_login_attempts_per_source_overrides?: {
                 [key: string]: number;
             } | null;
+            /**
+             * Max File Downloads Per Minute
+             * @description max GET /v1/files/{file_id}/content calls per key (per user for JWT callers) per file per minute. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit
+             */
+            max_file_downloads_per_minute?: number | null;
             /**
              * Max File Size Mb
              * @description max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider
@@ -30707,6 +30793,11 @@ export interface components {
              * @default 0
              */
             eligible: number;
+            /**
+             * Failed Tasks
+             * @default 0
+             */
+            failed_tasks: number;
             /**
              * Grouped Batches
              * @default 0
@@ -33303,6 +33394,11 @@ export interface components {
         /** Job */
         Job: {
             /**
+             * Activities
+             * @default []
+             */
+            activities: components["schemas"]["Activity"][];
+            /**
              * Assessments
              * @default []
              */
@@ -33321,6 +33417,7 @@ export interface components {
              * @default {
              *       "candidates": 0,
              *       "eligible": 0,
+             *       "failed_tasks": 0,
              *       "grouped_batches": 0,
              *       "grouping_batches": 0,
              *       "inconclusive": 0,
@@ -38224,6 +38321,16 @@ export interface components {
             /** Top Models */
             top_models: components["schemas"]["ModelInsightMetric"][];
         };
+        /** ModelMessage */
+        ModelMessage: {
+            /** Content */
+            content: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "system" | "user" | "assistant";
+        };
         /** ModelParams */
         ModelParams: {
             /** Litellm Params */
@@ -38236,6 +38343,11 @@ export interface components {
         };
         /** ModelRequest */
         ModelRequest: {
+            /**
+             * Messages
+             * @default []
+             */
+            messages: components["schemas"]["ModelMessage"][];
             /** Prompt */
             prompt: string;
             /**
@@ -38265,6 +38377,11 @@ export interface components {
         ModelResult: {
             /** Content */
             content: string;
+            /**
+             * Context Exceeded
+             * @default false
+             */
+            context_exceeded: boolean;
             /** Cost */
             cost: number;
         };
@@ -40953,26 +41070,13 @@ export interface components {
         };
         /** Progress */
         Progress: {
-            /**
-             * @default {
-             *       "candidates": 0,
-             *       "eligible": 0,
-             *       "grouped_batches": 0,
-             *       "grouping_batches": 0,
-             *       "inconclusive": 0,
-             *       "investigated": 0,
-             *       "partial": 0,
-             *       "screened": 0,
-             *       "selected": 0,
-             *       "unassessable": 0
-             *     }
-             */
-            coverage: components["schemas"]["Coverage"];
+            activity?: components["schemas"]["Activity"] | null;
+            coverage?: components["schemas"]["Coverage"] | null;
             /** Reading */
             reading?: components["schemas"]["InFlight"][] | null;
             review?: components["schemas"]["Review"] | null;
             /** Stage */
-            stage: string;
+            stage?: string | null;
         };
         /** Prompt */
         Prompt: {
@@ -43766,6 +43870,11 @@ export interface components {
              * @default []
              */
             spans: components["schemas"]["ReviewSpan"][];
+            /**
+             * Tool Calls
+             * @default []
+             */
+            tool_calls: components["schemas"]["ToolCount"][];
             /** Trace Id */
             trace_id: string;
             /**
@@ -46576,6 +46685,16 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** ToolCount */
+        ToolCount: {
+            /** Calls */
+            calls: number;
+            /**
+             * Name
+             * @enum {string}
+             */
+            name: "model" | "read" | "search" | "python" | "catalog" | "review_catalog" | "read_reviews" | "search_reviews" | "history" | "checkpoint";
+        };
         /** ToolDetailResponse */
         ToolDetailResponse: {
             /** Overrides */
@@ -46886,6 +47005,33 @@ export interface components {
             spans: components["schemas"]["Span"][];
             summary: components["schemas"]["TraceSummary"];
         };
+        /** TraceFindingCount */
+        TraceFindingCount: {
+            /** Finding Count */
+            finding_count: number | null;
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
+        /** TraceFindingsRequest */
+        TraceFindingsRequest: {
+            /** Traces */
+            traces: components["schemas"]["TraceIdentity"][];
+        };
+        /** TraceIdentity */
+        TraceIdentity: {
+            /** Trace Id */
+            trace_id: string;
+            /**
+             * Trace Ref
+             * @default
+             */
+            trace_ref: string;
+        };
         /** TracePage */
         TracePage: {
             /** Data */
@@ -46897,6 +47043,11 @@ export interface components {
         TracePart: {
             /** Content */
             content: string;
+            /**
+             * End Time
+             * @default
+             */
+            end_time: string;
             /** Execution Id */
             execution_id: string;
             /** Kind */
@@ -46910,6 +47061,11 @@ export interface components {
             parent_span_id: string;
             /** Span Id */
             span_id: string;
+            /**
+             * Start Time
+             * @default
+             */
+            start_time: string;
             /**
              * Truncated
              * @default false
@@ -62189,6 +62345,39 @@ export interface operations {
             };
         };
     };
+    trace_findings_lens_traces_findings_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TraceFindingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceFindingCount"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     watch_all_lens_watch_all_post: {
         parameters: {
             query?: never;
@@ -77267,6 +77456,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_otlp_traces_v1_logs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

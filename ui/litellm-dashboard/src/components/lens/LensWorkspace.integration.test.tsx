@@ -177,6 +177,7 @@ describe("Lens interactive demo", () => {
       if (path.endsWith("/reviews")) return Response.json({ reviews: [], reviewed: saved.jobs[0].reviewed });
       if (path.endsWith("/runs")) return Response.json(saved.jobs);
       if (path === "/v1/traces") return Response.json({ data: data.runs.map((run) => run.trace.summary) });
+      if (path === "/lens/traces/findings") return Response.json([]);
       return Response.json({ data: [], traces: true, requests: false });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
@@ -355,6 +356,7 @@ describe("Lens interactive demo", () => {
       if (path === "/lens/agents") return Response.json([]);
       if (path.startsWith("/lens/preview")) return Response.json({ eligible: 0, selected: 0, executions: [] });
       if (path === "/v1/traces") return Response.json({ data: [createLensDemoData().runs[0].trace.summary] });
+      if (path === "/lens/traces/findings") return Response.json([]);
       return Response.json({ data: [], traces: true, requests: false });
     });
     renderWithProviders(<LensWorkspace accessToken="live-token" userRole="Admin" readOnly={false} />, {
@@ -478,7 +480,7 @@ it("keeps demo row actions visible and opens reviewed traces without touching li
   await user.click(await screen.findByRole("button", { name: "View run" }));
   const reviews = await screen.findByRole("list", { name: "Reviewed traces" });
   expect(within(reviews).getAllByRole("button").length).toBeGreaterThan(0);
-  expect(screen.getByRole("region", { name: "Conclusions so far" })).toHaveTextContent("Repeated lookups");
+  expect(screen.getByRole("region", { name: "Preliminary observations" })).toHaveTextContent("Repeated lookups");
   expect(network).not.toHaveBeenCalled();
 });
 
