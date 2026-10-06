@@ -12,7 +12,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 from ....anthropic.chat.transformation import AnthropicConfig
-from ....anthropic.common_utils import requires_native_compaction_beta
+from ....anthropic.common_utils import AnthropicError, requires_native_compaction_beta
 from .output_params_utils import sanitize_vertex_anthropic_output_params
 
 if TYPE_CHECKING:
@@ -22,11 +22,16 @@ _VERTEX_HEADER_ONLY_BETAS: Final = frozenset({ANTHROPIC_BETA_HEADER_VALUES.COMPA
 
 
 def _beta_names(value: object) -> frozenset[str]:
+    if value is None:
+        return frozenset()
     if isinstance(value, str):
         return frozenset(beta.strip() for beta in value.split(",") if beta.strip())
-    if isinstance(value, list):
-        return frozenset(str(beta).strip() for beta in value if str(beta).strip())
-    return frozenset()
+    if isinstance(value, (list, tuple)) and all(isinstance(beta, str) for beta in value):
+        return frozenset(beta.strip() for beta in value if beta.strip())
+    raise AnthropicError(
+        status_code=400,
+        message=f"anthropic_beta must be a string or a list of strings, got {type(value).__name__}",
+    )
 
 
 class VertexAIError(Exception):
@@ -150,19 +155,20 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         )
         extra_headers: Final = optional_params.get("extra_headers") or {}
         data.pop("extra_headers", None)
-        requested_betas: Final = (
-            frozenset(beta_set)
-            | compaction_betas
-            | _beta_names(extra_headers.get("anthropic-beta"))
-            | _beta_names(data.pop("anthropic_beta", None))
-        )
+        injected_betas: Final = frozenset(beta_set) | _beta_names(extra_headers.get("anthropic-beta"))
+        client_body_betas: Final = _beta_names(data.pop("anthropic_beta", None))
 
-        body_betas: Final = requested_betas - _VERTEX_HEADER_ONLY_BETAS
+        body_betas: Final = (injected_betas | client_body_betas) - _VERTEX_HEADER_ONLY_BETAS
         if body_betas:
-            data["anthropic_beta"] = list(body_betas)
-        header_betas: Final = requested_betas | _beta_names(headers.get("anthropic-beta"))
+            data["anthropic_beta"] = sorted(body_betas)
+        header_betas: Final = (
+            injected_betas
+            | compaction_betas
+            | (client_body_betas & _VERTEX_HEADER_ONLY_BETAS)
+            | _beta_names(headers.get("anthropic-beta"))
+        )
         if header_betas:
-            headers["anthropic-beta"] = ",".join(header_betas)
+            headers["anthropic-beta"] = ",".join(sorted(header_betas))
 
         return data
 

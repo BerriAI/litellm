@@ -13,6 +13,7 @@ from litellm.anthropic_beta_headers_manager import (
     update_headers_with_filtered_beta,
     update_request_with_filtered_beta,
 )
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
     VertexAIAnthropicConfig,
 )
@@ -1003,8 +1004,42 @@ def test_vertex_ai_anthropic_client_sent_body_compact_2026_09_04_moves_to_the_he
         headers=headers,
     )
 
-    assert headers["anthropic-beta"].split(",").count("compact-2026-09-04") == 1
+    assert headers["anthropic-beta"] == "compact-2026-09-04"
     assert result["anthropic_beta"] == ["interleaved-thinking-2025-05-14"]
+
+
+@pytest.mark.parametrize(
+    "anthropic_beta",
+    [["interleaved-thinking-2025-05-14"], ("interleaved-thinking-2025-05-14",)],
+    ids=["list", "sdk_tuple"],
+)
+def test_vertex_ai_anthropic_client_sent_body_betas_stay_out_of_the_header(anthropic_beta):
+    headers = {}
+
+    result = VertexAIAnthropicConfig().transform_request(
+        model="claude-opus-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"max_tokens": 100, "is_vertex_request": True, "anthropic_beta": anthropic_beta},
+        litellm_params={},
+        headers=headers,
+    )
+
+    assert result["anthropic_beta"] == ["interleaved-thinking-2025-05-14"]
+    assert "anthropic-beta" not in headers
+
+
+@pytest.mark.parametrize("anthropic_beta", [5, [1, 2], {"beta": "x"}], ids=["int", "list_of_ints", "dict"])
+def test_vertex_ai_anthropic_malformed_anthropic_beta_answers_400(anthropic_beta):
+    with pytest.raises(AnthropicError) as excinfo:
+        VertexAIAnthropicConfig().transform_request(
+            model="claude-opus-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={"max_tokens": 100, "is_vertex_request": True, "anthropic_beta": anthropic_beta},
+            litellm_params={},
+            headers={},
+        )
+
+    assert excinfo.value.status_code == 400
 
 
 _VERTEX_MESSAGE_RESPONSE: Final = {
