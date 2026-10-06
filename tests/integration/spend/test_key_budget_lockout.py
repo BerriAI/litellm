@@ -90,7 +90,7 @@ def _denied_with_budget_exceeded(gateway: Gateway, model: str, key: str) -> None
     assert object_value(denied.json()["error"])["type"] == "budget_exceeded"
 
 
-@pytest.mark.timeout(149)  # measured tier cache refresh took about 59 seconds
+@pytest.mark.timeout(149)
 def test_raising_a_spent_tier_budget_restores_serving(gateway: Gateway) -> None:
     with (
         gateway.scenario() as scenario,
@@ -131,7 +131,7 @@ def test_raising_a_spent_tier_budget_restores_serving(gateway: Gateway) -> None:
         assert len(upstream.get("/__observations").json()["requests"]) == 1
 
 
-@pytest.mark.timeout(149)  # measured tier cache refresh took about 59 seconds
+@pytest.mark.timeout(149)
 def test_lowering_a_tier_budget_below_spend_blocks_the_key(gateway: Gateway) -> None:
     with (
         gateway.scenario() as scenario,

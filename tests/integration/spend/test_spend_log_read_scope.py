@@ -263,22 +263,18 @@ def test_legacy_spend_logs_clamp_internal_user_filters_to_their_own_user(gateway
                 seconds=70,
             )
 
-        # a foreign user_id filter still returns only A's rows
         filtered: Final = _legacy_spend_rows(gateway, key_a, {"user_id": user_b})
         assert filtered != [], filtered
         assert {string_value(object_value(row)["user"]) for row in filtered} == {user_a}, filtered
         assert request_b not in {string_value(object_value(row)["request_id"]) for row in filtered}
         assert request_a in {string_value(object_value(row)["request_id"]) for row in filtered}
 
-        # a foreign api_key filter returns nothing
         by_key: Final = _legacy_spend_rows(gateway, key_a, {"api_key": key_b})
         assert by_key == [], by_key
 
-        # a foreign request_id returns nothing
         by_request: Final = _legacy_spend_rows(gateway, key_a, {"request_id": request_b})
         assert by_request == [], by_request
 
-        # the date-window forms clamp the same way
         now: Final = datetime.now(timezone.utc)
         window: Final = {
             "start_date": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
@@ -293,6 +289,5 @@ def test_legacy_spend_logs_clamp_internal_user_filters_to_their_own_user(gateway
         assert unsummarized != [], unsummarized
         assert {string_value(object_value(row)["user"]) for row in unsummarized} == {user_a}, unsummarized
 
-        # the master key sees B's rows under the same filter
         master: Final = _legacy_spend_rows(gateway, gateway.key, {"user_id": user_b, "request_id": request_b})
         assert [string_value(object_value(row)["request_id"]) for row in master] == [request_b], master

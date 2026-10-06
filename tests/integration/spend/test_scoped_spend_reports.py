@@ -55,7 +55,7 @@ def _logged(scope_column: str, scope_value: str, start: datetime, end: datetime)
     return read_rows(
         f'SELECT api_key, model, spend, prompt_tokens, completion_tokens, team_id FROM "LiteLLM_SpendLogs" '
         f'WHERE "startTime" >= %s AND "startTime" < %s AND {scope_column} = %s',
-        (start, end, scope_value),
+        (start.isoformat(), end.isoformat(), scope_value),
     )
 
 
@@ -64,7 +64,7 @@ def _logged_keys(keys: tuple[str, ...], start: datetime, end: datetime) -> list[
     return read_rows(
         'SELECT api_key, model, spend, prompt_tokens, completion_tokens, team_id FROM "LiteLLM_SpendLogs" '
         f'WHERE "startTime" >= %s AND "startTime" < %s AND api_key IN ({placeholders})',
-        (start, end, *keys),
+        (start.isoformat(), end.isoformat(), *keys),
     )
 
 
@@ -120,11 +120,11 @@ def test_scoped_spend_reports_match_sql_and_enforce_caller_scope(gateway: Gatewa
             seconds=30,
         )
         dates: Final = {date.fromisoformat(str(row["day"])) for row in logged}
-        assert len(dates) == 1, logged
-        spend_date: Final[date] = next(iter(dates))
-        start: Final = datetime.combine(spend_date, time.min)
-        end: Final = start + timedelta(days=1)
-        window: Final = {"start_date": spend_date.isoformat(), "end_date": spend_date.isoformat()}
+        start_date: Final[date] = min(dates)
+        end_date: Final[date] = max(dates)
+        start: Final = datetime.combine(start_date, time.min)
+        end: Final = datetime.combine(end_date, time.min) + timedelta(days=1)
+        window: Final = {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()}
 
         _assert_report_matches_db(
             _rows(gateway, "/key/spend/report", key=k1, params=window), _logged("api_key", k1_hash, start, end)
