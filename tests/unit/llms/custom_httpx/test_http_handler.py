@@ -24,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     MaskedHTTPStatusError,
     _get_httpx_client,
+    get_async_httpx_client,
     get_ssl_configuration,
 )
 from litellm.types.llms.custom_http import VerifyTypes
@@ -1875,3 +1876,79 @@ async def test_http2_disabled_by_default(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", False)
 
     assert AsyncHTTPHandler._should_use_aiohttp_transport() is True
+
+
+class _FactoryTransport(httpx.MockTransport):
+    def __init__(self, generation: int) -> None:
+        self.closed = False
+        super().__init__(lambda request: httpx.Response(200, json={"generation": generation}))
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if self.closed:
+            raise httpx.ConnectError("Transport closed", request=request)
+        return await super().handle_async_request(request)
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _transport_factory() -> tuple[Callable[[], httpx.AsyncBaseTransport], list[_FactoryTransport]]:
+    transports: Final[list[_FactoryTransport]] = []
+
+    def create() -> httpx.AsyncBaseTransport:
+        transport: Final = _FactoryTransport(len(transports))
+        transports.append(transport)
+        return transport
+
+    return create, transports
+
+
+@pytest.mark.asyncio
+async def test_transport_factory_reuses_cached_client_and_refreshes_closed_generation() -> None:
+    factory, transports = _transport_factory()
+    params: Final = {"transport_factory": factory, "follow_redirects": False, "timeout": 15}
+    handler: Final = get_async_httpx_client("factory-fixture", params=params)
+    cached: Final = get_async_httpx_client("factory-fixture", params=params)
+    first: Final = handler.client
+    assert cached is handler
+    assert (await first.get("https://fixture.example/first")).json() == {"generation": 0}
+    assert len(transports) == 1
+    await first.aclose()
+
+    refreshed: Final = cached.client
+    try:
+        assert (await refreshed.get("https://fixture.example/next")).json() == {"generation": 1}
+        assert refreshed is not first
+        assert refreshed.timeout == httpx.Timeout(15)
+        assert not refreshed.follow_redirects
+        assert transports[0].closed
+        assert not transports[1].closed
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_transport_factory_isolates_replacement_from_retired_cached_client() -> None:
+    factory, transports = _transport_factory()
+    params: Final = {"transport_factory": factory}
+    retired: Final = get_async_httpx_client("factory-fixture", params=params)
+    assert (await retired.client.get("https://fixture.example/first")).json() == {"generation": 0}
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    replacement: Final = get_async_httpx_client("factory-fixture", params=params)
+    await retired.close()
+
+    try:
+        assert replacement is not retired
+        assert transports[0].closed
+        assert not transports[1].closed
+        assert (await replacement.client.get("https://fixture.example/next")).json() == {"generation": 1}
+    finally:
+        await replacement.close()
+
+
+def test_transport_factory_and_transport_are_mutually_exclusive() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        AsyncHTTPHandler(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200)),
+            transport_factory=lambda: httpx.MockTransport(lambda request: httpx.Response(200)),
+        )
