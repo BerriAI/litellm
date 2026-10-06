@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
+import pydantic
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
@@ -123,7 +124,7 @@ class _ResponseUsage(BaseModel):
     usage: Usage | None = None
 
 
-class _UsageContainer(BaseModel):
+class _UsageContainer(pydantic.BaseModel):
     model_config = ConfigDict(strict=True, from_attributes=True)
     usage: object | None = None
 
@@ -500,7 +501,7 @@ async def _capture_estimated(
     original: Final = context.capture.observation
     available: Final = max(original.started_at, context.collector.clock())
     raw_usage: Final = _UsageContainer.model_validate(response_obj).usage
-    serialized: Final = raw_usage.model_dump() if isinstance(raw_usage, BaseModel) else raw_usage
+    serialized: Final = raw_usage.model_dump() if isinstance(raw_usage, pydantic.BaseModel) else raw_usage
     usage: Final = (
         normalize_cache_usage(
             StandardLoggingPayloadSetup.get_usage_from_response_obj(
