@@ -461,6 +461,60 @@ describe("RunView", () => {
     await waitFor(() => expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(2));
   });
 
+  it("cancels an in-flight refresh and stops interval requests when live updates pause", async () => {
+    vi.useFakeTimers();
+    try {
+      let completeRefresh!: (trace: Trace) => void;
+      vi.mocked(agentTraceCall).mockReset();
+      vi.mocked(agentTraceCall).mockResolvedValueOnce(research).mockImplementationOnce(
+        () => new Promise<Trace>((resolve) => { completeRefresh = resolve; }),
+      );
+      renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_100); });
+      expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(2);
+      fireEvent.click(screen.getByRole("button", { name: "Live updates" }));
+      await act(async () => {
+        completeRefresh({ ...research, summary: { ...research.summary, span_count: research.summary.span_count + 7 } });
+        await vi.advanceTimersByTimeAsync(60_100);
+      });
+      expect(screen.getByRole("banner")).toHaveTextContent(`Steps ${research.summary.span_count}`);
+      expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a failed refresh without calling the next-page operation", async () => {
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall).mockResolvedValueOnce(research).mockRejectedValueOnce(new Error("refresh unavailable")).mockResolvedValue(research);
+    renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+    await screen.findByTestId("detail-pane");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh run" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Previously received steps are still shown");
+    expect(screen.queryByText(/could not load more/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry refresh" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, null, null]);
+  });
+
+  it("refreshes paginated runs using the newly returned cursor", async () => {
+    const first = { ...research, spans: research.spans.slice(0, 1), next_cursor: "old-page" };
+    const second = { ...research, spans: research.spans.slice(1), next_cursor: null };
+    vi.mocked(agentTraceCall).mockReset();
+    vi.mocked(agentTraceCall).mockResolvedValueOnce(first).mockResolvedValueOnce(second)
+      .mockResolvedValueOnce({ ...first, next_cursor: "new-page" }).mockImplementationOnce(async (_token, _id, _ref, cursor) => {
+        if (cursor !== "new-page") throw new Error("stale cursor");
+        return second;
+      });
+    renderWithProviders(<RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Load more steps" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Load more steps" })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Refresh run" }));
+    await waitFor(() => expect(vi.mocked(agentTraceCall)).toHaveBeenCalledTimes(4));
+    expect(vi.mocked(agentTraceCall).mock.calls.map((call) => call[3])).toEqual([null, "old-page", null, "new-page"]);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("keeps a way back to the runs table when a run fails to load", async () => {
     const user = userEvent.setup();
     const onBack = vi.fn();

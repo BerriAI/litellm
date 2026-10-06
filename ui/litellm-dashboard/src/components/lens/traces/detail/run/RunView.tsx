@@ -108,7 +108,11 @@ function LoadedRun({
   };
   const traceQuery = useSuspenseInfiniteQuery(traceQueryOptions);
   const refreshTrace = () => queryClient.resetQueries({ queryKey, exact: true });
-  const failure = traceQuery.error ? classifyTraceReadFailure(traceQuery.error) : null;
+  const failure = traceQuery.isFetchNextPageError ? classifyTraceReadFailure(traceQuery.error) : null;
+  const toggleLive = () => {
+    if (live) void queryClient.cancelQueries({ queryKey, exact: true });
+    setLive((enabled) => !enabled);
+  };
   const trace = useMemo(() => {
     const pages = traceQuery.data.pages;
     return {
@@ -146,8 +150,16 @@ function LoadedRun({
         onRefresh={() => void traceQuery.refetch()}
         live={live}
         canLive={traces.live}
-        onLiveChange={() => setLive((enabled) => !enabled)}
+        onLiveChange={toggleLive}
       />
+      {traceQuery.isRefetchError && (
+        <div role="alert" className="flex items-center gap-3 border-b p-3 text-xs text-muted-foreground">
+          Could not refresh this run. Previously received steps are still shown.
+          <Button variant="outline" size="sm" disabled={traceQuery.isFetching} onClick={() => void traceQuery.refetch()}>
+            Retry refresh
+          </Button>
+        </div>
+      )}
       {(traceQuery.hasNextPage || failure) && (
         <PagingBanner
           loaded={trace.spans.length}
