@@ -1,5 +1,5 @@
 use litellm_traces::{
-    AgentNode, SpanStatus, iso_time, listed_summary,
+    AgentNode, SpanStatus, SpendMatch, iso_time, listed_summary,
     query::named::{ListTracesRow, SpendByResponseIdsRow, TraceSpansRow},
     resolve_trace,
 };
@@ -387,6 +387,63 @@ fn repeated_response_id_counts_once() {
             .map(|span| span.spend)
             .collect::<Vec<_>>(),
         [None, Some(0.25), Some(0.25)]
+    );
+}
+
+#[rstest]
+fn model_calls_link_the_spend_log_they_were_priced_from() {
+    let rows = [
+        row("agent", "", "agent", "agent", "agent"),
+        llm("matched", "agent", "agent", "matched"),
+        llm("no-log", "agent", "agent", "missing"),
+        llm("no-id", "agent", "agent", ""),
+        llm("ambiguous", "agent", "agent", "cached"),
+    ];
+    let logs = [
+        spend("request-matched", "matched", 0.25),
+        spend("request-cached-a", "cached", 0.25),
+        spend("request-cached-b", "cached", 0.0),
+    ];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    let links: Vec<_> = trace
+        .spans
+        .iter()
+        .map(|span| (span.spend_log_request_id.as_deref(), span.spend_match))
+        .collect();
+    assert_eq!(
+        links,
+        [
+            (None, None),
+            (Some("request-matched"), Some(SpendMatch::Matched)),
+            (None, Some(SpendMatch::NoSpendLog)),
+            (None, Some(SpendMatch::NoCallId)),
+            (None, Some(SpendMatch::Ambiguous)),
+        ]
+    );
+}
+
+#[rstest]
+fn model_call_span_cost_agrees_with_the_run_total_when_priced_from_a_wrapper() {
+    let rows = [
+        TraceSpansRow {
+            call_keys: vec![litellm_traces::CallKey::LiteLlmRequest("gateway".into())],
+            call_evidence: Some(litellm_traces::CallEvidenceKind::Complete),
+            ..llm("wrapper", "", "agent", "")
+        },
+        llm("call", "wrapper", "agent", ""),
+    ];
+    let logs = [SpendByResponseIdsRow {
+        litellm_call_id: "gateway".into(),
+        ..spend("request", "chatcmpl-request", 0.25)
+    }];
+    let trace = resolve_trace("trace", "ref", &rows, &logs).unwrap();
+    assert_eq!(trace.summary.spend, Some(0.25));
+    assert_eq!(
+        (
+            trace.spans[1].spend,
+            trace.spans[1].spend_log_request_id.as_deref()
+        ),
+        (Some(0.25), Some("request"))
     );
 }
 
