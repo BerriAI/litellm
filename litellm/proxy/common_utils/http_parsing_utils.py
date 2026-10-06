@@ -33,6 +33,16 @@ _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequ
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
+def resolve_realtime_route_model(model: str | None, intent: str | None, is_translation: bool) -> str | None:
+    if model is not None:
+        return model
+    if is_translation:
+        return "gpt-realtime-translate"
+    if intent == "transcription":
+        return "gpt-realtime-whisper"
+    return None
+
+
 def resolve_inference_model(
     body_model: object,
     settings: Mapping[str, object],
