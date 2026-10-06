@@ -4,7 +4,6 @@ import struct
 from typing import Final, Literal
 from urllib.parse import parse_qs
 
-import httpx
 from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
@@ -85,8 +84,7 @@ def test_azure_embedding_uses_deployment_api_version_and_normalizes_response(gat
         assert response.status_code == 200, response.text
         payload: Final = _EmbeddingResponse.model_validate_json(response.content)
         assert [item.model_dump() for item in payload.data] == [
-            {"object": "embedding", "index": index, "embedding": list(vector)}
-            for index, vector in enumerate(_VECTORS)
+            {"object": "embedding", "index": index, "embedding": list(vector)} for index, vector in enumerate(_VECTORS)
         ], response.text
         assert (payload.usage.prompt_tokens, payload.usage.total_tokens) == (4, 4), response.text
         assert [(request.method, request.target) for request in wire.drain()] == [

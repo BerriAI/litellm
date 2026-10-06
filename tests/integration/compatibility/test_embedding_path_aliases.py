@@ -44,9 +44,7 @@ def _assert_raw_embedding_response(response: httpx.Response) -> None:
 
 def _reply(encoding_format: str | None) -> Reply:
     embedding: Final = (
-        base64.b64encode(struct.pack("<3f", *_VECTOR)).decode("ascii")
-        if encoding_format == "base64"
-        else list(_VECTOR)
+        base64.b64encode(struct.pack("<3f", *_VECTOR)).decode("ascii") if encoding_format == "base64" else list(_VECTOR)
     )
     return Reply(
         body=json.dumps(
@@ -69,9 +67,8 @@ def test_embedding_model_is_resolved_from_each_endpoint_surface(
     gateway: Gateway,
     surface: Literal["azure_sdk", "deployments_raw", "engines_raw", "bare"],
 ) -> None:
-    expected_key: Final = (
-        "synthetic-key-a" if surface in ("azure_sdk", "deployments_raw") else "synthetic-key-b"
-    )
+    expected_key: Final = "synthetic-key-a" if surface in ("azure_sdk", "deployments_raw") else "synthetic-key-b"
+    # openai-python 2.33.0 defaults omitted encoding_format to base64: https://github.com/openai/openai-python/blob/v2.33.0/src/openai/resources/embeddings.py
     expected_body: Final = (
         {
             "model": "text-embedding-3-small",
@@ -104,13 +101,16 @@ def test_embedding_model_is_resolved_from_each_endpoint_surface(
         virtual_key: Final = scenario.key()
 
         if surface == "azure_sdk":
-            with httpx.Client(trust_env=False) as http_client, openai.AzureOpenAI(
-                azure_endpoint=str(gateway.client.base_url).rstrip("/"),
-                api_key=virtual_key,
-                api_version="2024-10-21",
-                max_retries=0,
-                http_client=http_client,
-            ) as client:
+            with (
+                httpx.Client(trust_env=False) as http_client,
+                openai.AzureOpenAI(
+                    azure_endpoint=str(gateway.client.base_url).rstrip("/"),
+                    api_key=virtual_key,
+                    api_version="2024-10-21",
+                    max_retries=0,
+                    http_client=http_client,
+                ) as client,
+            ):
                 response = client.embeddings.create(model=group_a, input=_TEXT)
             assert [item.embedding for item in response.data] == [list(_VECTOR)], response.model_dump_json()
             assert [item.index for item in response.data] == [0], response.model_dump_json()

@@ -79,12 +79,15 @@ def test_openai_sdk_embedding_preserves_base64_and_decodes_vectors(gateway: Gate
             api_key=_SDK_KEY,
         )
         virtual_key: Final = scenario.key()
-        with httpx.Client(trust_env=False) as http_client, openai.OpenAI(
-            base_url=f"{str(gateway.client.base_url).rstrip('/')}/v1",
-            api_key=virtual_key,
-            max_retries=0,
-            http_client=http_client,
-        ) as client:
+        with (
+            httpx.Client(trust_env=False) as http_client,
+            openai.OpenAI(
+                base_url=f"{str(gateway.client.base_url).rstrip('/')}/v1",
+                api_key=virtual_key,
+                max_retries=0,
+                http_client=http_client,
+            ) as client,
+        ):
             response: Final = client.embeddings.create(
                 model=model,
                 input=list(_INPUTS),

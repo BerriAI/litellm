@@ -109,9 +109,9 @@ def test_embedding_cache_reuses_cached_items_during_partial_hits(gateway: Gatewa
         assert len(partial_requests) == 1, f"Expected one uncached provider call, received {len(partial_requests)}"
         assert _input_values(partial_requests[0]) == ("bravo", "charlie")
         partial_payload: Final = _EmbeddingResponse.model_validate_json(partial.content)
-        assert [item.model_dump() for item in partial_payload.data] == _expected_data(
-            ("bravo", "alpha", "charlie")
-        ), partial.text
+        assert [item.model_dump() for item in partial_payload.data] == _expected_data(("bravo", "alpha", "charlie")), (
+            partial.text
+        )
         assert (partial_payload.usage.prompt_tokens, partial_payload.usage.total_tokens) == (
             3,
             3,
@@ -128,9 +128,9 @@ def test_embedding_cache_reuses_cached_items_during_partial_hits(gateway: Gatewa
         full_cache_hit: Final = eventually(attempt_partial, lambda attempt: not attempt[1])
         assert full_cache_hit[0].status_code == 200, full_cache_hit[0].text
         final_payload: Final = _EmbeddingResponse.model_validate_json(full_cache_hit[0].content)
-        assert [item.model_dump() for item in final_payload.data] == _expected_data(
-            ("bravo", "alpha", "charlie")
-        ), full_cache_hit[0].text
+        assert [item.model_dump() for item in final_payload.data] == _expected_data(("bravo", "alpha", "charlie")), (
+            full_cache_hit[0].text
+        )
         assert (final_payload.usage.prompt_tokens, final_payload.usage.total_tokens) == (
             3,
             3,

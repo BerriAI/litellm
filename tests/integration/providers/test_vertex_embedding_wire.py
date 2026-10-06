@@ -105,7 +105,16 @@ def test_vertex_text_embedding_sends_dimensionality_and_preserves_input_order(
         ]
 
 
-def test_gemini_embedding_sends_batch_contents_and_dimensionality(gateway: Gateway) -> None:
+@pytest.mark.parametrize(
+    ("embedding_input", "expected_inputs"),
+    ((list(_GEMINI_INPUTS), _GEMINI_INPUTS), (_GEMINI_INPUTS[0], (_GEMINI_INPUTS[0],))),
+    ids=("list", "string"),
+)
+def test_gemini_embedding_sends_batch_contents_and_dimensionality(
+    gateway: Gateway,
+    embedding_input: str | list[str],
+    expected_inputs: tuple[str, ...],
+) -> None:
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/models/gemini-embedding-001:batchEmbedContents"
@@ -117,7 +126,7 @@ def test_gemini_embedding_sends_batch_contents_and_dimensionality(gateway: Gatew
                     "content": {"parts": [{"text": text}]},
                     "outputDimensionality": 256,
                 }
-                for text in _GEMINI_INPUTS
+                for text in expected_inputs
             ]
         }
         return Reply(
@@ -125,7 +134,7 @@ def test_gemini_embedding_sends_batch_contents_and_dimensionality(gateway: Gatew
                 {
                     "embeddings": [
                         {"values": list(_VECTORS[index]), "statistics": {"token_count": index + 2}}
-                        for index, _ in enumerate(_GEMINI_INPUTS)
+                        for index, _ in enumerate(expected_inputs)
                     ]
                 }
             ).encode()
@@ -140,14 +149,16 @@ def test_gemini_embedding_sends_batch_contents_and_dimensionality(gateway: Gatew
         response: Final = gateway.request(
             "POST",
             "/v1/embeddings",
-            {"model": model, "input": list(_GEMINI_INPUTS), "dimensions": 256},
+            {"model": model, "input": embedding_input, "dimensions": 256},
         )
         assert response.status_code == 200, response.text
         payload: Final = _EmbeddingResponse.model_validate_json(response.content)
         assert [item.model_dump() for item in payload.data] == [
             {"object": "embedding", "index": index, "embedding": list(_VECTORS[index])}
-            for index, _ in enumerate(_GEMINI_INPUTS)
+            for index, _ in enumerate(expected_inputs)
         ], response.text
+        assert payload.usage.prompt_tokens == payload.usage.total_tokens, response.text
+        assert payload.usage.prompt_tokens > 0, response.text
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/models/gemini-embedding-001:batchEmbedContents")
         ]
