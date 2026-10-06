@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from typing_extensions import TypedDict
 
 
@@ -36,9 +36,15 @@ class OpenRouterImageData(BaseModel):
     media_type: str | None = None
     revised_prompt: str | None = None
 
+    @model_validator(mode="after")
+    def _require_image_payload(self) -> "OpenRouterImageData":
+        if self.b64_json is None and self.url is None:
+            raise ValueError("image entry has neither b64_json nor url")
+        return self
+
 
 class OpenRouterImagesResponse(BaseModel):
-    data: tuple[OpenRouterImageData, ...]
+    data: tuple[OpenRouterImageData, ...] = Field(min_length=1)
     created: int | None = None
     model: str | None = None
     usage: OpenRouterImageUsage | None = None

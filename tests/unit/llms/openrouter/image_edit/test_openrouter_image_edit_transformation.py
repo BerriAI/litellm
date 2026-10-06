@@ -100,6 +100,18 @@ class TestOpenRouterImageEditEndpoint:
 
         assert result == "https://openrouter.ai/api/v1/images"
 
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://openrouter.ai/api/v1/chat/completions",
+            "https://openrouter.ai/api/v1/chat/completions/",
+        ],
+    )
+    def test_legacy_chat_completions_api_base_is_rewritten_to_images(self, api_base):
+        result = self.config.get_complete_url(model=self.model, api_base=api_base, litellm_params={})
+
+        assert result == "https://openrouter.ai/api/v1/images"
+
     def test_uses_json_not_multipart(self):
         assert self.config.use_multipart_form_data() is False
 
@@ -399,6 +411,20 @@ class TestOpenRouterImageEditResponse:
             self._transform({"created": 0})
 
         assert "Error parsing OpenRouter image response" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"created": 0, "data": []},
+            {"created": 0, "data": [{"media_type": "image/png"}]},
+            {"created": 0, "data": [{"b64_json": "abc"}, {"revised_prompt": "no image here"}]},
+        ],
+    )
+    def test_response_without_a_usable_image_is_a_bad_gateway(self, payload):
+        with pytest.raises(OpenRouterException) as exc_info:
+            self._transform(payload)
+
+        assert exc_info.value.status_code == 502, str(exc_info.value)
 
     def test_unparseable_response_raises(self):
         raw_response = httpx.Response(

@@ -101,9 +101,8 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         api_base: str | None,
         litellm_params: dict,
     ) -> str:
-        base_url: Final = (api_base or get_secret_str("OPENROUTER_API_BASE") or _DEFAULT_OPENROUTER_API_BASE).rstrip(
-            "/"
-        )
+        configured: Final = api_base or get_secret_str("OPENROUTER_API_BASE") or _DEFAULT_OPENROUTER_API_BASE
+        base_url: Final = configured.rstrip("/").removesuffix("/chat/completions")
         if base_url.endswith("/images"):
             return base_url
         return f"{base_url}/images"
@@ -222,7 +221,7 @@ def _parse_images_response(raw_response: httpx.Response) -> OpenRouterImagesResp
     except (ValueError, ValidationError) as e:
         raise OpenRouterException(
             message=f"Error parsing OpenRouter image response: {e}",
-            status_code=raw_response.status_code,
+            status_code=raw_response.status_code if raw_response.status_code >= 400 else 502,
             headers=raw_response.headers,
         ) from e
 
