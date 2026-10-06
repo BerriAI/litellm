@@ -66,7 +66,8 @@ def _rows_for_key(key: str) -> list[dict[str, JsonValue]]:
 def test_bridged_chat_completion_above_log_offload_threshold_logs_and_charges_once(gateway: Gateway) -> None:
     prompt_prefix: Final = f"spend once {uuid4().hex[:8]} "
     long_prompt: Final = (prompt_prefix + "lorem ipsum " * 30_000)[:300_000]
-    sentinel_prompt: Final = f"spend sentinel {uuid4().hex[:8]}"
+    sentinel_prefix: Final = f"spend sentinel {uuid4().hex[:8]} "
+    sentinel_prompt: Final = (sentinel_prefix + "lorem ipsum " * 30_000)[:300_000]
     with (
         wire_server(_responses_reply((long_prompt, sentinel_prompt))) as wire,
         gateway.scenario() as scenario,
@@ -102,7 +103,10 @@ def test_bridged_chat_completion_above_log_offload_threshold_logs_and_charges_on
 
         rows: Final = eventually(
             lambda: _rows_for_key(key),
-            lambda values: any(row["litellm_call_id"] == sentinel_call_id for row in values),
+            lambda values: (
+                any(row["litellm_call_id"] == call_id for row in values)
+                and any(row["litellm_call_id"] == sentinel_call_id for row in values)
+            ),
             seconds=70,
         )
         call_rows: Final = [row for row in rows if row["litellm_call_id"] == call_id]
@@ -111,7 +115,7 @@ def test_bridged_chat_completion_above_log_offload_threshold_logs_and_charges_on
 
         key_spend: Final = eventually(
             lambda: read_rows('SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)),
-            lambda values: len(values) == 1 and float(str(values[0]["spend"])) >= 2 * EXPECTED_SPEND - 1e-9,
+            lambda values: len(values) == 1 and float(str(values[0]["spend"])) >= 2 * EXPECTED_SPEND,
             seconds=70,
         )
         assert float(str(key_spend[0]["spend"])) == pytest.approx(2 * EXPECTED_SPEND), key_spend
