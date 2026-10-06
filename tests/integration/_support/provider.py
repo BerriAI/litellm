@@ -14,11 +14,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Final
 
-from tests.integration._support.openai_wire import MODEL_DISCOVERY
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 PROVIDER_PORT: Final = 8191
 PROVIDER_URL: Final = f"http://127.0.0.1:{PROVIDER_PORT}"
+MODEL_DISCOVERY: Final = ("GET", "/v1/models")
 _UNQUEUED: Final = Reply(status=500, body=b'{"error": "the shared fake provider has no reply queued for this request"}')
 
 
