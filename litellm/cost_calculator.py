@@ -2620,8 +2620,6 @@ def batch_cost_calculator(
             "input_cost_per_token",
             "output_cost_per_token_batches",
             "output_cost_per_token",
-            "output_cost_per_image_token_batches",
-            "output_cost_per_image_token",
         )
     ):
         # model_info was provided (e.g. deployment metadata with only id/db_model)
