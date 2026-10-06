@@ -11,6 +11,7 @@ import { TabsContent } from "@/components/ui/tabs";
 import type { RunSelection } from "../../routing";
 import type { Trace } from "../../types";
 import { TraceConversation, type ConversationTracePaging } from "../conversation/TraceConversation";
+import { TraceThread } from "../conversation/TraceThread";
 import { DetailPane } from "../span/DetailPane";
 import { SpanTree } from "../tree/SpanTree";
 import type { TreeLayout } from "../tree/TreeRows";
@@ -53,18 +54,22 @@ export function RunBody({ trace, accessToken, selection, embedded, stale, conver
   useShortcut("right", () => tree.fold(true), { ...pane, description: "fold" });
   useShortcut("escape", () => setDetailOpen(false), { ...pane, enabled: active && detailOpen, description: "close" });
 
+  const openStep = (id: string) => {
+    select(id);
+    setView("steps");
+  };
+
+  if (view === "thread")
+    return (
+      <TabsContent value="thread" className="flex min-h-0 flex-1">
+        <TraceThread trace={trace} accessToken={accessToken} paging={conversationPaging} onOpenStep={openStep} />
+      </TabsContent>
+    );
+
   if (view === "conversation")
     return (
       <TabsContent value="conversation" className="flex min-h-0 flex-1">
-        <TraceConversation
-          trace={trace}
-          accessToken={accessToken}
-          paging={conversationPaging}
-          onOpenStep={(id) => {
-            select(id);
-            setView("steps");
-          }}
-        />
+        <TraceConversation trace={trace} accessToken={accessToken} paging={conversationPaging} onOpenStep={openStep} />
       </TabsContent>
     );
 
