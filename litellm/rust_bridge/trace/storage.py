@@ -62,7 +62,9 @@ class NativeStore(Protocol):
 
     def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Awaitable[None]: ...
 
-    def ingest(self, payload: bytes, content_type: str | None, tenant: Mapping[str, str]) -> Awaitable[int]: ...
+    def ingest(
+        self, payload: bytes, content_type: str | None, tenant: Mapping[str, str], logs: bool = False
+    ) -> Awaitable[int]: ...
 
     def list_traces(
         self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
@@ -178,8 +180,8 @@ class ClickHouseStorage:
     async def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> None:
         await self._native.insert_rows(table, rows)
 
-    async def ingest(self, payload: bytes, content_type: str | None, tenant: Tenant) -> int:
-        return await self._native.ingest(payload, content_type, asdict(tenant))
+    async def ingest(self, payload: bytes, content_type: str | None, tenant: Tenant, logs: bool = False) -> int:
+        return await self._native.ingest(payload, content_type, asdict(tenant), logs)
 
     async def list_traces(
         self,
