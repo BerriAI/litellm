@@ -170,6 +170,7 @@ export function InvestigationsView({ readOnly = false }: InvestigationsViewProps
                     onEnableMonitoring={() => openDialog("monitoring")}
                     onCancelRun={() => void actions.cancelRun(row.lens)}
                     onRunNow={() => openDialog("run_now")}
+                    onConnectWorker={() => setTab("settings")}
                     onReviewFinding={(owned, reviewStatus, reason) =>
                       void actions.review(owned.lens, owned.finding, reviewStatus, reason)
                     }

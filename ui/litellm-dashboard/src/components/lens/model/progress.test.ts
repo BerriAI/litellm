@@ -3,9 +3,9 @@ import {
   analysisElapsed,
   analysisProgress,
   analysisFraction,
+  analysisStages,
   analysisPace,
   remainingLabel,
-  stageDurations,
 } from "./progress";
 import { type Job } from "./types";
 
@@ -216,20 +216,27 @@ describe("Analysis pace", () => {
   });
 });
 
-describe("Stage durations", () => {
-  const start = Date.parse("2026-09-30T12:00:00Z");
-  const createdAt = "2026-09-30T12:00:00Z";
-
-  it("times finished stages from the transitions it saw and the active stage up to now", () => {
-    const samples = [
-      { at: start + 5000, step: 0, done: 10, fraction: 0.1 },
-      { at: start + 124000, step: 1, done: 0, fraction: 0.6 },
-    ];
-    expect(stageDurations(samples, createdAt, start + 145000)).toEqual([124, 21, null]);
+describe("Analysis stages", () => {
+  it("fills finished stages, fills the active one by its own count, and leaves later ones empty", () => {
+    const grouping = {
+      ...job,
+      stage: "Grouping observations",
+      coverage: { ...coverage, selected: 40, screened: 40, grouping_batches: 4, grouped_batches: 1 },
+    };
+    expect(analysisStages(grouping).map(({ state, fill, done, total }) => ({ state, fill, done, total }))).toEqual([
+      { state: "done", fill: 1, done: 40, total: 40 },
+      { state: "active", fill: 0.25, done: 1, total: 4 },
+      { state: "todo", fill: 0, done: 0, total: 0 },
+    ]);
   });
 
-  it("does not guess when a stage started before the page was opened", () => {
-    const samples = [{ at: start + 90000, step: 1, done: 2, fraction: 0.7 }];
-    expect(stageDurations(samples, createdAt, start + 100000)).toEqual([null, null, null]);
+  it("weights the stages so the bar agrees with the overall percentage", () => {
+    const grouping = {
+      ...job,
+      stage: "Grouping observations",
+      coverage: { ...coverage, selected: 40, screened: 40, grouping_batches: 4, grouped_batches: 1 },
+    };
+    const covered = analysisStages(grouping).reduce((sum, stage) => sum + stage.weight * stage.fill, 0);
+    expect(covered).toBeCloseTo(analysisFraction(analysisProgress(grouping)));
   });
 });

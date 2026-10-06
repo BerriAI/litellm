@@ -18,9 +18,10 @@ export interface InvestigationIntents {
   readonly onEnableMonitoring: () => void;
   readonly onCancelRun: () => void;
   readonly onRunNow: () => void;
+  readonly onConnectWorker: () => void;
 }
 
-export type InvestigationActionsProps = Omit<InvestigationIntents, "onCancelRun"> & {
+export type InvestigationActionsProps = Omit<InvestigationIntents, "onCancelRun" | "onConnectWorker"> & {
   readonly lens: Lens;
   readonly ready: boolean;
   readonly busy: boolean;
@@ -37,37 +38,35 @@ export function InvestigationActions({
   onRunNow,
 }: InvestigationActionsProps) {
   return (
-    <div className="flex flex-wrap gap-2">
-      <DropdownMenu>
-        <DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="Investigation actions" />}>
-          <MoreHorizontal className="size-4" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-48">
-          <DropdownMenuItem onClick={onEdit}>
-            <Settings2 />
-            Edit investigation
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="Investigation actions" />}>
+        <MoreHorizontal className="size-4" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        <DropdownMenuItem disabled={busy || hasActiveJob(lens.jobs) || !ready} onClick={onRunNow}>
+          <Play />
+          Run now
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={onEdit}>
+          <Settings2 />
+          Edit investigation
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!ready} onClick={onDuplicate}>
+          <Copy />
+          Duplicate
+        </DropdownMenuItem>
+        {lens.settings.enabled ? (
+          <DropdownMenuItem disabled={busy} onClick={onPause}>
+            <Pause />
+            Pause monitoring
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!ready} onClick={onDuplicate}>
-            <Copy />
-            Duplicate
+        ) : (
+          <DropdownMenuItem disabled={!ready || busy} onClick={onEnableMonitoring}>
+            <Play />
+            Enable monitoring
           </DropdownMenuItem>
-          {lens.settings.enabled ? (
-            <DropdownMenuItem disabled={busy} onClick={onPause}>
-              <Pause />
-              Pause monitoring
-            </DropdownMenuItem>
-          ) : (
-            <DropdownMenuItem disabled={!ready || busy} onClick={onEnableMonitoring}>
-              <Play />
-              Enable monitoring
-            </DropdownMenuItem>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <Button disabled={busy || hasActiveJob(lens.jobs) || !ready} onClick={onRunNow}>
-        <Play className="size-3" />
-        Run now
-      </Button>
-    </div>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

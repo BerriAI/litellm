@@ -53,7 +53,8 @@ describe("InvestigationActions", () => {
   it("reports each menu choice as an intent without touching the API", async () => {
     const user = userEvent.setup();
     const intents = renderActions();
-    await user.click(screen.getByRole("button", { name: "Run now" }));
+    await user.click(screen.getByRole("button", { name: "Investigation actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Run now" }));
     expect(intents.onRunNow).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Investigation actions" }));
     await user.click(await screen.findByRole("menuitem", { name: "Pause monitoring" }));
@@ -77,7 +78,7 @@ describe("InvestigationActions", () => {
     expect(intents.onPause).not.toHaveBeenCalled();
   });
 
-  it("blocks a second run while one is queued or running", () => {
+  it("blocks a second run while one is queued or running", async () => {
     const job = {
       id: "job",
       status: "queued" as const,
@@ -95,7 +96,9 @@ describe("InvestigationActions", () => {
       steps: [],
       findings: [],
     };
+    const user = userEvent.setup();
     renderActions({ lens: { ...lens, jobs: [job] } });
-    expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Investigation actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Run now" })).toHaveAttribute("aria-disabled", "true");
   });
 });
