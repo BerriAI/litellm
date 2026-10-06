@@ -1758,7 +1758,7 @@ def sign_aws_json_post(
         from botocore.auth import SigV4Auth
         from botocore.awsrequest import AWSRequest
     except ImportError:
-        raise ImportError(f"Missing boto3 to call {service_name}. Run pip install 'litellm[aws]'.")
+        raise ImportError(f"Missing boto3 to call {service_name}. Run pip install '{get_distribution_name()}[aws]'.")
 
     aws_request: Final = AWSRequest(method="POST", url=url, data=body, headers=headers)
     SigV4Auth(get_credentials(), service_name, aws_region_name).add_auth(aws_request)
