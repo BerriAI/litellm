@@ -13,16 +13,6 @@ on:
           have its path existence-checked like any other token.
         required: true
         type: string
-      unit-flag:
-        description: >-
-          Codecov flag of the `.circleci/tests.yml` job that now owns part of
-          this shard. The shard also runs the files
-          `.circleci/scripts/unit_selection.sh` lists for the flag, on every
-          event, because the CircleCI pipeline is manual-only while the tests
-          migrate.
-        required: false
-        type: string
-        default: ""
       workers:
         description: "Number of pytest-xdist workers"
         required: false
@@ -79,12 +69,11 @@ on:
         description: "Unique name for the coverage artifact (must be unique per run)"
         required: true
         type: string
-      legacy-mcp-peer:
-        description: "Install the isolated SDK1 peer for MCP compatibility tests"
+      rust-bridge-artifact:
+        description: "Prebuilt editable Rust bridge artifact"
         required: false
-        type: boolean
-        default: false
-
+        type: string
+        default: ""
 permissions:
   contents: read
 
@@ -134,25 +123,29 @@ jobs:
         timeout-minutes: 5
         uses: ./.github/actions/cache-uv-downloads
 
-      - name: Cache the Rust build
+      - name: Set up the Rust build
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: ./.github/actions/cache-cargo-build
+        uses: ./.github/actions/rust-bridge
+        with:
+          artifact: ${{ inputs.rust-bridge-artifact }}
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 8
         env:
-          LEGACY_MCP_PEER: ${{ inputs.legacy-mcp-peer }}
+          RUST_BRIDGE_ARTIFACT: ${{ inputs.rust-bridge-artifact }}
         run: |
           diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml
-          uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
-          if [ "$LEGACY_MCP_PEER" = "true" ]; then
-            uv venv --python "${UV_PYTHON}" .venv-mcp-peer
-            uv pip install --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
-            echo "MCP_TEST_PEER_PYTHON=$GITHUB_WORKSPACE/.venv-mcp-peer/bin/python" >> "$GITHUB_ENV"
+          if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime
+          else
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --no-install-project
+            uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
+            cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
+            uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
           fi
+          uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
@@ -171,7 +164,6 @@ jobs:
         timeout-minutes: ${{ inputs.timeout-minutes }}
         env:
           TEST_PATH: ${{ inputs.test-path }}
-          UNIT_FLAG: ${{ inputs.unit-flag }}
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
@@ -181,9 +173,6 @@ jobs:
         run: |
           echo "has-coverage=false" >> "$GITHUB_OUTPUT"
           selection="${TEST_PATH}"
-          if [ -n "${UNIT_FLAG}" ]; then
-            selection="${TEST_PATH} $(bash .circleci/scripts/unit_selection.sh "${UNIT_FLAG}" | tr '\n' ' ')"
-          fi
           if [ -z "${selection// /}" ]; then
             echo "shard selection is empty; nothing to run"
             exit 0

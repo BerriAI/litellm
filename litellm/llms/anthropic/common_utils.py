@@ -3,6 +3,7 @@ This file contains common utils for anthropic calls.
 """
 
 import copy
+import json
 import re
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
@@ -38,7 +39,6 @@ from litellm.llms.anthropic.wif import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.proxy._types import SpecialHeaders
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
@@ -52,6 +52,7 @@ from litellm.types.llms.anthropic import (
     AnthropicThinkingParam,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.proxy.auth.special_headers import SpecialHeaders
 from litellm.types.proxy.model_listing import ModelInfoResponse
 from litellm.types.utils import LlmProviders
 
@@ -81,6 +82,23 @@ ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = MappingProxyType(
         "timeout_error": 504,
     }
 )
+
+
+def anthropic_error_frame_exception(error_type: str, message: str, status_code: int, model: str) -> Exception:
+    """The exception the pre-stream mapping raises for an HTTP answer carrying this frame's body and status, so a
+    retry policy's per-class budget governs an `event: error` frame the way it governs the same error before the
+    stream opened: an overloaded frame is the InternalServerError a real 529 answer is, whatever status the frame
+    map gives it."""
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+
+    frame_body: Final = json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
+    frame_error: Final = AnthropicError(status_code=status_code, message=frame_body)
+    try:
+        exception_type(model=model, original_exception=frame_error, custom_llm_provider="anthropic")
+    except Exception as raised:  # noqa: BLE001  # exception_type hands the mapped error back by raising it
+        return raised
+    return frame_error
+
 
 _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")

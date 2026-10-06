@@ -326,7 +326,7 @@ class OCRPricing(TypedDict, total=False):
     annotation_cost_per_page: ReadOnly[float | None]
 
 
-_WALL_CLOCK_PRICED_MODES: Final = frozenset({"chat", "completion", "embedding", "responses"})
+_WALL_CLOCK_PRICED_MODES: Final = frozenset({"audio_transcription", "chat", "completion", "embedding", "responses"})
 
 
 def _has_token_or_tiered_pricing(model_info: ModelInfoBase) -> bool:
@@ -346,6 +346,7 @@ def _per_second_pricing_cost(
     model: str,
     custom_llm_provider: str | None,
     response_time_ms: float | None,
+    audio_seconds: float = 0.0,
 ) -> tuple[float, float] | None:
     try:
         model_info: Final = _cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
@@ -366,7 +367,11 @@ def _per_second_pricing_cost(
     if resolved_cost_per_second is None:
         return None
 
-    seconds: Final = (response_time_ms or 0.0) / 1000
+    seconds: Final = (
+        audio_seconds
+        if audio_seconds > 0 and model_info.get("mode") == "audio_transcription"
+        else (response_time_ms or 0.0) / 1000
+    )
     verbose_logger.debug(
         "For model=%s - cost_per_second: %s; response time: %s",
         model,
@@ -667,6 +672,7 @@ def cost_per_token(
             model=model,
             custom_llm_provider=custom_llm_provider,
             response_time_ms=response_time_ms,
+            audio_seconds=audio_transcription_file_duration,
         )
     ) is not None:
         return per_second_cost
@@ -1569,6 +1575,7 @@ def completion_cost(
                         optional_params=optional_params,
                         call_type=call_type,
                         model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
+                        vertex_location=vertex_location,
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###

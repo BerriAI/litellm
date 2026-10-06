@@ -6,7 +6,7 @@ import traceback
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -18,6 +18,8 @@ from litellm.secret_managers.get_azure_ad_token_provider import (
 )
 
 oidc_cache: Final = DualCache()
+
+_PARSED_LITERAL: Final = TypeAdapter(object)
 
 
 _OIDC_TOKEN_EXPIRY_MARGIN_SECONDS: Final = 60
@@ -348,7 +350,7 @@ def get_secret(
                 secret = os.getenv(secret_name)
             try:
                 if isinstance(secret, str):
-                    secret_value_as_bool = ast.literal_eval(secret)
+                    secret_value_as_bool = _PARSED_LITERAL.validate_python(ast.literal_eval(secret))
                     if isinstance(secret_value_as_bool, bool):
                         return secret_value_as_bool
                     else:

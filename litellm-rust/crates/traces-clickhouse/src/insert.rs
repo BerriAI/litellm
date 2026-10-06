@@ -239,8 +239,7 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    use super::Error;
-    use super::{shared_rows, write_rows};
+    use super::{Error, shared_rows, write_rows};
 
     #[rstest]
     fn encoded_limit_counts_utf8_bytes_across_rows() {
