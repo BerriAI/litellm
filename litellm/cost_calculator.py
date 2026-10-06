@@ -100,7 +100,7 @@ from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_toke
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import DecisionsResponse, DecisionsUsage
-from litellm.types.llms.base import CachedTokensDetails
+from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
 from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
@@ -2843,12 +2843,12 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
 _RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete"})
 
 
-class _ResponsesWsEventResponse(BaseModel):
+class _ResponsesWsEventResponse(LiteLLMBaseModel):
     usage: Mapping[str, object] | None = None
     service_tier: str | None = None
 
 
-class _ResponsesWsEvent(BaseModel):
+class _ResponsesWsEvent(LiteLLMBaseModel):
     type: str = ""
     response: _ResponsesWsEventResponse | None = None
 

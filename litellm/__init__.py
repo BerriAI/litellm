@@ -1549,20 +1549,20 @@ from .passthrough import allm_passthrough_route, llm_passthrough_route
 from .google_genai import agenerate_content
 
 ### GLOBAL CONFIG ###
-global_bitbucket_config: Optional[Dict[str, Any]] = None
+global_bitbucket_config: Optional[Mapping[str, object]] = None
 
 
-def set_global_bitbucket_config(config: Dict[str, Any]) -> None:
+def set_global_bitbucket_config(config: Mapping[str, object]) -> None:
     """Set global BitBucket configuration for prompt management."""
     global global_bitbucket_config
     global_bitbucket_config = config
 
 
 ### GLOBAL CONFIG ###
-global_gitlab_config: Optional[Dict[str, Any]] = None
+global_gitlab_config: Optional[Mapping[str, object]] = None
 
 
-def set_global_gitlab_config(config: Dict[str, Any]) -> None:
+def set_global_gitlab_config(config: Mapping[str, object]) -> None:
     """Set global BitBucket configuration for prompt management."""
     global global_gitlab_config
     global_gitlab_config = config
@@ -2217,12 +2217,13 @@ if TYPE_CHECKING:
         DefaultTeamSSOParams,
         LiteLLM_UpperboundKeyGenerateParams,
     )
+    from litellm.utils import ModelResponseListIterator as _ModelResponseListIterator
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
     completion_cost: Callable[..., float]
-    response_cost_calculator: Any
-    modify_integration: Any
+    response_cost_calculator: Callable[..., float]
+    modify_integration: Callable[..., None]
 
     # Utils functions - type stubs for truly lazy loaded functions only
     # (functions NOT imported via "from .main import *")
@@ -2258,7 +2259,7 @@ if TYPE_CHECKING:
     remove_index_from_tool_calls: Callable[..., None]
 
     # Response types - truly lazy loaded only (not in main.py or elsewhere)
-    ModelResponseListIterator: Type[Any]
+    ModelResponseListIterator: Type[_ModelResponseListIterator]
 
     # HTTP handler singletons (created lazily via __getattr__ at runtime)
     module_level_aclient: AsyncHTTPHandler

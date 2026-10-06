@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import ReadOnly, TypedDict
 
@@ -35,6 +35,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_set_request_parsed_body,
 )
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
     ResponsesAPIOptionalRequestParams,
@@ -1396,7 +1397,7 @@ def _extract_model_from_first_ws_event(first_event: object) -> str | None:
     return (nested.get("model") if isinstance(nested, dict) else None) or first_event.get("model")
 
 
-class _ResponseCreateRoutingHints(BaseModel):
+class _ResponseCreateRoutingHints(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     input: str | Sequence[object] | None = None

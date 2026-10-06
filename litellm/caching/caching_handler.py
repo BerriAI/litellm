@@ -21,7 +21,7 @@ import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 import litellm
 from litellm._internal_context import post_response_phase
@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.logging_utils import (
 )
 from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, CachedEmbedding
 from litellm.types.integrations.custom_logger import converted_stream_requested
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
@@ -68,7 +69,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 
-class CachingHandlerResponse(BaseModel):
+class CachingHandlerResponse(LiteLLMBaseModel):
     """
     This is the response object for the caching handler. We need to separate embedding cached responses and (completion / text_completion / transcription) cached responses
 
@@ -172,7 +173,7 @@ def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
     return request_kwargs.get("cache_key", None)
 
 
-class _CachedEmbeddingRecord(BaseModel):
+class _CachedEmbeddingRecord(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     embedding: list[float] | str | None

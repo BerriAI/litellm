@@ -147,7 +147,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     normalize_route_for_root_path,
 )
-from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.repositories.table_repositories import JWTKeyMappingRepository, TeamMembershipRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
@@ -1038,7 +1038,7 @@ async def _auto_register_jwt_mapping(
 
     try:
         async with db_span("auto_register_jwt_mapping", "LiteLLM_JWTKeyMapping"):
-            await prisma_client.db.litellm_jwtkeymapping.create(
+            await JWTKeyMappingRepository(prisma_client).table.create(
                 data={
                     "jwt_issuer": jwt_issuer or "",
                     "jwt_claim_name": virtual_key_claim_field,
@@ -2387,7 +2387,7 @@ async def validate_resolved_virtual_key(  # noqa: C901  # Preserve ordering of e
                         include={"litellm_budget_table": True},
                     )
                     if _db_member is not None:
-                        team_member_info = LiteLLM_TeamMembership(**_db_member.model_dump())
+                        team_member_info = LiteLLM_TeamMembership.model_validate(_db_member.model_dump())
                         await user_api_key_cache.async_set_cache(
                             key=_cache_key,
                             value=team_member_info,

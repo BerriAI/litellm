@@ -15,7 +15,7 @@ import click
 import httpx
 from click.core import ParameterSource
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
@@ -26,6 +26,7 @@ from litellm.proxy.db.pgbouncer import (
     start_in_container_pgbouncer,
 )
 from litellm.proxy.db.query_engine_reaper import start_query_engine_reaper
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -97,7 +98,7 @@ def _build_db_connection_url_params(
     return params
 
 
-class DatabaseTimeoutSettings(BaseModel):
+class DatabaseTimeoutSettings(LiteLLMBaseModel):
     """The `general_settings` keys that bound how long a statement may hold locks.
 
     Validated at the boundary so a mistyped value fails at startup with a clear

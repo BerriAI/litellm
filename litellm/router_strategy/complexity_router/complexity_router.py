@@ -65,6 +65,7 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
 )
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -136,13 +137,13 @@ else:
     SemanticRouter = Any
 
 
-class TierClassification(BaseModel):
+class TierClassification(LiteLLMBaseModel):
     """Structured response schema for the LLM-based complexity classifier."""
 
     tier: Literal["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
 
 
-class _LabeledTierClassification(BaseModel):
+class _LabeledTierClassification(LiteLLMBaseModel):
     """Parses the classifier's reply when the wire carries operator-chosen tier strings."""
 
     tier: str

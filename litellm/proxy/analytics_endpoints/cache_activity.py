@@ -4,9 +4,10 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Final, Protocol
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
 from litellm.proxy._types import LiteLLMRoutes
+from litellm.types.llms.base import LiteLLMBaseModel
 
 UNKNOWN_CALL_TYPE: Final = "Unknown"
 INFO_ROUTES_JSON: Final = json.dumps(LiteLLMRoutes.info_routes.value)
@@ -25,7 +26,7 @@ class _SupportsRawQueryDb(Protocol):
     def db(self) -> _SupportsQueryRaw: ...
 
 
-class CacheActivityGroup(BaseModel):
+class CacheActivityGroup(LiteLLMBaseModel):
     call_type: str
     api_requests: int
     cache_hits: int
@@ -34,7 +35,7 @@ class CacheActivityGroup(BaseModel):
     generated_completion_tokens: int
 
 
-class CacheActivityTotals(BaseModel):
+class CacheActivityTotals(LiteLLMBaseModel):
     api_requests: int
     cache_hits: int
     failed_requests: int
@@ -42,19 +43,19 @@ class CacheActivityTotals(BaseModel):
     cache_hit_ratio: float
 
 
-class CacheActivityFilterOptions(BaseModel):
+class CacheActivityFilterOptions(LiteLLMBaseModel):
     key_aliases: list[str]
     models: list[str]
 
 
-class CacheActivityErrorBucket(BaseModel):
+class CacheActivityErrorBucket(LiteLLMBaseModel):
     call_type: str
     error_code: str
     error_class: str
     count: int
 
 
-class CacheActivityResponse(BaseModel):
+class CacheActivityResponse(LiteLLMBaseModel):
     groups: list[CacheActivityGroup]
     totals: CacheActivityTotals
     filter_options: CacheActivityFilterOptions
@@ -131,11 +132,11 @@ MODEL_OPTIONS_SQL: Final = """
 """
 
 
-class _KeyAliasRow(BaseModel):
+class _KeyAliasRow(LiteLLMBaseModel):
     key_alias: str
 
 
-class _ModelRow(BaseModel):
+class _ModelRow(LiteLLMBaseModel):
     model: str
 
 

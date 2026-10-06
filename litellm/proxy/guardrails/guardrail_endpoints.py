@@ -65,6 +65,7 @@ from litellm.types.guardrails import (
     SupportedGuardrailIntegrations,
     ToolPermissionGuardrailConfigModel,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.guardrails.guardrail_hooks.hide_secrets import (
     HideSecretsGuardrailConfigModel,
 )
@@ -344,7 +345,7 @@ async def list_guardrails_v2(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class CreateGuardrailRequest(BaseModel):
+class CreateGuardrailRequest(LiteLLMBaseModel):
     guardrail: Guardrail
 
 
@@ -455,7 +456,7 @@ async def create_guardrail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-class UpdateGuardrailRequest(BaseModel):
+class UpdateGuardrailRequest(LiteLLMBaseModel):
     guardrail: Guardrail
 
 
@@ -664,7 +665,7 @@ async def delete_guardrail(
 GENERIC_GUARDRAIL_API: Final = "generic_guardrail_api"
 
 
-class RegisterGuardrailRequest(BaseModel):
+class RegisterGuardrailRequest(LiteLLMBaseModel):
     """Request body for POST /guardrails/register. Follows Generic Guardrail API config."""
 
     guardrail_name: str
@@ -676,21 +677,21 @@ class RegisterGuardrailRequest(BaseModel):
         return dict(self.litellm_params)
 
 
-class RegisterGuardrailResponse(BaseModel):
+class RegisterGuardrailResponse(LiteLLMBaseModel):
     guardrail_id: str
     guardrail_name: str
     status: str
     submitted_at: datetime | None = None
 
 
-class GuardrailSubmissionSummary(BaseModel):
+class GuardrailSubmissionSummary(LiteLLMBaseModel):
     total: int
     pending_review: int
     active: int
     rejected: int
 
 
-class GuardrailSubmissionItem(BaseModel):
+class GuardrailSubmissionItem(LiteLLMBaseModel):
     guardrail_id: str
     guardrail_name: str
     status: str  # pending_review | active | rejected
@@ -708,7 +709,7 @@ class GuardrailSubmissionItem(BaseModel):
     updated_at: datetime | None = None
 
 
-class ListGuardrailSubmissionsResponse(BaseModel):
+class ListGuardrailSubmissionsResponse(LiteLLMBaseModel):
     submissions: list[GuardrailSubmissionItem]
     summary: GuardrailSubmissionSummary
 
@@ -2032,7 +2033,7 @@ async def get_provider_specific_params():
     return provider_params
 
 
-class TestCustomCodeGuardrailRequest(BaseModel):
+class TestCustomCodeGuardrailRequest(LiteLLMBaseModel):
     """Request model for testing custom code guardrails."""
 
     custom_code: str
@@ -2048,7 +2049,7 @@ class TestCustomCodeGuardrailRequest(BaseModel):
     """Optional mock request_data (model, user_id, team_id, metadata, etc.)."""
 
 
-class TestCustomCodeGuardrailResponse(BaseModel):
+class TestCustomCodeGuardrailResponse(LiteLLMBaseModel):
     """Response model for testing custom code guardrails."""
 
     success: bool
