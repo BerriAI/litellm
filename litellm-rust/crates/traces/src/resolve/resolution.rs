@@ -27,7 +27,10 @@ pub(super) struct Resolution<'a> {
     types: HashMap<&'a str, ObservationType>,
     tool_failures: HashMap<&'a str, &'a TraceSpansRow>,
     pub(super) model_calls: Vec<usize>,
+    call_matches: HashMap<usize, CallMatch<'a>>,
 }
+
+pub(super) type CallMatch<'a> = (Option<Requests<'a>>, SpendMatch);
 
 impl<'a> Resolution<'a> {
     pub(super) fn new(rows: &'a [TraceSpansRow], spend: &'a [SpendRow]) -> Self {
@@ -36,7 +39,7 @@ impl<'a> Resolution<'a> {
         let types: HashMap<&str, ObservationType> = (0..rows.len())
             .map(|index| (graph.id(index), resolved_type(&graph, index, named_agents)))
             .collect();
-        let model_calls = (0..rows.len())
+        let model_calls: Vec<usize> = (0..rows.len())
             .filter(|index| {
                 types[graph.id(*index)] == ObservationType::Llm
                     && !graph
@@ -46,7 +49,7 @@ impl<'a> Resolution<'a> {
             })
             .collect();
         let team_id = rows.first().map_or("", |row| row.team_id.as_str());
-        Self {
+        let resolution = Self {
             graph,
             spend: spend.iter().filter(|row| row.team_id == team_id).collect(),
             types,
@@ -61,6 +64,16 @@ impl<'a> Resolution<'a> {
                 .map(|row| (row.tool_call_id.as_str(), row))
                 .collect(),
             model_calls,
+            call_matches: HashMap::new(),
+        };
+        let call_matches = resolution
+            .model_calls
+            .iter()
+            .map(|call| (*call, resolution.match_call(*call)))
+            .collect();
+        Self {
+            call_matches,
+            ..resolution
         }
     }
 
@@ -114,16 +127,19 @@ impl<'a> Resolution<'a> {
         spend::match_ids(&spend::call_ids(self.row(index)), &self.spend).0
     }
 
-    pub(super) fn call_requests(&self, call: usize) -> Option<Requests<'a>> {
-        self.call_match(call).0
+    pub(super) fn call_match(&self, index: usize) -> Option<&CallMatch<'a>> {
+        self.call_matches.get(&index)
     }
 
-    pub(super) fn call_match(&self, call: usize) -> (Option<Requests<'a>>, SpendMatch) {
+    pub(super) fn call_requests(&self, call: usize) -> Option<Requests<'a>> {
+        self.call_match(call)
+            .and_then(|(requests, _)| requests.clone())
+    }
+
+    fn match_call(&self, call: usize) -> CallMatch<'a> {
         spend::match_ids(&self.call_ids(call), &self.spend)
     }
 
-    /// A model call is priced by every id LiteLLM assigned that is recorded on it, on the LLM
-    /// wrappers around only it, and on the spans beneath it.
     fn call_ids(&self, call: usize) -> BTreeSet<CallKey> {
         let wrappers = self.graph.ancestors(call).into_iter().filter(|ancestor| {
             self.kind(*ancestor) == ObservationType::Llm
