@@ -2,7 +2,7 @@ import json
 import os
 import time
 from datetime import datetime
-from typing import Any, Final
+from typing import Any, Final, TypeVar
 
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -24,18 +24,26 @@ DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_
 DEFAULT_GITHUB_API_KEY_URL: Final = "https://api.github.com/copilot_internal/v2/token"
 
 
+class CopilotCachedKey(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="ignore", hide_input_in_errors=True)
+
+    token: str
+    expires_at: float
+
+
 class CopilotEndpoints(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="ignore", hide_input_in_errors=True)
 
     api: str | None = None
 
 
-class CopilotApiKeyFile(BaseModel):
+class CopilotCachedEndpoints(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="ignore", hide_input_in_errors=True)
 
-    token: str
-    expires_at: float
     endpoints: CopilotEndpoints | None = None
+
+
+ApiKeyFileView = TypeVar("ApiKeyFileView", CopilotCachedKey, CopilotCachedEndpoints)
 
 
 class Authenticator:
@@ -100,7 +108,7 @@ class Authenticator:
         Raises:
             GetAPIKeyError: If unable to obtain an API key.
         """
-        cached: Final = self._read_api_key_file()
+        cached: Final = self._read_api_key_file(CopilotCachedKey)
         if cached is not None and cached.expires_at > datetime.now().timestamp():
             return cached.token
         if cached is not None:
@@ -137,12 +145,12 @@ class Authenticator:
         Returns:
             Optional[str]: The GitHub Copilot API endpoint, or None if not found.
         """
-        cached: Final = self._read_api_key_file()
+        cached: Final = self._read_api_key_file(CopilotCachedEndpoints)
         if cached is None or cached.endpoints is None:
             return None
         return cached.endpoints.api
 
-    def _read_api_key_file(self) -> CopilotApiKeyFile | None:
+    def _read_api_key_file(self, view: type[ApiKeyFileView]) -> ApiKeyFileView | None:
         try:
             with open(self.api_key_file, "r") as f:
                 raw: Final = f.read()
@@ -150,7 +158,7 @@ class Authenticator:
             verbose_logger.warning("No API key file found or error opening file")
             return None
         try:
-            return CopilotApiKeyFile.model_validate_json(raw)
+            return view.model_validate_json(raw)
         except ValidationError as e:
             verbose_logger.warning("Ignoring %s, not a Copilot API key file: %s", self.api_key_file, e)
             return None
