@@ -4,7 +4,7 @@ import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 from openai.types import Batch
 
@@ -13,7 +13,9 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.internal_call_metadata import billing_kwargs
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -500,15 +502,17 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
         """
         verbose_proxy_logger.debug("in RouterBudgetLimiting.async_log_success_event")
-        standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
+        financial_kwargs: Final = billing_kwargs(kwargs)
+        standard_logging_payload: Final = cast(  # cast-ok: identity projection preserves the existing logging payload
+            StandardLoggingPayload | None, financial_kwargs.get("standard_logging_object")
+        )
         if standard_logging_payload is None:
             verbose_proxy_logger.debug(
                 "Skipping _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event: standard_logging_payload is None"
             )
             return
 
-        _litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
-        _metadata: Final[dict] = _litellm_params.get("metadata", {}) or {}
+        _metadata: Final = get_litellm_metadata_from_kwargs(dict(financial_kwargs))
         payload_metadata: Final = standard_logging_payload.get("metadata") or {}
 
         # Use model_group (the user-facing model alias, e.g. "gpt-4o") when
@@ -518,7 +522,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         # the deployment-level "model" field preserves behaviour for non-proxy
         # or non-router deployments where model_group is None.
         model: Final = standard_logging_payload.get("model_group") or standard_logging_payload.get("model")
-        if model is None:
+        if not model:
             return
 
         response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)

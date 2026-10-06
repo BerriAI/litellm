@@ -972,6 +972,40 @@ def request_skips_budget_checks(route: str, model: str | list[str] | None, llm_r
     return route_skips_budget_checks(route=route) or _is_model_cost_zero(model=model, llm_router=llm_router)
 
 
+async def check_user_budget(user_object: LiteLLM_UserTable | None, proxy_logging_obj: "ProxyLogging") -> None:
+    if user_object is None or user_object.max_budget is None:
+        return
+    from litellm.proxy.proxy_server import get_current_spend
+
+    user_budget: Final = user_object.max_budget
+    user_spend: Final = await get_current_spend(
+        counter_key=f"spend:user:{user_object.user_id}",
+        fallback_spend=user_object.spend or 0.0,
+        max_budget=user_budget,
+    )
+    call_info: Final = CallInfo(
+        spend=user_spend,
+        max_budget=user_budget,
+        user_id=user_object.user_id,
+        user_email=user_object.user_email,
+        event_group=Litellm_EntityType.USER,
+    )
+    asyncio.create_task(
+        proxy_logging_obj.budget_alerts(
+            type="user_budget",
+            user_info=call_info,
+        )
+    )
+    if math.isfinite(user_budget) and user_spend >= user_budget:
+        raise litellm.BudgetExceededError(
+            current_cost=user_spend,
+            max_budget=user_budget,
+            message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
+            entity_type=Litellm_EntityType.USER.value,
+            entity_id=user_object.user_id,
+        )
+
+
 async def common_checks(
     request_body: dict,
     team_object: LiteLLM_TeamTable | None,
@@ -1211,42 +1245,10 @@ async def common_checks(
             )
 
         async def _user_max_budget_check() -> None:
-            # 4.1 personal budget
-            if user_object is None or user_object.max_budget is None:
-                return
             is_team_key: Final = team_object is not None and team_object.team_id is not None
             if is_team_key and general_settings.get("apply_user_budget_to_team_keys") is not True:
                 return
-
-            from litellm.proxy.proxy_server import get_current_spend
-
-            user_budget: Final = user_object.max_budget
-            user_spend: Final = await get_current_spend(
-                counter_key=f"spend:user:{user_object.user_id}",
-                fallback_spend=user_object.spend or 0.0,
-                max_budget=user_budget,
-            )
-            call_info: Final = CallInfo(
-                spend=user_spend,
-                max_budget=user_budget,
-                user_id=user_object.user_id,
-                user_email=user_object.user_email,
-                event_group=Litellm_EntityType.USER,
-            )
-            asyncio.create_task(
-                proxy_logging_obj.budget_alerts(
-                    type="user_budget",
-                    user_info=call_info,
-                )
-            )
-            if math.isfinite(user_budget) and user_spend >= user_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=user_spend,
-                    max_budget=user_budget,
-                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
-                    entity_type=Litellm_EntityType.USER.value,
-                    entity_id=user_object.user_id,
-                )
+            await check_user_budget(user_object, proxy_logging_obj)
 
         # Each scope reads a distinct counter key with no cross-scope ordering
         # dependency, so the per-scope Redis-first reads run concurrently instead

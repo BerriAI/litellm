@@ -111,6 +111,11 @@ const jobHeadline = (job: ShadowEvalJob): React.ReactNode =>
 
 const isActive = (job: ShadowEvalJob): boolean => job.status === "running";
 
+const jobOwnerLabel = (job: ShadowEvalJob): string => {
+  if (isActive(job)) return job.created_by ? `Billing owner: ${job.created_by}` : "Billing owner unavailable";
+  return job.created_by ? `Started by ${job.created_by}` : "Creator unavailable";
+};
+
 const endsIn = (endsAt: string | null | undefined): string | null => {
   if (!endsAt) return null;
   const remainingMs = new Date(endsAt).getTime() - Date.now();
@@ -390,6 +395,7 @@ const JobResults: React.FC<{
           <StatusBadge status={job.status} />
           <div>
             <p className="text-sm font-medium text-foreground">{jobHeadline(job)}</p>
+            <p className="text-xs text-muted-foreground">{jobOwnerLabel(job)}</p>
             <p className="text-xs text-muted-foreground">
               {(job.judged_count ?? 0).toLocaleString()} turns judged · {(job.error_count ?? 0).toLocaleString()}{" "}
               errored · {usd(totalSpend(job))}
@@ -436,6 +442,7 @@ const PreviousJob: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
           <StatusBadge status={shown.status} />
           <div>
             <p className="text-sm font-medium text-foreground">{jobHeadline(shown)}</p>
+            <p className="text-xs text-muted-foreground">{jobOwnerLabel(shown)}</p>
             <p className="text-xs text-muted-foreground">
               {shown.judged_count != null &&
                 `${shown.judged_count.toLocaleString()} judged · ${(shown.error_count ?? 0).toLocaleString()} errored · ${usd(totalSpend(shown))} eval spend · `}

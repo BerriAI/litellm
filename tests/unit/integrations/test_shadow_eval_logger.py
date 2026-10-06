@@ -2,7 +2,7 @@
 the detached pipeline's single attempt-row write, and the cache-first job lookup."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
@@ -27,6 +27,7 @@ from litellm.integrations.shadow_eval_logger import (
     _unmask_preference,
     request_guardrail_fingerprint,
 )
+from litellm.models.user import LiteLLM_UserTable
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
     SHADOW_EVAL_JUDGE_CALL_ORIGIN,
@@ -49,6 +50,7 @@ def test_guardrail_fingerprint_excludes_auth_metadata() -> None:
 def _job(**overrides) -> ActiveShadowEvalJob:
     defaults = dict(
         id="job-1",
+        created_by="evaluation-admin",
         router_name="my-router",
         shadow_percentage=100.0,
         judge_model="judge-model",
@@ -81,6 +83,7 @@ def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash
     record = MagicMock()
     for field, value in dict(
         id=job.id,
+        created_by=job.created_by,
         target_type=target_type,
         target_id=target_id,
         router_name=job.router_name,
@@ -230,7 +233,14 @@ def _spend_counter(store=None):
     return counter, read, write
 
 
-def _logger(router=None, prisma=None, jobs=(), counter_store=None, jobs_by_target=None) -> ShadowEvalLogger:
+async def _test_billing_user(user_id: str, _prisma: object) -> LiteLLM_UserTable:
+    return LiteLLM_UserTable(user_id=user_id)
+
+
+def _logger(
+    router=None, prisma=None, jobs=(), counter_store=None, jobs_by_target=None,
+    billing_user_reader: Callable[[str, object], Awaitable[LiteLLM_UserTable | None]] = _test_billing_user,
+) -> ShadowEvalLogger:
     cache = InMemoryCache(max_size_in_memory=4, default_ttl=60)
     counter, read, write = _spend_counter(counter_store)
     funnel_events = []
@@ -238,6 +248,7 @@ def _logger(router=None, prisma=None, jobs=(), counter_store=None, jobs_by_targe
         router_provider=lambda: router,
         prisma_provider=lambda: prisma,
         jobs_cache=cache,
+        billing_user_reader=billing_user_reader,
         job_spend_reader=read,
         job_spend_writer=write,
         funnel_recorder=lambda job_id, stage: funnel_events.append((job_id, stage)),
@@ -1492,6 +1503,42 @@ class TestActiveJobsCache:
 
 @pytest.mark.asyncio
 class TestShadowPipeline:
+    @pytest.mark.parametrize("owner", [None, "", "deleted-admin", "unreadable-admin"])
+    async def test_unavailable_owner_withholds_evaluation(self, owner: str | None) -> None:
+        async def read_owner(user_id: str, prisma: object) -> LiteLLM_UserTable | None:
+            if user_id == "unreadable-admin":
+                raise RuntimeError("database unavailable")
+            return None
+
+        router: Final = _router()
+        logger: Final = _logger(
+            router=router, prisma=_prisma(), jobs=(_job(created_by=owner),), billing_user_reader=read_owner
+        )
+        await logger.async_log_success_event(_success_kwargs(), RESPONSE, None, None)
+        await _drain(logger)
+
+        router.acompletion.assert_not_called()
+        assert logger._test_funnel == [("job-1", "withheld")]
+
+    async def test_creator_budget_configuration_refreshes_per_sample(self) -> None:
+        reader: Final = AsyncMock(side_effect=[
+            LiteLLM_UserTable(user_id="evaluation-admin", model_max_budget={"my-router": {"max_budget": 1, "budget_duration": "1h"}}),
+            LiteLLM_UserTable(user_id="evaluation-admin", model_max_budget={"my-router": {"max_budget": 2, "budget_duration": "1d"}}),
+        ])
+        router: Final = _router()
+        logger: Final = _logger(
+            router=router, prisma=_prisma(), jobs=(_job(),), billing_user_reader=reader
+        )
+        for request_id in ("first", "second"):
+            await logger.async_log_success_event(_success_kwargs(request_id=request_id), RESPONSE, None, None)
+            await _drain(logger)
+
+        assert reader.await_count == 2
+        assert [
+            call.kwargs["metadata"]["user_api_key_billing_model_max_budget"]["my-router"]["budget_duration"]
+            for call in router.acompletion.call_args_list
+        ] == ["1h", "1h", "1d", "1d"]
+
     async def test_no_prisma_means_no_provider_spend(self):
         router = _router()
         logger = _logger(router=router, prisma=None)
@@ -1995,6 +2042,7 @@ class TestShadowPipeline:
         for call in (shadow_call, judge_call):
             assert call["num_retries"] == 0
             assert call["fallbacks"] == []
+            assert call["metadata"]["user_api_key_billing_user_id"] == "evaluation-admin"
             assert call["metadata"]["user_api_key_hash"] == "key-hash"
             assert call["metadata"]["user_api_key_team_id"] == "team-1"
             assert "user_api_key_budget_reservation" not in call["metadata"]
@@ -2003,6 +2051,45 @@ class TestShadowPipeline:
         assert "routing_decision" not in judge_call["metadata"]
         assert shadow_call["temperature"] == 0.2
         assert judge_call["max_tokens"] == JUDGE_MAX_OUTPUT_TOKENS
+        assert "user_api_key_billing_user_id" not in parent_metadata
+
+
+@pytest.mark.asyncio
+async def test_creator_personal_budget_uses_authoritative_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.exceptions import BudgetExceededError
+    from litellm.integrations.shadow_eval_logger import _billing_user
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy import proxy_server
+
+    reader: Final = AsyncMock(return_value=LiteLLM_UserTable(user_id="evaluation-admin", max_budget=1))
+    spend: Final = AsyncMock(return_value=1.0)
+    monkeypatch.setattr(auth_checks, "get_user_object", reader)
+    monkeypatch.setattr(proxy_server, "get_current_spend", spend)
+    with pytest.raises(BudgetExceededError):
+        await _billing_user("evaluation-admin", _prisma())
+    assert reader.await_args.kwargs["check_db_only"] is True
+    assert reader.await_args.kwargs["user_id_upsert"] is False
+    assert spend.await_args.kwargs["counter_key"] == "spend:user:evaluation-admin"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+async def test_evaluation_enforces_payer_model_budget(monkeypatch: pytest.MonkeyPatch, bucket: str) -> None:
+    from litellm.caching.caching import DualCache
+    from litellm.exceptions import BudgetExceededError
+    from litellm.proxy import proxy_server
+    from litellm.proxy.hooks.model_max_budget_limiter import _PROXY_VirtualKeyModelMaxBudgetLimiter
+
+    limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(DualCache())
+    monkeypatch.setattr(proxy_server, "model_max_budget_limiter", limiter)
+    metadata: Final = {
+        "user_api_key_billing_user_id": "evaluation-admin",
+        "user_api_key_billing_model_max_budget": {"judge": {"max_budget": 0, "budget_duration": "1h"}},
+        "model_group": "judge",
+    }
+    with pytest.raises(BudgetExceededError):
+        await _logger().async_pre_call_deployment_hook({bucket: metadata, "model": "provider-model"}, None)
+    await _logger().async_pre_call_deployment_hook({"metadata": {"model_group": "judge"}}, None)
 
 
 def _reverse_job(**overrides) -> ActiveShadowEvalJob:

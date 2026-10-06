@@ -30,7 +30,11 @@ from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.tools import is_web_search_tool_responses
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs, independent_snapshot
-from litellm.litellm_core_utils.internal_call_metadata import sanitized_forwardable_call_metadata
+from litellm.litellm_core_utils.internal_call_metadata import (
+    BILLING_MODEL_MAX_BUDGET_METADATA_KEY,
+    BILLING_USER_ID_METADATA_KEY,
+    sanitized_forwardable_call_metadata,
+)
 from litellm.litellm_core_utils.llm_judge import (
     default_router_provider,
     extract_text_from_content,
@@ -39,10 +43,11 @@ from litellm.litellm_core_utils.llm_judge import (
 )
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.models.user import LiteLLM_UserTable
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import ShadowEvalDirection
-from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
+from litellm.types.utils import SHADOW_EVAL_JUDGE_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN, CallTypes
 
 if TYPE_CHECKING:
     from litellm.proxy.db.shadow_eval_funnel import ShadowEvalFunnelStage
@@ -661,6 +666,21 @@ async def _key_or_team_is_over_budget(metadata: Mapping[str, object]) -> bool:
     return False
 
 
+async def _billing_user(user_id: str, prisma: "PrismaClient") -> LiteLLM_UserTable | None:
+    from litellm.proxy.auth.auth_checks import check_user_budget, get_user_object
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    user: Final = await get_user_object(
+        user_id=user_id,
+        prisma_client=prisma,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+        check_db_only=True,
+    )
+    await check_user_budget(user, proxy_logging_obj)
+    return user
+
+
 def _forwarded_team_id(metadata: Mapping[str, object]) -> str | None:
     """The shadowed key's team, the identity the judge call already carries in its metadata
     and the router already selects deployments with. Read here too so the arm choice, which
@@ -741,6 +761,7 @@ class ActiveShadowEvalJob(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     id: str
+    created_by: str | None = None
     router_name: str
     router_names: tuple[str, ...] = ()
     models: frozenset[str] = frozenset()
@@ -834,10 +855,12 @@ class ShadowEvalLogger(CustomLogger):
         job_spend_reader: Callable[[str, float, float], Awaitable[float]] | None = None,
         job_spend_writer: Callable[[str, float], Awaitable[None]] | None = None,
         funnel_recorder: Callable[[str, "ShadowEvalFunnelStage"], None] | None = None,
+        billing_user_reader: Callable[[str, "PrismaClient"], Awaitable[LiteLLM_UserTable | None]] = _billing_user,
     ) -> None:
         """Providers are callables so the proxy's lazily-initialized globals are resolved
         at call time, not at logger construction. The spend reader and writer wrap the
         proxy's cross-pod spend counter; tests inject a plain in-memory pair."""
+        self._billing_user_reader: Final = billing_user_reader
         self._router_provider = router_provider or default_router_provider
         self._prisma_provider = prisma_provider or _default_prisma_provider
         self._jobs_cache = jobs_cache or _jobs_cache
@@ -848,6 +871,22 @@ class ShadowEvalLogger(CustomLogger):
         # Starts per job since the last cache fill, never decremented within a
         # generation; the refill absorbs written rows and resets.
         self._job_starts: dict[str, int] = {}  # mutable-ok: per-generation counter
+
+    async def async_pre_call_deployment_hook(self, kwargs: dict[str, object], call_type: CallTypes | None) -> None:
+        raw_metadata: Final = kwargs.get("litellm_metadata") or kwargs.get("metadata")
+        if not isinstance(raw_metadata, Mapping) or not raw_metadata.get(BILLING_USER_ID_METADATA_KEY):
+            return
+        metadata: Final = _CHAT_REQUEST_ADAPTER.validate_python(raw_metadata)
+        payer: Final = metadata.get(BILLING_USER_ID_METADATA_KEY)
+        budget: Final = metadata.get(BILLING_MODEL_MAX_BUDGET_METADATA_KEY)
+        model: Final = metadata.get("model_group") or kwargs.get("model")
+        if not isinstance(payer, str) or not payer or not isinstance(budget, Mapping) or not isinstance(model, str):
+            return
+        from litellm.proxy.proxy_server import model_max_budget_limiter
+
+        await model_max_budget_limiter.is_user_within_model_budget(
+            user_id=payer, user_model_max_budget=_CHAT_REQUEST_ADAPTER.validate_python(budget), model=model
+        )
 
     async def _active_jobs(self) -> Mapping[tuple[str, str], tuple[ActiveShadowEvalJob, ...]]:
         """Active jobs by (target_type, target_id), cache-first. A target holds at most
@@ -1083,6 +1122,23 @@ class ShadowEvalLogger(CustomLogger):
             if spend >= job.max_budget:
                 self._record_funnel(job.id, "withheld")
                 return
+        if not job.created_by:
+            self._record_funnel(job.id, "withheld")
+            return
+        try:
+            payer: Final = await self._billing_user_reader(job.created_by, prisma)
+        except Exception as e:  # noqa: BLE001  # evaluation must not spend when its payer cannot be verified
+            verbose_logger.warning("shadow_eval: billing owner unavailable for %s: %s", job.id, e)
+            self._record_funnel(job.id, "withheld")
+            return
+        if payer is None:
+            self._record_funnel(job.id, "withheld")
+            return
+        billing_metadata: Final = {
+            **parent_metadata,
+            BILLING_USER_ID_METADATA_KEY: payer.user_id,
+            BILLING_MODEL_MAX_BUDGET_METADATA_KEY: _CHAT_REQUEST_ADAPTER.validate_python(payer.model_max_budget or {}),
+        }
         for arm_router in job.arm_router_names:
             await self._run_shadow_arm(
                 prisma=prisma,
@@ -1097,7 +1153,7 @@ class ShadowEvalLogger(CustomLogger):
                 real_cache_hit=real_cache_hit,
                 control_tier=control_tier,
                 shadow_params=shadow_params,
-                parent_metadata=parent_metadata,
+                parent_metadata=billing_metadata,
             )
 
     async def _run_shadow_arm(
@@ -1273,7 +1329,7 @@ class ShadowEvalLogger(CustomLogger):
     ) -> "_ShadowResponse | _CallFailure":
         """Send the prompt through the arm nobody was served: the auto-router under
         evaluation, or a reverse job's fixed baseline model. The metadata carries the
-        shadowed key's identity (spend attribution) and receives a routing decision
+        sampled routing identity and the job creator's billing identity, plus a routing decision
         write-back, which a plain baseline model simply never makes."""
         router: Final = self._router_provider()
         if router is None:

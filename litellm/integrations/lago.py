@@ -11,6 +11,8 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.internal_call_metadata import BILLING_USER_ID_METADATA_KEY, billing_kwargs
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
@@ -63,7 +65,8 @@ class LagoLogger(CustomLogger):
     def _common_logic(self, kwargs: dict, response_obj) -> dict:
         response_obj.get("id", kwargs.get("litellm_call_id"))
         get_utc_datetime().isoformat()
-        cost: Final = kwargs.get("response_cost", None)
+        financial_kwargs: Final = billing_kwargs(kwargs)
+        cost: Final = financial_kwargs.get("response_cost", None)
         model: Final = kwargs.get("model")
         usage = {}
 
@@ -79,12 +82,12 @@ class LagoLogger(CustomLogger):
         litellm_params: Final = kwargs.get("litellm_params", {}) or {}
         proxy_server_request: Final = litellm_params.get("proxy_server_request") or {}
         end_user_id: Final = proxy_server_request.get("body", {}).get("user", None)
-        user_id: Final = litellm_params["metadata"].get("user_api_key_user_id", None)
-        team_id: Final = litellm_params["metadata"].get("user_api_key_team_id", None)
-        litellm_params["metadata"].get("user_api_key_org_id", None)
+        metadata: Final = get_litellm_metadata_from_kwargs(dict(financial_kwargs))
+        user_id: Final = metadata.get("user_api_key_user_id")
+        team_id: Final = metadata.get("user_api_key_team_id")
+        evaluation_payer: Final = metadata.get(BILLING_USER_ID_METADATA_KEY)
 
         charge_by: Literal["end_user_id", "team_id", "user_id"] = "end_user_id"
-        external_customer_id: str | None = None
 
         if os.getenv("LAGO_API_CHARGE_BY", None) is not None and isinstance(os.environ["LAGO_API_CHARGE_BY"], str):
             if os.environ["LAGO_API_CHARGE_BY"] in [
@@ -96,12 +99,11 @@ class LagoLogger(CustomLogger):
             else:
                 raise Exception("invalid LAGO_API_CHARGE_BY set")
 
-        if charge_by == "end_user_id":
-            external_customer_id = end_user_id
-        elif charge_by == "team_id":
-            external_customer_id = team_id
-        elif charge_by == "user_id":
-            external_customer_id = user_id
+        external_customer_id: Final = (
+            evaluation_payer
+            if isinstance(evaluation_payer, str) and evaluation_payer
+            else {"end_user_id": end_user_id, "team_id": team_id, "user_id": user_id}[charge_by]
+        )
 
         if external_customer_id is None:
             raise Exception(

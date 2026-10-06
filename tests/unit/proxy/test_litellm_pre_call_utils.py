@@ -473,7 +473,14 @@ async def test_add_litellm_data_to_request_strips_admin_injection_slots():
 
 
 @pytest.mark.asyncio
-async def test_add_litellm_data_to_request_strips_all_user_api_key_prefix_keys():
+@pytest.mark.parametrize(
+    "path, metadata_key",
+    [("/v1/chat/completions", "metadata"), ("/v1/responses", "litellm_metadata"), ("/v1/messages", "litellm_metadata")],
+)
+@pytest.mark.parametrize("json_encoded", [False, True])
+async def test_add_litellm_data_to_request_strips_all_user_api_key_prefix_keys(
+    path: str, metadata_key: str, json_encoded: bool
+) -> None:
     """Strip must cover the full user_api_key_* family, not a hand-maintained
     list of 2-3 names. Proxy writes a dozen such fields (user_id, alias,
     spend, team_id, request_route, …) and an attacker populating any of them
@@ -481,17 +488,7 @@ async def test_add_litellm_data_to_request_strips_all_user_api_key_prefix_keys()
     spend in audit logs and guardrails."""
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
-    request_mock = MagicMock(spec=Request)
-    request_mock.url.path = "/v1/chat/completions"
-    request_mock.url = MagicMock()
-    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
-    request_mock.method = "POST"
-    request_mock.query_params = {}
-    request_mock.headers = {"Content-Type": "application/json"}
-    request_mock.client = MagicMock()
-    request_mock.client.host = "127.0.0.1"
-
-    attacker_injected = {
+    attacker_injected: Final = {
         "user_api_key_user_id": "victim",
         "user_api_key_alias": "admin-key",
         "user_api_key_spend": 0.0,
@@ -499,14 +496,16 @@ async def test_add_litellm_data_to_request_strips_all_user_api_key_prefix_keys()
         "user_api_key_end_user_id": "victim-user",
         "user_api_key_request_route": "/fake/route",
         "user_api_key_hash": "fake-hash",
+        "user_api_key_billing_user_id": "victim-admin",
+        "user_api_key_billing_model_max_budget": {"test-model": {"max_budget": 100.0}},
     }
-    data = {
+    data: Final = {
         "model": "gpt-3.5-turbo",
-        "metadata": {**attacker_injected},
-        "litellm_metadata": {**attacker_injected},
+        "metadata": json.dumps(attacker_injected) if json_encoded else dict(attacker_injected),
+        "litellm_metadata": json.dumps(attacker_injected) if json_encoded else dict(attacker_injected),
     }
 
-    user_api_key_dict = UserAPIKeyAuth(
+    user_api_key_dict: Final = UserAPIKeyAuth(
         api_key="hashed-key",
         user_id="real-user",
         metadata={},
@@ -518,20 +517,26 @@ async def test_add_litellm_data_to_request_strips_all_user_api_key_prefix_keys()
         team_max_budget=200.0,
     )
 
-    updated = await add_litellm_data_to_request(
+    updated: Final = await add_litellm_data_to_request(
         data=data,
-        request=request_mock,
+        request=_reserved_stamp_request(path),
         user_api_key_dict=user_api_key_dict,
         proxy_config=MagicMock(),
         general_settings={},
         version="test-version",
     )
 
-    # The non-authoritative metadata dict must not retain ANY attacker-injected
-    # user_api_key_* key.
-    other = updated.get("litellm_metadata") or {}
-    attacker_leaks = [k for k in other if k.startswith("user_api_key_")]
+    other: Final = updated.get("litellm_metadata" if metadata_key == "metadata" else "metadata") or {}
+    attacker_leaks: Final = [k for k in other if k.startswith("user_api_key_")]
     assert attacker_leaks == [], f"Unexpected leaked keys: {attacker_leaks}"
+    assert updated[metadata_key]["user_api_key_user_id"] == "real-user"
+    for metadata in (
+        updated[metadata_key], other, updated[metadata_key]["requester_metadata"],
+        updated["proxy_server_request"]["body"]["metadata"],
+        updated["proxy_server_request"]["body"]["litellm_metadata"],
+    ):
+        assert "user_api_key_billing_user_id" not in metadata
+        assert "user_api_key_billing_model_max_budget" not in metadata
 
 
 @pytest.mark.asyncio

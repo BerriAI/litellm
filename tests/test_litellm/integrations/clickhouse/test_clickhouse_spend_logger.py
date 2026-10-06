@@ -114,6 +114,31 @@ def _payload(**overrides: Any) -> dict[str, Any]:
     return {**payload, **overrides}
 
 
+def test_evaluation_spend_row_bills_creator_and_preserves_runtime_payload() -> None:
+    payload: Final = _payload()
+    kwargs: Final = {
+        "response_cost": payload["response_cost"],
+        "litellm_params": {
+            "metadata": {
+                **payload["metadata"],
+                "user_api_key_billing_user_id": "admin",
+            }
+        },
+    }
+
+    row: Final = spend_log_row_from_payload(payload, kwargs)
+
+    assert (row["user"], row["api_key"], row["team_id"], row["organization_id"], row["end_user"]) == (
+        "admin",
+        "",
+        "",
+        "",
+        "",
+    )
+    assert (row["spend"], row["total_tokens"]) == (payload["response_cost"], payload["total_tokens"])
+    assert payload["metadata"]["user_api_key_user_id"] == "user-1"
+
+
 def _standard_payload(
     *,
     response_cost: float | None,

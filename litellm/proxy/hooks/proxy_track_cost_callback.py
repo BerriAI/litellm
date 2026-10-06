@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
 )
+from litellm.litellm_core_utils.internal_call_metadata import billing_kwargs
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.proxy._types import UserAPIKeyAuth
@@ -121,11 +122,12 @@ class _ProxyDBLogger(CustomLogger):
     async def async_log_success_event(
         self, kwargs: ObjectMapping, response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
+        financial_kwargs: Final = billing_kwargs(kwargs)
         if self.spend_event_producer is None or not is_offloadable_success(response_obj):
-            await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
+            await self._PROXY_track_cost_callback(financial_kwargs, response_obj, start_time, end_time)
             return
         event: Final = build_spend_event(
-            kwargs,
+            financial_kwargs,
             response_obj,
             start_time,
             end_time,
@@ -133,7 +135,7 @@ class _ProxyDBLogger(CustomLogger):
         )
         if isinstance(event, SpendEventBuildError):
             verbose_proxy_logger.warning("collector: tracking cost in-process, event not buildable: %s", event.reason)
-            await self._PROXY_track_cost_callback(kwargs, response_obj, start_time, end_time)
+            await self._PROXY_track_cost_callback(financial_kwargs, response_obj, start_time, end_time)
             return
         await self.spend_event_producer.publish(event)
 

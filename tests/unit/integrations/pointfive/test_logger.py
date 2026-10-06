@@ -3,6 +3,7 @@ import gzip
 import json
 import logging
 from collections.abc import Callable
+from typing import Final
 
 import pytest
 
@@ -47,6 +48,19 @@ def _logger(upload_client: FakeUploadClient, **params) -> PointFiveLogger:
 
 def _event(request_id: str, size: int = 0) -> dict:
     return {"standard_logging_object": {"id": request_id, "model": "gpt-4o", "blob": "x" * size}}
+
+
+def test_finops_record_attributes_evaluation_to_creator() -> None:
+    source: Final = {"user_api_key_user_id": "sampled", "user_api_key_billing_user_id": "admin"}
+    payload: Final = {"metadata": source, "response_cost": 0.25, "total_tokens": 7}
+    kwargs: Final = {"litellm_params": {"metadata": source}, "standard_logging_object": payload}
+
+    record: Final = _logger(FakeUploadClient())._record_for(kwargs)
+
+    assert record is not None
+    assert record["metadata"]["user_api_key_user_id"] == "admin"
+    assert (record["response_cost"], record["total_tokens"]) == (0.25, 7)
+    assert source["user_api_key_user_id"] == "sampled"
 
 
 @pytest.mark.asyncio

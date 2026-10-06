@@ -2,13 +2,47 @@ import datetime
 import json
 import os
 import unittest
-from typing import List, Optional, Tuple
+from typing import Final, List, Optional, Tuple
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
 import pytest
 
 import litellm
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [True, False])
+async def test_pubsub_spend_exports_charge_evaluation_creator(
+    monkeypatch: pytest.MonkeyPatch,
+    legacy: bool,
+) -> None:
+    from litellm.integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
+    from litellm.litellm_core_utils.litellm_logging import create_dummy_standard_logging_payload
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setattr(litellm, "gcs_pub_sub_use_v1", legacy)
+    logger: Final = GcsPubSubLogger(project_id="project", topic_id="spend")
+    source: Final = {"user_api_key_user_id": "sampled", "user_api_key_billing_user_id": "admin"}
+    kwargs: Final = {
+        "model": "eval-model",
+        "response_cost": 0.25,
+        "litellm_params": {"metadata": source},
+        "standard_logging_object": {
+            **create_dummy_standard_logging_payload(),
+            "metadata": source,
+            "response_cost": 0.25,
+        },
+    }
+    now: Final = datetime.datetime(2026, 1, 1)
+
+    await logger.async_log_success_event(kwargs, litellm.ModelResponse(id="eval", choices=[]), now, now)
+
+    assert len(logger.log_queue) == 1
+    row: Final = logger.log_queue[0]
+    assert (row["user"] if legacy else row["metadata"]["user_api_key_user_id"]) == "admin"
+    assert source["user_api_key_user_id"] == "sampled"
 
 
 @pytest.mark.asyncio

@@ -56,6 +56,43 @@ from litellm.types.utils import (
 )
 
 
+def test_shadow_receipt_charges_creator_and_keeps_sampled_runtime_identity() -> None:
+    metadata: Final = {
+        "user_api_key": "source-key",
+        "user_api_key_user_id": "source-user",
+        "user_api_key_team_id": "source-team",
+        "user_api_key_org_id": "source-org",
+        "user_api_key_end_user_id": "source-end-user",
+        "user_api_key_billing_user_id": "eval-admin",
+        "internal_call_origin": "autorouter_classifier",
+        "model_group": "eval-model",
+    }
+    kwargs: Final = {"model": "eval-model", "response_cost": 0.25, "litellm_params": {"metadata": metadata}}
+    now: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+    response: Final = litellm.ModelResponse(
+        id="eval-call",
+        choices=[],
+        usage=litellm.Usage(
+            prompt_tokens=4,
+            completion_tokens=2,
+            total_tokens=6,
+        ),
+    )
+
+    row: Final = get_logging_payload(kwargs, response, now, now)
+
+    assert (row["user"], row["api_key"], row["team_id"], row["organization_id"], row["end_user"]) == (
+        "eval-admin",
+        "",
+        "",
+        "",
+        "",
+    )
+    assert (row["spend"], row["total_tokens"], row["model_group"]) == (0.25, 6, "eval-model")
+    assert json.loads(row["metadata"])["internal_call_origin"] == "autorouter_classifier"
+    assert metadata["user_api_key_user_id"] == "source-user"
+
+
 def _get_additional_usage_values_for_usage(usage: litellm.Usage) -> dict:
     payload = get_logging_payload(
         kwargs={

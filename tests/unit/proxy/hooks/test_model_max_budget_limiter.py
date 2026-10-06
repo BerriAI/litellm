@@ -196,3 +196,26 @@ async def test_a_batch_polled_within_every_budget_window_is_never_charged_again(
     await _poll(limiter, finished, BATCH_COST)
 
     assert _local_spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
+
+
+@pytest.mark.asyncio
+async def test_shadow_charges_creator_model_window_without_charging_sampled_budgets() -> None:
+    limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    source: Final = _event("acompletion", CHAT_COST)
+    event: Final = {
+        **source,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_model_max_budget": {MODEL_GROUP: {"budget_limit": 1, "time_period": "1d"}},
+                "user_api_key_user_model_max_budget": {MODEL_GROUP: {"budget_limit": 1, "time_period": "1d"}},
+                "user_api_key_billing_user_id": "eval-admin",
+                "user_api_key_billing_model_max_budget": {MODEL_GROUP: {"budget_limit": 1, "time_period": "1h"}},
+            }
+        },
+    }
+
+    await limiter.async_log_success_event(event, None, None, None)
+
+    assert await _spend(limiter, f"user_model_spend:eval-admin:{MODEL_GROUP}:1h") == pytest.approx(CHAT_COST)
+    assert await _spend(limiter, KEY_SPEND_KEY) == 0
+    assert await _spend(limiter, USER_SPEND_KEY) == 0

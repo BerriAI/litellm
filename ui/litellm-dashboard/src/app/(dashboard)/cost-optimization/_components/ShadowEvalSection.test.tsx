@@ -263,6 +263,7 @@ describe("ShadowEvalSection", () => {
     mockHooks({});
     render(<ShadowEvalSection />);
 
+    expect(screen.getByText(/Evaluation calls are billed to the admin who starts the job/)).toBeInTheDocument();
     await user.click(screen.getByPlaceholderText("Select a judge model"));
     expect(screen.getByRole("option", { name: /prod-judge.*Recommended/ })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /openai\/gpt-4o/ })).not.toBeInTheDocument();
@@ -273,6 +274,7 @@ describe("ShadowEvalSection", () => {
       screen.getByText("Adoption check: key's traffic vs the router"),
       "Regression check: router's picks vs a baseline",
     );
+    expect(screen.getByText(/Evaluation calls are billed to the admin who starts the job/)).toBeInTheDocument();
     await user.click(screen.getByPlaceholderText("Select a baseline model"));
     expect(screen.getByRole("option", { name: "prod-judge", exact: true })).toBeInTheDocument();
     expect(screen.queryByText("Recommended")).not.toBeInTheDocument();
@@ -467,6 +469,23 @@ describe("ShadowEvalSection", () => {
     expect(screen.getByText(/\$3\.21 of \$10\.00 eval spend/)).toBeInTheDocument();
   });
 
+  it.each([
+    ["initiating-admin", "Billing owner: initiating-admin", "Started by initiating-admin"],
+    [null, "Billing owner unavailable", "Creator unavailable"],
+  ] as const)(
+    "shows the recorded billing owner %s on active and previous jobs",
+    (created_by, activeLabel, previousLabel) => {
+      mockHooks({
+        jobs: [job({ created_by }), job({ job_id: "previous-job", status: "completed", created_by })],
+      });
+      render(<ShadowEvalSection />);
+
+      expect(screen.getByText(activeLabel)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: /Previous evaluations/ }));
+      expect(screen.getByText(previousLabel)).toBeInTheDocument();
+    },
+  );
+
   it("shows spend without a budget cap for a job from before spend budgets existed", () => {
     const j = job({ targets: [targetEntry("hashed-key-abc", { max_budget: null, spend: 3.21 })] });
     mockHooks({ jobs: [j], detailsById: { "job-1": j } });
@@ -501,10 +520,11 @@ describe("ShadowEvalSection", () => {
   });
 
   it("hides the stop button and offers the start form once the latest job completed", () => {
-    const done = job({ status: "completed" });
+    const done = job({ status: "completed", created_by: "initiating-admin" });
     mockHooks({ jobs: [done], detailsById: { "job-1": done } });
     render(<ShadowEvalSection />);
     expect(screen.queryByText("Stop")).not.toBeInTheDocument();
+    expect(screen.getByText("Started by initiating-admin")).toBeInTheDocument();
     expect(screen.getByText("Start a shadow eval")).toBeInTheDocument();
   });
 

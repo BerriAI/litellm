@@ -1,5 +1,10 @@
 """Unit tests for internal-call metadata forwarding: budget-reservation stripping and origin stamping."""
 
+from copy import deepcopy
+from typing import Final
+
+import pytest
+
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.litellm_core_utils.internal_call_metadata import (
     forwarded_internal_call_metadata,
@@ -119,3 +124,84 @@ class TestSubCallMetadataSanitization:
         assert sanitized_auth.team_id == "team-1"
         assert sanitized_auth.api_key == auth.api_key
         assert auth.budget_reservation == {"reserved_cost": 1.0}
+
+
+@pytest.mark.parametrize("alternate", [{}, {"litellm_metadata": None}, {"litellm_metadata": {}}])
+def test_billing_projection_preserves_bucket_selection_and_runtime_objects(alternate: dict[str, object]) -> None:
+    from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+    from litellm.litellm_core_utils.internal_call_metadata import billing_kwargs
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_request_model_access_groups
+
+    metadata: Final = {
+        **PARENT,
+        "user_api_key_user_id": "sampled",
+        "user_api_key_project_id": "project",
+        "user_api_key_billing_user_id": "admin",
+        "tags": ["sampled"],
+        "agent_id": "agent",
+        "billing_agent_id": "agent",
+        "team_id": "team",
+        "team_alias": "Team",
+        "user_api_key_auth": {"matched_model_access_groups": ["premium"]},
+        "user_api_key_billing_model_max_budget": {"eval-model": {"budget_limit": 3, "time_period": "1h"}},
+        "model_group": "eval-model",
+    }
+    parent: Final = {
+        "user": "end-user",
+        "agent_id": "agent",
+        "litellm_params": {
+            "metadata": metadata,
+            **alternate,
+            "user_api_key_end_user_id": "end-user",
+            "proxy_server_request": {"body": {"user": "end-user", "model": "eval-model"}},
+        },
+        "standard_logging_object": {
+            "metadata": metadata,
+            "end_user": "end-user",
+            "request_tags": ["sampled"],
+            "request_model_access_groups": ["premium"],
+            "response_cost": 0.25,
+            "total_tokens": 7,
+        },
+    }
+    original: Final = deepcopy(parent)
+    projected: Final = billing_kwargs(parent)
+    resolved: Final = get_litellm_metadata_from_kwargs(dict(projected))
+
+    assert resolved["user_api_key_user_id"] == "admin"
+    assert resolved["user_api_key_user_model_max_budget"] == metadata["user_api_key_billing_model_max_budget"]
+    assert resolved["model_group"] == "eval-model"
+    assert not set(resolved) & {
+        "user_api_key",
+        "user_api_key_auth",
+        "user_api_key_team_id",
+        "tags",
+        "user_api_key_project_id",
+        "agent_id",
+        "billing_agent_id",
+        "team_id",
+        "team_alias",
+    }
+    assert get_request_model_access_groups(projected) == ()
+    assert billing_kwargs(projected) == projected
+    assert parent == original
+
+
+@pytest.mark.parametrize("owner", [None, "", 3])
+def test_no_billing_owner_is_identity_passthrough(owner: object) -> None:
+    from litellm.litellm_core_utils.internal_call_metadata import billing_kwargs
+
+    request: Final = {"litellm_params": {"metadata": {"user_api_key_billing_user_id": owner}}}
+    assert billing_kwargs(request) is request
+
+
+def test_nested_classifier_preserves_the_evaluation_payer() -> None:
+    parent: Final = {
+        "user_api_key_user_id": "sampled",
+        "user_api_key_billing_user_id": "admin",
+        "user_api_key_billing_model_max_budget": {"eval-model": {"budget_limit": 3, "time_period": "1h"}},
+    }
+    shadow: Final = sanitized_forwardable_call_metadata(parent, "shadow_eval_router")
+    classifier: Final = forwarded_internal_call_metadata(shadow, "autorouter_classifier")
+
+    assert classifier == {**parent, "internal_call_origin": "autorouter_classifier"}
