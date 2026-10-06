@@ -210,7 +210,7 @@ class ZscalerAIGuard(CustomGuardrail):
             # Resolve user for payload (dashboard attribution on AI Guard)
             # This is the top-level "user" field from the OpenAI chat completion request,
             # independent of the user_api_key_* metadata sent via headers.
-            user_for_payload = request_data.get("user") or None
+            user_for_payload: Final = request_data.get("user") or None
 
             zscaler_ai_guard_result = None
             direction: Final = "OUT" if input_type == "response" else "IN"
@@ -363,7 +363,7 @@ class ZscalerAIGuard(CustomGuardrail):
             raise HTTPException(status_code=response.status_code, detail=user_facing_error)
 
     async def make_zscaler_ai_guard_api_call(
-        self, zscaler_ai_guard_url, api_key, policy_id, direction, content, user=None, **kwargs
+        self, zscaler_ai_guard_url, api_key, policy_id, direction, content, user: str | None = None, **kwargs
     ):
         """
         Makes an API call to the Zscaler AI Guard service and handles retries, errors, and response parsing.
