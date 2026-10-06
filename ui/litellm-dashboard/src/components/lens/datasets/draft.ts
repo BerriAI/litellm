@@ -5,6 +5,7 @@ export const SKIP_REASON_TEXT: Readonly<Record<SkipReason, string>> = {
   no_content: "No conversation or reply was recorded",
   too_large: "Too large to store as one case",
   over_limit: "The dataset is full",
+  invalid: "Not a valid case line",
 };
 
 export interface Draft {
