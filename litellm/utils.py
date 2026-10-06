@@ -1661,11 +1661,12 @@ def post_call_processing(
         raise e
 
 
-def _is_litellm_router_call(kwargs: Mapping[str, object]) -> bool:
-    """The router and proxy stamp model_group in metadata or litellm_metadata and run their own retries."""
-    metadata: Final = kwargs.get("metadata")
-    litellm_metadata: Final = kwargs.get("litellm_metadata")
-    return any(isinstance(bucket, Mapping) and "model_group" in bucket for bucket in (metadata, litellm_metadata))
+def _is_litellm_router_call(kwargs: Mapping[str, object], *, is_async: bool) -> bool:
+    """Router completion uses metadata. Async generic calls retry with litellm_metadata; sync generic calls need SDK retries."""
+    metadata_buckets: Final = (
+        (kwargs.get("metadata"), kwargs.get("litellm_metadata")) if is_async else (kwargs.get("metadata"),)
+    )
+    return any(isinstance(bucket, Mapping) and "model_group" in bucket for bucket in metadata_buckets)
 
 
 def client(original_function):
@@ -1910,7 +1911,7 @@ def client(original_function):
                 litellm.num_retries = None  # set retries to None to prevent infinite loops
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
-                is_completion_litellm_router_call: Final = _is_litellm_router_call(kwargs)
+                is_completion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
                     num_retries and not is_completion_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
@@ -1944,7 +1945,7 @@ def client(original_function):
                     kwargs["retry_policy"] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = None  # set retries to None to prevent infinite loops
 
-                is_responses_litellm_router_call: Final = _is_litellm_router_call(kwargs)
+                is_responses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=False)
                 if (
                     num_retries and not is_responses_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
@@ -2221,7 +2222,7 @@ def client(original_function):
             if call_type == CallTypes.acompletion.value:
                 context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
 
-                is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs)
+                is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
                     num_retries and not is_acompletion_litellm_router_call
@@ -2252,7 +2253,7 @@ def client(original_function):
                     result = await original_function(*args, **kwargs)
                     return result
             elif call_type == CallTypes.aresponses.value:
-                is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs)
+                is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs, is_async=True)
 
                 if (
                     num_retries and not is_aresponses_litellm_router_call

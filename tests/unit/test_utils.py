@@ -4757,18 +4757,22 @@ async def test_wrapper_async_logs_converted_responses_stream_with_standard_loggi
 
 
 @pytest.mark.parametrize(
-    "kwargs, expected",
+    "kwargs, is_async, expected",
     [
-        ({"metadata": {"model_group": "g"}}, True),
-        ({"litellm_metadata": {"model_group": "g"}}, True),
-        ({}, False),
-        ({"metadata": None}, False),
+        ({"metadata": {"model_group": "g"}}, False, True),
+        ({"metadata": {"model_group": "g"}}, True, True),
+        ({"litellm_metadata": {"model_group": "g"}}, False, False),
+        ({"litellm_metadata": {"model_group": "g"}}, True, True),
+        ({}, False, False),
+        ({}, True, False),
+        ({"metadata": None}, False, False),
+        ({"metadata": None}, True, False),
     ],
 )
-def test_is_litellm_router_call_checks_both_metadata_buckets(
-    kwargs: Mapping[str, object], expected: bool
+def test_is_litellm_router_call_is_async_aware(
+    kwargs: Mapping[str, object], is_async: bool, expected: bool
 ) -> None:
-    assert _is_litellm_router_call(kwargs) is expected
+    assert _is_litellm_router_call(kwargs, is_async=is_async) is expected
 
 
 @pytest.mark.asyncio
@@ -4809,6 +4813,44 @@ async def test_router_aresponses_does_not_run_sdk_retries(
 
         assert upstream.call_count == 3
         retry_recorder.assert_not_awaited()
+    finally:
+        router.discard()
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+def test_router_responses_keeps_sdk_retries_for_sync_router_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    model_list: Final = [
+        {
+            "model_name": "responses-retry",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "sk-test",
+                "api_base": "https://responses-retry.local/v1",
+                "num_retries": 2,
+            },
+        }
+    ]
+    router: Final = litellm.Router(
+        model_list=model_list, num_retries=0, retry_after=0, disable_cooldowns=True
+    )
+
+    try:
+        with respx.mock(assert_all_called=True) as respx_mock:
+            upstream: Final = respx_mock.post("https://responses-retry.local/v1/responses").mock(
+                return_value=httpx.Response(
+                    503,
+                    headers={"retry-after": "0"},
+                    json={"error": {"message": "model is down", "type": "server_error"}},
+                )
+            )
+            with pytest.raises(litellm.ServiceUnavailableError):
+                router.responses(model="responses-retry", input="hi")
+
+        assert upstream.call_count == 3
     finally:
         router.discard()
         litellm.in_memory_llm_clients_cache.flush_cache()
