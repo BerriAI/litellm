@@ -11,6 +11,8 @@ export type SpanErrorQuery = NonNullable<
   paths["/v1/traces/{trace_id}/spans/{span_id}/error"]["get"]["parameters"]["query"]
 >;
 export type TraceQueryBody = components["schemas"]["TraceQueryRequest"];
+export type TraceFindingsRequest = components["schemas"]["TraceFindingsRequest"];
+export type TraceFindingCount = components["schemas"]["TraceFindingCount"];
 type ApiSpanDetail =
   paths["/v1/traces/{trace_id}/spans/{span_id}"]["get"]["responses"][200]["content"]["application/json"];
 export type Span = Trace["spans"][number];

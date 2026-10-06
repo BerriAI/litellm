@@ -10,7 +10,7 @@ use std::{
 };
 
 use crate::{Error, otlp::DecodedEvent};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 mod format;
 mod instrumentation;
@@ -18,6 +18,12 @@ mod messages;
 mod metadata;
 
 pub(crate) const CLAUDE_CODE_SCOPE: &str = "com.anthropic.claude_code.tracing";
+pub(crate) const CLAUDE_CODE_EVENTS_SCOPE: &str = "com.anthropic.claude_code.events";
+pub(crate) fn visible_claude_response(event: &str, source: &str) -> bool {
+    event == "assistant_response"
+        && (matches!(source, "repl_main_thread" | "sdk" | "sdk_main_thread")
+            || source.starts_with("agent:"))
+}
 pub(crate) const CLAUDE_CODE_AGENT: &str = "claude-code";
 use instrumentation::Instrumentation;
 pub(crate) use messages::{HIDDEN_BLOCK_TYPES, MessagePayload, encode};
@@ -44,8 +50,16 @@ pub enum ObservationType {
 }
 
 /// A model request a span stands for, by the identifier its instrumentation recorded.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
-#[serde(try_from = "String")]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    serde_with::DeserializeFromStr,
+    serde_with::SerializeDisplay,
+)]
 pub enum CallKey {
     /// LiteLLM's gateway call id, with a fallback to legacy spend request ids.
     LiteLlmRequest(String),
@@ -99,12 +113,6 @@ pub enum CallEvidenceKind {
     Unknown,
     Partial,
     Complete,
-}
-
-impl Serialize for CallKey {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(self)
-    }
 }
 
 /// Which model requests a span accounts for. `Complete` comes only from an instrumentation's known

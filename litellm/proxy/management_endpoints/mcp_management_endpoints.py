@@ -131,11 +131,13 @@ if MCP_AVAILABLE:
             validate_tool_name,  # pyright: ignore[reportAssignmentType]
         )
     except ImportError:
-        from pydantic import BaseModel
+        from pydantic import Field
 
-        class _ToolNameValidationResult(BaseModel):
+        from litellm.types.llms.base import LiteLLMBaseModel
+
+        class _ToolNameValidationResult(LiteLLMBaseModel):
             is_valid: bool = True
-            warnings: list[str] = []
+            warnings: list[str] = Field(default=[])
 
         def validate_tool_name(name: str) -> _ToolNameValidationResult:
             return _ToolNameValidationResult()
