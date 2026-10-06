@@ -4,10 +4,11 @@ import json
 import uuid
 from typing import Final
 
+import openai
+import pytest
 from integration._support.client import Gateway, Scenario
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
-from integration.responses_test_support import drain_contract_requests, model_discovery_reply
 from openai.types.responses import CompactedResponse
 from pydantic import JsonValue, TypeAdapter
 
@@ -22,6 +23,21 @@ _FUNCTION_TOOL: Final = {
     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
     "strict": True,
 }
+
+
+def model_discovery_reply(model: str) -> Reply:
+    return Reply(
+        body=json.dumps(
+            {"object": "list", "data": [{"id": model, "object": "model", "created": 1, "owned_by": "openai"}]}
+        ).encode()
+    )
+
+
+def drain_contract_requests(wire: Wire) -> tuple[Request, ...]:
+    requests: Final = wire.drain()
+    discovery: Final = tuple(request for request in requests if request.target == "/v1/models")
+    assert all(request.method == "GET" and request.body == b"" for request in discovery), requests
+    return tuple(request for request in requests if request.target != "/v1/models")
 
 
 def _deployment(scenario: Scenario, wire: Wire) -> str:
@@ -181,3 +197,79 @@ def test_responses_compact_routes_forward_complete_request_and_typed_items(gatew
                     "store": None,
                 }, response.text
         assert [request.target for request in drain_contract_requests(wire)] == ["/v1/responses/compact"] * 6
+
+
+@pytest.mark.parametrize("prefix", ("/v1", "", "/openai/v1"))
+def test_sdk_compact_reaches_the_compact_endpoint_with_its_full_body(gateway: Gateway, prefix: str) -> None:
+    completed_id: Final = f"resp_compact_sdk_{uuid.uuid4().hex}"
+    input_items: Final = [
+        {"role": "user", "content": [{"type": "input_text", "text": "Summarize the patch so far."}]},
+        {
+            "id": f"rs_{uuid.uuid4().hex}",
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Prior reasoning"}],
+            "encrypted_content": "synthetic-encrypted-content",
+        },
+        {"type": "function_call_output", "call_id": "call_previous", "output": "The record is ready."},
+    ]
+    output_item: Final = {
+        "id": f"rs_compact_{uuid.uuid4().hex}",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "Compacted state"}],
+        "encrypted_content": "synthetic-compact-state",
+    }
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        assert (request.method, request.target) == ("POST", "/v1/responses/compact"), request.target
+        assert request.headers["authorization"] == f"Bearer {_API_KEY}", dict(request.headers)
+        assert _JSON_OBJECT.validate_json(request.body) == {
+            "model": _MODEL,
+            "input": input_items,
+            "instructions": "Preserve the latest decision.",
+        }, request.body
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": completed_id,
+                    "created_at": 1,
+                    "object": "response.compaction",
+                    "output": [output_item],
+                    "usage": {
+                        "input_tokens": 7,
+                        "input_tokens_details": {"cached_tokens": 0},
+                        "output_tokens": 3,
+                        "output_tokens_details": {"reasoning_tokens": 0},
+                        "total_tokens": 10,
+                    },
+                }
+            ).encode()
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        client: Final = openai.OpenAI(base_url=f"{gateway.client.base_url}{prefix}", api_key=gateway.key, max_retries=0)
+        compacted: Final = client.responses.compact(
+            model=model,
+            input=input_items,
+            instructions="Preserve the latest decision.",
+        )
+        assert compacted.id != completed_id and same_response(compacted.id, completed_id), compacted.model_dump_json()
+        assert compacted.model_dump(mode="json", exclude_none=True) == {
+            "id": compacted.id,
+            "created_at": 1,
+            "model": model,
+            "object": "response.compaction",
+            "output": [output_item],
+            "usage": {
+                "input_tokens": 7,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 3,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 10,
+            },
+        }, compacted.model_dump_json()
+        assert [(request.method, request.target) for request in drain_contract_requests(wire)] == [
+            ("POST", "/v1/responses/compact")
+        ]

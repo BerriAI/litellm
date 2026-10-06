@@ -11,7 +11,6 @@ import pytest
 from integration._support.client import Gateway, Scenario
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
-from integration.responses_test_support import drain_contract_requests, model_discovery_reply
 from pydantic import JsonValue, TypeAdapter
 
 _MODEL: Final = "gpt-5"
@@ -25,6 +24,21 @@ _CUSTOM_TOOL: Final = {
     "description": "Apply a patch",
     "format": {"type": "grammar", "syntax": "lark", "definition": 'start: "ok"'},
 }
+
+
+def model_discovery_reply(model: str) -> Reply:
+    return Reply(
+        body=json.dumps(
+            {"object": "list", "data": [{"id": model, "object": "model", "created": 1, "owned_by": "openai"}]}
+        ).encode()
+    )
+
+
+def drain_contract_requests(wire: Wire) -> tuple[Request, ...]:
+    requests: Final = wire.drain()
+    discovery: Final = tuple(request for request in requests if request.target == "/v1/models")
+    assert all(request.method == "GET" and request.body == b"" for request in discovery), requests
+    return tuple(request for request in requests if request.target != "/v1/models")
 
 
 def _response(identity: str) -> dict[str, JsonValue]:
@@ -98,10 +112,20 @@ def _deployment(scenario: Scenario, wire: Wire) -> str:
     )
 
 
+@pytest.mark.parametrize(
+    ("suffix", "reasoning"),
+    (
+        ("-thinking-high", {"reasoning": {"effort": "high"}}),
+        ("-fast", {}),
+        ("-thinking-high-fast", {"reasoning": {"effort": "high"}}),
+    ),
+)
 @pytest.mark.parametrize("stream", (False, True))
 def test_cursor_responses_input_uses_responses_wire_and_chat_output(
     gateway: Gateway,
     stream: bool,
+    suffix: str,
+    reasoning: dict[str, JsonValue],
 ) -> None:
     raw_id: Final = f"resp_cursor_{uuid.uuid4().hex}"
     with gateway.scenario() as scenario:
@@ -140,7 +164,7 @@ def test_cursor_responses_input_uses_responses_wire_and_chat_output(
                 "model": _MODEL,
                 "input": _INPUT,
                 "metadata": expected_metadata,
-                "reasoning": {"effort": "high"},
+                **reasoning,
                 "tools": [_CUSTOM_TOOL],
                 "stream": stream,
             }, request.body
@@ -154,11 +178,11 @@ def test_cursor_responses_input_uses_responses_wire_and_chat_output(
                 "POST",
                 "/cursor/chat/completions",
                 {
-                    "model": f"{model}-thinking-high",
+                    "model": f"{model}{suffix}",
                     "input": _INPUT,
                     "messages": [],
                     "tools": [_CUSTOM_TOOL],
-                    "stream_options": {"include_usage": True},
+                    "stream_options": {"include_usage": True, "include_obfuscation": False},
                     "stream": stream,
                 },
                 key=key,
@@ -173,6 +197,18 @@ def test_cursor_responses_input_uses_responses_wire_and_chat_output(
                 assert events, response.text
                 assert all(event.get("object") == "chat.completion.chunk" for event in events), response.text
                 assert all(not str(event.get("type", "")).startswith("response.") for event in events), response.text
+                assert [{k: v for k, v in event.items() if k not in ("id", "created")} for event in events] == [
+                    {
+                        "object": "chat.completion.chunk",
+                        "model": model,
+                        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Patch inspected."}}],
+                    },
+                    {
+                        "object": "chat.completion.chunk",
+                        "model": model,
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    },
+                ], response.text
             else:
                 payload: Final = _JSON_OBJECT.validate_json(response.content)
                 identity: Final = payload.get("id")
@@ -207,6 +243,43 @@ def test_cursor_responses_input_uses_responses_wire_and_chat_output(
                     },
                 }, response.text
             assert [request.target for request in drain_contract_requests(wire)] == ["/v1/responses"]
+
+
+def test_cursor_stream_reports_usage_when_the_client_asks_for_it(gateway: Gateway) -> None:
+    pytest.skip(
+        "BUG: /cursor/chat/completions with stream_options.include_usage streams no usage chunk; "
+        "the Responses usage from response.completed never reaches the chat client"
+    )
+    raw_id: Final = f"resp_cursor_usage_{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return model_discovery_reply(_MODEL)
+        assert (request.method, request.target) == ("POST", "/v1/responses"), request.target
+        return Reply(content_type="text/event-stream", chunks=_stream(raw_id))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = _deployment(scenario, wire)
+        response: Final = gateway.request(
+            "POST",
+            "/cursor/chat/completions",
+            {
+                "model": model,
+                "input": _INPUT,
+                "stream_options": {"include_usage": True},
+                "stream": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        events: Final = tuple(
+            _JSON_OBJECT.validate_json(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ") and line != "data: [DONE]"
+        )
+        assert [event["usage"] for event in events if event.get("usage")] == [
+            {"completion_tokens": 3, "prompt_tokens": 4, "total_tokens": 7}
+        ], response.text
+        assert [request.target for request in drain_contract_requests(wire)] == ["/v1/responses"]
 
 
 def test_cursor_messages_body_uses_chat_completions_wire(gateway: Gateway) -> None:

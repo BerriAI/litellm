@@ -10,11 +10,6 @@ import pytest
 from integration._support.client import Gateway, Scenario, object_value, string_value
 from integration._support.responses_vendor import same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
-from integration.responses_test_support import (
-    drain_contract_requests,
-    model_discovery_reply,
-    wait_for_model_group_workers,
-)
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
 _MODEL: Final = "gpt-5"
@@ -27,6 +22,21 @@ class _DeleteResponse(BaseModel):
     id: str
     object: Literal["response"]
     deleted: bool
+
+
+def model_discovery_reply(model: str) -> Reply:
+    return Reply(
+        body=json.dumps(
+            {"object": "list", "data": [{"id": model, "object": "model", "created": 1, "owned_by": "openai"}]}
+        ).encode()
+    )
+
+
+def drain_contract_requests(wire: Wire) -> tuple[Request, ...]:
+    requests: Final = wire.drain()
+    discovery: Final = tuple(request for request in requests if request.target == "/v1/models")
+    assert all(request.method == "GET" and request.body == b"" for request in discovery), requests
+    return tuple(request for request in requests if request.target != "/v1/models")
 
 
 def _response(identity: str, status: str = "completed") -> bytes:
@@ -52,17 +62,15 @@ def _stream(identity: str) -> tuple[bytes, ...]:
     ) + (b"data: [DONE]\n\n",)
 
 
-def _deployment(gateway: Gateway, scenario: Scenario, wire: Wire) -> str:
-    model: Final = scenario.model(
+def _deployment(scenario: Scenario, wire: Wire) -> str:
+    return scenario.model(
         model=f"openai/{_MODEL}",
         api_key=_API_KEY,
         api_base=f"{wire.url}/v1",
     )
-    wait_for_model_group_workers(gateway, model)
-    return model
 
 
-def _register_in_group(gateway: Gateway, scenario: Scenario, wire: Wire, group: str) -> None:
+def _register_preferred_in_group(scenario: Scenario, wire: Wire, group: str) -> None:
     created: Final = scenario.gateway.post(
         "/model/new",
         {
@@ -71,13 +79,13 @@ def _register_in_group(gateway: Gateway, scenario: Scenario, wire: Wire, group: 
                 "model": f"openai/{_MODEL}",
                 "api_key": _API_KEY,
                 "api_base": f"{wire.url}/v1",
+                "order": 1,
             },
             "model_info": {},
         },
     )
     deployment_id: Final = string_value(object_value(created["model_info"])["id"])
     scenario.cleanups.callback(scenario.delete_model, deployment_id)
-    wait_for_model_group_workers(gateway, group)
 
 
 def _client(gateway: Gateway, key: str, prefix: str) -> openai.OpenAI:
@@ -110,12 +118,12 @@ def test_retrieve_routes_to_the_deployment_that_created_the_response(
         return Reply(body=_response(raw_id))
 
     with wire_server(respond) as wire_b, wire_server(respond) as wire_a, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire_b)
+        model: Final = _deployment(scenario, wire_b)
         client: Final = _client(gateway, gateway.key, prefix)
         created: Final = client.responses.create(model=model, input="create for affinity")
         client_id: Final = created.id
         assert client_id.startswith("resp_") and client_id != raw_id, created.model_dump_json()
-        _register_in_group(gateway, scenario, wire_a, model)
+        _register_preferred_in_group(scenario, wire_a, model)
         retrieved: Final = client.responses.retrieve(client_id)
         assert retrieved.id != raw_id, retrieved.model_dump_json()
         assert same_response(retrieved.id, client_id), retrieved.model_dump_json()
@@ -157,7 +165,7 @@ def test_retrieve_returns_the_id_the_client_holds(gateway: Gateway, prefix: str)
         return Reply(body=_response(raw_id))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire)
+        model: Final = _deployment(scenario, wire)
         client: Final = _client(gateway, gateway.key, prefix)
         created: Final = client.responses.create(model=model, input="retrieve client id")
         client_id: Final = created.id
@@ -199,7 +207,7 @@ def test_streamed_response_ids_are_stable_and_retrievable_on_each_alias(
         return Reply(body=_response(raw_id))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire)
+        model: Final = _deployment(scenario, wire)
         team: Final = scenario.team(models=[model])
         user: Final = scenario.member(team)
         key: Final = scenario.key(team_id=team, user_id=user, models=[model])
@@ -242,7 +250,7 @@ def test_delete_forwards_provider_id_and_returns_client_id(
         return Reply(body=json.dumps({"id": raw_id, "object": "response", "deleted": True}).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire)
+        model: Final = _deployment(scenario, wire)
         client: Final = _client(gateway, gateway.key, prefix)
         created: Final = client.responses.create(model=model, input="delete lifecycle")
         deleted: Final = client.responses.with_raw_response.delete(created.id)
@@ -283,7 +291,7 @@ def test_delete_returns_the_client_held_id_not_the_provider_id(
         return Reply(body=json.dumps({"id": raw_id, "object": "response", "deleted": True}).encode())
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire)
+        model: Final = _deployment(scenario, wire)
         client: Final = _client(gateway, gateway.key, prefix)
         created: Final = client.responses.create(model=model, input="delete client id")
         deleted: Final = client.responses.with_raw_response.delete(created.id)
@@ -328,11 +336,19 @@ def test_cancel_forwards_provider_id_and_returns_cancelled_response(
         return Reply(body=_response(raw_id, "cancelled"))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire)
+        model: Final = _deployment(scenario, wire)
         client: Final = _client(gateway, gateway.key, prefix)
         created: Final = client.responses.create(model=model, input="cancel lifecycle", background=True)
         cancelled: Final = client.responses.cancel(created.id)
-        assert cancelled.status == "cancelled", cancelled.model_dump_json()
+        assert cancelled.id != raw_id and same_response(cancelled.id, created.id), cancelled.model_dump_json()
+        assert cancelled.model_dump(mode="json", exclude_none=True) == {
+            "id": cancelled.id,
+            "object": "response",
+            "created_at": 1.0,
+            "status": "cancelled",
+            "model": _MODEL,
+            "output": [],
+        }, cancelled.model_dump_json()
         requests: Final = drain_contract_requests(wire)
         assert [(request.method, request.target) for request in requests] == [
             ("POST", "/v1/responses"),
@@ -371,7 +387,7 @@ def test_input_items_pagination_query_reaches_the_provider(gateway: Gateway) -> 
         return Reply(body=b'{"data":[],"has_more":false,"object":"list"}')
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = _deployment(gateway, scenario, wire)
+        model: Final = _deployment(scenario, wire)
         client: Final = _client(gateway, gateway.key, "/v1")
         created: Final = client.responses.create(model=model, input="list response input items")
         page: Final = client.responses.input_items.list(

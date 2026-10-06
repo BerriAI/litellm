@@ -8,17 +8,27 @@ import openai
 import pytest
 from integration._support.client import Gateway, Scenario, object_value, string_value
 from integration._support.wire import Reply, Request, Wire, wire_server
-from integration.responses_test_support import (
-    drain_contract_requests,
-    model_discovery_reply,
-    wait_for_model_group_workers,
-)
 from openai.types.responses import ResponseCompletedEvent
 from pydantic import JsonValue, TypeAdapter
 
 _MODEL: Final = "gpt-5"
 _API_KEY: Final = "synthetic-responses-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def model_discovery_reply(model: str) -> Reply:
+    return Reply(
+        body=json.dumps(
+            {"object": "list", "data": [{"id": model, "object": "model", "created": 1, "owned_by": "openai"}]}
+        ).encode()
+    )
+
+
+def drain_contract_requests(wire: Wire) -> tuple[Request, ...]:
+    requests: Final = wire.drain()
+    discovery: Final = tuple(request for request in requests if request.target == "/v1/models")
+    assert all(request.method == "GET" and request.body == b"" for request in discovery), requests
+    return tuple(request for request in requests if request.target != "/v1/models")
 
 
 def _response(identity: str, status: str = "completed") -> bytes:
@@ -44,7 +54,7 @@ def _stream(identity: str) -> tuple[bytes, ...]:
     ) + (b"data: [DONE]\n\n",)
 
 
-def _register_in_group(scenario: Scenario, wire: Wire, group: str) -> str:
+def _register_in_group(scenario: Scenario, wire: Wire, group: str, order: int | None = None) -> str:
     created: Final = scenario.gateway.post(
         "/model/new",
         {
@@ -53,6 +63,7 @@ def _register_in_group(scenario: Scenario, wire: Wire, group: str) -> str:
                 "model": f"openai/{_MODEL}",
                 "api_key": _API_KEY,
                 "api_base": f"{wire.url}/v1",
+                **({} if order is None else {"order": order}),
             },
             "model_info": {},
         },
@@ -75,14 +86,18 @@ def _register(scenario: Scenario, wire: Wire, group: str | None = None) -> str:
 
 
 def _enable_responses_affinity(scenario: Scenario) -> None:
-    scenario.gateway.post(
-        "/config/update",
-        {"router_settings": {"optional_pre_call_checks": ["responses_api_deployment_check"]}},
-    )
+    gateway: Final = scenario.gateway
+    settings: Final = object_value(gateway.get("/router/settings")["current_values"])
+    current: Final = settings.get("optional_pre_call_checks")
+    original: Final = list(current) if isinstance(current, list) else []
     scenario.cleanups.callback(
-        scenario.gateway.post,
+        gateway.post,
         "/config/update",
-        {"router_settings": {"optional_pre_call_checks": []}},
+        {"router_settings": {"optional_pre_call_checks": original}},
+    )
+    gateway.post(
+        "/config/update",
+        {"router_settings": {"optional_pre_call_checks": [*original, "responses_api_deployment_check"]}},
     )
 
 
@@ -122,7 +137,6 @@ def test_previous_response_id_uses_the_raw_id_and_affinity(
         model: Final = f"integration-{uuid.uuid4().hex}"
         _enable_responses_affinity(scenario)
         assert _register(scenario, first_wire, model) == model
-        wait_for_model_group_workers(gateway, model)
         client: Final = openai.OpenAI(
             base_url=f"{gateway.client.base_url}/v1",
             api_key=gateway.key,
@@ -130,8 +144,7 @@ def test_previous_response_id_uses_the_raw_id_and_affinity(
         )
         first: Final = client.responses.create(model=model, input="turn one")
         assert first.id.startswith("resp_") and first.id != first_raw_id, first.model_dump_json()
-        _register(scenario, second_wire, model)
-        wait_for_model_group_workers(gateway, model)
+        _register_in_group(scenario, second_wire, model, order=1)
         second_result: Final = client.responses.create(
             model=model,
             input="turn two",
