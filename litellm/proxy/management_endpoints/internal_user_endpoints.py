@@ -2667,15 +2667,13 @@ async def _resolve_org_filter_for_user_search(
     """
     Return a list of org IDs to filter by, or ``None`` for no filter.
 
-    Reads the ``scope_user_search_to_org`` UI-setting flag and applies
+    Reads the ``scope_user_search_to_org`` flag from ``general_settings`` and applies
     role-based access rules when the flag is ON.
     """
-    from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
-        get_ui_settings_cached,
-    )
+    from litellm.proxy.config_resolvers.settings_rules import coerce_bool
+    from litellm.proxy.proxy_server import general_settings
 
-    ui_settings: Final = await get_ui_settings_cached()
-    if not ui_settings.get("scope_user_search_to_org", False):
+    if not coerce_bool(general_settings.get("scope_user_search_to_org", False)):
         return None  # flag OFF — no filtering
 
     if _user_has_admin_view(user_api_key_dict):

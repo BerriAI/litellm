@@ -416,6 +416,7 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
     "allow_agents_for_team_admins",
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
+    "scope_user_search_to_org",
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
@@ -1671,46 +1672,6 @@ async def update_mcp_tool_search_settings(
     )
 
 
-UI_SETTINGS_CACHE_KEY: Final = "ui_settings:settings_dict"
-UI_SETTINGS_CACHE_TTL: Final = 600  # 10 minutes
-
-
-@with_service_target(CONFIG_PARAMS_TARGET)
-async def get_ui_settings_cached() -> dict[str, JsonValue]:
-    """
-    Return the persisted UI settings dict, using DualCache for reads.
-
-    Cache hit  → return cached dict immediately.
-    Cache miss → read from DB, populate cache, return dict.
-    """
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
-
-    # 1. Try cache
-    cached: Final = await user_api_key_cache.async_get_cache(key=UI_SETTINGS_CACHE_KEY)
-    if cached is not None and isinstance(cached, dict):
-        return cached
-
-    # 2. Fallback to DB
-    if prisma_client is None:
-        return {}
-
-    db_record: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
-        where={"id": "ui_settings"}
-    )
-    ui_settings: dict[str, JsonValue] = {}
-    if db_record and db_record.ui_settings:
-        raw: Final = db_record.ui_settings
-        ui_settings = json.loads(raw) if isinstance(raw, str) else dict(raw)
-
-    # Sanitize
-    ui_settings = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
-
-    # 3. Populate cache with TTL
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
-
-    return ui_settings
-
-
 _UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 
@@ -1790,11 +1751,6 @@ async def get_ui_settings():
     ui_settings: Final = {k: v for k, v in parsed.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
     apply_runtime_general_settings_flags(ui_settings)
-
-    # Refresh DualCache so other code paths (e.g. /user/filter/ui) see fresh values
-    from litellm.proxy.proxy_server import user_api_key_cache
-
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
     effective_ui_settings: Final[Mapping[str, object]] = MappingProxyType(
         {
@@ -1956,12 +1912,6 @@ async def update_ui_settings(
     )
 
     apply_runtime_general_settings_flags(ui_settings)
-
-    # Invalidate + set DualCache so subsequent reads see the new values immediately
-    from litellm.proxy.proxy_server import user_api_key_cache
-
-    sanitized: Final = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=sanitized, ttl=UI_SETTINGS_CACHE_TTL)
 
     asyncio.create_task(
         create_config_audit_log(
