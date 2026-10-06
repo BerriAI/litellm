@@ -17,10 +17,7 @@ pub(crate) async fn create(
     let model_group = request::model_name(&body)?.to_owned();
     request::authorize_model(&identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(&identity, body)?;
-    let route = gateway.responses.clone().with_cache(crate::caching::scoped(
-        gateway.cache.as_ref(),
-        &cache_options,
-    )?);
+    let route = gateway.responses.clone();
 
     let call = ResponsesCall {
         model: deployment.model.clone(),
@@ -38,7 +35,7 @@ pub(crate) async fn create(
     let machine = route.machine(
         call,
         litellm_core::CallOptions {
-            cache: Some(cache_options.policy),
+            cache: Some(cache_options),
             model_group: Some(model_group),
             observers: None,
         },

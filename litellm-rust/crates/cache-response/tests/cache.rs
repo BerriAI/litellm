@@ -8,22 +8,19 @@ use std::{
     time::Duration,
 };
 
-use litellm_cache::BaseCache;
+use litellm_cache::{BaseCache, ExactCacheContext};
 use litellm_cache_memory::InMemoryCache;
-use litellm_cache_response::{
-    CacheAccess, CacheEntry, CacheKeyInput, CacheTarget, ResponseCache, ResponseCacheConfig,
-    ResponseCacheRequest,
-};
+use litellm_cache_response::{CacheEntry, CacheKey, ResponseCache};
 use redis_test::MockCmd;
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
-use support::{keyed, memory, redis, request};
+use support::{DEFAULT, key, keyed, memory, redis};
 
 type Memory = Arc<ResponseCache<InMemoryCache<CacheEntry>>>;
 
 #[rstest]
 #[tokio::test]
-async fn sync_and_async_consumers_share_keys_ttls_and_freshness(mut request: ResponseCacheRequest) {
+async fn sync_and_async_consumers_share_keys_ttls_and_freshness(key: CacheKey) {
     let clock = Arc::new(AtomicU64::new(100));
     let backend = Arc::new(InMemoryCache::with_clock(
         Some(8),
@@ -34,11 +31,14 @@ async fn sync_and_async_consumers_share_keys_ttls_and_freshness(mut request: Res
         },
     ));
     let cache = ResponseCache::new(backend.clone());
-    request.context.ttl = Some(Duration::from_secs(10));
-    request.max_age = Some(Duration::from_secs(5));
+    let context = ExactCacheContext {
+        ttl: Some(Duration::from_secs(10)),
+    };
+    let max_age = Some(Duration::from_secs(5));
     cache
         .store(
-            &request,
+            &key,
+            &context,
             json!({"choices": [1], "usage": {"total_tokens": 7}}),
             Duration::from_secs(100),
         )
@@ -49,19 +49,20 @@ async fn sync_and_async_consumers_share_keys_ttls_and_freshness(mut request: Res
     );
     assert!(
         cache
-            .async_lookup(&request, Duration::from_secs(105))
+            .async_lookup(&key, &context, max_age, Duration::from_secs(105))
             .await
             .unwrap()
             .is_some()
     );
     assert_eq!(
-        cache.lookup(&request, Duration::from_secs(106)).unwrap(),
+        cache
+            .lookup(&key, &context, max_age, Duration::from_secs(106))
+            .unwrap(),
         None
     );
-    request.max_age = None;
     assert_eq!(
         cache
-            .lookup(&request, Duration::from_secs(106))
+            .lookup(&key, &context, None, Duration::from_secs(106))
             .unwrap()
             .unwrap()["usage"]["total_tokens"],
         7
@@ -69,75 +70,25 @@ async fn sync_and_async_consumers_share_keys_ttls_and_freshness(mut request: Res
     clock.store(111, Ordering::SeqCst);
     assert_eq!(
         cache
-            .async_lookup(&request, Duration::from_secs(111))
+            .async_lookup(&key, &context, None, Duration::from_secs(111))
             .await
             .unwrap(),
         None
     );
     cache
-        .async_store(&request, json!({"choices": [2]}), Duration::from_secs(111))
+        .async_store(
+            &key,
+            context.clone(),
+            json!({"choices": [2]}),
+            Duration::from_secs(111),
+        )
         .await
         .unwrap();
     assert_eq!(
-        cache.lookup(&request, Duration::from_secs(111)).unwrap(),
+        cache
+            .lookup(&key, &context, None, Duration::from_secs(111))
+            .unwrap(),
         Some(json!({"choices": [2]}))
-    );
-}
-
-const WRITE_ONLY: CacheAccess = CacheAccess {
-    reads: false,
-    writes: true,
-};
-const READ_ONLY: CacheAccess = CacheAccess {
-    reads: true,
-    writes: false,
-};
-
-#[rstest]
-#[case::read_write(CacheAccess::READ_WRITE, CacheAccess::READ_WRITE, true)]
-#[case::read_only_writer_skips_the_write(READ_ONLY, CacheAccess::READ_WRITE, false)]
-#[case::read_only_reader_still_reads(CacheAccess::READ_WRITE, READ_ONLY, true)]
-#[case::write_only_writer_still_writes(WRITE_ONLY, CacheAccess::READ_WRITE, true)]
-#[case::write_only_reader_skips_the_read(CacheAccess::READ_WRITE, WRITE_ONLY, false)]
-#[case::no_access_writer_skips_the_write(CacheAccess::NONE, CacheAccess::READ_WRITE, false)]
-#[case::no_access_reader_skips_the_read(CacheAccess::READ_WRITE, CacheAccess::NONE, false)]
-#[tokio::test]
-async fn access_skips_io_and_keeps_reads_and_writes_independent(
-    memory: Memory,
-    request: ResponseCacheRequest,
-    #[case] write: CacheAccess,
-    #[case] read: CacheAccess,
-    #[case] hit: bool,
-    #[values(false, true)] asynchronous: bool,
-) {
-    let now = Duration::from_secs(100);
-    let writer = ResponseCacheRequest {
-        access: write,
-        ..request.clone()
-    };
-    let reader = ResponseCacheRequest {
-        access: read,
-        ..request
-    };
-
-    if asynchronous {
-        memory
-            .async_store(&writer, json!({"v": 1}), now)
-            .await
-            .unwrap();
-    } else {
-        memory.store(&writer, json!({"v": 1}), now).unwrap();
-    }
-    let found = if asynchronous {
-        memory.async_lookup(&reader, now).await.unwrap()
-    } else {
-        memory.lookup(&reader, now).unwrap()
-    };
-
-    assert_eq!(
-        found,
-        hit.then(|| json!({"v": 1})),
-        "{write:?} then {read:?}"
     );
 }
 
@@ -148,7 +99,7 @@ async fn access_skips_io_and_keeps_reads_and_writes_independent(
 #[case::python_async_json(br#"{"timestamp":100.0,"response":{"ok":true,"text":"cached"}}"#.as_slice())]
 #[tokio::test]
 async fn redis_consumer_reads_python_sync_and_async_envelopes(
-    request: ResponseCacheRequest,
+    key: CacheKey,
     #[case] stored: &[u8],
     #[values(false, true)] asynchronous: bool,
 ) {
@@ -161,9 +112,9 @@ async fn redis_consumer_reads_python_sync_and_async_envelopes(
     );
     let now = Duration::from_secs(101);
     let found = if asynchronous {
-        cache.async_lookup(&request, now).await.unwrap()
+        cache.async_lookup(&key, &DEFAULT, None, now).await.unwrap()
     } else {
-        cache.lookup(&request, now).unwrap()
+        cache.lookup(&key, &DEFAULT, None, now).unwrap()
     };
     assert_eq!(found, Some(json!({"ok": true, "text": "cached"})));
 }
@@ -176,7 +127,7 @@ async fn redis_consumer_reads_python_sync_and_async_envelopes(
 #[case::array(json!([1, 2]), br#"{"timestamp":100.0,"response":"[1,2]"}"#.as_slice())]
 #[tokio::test]
 async fn redis_consumer_writes_python_compatible_json(
-    request: ResponseCacheRequest,
+    key: CacheKey,
     #[case] response: Value,
     #[case] wire: &[u8],
 ) {
@@ -188,16 +139,14 @@ async fn redis_consumer_writes_python_compatible_json(
         Some("tenant"),
     );
     cache
-        .async_store(&request, response, Duration::from_secs(100))
+        .async_store(&key, DEFAULT, response, Duration::from_secs(100))
         .await
         .unwrap();
 }
 
 #[rstest]
 #[tokio::test]
-async fn invalid_entries_are_misses_and_disabled_reads_do_not_touch_redis(
-    mut request: ResponseCacheRequest,
-) {
+async fn invalid_entries_are_misses(key: CacheKey) {
     let cache = redis(
         vec![MockCmd::new(
             redis::cmd("GET").arg("tenant:key"),
@@ -205,11 +154,11 @@ async fn invalid_entries_are_misses_and_disabled_reads_do_not_touch_redis(
         )],
         None,
     );
-    request.access.reads = false;
-    assert_eq!(cache.lookup(&request, Duration::ZERO).unwrap(), None);
-    request.access.reads = true;
     assert_eq!(
-        cache.async_lookup(&request, Duration::ZERO).await.unwrap(),
+        cache
+            .async_lookup(&key, &DEFAULT, None, Duration::ZERO)
+            .await
+            .unwrap(),
         None
     );
 }
@@ -219,15 +168,16 @@ async fn invalid_entries_are_misses_and_disabled_reads_do_not_touch_redis(
 async fn captured_service_keeps_the_selected_backend_for_background_writes(
     #[from(memory)] original: Memory,
     #[from(memory)] replacement: Memory,
-    request: ResponseCacheRequest,
+    key: CacheKey,
 ) {
     let captured = original.clone();
     let writer = tokio::spawn({
-        let request = request.clone();
+        let key = key.clone();
         async move {
             captured
                 .async_store(
-                    &request,
+                    &key,
+                    DEFAULT,
                     json!({"selected": "original"}),
                     Duration::from_secs(100),
                 )
@@ -236,38 +186,16 @@ async fn captured_service_keeps_the_selected_backend_for_background_writes(
     });
     writer.await.unwrap().unwrap();
     assert_eq!(
-        original.lookup(&request, Duration::from_secs(100)).unwrap(),
+        original
+            .lookup(&key, &DEFAULT, None, Duration::from_secs(100))
+            .unwrap(),
         Some(json!({"selected":"original"}))
     );
     assert_eq!(
         replacement
-            .lookup(&request, Duration::from_secs(100))
+            .lookup(&key, &DEFAULT, None, Duration::from_secs(100))
             .unwrap(),
         None
-    );
-}
-
-#[rstest]
-#[case::with_namespace("tenant")]
-#[case::without_namespace("")]
-fn generated_keys_preserve_namespace_and_explicit_keys(#[case] namespace: &str) {
-    let memory = ResponseCache::new(Arc::new(InMemoryCache::<CacheEntry>::default())).with_config(
-        ResponseCacheConfig {
-            namespace: namespace.into(),
-            ..ResponseCacheConfig::default()
-        },
-    );
-    let generated = ResponseCacheRequest::new(CacheKeyInput::request(
-        CacheTarget::resolve(None, "a", None, None),
-        json!({}),
-    ));
-    let explicit = keyed(memory.key(&generated).as_str());
-    memory
-        .store(&generated, json!({"value": 7}), Duration::from_secs(100))
-        .unwrap();
-    assert_eq!(
-        memory.lookup(&explicit, Duration::from_secs(100)).unwrap(),
-        Some(json!({"value":7}))
     );
 }
 
@@ -278,16 +206,19 @@ fn generated_keys_preserve_namespace_and_explicit_keys(#[case] namespace: &str) 
 #[case::array(json!([1, 2]))]
 fn non_object_responses_round_trip_through_a_typed_backend(
     memory: Memory,
-    request: ResponseCacheRequest,
+    key: CacheKey,
     #[case] response: Value,
 ) {
     let now = Duration::from_secs(100);
-    memory.store(&request, response.clone(), now).unwrap();
-    assert_eq!(memory.lookup(&request, now).unwrap(), Some(response));
+    memory.store(&key, &DEFAULT, response.clone(), now).unwrap();
+    assert_eq!(
+        memory.lookup(&key, &DEFAULT, None, now).unwrap(),
+        Some(response)
+    );
 }
 
 #[rstest]
-fn entries_without_timestamps_are_always_fresh(request: ResponseCacheRequest) {
+fn entries_without_timestamps_are_always_fresh(key: CacheKey) {
     let backend = Arc::new(InMemoryCache::default());
     BaseCache::set_cache(
         backend.as_ref(),
@@ -300,10 +231,15 @@ fn entries_without_timestamps_are_always_fresh(request: ResponseCacheRequest) {
     )
     .unwrap();
     let cache = ResponseCache::new(backend);
-    let mut request = request;
-    request.max_age = Some(Duration::from_secs(1));
     assert_eq!(
-        cache.lookup(&request, Duration::from_secs(100)).unwrap(),
+        cache
+            .lookup(
+                &key,
+                &DEFAULT,
+                Some(Duration::from_secs(1)),
+                Duration::from_secs(100)
+            )
+            .unwrap(),
         Some(json!({"choices": [{"text": "legacy"}]}))
     );
 }
@@ -346,24 +282,22 @@ async fn gcs_reads_python_entries_and_writes_python_compatible_envelopes(
         .await;
     let lookup = if asynchronous {
         cache
-            .async_lookup(&keyed("python"), Duration::from_secs(102))
+            .async_lookup(&keyed("python"), &DEFAULT, None, Duration::from_secs(102))
             .await
     } else {
-        cache.lookup(&keyed("python"), Duration::from_secs(102))
+        cache.lookup(&keyed("python"), &DEFAULT, None, Duration::from_secs(102))
     };
     assert_eq!(lookup.unwrap(), Some(response.clone()));
-    let request = ResponseCacheRequest {
-        context: litellm_cache::ExactCacheContext {
-            ttl: Some(Duration::from_secs(12)),
-        },
-        ..keyed("native")
+    let context = ExactCacheContext {
+        ttl: Some(Duration::from_secs(12)),
     };
+    let native = keyed("native");
     let stored = if asynchronous {
         cache
-            .async_store(&request, response, Duration::from_secs(102))
+            .async_store(&native, context, response, Duration::from_secs(102))
             .await
     } else {
-        cache.store(&request, response, Duration::from_secs(102))
+        cache.store(&native, &context, response, Duration::from_secs(102))
     };
     assert_eq!(stored, Ok(()));
     let requests = server.received_requests().await.unwrap();
@@ -406,9 +340,9 @@ async fn gcs_batch_reads_preserve_order_and_treat_invalid_entries_as_misses(
         .respond_with(ResponseTemplate::new(404))
         .mount(&server)
         .await;
-    let requests = [keyed("hit"), keyed("missing"), keyed("invalid")];
+    let keys = [keyed("hit"), keyed("missing"), keyed("invalid")];
     let partial = cache
-        .async_lookup_batch(&requests, Duration::from_secs(102))
+        .async_lookup_batch(&keys, &DEFAULT, None, Duration::from_secs(102))
         .await
         .unwrap();
     assert_eq!(partial.values, vec![Some(json!({"answer":7})), None, None]);

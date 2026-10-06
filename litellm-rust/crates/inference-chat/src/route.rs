@@ -62,7 +62,7 @@ impl ChatCompletionsRoute {
     pub(super) async fn run_call(
         &self,
         call: ChatCompletionsCall,
-        cache_options: Option<litellm_cache_response::CachePolicy>,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
         model_group: Option<&str>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,

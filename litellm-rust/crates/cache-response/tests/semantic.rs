@@ -9,10 +9,10 @@ use litellm_cache::{
     BaseCache, Error, SemanticCacheContext,
     semantic::{SemanticCache, SemanticLookup},
 };
-use litellm_cache_response::{CacheEntry, ResponseCache, ResponseCacheRequest};
+use litellm_cache_response::{CacheEntry, CacheKey, PendingWrite, ResponseCache};
 use rstest::rstest;
 use serde_json::{Value, json};
-use support::{keyed, request};
+use support::{key, keyed};
 
 #[derive(Default)]
 struct SemanticBackend {
@@ -54,7 +54,7 @@ impl BaseCache for SemanticBackend {
 #[rstest]
 #[tokio::test]
 async fn semantic_context_reaches_backend_for_store_and_lookup(
-    request: ResponseCacheRequest,
+    key: CacheKey,
     #[values(false, true)] asynchronous: bool,
 ) {
     let backend = Arc::new(SemanticBackend::default());
@@ -63,19 +63,18 @@ async fn semantic_context_reaches_backend_for_store_and_lookup(
         messages: Some(json!([{"role": "user", "content": "hello"}])),
         ..Default::default()
     };
-    let request = request.with_context(context.clone());
     let response = json!({"answer": 42});
     let now = Duration::from_secs(100);
 
     let hit = if asynchronous {
         cache
-            .async_store(&request, response.clone(), now)
+            .async_store(&key, context.clone(), response.clone(), now)
             .await
             .unwrap();
-        cache.async_lookup(&request, now).await.unwrap()
+        cache.async_lookup(&key, &context, None, now).await.unwrap()
     } else {
-        cache.store(&request, response.clone(), now).unwrap();
-        cache.lookup(&request, now).unwrap()
+        cache.store(&key, &context, response.clone(), now).unwrap();
+        cache.lookup(&key, &context, None, now).unwrap()
     };
 
     assert_eq!(hit, Some(response));
@@ -87,42 +86,43 @@ async fn semantic_context_reaches_backend_for_store_and_lookup(
 
 #[rstest]
 #[tokio::test]
-async fn batch_store_preserves_semantic_context_without_batch_reads(
+async fn deferred_writes_preserve_each_semantic_context(
     #[values(false, true)] distinct_contexts: bool,
 ) {
     let backend = Arc::new(SemanticBackend::default());
     let cache = ResponseCache::new(backend.clone());
-    let requests = ["first", "second"].map(|key| {
-        keyed(key).with_context(SemanticCacheContext {
-            messages: Some(json!([{"role": "user", "content": if distinct_contexts { key } else { "shared" }}])),
+    let writes = ["first", "second"].map(|name| PendingWrite {
+        key: keyed(name),
+        context: SemanticCacheContext {
+            messages: Some(json!([{"role": "user", "content": if distinct_contexts { name } else { "shared" }}])),
             ..Default::default()
-        })
+        },
+        response: json!({"answer": name}),
+        produced_at: Duration::from_secs(100),
     });
-    let now = Duration::from_secs(100);
-    cache
-        .async_store_batch(
-            requests
-                .iter()
-                .map(|request| {
-                    (
-                        request.clone(),
-                        json!({"answer": cache.key(request).as_str()}),
-                    )
-                })
-                .collect(),
-            now,
-        )
-        .await
-        .unwrap();
+    let expected = writes
+        .iter()
+        .map(|write| {
+            (
+                write.key.clone(),
+                write.context.clone(),
+                write.response.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    cache.async_store_entries(writes.into()).await.unwrap();
 
     assert_eq!(
         backend.contexts.lock().unwrap().as_slice(),
-        &[requests[0].context.clone(), requests[1].context.clone()]
+        &[expected[0].1.clone(), expected[1].1.clone()]
     );
-    for request in requests {
+    for (key, context, response) in expected {
         assert_eq!(
-            cache.async_lookup(&request, now).await.unwrap(),
-            Some(json!({"answer": cache.key(&request).as_str()}))
+            cache
+                .async_lookup(&key, &context, None, Duration::from_secs(100))
+                .await
+                .unwrap(),
+            Some(response)
         );
     }
 }
@@ -176,39 +176,33 @@ fn scored(timestamp: f64, similarity: f64) -> Result<SemanticLookup<CacheEntry>,
 }
 
 #[rstest]
-#[case::fresh_hit(scored(95.0, 0.95), true, Ok(SemanticLookup { value: Some(json!({"answer": 42})), similarity: Some(0.95) }))]
-#[case::stale_hit_keeps_the_similarity(
-    scored(50.0, 0.95),
-    true,
-    Ok(SemanticLookup::miss(Some(0.95)))
-)]
+#[case::fresh_hit(scored(95.0, 0.95), Ok(SemanticLookup { value: Some(json!({"answer": 42})), similarity: Some(0.95) }))]
+#[case::stale_hit_keeps_the_similarity(scored(50.0, 0.95), Ok(SemanticLookup::miss(Some(0.95))))]
 #[case::miss_keeps_the_similarity(
     Ok(SemanticLookup::miss(Some(0.4))),
-    true,
     Ok(SemanticLookup::miss(Some(0.4)))
 )]
-#[case::no_search(Ok(SemanticLookup::miss(None)), true, Ok(SemanticLookup::miss(None)))]
-#[case::disabled_reads_skip_the_backend(scored(95.0, 0.95), false, Ok(SemanticLookup::miss(None)))]
-#[case::invalid_entry_is_a_miss(Err(Error::InvalidEntry), true, Ok(SemanticLookup::miss(None)))]
-#[case::backend_errors_propagate(Err(Error::Unavailable), true, Err(Error::Unavailable))]
+#[case::no_search(Ok(SemanticLookup::miss(None)), Ok(SemanticLookup::miss(None)))]
+#[case::invalid_entry_is_a_miss(Err(Error::InvalidEntry), Ok(SemanticLookup::miss(None)))]
+#[case::backend_errors_propagate(Err(Error::Unavailable), Err(Error::Unavailable))]
 #[tokio::test]
 async fn semantic_lookup_applies_freshness_to_the_value_only(
     #[case] backend: Result<SemanticLookup<CacheEntry>, Error>,
-    #[case] reads: bool,
     #[case] expected: Result<SemanticLookup<Value>, Error>,
     #[values(false, true)] asynchronous: bool,
-    request: ResponseCacheRequest,
+    key: CacheKey,
 ) {
     let cache = ResponseCache::new(Arc::new(ScoredBackend(backend)));
-    let mut request = request.with_context(SemanticCacheContext::default());
-    request.max_age = Some(Duration::from_secs(10));
-    request.access.reads = reads;
+    let context = SemanticCacheContext::default();
+    let max_age = Some(Duration::from_secs(10));
     let now = Duration::from_secs(100);
 
     let lookup = if asynchronous {
-        cache.async_lookup_semantic(&request, now).await
+        cache
+            .async_lookup_semantic(&key, &context, max_age, now)
+            .await
     } else {
-        cache.lookup_semantic(&request, now)
+        cache.lookup_semantic(&key, &context, max_age, now)
     };
 
     assert_eq!(lookup, expected);

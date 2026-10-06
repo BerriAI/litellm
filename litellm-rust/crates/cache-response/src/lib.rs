@@ -5,7 +5,7 @@ mod entry;
 mod envelope;
 mod exact;
 mod key;
-mod request;
+mod policy;
 mod scope;
 mod service;
 
@@ -16,6 +16,6 @@ pub use entry::CacheEntry;
 pub use envelope::ResponseEnvelope;
 pub use exact::{ConnectionProbe, ExactResponseCache};
 pub use key::{CacheKey, CacheKeyInput, CacheTarget, extra_headers};
-pub use request::{CacheAccess, ResponseCacheRequest};
-pub use scope::{CacheOptions, CachePolicy, CacheScope, ScopedCache};
+pub use policy::{CacheAccess, CacheOptions, CachePolicy};
+pub use scope::CacheScope;
 pub use service::{ResponseCacheConfig, ResponseCacheService};

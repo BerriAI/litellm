@@ -30,7 +30,6 @@ pub use litellm_router::{Deployment, Router as ModelRouter};
 pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
-    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
     pub messages: MessagesRoute,
@@ -45,7 +44,9 @@ pub struct Gateway {
 impl Gateway {
     pub fn with_cache(self, cache: Arc<dyn litellm_cache_response::ResponseCacheService>) -> Self {
         Self {
-            cache: Some(cache),
+            chat_completions: self.chat_completions.with_cache(cache.clone()),
+            messages: self.messages.with_cache(cache.clone()),
+            responses: self.responses.with_cache(cache),
             ..self
         }
     }
@@ -59,7 +60,6 @@ impl Gateway {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
         let auth = resources.auth.clone();
         Ok(Self {
-            cache: None,
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),
                 auth.clone(),

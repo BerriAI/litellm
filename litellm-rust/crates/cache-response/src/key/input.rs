@@ -6,17 +6,14 @@ use serde_json::{Map, Value};
 use super::CacheTarget;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CacheKeyInput {
-    Preset(String),
-    Request {
-        target: CacheTarget,
-        parameters: Value,
-    },
+pub struct CacheKeyInput {
+    surface: String,
+    target: CacheTarget,
+    parameters: Value,
 }
 
 impl CacheKeyInput {
-    pub fn request(target: CacheTarget, parameters: Value) -> Self {
+    pub fn new(surface: &str, target: CacheTarget, parameters: Value) -> Self {
         let parameters = match canonical(parameters) {
             Value::Object(fields) => Value::Object(
                 fields
@@ -26,15 +23,21 @@ impl CacheKeyInput {
             ),
             value => value,
         };
-        Self::Request { target, parameters }
+        Self {
+            surface: surface.to_owned(),
+            target,
+            parameters,
+        }
     }
 
     pub fn forwarded(
+        surface: &str,
         target: CacheTarget,
         parameters: impl IntoIterator<Item = (String, Value)>,
         headers: impl IntoIterator<Item = (&'static str, Value)>,
     ) -> Self {
-        Self::request(
+        Self::new(
+            surface,
             target,
             Value::Object(
                 parameters

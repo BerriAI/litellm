@@ -18,7 +18,7 @@ pub(super) async fn execute(
     http: &Client,
     auth: &AuthServices,
     request: ProviderChatCompletionsRequest,
-    cache: Option<crate::caching::RouteCache>,
+    cache: Option<crate::caching::CachePlan>,
     interceptors: &impl Interceptors<Error>,
     observers: Option<&ObservationSender>,
 ) -> Result<ChatCompletionsResponse, Error> {
@@ -57,14 +57,9 @@ pub(super) async fn execute(
     let wire = interceptors
         .before_provider_request(outbound, context)
         .await?;
-    let (cache_request, cache, cache_options) = crate::caching::RouteCache::into_call(
-        cache.and_then(|cache| cache.confirm(&wire)),
-        identity,
-    );
     crate::caching::execute_unary::<super::route::ChatCompletions, _, _>(
-        cache_request,
-        cache,
-        cache_options,
+        identity,
+        cache.and_then(|cache| cache.confirm(&wire)),
         interceptors,
         observers,
         || async move {

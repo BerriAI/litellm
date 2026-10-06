@@ -1,4 +1,4 @@
-use crate::caching::RouteCache;
+use crate::caching::CachePlan;
 pub use crate::error::RouteError as Error;
 use litellm_host::observation::ObservationSender;
 pub use litellm_inference::RouteError as Error;
@@ -22,7 +22,7 @@ pub struct ResponsesRoute {
     http: litellm_http::Client,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
-    cache: Option<litellm_cache_response::ScopedCache>,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
 }
 
 impl ResponsesRoute {
@@ -39,7 +39,10 @@ impl ResponsesRoute {
         }
     }
 
-    pub fn with_cache(self, cache: impl Into<Option<litellm_cache_response::ScopedCache>>) -> Self {
+    pub fn with_cache(
+        self,
+        cache: impl Into<Option<Arc<dyn litellm_cache_response::ResponseCacheService>>>,
+    ) -> Self {
         Self {
             cache: cache.into(),
             ..self
@@ -81,7 +84,7 @@ impl ResponsesRoute {
     async fn run(
         &self,
         call: ResponsesCall,
-        cache_options: Option<litellm_cache_response::CachePolicy>,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
         model_group: Option<&str>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
@@ -96,12 +99,12 @@ impl ResponsesRoute {
     async fn run_provider(
         &self,
         call: ResponsesCall,
-        cache_options: Option<litellm_cache_response::CachePolicy>,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
         model_group: Option<&str>,
         interceptors: &impl Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
-        let cache = RouteCache::attach(self.cache.as_ref(), cache_options, &call, model_group)?;
+        let cache = CachePlan::for_request(self.cache.as_ref(), cache_options, &call, model_group)?;
         let request = prepare::prepare(call, self.secrets.as_ref()).await?;
         litellm_inference::diagnostic::provider(
             &request.context.model,

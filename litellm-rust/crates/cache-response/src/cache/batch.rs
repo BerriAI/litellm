@@ -4,7 +4,7 @@ use litellm_cache::{BaseCache, BatchCache, BatchEntry, CacheContext, Error, Exac
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 use serde_json::Value;
 
-use crate::{CacheEntry, CacheKey, ResponseCache, ResponseCacheRequest};
+use crate::{CacheEntry, CacheKey, ResponseCache};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BatchLookup<T> {
@@ -37,7 +37,8 @@ impl<T: Serialize> Serialize for BatchLookup<T> {
 }
 
 pub struct PendingWrite<C: CacheContext = ExactCacheContext> {
-    pub request: ResponseCacheRequest<C>,
+    pub key: CacheKey,
+    pub context: C,
     pub response: Value,
     pub produced_at: Duration,
 }
@@ -49,53 +50,33 @@ where
 {
     pub fn lookup_batch(
         &self,
-        requests: &[ResponseCacheRequest<B::Context>],
+        keys: &[CacheKey],
+        context: &B::Context,
+        max_age: Option<Duration>,
         now: Duration,
     ) -> Result<BatchLookup<Value>, Error> {
-        let keys = self.keys(requests);
-        let readable = readable(keys.iter().zip(requests));
-        let entries = match readable.first() {
-            Some((_, _, request)) => self
-                .backend
-                .batch_get_cache(&key_strings(&readable), &request.context)?,
-            None => Vec::new(),
-        };
-        batch_lookup(requests.len(), readable, entries, now)
+        if keys.is_empty() {
+            return Ok(BatchLookup::misses(0));
+        }
+        let entries = self.backend.batch_get_cache(&key_strings(keys), context)?;
+        batch_lookup(keys.len(), entries, max_age, now)
     }
 
     pub async fn async_lookup_batch(
         &self,
-        requests: &[ResponseCacheRequest<B::Context>],
+        keys: &[CacheKey],
+        context: &B::Context,
+        max_age: Option<Duration>,
         now: Duration,
     ) -> Result<BatchLookup<Value>, Error> {
-        let keys = self.keys(requests);
-        self.async_lookup_keyed_batch(keys.iter().zip(requests), now)
-            .await
-    }
-
-    pub(crate) async fn async_lookup_keyed_batch<'a>(
-        &self,
-        requests: impl ExactSizeIterator<Item = (&'a CacheKey, &'a ResponseCacheRequest<B::Context>)>,
-        now: Duration,
-    ) -> Result<BatchLookup<Value>, Error>
-    where
-        B::Context: 'a,
-    {
-        let len = requests.len();
-        let readable = readable(requests);
-        let entries = match readable.first() {
-            Some((_, _, request)) => {
-                self.backend
-                    .async_batch_get_cache(key_strings(&readable), request.context.clone())
-                    .await?
-            }
-            None => Vec::new(),
-        };
-        batch_lookup(len, readable, entries, now)
-    }
-
-    fn keys(&self, requests: &[ResponseCacheRequest<B::Context>]) -> Vec<CacheKey> {
-        requests.iter().map(|request| self.key(request)).collect()
+        if keys.is_empty() {
+            return Ok(BatchLookup::misses(0));
+        }
+        let entries = self
+            .backend
+            .async_batch_get_cache(key_strings(keys), context.clone())
+            .await?;
+        batch_lookup(keys.len(), entries, max_age, now)
     }
 }
 
@@ -106,14 +87,16 @@ where
 {
     pub async fn async_store_batch(
         &self,
-        entries: Vec<(ResponseCacheRequest<B::Context>, Value)>,
+        entries: Vec<(CacheKey, Value)>,
+        context: B::Context,
         now: Duration,
     ) -> Result<(), Error> {
         self.async_store_entries(
             entries
                 .into_iter()
-                .map(|(request, response)| PendingWrite {
-                    request,
+                .map(|(key, response)| PendingWrite {
+                    key,
+                    context: context.clone(),
                     response,
                     produced_at: now,
                 })
@@ -129,12 +112,8 @@ where
         let writable = writes
             .into_iter()
             .filter_map(|write| {
-                let entry = self.writable(&write.request, write.response, write.produced_at)?;
-                Some((
-                    String::from(self.key(&write.request)),
-                    entry,
-                    write.request.context,
-                ))
+                let entry = self.writable(write.response, write.produced_at)?;
+                Some((String::from(write.key), entry, write.context))
             })
             .collect::<Vec<_>>();
         let Some((_, _, first_context)) = writable.first() else {
@@ -161,39 +140,26 @@ where
     }
 }
 
-type Readable<'a, C> = Vec<(usize, &'a CacheKey, &'a ResponseCacheRequest<C>)>;
-
-fn readable<'a, C: CacheContext + 'a>(
-    requests: impl Iterator<Item = (&'a CacheKey, &'a ResponseCacheRequest<C>)>,
-) -> Readable<'a, C> {
-    requests
-        .enumerate()
-        .filter(|(_, (_, request))| request.access.reads)
-        .map(|(index, (key, request))| (index, key, request))
-        .collect()
+fn key_strings(keys: &[CacheKey]) -> Vec<String> {
+    keys.iter().map(|key| key.as_str().to_owned()).collect()
 }
 
-fn key_strings<C: CacheContext>(readable: &Readable<'_, C>) -> Vec<String> {
-    readable
-        .iter()
-        .map(|(_, key, _)| key.as_str().to_owned())
-        .collect()
-}
-
-fn batch_lookup<C: CacheContext>(
+fn batch_lookup(
     len: usize,
-    readable: Readable<'_, C>,
     entries: Vec<BatchEntry<CacheEntry>>,
+    max_age: Option<Duration>,
     now: Duration,
 ) -> Result<BatchLookup<Value>, Error> {
-    if readable.len() != entries.len() {
+    if entries.len() != len {
         return Err(Error::Unavailable);
     }
-    let mut hits = BatchLookup::misses(len);
-    for ((index, _, request), entry) in readable.into_iter().zip(entries) {
-        if let BatchEntry::Hit(entry) = entry {
-            hits.values[index] = entry.into_fresh(now, request.max_age);
-        }
-    }
-    Ok(hits)
+    Ok(BatchLookup {
+        values: entries
+            .into_iter()
+            .map(|entry| match entry {
+                BatchEntry::Hit(entry) => entry.into_fresh(now, max_age),
+                BatchEntry::Miss | BatchEntry::Invalid => None,
+            })
+            .collect(),
+    })
 }

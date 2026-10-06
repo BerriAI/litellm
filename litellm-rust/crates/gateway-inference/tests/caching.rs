@@ -4,10 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use axum::body::to_bytes;
 use litellm_cache_memory::InMemoryCache;
-use litellm_cache_response::{
-    CacheKey, CacheKeyInput, ResponseCache, ResponseCacheConfig, ResponseCacheRequest,
-    ResponseCacheService,
-};
+use litellm_cache_response::{CacheKey, ResponseCache, ResponseCacheConfig, ResponseCacheService};
 use rstest::rstest;
 use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
@@ -76,7 +73,7 @@ async fn all_inference_endpoints_share_native_cache(
     let stored = cache
         .lookup(
             &CacheKey::Native(cache_key.to_str().unwrap().into()),
-            &ResponseCacheRequest::new(CacheKeyInput::Preset(cache_key.to_str().unwrap().into())),
+            None,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap(),

@@ -7,7 +7,9 @@ pub use batch::{BatchLookup, PendingWrite};
 use litellm_cache::{BaseCache, CacheConnectionResult, ConnectionCache, Error, FlushCache};
 use serde_json::Value;
 
-use crate::{CacheEntry, CacheKey, ResponseCacheConfig, ResponseCacheRequest};
+use crate::{
+    CacheEntry, CacheKey, CacheKeyInput, CacheScope, ResponseCacheConfig, key::KeyContext,
+};
 
 pub struct ResponseCache<B: BaseCache<Value = CacheEntry>>
 where
@@ -59,99 +61,67 @@ where
         self.backend.test_connection().await
     }
 
-    pub fn key(&self, request: &ResponseCacheRequest<B::Context>) -> CacheKey {
+    pub fn key(&self, input: &CacheKeyInput, scope: &CacheScope) -> CacheKey {
         CacheKey::derive(
-            &self.config.namespace,
-            &request.surface,
-            &request.scope,
-            &request.key,
+            input,
+            &KeyContext {
+                namespace: &self.config.namespace,
+                scope,
+            },
         )
     }
 
     pub fn lookup(
         &self,
-        request: &ResponseCacheRequest<B::Context>,
+        key: &CacheKey,
+        context: &B::Context,
+        max_age: Option<Duration>,
         now: Duration,
     ) -> Result<Option<Value>, Error> {
-        if !request.access.reads {
-            return Ok(None);
-        }
-        let entry = self
-            .backend
-            .get_cache(self.key(request).as_str(), &request.context);
-        fresh_hit(entry, now, request.max_age)
+        fresh_hit(self.backend.get_cache(key.as_str(), context), now, max_age)
     }
 
     pub async fn async_lookup(
         &self,
-        request: &ResponseCacheRequest<B::Context>,
-        now: Duration,
-    ) -> Result<Option<Value>, Error> {
-        self.async_lookup_keyed(&self.key(request), request, now)
-            .await
-    }
-
-    pub(crate) async fn async_lookup_keyed(
-        &self,
         key: &CacheKey,
-        request: &ResponseCacheRequest<B::Context>,
+        context: &B::Context,
+        max_age: Option<Duration>,
         now: Duration,
     ) -> Result<Option<Value>, Error> {
-        if !request.access.reads {
-            return Ok(None);
-        }
-        let entry = self
-            .backend
-            .async_get_cache(key.as_str(), &request.context)
-            .await;
-        fresh_hit(entry, now, request.max_age)
+        let entry = self.backend.async_get_cache(key.as_str(), context).await;
+        fresh_hit(entry, now, max_age)
     }
 
     pub fn store(
         &self,
-        request: &ResponseCacheRequest<B::Context>,
+        key: &CacheKey,
+        context: &B::Context,
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
-        let Some(entry) = self.writable(request, response, now) else {
+        let Some(entry) = self.writable(response, now) else {
             return Ok(());
         };
-        self.backend
-            .set_cache(self.key(request).as_str(), entry, &request.context)
+        self.backend.set_cache(key.as_str(), entry, context)
     }
 
     pub async fn async_store(
         &self,
-        request: &ResponseCacheRequest<B::Context>,
-        response: Value,
-        now: Duration,
-    ) -> Result<(), Error> {
-        self.async_store_keyed(&self.key(request), request, response, now)
-            .await
-    }
-
-    pub(crate) async fn async_store_keyed(
-        &self,
         key: &CacheKey,
-        request: &ResponseCacheRequest<B::Context>,
+        context: B::Context,
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
-        let Some(entry) = self.writable(request, response, now) else {
+        let Some(entry) = self.writable(response, now) else {
             return Ok(());
         };
         self.backend
-            .async_set_cache(key.as_str(), entry, request.context.clone())
+            .async_set_cache(key.as_str(), entry, context)
             .await
     }
 
-    fn writable(
-        &self,
-        request: &ResponseCacheRequest<B::Context>,
-        response: Value,
-        produced_at: Duration,
-    ) -> Option<CacheEntry> {
-        (request.access.writes && self.fits(&response))
+    fn writable(&self, response: Value, produced_at: Duration) -> Option<CacheEntry> {
+        self.fits(&response)
             .then(|| CacheEntry::produced_at(response, produced_at))
     }
 

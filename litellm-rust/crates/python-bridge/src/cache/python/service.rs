@@ -3,7 +3,7 @@ use std::time::Duration;
 use futures_util::future::BoxFuture;
 use litellm_cache::Error;
 use litellm_cache_response::{
-    CacheKey, CacheScope, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
+    CacheKey, CacheKeyInput, CacheScope, ResponseCacheConfig, ResponseCacheService,
     ResponseEnvelope,
 };
 use litellm_core::{
@@ -78,14 +78,13 @@ struct PythonCacheService<P: Protocol> {
 pub(in crate::cache) fn service<P: Protocol<HostCall = CacheCall>>(
     services: HostServices<P>,
     surface: &'static str,
-    config: ResponseCacheConfig,
 ) -> std::sync::Arc<dyn ResponseCacheService>
 where
     P::Error: From<MachineFault>,
 {
     std::sync::Arc::new(PythonCacheService {
         services,
-        config,
+        config: ResponseCacheConfig::default(),
         surface,
     })
 }
@@ -100,11 +99,12 @@ where
 
     fn key<'a>(
         &'a self,
-        request: &'a ResponseCacheRequest,
+        _: &'a CacheKeyInput,
+        scope: &'a CacheScope,
     ) -> BoxFuture<'a, Result<CacheKey, Error>> {
         Box::pin(async move {
-            match request.scope {
-                CacheScope::Isolated(_) => Err(Error::UnsupportedOperation),
+            match scope {
+                CacheScope::Caller(_) => Err(Error::UnsupportedOperation),
                 CacheScope::Shared => self
                     .services
                     .call(|reply| CacheCall::GetCacheKey { reply })
@@ -118,7 +118,7 @@ where
     fn lookup<'a>(
         &'a self,
         key: &'a CacheKey,
-        _: &'a ResponseCacheRequest,
+        _: Option<Duration>,
         _: Duration,
     ) -> BoxFuture<'a, Result<Option<Value>, Error>> {
         let key = key.as_str().to_owned();
@@ -135,7 +135,7 @@ where
     fn store<'a>(
         &'a self,
         key: &'a CacheKey,
-        _: &'a ResponseCacheRequest,
+        _: Option<Duration>,
         value: Value,
         _: Duration,
     ) -> BoxFuture<'a, Result<(), Error>> {

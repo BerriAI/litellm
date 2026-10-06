@@ -20,14 +20,14 @@ use super::{
     prepare::ProviderMessagesRequest,
 };
 use crate::{
-    caching::RouteCache, constants::MESSAGES_TIMEOUT_SECS, context::CallContext,
+    caching::CachePlan, constants::MESSAGES_TIMEOUT_SECS, context::CallContext,
     outbound::outbound_request,
 };
 
 pub(super) struct ProviderCall {
     pub identity: ProviderIdentity,
     pub wire: WireRequest,
-    pub cache: Option<RouteCache>,
+    pub cache: Option<CachePlan>,
     provider: super::common_utils::MessagesProvider,
     signer: Option<litellm_auth_aws::SigV4Signer>,
     timeout: Option<Duration>,
@@ -38,7 +38,7 @@ impl MessagesRoute {
     pub(super) async fn prepare_outbound(
         &self,
         request: ProviderMessagesRequest,
-        cache: Option<RouteCache>,
+        cache: Option<CachePlan>,
         context: &CallContext<'_, impl Interceptors<Error>>,
     ) -> Result<ProviderCall, Error> {
         let ProviderMessagesRequest {

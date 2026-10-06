@@ -1,5 +1,7 @@
 use super::python;
-use litellm_cache_response::{CachePolicy, ResponseCacheConfig, ScopedCache};
+use std::sync::Arc;
+
+use litellm_cache_response::{CacheOptions, CachePolicy, ResponseCacheService};
 use litellm_core::caching::Cachable;
 use litellm_host::{
     machine::{HostServices, MachineFault},
@@ -21,20 +23,19 @@ impl<P: Protocol> Protocol for PythonCached<P> {
 pub(crate) struct PythonCacheConfig {
     policy: CachePolicy,
     surface: &'static str,
-    config: ResponseCacheConfig,
 }
 
 impl PythonCacheConfig {
-    pub(crate) fn attach<P: Protocol<HostCall = python::CacheCall>>(
+    pub(crate) fn into_parts<P: Protocol<HostCall = python::CacheCall>>(
         self,
         services: HostServices<P>,
-    ) -> (ScopedCache, CachePolicy)
+    ) -> (Arc<dyn ResponseCacheService>, CacheOptions)
     where
         P::Error: From<MachineFault>,
     {
         (
-            ScopedCache::shared(python::service(services, self.surface, self.config)),
-            self.policy,
+            python::service(services, self.surface),
+            CacheOptions::shared(self.policy),
         )
     }
 }
@@ -118,21 +119,10 @@ pub(crate) fn configure_python_cache<P: Cachable>(
         no_store: boolean("no-store")?,
         ..CachePolicy::default()
     };
-    let namespace = cache
-        .getattr_opt("namespace")?
-        .filter(|value| !value.is_none())
-        .map(|value| value.extract())
-        .transpose()?
-        .unwrap_or_default();
     host.bind(cache, arguments);
     Ok(Some(PythonCacheConfig {
         policy,
         surface: P::SURFACE,
-        config: ResponseCacheConfig {
-            namespace,
-            supports_isolated_scope: false,
-            ..ResponseCacheConfig::default()
-        },
     }))
 }
 

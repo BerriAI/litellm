@@ -124,7 +124,7 @@ async fn rejected_results_are_not_delivered_or_cached(
 ) {
     use futures_util::TryStreamExt;
     use litellm_cache_memory::InMemoryCache;
-    use litellm_cache_response::{CacheScope, ResponseCache, ScopedCache};
+    use litellm_cache_response::{CacheOptions, CachePolicy, ResponseCache};
 
     let response = if streaming {
         ResponseTemplate::new(200).set_body_raw(
@@ -135,16 +135,13 @@ async fn rejected_results_are_not_delivered_or_cached(
         message_response()
     };
     let upstream = upstream([response.clone(), response]).await;
-    let route = messages_route(no_secrets()).with_cache(
-        ScopedCache::new(
-            Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
-                Some(100),
-                Some(Duration::from_secs(60)),
-            )))),
-            CacheScope::Shared,
-        )
-        .unwrap(),
-    );
+    let cache: Arc<dyn litellm_cache_response::ResponseCacheService> =
+        Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
+            Some(100),
+            Some(Duration::from_secs(60)),
+        ))));
+    let route = messages_route(no_secrets()).with_cache(cache);
+    let options = || CacheOptions::shared(CachePolicy::default());
     for (reject, expected_requests, cached) in [
         (true, 1, false),
         (false, 2, false),
@@ -167,13 +164,16 @@ async fn rejected_results_are_not_delivered_or_cached(
         };
         let result = if hosted {
             litellm_host_native::in_process::run_hosted(
-                route.clone().machine(host.request().unwrap(), None),
+                route.clone().machine(host.request().unwrap(), options()),
                 host.runtime(),
             )
             .await
             .map(|_| ())
         } else {
-            match route.execute(host.request().unwrap(), &host, None).await {
+            match route
+                .execute(host.request().unwrap(), &host, options())
+                .await
+            {
                 Ok(MessagesCallResponse::Complete(_)) => Ok(()),
                 Ok(MessagesCallResponse::Stream { chunks, .. }) => {
                     chunks.try_collect::<Vec<_>>().await.map(|_| ())

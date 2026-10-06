@@ -7,16 +7,28 @@ use std::{
 };
 
 use futures_util::future::BoxFuture;
-use litellm_cache::{CacheCodec, Error, ExactCacheContext};
+use litellm_cache::{CacheCodec, Error};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::RedisCache;
 use litellm_cache_response::{
-    CacheAccess, CacheEntry, CacheKey, CacheKeyInput, ResponseCache, ResponseCacheCodec,
-    ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
+    CacheEntry, CacheKey, CacheKeyInput, CacheScope, CacheTarget, ResponseCache,
+    ResponseCacheCodec, ResponseCacheConfig, ResponseCacheService,
 };
 use redis_test::{MockCmd, MockRedisConnection};
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
+
+fn input(prompt: &str) -> CacheKeyInput {
+    CacheKeyInput::new(
+        "responses",
+        CacheTarget::ModelGroup("group".into()),
+        json!({"input": prompt}),
+    )
+}
+
+fn keyed(key: &str) -> CacheKey {
+    CacheKey::External(key.into())
+}
 
 #[rstest]
 #[tokio::test]
@@ -28,36 +40,34 @@ async fn service_honors_per_call_expiry_and_freshness() {
             Duration::from_secs(cache_clock.load(Ordering::SeqCst))
         }),
     )));
-    let request = ResponseCacheRequest {
-        context: ExactCacheContext {
-            ttl: Some(Duration::from_secs(5)),
-        },
-        ..ResponseCacheRequest::new(CacheKeyInput::Preset("entry".into()))
-    };
-    let key = cache.key(&request).await.unwrap();
+    let key = cache
+        .key(&input("entry"), &CacheScope::Shared)
+        .await
+        .unwrap();
     cache
-        .store(&key, &request, json!({"answer":7}), Duration::ZERO)
+        .store(
+            &key,
+            Some(Duration::from_secs(5)),
+            json!({"answer":7}),
+            Duration::ZERO,
+        )
         .await
         .unwrap();
     assert_eq!(
-        cache.lookup(&key, &request, Duration::ZERO).await.unwrap(),
+        cache.lookup(&key, None, Duration::ZERO).await.unwrap(),
         Some(json!({"answer":7}))
     );
-    let stale_request = ResponseCacheRequest {
-        max_age: Some(Duration::from_secs(1)),
-        ..request.clone()
-    };
     clock.store(2, Ordering::SeqCst);
     assert_eq!(
         cache
-            .lookup(&key, &stale_request, Duration::from_secs(2))
+            .lookup(&key, Some(Duration::from_secs(1)), Duration::from_secs(2))
             .await
             .unwrap(),
         None
     );
     assert!(
         cache
-            .lookup(&key, &request, Duration::from_secs(2))
+            .lookup(&key, None, Duration::from_secs(2))
             .await
             .unwrap()
             .is_some()
@@ -65,7 +75,7 @@ async fn service_honors_per_call_expiry_and_freshness() {
     clock.store(6, Ordering::SeqCst);
     assert_eq!(
         cache
-            .lookup(&key, &request, Duration::from_secs(6))
+            .lookup(&key, None, Duration::from_secs(6))
             .await
             .unwrap(),
         None
@@ -78,22 +88,26 @@ async fn native_service_reads_and_writes_under_the_key_it_is_given() {
     let cache: Arc<dyn ResponseCacheService> = Arc::new(ResponseCache::new(Arc::new(
         InMemoryCache::<CacheEntry>::default(),
     )));
-    let stored = request("stored");
-    let other = request("other");
-    let key = cache.key(&stored).await.unwrap();
+    let key = cache
+        .key(&input("stored"), &CacheScope::Shared)
+        .await
+        .unwrap();
     cache
-        .store(&key, &stored, json!({"answer":7}), Duration::ZERO)
+        .store(&key, None, json!({"answer":7}), Duration::ZERO)
         .await
         .unwrap();
     assert_eq!(
-        cache.lookup(&key, &other, Duration::ZERO).await.unwrap(),
+        cache.lookup(&key, None, Duration::ZERO).await.unwrap(),
         Some(json!({"answer":7}))
     );
-    let other_key = cache.key(&other).await.unwrap();
+    let other_key = cache
+        .key(&input("other"), &CacheScope::Shared)
+        .await
+        .unwrap();
     assert_ne!(other_key, key);
     assert_eq!(
         cache
-            .lookup(&other_key, &stored, Duration::ZERO)
+            .lookup(&other_key, None, Duration::ZERO)
             .await
             .unwrap(),
         None
@@ -107,37 +121,36 @@ async fn entry_limit_applies_to_sync_async_and_batch_writes() {
     let cache = ResponseCache::new(storage.clone()).with_config(ResponseCacheConfig {
         namespace: "service-test".into(),
         max_entry_bytes: json!({"answer":7}).to_string().len(),
-        ..ResponseCacheConfig::default()
     });
     let small = json!({"answer":7});
     let large = json!({"answer":"too large"});
-    let request = |key: &str| ResponseCacheRequest::new(CacheKeyInput::Preset(key.into()));
+    let context = litellm_cache::ExactCacheContext::default();
     cache
-        .store(&request("sync"), large.clone(), Duration::ZERO)
+        .store(&keyed("sync"), &context, large.clone(), Duration::ZERO)
         .unwrap();
     cache
-        .async_store(&request("async"), large.clone(), Duration::ZERO)
+        .async_store(
+            &keyed("async"),
+            context.clone(),
+            large.clone(),
+            Duration::ZERO,
+        )
         .await
         .unwrap();
     cache
         .async_store_batch(
             vec![
-                (request("batch-large"), large),
-                (request("batch-small"), small.clone()),
+                (keyed("batch-large"), large),
+                (keyed("batch-small"), small.clone()),
             ],
+            context,
             Duration::ZERO,
         )
         .await
         .unwrap();
     let service: Arc<dyn ResponseCacheService> = Arc::new(cache);
-    let stored = request("service");
     service
-        .store(
-            &service.key(&stored).await.unwrap(),
-            &stored,
-            small.clone(),
-            Duration::ZERO,
-        )
+        .store(&keyed("service"), None, small.clone(), Duration::ZERO)
         .await
         .unwrap();
     for key in ["sync", "async", "batch-large"] {
@@ -146,7 +159,7 @@ async fn entry_limit_applies_to_sync_async_and_batch_writes() {
     for key in ["batch-small", "service"] {
         assert_eq!(
             service
-                .lookup(&CacheKey::Native(key.into()), &request(key), Duration::ZERO)
+                .lookup(&keyed(key), None, Duration::ZERO)
                 .await
                 .unwrap(),
             Some(small.clone())
@@ -165,20 +178,16 @@ impl ResponseCacheService for SingleLookupService {
 
     fn key<'a>(
         &'a self,
-        request: &'a ResponseCacheRequest,
+        _: &'a CacheKeyInput,
+        _: &'a CacheScope,
     ) -> BoxFuture<'a, Result<CacheKey, Error>> {
-        Box::pin(async move {
-            match &request.key {
-                CacheKeyInput::Preset(key) => Ok(CacheKey::External(key.clone())),
-                CacheKeyInput::Request { .. } => Err(Error::Unavailable),
-            }
-        })
+        Box::pin(async { Err(Error::Unavailable) })
     }
 
     fn lookup<'a>(
         &'a self,
         key: &'a CacheKey,
-        _: &'a ResponseCacheRequest,
+        _: Option<Duration>,
         now: Duration,
     ) -> BoxFuture<'a, Result<Option<Value>, Error>> {
         Box::pin(async move {
@@ -196,29 +205,12 @@ impl ResponseCacheService for SingleLookupService {
     fn store<'a>(
         &'a self,
         _: &'a CacheKey,
-        _: &'a ResponseCacheRequest,
+        _: Option<Duration>,
         _: Value,
         _: Duration,
     ) -> BoxFuture<'a, Result<(), Error>> {
         Box::pin(async { Ok(()) })
     }
-}
-
-fn request(key: &str) -> ResponseCacheRequest {
-    ResponseCacheRequest::new(CacheKeyInput::Preset(key.into()))
-}
-
-async fn keyed(
-    service: &dyn ResponseCacheService,
-    requests: impl IntoIterator<Item = ResponseCacheRequest>,
-) -> Vec<(CacheKey, ResponseCacheRequest)> {
-    futures_util::future::try_join_all(
-        requests
-            .into_iter()
-            .map(|request| async move { Ok::<_, Error>((service.key(&request).await?, request)) }),
-    )
-    .await
-    .unwrap()
 }
 
 #[fixture]
@@ -236,19 +228,16 @@ fn service() -> Arc<dyn ResponseCacheService> {
 #[tokio::test]
 async fn batch_fallback_preserves_single_lookup_results(
     service: Arc<dyn ResponseCacheService>,
-    #[case] keys: &[&str],
+    #[case] names: &[&str],
     #[case] missing: &[usize],
 ) {
-    let requests = keyed(service.as_ref(), keys.iter().map(|key| request(key))).await;
+    let keys: Vec<_> = names.iter().map(|name| keyed(name)).collect();
     let now = Duration::from_secs(100);
-    let batch = service.lookup_batch(&requests, now).await.unwrap();
-    let expected: Vec<_> = futures_util::future::try_join_all(
-        requests
-            .iter()
-            .map(|(key, request)| service.lookup(key, request, now)),
-    )
-    .await
-    .unwrap();
+    let batch = service.lookup_batch(&keys, None, now).await.unwrap();
+    let expected: Vec<_> =
+        futures_util::future::try_join_all(keys.iter().map(|key| service.lookup(key, None, now)))
+            .await
+            .unwrap();
     assert_eq!(batch.values, expected);
     assert_eq!(batch.missing_indices(), missing);
     assert_eq!(
@@ -260,16 +249,24 @@ async fn batch_fallback_preserves_single_lookup_results(
 #[rstest]
 #[tokio::test]
 async fn batch_fallback_preserves_storage_failures(service: Arc<dyn ResponseCacheService>) {
-    let requests = keyed(service.as_ref(), [request("hit"), request("failure")]).await;
     let result = service
-        .lookup_batch(&requests, Duration::from_secs(100))
+        .lookup_batch(
+            &[keyed("hit"), keyed("failure")],
+            None,
+            Duration::from_secs(100),
+        )
         .await;
     assert_eq!(result, Err(Error::Unavailable));
 }
 
 #[rstest]
+#[case::fresh(None, true)]
+#[case::stale(Some(Duration::from_secs(1)), false)]
 #[tokio::test]
-async fn response_service_uses_bulk_reads_and_applies_per_request_policy() {
+async fn response_service_uses_bulk_reads_and_applies_freshness(
+    #[case] max_age: Option<Duration>,
+    #[case] fresh: bool,
+) {
     let response = json!({"answer": 7});
     let encoded = ResponseCacheCodec
         .encode(&CacheEntry::produced_at(
@@ -278,11 +275,10 @@ async fn response_service_uses_bulk_reads_and_applies_per_request_policy() {
         ))
         .unwrap();
     let connection = MockRedisConnection::new(vec![MockCmd::new(
-        redis::cmd("MGET").arg(["hit", "miss", "hit", "stale"].as_slice()),
+        redis::cmd("MGET").arg(["hit", "miss", "hit"].as_slice()),
         Ok(vec![
             redis::Value::BulkString(encoded.clone()),
             redis::Value::Nil,
-            redis::Value::BulkString(encoded.clone()),
             redis::Value::BulkString(encoded),
         ]),
     )])
@@ -290,35 +286,14 @@ async fn response_service_uses_bulk_reads_and_applies_per_request_policy() {
     let cache: Arc<dyn ResponseCacheService> = Arc::new(ResponseCache::new(Arc::new(
         RedisCache::with_connection(connection, None, ResponseCacheCodec),
     )));
-    let disabled = ResponseCacheRequest {
-        access: CacheAccess {
-            reads: false,
-            writes: true,
-        },
-        ..request("disabled")
-    };
-    let stale = ResponseCacheRequest {
-        max_age: Some(Duration::from_secs(1)),
-        ..request("stale")
-    };
-    let requests = keyed(
-        cache.as_ref(),
-        [
-            request("hit"),
-            disabled,
-            request("miss"),
-            request("hit"),
-            stale,
-        ],
-    )
-    .await;
     let batch = cache
-        .lookup_batch(&requests, Duration::from_secs(102))
+        .lookup_batch(
+            &[keyed("hit"), keyed("miss"), keyed("hit")],
+            max_age,
+            Duration::from_secs(102),
+        )
         .await
         .unwrap();
-    assert_eq!(
-        batch.values,
-        vec![Some(response.clone()), None, None, Some(response), None]
-    );
-    assert_eq!(batch.missing_indices(), vec![1, 2, 4]);
+    let hit = fresh.then(|| response.clone());
+    assert_eq!(batch.values, vec![hit.clone(), None, hit]);
 }

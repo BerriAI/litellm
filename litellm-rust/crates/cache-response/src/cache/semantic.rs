@@ -6,7 +6,7 @@ use litellm_cache::{
 };
 use serde_json::Value;
 
-use crate::{CacheEntry, ResponseCache, ResponseCacheRequest};
+use crate::{CacheEntry, CacheKey, ResponseCache};
 
 impl<B> ResponseCache<B>
 where
@@ -17,31 +17,29 @@ where
     /// value only: Python stamps the similarity before its max-age check.
     pub fn lookup_semantic(
         &self,
-        request: &ResponseCacheRequest<B::Context>,
+        key: &CacheKey,
+        context: &B::Context,
+        max_age: Option<Duration>,
         now: Duration,
     ) -> Result<SemanticLookup<Value>, Error> {
-        if !request.access.reads {
-            return Ok(SemanticLookup::miss(None));
-        }
         let lookup = self
             .backend
-            .get_cache_with_similarity(self.key(request).as_str(), &request.context);
-        fresh_semantic(lookup, now, request.max_age)
+            .get_cache_with_similarity(key.as_str(), context);
+        fresh_semantic(lookup, now, max_age)
     }
 
     pub async fn async_lookup_semantic(
         &self,
-        request: &ResponseCacheRequest<B::Context>,
+        key: &CacheKey,
+        context: &B::Context,
+        max_age: Option<Duration>,
         now: Duration,
     ) -> Result<SemanticLookup<Value>, Error> {
-        if !request.access.reads {
-            return Ok(SemanticLookup::miss(None));
-        }
         let lookup = self
             .backend
-            .async_get_cache_with_similarity(self.key(request).as_str(), &request.context)
+            .async_get_cache_with_similarity(key.as_str(), context)
             .await;
-        fresh_semantic(lookup, now, request.max_age)
+        fresh_semantic(lookup, now, max_age)
     }
 }
 

@@ -44,13 +44,7 @@ async fn handle(
     let model_group = request::model_name(&body)?.to_owned();
     request::authorize_model(identity, deployment, &body).await?;
     let (body, cache_options) = crate::caching::prepare(identity, body)?;
-    let route = gateway
-        .chat_completions
-        .clone()
-        .with_cache(crate::caching::scoped(
-            gateway.cache.as_ref(),
-            &cache_options,
-        )?);
+    let route = gateway.chat_completions.clone();
 
     let messages = body.get("messages").cloned().unwrap_or_default();
     let headers = crate::caching::CacheHeaders::default();
@@ -70,7 +64,7 @@ async fn handle(
                 timeout: deployment.timeout,
             },
             litellm_core::CallOptions {
-                cache: Some(cache_options.policy),
+                cache: Some(cache_options),
                 model_group: Some(model_group),
                 observers: None,
             },

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheEntry, CacheKey, CacheKeyInput, CacheOptions, CacheScope, CacheTarget, ResponseCache,
+    CacheEntry, CacheKey, CacheKeyInput, CacheScope, CacheTarget, ResponseCache,
     ResponseCacheConfig,
 };
 use rstest::rstest;
@@ -14,7 +14,7 @@ fn key_in(namespace: &str, input: CacheKeyInput) -> CacheKey {
             namespace: namespace.into(),
             ..ResponseCacheConfig::default()
         })
-        .key(&CacheOptions::new(CacheScope::Shared).request("responses", input))
+        .key(&input, &CacheScope::Shared)
 }
 
 fn key(input: CacheKeyInput) -> CacheKey {
@@ -22,17 +22,11 @@ fn key(input: CacheKeyInput) -> CacheKey {
 }
 
 fn group(name: &str, parameters: Value) -> CacheKeyInput {
-    CacheKeyInput::request(CacheTarget::ModelGroup(name.into()), parameters)
-}
-
-#[rstest]
-#[case::without_namespace("")]
-#[case::with_namespace("team")]
-fn preset_keys_are_used_verbatim(#[case] namespace: &str) {
-    assert_eq!(
-        key_in(namespace, CacheKeyInput::Preset("preset".into())).as_str(),
-        "preset"
-    );
+    CacheKeyInput::new(
+        "responses",
+        CacheTarget::ModelGroup(name.into()),
+        parameters,
+    )
 }
 
 #[rstest]
@@ -55,7 +49,8 @@ fn the_namespace_prefixes_generated_keys_exactly_once(
 fn deployments_in_one_model_group_share_a_key() {
     let request = json!({"input": "hello"});
     assert_eq!(
-        key(CacheKeyInput::request(
+        key(CacheKeyInput::new(
+            "responses",
             CacheTarget::resolve(
                 Some("gpt-5"),
                 "gpt-5",
@@ -64,7 +59,8 @@ fn deployments_in_one_model_group_share_a_key() {
             ),
             request.clone()
         )),
-        key(CacheKeyInput::request(
+        key(CacheKeyInput::new(
+            "responses",
             CacheTarget::resolve(Some("gpt-5"), "gpt-5", Some("openai"), None),
             request
         )),
@@ -95,8 +91,8 @@ fn deployments_in_one_model_group_share_a_key() {
 fn distinct_targets_never_share_a_key(#[case] first: CacheTarget, #[case] second: CacheTarget) {
     let request = json!({"input": "hello"});
     assert_ne!(
-        key(CacheKeyInput::request(first, request.clone())),
-        key(CacheKeyInput::request(second, request)),
+        key(CacheKeyInput::new("responses", first, request.clone())),
+        key(CacheKeyInput::new("responses", second, request)),
     );
 }
 
@@ -143,4 +139,21 @@ fn every_parameter_changes_the_key(#[case] name: &str) {
     let base = json!({"input": "hello"});
     let varied = json!({"input": "hello", name: 1});
     assert_ne!(key(group("g", base)), key(group("g", varied)));
+}
+
+#[rstest]
+fn surfaces_never_share_a_key() {
+    let target = || CacheTarget::ModelGroup("g".into());
+    assert_ne!(
+        key(CacheKeyInput::new(
+            "responses",
+            target(),
+            json!({"input": "hello"})
+        )),
+        key(CacheKeyInput::new(
+            "messages",
+            target(),
+            json!({"input": "hello"})
+        )),
+    );
 }

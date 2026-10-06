@@ -1,9 +1,9 @@
 use serde_json::Value;
 use std::{sync::Mutex, time::Duration};
 
-use litellm_cache::Error;
+use litellm_cache::{Error, ExactCacheContext};
 
-use crate::{ExactResponseCache, PendingWrite, ResponseCacheRequest};
+use crate::{CacheKey, ExactResponseCache, PendingWrite};
 
 pub struct WriteBuffer {
     flush_size: usize,
@@ -21,14 +21,16 @@ impl WriteBuffer {
     pub async fn async_store(
         &self,
         cache: &dyn ExactResponseCache,
-        request: &ResponseCacheRequest,
+        key: &CacheKey,
+        ttl: Option<Duration>,
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
         let pending = {
             let mut entries = self.entries.lock().map_err(|_| Error::Unavailable)?;
             entries.push(PendingWrite {
-                request: request.clone(),
+                key: key.clone(),
+                context: ExactCacheContext { ttl },
                 response,
                 produced_at: now,
             });
@@ -50,12 +52,12 @@ impl WriteBuffer {
 mod tests {
     use std::sync::Arc;
 
-    use litellm_cache::{BaseCache, BatchCache, ExactCacheContext, FlushCache};
+    use litellm_cache::{BaseCache, BatchCache, FlushCache};
     use rstest::rstest;
     use serde_json::json;
 
     use super::*;
-    use crate::{CacheEntry, CacheKeyInput, ResponseCache};
+    use crate::{CacheEntry, ResponseCache};
 
     struct FailingBackend {
         failed_flushes: usize,
@@ -119,21 +121,21 @@ mod tests {
         });
         let cache = ResponseCache::new(backend.clone());
         let buffer = WriteBuffer::new(2);
-        let request = ResponseCacheRequest::new(CacheKeyInput::Preset("buffered".into()));
+        let key = CacheKey::External("buffered".into());
 
         for batch in 0..=failed_flushes {
             let first = json!(batch * 2);
             let second = json!(batch * 2 + 1);
             assert_eq!(
                 buffer
-                    .async_store(&cache, &request, first, Duration::ZERO)
+                    .async_store(&cache, &key, None, first, Duration::ZERO)
                     .await,
                 Ok(())
             );
             assert_eq!(backend.batches.lock().unwrap().len(), batch);
             assert_eq!(
                 buffer
-                    .async_store(&cache, &request, second, Duration::ZERO)
+                    .async_store(&cache, &key, None, second, Duration::ZERO)
                     .await,
                 if batch < failed_flushes {
                     Err(Error::Unavailable)

@@ -16,7 +16,7 @@ use litellm_auth::AuthServices;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use litellm_secrets::source::SecretSource;
 
-use crate::caching::RouteCache;
+use crate::caching::CachePlan;
 use crate::chat_completions::types::{ChatCompletionsCall, ChatCompletionsRequest};
 use prepare::{prepare_provider_request, resolve_request};
 
@@ -25,7 +25,7 @@ pub struct ChatCompletionsRoute {
     http: litellm_http::Client,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
-    cache: Option<litellm_cache_response::ScopedCache>,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
 }
 
 impl ChatCompletionsRoute {
@@ -42,7 +42,10 @@ impl ChatCompletionsRoute {
         }
     }
 
-    pub fn with_cache(self, cache: impl Into<Option<litellm_cache_response::ScopedCache>>) -> Self {
+    pub fn with_cache(
+        self,
+        cache: impl Into<Option<Arc<dyn litellm_cache_response::ResponseCacheService>>>,
+    ) -> Self {
         Self {
             cache: cache.into(),
             ..self
@@ -76,12 +79,13 @@ impl ChatCompletionsRoute {
     async fn run(
         &self,
         request: ChatCompletionsRequest<'_>,
-        cache_options: Option<litellm_cache_response::CachePolicy>,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
         model_group: Option<&str>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let cache = RouteCache::attach(self.cache.as_ref(), cache_options, &request, model_group)?;
+        let cache =
+            CachePlan::for_request(self.cache.as_ref(), cache_options, &request, model_group)?;
         let resolved = resolve_request(request)?;
         let snapshot = self
             .secrets

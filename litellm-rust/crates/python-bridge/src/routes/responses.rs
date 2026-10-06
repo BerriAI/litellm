@@ -93,14 +93,14 @@ fn run_public(
                       services,
                       interceptors,
                       observers| async move {
-                    let (cache, policy) = config.map(|config| config.attach(services)).unzip();
+                    let (cache, options) = config.map(|config| config.into_parts(services)).unzip();
                     route
                         .with_cache(cache)
                         .execute(
                             call,
                             &interceptors,
                             litellm_core::CallOptions {
-                                cache: policy,
+                                cache: options,
                                 model_group: None,
                                 observers,
                             },

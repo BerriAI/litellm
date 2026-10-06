@@ -12,26 +12,22 @@ pub enum CacheKey {
     External(String),
 }
 
+pub(crate) struct KeyContext<'a> {
+    pub namespace: &'a str,
+    pub scope: &'a CacheScope,
+}
+
 impl CacheKey {
-    pub(crate) fn derive(
-        namespace: &str,
-        surface: &str,
-        scope: &CacheScope,
-        input: &CacheKeyInput,
-    ) -> Self {
-        if let (CacheScope::Shared, CacheKeyInput::Preset(key)) = (scope, input) {
-            return Self::Native(key.clone());
-        }
+    pub(crate) fn derive(input: &CacheKeyInput, context: &KeyContext<'_>) -> Self {
         let material = json!({
-            "surface": surface,
-            "scope": match scope {
+            "scope": match context.scope {
                 CacheScope::Shared => None,
-                CacheScope::Isolated(scope) => Some(scope),
+                CacheScope::Caller(caller) => Some(caller),
             },
             "input": input,
         });
         let hash = format!("{:x}", Sha256::digest(material.to_string()));
-        Self::Native(match namespace {
+        Self::Native(match context.namespace {
             "" => format!("{KEY_VERSION}:{hash}"),
             namespace => format!("{namespace}:{KEY_VERSION}:{hash}"),
         })

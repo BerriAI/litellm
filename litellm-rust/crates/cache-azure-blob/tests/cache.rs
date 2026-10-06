@@ -8,7 +8,7 @@ use litellm_cache::{
 };
 use litellm_cache_azure_blob::AzureBlobCache;
 use litellm_cache_response::{
-    CacheEntry, CacheKeyInput, CacheTarget, ResponseCache, ResponseCacheCodec, ResponseCacheRequest,
+    CacheEntry, CacheKey, CacheKeyInput, CacheScope, CacheTarget, ResponseCache, ResponseCacheCodec,
 };
 use rstest::{fixture, rstest};
 use serde_json::json;
@@ -26,11 +26,15 @@ fn response_cache(fixture: &Fixture) -> ResponseCache<AzureBlobCache<ResponseCac
     ResponseCache::new(fixture.cache.clone())
 }
 
-fn request(model: &str) -> ResponseCacheRequest {
-    ResponseCacheRequest::new(CacheKeyInput::request(
-        CacheTarget::resolve(None, model, None, None),
-        serde_json::json!({}),
-    ))
+fn key(cache: &ResponseCache<AzureBlobCache<ResponseCacheCodec>>, model: &str) -> CacheKey {
+    cache.key(
+        &CacheKeyInput::new(
+            "chat_completions",
+            CacheTarget::resolve(None, model, None, None),
+            serde_json::json!({}),
+        ),
+        &CacheScope::Shared,
+    )
 }
 
 fn now() -> Duration {
@@ -262,15 +266,18 @@ fn malformed_blobs_are_invalid_entries(fixture: Fixture, #[case] key: &str, #[ca
 #[rstest]
 fn malformed_blobs_are_response_cache_misses(fixture: Fixture) {
     let response_cache = response_cache(&fixture);
-    let broken = request("broken");
-    fixture
-        .service
-        .seed_blob(response_cache.key(&broken).as_str(), b"{not json");
-    assert_eq!(response_cache.lookup(&broken, now()).unwrap(), None);
+    let broken = key(&response_cache, "broken");
+    fixture.service.seed_blob(broken.as_str(), b"{not json");
+    assert_eq!(
+        response_cache
+            .lookup(&broken, &no_ttl(), None, now())
+            .unwrap(),
+        None
+    );
     assert_eq!(
         fixture
             .runtime
-            .block_on(response_cache.async_lookup(&broken, now()))
+            .block_on(response_cache.async_lookup(&broken, &no_ttl(), None, now()))
             .unwrap(),
         None
     );
@@ -307,19 +314,19 @@ fn batch_get_preserves_order_and_marks_misses_and_invalid_entries(fixture: Fixtu
     assert_eq!(asynchronous, sync);
 
     let response_cache = response_cache(&fixture);
-    let requests = [request("hit"), request("missing"), request("bad")];
+    let keys = ["hit", "missing", "bad"].map(|model| key(&response_cache, model));
     response_cache
-        .store(&requests[0], json!("HIT"), now())
+        .store(&keys[0], &no_ttl(), json!("HIT"), now())
         .unwrap();
-    fixture
-        .service
-        .seed_blob(response_cache.key(&requests[2]).as_str(), b"nope");
-    let hits = response_cache.lookup_batch(&requests, now()).unwrap();
+    fixture.service.seed_blob(keys[2].as_str(), b"nope");
+    let hits = response_cache
+        .lookup_batch(&keys, &no_ttl(), None, now())
+        .unwrap();
     assert_eq!(hits.values, vec![Some(json!("HIT")), None, None]);
     assert_eq!(hits.missing_indices(), vec![1, 2]);
     let async_hits = fixture
         .runtime
-        .block_on(response_cache.async_lookup_batch(&requests, now()))
+        .block_on(response_cache.async_lookup_batch(&keys, &no_ttl(), None, now()))
         .unwrap();
     assert_eq!(async_hits.values, hits.values);
 }
@@ -409,41 +416,52 @@ fn disconnect_is_idempotent_and_keeps_data(fixture: Fixture) {
 #[rstest]
 fn response_cache_stores_and_reads_through_the_backend(fixture: Fixture) {
     let response_cache = response_cache(&fixture);
-    let mut request = request("gpt");
-    request.context = with_ttl(60);
+    let key = key(&response_cache, "gpt");
+    let context = with_ttl(60);
     let response = json!({"id": "chatcmpl-1"});
     response_cache
-        .store(&request, response.clone(), now())
+        .store(&key, &context, response.clone(), now())
         .unwrap();
     assert_eq!(
-        fixture.stored_json(response_cache.key(&request).as_str()),
+        fixture.stored_json(key.as_str()),
         json!({"timestamp": 1_700_000_000.0, "response": {"id": "chatcmpl-1"}})
     );
     assert_eq!(
         response_cache
-            .lookup(&request, now() + Duration::from_secs(3600))
+            .lookup(&key, &context, None, now() + Duration::from_secs(3600))
             .unwrap(),
         Some(response.clone())
     );
     assert_eq!(
         fixture
             .runtime
-            .block_on(response_cache.async_lookup(&request, now() + Duration::from_secs(3600)))
+            .block_on(response_cache.async_lookup(
+                &key,
+                &context,
+                None,
+                now() + Duration::from_secs(3600),
+            ))
             .unwrap(),
         Some(response.clone())
     );
     fixture.runtime.block_on(async {
         response_cache
-            .async_store(&request, json!("replaced"), now())
+            .async_store(&key, context.clone(), json!("replaced"), now())
             .await
             .unwrap();
         assert_eq!(
-            response_cache.async_lookup(&request, now()).await.unwrap(),
+            response_cache
+                .async_lookup(&key, &context, None, now())
+                .await
+                .unwrap(),
             Some(json!("replaced"))
         );
         response_cache.async_flush().await.unwrap();
         assert_eq!(
-            response_cache.async_lookup(&request, now()).await.unwrap(),
+            response_cache
+                .async_lookup(&key, &context, None, now())
+                .await
+                .unwrap(),
             None
         );
     });

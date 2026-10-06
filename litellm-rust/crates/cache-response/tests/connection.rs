@@ -5,12 +5,12 @@ use std::{sync::Arc, time::Duration};
 use litellm_cache::CacheConnectionStatus;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheEntry, ConnectionProbe, ExactResponseCache, ResponseCache, ResponseCacheRequest,
+    CacheEntry, CacheKey, ConnectionProbe, ExactResponseCache, ResponseCache,
 };
 use redis_test::MockCmd;
 use rstest::rstest;
 use serde_json::json;
-use support::{keyed, memory, redis, request};
+use support::{key, keyed, memory, redis};
 
 #[rstest]
 #[case::reachable(
@@ -49,7 +49,7 @@ async fn connection_backends_are_reachable_as_a_probe(
 
 #[rstest]
 #[tokio::test]
-async fn one_service_serves_both_the_exact_cache_and_its_probe(request: ResponseCacheRequest) {
+async fn one_service_serves_both_the_exact_cache_and_its_probe(key: CacheKey) {
     let service = Arc::new(redis(
         vec![
             MockCmd::new(redis::cmd("PING"), Ok("PONG")),
@@ -69,7 +69,7 @@ async fn one_service_serves_both_the_exact_cache_and_its_probe(request: Response
     );
     assert_eq!(
         exact
-            .async_lookup(&request, Duration::from_secs(100))
+            .async_lookup(&key, Duration::from_secs(100))
             .await
             .unwrap(),
         Some(json!({"ok": true}))
@@ -82,7 +82,7 @@ async fn one_service_serves_both_the_exact_cache_and_its_probe(request: Response
 #[tokio::test]
 async fn backends_without_a_connection_test_serve_every_response_operation(
     #[from(memory)] service: Arc<ResponseCache<InMemoryCache<CacheEntry>>>,
-    request: ResponseCacheRequest,
+    key: CacheKey,
 ) {
     let cache: Arc<dyn ExactResponseCache> = service;
     let now = Duration::from_secs(100);
@@ -90,10 +90,10 @@ async fn backends_without_a_connection_test_serve_every_response_operation(
     let missing = keyed("tenant:missing");
 
     assert_eq!(cache.default_ttl(), Some(Duration::from_secs(600)));
-    cache.store(&request, json!({"v": 1}), now).unwrap();
-    assert_eq!(cache.lookup(&request, now).unwrap(), Some(json!({"v": 1})));
+    cache.store(&key, None, json!({"v": 1}), now).unwrap();
+    assert_eq!(cache.lookup(&key, now).unwrap(), Some(json!({"v": 1})));
     cache
-        .async_store(&other, json!({"v": 2}), now)
+        .async_store(&other, None, json!({"v": 2}), now)
         .await
         .unwrap();
     assert_eq!(
@@ -101,8 +101,8 @@ async fn backends_without_a_connection_test_serve_every_response_operation(
         Some(json!({"v": 2}))
     );
 
-    let requests = [request.clone(), missing.clone(), other.clone()];
-    let partial = cache.lookup_batch(&requests, now).unwrap();
+    let keys = [key.clone(), missing.clone(), other.clone()];
+    let partial = cache.lookup_batch(&keys, now).unwrap();
     assert_eq!(
         partial.values,
         vec![Some(json!({"v": 1})), None, Some(json!({"v": 2}))]
@@ -110,14 +110,14 @@ async fn backends_without_a_connection_test_serve_every_response_operation(
     assert_eq!(partial.missing_indices(), vec![1]);
 
     cache
-        .async_store_batch(vec![(missing.clone(), json!({"v": 3}))], now)
+        .async_store_batch(vec![(missing.clone(), json!({"v": 3}))], None, now)
         .await
         .unwrap();
-    let partial = cache.async_lookup_batch(&requests, now).await.unwrap();
+    let partial = cache.async_lookup_batch(&keys, now).await.unwrap();
     assert!(partial.missing_indices().is_empty());
     assert_eq!(partial.values[1], Some(json!({"v": 3})));
 
     cache.async_flush().await.unwrap();
-    let partial = cache.async_lookup_batch(&requests, now).await.unwrap();
+    let partial = cache.async_lookup_batch(&keys, now).await.unwrap();
     assert_eq!(partial.missing_indices(), vec![0, 1, 2]);
 }

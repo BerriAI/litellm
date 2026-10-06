@@ -11,8 +11,8 @@ use serde_json::Value;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::{RedisCache, RedisTopology};
 use litellm_cache_response::{
-    CacheEntry, CacheKeyInput, ExactResponseCache, ResponseCache, ResponseCacheCodec,
-    ResponseCacheConfig, ResponseCacheRequest,
+    CacheEntry, CacheKey, ExactResponseCache, ResponseCache, ResponseCacheCodec,
+    ResponseCacheConfig,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 
@@ -44,10 +44,8 @@ impl NativeCacheHandle {
     }
 }
 
-fn request(key: String, ttl: Option<f64>) -> PyResult<ResponseCacheRequest> {
-    let mut request: ResponseCacheRequest = ResponseCacheRequest::new(CacheKeyInput::Preset(key));
-    request.context.ttl = ttl.map(duration).transpose()?;
-    Ok(request)
+fn optional_duration(ttl: Option<f64>) -> PyResult<Option<Duration>> {
+    ttl.map(duration).transpose()
 }
 
 #[pymethods]
@@ -62,7 +60,6 @@ impl NativeCacheHandle {
         let storage = Arc::new(InMemoryCache::new(Some(capacity), Some(ttl)));
         let backend = Arc::new(ResponseCache::new(storage.clone()).with_config(
             ResponseCacheConfig {
-                namespace: "sdk".into(),
                 max_entry_bytes,
                 ..ResponseCacheConfig::default()
             },
@@ -99,11 +96,10 @@ impl NativeCacheHandle {
                 )
             })
             .map_err(cache_error)?
-            .with_namespace(Some(namespace.clone())),
+            .with_namespace(Some(namespace)),
         );
         let backend = Arc::new(ResponseCache::new(storage.clone()).with_config(
             ResponseCacheConfig {
-                namespace,
                 max_entry_bytes,
                 ..ResponseCacheConfig::default()
             },
@@ -116,9 +112,8 @@ impl NativeCacheHandle {
     }
     fn get(&self, py: Python<'_>, key: String) -> PyResult<Py<PyAny>> {
         self.check_process()?;
-        let request = request(key, None)?;
-        let value =
-            release_gil(py, || self.backend.lookup(&request, now())).map_err(cache_error)?;
+        let key = CacheKey::External(key);
+        let value = release_gil(py, || self.backend.lookup(&key, now())).map_err(cache_error)?;
         to_py(py, &value)
     }
 
@@ -131,18 +126,19 @@ impl NativeCacheHandle {
         ttl: Option<f64>,
     ) -> PyResult<()> {
         self.check_process()?;
-        let request = request(key, ttl)?;
+        let key = CacheKey::External(key);
+        let ttl = optional_duration(ttl)?;
         let value: Value = from_py(value)?;
-        release_gil(py, || self.backend.store(&request, value, now())).map_err(cache_error)
+        release_gil(py, || self.backend.store(&key, ttl, value, now())).map_err(cache_error)
     }
 
     fn async_get<'py>(&self, py: Python<'py>, key: String) -> PyResult<Bound<'py, PyAny>> {
         self.check_process()?;
-        let request = request(key, None)?;
+        let key = CacheKey::External(key);
         let backend = self.backend.clone();
         crate::execution::run_async(
             py,
-            async move { backend.async_lookup(&request, now()).await },
+            async move { backend.async_lookup(&key, now()).await },
             cache_error,
         )
     }
@@ -156,12 +152,13 @@ impl NativeCacheHandle {
         ttl: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         self.check_process()?;
-        let request = request(key, ttl)?;
+        let key = CacheKey::External(key);
+        let ttl = optional_duration(ttl)?;
         let value: Value = from_py(value)?;
         let backend = self.backend.clone();
         crate::execution::run_async(
             py,
-            async move { backend.async_store(&request, value, now()).await },
+            async move { backend.async_store(&key, ttl, value, now()).await },
             cache_error,
         )
     }
@@ -177,12 +174,13 @@ impl NativeCacheHandle {
         let entries: Vec<(String, Value)> = from_py(entries)?;
         let entries = entries
             .into_iter()
-            .map(|(key, value)| Ok((request(key, ttl)?, value)))
-            .collect::<PyResult<Vec<_>>>()?;
+            .map(|(key, value)| (CacheKey::External(key), value))
+            .collect();
+        let ttl = optional_duration(ttl)?;
         let backend = self.backend.clone();
         crate::execution::run_async(
             py,
-            async move { backend.async_store_batch(entries, now()).await },
+            async move { backend.async_store_batch(entries, ttl, now()).await },
             cache_error,
         )
     }
