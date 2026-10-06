@@ -14479,16 +14479,30 @@ class Router:
         to the deployment that actually served the request. Every attempt therefore
         writes or clears, never just writes.
         """
+        from litellm.router_utils.baseline_request import capture_baseline_parameters
         from litellm.types.router import BaselineRouteStamp
 
         baseline_model: Final = routing_decision.get("savings_baseline_model") if routing_decision else None
         baseline_id: Final = routing_decision.get("savings_baseline_deployment_id") if routing_decision else None
         router_name: Final = routing_decision.get("router_model_name") if routing_decision else None
+        previous_metadata: Final = request_kwargs.get(get_metadata_variable_name_from_kwargs(request_kwargs))
+        previous: Final = (
+            previous_metadata.get("_autorouter_baseline_route") if isinstance(previous_metadata, dict) else None
+        )
+        caller_parameters: Final = (
+            (
+                previous.request_parameters
+                if isinstance(previous, BaselineRouteStamp)
+                else capture_baseline_parameters(request_kwargs)
+            )
+            if router_name and baseline_model
+            else None
+        )
         Router._stamp_or_clear_metadata_key(
             request_kwargs=request_kwargs,
             key="_autorouter_baseline_route",
             value=(
-                BaselineRouteStamp(router_name, baseline_model, baseline_id)
+                BaselineRouteStamp(router_name, baseline_model, baseline_id, caller_parameters)
                 if router_name and baseline_model and baseline_id
                 else None
             ),

@@ -42,7 +42,7 @@ _MESSAGES_JSON: Final = """[{"role":"user","content":[
 _MODELS: Final = _MESSAGES.validate_json("""[
     {"model_name":"test-router","litellm_params":{"model":"auto_router/complexity_router",
       "complexity_router_config":{"tiers":{"SIMPLE":"sonnet","MEDIUM":"sonnet","COMPLEX":"sonnet",
-      "REASONING":"opus"},"session_affinity":false,
+      "REASONING":{"model_name":"opus","litellm_params":{"max_tokens":16}}},"session_affinity":false,
       "keyword_tier_rules":[{"keywords":["USE_OPUS"],"tier":"REASONING"}]}}},
     {"model_name":"sonnet","litellm_params":{"model":"anthropic/claude-sonnet-5","api_key":"test-selected"},
       "model_info":{"id":"selected"}},
@@ -82,7 +82,9 @@ class _CallContext(TypedDict):
 
 
 def _kwargs(logging_obj: Logging, trusted: bool = True, *, explicit_logging: bool = True) -> _CallContext:
-    context: Final = _OBJECTS.validate_json('{"litellm_metadata":{"user_api_key_hash":"test-caller-hash"}}')
+    context: Final = _OBJECTS.validate_json(
+        '{"max_tokens":16,"litellm_metadata":{"user_api_key_hash":"test-caller-hash"}}'
+    )
     Router._record_routing_decision(  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage]  # production trusted stamp owner
         context,
         StandardLoggingRoutingDecision(
@@ -133,7 +135,10 @@ def _upstream(request: httpx.Request) -> httpx.Response:
     assert isinstance(model, str)
     stream: Final = body.get("stream") is True
     content: Final = b"".join(_sse(model=model)) if stream else json.dumps(_message(True, model)).encode()
-    return httpx.Response(200, content=content, request=request,
+    return httpx.Response(
+        200,
+        content=content,
+        request=request,
         headers=MappingProxyType({"content-type": "text/event-stream" if stream else "application/json"}),
     )
 
@@ -182,6 +187,7 @@ async def _call(
         stream: Final = cast(AsyncIterator[object], response)  # cast-ok: iterator checked; all items satisfy object
         assert tuple([chunk async for chunk in stream])
 
+
 class _Capture(CustomLogger):
     def __init__(self, call_id: str) -> None:
         self.call_id: Final = call_id
@@ -199,9 +205,20 @@ class _Capture(CustomLogger):
 
 
 class _Rig:
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, retries: int = 0, count: TokenCounter = _count) -> None:
-        self.router: Final = Router(model_list=_MODELS, num_retries=retries,
-            retry_policy=RetryPolicy(RateLimitErrorRetries=retries), disable_cooldowns=True)
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        retries: int = 0,
+        count: TokenCounter = _count,
+        models: list[dict[str, JsonValue]] = _MODELS,
+    ) -> None:
+        self.router: Final = Router(
+            model_list=models,
+            num_retries=retries,
+            retry_policy=RetryPolicy(RateLimitErrorRetries=retries),
+            disable_cooldowns=True,
+        )
 
         def router() -> Router:
             return self.router
@@ -218,9 +235,16 @@ class _Rig:
         monkeypatch.setattr(litellm, "_async_success_callback", [self.capture])
 
     def logging(self, stream: bool = False) -> Logging:
-        return Logging(model="anthropic/claude-sonnet-5", messages=_MESSAGES.validate_json(_MESSAGES_JSON),
-            stream=stream, call_type=CallTypes.anthropic_messages.value, start_time=datetime.now(),
-            litellm_call_id=self.call_id, function_id=self.call_id, kwargs={"litellm_session_id":"baseline-session"})
+        return Logging(
+            model="anthropic/claude-sonnet-5",
+            messages=_MESSAGES.validate_json(_MESSAGES_JSON),
+            stream=stream,
+            call_type=CallTypes.anthropic_messages.value,
+            start_time=datetime.now(),
+            litellm_call_id=self.call_id,
+            function_id=self.call_id,
+            kwargs={"litellm_session_id": "baseline-session"},
+        )
 
 
 def _observation(payload: Mapping[str, object]) -> CapturedBaselineObservation:
@@ -232,7 +256,9 @@ def _observation(payload: Mapping[str, object]) -> CapturedBaselineObservation:
 
 @pytest.mark.parametrize("stream,baseline", ((False, False), (True, False), (False, True), (True, True)))
 async def test_native_logging_captures_usage_without_publishing_hypothetical_savings(
-    monkeypatch: pytest.MonkeyPatch, stream: bool, baseline: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    baseline: bool,
 ) -> None:
     rig: Final = _Rig(monkeypatch)
     messages: Final = _MESSAGES_JSON.replace("question", "question USE_OPUS") if baseline else _MESSAGES_JSON
@@ -283,11 +309,14 @@ async def test_caller_cannot_forge_an_observation_scope(monkeypatch: pytest.Monk
     assert payload["autorouter_savings"] is None
 
 
-@pytest.mark.parametrize("model,key,endpoint", (
-    ("claude-sonnet-5", "test-first", None),
-    ("claude-opus-5", "test-second", None),
-    ("claude-opus-5", "test-first", "https://example.test"),
-))
+@pytest.mark.parametrize(
+    "model,key,endpoint",
+    (
+        ("claude-sonnet-5", "test-first", None),
+        ("claude-opus-5", "test-second", None),
+        ("claude-opus-5", "test-first", "https://example.test"),
+    ),
+)
 async def test_count_memo_is_scoped_to_provider_recipient(model: str, key: str, endpoint: str | None) -> None:
     counts: Final = iter((5000, 6000))
 
@@ -304,7 +333,8 @@ async def test_count_memo_is_scoped_to_provider_recipient(model: str, key: str, 
 
 @pytest.mark.parametrize("stream", (False, True))
 async def test_provider_counting_does_not_hold_the_inference_response(
-    monkeypatch: pytest.MonkeyPatch, stream: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
 ) -> None:
     counting: Final = asyncio.Event()
     release: Final = asyncio.Event()
@@ -324,3 +354,210 @@ async def test_provider_counting_does_not_hold_the_inference_response(
             assert _observation(await rig.capture.payload()).observation.plan is not None
     finally:
         release.set()
+
+
+@pytest.mark.parametrize("baseline_effort", (None, "medium"))
+async def test_native_tier_switch_uses_baseline_settings_and_preserves_history(
+    monkeypatch: pytest.MonkeyPatch,
+    baseline_effort: str | None,
+) -> None:
+    from litellm.proxy.spend_tracking.baseline_accounting import BaselineHistory, advance_baseline_history
+
+    models: Final = _MESSAGES.validate_python(
+        [
+            {
+                "model_name": "test-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": {"model_name": "sonnet", "litellm_params": {"reasoning_effort": "low"}},
+                            "MEDIUM": {"model_name": "sonnet", "litellm_params": {"reasoning_effort": "low"}},
+                            "COMPLEX": {"model_name": "sonnet", "litellm_params": {"reasoning_effort": "high"}},
+                            "REASONING": "opus",
+                        },
+                        "session_affinity": False,
+                        "keyword_tier_rules": [{"keywords": ["ESCALATE"], "tier": "COMPLEX"}],
+                    },
+                },
+            },
+            _MODELS[1],
+            {
+                "model_name": "opus",
+                "model_info": {"id": "baseline"},
+                "litellm_params": {
+                    "model": "anthropic/claude-opus-5",
+                    "api_key": "test-selected",
+                    **({"reasoning_effort": baseline_effort} if baseline_effort else {}),
+                },
+            },
+        ]
+    )
+    rig: Final = _Rig(monkeypatch, models=models)
+    captures: Final[asyncio.Queue[CapturedBaselineObservation]] = asyncio.Queue()
+    with _transport(_upstream) as route:
+        for suffix in ("", " ESCALATE"):
+            log: Final = rig.logging()
+            await rig.router.anthropic_messages(
+                model="test-router",
+                max_tokens=4096,
+                messages=_MESSAGES.validate_json(_MESSAGES_JSON.replace("question", "question" + suffix)),
+                litellm_logging_obj=log,
+                litellm_call_id=rig.call_id,
+                litellm_metadata={"user_api_key_hash": "test-caller-hash"},
+                litellm_session_id="native-tiers",
+            )
+            captures.put_nowait(_observation(await rig.capture.payload()))
+        first_wire, second_wire = (_JSON_OBJECT.validate_json(call.request.content) for call in route.calls)
+    assert (first_wire.get("thinking"), first_wire.get("output_config")) != (
+        second_wire.get("thinking"),
+        second_wire.get("output_config"),
+    )
+    first, second = (captures.get_nowait() for _ in range(2))
+    assert first.scope == second.scope
+    assert first.observation.plan is not None and second.observation.plan is not None
+    assert first.observation.plan.breakpoints == second.observation.plan.breakpoints
+    history, _ = advance_baseline_history(
+        BaselineHistory(),
+        (first.observation.model_copy(update={"request_id": "first", "started_at": 1000.0, "available_at": 1001.0}),),
+    )
+    _, result = advance_baseline_history(
+        history,
+        (second.observation.model_copy(update={"request_id": "second", "started_at": 1020.0, "available_at": 1021.0}),),
+    )
+    assert result[0].usage is not None and result[0].usage.prompt_tokens_details.cached_tokens == 5000
+
+
+@pytest.mark.parametrize("call_type", (CallTypes.acompletion, CallTypes.aresponses, CallTypes.anthropic_messages))
+async def test_plain_requests_do_not_initialize_or_warn(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    call_type: CallTypes,
+) -> None:
+    rig: Final = _Rig(monkeypatch)
+    logging: Final = rig.logging()
+    await rig.hook.async_pre_call_deployment_hook(
+        {
+            "litellm_logging_obj": logging,
+            "litellm_metadata": {"session_id": "ordinary"},
+        },
+        call_type,
+    )
+    assert logging.baseline_cache_context is None
+    assert "baseline observation could not be initialized" not in caplog.text
+    assert not rig.hook.counts
+
+
+async def test_plain_fallback_invalidates_existing_autorouter_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+    rig: Final = _Rig(monkeypatch)
+    logging: Final = rig.logging()
+    await rig.hook.async_pre_call_deployment_hook(_kwargs(logging), CallTypes.anthropic_messages)
+    assert logging.baseline_cache_context is not None
+    await rig.hook.async_pre_call_deployment_hook({"litellm_logging_obj": logging}, CallTypes.anthropic_messages)
+    assert logging.baseline_observation is not None
+    assert logging.baseline_observation.observation.reason == "retried_request"
+
+
+async def test_native_count_finishing_after_quarter_worker_budget_keeps_plan_and_spend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils import logging_worker
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+
+    release: Final = asyncio.Event()
+
+    async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int:
+        if not release.is_set():
+            asyncio.get_running_loop().call_later(2.3, release.set)
+            await release.wait()
+        return await _count(model, api_key, body)
+
+    worker: Final = LoggingWorker(timeout=8.0)
+    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", worker)
+    rig: Final = _Rig(monkeypatch, count=count)
+    try:
+        with _transport(_upstream):
+            await _call(rig.router, rig.logging())
+            payload: Final = await rig.capture.payload()
+        observed: Final = _observation(payload).observation
+        assert observed.outcome == "complete" and observed.reason is None
+        assert observed.plan is not None and observed.plan.breakpoints[0].prefix_tokens == 5000
+        assert payload["response_cost"] is not None and worker._timeout_total == 0
+    finally:
+        release.set()
+        await worker.stop()
+
+
+@pytest.mark.parametrize(
+    "options",
+    (
+        {"thinking": {"type": "enabled", "budget_tokens": 2048}},
+        {"extra_body": {"speed": "fast", "output_config": {"effort": "high"}}},
+    ),
+)
+async def test_native_baseline_identity_keeps_the_actual_transformed_body(
+    monkeypatch: pytest.MonkeyPatch, options: dict[str, JsonValue]
+) -> None:
+    rig: Final = _Rig(monkeypatch)
+    log: Final = rig.logging()
+    with _transport(_upstream):
+        await rig.router.anthropic_messages(
+            model="test-router",
+            max_tokens=16,
+            messages=_MESSAGES.validate_json(_MESSAGES_JSON.replace("question", "question USE_OPUS")),
+            litellm_logging_obj=log,
+            litellm_call_id=rig.call_id,
+            litellm_metadata={"user_api_key_hash": "test-caller-hash"},
+            litellm_session_id="native-identical",
+            **options,
+        )
+        observed: Final = _observation(await rig.capture.payload()).observation
+    assert observed.outcome == "complete"
+    assert log.baseline_cache_context is not None
+    assert observed.baseline_equivalent and observed.usage is not None, (
+        log.baseline_cache_context.baseline_parameters,
+        log.baseline_cache_context.selected_parameters,
+    )
+
+
+@pytest.mark.parametrize("tier_limit", (8, 16))
+@pytest.mark.parametrize("extra", ({}, {"max_tokens": 8}))
+async def test_native_baseline_identity_respects_caller_limit_and_tier_override(
+    monkeypatch: pytest.MonkeyPatch, tier_limit: int, extra: dict[str, int]
+) -> None:
+    models: Final = _MESSAGES.validate_python(
+        [
+            {
+                "model_name": "test-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": {"model_name": "opus", "litellm_params": {"max_tokens": tier_limit}},
+                            "MEDIUM": {"model_name": "opus", "litellm_params": {"max_tokens": tier_limit}},
+                            "COMPLEX": "opus",
+                            "REASONING": "opus",
+                        },
+                        "session_affinity": False,
+                    },
+                },
+            },
+            {**_MODELS[2], "litellm_params": {**_MODELS[2]["litellm_params"], "max_tokens": 64}},
+        ]
+    )
+    rig: Final = _Rig(monkeypatch, models=models)
+    with _transport(_upstream) as route:
+        await rig.router.anthropic_messages(
+            model="test-router",
+            max_tokens=8,
+            messages=_MESSAGES.validate_json(_MESSAGES_JSON),
+            litellm_logging_obj=rig.logging(),
+            litellm_call_id=rig.call_id,
+            litellm_metadata={"user_api_key_hash": "test-caller-hash"},
+            litellm_session_id="native-limits",
+            extra_body=extra,
+        )
+        observed: Final = _observation(await rig.capture.payload()).observation
+        wire: Final = _JSON_OBJECT.validate_json(route.calls.last.request.content)
+    assert wire["max_tokens"] == tier_limit
+    assert observed.baseline_equivalent == (tier_limit == 8)

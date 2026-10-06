@@ -20,8 +20,9 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
+from litellm.router_utils.baseline_request import BASELINE_PARAMETERS, baseline_request
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.router import LiteLLM_Params
+from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import ModelResponse
 from litellm.utils import supports_thinking_cache_preservation
 
@@ -618,13 +619,41 @@ def resolve_baseline_prediction_target(params: LiteLLM_Params) -> NativePredicti
     return _resolve_prediction_target(params, allow_configured_endpoint=True)
 
 
+def project_baseline_body(
+    body: Mapping[str, JsonValue], parameters: Mapping[str, JsonValue] | None, model: str
+) -> dict[str, JsonValue] | None:
+    if parameters is None:
+        return None
+    projected: Final = baseline_request(body, parameters, {})
+    if projected is None:
+        return None
+    owned: Final = _JSON_OBJECT.validate_python(projected)
+    messages: Final = TypeAdapter(list[dict[str, JsonValue]]).validate_python(owned.get("messages"))
+    options: Final = {
+        **{key: value for key, value in owned.items() if key not in ("messages", "model")},
+        "max_tokens": owned.get("max_tokens", body.get("max_tokens")),
+    }
+    return _JSON_OBJECT.validate_python(
+        AnthropicMessagesConfig().transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=options,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    )
+
+
 def _resolve_prediction_target(
     params: LiteLLM_Params,
     *,
     allow_configured_endpoint: bool,
 ) -> NativePredictionTarget | UnsupportedPredictionTarget:
     configured_options: Final = frozenset(params.model_dump(exclude_defaults=True, exclude_none=True))
-    if configured_options - _DEPLOYMENT_OPTIONS:
+    allowed: Final = (
+        _DEPLOYMENT_OPTIONS | frozenset(BASELINE_PARAMETERS) if allow_configured_endpoint else _DEPLOYMENT_OPTIONS
+    )
+    if configured_options - allowed:
         return UnsupportedPredictionTarget("unsupported_deployment_configuration")
     api_base: Final = AnthropicModelInfo.get_api_base(params.api_base)
     if not allow_configured_endpoint and api_base not in (
