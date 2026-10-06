@@ -5,7 +5,6 @@ from typing import Final
 import pytest
 
 from e2e_http import StreamingResponse
-from e2e_metadata import Domain, Subject, meta
 from guardrails_client import poll_until_guardrail_applied
 
 
@@ -24,11 +23,6 @@ def _response(applied: str, status: int = 200) -> StreamingResponse:
     return StreamingResponse(status_code=status, body="{}", headers={"x-litellm-applied-guardrails": applied})
 
 
-@meta(
-    Subject(
-        domain=Domain.GUARDRAILS,
-    )
-)
 def test_waits_for_requested_guardrail_after_an_unrelated_global_guardrail() -> None:
     clock: Final = Clock()
     expected: Final = _response("global-filter, tool-permission")
@@ -43,11 +37,6 @@ def test_waits_for_requested_guardrail_after_an_unrelated_global_guardrail() -> 
 
 
 @pytest.mark.parametrize("applied", ("", "global-filter", "tool-permission-sibling"))
-@meta(
-    Subject(
-        domain=Domain.GUARDRAILS,
-    )
-)
 def test_missing_exact_guardrail_returns_failure_evidence_at_deadline(applied: str) -> None:
     clock: Final = Clock()
     missing: Final = _response(applied)
@@ -64,11 +53,6 @@ def test_missing_exact_guardrail_returns_failure_evidence_at_deadline(applied: s
 
 
 @pytest.mark.parametrize("status", (400, 401, 429, 500))
-@meta(
-    Subject(
-        domain=Domain.GUARDRAILS,
-    )
-)
 def test_http_failure_is_not_hidden_by_a_later_success(status: int) -> None:
     clock: Final = Clock()
     failed: Final = _response("", status)
