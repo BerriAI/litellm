@@ -6,6 +6,7 @@ import { renderWithLens, stubGateway } from "@/../tests/lens-test-utils";
 import { ApiError } from "@/lib/http/client";
 import { lensKeys } from "../data/queries";
 import { InvestigationsView } from "./InvestigationsView";
+import { RunReport } from "./detail/RunReport";
 import { briefMarkdown } from "../model/findings";
 import { findingKey } from "../model/inbox";
 import { runTime } from "../model/format";
@@ -469,6 +470,40 @@ it("opens the saved results of an older batch", async () => {
   expect(within(screen.getByRole("tabpanel", { name: "History" })).getByText(/Took 2m 13s/)).toBeVisible();
 });
 
+it("keeps history status and cost updating when an older run fails to load", async () => {
+  testQueryClient.clear();
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const running = { ...lens.jobs[0], status: "running" as const, cost: 0.25 };
+  const older = { ...lens.jobs[0], id: "older", created_at: "2026-09-29T10:00:00Z" };
+  const runs = vi.fn().mockResolvedValue([running, older]);
+  proxy.get.mockImplementation(async (path) => {
+    if (path.endsWith("/reviews")) return { reviews: [], reviewed: 0 };
+    if (path === "/lens") return { lenses: [{ ...lens, jobs: [running] }], workers: [], tracing_enabled: true };
+    if (path === "/lens/lens/runs") return runs();
+    if (path === "/lens/lens/runs/older") throw new Error("Run unavailable");
+    return { data: [] };
+  });
+  const user = userEvent.setup();
+  const { unmount } = renderWithProviders(<InvestigationsView readOnly />);
+  try {
+    await user.click(await screen.findByRole("tab", { name: "History" }));
+    const history = within(screen.getByRole("tabpanel", { name: "History" }));
+    expect(await history.findByText("Running")).toBeVisible();
+    expect(history.getByText("$0.25")).toBeVisible();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Investigation run" }), "older");
+    expect(await screen.findByText(/Could not load this run/)).toBeVisible();
+
+    runs.mockResolvedValue([{ ...running, status: "completed", cost: 1.75 }, older]);
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(await history.findByText("$1.75")).toBeVisible();
+    expect(history.queryByText("Running")).not.toBeInTheDocument();
+    expect(history.getAllByText("Completed")).toHaveLength(2);
+  } finally {
+    unmount();
+    vi.useRealTimers();
+  }
+});
+
 it("reads request content from the beginning after its abbreviated preview", async () => {
   testQueryClient.clear();
   const requestId = btoa(JSON.stringify(["requests", "", "request-1"]));
@@ -930,6 +965,59 @@ it("pauses monitoring from the detail menu by saving the investigation with moni
   await user.click(await screen.findByRole("menuitem", { name: "Pause monitoring" }));
   await waitFor(() => expect(proxy.put).toHaveBeenCalledTimes(1));
   expect(sentBody(proxy.put, "/lens/lens")).toEqual([{ ...watching.settings, enabled: false }]);
+});
+
+it("updates elapsed time without reformatting the activity log and still shows new model calls", async () => {
+  vi.useFakeTimers();
+  const formatTime = vi.spyOn(Date.prototype, "toLocaleTimeString");
+  const created_at = new Date(Date.now() - 60_000).toISOString();
+  const running = {
+    ...lens.jobs[0],
+    status: "running" as const,
+    stage: "Reading executions",
+    created_at,
+    coverage: { ...lens.jobs[0].coverage, selected: 62, screened: 13 },
+    steps: Array.from({ length: 200 }, (_, index) => ({
+      at: created_at,
+      kind: "model" as const,
+      label: `Reviewed run ${index}`,
+      model: "analysis",
+      purpose: "extract" as const,
+      prompt_tokens: 100,
+      completion_tokens: 20,
+      cost: 0.01,
+    })),
+  };
+  const view = (job: typeof running) => (
+    <RunReport lens={lens} job={job} findings={[]} connected ready busy={false} picker={null} />
+  );
+  const { rerender, unmount } = renderWithProviders(view(running));
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "Activity log" }));
+    expect(screen.getByRole("progressbar", { name: "Investigation progress" })).toHaveAttribute("aria-valuenow", "13");
+    expect(screen.getByRole("progressbar", { name: "Investigation progress" })).toHaveAttribute(
+      "aria-valuetext",
+      "13% overall. Reviewing activity: 13 of 62 selected runs reviewed",
+    );
+    expect(within(screen.getByRole("list", { name: "Investigation steps" })).getAllByRole("listitem")).toHaveLength(
+      200,
+    );
+    formatTime.mockClear();
+    await act(async () => vi.advanceTimersByTime(3000));
+    expect(screen.getByText("1m 3s")).toBeVisible();
+    expect(formatTime.mock.calls.length).toBe(0);
+
+    rerender(
+      view({ ...running, cost: 2.01, steps: [...running.steps, { ...running.steps[0], label: "New model call" }] }),
+    );
+    expect(screen.getByText("201 model calls")).toBeVisible();
+    expect(screen.getByText("$2.01")).toBeVisible();
+    expect(screen.getByText(/New model call/)).toBeVisible();
+  } finally {
+    unmount();
+    formatTime.mockRestore();
+    vi.useRealTimers();
+  }
 });
 
 it("stops the running job from the run report's primary action", async () => {

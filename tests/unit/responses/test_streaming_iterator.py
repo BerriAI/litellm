@@ -646,7 +646,15 @@ def test_stream_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypat
             status="completed",
             model="test-model",
             object="response",
-            output=[],
+            output=[
+                {
+                    "type": "message",
+                    "id": "msg_lit6184",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "cached", "annotations": []}],
+                }
+            ],
         ),
     )
     monkeypatch.setattr(litellm, "cache", _SlowWriteCache())
@@ -1259,6 +1267,25 @@ def test_billed_terminal_response_copies_when_estimating_and_leaves_the_original
     assert billed is not response
     assert billed.usage is estimated
     assert response.usage is None
+
+
+def test_persist_completed_response_to_cache_skips_a_response_without_output(monkeypatch):
+    logging_obj: Final = _logging_obj_stub()
+    caching_handler: Final = Mock()
+    caching_handler.request_kwargs = {"stream": True}
+    logging_obj.llm_caching_handler = caching_handler
+    iterator: Final = _make_iterator(sse_events=[], logging_obj=logging_obj)
+    iterator.completed_response = ResponseCompletedEvent.model_construct(
+        type="response.completed",
+        response=ResponsesAPIResponse.model_construct(id="resp_empty", output=[], usage=None),
+    )
+    cache: Final = Mock()
+    monkeypatch.setattr(litellm, "cache", cache)
+
+    iterator._persist_completed_response_to_cache(is_async=False)
+
+    cache.add_cache.assert_not_called()
+    caching_handler.should_store_result_in_cache.assert_not_called()
 
 
 def test_persist_completed_response_to_cache_survives_an_unserializable_response(monkeypatch):
