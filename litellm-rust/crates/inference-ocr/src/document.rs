@@ -4,7 +4,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_llms::base_llm::ocr::{error::Error, transformation::OCR_INLINE_MAX_BYTES};
 use litellm_llms_types::formats::ocr::OcrDocument;
 
-use crate::ocr::types::OcrDocumentInput;
+use crate::types::OcrDocumentInput;
 
 pub fn prepare_document(input: OcrDocumentInput) -> Result<OcrDocument, Error> {
     match input {

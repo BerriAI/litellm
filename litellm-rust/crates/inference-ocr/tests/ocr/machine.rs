@@ -12,7 +12,7 @@ use litellm_host::{
     protocol::{HostRequest, InterceptRequest},
 };
 use litellm_host_native::services::HostCallHandler;
-use litellm_inference::ocr::{
+use litellm_inference_ocr::{
     route::{OcrCall, OcrMachine, OcrOp},
     types::OcrDocumentInput,
 };

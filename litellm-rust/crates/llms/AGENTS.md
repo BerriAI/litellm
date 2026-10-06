@@ -1,4 +1,4 @@
-litellm-llms mirrors `litellm/llms/`: base config traits, provider transformations, and the OCR request handler in `base_llm/ocr/handler.rs`. Transport code (clients, media fetching, header helpers, transport errors) lives in `litellm-http`. See `../core/AGENTS.md` for how the crates layer.
+litellm-llms mirrors `litellm/llms/`: base config traits, provider transformations, and the OCR request handler in `base_llm/ocr/handler.rs`. Transport code (clients, media fetching, header helpers, transport errors) lives in `litellm-http`. See `../inference/AGENTS.md` for how the crates layer.
 
 ## Python/Rust transformation pairs
 
@@ -22,7 +22,7 @@ Azure Messages maps to `llms/azure_ai/anthropic/messages_transformation.py`; Bed
 
 ## Provider and format boundaries
 
-The same ownership rule applies to Messages, Responses, Chat Completions, OCR, and other API formats. `litellm-llms-types` owns shared API data contracts. `llms/src/base_llm/<format>/` owns provider adapter contracts and shared transformation machinery. `llms/src/<provider>/<format>/` owns provider implementations and policy. `core/src/<format>/` owns call orchestration. Repeating a format name identifies the API each layer handles, not duplicate ownership of its schema. These boundaries also apply between modules in the same crate
+The same ownership rule applies to Messages, Responses, Chat Completions, OCR, and other API formats. `litellm-llms-types` owns shared API data contracts. `llms/src/base_llm/<format>/` owns provider adapter contracts and shared transformation machinery. `llms/src/<provider>/<format>/` owns provider implementations and policy. `inference-<format>` owns call orchestration. Repeating a format name identifies the API each layer handles, not duplicate ownership of its schema. These boundaries also apply between modules in the same crate
 
 A provider adapter may explicitly reuse another provider's transformation helper when that policy applies to its backend, such as Bedrock's Claude adapter using Anthropic payload shaping. Reuse across hosts of the same model family does not make the policy format-wide. Keep provider policy out of shared trait defaults and generic normalization, and keep shared execution contexts limited to inputs the adapter contract actually needs. Pure payload rewrites belong with transformations, not transport handlers
 

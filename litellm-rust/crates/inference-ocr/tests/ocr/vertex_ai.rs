@@ -1,5 +1,5 @@
 use litellm_auth::{InputSource, Sourced};
-use litellm_inference::ocr::arguments::is_supported_request;
+use litellm_inference_ocr::arguments::is_supported_request;
 use litellm_llms::base_llm::ocr::settings::OcrSettings;
 use rstest::rstest;
 

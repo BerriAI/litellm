@@ -9,7 +9,7 @@ use litellm_host::{
 use litellm_llms::base_llm::ocr::error::Error;
 use litellm_llms_types::formats::ocr::LiteLLMOcrResponse;
 
-use crate::ocr::types::{LiteLLMOcrRequest, OcrDocumentInput};
+use crate::types::{LiteLLMOcrRequest, OcrDocumentInput};
 
 pub enum OcrOp {
     AcquireAzureAdToken(Reply<ResolvedCredential>),
@@ -49,7 +49,7 @@ fn caller_token_provider(services: HostServices<Ocr>) -> TokenProviderHandle {
     })
 }
 
-impl crate::ocr::OcrRoute {
+impl crate::OcrRoute {
     pub fn machine(self, request: OcrCall, observers: Option<ObservationSender>) -> OcrMachine {
         hosted_call(
             request,
