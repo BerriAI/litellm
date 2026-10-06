@@ -123,14 +123,9 @@ class DeepEvalLogger(CustomLogger):
         if choices:
             message: Final = _as_mapping(choices[0].get("message")) or {}
             content: Final = message.get("content")
-            tool_calls: Final = _as_list(message.get("tool_calls"))
-            if content:
-                return content
-            if tool_calls:
-                return tool_calls
-            if isinstance(content, str):
-                return content
-            return _as_list(content) or None
+            content_text: Final = content if isinstance(content, str) else None
+            # Some providers (e.g. DeepSeek) send content "" alongside tool calls, so prefer non-empty content.
+            return content_text or _as_list(content) or _as_list(message.get("tool_calls")) or content_text
         output_items: Final = _as_list(response_dict.get("output"))
         if output_items:
             output_texts: Final = tuple(
