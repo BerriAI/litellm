@@ -9,7 +9,7 @@ from integration.translation.chat_completions.bases.azure import (
     GPT_6_1_SOL_TEST_CASE,
     GPT_6_LUNA_TEST_CASE,
 )
-from integration.translation.runner import run
+from integration.translation.runner import assert_translation
 
 
 @pytest.mark.parametrize(
@@ -27,4 +27,4 @@ def test_chat_completions_basic_azure(case: TranslationTestCase, gateway: Gatewa
     pytest.skip(
         "BUG: LIT-9235 chat completions moves message.refusal into provider_specific_fields and drops null system_fingerprint and logprobs"
     )
-    run(case, gateway, provider)
+    assert_translation(case, gateway, provider)
