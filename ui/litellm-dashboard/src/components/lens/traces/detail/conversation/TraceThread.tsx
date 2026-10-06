@@ -17,7 +17,14 @@ import {
   pendingConversationBranches,
 } from "./conversation";
 import { ConversationMessage, ConversationStep, ConversationSteps } from "./ConversationParts";
-import { buildThread, threadDurationMs, type ThreadTurn, type ThreadWork } from "./thread";
+import {
+  buildThread,
+  replyErrorSpanIds,
+  threadDurationMs,
+  withoutErrorsOf,
+  type ThreadTurn,
+  type ThreadWork,
+} from "./thread";
 import { useConversationDetails } from "./useConversationDetails";
 
 export interface ConversationTracePaging {
@@ -39,14 +46,15 @@ export function TraceThread({ trace, accessToken, onOpenStep, paging }: TraceThr
   const { details, entries, complete, loading, failed, hasMore, loadMore } = useConversationDetails(trace, accessToken);
   const pending = pendingConversationBranches(trace.spans, details, Boolean(trace.next_cursor));
   const groups = groupConversation(buildConversation(trace.spans, details, complete, pending), trace.spans);
-  const turns = buildThread(groups);
+  const builtTurns = buildThread(groups);
   const traceComplete = complete && !trace.next_cursor;
-  const shownErrors = new Set(
-    turns.flatMap((turn) => (turn.replyItem?.showError ? [turn.replyItem.span.span_id] : [])),
-  );
+  const shownErrors = replyErrorSpanIds(builtTurns);
+  const toolSpanIds = new Set(trace.spans.flatMap((span) => (span.type === "tool" ? [span.span_id] : [])));
   const rootErrors = trace.spans.filter(
     (span) => span.parent_span_id === null && span.status === "error" && !shownErrors.has(span.span_id),
   );
+  const rootErrorIds = new Set(rootErrors.map((span) => span.span_id));
+  const turns = builtTurns.map((turn) => withoutErrorsOf(turn, rootErrorIds));
   const busy = loading || Boolean(paging?.loading);
   const blocked = failed || Boolean(paging?.failed);
   const sourceRemaining = hasMore || Boolean(trace.next_cursor && paging);
@@ -73,7 +81,7 @@ export function TraceThread({ trace, accessToken, onOpenStep, paging }: TraceThr
         {rootErrors.map((span) => (
           <ErrorBlock key={span.span_id} span={span} />
         ))}
-        {conversationWarnings(details, traceComplete).map((warning) => (
+        {conversationWarnings(details, traceComplete, toolSpanIds).map((warning) => (
           <p key={warning} role="status" className="rounded-md border p-3 text-sm text-muted-foreground">
             {warning}
           </p>
