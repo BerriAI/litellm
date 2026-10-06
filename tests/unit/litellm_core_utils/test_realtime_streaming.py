@@ -3105,6 +3105,50 @@ async def test_translation_failed_audio_send_is_not_billed() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("default_on,requested", ((False, False), (True, False), (False, True)))
+@pytest.mark.parametrize(
+    "event_hook",
+    (GuardrailEventHooks.realtime_input_transcription, GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call),
+)
+async def test_translation_rejects_applicable_guardrails_before_forwarding_audio(
+    monkeypatch: pytest.MonkeyPatch, default_on: bool, requested: bool, event_hook: GuardrailEventHooks
+) -> None:
+    guardrail: Final = CustomGuardrail(guardrail_name="speech-policy", event_hook=event_hook, default_on=default_on)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    input_event: Final = json.dumps(
+        {"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(4800)).decode()}
+    )
+    output_event: Final = {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(4800)).decode()}
+    client: Final = _ga_client_ws()
+    client.receive_text = AsyncMock(side_effect=[input_event, ConnectionClosed(None, None)])
+    client.send_text = AsyncMock()
+    client.close = AsyncMock()
+    backend: Final = MagicMock()
+    backend.send = AsyncMock()
+    backend.recv = AsyncMock(side_effect=[json.dumps(output_event), ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        websocket=client,
+        backend_ws=backend,
+        logging_obj=MagicMock(),
+        translation_session=True,
+        request_data={"litellm_metadata": {"guardrails": ["speech-policy"] if requested else []}},
+    )
+
+    await streaming.bidirectional_forward()
+
+    messages: Final = tuple(json.loads(call.args[0]) for call in client.send_text.await_args_list)
+    if default_on or requested:
+        assert messages[0]["error"]["type"] == "guardrail_error"
+        client.close.assert_awaited_once_with(
+            code=1008, reason="Translation sessions cannot enforce configured realtime guardrails"
+        )
+        backend.send.assert_not_awaited()
+    else:
+        assert output_event in messages
+        backend.send.assert_awaited_once_with(input_event)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("retain_close", (False, True))
 @pytest.mark.parametrize("reported_input,expected_input", [(None, 2.0), (0.0, 0.0), (0.25, 0.25)])
 async def test_translation_terminal_usage_fills_only_missing_input_duration(

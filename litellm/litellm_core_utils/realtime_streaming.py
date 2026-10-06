@@ -124,7 +124,8 @@ def _translation_audio_bytes_per_second(audio_format: str | RealtimeAudioFormats
         case "g711_ulaw" | "g711_alaw" | AudioPCMU() | AudioPCMA():
             return 8000.0
         case _:
-            return None
+            pass
+    return None
 
 
 class RealtimeEventNormalizer(Protocol):
@@ -1816,6 +1817,16 @@ class RealTimeStreaming:
             return ClientLoopExit.CLIENT_DISCONNECTED
 
     async def bidirectional_forward(self) -> None:
+        if self._is_translation_session and self._has_realtime_guardrails():
+            await self.websocket.send_text(
+                realtime_error_event(
+                    "Translation sessions cannot enforce configured realtime guardrails", error_type="guardrail_error"
+                )
+            )
+            await self.websocket.close(
+                code=1008, reason="Translation sessions cannot enforce configured realtime guardrails"
+            )
+            return
         forward_task: Final = asyncio.create_task(self.backend_to_client_send_messages())
         client_task: Final = asyncio.create_task(self.client_ack_messages())
         try:
