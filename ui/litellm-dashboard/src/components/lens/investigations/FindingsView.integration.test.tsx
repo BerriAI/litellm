@@ -29,6 +29,12 @@ it("deduplicates findings across investigations and applies feedback to every so
   renderWithLens(<FindingsView />, { searchParams: "?tab=findings", onUrlUpdate });
   const rows = await screen.findAllByRole("row", { name: issue.title });
   expect(rows).toHaveLength(1);
+  expect(screen.getByRole("columnheader", { name: "Investigation", exact: true })).toBeVisible();
+  const investigations = `${support.settings.name}, ${twin.settings.name}`;
+  expect(within(rows[0]).getByRole("cell", { name: investigations, exact: true })).toHaveAttribute(
+    "title",
+    investigations,
+  );
   expect(within(rows[0]).getByRole("cell", { name: "2", exact: true })).toBeVisible();
   await user.click(rows[0]);
   const panel = await screen.findByRole("complementary", { name: "Finding details" });
@@ -101,6 +107,7 @@ it("reviews only the selected check when two findings have the same title", asyn
   renderWithLens(<FindingsView />, { searchParams: "?tab=findings" });
   const rows = await screen.findAllByRole("row", { name: issue.title });
   expect(rows).toHaveLength(2);
+  expect(within(rows[0]).getByRole("cell", { name: support.settings.name, exact: true })).toBeVisible();
   await user.click(rows[0]);
   await user.click(await screen.findByRole("button", { name: "Mark resolved" }));
   await waitFor(() => expect(proxy.patch).toHaveBeenCalledTimes(1));

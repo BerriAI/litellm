@@ -11,7 +11,7 @@ export type InvestigationSummaryProps = ComponentProps<"div"> & {
 };
 
 export function InvestigationSummary({ lens, connected, className, ...props }: InvestigationSummaryProps) {
-  const lastCompleted = lens.jobs.find((job) => job.status === "completed");
+  const lastCompleted = lens.jobs.find((job) => job.status === "completed" && !job.error);
   const lastSuccess = lastCompleted?.finished_at ?? lens.last_scan_at;
   const spent = lens.budget_month === new Date().toISOString().slice(0, 7) ? lens.spent ?? 0 : 0;
   return (
@@ -30,7 +30,7 @@ export function InvestigationSummary({ lens, connected, className, ...props }: I
         </strong>
       </span>
       <span>
-        Last success: <span className="text-foreground">{lastSuccess ? runTime(lastSuccess) : "Not yet"}</span>
+        Last full completion: <span className="text-foreground">{lastSuccess ? runTime(lastSuccess) : "Not yet"}</span>
       </span>
       <span>
         This month:{" "}

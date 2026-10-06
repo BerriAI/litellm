@@ -175,6 +175,42 @@ model_list:
       api_base: http://127.0.0.1:8191
       api_key: synthetic-azure-key
       api_version: "2025-04-01-preview"
+  - model_name: bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/invoke/us.anthropic.claude-sonnet-4-6
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-sonnet-4-6
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/invoke/us.anthropic.claude-sonnet-5
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-sonnet-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/invoke/us.anthropic.claude-opus-4-8
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-opus-4-8
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/invoke/us.anthropic.claude-sonnet-5-5
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-sonnet-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
+  - model_name: bedrock/invoke/us.anthropic.claude-opus-5-5
+    litellm_params:
+      model: bedrock/invoke/us.anthropic.claude-opus-5-5
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-bedrock-key
+      aws_region_name: us-east-1
   - model_name: bedrock_mantle/anthropic.claude-haiku-4-5
     litellm_params:
       model: bedrock_mantle/anthropic.claude-haiku-4-5
