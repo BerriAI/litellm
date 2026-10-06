@@ -208,7 +208,8 @@ def test_add_message_forwards_content_parts_attachments_metadata(
 def test_run_forwards_every_sdk_field(gateway: Gateway, tmp_path: Path, prefix: str) -> None:
     pytest.skip(
         "BUG: runs.create drops additional_messages, temperature, top_p, max_prompt_tokens, max_completion_tokens, "
-        "truncation_strategy, tool_choice, response_format and parallel_tool_calls, sends nulls, then polls "
+        "truncation_strategy, tool_choice, response_format, parallel_tool_calls and reasoning_effort, sends nulls, "
+        "then polls "
         "GET /runs/{id}"
     )
     with wire_server(_respond) as wire:
