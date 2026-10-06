@@ -633,8 +633,12 @@ async def test_request_deadline_expiry_returns_gateway_timeout(stalled: str, mon
     from tests.unit.proxy.lens.test_endpoints import ResultDatabase
     from tests.unit.proxy.lens.test_state import NOW, lens
 
-    monkeypatch.setattr(litellm, "request_timeout", 60 if stalled == "budget_wait" else 0.05)
-    monkeypatch.setattr(inference, "BUDGET_WAIT_TIMEOUT", 0.05 if stalled == "budget_wait" else 60)
+    budget_deadline: Final = inference.BUDGET_WAIT_TIMEOUT
+    request_deadline: Final = budget_deadline * 2 if stalled == "budget_wait" else budget_deadline / 2
+    monkeypatch.setattr(litellm, "request_timeout", request_deadline)
+    loop: Final = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "time", lambda: 0.0)
+    loop.call_soon(monkeypatch.setattr, loop, "time", lambda: min(request_deadline, budget_deadline) + 1)
     db: Final = ResultDatabase(lens())
     hold: Final = BudgetReservation(
         id="active", job_id="run", amount=90, month=db.stored.budget_month, expires_at=NOW + BUDGET_LEASE
@@ -669,13 +673,16 @@ async def test_renewal_deadline_cancels_stalled_database_and_model(monkeypatch: 
     from litellm.proxy.lens import inference
     from litellm.proxy.lens.repository import Database, LensRepository, Row
 
-    monkeypatch.setattr(inference, "BUDGET_RENEW_INTERVAL", 0.05)
+    interval: Final = inference.BUDGET_RENEW_INTERVAL
+    loop: Final = asyncio.get_running_loop()
+    monkeypatch.setattr(loop, "time", lambda: 0.0)
     admitted: Final = asyncio.Event()
     database_cancelled: Final = asyncio.Event()
     model_cancelled: Final = asyncio.Event()
 
     class StalledDatabase:
         async def query_raw(self, query: str, *args: object) -> tuple[Row, ...]:
+            loop.call_soon(monkeypatch.setattr, loop, "time", lambda: 2 * (interval + 1))
             try:
                 await asyncio.Event().wait()
             finally:
@@ -691,6 +698,7 @@ async def test_renewal_deadline_cancels_stalled_database_and_model(monkeypatch: 
 
     async def model() -> tuple[ModelResponse, float | None]:
         admitted.set()
+        loop.call_soon(monkeypatch.setattr, loop, "time", lambda: interval + 1)
         try:
             await asyncio.Event().wait()
         finally:
