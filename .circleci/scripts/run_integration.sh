@@ -72,7 +72,7 @@ export PATH="$PWD/.venv/bin:$PATH"
 export PYTHONPATH="$PWD:$PWD/tests:$PWD/tests/e2e"
 export DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/circle_test"
 export REDIS_HOST=127.0.0.1 REDIS_PORT=6379
-export LITELLM_MASTER_KEY=sk-integration-master LITELLM_SALT_KEY=sk-integration-salt
+export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 16)" LITELLM_SALT_KEY=sk-integration-salt
 export LITELLM_MODE=PRODUCTION LITELLM_LOCAL_MODEL_COST_MAP=True
 export STORE_MODEL_IN_DB=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1
 export INTEGRATION_PROXY_URL=http://127.0.0.1:4000

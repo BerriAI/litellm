@@ -4,9 +4,10 @@ This test ensures that the proxy can passthrough anthropic requests
 
 import pytest
 import anthropic
+import os
 
 client = anthropic.Anthropic(
-    base_url="http://0.0.0.0:4000/anthropic", api_key="sk-1234"
+    base_url="http://0.0.0.0:4000/anthropic", api_key=os.environ["LITELLM_MASTER_KEY"]
 )
 
 

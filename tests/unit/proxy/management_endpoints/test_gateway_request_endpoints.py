@@ -2,6 +2,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from tests._master_key import MASTER_KEY
+
 # Patching ``litellm.proxy.proxy_server.prisma_client`` imports that module, whose
 # module-level setup reads DATABASE_URL and LITELLM_MASTER_KEY. Tier-zero runners
 # set neither, so pin throwaways first, as test_component_allowlists.py does. The
@@ -9,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # tests sharing the xdist worker and make them treat a phantom database as live.
 _THROWAWAY_ENV = {
     "DATABASE_URL": "sqlite:///:memory:",
-    "LITELLM_MASTER_KEY": "sk-test-gateway-request-endpoints",
+    "LITELLM_MASTER_KEY": MASTER_KEY,
 }
 _PRE_EXISTING_ENV = {key: os.environ.get(key) for key in _THROWAWAY_ENV}
 for _key, _value in _THROWAWAY_ENV.items():

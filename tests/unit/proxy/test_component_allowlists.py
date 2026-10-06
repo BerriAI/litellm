@@ -41,6 +41,8 @@ from starlette.routing import Mount, Route
 from starlette.testclient import TestClient
 from starlette.types import Lifespan
 
+from tests._master_key import MASTER_KEY
+
 # Importing ``litellm.proxy.proxy_server`` runs its module-level setup, which
 # reads ``DATABASE_URL`` (Prisma) and ``LITELLM_MASTER_KEY``. Tier-zero CI
 # runners don't set these. We pin throwaway values before the import so the
@@ -50,7 +52,7 @@ from starlette.types import Lifespan
 # treat a phantom database as available instead of skipping).
 _THROWAWAY_ENV = {
     "DATABASE_URL": "sqlite:///:memory:",
-    "LITELLM_MASTER_KEY": "sk-test-component-allowlist",
+    "LITELLM_MASTER_KEY": MASTER_KEY,
 }
 _PRE_EXISTING_ENV = {key: os.environ.get(key) for key in _THROWAWAY_ENV}
 for _key, _value in _THROWAWAY_ENV.items():

@@ -57,7 +57,7 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
     team, and end user TPM counters, not just chat completion ModelResponse
     objects.
     """
-    _api_key = hash_token("sk-12345")
+    _api_key = hash_token("sk-98765")
     user_id = "ishaan"
     team_id = "litellm-team"
     end_user_id = "customer-1"

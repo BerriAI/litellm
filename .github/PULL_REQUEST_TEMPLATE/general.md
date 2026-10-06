@@ -150,7 +150,7 @@ For each e2e test you added or changed, list the manual steps a reviewer can fol
 Example checklists:
 
 - tests/e2e/quota_management/ratelimit/test_rate_limit_e2e.py::TestKeyRateLimits::test_rpm_limit_blocks_over_limit - a key allowed 2 requests a minute serves exactly 2 and refuses the 3rd
-  - [ ] Generate a limited key: curl -X POST http://localhost:4000/key/generate -H "Authorization: Bearer sk-1234" -d '{"rpm_limit": 2}'
+  - [ ] Generate a limited key: curl -X POST http://localhost:4000/key/generate -H "Authorization: Bearer $LITELLM_MASTER_KEY" -d '{"rpm_limit": 2}'
   - [ ] Send three /v1/chat/completions requests with that key inside one minute
   - [ ] Expect the first two to return 200 and the third to return 429 naming the rpm limit
   - [ ] Sanity check: this test makes sense to add and is not hand-wavey (e.g., assert actual expected spend instead of just spend > 0) or potentially flaky
@@ -164,4 +164,3 @@ Example checklists:
 ## Final Attestation
 
 - [ ] The tests check the right things, including the edge cases, and regressions in the respective real-world customer use-cases are not possible after this PR
-

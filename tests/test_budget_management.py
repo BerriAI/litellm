@@ -1,3 +1,4 @@
+import os
 # What is this?
 ## Unit tests for the /budget/* endpoints
 from litellm._uuid import uuid
@@ -23,7 +24,7 @@ def _parse_budget_api_datetime(value: str) -> datetime:
 
 async def delete_budget(session, budget_id):
     url = "http://0.0.0.0:4000/budget/delete"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {"id": budget_id}
     async with session.post(url, headers=headers, json=data) as response:
         assert response.status == 200
@@ -32,7 +33,7 @@ async def delete_budget(session, budget_id):
 
 async def create_budget(session, data):
     url = "http://0.0.0.0:4000/budget/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
 
     async with session.post(url, headers=headers, json=data) as response:
         assert response.status == 200

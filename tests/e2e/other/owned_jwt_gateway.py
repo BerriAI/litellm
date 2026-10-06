@@ -86,7 +86,6 @@ def owned_jwt_gateway(
         "JWT_PUBLIC_KEY_URL": idp.jwks_url,
         "JWT_ISSUER": idp.issuer,
         "JWT_AUDIENCE": "litellm-e2e",
-        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true",
         "DISABLE_SCHEMA_UPDATE": "true",
         "STORE_MODEL_IN_DB": "True",
         "PYTHONPATH": str(Path(__file__).resolve().parents[3]),

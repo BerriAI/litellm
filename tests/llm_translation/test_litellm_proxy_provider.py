@@ -226,14 +226,14 @@ async def test_litellm_gateway_image_generation_direct(is_async):
                 model="litellm_proxy/dall-e-3",
                 prompt="A beautiful sunset over mountains",
                 api_base="http://my-proxy",
-                api_key="sk-1234",
+                api_key="sk-9876",
             )
 
             # Verify the AsyncOpenAI client constructor was called with correct parameters
             mock_async_constructor.assert_called_once()
             constructor_kwargs = mock_async_constructor.call_args.kwargs
             print("KWARGS to Async OpenAI constructor=", constructor_kwargs)
-            assert constructor_kwargs["api_key"] == "sk-1234"
+            assert constructor_kwargs["api_key"] == "sk-9876"
             assert constructor_kwargs["base_url"] == "http://my-proxy"
 
             # Verify the AsyncOpenAI client was called correctly
@@ -253,13 +253,13 @@ async def test_litellm_gateway_image_generation_direct(is_async):
                 model="litellm_proxy/dall-e-3",
                 prompt="A beautiful sunset over mountains",
                 api_base="http://my-proxy",
-                api_key="sk-1234",
+                api_key="sk-9876",
             )
 
             # Verify the OpenAI client constructor was called with correct parameters
             mock_sync_constructor.assert_called_once()
             constructor_kwargs = mock_sync_constructor.call_args.kwargs
-            assert constructor_kwargs["api_key"] == "sk-1234"
+            assert constructor_kwargs["api_key"] == "sk-9876"
             assert constructor_kwargs["base_url"] == "http://my-proxy"
 
             # Verify the OpenAI client was called correctly
@@ -309,7 +309,7 @@ async def test_litellm_gateway_from_sdk_image_edit(is_async):
                 prompt="A test prompt",
                 image=[image_file],
                 api_base="http://my-proxy",
-                api_key="sk-1234",
+                api_key="sk-9876",
             )
             mock_post.assert_awaited_once()
         else:
@@ -318,13 +318,13 @@ async def test_litellm_gateway_from_sdk_image_edit(is_async):
                 prompt="A test prompt",
                 image=[image_file],
                 api_base="http://my-proxy",
-                api_key="sk-1234",
+                api_key="sk-9876",
             )
             mock_post.assert_called_once()
 
     called_kwargs = mock_post.call_args.kwargs
     assert called_kwargs["url"] == "http://my-proxy/images/edits"
-    assert called_kwargs["headers"]["Authorization"] == "Bearer sk-1234"
+    assert called_kwargs["headers"]["Authorization"] == "Bearer sk-9876"
 
 
 @pytest.mark.parametrize("is_async", [False, True])

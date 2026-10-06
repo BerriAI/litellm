@@ -569,7 +569,7 @@ async def create_file(
     Example Curl
     ```
     curl http://localhost:4000/v1/files \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -F purpose="batch" \
         -F file="@mydata.jsonl"
         -F expires_after[anchor]="created_at" \
@@ -970,7 +970,7 @@ async def get_file_content(
     Example Curl
     ```
     curl http://localhost:4000/v1/files/file-abc123/content \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     ```
     """
@@ -1282,7 +1282,7 @@ async def get_file(
     Example Curl
     ```
     curl http://localhost:4000/v1/files/file-abc123 \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     ```
     """
@@ -1708,7 +1708,7 @@ async def list_files(
     Example Curl
     ```
     curl http://localhost:4000/v1/files\
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
 
     ```
     """

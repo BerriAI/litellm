@@ -21,7 +21,7 @@ docker build --build-arg LITELLM_RELEASE_TAG="$LITELLM_RELEASE_TAG" \
 docker compose -f docker/docker-compose.tracing.yml up -d --build
 ```
 
-Open `http://localhost:4002/ui/` and sign in as `admin` with password `sk-1234`. Go to **Lens > Investigations > Connect worker**, choose a model and monthly budget, then **Get install command**. Expand **Using Docker Compose or Helm?** and copy the worker token. In the same terminal, run:
+Open `http://localhost:4002/ui/` and sign in as `admin` with the key saved in `.lens-dev/master_key`. Go to **Lens > Investigations > Connect worker**, choose a model and monthly budget, then **Get install command**. Expand **Using Docker Compose or Helm?** and copy the worker token. In the same terminal, run:
 
 ```bash
 export LITELLM_URL=http://litellm:4000

@@ -57,7 +57,7 @@ async def video_generation(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "model": "sora-2",
@@ -144,7 +144,7 @@ async def video_list(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/videos" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -232,7 +232,7 @@ async def video_status(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/videos/video_123" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -332,7 +332,7 @@ async def video_content(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/videos/{video_id}/content" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --output video.mp4
     ```
     """
@@ -437,7 +437,7 @@ async def video_remix(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos/video_123/remix" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "prompt": "A new version with different colors"
@@ -541,7 +541,7 @@ async def video_create_character(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos/characters" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -F "video=@character_video.mp4" \
         -F "name=my_character"
     ```
@@ -643,7 +643,7 @@ async def video_get_character(
     Example:
     ```bash
     curl -X GET "http://localhost:4000/v1/videos/characters/char_123" \
-        -H "Authorization: Bearer sk-1234"
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
     from litellm.proxy.proxy_server import (
@@ -748,7 +748,7 @@ async def video_edit(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos/edits" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{"prompt": "Make it brighter", "video": {"id": "video_123"}}'
     ```
@@ -852,7 +852,7 @@ async def video_extension(
     Example:
     ```bash
     curl -X POST "http://localhost:4000/v1/videos/extensions" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{"prompt": "Continue the scene", "seconds": "5", "video": {"id": "video_123"}}'
     ```

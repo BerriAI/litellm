@@ -20,6 +20,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value
 from litellm.proxy.proxy_server import ProxyConfig
 from litellm.proxy.utils import DualCache, ProxyLogging
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from tests._master_key import MASTER_KEY
 
 
 class DBModel(BaseModel):
@@ -48,7 +49,7 @@ async def test_delete_deployment():
     )
     encrypted_litellm_params = litellm_params.dict(exclude_none=True)
 
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
 
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
 
@@ -146,7 +147,7 @@ async def test_add_existing_deployment():
 
     init_len_list = len(llm_router.model_list)
     print(f"llm_router: {llm_router}")
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
     pc = ProxyConfig()
@@ -201,7 +202,7 @@ async def test_db_error_new_model_check():
 
     init_len_list = len(llm_router.model_list)
     print(f"llm_router: {llm_router}")
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
     pc = ProxyConfig()
@@ -322,7 +323,7 @@ async def test_add_and_delete_deployments(llm_router, model_list_flag_value):
     - when router is init and not empty
     """
 
-    master_key = "sk-1234"
+    master_key = MASTER_KEY
     setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
     setattr(litellm.proxy.proxy_server, "master_key", master_key)
     pc = ProxyConfig()

@@ -2,6 +2,7 @@
 This test ensures that the proxy can passthrough anthropic requests
 """
 
+import os
 import pytest
 import anthropic
 import aiohttp
@@ -15,7 +16,7 @@ async def test_anthropic_basic_completion_with_headers():
     print("making basic completion request to anthropic passthrough with aiohttp")
 
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
         "Content-Type": "application/json",
         "Anthropic-Version": "2023-06-01",
     }
@@ -65,7 +66,7 @@ async def test_anthropic_basic_completion_with_headers():
 
                 async with session.get(
                     f"http://0.0.0.0:4000/spend/logs?request_id={anthropic_message_id}",
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}"},
                 ) as spend_response:
                     print("text spend response")
                     print(f"Spend response: {spend_response}")
@@ -155,7 +156,7 @@ async def test_anthropic_streaming_with_headers():
     print("making streaming request to anthropic passthrough with aiohttp")
 
     headers = {
-        "Authorization": f"Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
         "Content-Type": "application/json",
         "Anthropic-Version": "2023-06-01",
     }
@@ -236,7 +237,7 @@ async def test_anthropic_streaming_with_headers():
 
                 async with session.get(
                     f"http://0.0.0.0:4000/spend/logs?request_id={anthropic_message_id}",
-                    headers={"Authorization": "Bearer sk-1234"},
+                    headers={"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}"},
                 ) as spend_response:
                     spend_data = await spend_response.json()
                     print(f"Spend data: {spend_data}")
@@ -330,7 +331,7 @@ async def test_anthropic_messages_streaming_cost_injection():
     print("Testing cost injection in Anthropic Messages API streaming response")
 
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
     }
@@ -404,7 +405,7 @@ async def test_anthropic_messages_openai_model_streaming_cost_injection():
     print("Testing cost injection in Anthropic Messages API with OpenAI model")
 
     headers = {
-        "Authorization": "Bearer sk-1234",
+        "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
     }

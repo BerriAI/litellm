@@ -40,7 +40,7 @@ async def test_llm_guard_call_type_aliases(
             "is_valid": is_valid,
         },
     )
-    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-12345"))
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key=hash_token("sk-98765"))
     data: Final = {
         payload_key: [{"role": "user", "content": "email: person@example.com"}]
         if payload_key == "messages"

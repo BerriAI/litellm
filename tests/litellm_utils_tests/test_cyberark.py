@@ -67,7 +67,7 @@ async def test_cyberark_write_secret_rejects_yaml_injection():
 
             response = await cyberark_manager.async_write_secret(
                 secret_name=malicious_secret_name,
-                secret_value="sk-1234",
+                secret_value="sk-9876",
             )
 
             assert response["status"] == "error"
@@ -186,7 +186,7 @@ async def test_cyberark_rotate_secret():
     Test key rotation in CyberArk Conjur using mocked HTTP requests.
 
     This test simulates what happens when a virtual key is rotated:
-    1. Write initial secret with alias (like sk-1234)
+    1. Write initial secret with alias (like a proxy key)
     2. Rotate to new value (like sk-12359)
     3. Verify reading the secret returns the NEW value
     """

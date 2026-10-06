@@ -33,6 +33,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftServicePrincipalTeam,
     TeamMappings,
 )
+from tests._master_key import MASTER_KEY
 
 _SSO_PROVIDER_ENV_VARS = (
     "DISABLE_ADMIN_UI",
@@ -8525,7 +8526,7 @@ async def _render_legacy_login_page(env_overrides, general_settings):
     with (
         # snapshot os.environ so the mutations below are reverted on exit
         patch.dict(os.environ, {}, clear=False),
-        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.premium_user", False),
         patch("litellm.proxy.proxy_server.general_settings", general_settings),
@@ -8656,7 +8657,7 @@ async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
     with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}), patch(
         "litellm.proxy.proxy_server.premium_user", False
     ), patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
-        "litellm.proxy.proxy_server.master_key", "sk-1234"
+        "litellm.proxy.proxy_server.master_key", MASTER_KEY
     ), patch(
         "litellm.proxy.management_endpoints.sso.saml_sso.SAMLAuthHandler.handle_acs",
         new=_fake_handle_acs,
@@ -9697,7 +9698,7 @@ async def _sso_key_generate_on_ui_disabled_node(*, source, key, google_sso_confi
         patch.dict(os.environ, env, clear=True),
         patch("litellm.proxy.proxy_server.premium_user", True),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
         patch("litellm.proxy.proxy_server.general_settings", {}),
         patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         patch("litellm.proxy.proxy_server.cli_sso_session_cache", cli_cache),

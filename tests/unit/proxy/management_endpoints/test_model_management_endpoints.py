@@ -420,7 +420,7 @@ class TestModelManagementAuthChecks:
         assert result is True
 
     def test_can_user_attach_credential_unchanged_encrypted_existing_allows_any_role(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-9876")
         encrypted_name = encrypt_value_helper(value="shared-credential")
         assert encrypted_name != "shared-credential"
         result = ModelManagementAuthChecks.can_user_attach_credential(
@@ -3408,7 +3408,7 @@ class TestUpdateDBModelKeepsLegacyDropParams:
         from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
 
-        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-9876")
         legacy_row = Deployment(
             model_name="gpt-5-nano",
             litellm_params=LiteLLM_Params(
@@ -4351,7 +4351,7 @@ class TestModelInfoCostMapEchoFilter:
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
-        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-9876")
         entry = litellm.get_model_info("openai/gpt-5.6")
         db_model = Deployment(
             model_name="gpt-5.6",
@@ -9090,7 +9090,7 @@ class TestWifBoundaryReadsTheResultingDeployment:
         credential, and lets the write through."""
         from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
 
-        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-9876")
         non_admin = UserAPIKeyAuth(user_id="team_admin", user_role=LitellmUserRoles.INTERNAL_USER)
         federated_row = MagicMock()
         federated_row.litellm_params = {

@@ -15,7 +15,7 @@ if worker_image > /dev/null 2>&1; then
 fi
 
 qa_dir=$(mktemp -d)
-master_key="sk-$(openssl rand -hex 32)"
+master_key="sk-$(openssl rand -hex 16)"
 compose=(docker compose -p lens-compose-ci --env-file "$qa_dir/env" -f deploy/lens/stack.yaml)
 cleanup() {
   "${compose[@]}" --profile lens down -v --remove-orphans >/dev/null 2>&1 || true

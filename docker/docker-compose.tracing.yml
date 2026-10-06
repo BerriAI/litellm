@@ -9,8 +9,7 @@ services:
         LITELLM_RELEASE_TAG: ${LITELLM_RELEASE_TAG:-}
     command: ["--config", "/app/tracing-config.yaml", "--port", "4000"]
     environment:
-      LITELLM_MASTER_KEY: sk-1234
-      LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY: "true"
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY}
       LITELLM_SALT_KEY: sk-local-tracing-salt-key
       DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
       STORE_MODEL_IN_DB: "True"

@@ -8,7 +8,7 @@ import aiohttp, openai
 from openai import OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI
 from typing import Optional, List, Union
 
-LITELLM_MASTER_KEY = "sk-1234"
+LITELLM_MASTER_KEY = os.environ["LITELLM_MASTER_KEY"]
 
 
 def response_header_check(response):
@@ -30,7 +30,7 @@ async def generate_key(
     ],
 ):
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {
         "models": models,
         "duration": None,
@@ -55,7 +55,7 @@ async def generate_key(
 
 async def new_user(session):
     url = "http://0.0.0.0:4000/user/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {
         "models": ["gpt-4", "text-embedding-ada-002", "gpt-image-1"],
         "duration": None,
@@ -323,7 +323,7 @@ async def test_chat_completion_ratelimit():
     """
     async with aiohttp.ClientSession() as session:
         # key_gen = await generate_key(session=session)
-        key = "sk-1234"
+        key = os.environ["LITELLM_MASTER_KEY"]
         tasks = []
         tasks.append(
             chat_completion(session=session, key=key, model="fake-openai-endpoint-2")
@@ -351,7 +351,7 @@ async def test_chat_completion_different_deployments():
     """
     async with aiohttp.ClientSession() as session:
         # key_gen = await generate_key(session=session)
-        key = "sk-1234"
+        key = os.environ["LITELLM_MASTER_KEY"]
         results = []
         for _ in range(20):
             results.append(
@@ -377,7 +377,7 @@ async def test_chat_completion_streaming():
     """
     [PROD Test] Ensures logprobs are returned correctly
     """
-    client = AsyncOpenAI(api_key="sk-1234", base_url="http://0.0.0.0:4000")
+    client = AsyncOpenAI(api_key=os.environ["LITELLM_MASTER_KEY"], base_url="http://0.0.0.0:4000")
 
     response = await client.chat.completions.create(
         model="gpt-3.5-turbo-large",
@@ -401,7 +401,7 @@ async def test_completion_streaming_usage_metrics():
     [PROD Test] Ensures usage metrics are returned correctly when `include_usage` is set to `True`
     """
     client: Final = AsyncOpenAI(
-        api_key="sk-1234", base_url=os.environ.get("LITELLM_PROXY_BASE_URL", "http://0.0.0.0:4000")
+        api_key=os.environ["LITELLM_MASTER_KEY"], base_url=os.environ.get("LITELLM_PROXY_BASE_URL", "http://0.0.0.0:4000")
     )
 
     response = await client.completions.create(
@@ -458,7 +458,7 @@ async def test_batch_chat_completions():
         # call chat/completions with a model that the key was not created for + the model is not on the config.yaml
         response = await chat_completion(
             session=session,
-            key="sk-1234",
+            key=os.environ["LITELLM_MASTER_KEY"],
             model="gpt-3.5-turbo,fake-openai-endpoint",
         )
 

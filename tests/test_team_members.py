@@ -1,3 +1,4 @@
+import os
 import pytest
 import requests
 import time
@@ -77,7 +78,7 @@ class TeamAPI:
 def api_client():
     """Fixture for TeamAPI client"""
     base_url = "http://localhost:4000"
-    auth_token = "sk-1234"  # Replace with your token
+    auth_token = os.environ["LITELLM_MASTER_KEY"]  # Replace with your token
     return TeamAPI(base_url, auth_token)
 
 

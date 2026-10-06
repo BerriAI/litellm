@@ -149,7 +149,7 @@ async def test_proxy_only_error_log_keeps_litellm_metadata_in_litellm_params():
                 "input": "blocked prompt",
                 "litellm_metadata": {"standard_logging_guardrail_information": guardrail_info},
             },
-            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/responses"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/responses"),
             route="/v1/responses",
             original_exception=HTTPException(status_code=400, detail="blocked"),
         )
@@ -203,14 +203,14 @@ def test_get_model_group_info_order():
                 "model_name": "openai/tts-1",
                 "litellm_params": {
                     "model": "openai/tts-1",
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                 },
             },
             {
                 "model_name": "openai/gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "openai/gpt-3.5-turbo",
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                 },
             },
         ]
@@ -2090,7 +2090,7 @@ async def test_proxy_only_error_expected_4xx_skips_traceback_for_both_handlers(m
                     "model": "does-not-exist",
                     "messages": [{"role": "user", "content": "hi"}],
                 },
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/chat/completions"),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/chat/completions"),
                 route="/v1/chat/completions",
                 original_exception=exc,
             )
@@ -2141,7 +2141,7 @@ async def test_proxy_only_error_5xx_keeps_traceback_and_runs_sync_callbacks(monk
                     "model": "gpt-4o",
                     "messages": [{"role": "user", "content": "hi"}],
                 },
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/chat/completions"),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-9876", request_route="/v1/chat/completions"),
                 route="/v1/chat/completions",
                 original_exception=exc,
             )

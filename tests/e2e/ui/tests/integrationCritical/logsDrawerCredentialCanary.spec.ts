@@ -2,6 +2,7 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import { Page } from "../../fixtures/pages";
 import { dismissFeedbackPopup, navigateToPage } from "../../helpers/navigation";
+import { masterKey } from "../../helpers/traffic";
 
 /**
  * Credential canary S8: what the Logs page renders for a request, including any client-side
@@ -55,7 +56,7 @@ test("the Logs drawer renders the stored request without the deployment api_key"
   page,
   request,
 }) => {
-  const master = process.env.LITELLM_MASTER_KEY ?? "sk-integration-master";
+  const master = masterKey();
   const upstream = (
     process.env.INTEGRATION_UPSTREAM_URL ?? "http://127.0.0.1:8190"
   ).replace(/\/+$/, "");

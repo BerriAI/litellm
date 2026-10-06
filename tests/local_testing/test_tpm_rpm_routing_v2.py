@@ -519,7 +519,7 @@ def test_return_potential_deployments():
                 "model_name": "model-test",
                 "litellm_params": {
                     "rpm": 1,
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                     "model": "openai/gpt-3.5-turbo",
                     "mock_response": "Hello, world!",
                 },
@@ -532,7 +532,7 @@ def test_return_potential_deployments():
                 "model_name": "model-test",
                 "litellm_params": {
                     "rpm": 10,
-                    "api_key": "sk-1234",
+                    "api_key": "sk-9876",
                     "model": "openai/o1-mini",
                     "mock_response": "Hello, world, it's o1!",
                 },

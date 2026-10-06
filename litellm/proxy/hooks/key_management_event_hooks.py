@@ -292,7 +292,7 @@ class KeyManagementEventHooks:
 
         Args:
             secret_name: Name of the virtual key
-            secret_token: Value of the virtual key (example: sk-1234)
+            secret_token: Value of the virtual key (example: $LITELLM_API_KEY)
         """
         if litellm._key_management_settings is not None:
             if litellm._key_management_settings.store_virtual_keys is True:
@@ -330,7 +330,7 @@ class KeyManagementEventHooks:
         Args:
             current_secret_name: Current name of the virtual key
             new_secret_name: New name of the virtual key
-            new_secret_value: New value of the virtual key (example: sk-1234)
+            new_secret_value: New value of the virtual key (example: $LITELLM_API_KEY)
             team_id: Optional team ID to get team-specific secret manager settings
         """
         secret_manager: Final = KeyManagementEventHooks._stored_virtual_key_secret_manager()

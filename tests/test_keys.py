@@ -16,7 +16,7 @@ async def generate_team(
     session, models: Optional[list] = None, team_id: Optional[str] = None
 ):
     url = "http://0.0.0.0:4000/team/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     if team_id is None:
         team_id = "litellm-dashboard"
     data = {"team_id": team_id, **({"models": models} if models is not None else {})}
@@ -37,7 +37,7 @@ async def generate_user(
     user_role="app_owner",
 ):
     url = "http://0.0.0.0:4000/user/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {
         "user_role": user_role,
         "team_id": "litellm-dashboard",
@@ -64,7 +64,7 @@ async def generate_key(
     user_id: Optional[str] = None,
     team_id: Optional[str] = None,
     metadata: Optional[dict] = None,
-    calling_key="sk-1234",
+    calling_key=os.environ["LITELLM_MASTER_KEY"],
 ):
     url = "http://0.0.0.0:4000/key/generate"
     headers = {
@@ -125,7 +125,7 @@ async def test_key_gen_bad_key():
     """
     async with aiohttp.ClientSession() as session:
         ## LOGIN TO UI
-        form_data = {"username": "admin", "password": "sk-1234"}
+        form_data = {"username": "admin", "password": os.environ["LITELLM_MASTER_KEY"]}
         async with session.post(
             "http://0.0.0.0:4000/login", data=form_data
         ) as response:
@@ -210,7 +210,7 @@ async def chat_completion_streaming(session, key, model="gpt-4"):
     return prompt_tokens, completion_tokens
 
 
-async def delete_key(session, get_key, auth_key="sk-1234"):
+async def delete_key(session, get_key, auth_key=os.environ["LITELLM_MASTER_KEY"]):
     """
     Delete key
     """
@@ -334,7 +334,7 @@ async def test_key_info():
         key_gen = await generate_key(session=session, i=0)
         key = key_gen["key"]
         # as admin #
-        await get_key_info(session=session, get_key=key, call_key="sk-1234")
+        await get_key_info(session=session, get_key=key, call_key=os.environ["LITELLM_MASTER_KEY"])
         # as key itself #
         await get_key_info(session=session, get_key=key, call_key=key)
 
@@ -355,7 +355,7 @@ async def test_model_info():
         key_gen = await generate_key(session=session, i=0)
         key = key_gen["key"]
         # as admin #
-        admin_models = await get_model_info(session=session, call_key="sk-1234")
+        admin_models = await get_model_info(session=session, call_key=os.environ["LITELLM_MASTER_KEY"])
         admin_models = admin_models["data"]
         # as key itself #
         user_models = await get_model_info(session=session, call_key=key)
@@ -367,7 +367,7 @@ async def test_model_info():
 
 async def get_spend_logs(session, request_id):
     url = f"http://0.0.0.0:4000/spend/logs?request_id={request_id}"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
 
     async with session.get(url, headers=headers) as response:
         status = response.status

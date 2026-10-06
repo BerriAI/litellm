@@ -1,3 +1,4 @@
+import os
 import pytest
 import asyncio
 import aiohttp, openai
@@ -55,7 +56,7 @@ async def test_basic_rerank_on_proxy():
         try:
             response = await make_rerank_curl_request(
                 session,
-                "sk-1234",
+                os.environ["LITELLM_MASTER_KEY"],
                 query="What is the capital of the United States?",
                 documents=docs,
             )

@@ -25,6 +25,7 @@ from litellm.proxy.management_endpoints.coordination_redis_endpoints import (
 from litellm.types.management_endpoints.coordination_redis_endpoints import (
     COORDINATION_REDIS_SETTINGS_FIELDS,
 )
+from tests._master_key import MASTER_KEY
 
 _SAVED_SETTINGS = {
     "host": "coord-redis.example.com",
@@ -275,7 +276,7 @@ async def test_update_persists_into_the_general_settings_config_row(monkeypatch)
     (the row startup merges over the yaml config), and sibling general_settings
     keys survive the write."""
     monkeypatch.setattr(litellm, "store_audit_logs", False)
-    mock_prisma = _prisma_with_general_settings({"master_key": "sk-1234"})
+    mock_prisma = _prisma_with_general_settings({"master_key": MASTER_KEY})
     invalidated: list[str] = []
 
     async def _capture_invalidate(param_name: str) -> None:
@@ -306,7 +307,7 @@ async def test_update_persists_into_the_general_settings_config_row(monkeypatch)
         "port": 6379,
         "password": "pw",
     }
-    assert persisted["master_key"] == "sk-1234"
+    assert persisted["master_key"] == MASTER_KEY
     assert invalidated == ["general_settings"]
 
     # the response echoes the saved settings back redacted
@@ -632,7 +633,7 @@ def _real_proxy_config(file_general_settings: dict) -> "object":
 @pytest.mark.asyncio
 async def test_update_refuses_a_config_owned_coordination_redis_block(monkeypatch):
     monkeypatch.setattr(litellm, "store_audit_logs", False)
-    mock_prisma = _prisma_with_general_settings({"master_key": "sk-1234"})
+    mock_prisma = _prisma_with_general_settings({"master_key": MASTER_KEY})
     from_file = {"coordination_redis": {"host": "yaml-redis.example.com", "port": 6379}}
 
     with (
@@ -655,14 +656,14 @@ async def test_update_refuses_a_config_owned_coordination_redis_block(monkeypatc
 @pytest.mark.asyncio
 async def test_update_still_persists_when_the_config_file_declares_no_block(monkeypatch):
     monkeypatch.setattr(litellm, "store_audit_logs", False)
-    mock_prisma = _prisma_with_general_settings({"master_key": "sk-1234"})
+    mock_prisma = _prisma_with_general_settings({"master_key": MASTER_KEY})
 
     async def _capture_invalidate(param_name: str) -> None:
         return None
 
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
-        patch("litellm.proxy.proxy_server.proxy_config", _real_proxy_config({"master_key": "sk-1234"})),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        patch("litellm.proxy.proxy_server.proxy_config", _real_proxy_config({"master_key": MASTER_KEY})),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
         patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
         patch(  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
             "litellm.proxy.management_endpoints.coordination_redis_endpoints.invalidate_config_param",

@@ -97,7 +97,7 @@ class TestCooldownCacheExceptionMasking:
     def test_exception_with_api_keys_masked(self, cooldown_cache):
         """Test that API keys in exceptions are properly masked"""
         exception_with_key = (
-            "Authentication failed with api_key=sk-1234567890abcdefghijklmnopqrstuvwxyz "
+            "Authentication failed with api_key=sk-9876567890abcdefghijklmnopqrstuvwxyz "
             "and token=bearer_token_123456789 for model gpt-4"
         )
 
@@ -115,7 +115,7 @@ class TestCooldownCacheExceptionMasking:
         masked_exception = cooldown_data["exception_received"]
 
         # Should mask the sensitive content while preserving structure
-        assert masked_exception.startswith("Authentication failed with api_key=sk-12345678")
+        assert masked_exception.startswith("Authentication failed with api_key=sk-98765678")
         assert "*" in masked_exception
         assert len(masked_exception) == len(exception_with_key)
 

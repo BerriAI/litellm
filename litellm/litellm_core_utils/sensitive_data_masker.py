@@ -292,7 +292,7 @@ def _redact_sequence(values: Sequence[object], depth: int) -> Sequence[object]:
 """
 masker = SensitiveDataMasker()
 data = {
-    "api_key": "sk-1234567890abcdef",
+    "api_key": "sk-9876543210abcdef",
     "redis_password": "very_secret_pass",
     "port": 6379,
     "tags": ["East US 2", "production", "test"]

@@ -885,8 +885,8 @@ class TestHookHeaderMergePriority:
                         tasks=[],
                         mcp_auth_header=None,
                         mcp_server_auth_headers=None,
-                        oauth2_headers={"Authorization": "Bearer sk-1234"},
-                        raw_headers={"authorization": "Bearer sk-1234"},
+                        oauth2_headers={"Authorization": "Bearer sk-9876"},
+                        raw_headers={"authorization": "Bearer sk-9876"},
                         proxy_logging_obj=None,
                         hook_extra_headers=None,
                     )
@@ -929,9 +929,9 @@ class TestHookHeaderMergePriority:
                         tasks=[],
                         mcp_auth_header=None,
                         mcp_server_auth_headers=None,
-                        oauth2_headers={"Authorization": "Bearer sk-1234"},
+                        oauth2_headers={"Authorization": "Bearer sk-9876"},
                         raw_headers={
-                            "authorization": "Bearer sk-1234",
+                            "authorization": "Bearer sk-9876",
                             "x-custom": "from-client",
                         },
                         proxy_logging_obj=None,

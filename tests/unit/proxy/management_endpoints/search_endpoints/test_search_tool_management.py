@@ -466,7 +466,7 @@ async def test_list_search_tools_db_masking_sensitive_values(monkeypatch):
             "search_tool_name": "perplexity-tool",
             "litellm_params": {
                 "search_provider": "perplexity",
-                "api_key": "pplx-sk-1234567890abcdef",
+                "api_key": "pplx-sk-9876567890abcdef",
                 "api_base": "https://api.perplexity.ai",
             },
             "search_tool_info": {"description": "Perplexity tool"},
@@ -552,7 +552,7 @@ async def test_list_search_tools_db_masking_sensitive_values(monkeypatch):
                     )
                     assert tool1 is not None
                     assert (
-                        tool1["litellm_params"]["api_key"] != "pplx-sk-1234567890abcdef"
+                        tool1["litellm_params"]["api_key"] != "pplx-sk-9876567890abcdef"
                     )
                     assert "****" in tool1["litellm_params"]["api_key"]
                     assert tool1["litellm_params"]["search_provider"] == "perplexity"

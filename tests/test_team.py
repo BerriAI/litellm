@@ -1,3 +1,4 @@
+import os
 # What this tests ?
 ## Tests /team endpoints.
 import pytest
@@ -50,7 +51,7 @@ async def wait_for_team_member_spend_update(
     initial_spend = None
     while time.time() - start_time < max_wait:
         try:
-            user_info = await get_user_info(session, user_id, call_user="sk-1234")
+            user_info = await get_user_info(session, user_id, call_user=os.environ["LITELLM_MASTER_KEY"])
             if user_info.get("teams"):
                 for team in user_info["teams"]:
                     if team.get("team_id") == team_id:
@@ -90,7 +91,7 @@ async def new_user(
     user_email=None,
 ):
     url = "http://localhost:4000/user/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {
         "models": models,
         "aliases": {"mistral-7b": "gpt-3.5-turbo"},
@@ -126,7 +127,7 @@ async def add_member(
     session, i, team_id, user_id=None, user_email=None, max_budget=None, members=None
 ):
     url = "http://localhost:4000/team/member_add"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {"team_id": team_id, "member": {"role": "user"}}
     if user_email is not None:
         data["member"]["user_email"] = user_email
@@ -162,7 +163,7 @@ async def update_member(
     max_budget=None,
 ):
     url = "http://localhost:4000/team/member_update"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {"team_id": team_id}
     if user_id is not None:
         data["user_id"] = user_id
@@ -191,7 +192,7 @@ async def update_member(
 
 async def delete_member(session, i, team_id, user_id=None, user_email=None):
     url = "http://localhost:4000/team/member_delete"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {"team_id": team_id}
     if user_id is not None:
         data["user_id"] = user_id
@@ -221,7 +222,7 @@ async def generate_key(
     team_id=None,
 ):
     url = "http://localhost:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {
         "models": models,
         "duration": None,
@@ -287,7 +288,7 @@ async def new_team(session, i, user_id=None, member_list=None, model_aliases=Non
     import json
 
     url = "http://localhost:4000/team/new"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {"team_alias": "my-new-team"}
     if user_id is not None:
         data["members_with_roles"] = [{"role": "user", "user_id": user_id}]
@@ -315,7 +316,7 @@ async def new_team(session, i, user_id=None, member_list=None, model_aliases=Non
 
 async def update_team(session, i, team_id, user_id=None, member_list=None, **kwargs):
     url = "http://localhost:4000/team/update"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {"team_id": team_id, **kwargs}
     if user_id is not None:
         data["members_with_roles"] = [{"role": "user", "user_id": user_id}]
@@ -342,7 +343,7 @@ async def delete_team(
     team_id,
 ):
     url = "http://localhost:4000/team/delete"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {
         "team_ids": [team_id],
     }
@@ -366,7 +367,7 @@ async def list_teams(
     i,
 ):
     url = "http://localhost:4000/team/list"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
 
     async with session.get(url, headers=headers) as response:
         status = response.status
@@ -431,7 +432,7 @@ async def test_team_info():
         )
         team_id = new_team_data["team_id"]
         ## as admin ##
-        await get_team_info(session=session, get_team=team_id, call_key="sk-1234")
+        await get_team_info(session=session, get_team=team_id, call_key=os.environ["LITELLM_MASTER_KEY"])
         """
         Scenario 2 - as team key
         """
@@ -496,7 +497,7 @@ async def test_team_update_sc_2():
         )
         ## ASSERT TEAM SIZE
         team_info = await get_team_info(
-            session=session, get_team=team_data["team_id"], call_key="sk-1234"
+            session=session, get_team=team_data["team_id"], call_key=os.environ["LITELLM_MASTER_KEY"]
         )
 
         assert len(team_info["team_info"]["members_with_roles"]) == 12
@@ -557,7 +558,7 @@ async def test_team_member_add_email():
 
         ## check user info to confirm user is in team
         updated_user_info = await get_user_info(
-            session=session, get_user=new_user_info["user_id"], call_user="sk-1234"
+            session=session, get_user=new_user_info["user_id"], call_user=os.environ["LITELLM_MASTER_KEY"]
         )
 
         print(updated_user_info)
@@ -594,7 +595,7 @@ async def test_team_delete():
 
         ## ASSERT USER MEMBERSHIP IS CREATED
         user_info = await get_user_info(
-            session=session, get_user=normal_user, call_user="sk-1234"
+            session=session, get_user=normal_user, call_user=os.environ["LITELLM_MASTER_KEY"]
         )
         assert len(user_info["teams"]) == 1
 
@@ -608,14 +609,14 @@ async def test_team_delete():
 
         ## ASSERT USER MEMBERSHIP IS DELETED
         user_info = await get_user_info(
-            session=session, get_user=normal_user, call_user="sk-1234"
+            session=session, get_user=normal_user, call_user=os.environ["LITELLM_MASTER_KEY"]
         )
         assert len(user_info["teams"]) == 0
 
         ## ASSERT TEAM INFO NOW RETURNS A 404
         with pytest.raises(openai.NotFoundError):
             await get_team_info(
-                session=session, get_team=team_data["team_id"], call_key="sk-1234"
+                session=session, get_team=team_data["team_id"], call_key=os.environ["LITELLM_MASTER_KEY"]
             )
 
 
@@ -729,7 +730,7 @@ async def test_users_in_team_budget():
         print(f"[DEBUG] Key team_id: {team['team_id']}")
 
         # Check user info BEFORE updating member budget
-        user_info_before = await get_user_info(session, get_user, call_user="sk-1234")
+        user_info_before = await get_user_info(session, get_user, call_user=os.environ["LITELLM_MASTER_KEY"])
         print(f"[DEBUG] User info BEFORE update_member:")
         print(f"  - User budget: {user_info_before.get('max_budget')}")
         print(f"  - User spend: {user_info_before.get('spend')}")
@@ -746,7 +747,7 @@ async def test_users_in_team_budget():
         print(f"[DEBUG] Update result: {update_result}")
 
         # Check user info AFTER updating member budget
-        user_info_after = await get_user_info(session, get_user, call_user="sk-1234")
+        user_info_after = await get_user_info(session, get_user, call_user=os.environ["LITELLM_MASTER_KEY"])
         print(f"[DEBUG] User info AFTER update_member:")
         print(f"  - User budget: {user_info_after.get('max_budget')}")
         print(f"  - User spend: {user_info_after.get('spend')}")
@@ -790,7 +791,7 @@ async def test_users_in_team_budget():
 
         # Check user info BEFORE Call 2
         user_info_before_call2 = await get_user_info(
-            session, get_user, call_user="sk-1234"
+            session, get_user, call_user=os.environ["LITELLM_MASTER_KEY"]
         )
         print(f"\n[DEBUG] User info BEFORE Call 2:")
         print(f"  - User budget: {user_info_before_call2.get('max_budget')}")
@@ -855,7 +856,7 @@ async def test_users_in_team_budget():
 
         # Check user info AFTER Call 2
         user_info_after_call2 = await get_user_info(
-            session, get_user, call_user="sk-1234"
+            session, get_user, call_user=os.environ["LITELLM_MASTER_KEY"]
         )
         print(f"\n[DEBUG] User info AFTER Call 2:")
         print(f"  - User budget: {user_info_after_call2.get('max_budget')}")
@@ -901,7 +902,7 @@ async def test_users_in_team_budget():
         print("[DEBUG] Call 2 failed as expected with budget exceeded error")
 
         ## Check user info
-        user_info = await get_user_info(session, get_user, call_user="sk-1234")
+        user_info = await get_user_info(session, get_user, call_user=os.environ["LITELLM_MASTER_KEY"])
 
         assert (
             user_info["teams"][0]["team_memberships"][0]["litellm_budget_table"][

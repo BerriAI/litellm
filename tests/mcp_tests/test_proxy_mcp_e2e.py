@@ -27,6 +27,7 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import CallToolResult
 from starlette.requests import Request
 
+from tests._master_key import MASTER_KEY
 from tests.integration._support.wire import Reply, Request as WireRequest, Wire, wire_server
 
 from litellm.integrations.custom_logger import CustomLogger
@@ -47,7 +48,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROXY_START_TIMEOUT = 30
 
 
-PROXY_AUTHORIZATION_HEADER = "Bearer sk-1234"
+PROXY_AUTHORIZATION_HEADER = f"Bearer {MASTER_KEY}"
 
 
 @pytest.mark.asyncio
@@ -225,8 +226,7 @@ def _clear_proxy_database_env() -> typing.Iterator[None]:
     # The FastAPI lifespan event (proxy_startup_event) re-reads master_key from
     # the LITELLM_MASTER_KEY env var, overriding whatever initialize() set from
     # the config file. We must set it here so the lifespan doesn't reset it to None.
-    mp.setenv("LITELLM_MASTER_KEY", "sk-1234")
-    mp.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
+    mp.setenv("LITELLM_MASTER_KEY", MASTER_KEY)
     mp.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
     try:
         yield
@@ -396,7 +396,10 @@ from mcp.client.streamable_http import streamablehttp_client
 from langchain_mcp_adapters.tools import load_mcp_tools
 
 async def main():
-    async with streamablehttp_client(sys.argv[1] + '/mcp', headers={'Authorization': 'Bearer sk-1234'}) as (read, write, _):
+    async with streamablehttp_client(
+        sys.argv[1] + "/mcp",
+        headers={"Authorization": "Bearer " + os.environ["LITELLM_MASTER_KEY"]},
+    ) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = await load_mcp_tools(session)
@@ -703,7 +706,7 @@ class TestProxyMcpSchemaDiscoveryMode:
 async def authorize_proxy_key(request: Request, api_key: str) -> UserAPIKeyAuth:
     permissions = {
         "sk-schema": LiteLLM_ObjectPermissionTable(object_permission_id="schema", mcp_servers=["schema"]),
-        "sk-1234": LiteLLM_ObjectPermissionTable(object_permission_id="open", mcp_servers=["math_stdio"]),
+        "sk-9876": LiteLLM_ObjectPermissionTable(object_permission_id="open", mcp_servers=["math_stdio"]),
         "sk-restricted": LiteLLM_ObjectPermissionTable(
             object_permission_id="restricted", mcp_servers=["math_restricted"]
         ),
@@ -743,7 +746,7 @@ proxy_call_recorder = ProxyCallRecorder()
 
 
 @asynccontextmanager
-async def _scoped_session(url: str, key: str = "sk-1234", **headers: str) -> typing.AsyncIterator[ClientSession]:
+async def _scoped_session(url: str, key: str = "sk-9876", **headers: str) -> typing.AsyncIterator[ClientSession]:
     async with asyncio.timeout(30):
         async with _proxy_session(url, Authorization=f"Bearer {key}", **headers) as (read, write):
             async with ClientSession(read, write) as session:

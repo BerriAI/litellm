@@ -2,6 +2,9 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const fs = require('fs');
 const path = require('path');
 
+const masterKey = process.env.LITELLM_MASTER_KEY;
+if (!masterKey) throw new Error("LITELLM_MASTER_KEY must be set");
+
 // Import fetch if the SDK uses it
 const originalFetch = global.fetch || require('node-fetch');
 
@@ -22,7 +25,7 @@ jest.retryTimes(3);
 
 describe('Gemini AI Tests', () => {
     test('should successfully generate non-streaming content with tags', async () => {
-        const genAI = new GoogleGenerativeAI("sk-1234"); // litellm proxy API key
+        const genAI = new GoogleGenerativeAI(masterKey);
 
         const requestOptions = {
             baseUrl: 'http://127.0.0.1:4000/gemini',
@@ -50,7 +53,7 @@ describe('Gemini AI Tests', () => {
             await new Promise(resolve => setTimeout(resolve, 10000));
             const spendResponse = await fetch(
                 `http://127.0.0.1:4000/spend/logs?request_id=${callId}`,
-                { headers: { 'Authorization': 'Bearer sk-1234' } }
+                { headers: { 'Authorization': `Bearer ${masterKey}` } }
             );
             spendData = await spendResponse.json();
             console.log(`spendData (attempt ${attempt + 1}):`, spendData);
@@ -73,7 +76,7 @@ describe('Gemini AI Tests', () => {
     }, 90000);
 
     test('should successfully generate streaming content with tags', async () => {
-        const genAI = new GoogleGenerativeAI("sk-1234"); // litellm proxy API key
+        const genAI = new GoogleGenerativeAI(masterKey);
 
         const requestOptions = {
             baseUrl: 'http://127.0.0.1:4000/gemini',
@@ -110,7 +113,7 @@ describe('Gemini AI Tests', () => {
             await new Promise(resolve => setTimeout(resolve, 10000));
             const spendResponse = await fetch(
                 `http://127.0.0.1:4000/spend/logs?request_id=${callId}`,
-                { headers: { 'Authorization': 'Bearer sk-1234' } }
+                { headers: { 'Authorization': `Bearer ${masterKey}` } }
             );
             spendData = await spendResponse.json();
             console.log(`spendData (attempt ${attempt + 1}):`, spendData);

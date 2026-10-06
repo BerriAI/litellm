@@ -287,7 +287,7 @@ async def test_execute_search_attributes_spend_to_the_calling_key(monkeypatch):
     ]
     mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
     user_api_key_auth = UserAPIKeyAuth(
-        api_key="hashed-sk-1234",
+        api_key="hashed-sk-9876",
         key_alias="alice-key",
         user_id="user-alice",
         org_id="org-1",
@@ -302,8 +302,8 @@ async def test_execute_search_attributes_spend_to_the_calling_key(monkeypatch):
     )
 
     forwarded_metadata = mock_asearch.await_args.kwargs["litellm_metadata"]
-    assert forwarded_metadata["user_api_key"] == "hashed-sk-1234"
-    assert forwarded_metadata["user_api_key_hash"] == "hashed-sk-1234"
+    assert forwarded_metadata["user_api_key"] == "hashed-sk-9876"
+    assert forwarded_metadata["user_api_key_hash"] == "hashed-sk-9876"
     assert forwarded_metadata["user_api_key_alias"] == "alice-key"
     assert forwarded_metadata["user_api_key_user_id"] == "user-alice"
     assert forwarded_metadata["user_api_key_org_id"] == "org-1"
@@ -341,7 +341,7 @@ def _perplexity_router() -> MagicMock:
                 "litellm_trace_id": "trace-abc",
                 "litellm_session_id": "session-abc",
                 "metadata": {
-                    "user_api_key_auth": UserAPIKeyAuth(api_key="hashed-sk-1234"),
+                    "user_api_key_auth": UserAPIKeyAuth(api_key="hashed-sk-9876"),
                     "session_id": "session-abc",
                 },
             },
@@ -351,7 +351,7 @@ def _perplexity_router() -> MagicMock:
             {
                 "litellm_call_id": "parent-call-1",
                 "litellm_metadata": {
-                    "user_api_key_auth": UserAPIKeyAuth(api_key="hashed-sk-1234"),
+                    "user_api_key_auth": UserAPIKeyAuth(api_key="hashed-sk-9876"),
                     "session_id": "session-abc",
                     "trace_id": "trace-abc",
                 },
@@ -363,7 +363,7 @@ def _perplexity_router() -> MagicMock:
                 "litellm_params": {
                     "litellm_call_id": "parent-call-1",
                     "litellm_trace_id": "trace-abc",
-                    "metadata": {"user_api_key_auth": UserAPIKeyAuth(api_key="hashed-sk-1234")},
+                    "metadata": {"user_api_key_auth": UserAPIKeyAuth(api_key="hashed-sk-9876")},
                     "litellm_metadata": {"session_id": "session-abc"},
                 }
             },
@@ -393,7 +393,7 @@ async def test_execute_search_inherits_parent_request_session_and_trace(
     assert forwarded["litellm_metadata"]["session_id"] == "session-abc"
     assert forwarded["litellm_metadata"]["trace_id"] == "trace-abc"
     assert forwarded["litellm_metadata"]["parent_request_id"] == "parent-call-1"
-    assert forwarded["litellm_metadata"]["user_api_key"] == "hashed-sk-1234"
+    assert forwarded["litellm_metadata"]["user_api_key"] == "hashed-sk-9876"
     assert forwarded["litellm_metadata"]["model_group"] == "perplexity-sonar-pro"
     assert "litellm_call_id" not in forwarded
     assert (

@@ -13,10 +13,10 @@ The suites run against a live proxy, so bring one up first by running the litell
 
 ## Running the tests locally
 
-1. Create a `.env` file in this directory with the provider keys the example models use, plus the master key and the Postgres/Redis coordinates your config reads back:
+1. Generate a master key with `export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"`. Create a `.env` file in this directory with the provider keys the example models use and the Postgres/Redis coordinates your config reads back:
 
    ```bash
-   LITELLM_MASTER_KEY="sk-1234"
+   LITELLM_MASTER_KEY="sk-<your-master-key>"
    DATABASE_URL="postgresql://llmproxy:dbpassword9090@localhost:5432/litellm"
    REDIS_HOST="localhost"
    REDIS_PORT="6379"
@@ -110,7 +110,7 @@ A couple of logging destinations are configured on the proxy rather than by the 
 ```bash
 bash tests/e2e/secret_manager/backend.sh up cyberark
 (set -a; . ~/.cache/litellm-e2e-secret-manager/cyberark/proxy.env; set +a; env -u OPENAI_API_KEY LITELLM_LICENSE=... \
-  LITELLM_MASTER_KEY=sk-1234 DATABASE_URL=... uv run litellm --config tests/e2e/gateway/secret_manager_cyberark_ci_config.yml --port 4000)
+  LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" DATABASE_URL=... uv run litellm --config tests/e2e/gateway/secret_manager_cyberark_ci_config.yml --port 4000)
 (set -a; . ~/.cache/litellm-e2e-secret-manager/cyberark/tests.env; set +a; OPENAI_API_KEY=... \
   uv run --group e2e-dev pytest tests/e2e/secret_manager/ -v)
 bash tests/e2e/secret_manager/backend.sh down cyberark

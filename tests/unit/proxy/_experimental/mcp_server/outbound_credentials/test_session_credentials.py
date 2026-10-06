@@ -80,8 +80,8 @@ def test_kdf_differs_across_master_keys():
 @pytest.mark.parametrize(
     "value,expected",
     [
-        ("Bearer sk-1234", False),
-        ("sk-1234", False),
+        ("Bearer sk-9876", False),
+        ("sk-9876", False),
         ("Bearer llm_env_abc", False),
         ("Bearer llm_refresh_abc", False),
         ("llm_session_abc", True),
@@ -102,7 +102,7 @@ def test_resolve_admits_valid_access_token_with_and_without_scheme():
 
 
 def test_resolve_passes_non_session_bearers_through():
-    for value in ("Bearer sk-1234", "Bearer llm_env_whatever", "Bearer eyJhbGciOi"):
+    for value in ("Bearer sk-9876", "Bearer llm_env_whatever", "Bearer eyJhbGciOi"):
         assert isinstance(resolve_session_bearer(value, KEYS, NOW), NotSessionBearer)
 
 

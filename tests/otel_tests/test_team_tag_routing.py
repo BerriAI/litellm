@@ -1,3 +1,4 @@
+import os
 # What this tests ?
 ## Set tags on a team and then make a request to /chat/completions
 import pytest
@@ -7,7 +8,7 @@ from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
 from litellm._uuid import uuid
 
-LITELLM_MASTER_KEY = "sk-1234"
+LITELLM_MASTER_KEY = os.environ["LITELLM_MASTER_KEY"]
 
 
 async def chat_completion(

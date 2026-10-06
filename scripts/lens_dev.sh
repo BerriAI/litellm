@@ -116,7 +116,6 @@ proxy_env() {
   export LENS_WORKER_IMAGE=litellm-lens-worker:local
   export LITELLM_MODE=PRODUCTION
   export LITELLM_MASTER_KEY="$master_key"
-  if [ "$master_key" = sk-1234 ]; then export LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true; fi
   export LITELLM_SALT_KEY=sk-local-tracing-salt-key
   export DATABASE_URL="$database_url"
   export STORE_MODEL_IN_DB=True

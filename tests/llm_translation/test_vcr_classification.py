@@ -125,8 +125,8 @@ def test_should_extract_only_aws_access_key_from_sigv4_authorization():
 
 def test_should_keep_bearer_authorization_unchanged():
     """OpenAI ``Bearer <key>`` headers are stable as-is — keep them."""
-    out = _stable_key_value("Authorization", "Bearer sk-1234")
-    assert out == "Bearer sk-1234"
+    out = _stable_key_value("Authorization", "Bearer sk-9876")
+    assert out == "Bearer sk-9876"
 
 
 def test_should_produce_stable_fingerprint_across_sigv4_signatures():

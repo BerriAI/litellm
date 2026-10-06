@@ -3854,7 +3854,7 @@ class TestMCPServerManager:
             _should_strip_caller_authorization(
                 mcp_server=oauth_delegate,
                 raw_headers={
-                    "x-litellm-api-key": "Bearer sk-1234",
+                    "x-litellm-api-key": "Bearer sk-9876",
                     "authorization": "Bearer upstream",
                 },
                 user_api_key_auth=UserAPIKeyAuth(user_id="alice", api_key=None),

@@ -1118,11 +1118,11 @@ def _v3_request_data(**overrides) -> dict:
             "user_api_key_user_id": "default_user_id",
             "user_api_key_alias": "litellm_proxy_master_key",
             "session_id": "v3qa-1",
-            "headers": {"authorization": "Bearer sk-1234"},
+            "headers": {"authorization": "Bearer sk-9876"},
         },
         "proxy_server_request": {
             "url": "http://localhost:4141/v1/chat/completions",
-            "headers": {"authorization": "Bearer sk-1234", "x-claude-code-session-id": "cc-sess-9"},
+            "headers": {"authorization": "Bearer sk-9876", "x-claude-code-session-id": "cc-sess-9"},
         },
         "litellm_call_id": "call-123",
         "deployment": {"litellm_params": {"api_key": "sk-ant-PROVIDER-SECRET"}},
@@ -1298,7 +1298,7 @@ async def test_v3_request_phase_relays_the_provider_body_and_nothing_else():
         "litellm_call_id",
         "provider_specific_header",
         "PROVIDER-SECRET",
-        "Bearer sk-1234",
+        "Bearer sk-9876",
         "default_user_id",
         "litellm_proxy_master_key",
     ):
@@ -1485,7 +1485,7 @@ async def test_v3_agent_hint_enumerates_per_app_and_the_route_config_wins():
     pinned = _make_guardrail(api_key=V3_KEY, agent_ref="billing-bot")
     pinned.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
     data = _v3_request_data()
-    data["proxy_server_request"] = {"headers": {"authorization": "Bearer sk-1234"}}
+    data["proxy_server_request"] = {"headers": {"authorization": "Bearer sk-9876"}}
     await pinned.apply_guardrail(
         inputs={"texts": ["hi"]}, request_data=data, input_type="request", logging_obj=_logging_obj()
     )
@@ -1699,7 +1699,7 @@ CLAUDE_CODE_HEADERS = {
     "user-agent": "claude-cli/2.0.21 (external, claude-vscode, agent-sdk/0.3.27)",
     "x-app": "cli",
     "anthropic-beta": "interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
-    "authorization": "Bearer sk-1234",
+    "authorization": "Bearer sk-9876",
 }
 
 
@@ -1766,7 +1766,7 @@ async def test_v3_client_config_wins_over_the_user_agent_and_unknown_agents_send
     curl = _v3_request_data(
         proxy_server_request={
             "url": "http://localhost:4141/v1/chat/completions",
-            "headers": {"user-agent": "curl/8.7.1", "authorization": "Bearer sk-1234"},
+            "headers": {"user-agent": "curl/8.7.1", "authorization": "Bearer sk-9876"},
         }
     )
     await g2.apply_guardrail(
@@ -1843,7 +1843,7 @@ async def test_v3_legacy_completion_is_presented_as_one_chat_exchange():
         completion.pop(key)
     completion["proxy_server_request"] = {
         "url": "http://localhost:4141/v1/completions",
-        "headers": {"authorization": "Bearer sk-1234"},
+        "headers": {"authorization": "Bearer sk-9876"},
     }
 
     await g.apply_guardrail(
@@ -2107,7 +2107,7 @@ def _completion_call(prompt):
         data.pop(key)
     data["proxy_server_request"] = {
         "url": "http://localhost:4141/v1/completions",
-        "headers": {"authorization": "Bearer sk-1234"},
+        "headers": {"authorization": "Bearer sk-9876"},
     }
     return data
 

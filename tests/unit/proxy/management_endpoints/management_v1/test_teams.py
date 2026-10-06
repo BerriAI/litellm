@@ -769,7 +769,7 @@ def prisma(monkeypatch):
 
 
 def _post(body: object, path: str = BULK_UPDATE_PATH):
-    return client.post(path, json=body, headers={"Authorization": "Bearer sk-1234"})
+    return client.post(path, json=body, headers={"Authorization": "Bearer sk-9876"})
 
 
 def test_unknown_fields_empty_and_oversized_batches_are_422_problem_documents(prisma, as_proxy_admin):

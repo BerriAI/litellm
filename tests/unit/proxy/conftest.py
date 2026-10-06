@@ -21,6 +21,7 @@ from litellm._service_logger import ServiceTypes
 from litellm.integrations.otel.model.payloads import ServiceSpanData
 from litellm.integrations.otel.model.spans import service_span_name
 from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
+from tests._master_key import MASTER_KEY
 
 
 class StubClientNotConnectedError(ClientNotConnectedError):
@@ -294,7 +295,7 @@ def build_minimal_proxy_config(
     Args:
         database_url: Optional database URL (falls back to DATABASE_URL env var)
         **init_options: Additional configuration options:
-            - master_key: API key for authentication (default: "sk-1234")
+            - master_key: API key for authentication (default: MASTER_KEY)
             - enable_cache: Whether to enable Redis cache (default: True)
             - success_callback: Callback function for success events
 
@@ -302,7 +303,7 @@ def build_minimal_proxy_config(
         dict: Configuration dictionary ready to be written as YAML
     """
     config = {
-        "general_settings": {"master_key": init_options.get("master_key", "sk-1234")},
+        "general_settings": {"master_key": init_options.get("master_key", MASTER_KEY)},
         "litellm_settings": {},
     }
 
@@ -367,7 +368,7 @@ def create_proxy_test_client(
         monkeypatch: pytest monkeypatch fixture
         database_url: Optional database URL (falls back to DATABASE_URL env var)
         **init_options: Additional configuration options:
-            - master_key: API key for authentication (default: "sk-1234")
+            - master_key: API key for authentication (default: MASTER_KEY)
             - enable_cache: Whether to enable Redis cache (default: True)
             - success_callback: Callback function for success events
             - debug: Enable debug mode

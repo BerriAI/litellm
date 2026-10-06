@@ -2,6 +2,7 @@
 This test ensures that the proxy can passthrough requests to assemblyai
 """
 
+import os
 import time
 
 import pytest
@@ -9,7 +10,7 @@ import httpx
 import aiohttp
 import asyncio
 
-TEST_MASTER_KEY = "sk-1234"
+TEST_MASTER_KEY = os.environ["LITELLM_MASTER_KEY"]
 TEST_BASE_URL = "http://0.0.0.0:4000/assemblyai"
 
 

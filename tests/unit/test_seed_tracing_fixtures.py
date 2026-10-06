@@ -15,6 +15,7 @@ from pydantic import InstanceOf, TypeAdapter
 from litellm.rust_bridge.trace.generated.responses import TraceSQLResponse
 from litellm.rust_bridge.trace.storage import Tenant, span_rows
 from litellm.tracing.types import SpendLogRecord
+from tests._master_key import MASTER_KEY
 from scripts.seed_tracing_fixtures import (
     JSON,
     TRACE_FIXTURES,
@@ -217,7 +218,7 @@ async def test_first_copy_stamps_the_authenticated_tenant_and_writes_both_stores
 ) -> None:
     from litellm.rust_bridge.trace.storage import ClickHouseStorage
 
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-local")
+    monkeypatch.setenv("LITELLM_MASTER_KEY", MASTER_KEY)
     fixtures: Final = spend_fixtures()
     pattern: Final = response_pattern(tuple(chain.from_iterable(rows for _, rows in fixtures)))
     replays: Final = fixture_replays(TRACE_FIXTURES, 1_800_000_000_000, "first", pattern)

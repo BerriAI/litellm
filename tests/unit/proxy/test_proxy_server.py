@@ -8,6 +8,8 @@ from unittest import mock
 
 from dotenv import load_dotenv
 
+from tests._master_key import MASTER_KEY
+
 import litellm.proxy
 import litellm.proxy.proxy_server
 
@@ -233,7 +235,7 @@ async def test_proxy_shutdown_closes_admin_connector_when_drain_is_cancelled(
 
 
 # Your bearer token
-token = "sk-1234"
+token = MASTER_KEY
 
 headers = {"Authorization": f"Bearer {token}"}
 
@@ -632,7 +634,7 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth, monkeyp
 
     user_api_key_cache: Final = UserApiKeyCache()
     _team_id = "1234"
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
 
     valid_token = UserAPIKeyAuth(
         team_id=_team_id,
@@ -651,7 +653,7 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth, monkeyp
     user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
 
     request = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
@@ -694,7 +696,7 @@ def test_custom_logger_failure_handler(mock_acompletion, client_no_auth, monkeyp
     proxy_logging_obj._init_litellm_callbacks(llm_router=None)
 
     monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
     setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
 
@@ -1307,8 +1309,6 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.team_endpoints import team_member_add
 from tests.unit.proxy.management_endpoints.test_key_generate_prisma import prisma_client
-
-
 @pytest.fixture
 def mock_prisma_client():
     client = MagicMock()
@@ -1327,7 +1327,7 @@ def mock_prisma_client():
 async def test_create_user_default_budget(prisma_client, user_role):  # noqa: F811  # pytest fixture, not a redefinition
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
     await litellm.proxy.proxy_server.prisma_client.connect()
@@ -1390,7 +1390,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):  # noqa
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
     await litellm.proxy.proxy_server.prisma_client.connect()
@@ -1504,12 +1504,12 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
     user_api_key_cache: Final = UserApiKeyCache()
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
 
     valid_token = UserAPIKeyAuth(
         team_id=_team_id,
@@ -1579,12 +1579,12 @@ async def test_create_team_member_add_team_admin(
     )
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(litellm, "max_internal_user_budget", 10)
     setattr(litellm, "internal_user_budget_duration", "5m")
     user = f"ishaan {uuid.uuid4().hex}"
     _team_id = "litellm-test-client-id-new"
-    user_key = "sk-12345678"
+    user_key = "sk-98765678"
     team_admin = f"krrish {uuid.uuid4().hex}"
 
     valid_token = UserAPIKeyAuth(
@@ -1705,7 +1705,7 @@ async def test_user_info_team_list(prisma_client):  # noqa: F811  # pytest fixtu
     from litellm.proxy._types import LiteLLM_UserTable
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
@@ -1729,7 +1729,7 @@ async def test_user_info_team_list(prisma_client):  # noqa: F811  # pytest fixtu
                 request=MagicMock(),
                 user_id=None,
                 user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-1234", user_id="default_user_id"
+                    api_key=MASTER_KEY, user_id="default_user_id"
                 ),
             )
         except Exception:
@@ -1753,7 +1753,7 @@ async def test_add_callback_via_key(prisma_client):  # noqa: F811  # pytest fixt
     from litellm.proxy.proxy_server import chat_completion
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     litellm.set_verbose = True
@@ -1850,7 +1850,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
@@ -2009,7 +2009,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
@@ -2145,7 +2145,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     setattr(litellm.proxy.proxy_server, "prisma_client", mock_prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
@@ -2319,7 +2319,7 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):  # noqa: F
     from litellm.proxy.proxy_server import model_group_info, model_info_v1, model_list
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
@@ -2400,7 +2400,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
     from litellm.proxy.proxy_server import model_group_info, model_info_v1, model_list
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+    setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     await litellm.proxy.proxy_server.prisma_client.connect()
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
@@ -2454,7 +2454,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
 #     from litellm.proxy._types import TeamMemberAddRequest, Member, NewTeamRequest
 
 #     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-#     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
+#     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 #     try:
 
 #         async def test():
@@ -2463,7 +2463,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
 
 #             user_api_key_dict = UserAPIKeyAuth(
 #                 user_role=LitellmUserRoles.PROXY_ADMIN,
-#                 api_key="sk-1234",
+#                 api_key=MASTER_KEY,
 #                 user_id="1234",
 #             )
 

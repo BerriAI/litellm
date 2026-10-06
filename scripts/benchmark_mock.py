@@ -3,6 +3,7 @@
 
 import argparse
 import asyncio
+import os
 import time
 import statistics
 
@@ -17,7 +18,7 @@ REQUEST_BODY = {
 }
 
 HEADERS = {
-    "Authorization": "Bearer sk-1234",
+    "Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}",
     "Content-Type": "application/json",
 }
 

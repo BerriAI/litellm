@@ -61,7 +61,7 @@ def test_the_server_sets_a_marker_by_assignment_after_construction(marker):
 
 
 def test_a_virtual_key_is_hashed_out_of_the_auth_object():
-    raw_key = "sk-1234567890abcdefghij"
+    raw_key = "sk-9876567890abcdefghij"
 
     auth = UserAPIKeyAuth(api_key=raw_key)
 
@@ -70,7 +70,7 @@ def test_a_virtual_key_is_hashed_out_of_the_auth_object():
 
 
 def test_a_bearer_prefixed_key_hashes_the_same_as_the_bare_key():
-    raw_key = "sk-1234567890abcdefghij"
+    raw_key = "sk-9876567890abcdefghij"
 
     assert UserAPIKeyAuth(api_key=f"Bearer {raw_key}").token == UserAPIKeyAuth(api_key=raw_key).token
 

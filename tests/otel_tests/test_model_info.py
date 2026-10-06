@@ -2,6 +2,7 @@
 /model/info test
 """
 
+import os
 import httpx
 import pytest
 
@@ -11,7 +12,7 @@ async def test_custom_model_supports_vision():
     async with httpx.AsyncClient() as client:
         response = await client.get(
             "http://localhost:4000/model/info",
-            headers={"Authorization": "Bearer sk-1234"},
+            headers={"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}"},
         )
         assert response.status_code == 200
 
