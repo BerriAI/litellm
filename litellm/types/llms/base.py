@@ -13,6 +13,13 @@ class LiteLLMBaseModel(BaseModel):
 
         def __init__(self, /, **data: object) -> None: ...
 
+    def model_post_init(self, context: object, /) -> None:
+        # Instances built by a parent's validator or by model_construct skip this class's own
+        # first-use build, leaving a MockValSer that fails when the instance is serialized as Any
+        model = type(self)
+        if not model.__pydantic_complete__:
+            model.model_rebuild(raise_errors=False)
+
 
 class LiteLLMPydanticObjectBase(LiteLLMBaseModel):
     """

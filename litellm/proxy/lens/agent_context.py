@@ -2,9 +2,7 @@ import json
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import ConfigDict, Field, ValidationError
-
-from litellm.types.llms.base import LiteLLMBaseModel
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .activity import ActivityTracker, observe_operation
 from .analysis import AnalysisContextExceeded, AnalysisResponseError, ModelCall, structured_response
@@ -15,7 +13,7 @@ class Checkpoint(Record):
     working_notes: str = Field(min_length=1)
 
 
-class JournalPosition(LiteLLMBaseModel):
+class JournalPosition(BaseModel):
     model_config = ConfigDict(extra="ignore")
     journal_turns: int = 0
     resume_history_from_turn: int | None = None
