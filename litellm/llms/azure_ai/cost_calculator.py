@@ -3,11 +3,11 @@ Azure AI cost calculation helper.
 Handles Azure AI Foundry Model Router flat cost and other Azure AI specific pricing.
 """
 
-from typing import Final, Literal
+from typing import Final
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.types.utils import ModelInfo, Usage
+from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
 
@@ -34,11 +34,8 @@ def is_azure_model_router(model: str) -> bool:
 ROUTER_FEE_ENTRY_NAMES: Final = frozenset({"model-router", "model_router"})
 
 
-AZURE_ROUTER_FEE_ENTRY_NAME: Final = "model-router"
-
-
-def is_router_fee_entry(model: str, custom_llm_provider: str = "azure_ai") -> bool:
-    return model.lower().removeprefix(f"{custom_llm_provider}/") in ROUTER_FEE_ENTRY_NAMES
+def is_router_fee_entry(model: str) -> bool:
+    return model.lower().removeprefix("azure_ai/") in ROUTER_FEE_ENTRY_NAMES
 
 
 def _router_fee_entry_name(model: str) -> str:
@@ -46,41 +43,20 @@ def _router_fee_entry_name(model: str) -> str:
     return entry_name if entry_name in ROUTER_FEE_ENTRY_NAMES else "model_router"
 
 
-def _router_fee_model_info(model: str, custom_llm_provider: str) -> ModelInfo:
-    if custom_llm_provider == "azure_ai":
-        return get_model_info(model=_router_fee_entry_name(model), custom_llm_provider="azure_ai")
-    try:
-        return get_model_info(model=AZURE_ROUTER_FEE_ENTRY_NAME, custom_llm_provider=custom_llm_provider)
-    except Exception as e:
-        verbose_logger.debug(
-            "Azure Model Router: no %s fee entry for '%s', using the azure_ai entry. Error: %s",
-            custom_llm_provider,
-            model,
-            e,
-        )
-        return get_model_info(model="model_router", custom_llm_provider="azure_ai")
-
-
-def calculate_azure_model_router_flat_cost(
-    model: str, prompt_tokens: int, custom_llm_provider: Literal["azure_ai", "azure"] = "azure_ai"
-) -> float:
+def calculate_azure_model_router_flat_cost(model: str, prompt_tokens: int) -> float:
     """
     Calculate the flat cost for Azure AI Foundry Model Router.
-
-    The azure provider prices the fee from its own router entry and falls back to the azure_ai entry when the
-    cost map has no azure row, since both routes bill the same Model Router meter.
 
     Args:
         model: The model name (should be a model router model)
         prompt_tokens: Number of prompt tokens
-        custom_llm_provider: The provider whose router fee entry is looked up first
 
     Returns:
         float: The flat cost in USD, or 0.0 if not applicable
     """
     if not is_azure_model_router(model):
         return 0.0
-    model_info: Final = _router_fee_model_info(model, custom_llm_provider)
+    model_info: Final = get_model_info(model=_router_fee_entry_name(model), custom_llm_provider="azure_ai")
     router_flat_cost_per_token: Final = model_info.get("input_cost_per_token", 0)
     if router_flat_cost_per_token and router_flat_cost_per_token > 0:
         return prompt_tokens * router_flat_cost_per_token

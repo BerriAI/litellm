@@ -278,7 +278,7 @@ def _get_additional_costs(
 
     try:
         config_class = None
-        if custom_llm_provider == "azure_ai":
+        if custom_llm_provider in ("azure_ai", "azure"):
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
             config_class = AzureFoundryModelInfo.get_azure_ai_config_for_model(model)
@@ -721,7 +721,6 @@ def cost_per_token(
             usage=usage_block,
             response_time_ms=response_time_ms,
             service_tier=service_tier,
-            request_model=request_model,
         )
     elif custom_llm_provider == "gemini":
         return gemini_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
@@ -1815,12 +1814,11 @@ def completion_cost(
                     data_residency=data_residency,
                     vertex_location=vertex_location,
                     response=completion_response,
-                    request_model=request_model_for_cost if custom_llm_provider == "azure" else None,
                     custom_model_info=_ocr_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
-                if custom_llm_provider == "azure_ai" and not azure_ai_is_model_router_name(model):
+                if custom_llm_provider in ("azure_ai", "azure") and not azure_ai_is_model_router_name(model):
                     model_for_additional_costs = request_model_for_cost
                     if completion_response is not None:
                         hidden_params = getattr(completion_response, "_hidden_params", None) or {}
