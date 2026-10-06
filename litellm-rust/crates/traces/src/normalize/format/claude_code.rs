@@ -343,20 +343,19 @@ mod tests {
     }
 
     #[rstest]
-    fn background_notifications_and_compaction_are_system_messages() {
+    fn notification_prompts_keep_user_provenance_and_compaction_is_system() {
+        let prompt_text =
+            "<task-notification><summary>Agent Reader completed</summary></task-notification>";
         let notification = normalize(
             "claude_code.interaction",
-            &attributes(&[(
-                "user_prompt",
-                "<task-notification><summary>Agent Reader completed</summary></task-notification>",
-            )]),
+            &attributes(&[("user_prompt", prompt_text)]),
             &[],
         )
         .unwrap();
         let prompt: Value = serde_json::from_str(&notification.input).unwrap();
         assert_eq!(
             prompt[0],
-            serde_json::json!({"role":"system","content":"Agent Reader completed"})
+            serde_json::json!({"role":"user","content":prompt_text})
         );
         let compaction = normalize(
             "claude_code.compaction",

@@ -53,9 +53,9 @@ export function TraceConversation({
   const details = new Map(
     queries.slice(0, loadedCount).map((query, index) => [visible[index].span_id, query.data!] as const),
   );
-  const complete = loadedCount === steps.length;
+  const complete = loadedCount === steps.length && !trace.next_cursor;
   const items = buildConversation(trace.spans, details, complete);
-  const warnings = conversationWarnings(details, complete && !trace.next_cursor);
+  const warnings = conversationWarnings(details, complete);
   const multipleAgents = new Set(items.map((item) => item.agentId).filter(Boolean)).size > 1;
   const inlineErrorIds = new Set(items.filter((item) => item.showError).map((item) => item.span.span_id));
   const rootErrors = trace.spans.filter((span) => {
