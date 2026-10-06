@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import pytest
 import yaml
 from integration._support.otlp_sink import SpanSinks, owned_sinks
+from integration._support.prometheus_series import CapRig, series_cap_rig
 from pydantic import JsonValue
 
 AuditConfigWriter = Callable[[Path, Mapping[str, JsonValue]], Path]
@@ -51,3 +52,15 @@ def langfuse_vars(audit_sinks: SpanSinks) -> dict[str, JsonValue]:
         "langfuse_secret_key": "sk-lf-audit",
         "langfuse_host": audit_sinks.tenant,
     }
+
+
+@pytest.fixture(scope="session")
+def capped(tmp_path_factory: pytest.TempPathFactory) -> Iterator[CapRig]:
+    """A two-worker proxy capped at three series per metric, with three keys already holding a series each."""
+    with series_cap_rig(
+        tmp_path_factory.mktemp("series-cap"),
+        {"prometheus_metrics_max_series_per_metric": 3},
+        workers=2,
+        warm_keys=3,
+    ) as rig:
+        yield rig

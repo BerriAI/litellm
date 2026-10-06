@@ -1,5 +1,6 @@
 mod attributes;
 mod limits;
+mod logs;
 mod span;
 mod wire;
 
@@ -48,4 +49,19 @@ pub fn decode_otlp_with_limits(
 ) -> Result<Vec<DecodedSpan>, Error> {
     let request = wire::decode(body, content_type, &limits)?;
     span::flatten(request, limits)
+}
+
+pub fn decode_otlp_logs(
+    body: &[u8],
+    content_type: Option<&str>,
+) -> Result<Vec<DecodedSpan>, Error> {
+    decode_otlp_logs_with_limits(body, content_type, DecodeLimits::from_env()?)
+}
+
+pub fn decode_otlp_logs_with_limits(
+    body: &[u8],
+    content_type: Option<&str>,
+    limits: DecodeLimits,
+) -> Result<Vec<DecodedSpan>, Error> {
+    logs::flatten(wire::decode_logs(body, content_type, &limits)?, limits)
 }

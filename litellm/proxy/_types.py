@@ -545,6 +545,7 @@ class LiteLLMRoutes(enum.Enum):
         "/lens/workers/register",
         "/lens/workers/{worker_id}",
         "/v1/traces",
+        "/v1/logs",
         "/v1/traces/query",
         "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
@@ -1053,6 +1054,7 @@ class LiteLLMRoutes(enum.Enum):
     # updating this list — the default-allow behavior covers it automatically.
     admin_viewer_routes = (
         [
+            "/lens/traces/findings",
             "/user/list",
             "/user/available_users",
             "/user/available_roles",
@@ -2130,6 +2132,7 @@ class NewCustomerRequest(BudgetNewRequest):
         None  # require all user requests to use models in this specific region
     )
     default_model: str | None = None  # if no equivalent model in allowed region - default all requests to this model
+    models: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
     @model_validator(mode="before")
@@ -2156,6 +2159,7 @@ class UpdateCustomerRequest(LiteLLMPydanticObjectBase):
         None  # require all user requests to use models in this specific region
     )
     default_model: str | None = None  # if no equivalent model in allowed region - default all requests to this model
+    models: list[str] | None = None
     object_permission: LiteLLM_ObjectPermissionBase | None = None
 
 
@@ -2886,6 +2890,21 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     max_batch_file_size_mb: int | None = Field(
         None,
         description="max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider",
+    )
+    max_batch_file_records: int | None = Field(
+        None,
+        gt=0,
+        description="max records (non-blank lines) per batch input file for /v1/files uploads with purpose=batch, applied per key. A key's metadata can override it and a team's metadata adds a team cap on top, both set by a proxy admin; the lower of the key's value and the team's value wins. Unset means no limit",
+    )
+    max_batch_file_uploads_per_day: int | None = Field(
+        None,
+        gt=0,
+        description="max /v1/files uploads with purpose=batch per key (per user for JWT callers) per UTC day. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit",
+    )
+    max_file_downloads_per_minute: int | None = Field(
+        None,
+        gt=0,
+        description="max GET /v1/files/{file_id}/content calls per key (per user for JWT callers) per file per minute. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit",
     )
     max_file_size_mb: int | None = Field(
         None,
@@ -4464,6 +4483,11 @@ class ProxyErrorTypes(str, enum.Enum):
     User does not have access to the model
     """
 
+    customer_model_access_denied = "customer_model_access_denied"
+    """
+    Customer does not have access to the model
+    """
+
     org_model_access_denied = "org_model_access_denied"
     """
     Organization does not have access to the model
@@ -4553,7 +4577,7 @@ class ProxyErrorTypes(str, enum.Enum):
 
     @classmethod
     def get_model_access_error_type_for_object(
-        cls, object_type: Literal["key", "user", "team", "org", "project", "agent"]
+        cls, object_type: Literal["key", "user", "customer", "team", "org", "project", "agent"]
     ) -> "ProxyErrorTypes":
         """
         Get the model access error type for object_type
@@ -4564,6 +4588,8 @@ class ProxyErrorTypes(str, enum.Enum):
             return cls.team_model_access_denied
         elif object_type == "user":
             return cls.user_model_access_denied
+        elif object_type == "customer":
+            return cls.customer_model_access_denied
         elif object_type == "org":
             return cls.org_model_access_denied
         elif object_type == "project":

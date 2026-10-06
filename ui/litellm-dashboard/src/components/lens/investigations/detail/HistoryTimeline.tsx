@@ -7,6 +7,7 @@ import type { DotColumn } from "@/components/shared/dotField/dots";
 
 import { when } from "../../model/format";
 import type { Job } from "../../model/types";
+import { runStatus } from "../../model/status";
 
 const UNSUCCESSFUL_OPACITY = 0.35;
 
@@ -84,7 +85,7 @@ export function HistoryTimeline({ jobs, slots, onOpen }: HistoryTimelineProps) {
           <div>
             {hovered.total} reviewed, {hovered.failed} affected
           </div>
-          {hovered.job.status !== "completed" && <div className="capitalize">{hovered.job.status}</div>}
+          {(hovered.job.status !== "completed" || hovered.job.error) && <div>{runStatus(hovered.job)}</div>}
         </div>
       )}
     </div>
