@@ -12,7 +12,6 @@ use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::{RedisCache, RedisTopology};
 use litellm_cache_response::{
     CacheEntry, CacheKey, ExactResponseCache, ResponseCache, ResponseCacheCodec,
-    ResponseCacheConfig,
 };
 use pyo3::{exceptions::PyValueError, prelude::*};
 
@@ -58,12 +57,8 @@ impl NativeCacheHandle {
             return Err(PyValueError::new_err("cache limits must be positive"));
         }
         let storage = Arc::new(InMemoryCache::new(Some(capacity), Some(ttl)));
-        let backend = Arc::new(ResponseCache::new(storage.clone()).with_config(
-            ResponseCacheConfig {
-                max_entry_bytes,
-                ..ResponseCacheConfig::default()
-            },
-        ));
+        let backend =
+            Arc::new(ResponseCache::new(storage.clone()).with_max_entry_bytes(max_entry_bytes));
         Ok(Self {
             backend,
             storage: Storage::Memory(storage),
@@ -98,12 +93,8 @@ impl NativeCacheHandle {
             .map_err(cache_error)?
             .with_namespace(Some(namespace)),
         );
-        let backend = Arc::new(ResponseCache::new(storage.clone()).with_config(
-            ResponseCacheConfig {
-                max_entry_bytes,
-                ..ResponseCacheConfig::default()
-            },
-        ));
+        let backend =
+            Arc::new(ResponseCache::new(storage.clone()).with_max_entry_bytes(max_entry_bytes));
         Ok(Self {
             backend,
             storage: Storage::Redis(storage),

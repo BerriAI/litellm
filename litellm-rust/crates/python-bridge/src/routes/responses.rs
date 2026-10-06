@@ -101,7 +101,6 @@ fn run_public(
                             &interceptors,
                             litellm_inference::CallOptions {
                                 cache: options,
-                                model_group: None,
                                 observers,
                             },
                         )

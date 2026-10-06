@@ -26,7 +26,7 @@ pub(super) fn capture_stream<P: StreamCachable>(
                 Some(chunk) => {
                     let captured = captured.and_then(|mut data| {
                         let bytes = P::bytes(&chunk);
-                        if data.len().saturating_add(bytes.len()) > session.max_entry_bytes() {
+                        if !session.fits(data.len().saturating_add(bytes.len())) {
                             return None;
                         }
                         data.extend_from_slice(bytes);

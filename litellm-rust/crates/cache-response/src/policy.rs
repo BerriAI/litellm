@@ -2,8 +2,6 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::CacheScope;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CacheAccess {
@@ -22,40 +20,25 @@ impl CacheAccess {
     };
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct CachePolicy {
-    pub caching: Option<bool>,
-    pub no_cache: bool,
-    pub no_store: bool,
+    pub access: CacheAccess,
     pub ttl: Option<Duration>,
     pub max_age: Option<Duration>,
 }
 
-impl CachePolicy {
-    pub fn access(&self) -> CacheAccess {
-        let active = self.caching != Some(false);
-        CacheAccess {
-            reads: active && !self.no_cache,
-            writes: active && !self.no_store,
-        }
-    }
-
-    pub fn enabled(&self) -> bool {
-        self.access() != CacheAccess::NONE
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct CacheOptions {
-    pub policy: CachePolicy,
-    pub scope: CacheScope,
-}
-
-impl CacheOptions {
-    pub fn shared(policy: CachePolicy) -> Self {
+impl Default for CachePolicy {
+    fn default() -> Self {
         Self {
-            policy,
-            scope: CacheScope::Shared,
+            access: CacheAccess::READ_WRITE,
+            ttl: None,
+            max_age: None,
         }
+    }
+}
+
+impl CachePolicy {
+    pub fn enabled(&self) -> bool {
+        self.access != CacheAccess::NONE
     }
 }

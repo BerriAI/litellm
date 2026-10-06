@@ -48,7 +48,6 @@ fn run_messages(
                             &interceptors,
                             litellm_inference::CallOptions {
                                 cache: options,
-                                model_group: None,
                                 observers,
                             },
                         )

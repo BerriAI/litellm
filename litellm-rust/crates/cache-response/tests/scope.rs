@@ -2,44 +2,48 @@ use std::sync::Arc;
 
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheEntry, CacheKey, CacheKeyInput, CacheScope, CacheTarget, ResponseCache,
+    CacheCredential, CacheEntry, CacheKey, CacheKeyInput, CacheScope, Deployment, ResponseCache,
 };
 use rstest::rstest;
 use serde_json::json;
 
-fn key(scope: &CacheScope) -> CacheKey {
+fn key(credential: Option<CacheCredential>) -> CacheKey {
     ResponseCache::new(Arc::new(InMemoryCache::<CacheEntry>::default())).key(
         &CacheKeyInput::new(
             "messages",
-            CacheTarget::ModelGroup("group".into()),
+            Deployment::new("claude", None, None),
             json!({"prompt": "hello"}),
         ),
-        scope,
+        &CacheScope {
+            credential,
+            model_group: None,
+        },
     )
 }
 
 #[rstest]
-#[case::same_caller(
-    CacheScope::caller("a", "b", "c"),
-    CacheScope::caller("a", "b", "c"),
+#[case::same_credential(
+    Some(CacheCredential::new("a", "b", "c")),
+    Some(CacheCredential::new("a", "b", "c")),
     true
 )]
-#[case::different_credential(
-    CacheScope::caller("a", "b", "c"),
-    CacheScope::caller("a", "b", "d"),
+#[case::without_credentials(None, None, true)]
+#[case::different_credential_ids(
+    Some(CacheCredential::new("a", "b", "c")),
+    Some(CacheCredential::new("a", "b", "d")),
     false
 )]
 #[case::field_boundaries(
-    CacheScope::caller("a", "bc", "d"),
-    CacheScope::caller("ab", "c", "d"),
+    Some(CacheCredential::new("a", "bc", "d")),
+    Some(CacheCredential::new("ab", "c", "d")),
     false
 )]
-#[case::caller_and_shared(CacheScope::caller("a", "b", "c"), CacheScope::Shared, false)]
-#[case::empty_caller_and_shared(CacheScope::Caller(String::new()), CacheScope::Shared, false)]
-fn only_the_same_scope_shares_a_key(
-    #[case] first: CacheScope,
-    #[case] second: CacheScope,
+#[case::credential_and_none(Some(CacheCredential::new("a", "b", "c")), None, false)]
+#[case::empty_credential_and_none(Some(CacheCredential::new("", "", "")), None, false)]
+fn only_the_same_credential_shares_a_key(
+    #[case] first: Option<CacheCredential>,
+    #[case] second: Option<CacheCredential>,
     #[case] shared: bool,
 ) {
-    assert_eq!(key(&first) == key(&second), shared);
+    assert_eq!(key(first) == key(second), shared);
 }

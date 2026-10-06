@@ -11,7 +11,6 @@ pub struct CallContext<'a, I> {
     pub interceptors: &'a I,
     pub observers: Option<ObservationSender>,
     pub cache: Option<CacheOptions>,
-    pub model_group: Option<String>,
 }
 
 impl<'a, I: Interceptors<RouteError>> CallContext<'a, I> {
@@ -20,7 +19,6 @@ impl<'a, I: Interceptors<RouteError>> CallContext<'a, I> {
             interceptors,
             observers: options.observers,
             cache: options.cache,
-            model_group: options.model_group,
         }
     }
 

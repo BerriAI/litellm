@@ -3,7 +3,7 @@ use std::time::Duration;
 use futures_util::future::BoxFuture;
 use litellm_cache::Error;
 use litellm_cache_response::{
-    CacheKey, CacheKeyInput, CacheScope, ResponseCacheConfig, ResponseCacheService,
+    CacheKey, CacheKeyInput, CacheScope, ResponseCacheService,
     ResponseEnvelope,
 };
 use litellm_host::{
@@ -68,7 +68,6 @@ pub(crate) enum CacheCall {
 
 struct PythonCacheService<P: Protocol> {
     services: HostServices<P>,
-    config: ResponseCacheConfig,
     surface: &'static str,
 }
 
@@ -81,7 +80,6 @@ where
 {
     std::sync::Arc::new(PythonCacheService {
         services,
-        config: ResponseCacheConfig::default(),
         surface,
     })
 }
@@ -90,8 +88,8 @@ impl<P: Protocol<HostCall = CacheCall>> ResponseCacheService for PythonCacheServ
 where
     P::Error: From<MachineFault>,
 {
-    fn config(&self) -> &ResponseCacheConfig {
-        &self.config
+    fn max_entry_bytes(&self) -> Option<usize> {
+        None
     }
 
     fn key<'a>(
@@ -100,9 +98,9 @@ where
         scope: &'a CacheScope,
     ) -> BoxFuture<'a, Result<CacheKey, Error>> {
         Box::pin(async move {
-            match scope {
-                CacheScope::Caller(_) => Err(Error::UnsupportedOperation),
-                CacheScope::Shared => self
+            match scope.credential {
+                Some(_) => Err(Error::UnsupportedOperation),
+                None => self
                     .services
                     .call(|reply| CacheCall::GetCacheKey { reply })
                     .await

@@ -1,7 +1,9 @@
 use super::python;
 use std::sync::Arc;
 
-use litellm_cache_response::{CacheOptions, CachePolicy, ResponseCacheService};
+use litellm_cache_response::{
+    CacheAccess, CacheOptions, CachePolicy, CacheScope, ResponseCacheService,
+};
 use litellm_host::{
     machine::{HostServices, MachineFault},
     protocol::Protocol,
@@ -35,7 +37,10 @@ impl PythonCacheConfig {
     {
         (
             python::service(services, self.surface),
-            CacheOptions::shared(self.policy),
+            CacheOptions {
+                policy: self.policy,
+                scope: CacheScope::default(),
+            },
         )
     }
 }
@@ -115,8 +120,10 @@ pub(crate) fn configure_python_cache<P: Cachable>(
             .map(|value| value.unwrap_or(false))
     };
     let policy = CachePolicy {
-        no_cache: boolean("no-cache")?,
-        no_store: boolean("no-store")?,
+        access: CacheAccess {
+            reads: !boolean("no-cache")?,
+            writes: !boolean("no-store")?,
+        },
         ..CachePolicy::default()
     };
     host.bind(cache, arguments);

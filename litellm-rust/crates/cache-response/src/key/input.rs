@@ -1,19 +1,18 @@
 use std::collections::BTreeMap;
 
-use serde::Serialize;
 use serde_json::{Map, Value};
 
-use super::CacheTarget;
+use super::Deployment;
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CacheKeyInput {
-    surface: String,
-    target: CacheTarget,
-    parameters: Value,
+    pub(super) surface: String,
+    pub(super) deployment: Deployment,
+    pub(super) parameters: Value,
 }
 
 impl CacheKeyInput {
-    pub fn new(surface: &str, target: CacheTarget, parameters: Value) -> Self {
+    pub fn new(surface: &str, deployment: Deployment, parameters: Value) -> Self {
         let parameters = match canonical(parameters) {
             Value::Object(fields) => Value::Object(
                 fields
@@ -25,20 +24,20 @@ impl CacheKeyInput {
         };
         Self {
             surface: surface.to_owned(),
-            target,
+            deployment,
             parameters,
         }
     }
 
     pub fn forwarded(
         surface: &str,
-        target: CacheTarget,
+        deployment: Deployment,
         parameters: impl IntoIterator<Item = (String, Value)>,
         headers: impl IntoIterator<Item = (&'static str, Value)>,
     ) -> Self {
         Self::new(
             surface,
-            target,
+            deployment,
             Value::Object(
                 parameters
                     .into_iter()

@@ -124,7 +124,7 @@ async fn rejected_results_are_not_delivered_or_cached(
 ) {
     use futures_util::TryStreamExt;
     use litellm_cache_memory::InMemoryCache;
-    use litellm_cache_response::{CacheOptions, CachePolicy, ResponseCache};
+    use litellm_cache_response::{CacheOptions, ResponseCache};
 
     let response = if streaming {
         ResponseTemplate::new(200).set_body_raw(
@@ -141,7 +141,7 @@ async fn rejected_results_are_not_delivered_or_cached(
             Some(Duration::from_secs(60)),
         ))));
     let route = messages_route(no_secrets()).with_cache(cache);
-    let options = || CacheOptions::shared(CachePolicy::default());
+    let options = || CacheOptions::default();
     for (reject, expected_requests, cached) in [
         (true, 1, false),
         (false, 2, false),

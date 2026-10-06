@@ -350,7 +350,7 @@ async fn route_uses_injected_dependencies_and_optional_cache(
     #[case] expected_requests: usize,
 ) {
     use litellm_cache_memory::InMemoryCache;
-    use litellm_cache_response::{CacheOptions, CachePolicy, ResponseCache, ResponseCacheService};
+    use litellm_cache_response::{CacheOptions, ResponseCache, ResponseCacheService};
     use litellm_inference_messages::MessagesRoute;
 
     let upstream = upstream([message_response(), message_response()]).await;
@@ -374,7 +374,7 @@ async fn route_uses_injected_dependencies_and_optional_cache(
             ..super::call()
         };
         let MessagesCallResponse::Complete(response) = route
-            .execute(request, &(), CacheOptions::shared(CachePolicy::default()))
+            .execute(request, &(), CacheOptions::default())
             .await
             .unwrap()
         else {
@@ -395,7 +395,8 @@ async fn route_uses_injected_dependencies_and_optional_cache(
 async fn cache_policy_overrides_keep_the_caller_scope(call: MessagesCall) {
     use litellm_cache_memory::InMemoryCache;
     use litellm_cache_response::{
-        CacheOptions, CachePolicy, CacheScope, ResponseCache, ResponseCacheService,
+        CacheContext, CacheCredential, CacheOptions, CachePolicy, ResponseCache,
+        ResponseCacheService,
     };
 
     let first_body = message_body();
@@ -442,7 +443,10 @@ async fn cache_policy_overrides_keep_the_caller_scope(call: MessagesCall) {
                 ttl: Some(Duration::from_secs(30)),
                 ..CachePolicy::default()
             },
-            scope: CacheScope::Caller(caller.into()),
+            context: CacheContext {
+                credential: Some(CacheCredential::new("test", caller, "key")),
+                model_group: None,
+            },
         };
         let MessagesCallResponse::Complete(response) =
             route.execute(request, &(), override_options).await.unwrap()

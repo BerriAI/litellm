@@ -11,8 +11,8 @@ use litellm_cache::{CacheCodec, Error};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::RedisCache;
 use litellm_cache_response::{
-    CacheEntry, CacheKey, CacheKeyInput, CacheScope, CacheTarget, ResponseCache,
-    ResponseCacheCodec, ResponseCacheConfig, ResponseCacheService,
+    CacheEntry, CacheKey, CacheKeyInput, CacheScope, Deployment, ResponseCache,
+    ResponseCacheCodec, ResponseCacheService,
 };
 use redis_test::{MockCmd, MockRedisConnection};
 use rstest::{fixture, rstest};
@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 fn input(prompt: &str) -> CacheKeyInput {
     CacheKeyInput::new(
         "responses",
-        CacheTarget::ModelGroup("group".into()),
+        Deployment::new("gpt-5", None, None),
         json!({"input": prompt}),
     )
 }
@@ -41,7 +41,7 @@ async fn service_honors_per_call_expiry_and_freshness() {
         }),
     )));
     let key = cache
-        .key(&input("entry"), &CacheScope::Shared)
+        .key(&input("entry"), &CacheScope::default())
         .await
         .unwrap();
     cache
@@ -89,7 +89,7 @@ async fn native_service_reads_and_writes_under_the_key_it_is_given() {
         InMemoryCache::<CacheEntry>::default(),
     )));
     let key = cache
-        .key(&input("stored"), &CacheScope::Shared)
+        .key(&input("stored"), &CacheScope::default())
         .await
         .unwrap();
     cache
@@ -101,7 +101,7 @@ async fn native_service_reads_and_writes_under_the_key_it_is_given() {
         Some(json!({"answer":7}))
     );
     let other_key = cache
-        .key(&input("other"), &CacheScope::Shared)
+        .key(&input("other"), &CacheScope::default())
         .await
         .unwrap();
     assert_ne!(other_key, key);
@@ -118,10 +118,8 @@ async fn native_service_reads_and_writes_under_the_key_it_is_given() {
 #[tokio::test]
 async fn entry_limit_applies_to_sync_async_and_batch_writes() {
     let storage = Arc::new(InMemoryCache::<CacheEntry>::default());
-    let cache = ResponseCache::new(storage.clone()).with_config(ResponseCacheConfig {
-        namespace: "service-test".into(),
-        max_entry_bytes: json!({"answer":7}).to_string().len(),
-    });
+    let cache = ResponseCache::new(storage.clone())
+        .with_max_entry_bytes(json!({"answer":7}).to_string().len());
     let small = json!({"answer":7});
     let large = json!({"answer":"too large"});
     let context = litellm_cache::ExactCacheContext::default();
@@ -167,13 +165,11 @@ async fn entry_limit_applies_to_sync_async_and_batch_writes() {
     }
 }
 
-struct SingleLookupService {
-    config: ResponseCacheConfig,
-}
+struct SingleLookupService;
 
 impl ResponseCacheService for SingleLookupService {
-    fn config(&self) -> &ResponseCacheConfig {
-        &self.config
+    fn max_entry_bytes(&self) -> Option<usize> {
+        None
     }
 
     fn key<'a>(
@@ -215,9 +211,7 @@ impl ResponseCacheService for SingleLookupService {
 
 #[fixture]
 fn service() -> Arc<dyn ResponseCacheService> {
-    Arc::new(SingleLookupService {
-        config: ResponseCacheConfig::default(),
-    })
+    Arc::new(SingleLookupService)
 }
 
 #[rstest]

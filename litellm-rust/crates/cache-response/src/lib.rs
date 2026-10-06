@@ -5,8 +5,8 @@ mod entry;
 mod envelope;
 mod exact;
 mod key;
+mod options;
 mod policy;
-mod scope;
 mod service;
 
 pub use buffer::WriteBuffer;
@@ -15,7 +15,9 @@ pub use codec::ResponseCacheCodec;
 pub use entry::CacheEntry;
 pub use envelope::ResponseEnvelope;
 pub use exact::{ConnectionProbe, ExactResponseCache};
-pub use key::{CacheKey, CacheKeyInput, CacheTarget, extra_headers};
-pub use policy::{CacheAccess, CacheOptions, CachePolicy};
-pub use scope::CacheScope;
-pub use service::{ResponseCacheConfig, ResponseCacheService};
+pub use key::{
+    CacheCredential, CacheKey, CacheKeyInput, CacheScope, Deployment, extra_headers,
+};
+pub use options::CacheOptions;
+pub use policy::{CacheAccess, CachePolicy};
+pub use service::ResponseCacheService;

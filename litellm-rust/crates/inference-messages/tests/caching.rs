@@ -1,6 +1,6 @@
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheKeyInput, CacheOptions, CachePolicy, CacheTarget, ResponseCache, ResponseCacheConfig,
+    CacheKeyInput, CacheOptions, Deployment, ResponseCache, ResponseCacheConfig,
     ResponseCacheService,
 };
 use litellm_host::interceptors::{Interceptors, ProviderIdentity};
@@ -19,12 +19,8 @@ use std::{
 };
 struct CacheRequest {
     identity: ProviderIdentity,
-    target: CacheTarget,
+    deployment: Deployment,
     parameters: Value,
-}
-
-fn shared() -> CacheOptions {
-    CacheOptions::shared(CachePolicy::default())
 }
 
 fn plan<P: Cachable>(
@@ -36,7 +32,7 @@ fn plan<P: Cachable>(
         CachePlan::new(
             cache,
             options,
-            CacheKeyInput::new(P::SURFACE, request.target, request.parameters),
+            CacheKeyInput::new(P::SURFACE, request.deployment, request.parameters),
         )
     });
     (request.identity, plan)
@@ -110,14 +106,14 @@ async fn messages_cache_identity_includes_provider_native_parameters(
                         model: "test".into(),
                         provider: "anthropic".into(),
                     },
-                    target: CacheTarget::resolve(None, "test", None, None),
+                    deployment: Deployment::new("test", None, None),
                     parameters: json!({
                         "messages":[{"role":"user","content":"hello"}],
                         "max_tokens":32, (field):value
                     }),
                 },
                 Some(cache.clone()),
-                Some(shared()),
+                Some(CacheOptions::default()),
                 &(),
                 None,
                 || async {
@@ -270,7 +266,7 @@ async fn cache_identity_ignores_deployment_settings_and_skips_rewritten_requests
         support::messages_route(secrets.clone()).with_cache(cache).execute(MessagesCall {
                 body: serde_json::from_value(json!({"model":format!("anthropic/{model}"),"messages":[{"role":"user","content":"hello"}],"max_tokens":32})).unwrap(),
                 api_key:None,api_base:None,custom_llm_provider:None,extra_headers:None,provider_specific_header:None,timeout:None,shaping:Default::default(),
-            }, &hooks, shared()).await.unwrap();
+            }, &hooks, CacheOptions::default()).await.unwrap();
     }
     assert_eq!(hooks.calls.load(Ordering::SeqCst), 4);
     let sources = hooks
@@ -373,7 +369,7 @@ async fn forwarded_headers_and_the_deployment_decide_messages_cache_reuse(
         shaping: Default::default(),
     };
     for change in ["none", change] {
-        route.execute(call(change), &hooks, shared()).await.unwrap();
+        route.execute(call(change), &hooks, CacheOptions::default()).await.unwrap();
     }
     assert_eq!(
         matches!(

@@ -12,7 +12,6 @@ pub use error::RouteError;
 #[derive(Clone, Default)]
 pub struct CallOptions {
     pub cache: Option<litellm_cache_response::CacheOptions>,
-    pub model_group: Option<String>,
     pub observers: Option<litellm_host::observation::ObservationSender>,
 }
 

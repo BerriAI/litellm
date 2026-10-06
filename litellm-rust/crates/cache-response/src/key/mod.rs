@@ -1,8 +1,9 @@
 mod derive;
 mod input;
+mod scope;
 mod target;
 
 pub use derive::CacheKey;
-pub(crate) use derive::KeyContext;
 pub use input::{CacheKeyInput, extra_headers};
-pub use target::CacheTarget;
+pub use scope::{CacheCredential, CacheScope};
+pub use target::Deployment;

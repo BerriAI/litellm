@@ -55,8 +55,10 @@ impl<P: Cachable> CacheSession<P> {
         })
     }
 
-    pub(super) fn max_entry_bytes(&self) -> usize {
-        self.service.config().max_entry_bytes
+    pub(super) fn fits(&self, bytes: usize) -> bool {
+        self.service
+            .max_entry_bytes()
+            .is_none_or(|limit| bytes <= limit)
     }
 
     fn hit(&self) -> ResultSource {
@@ -69,7 +71,7 @@ impl<P: Cachable> CacheSession<P> {
     where
         P::Response: DeserializeOwned,
     {
-        if !self.policy.access().reads {
+        if !self.policy.access.reads {
             return None;
         }
         match self
@@ -91,7 +93,7 @@ impl<P: Cachable> CacheSession<P> {
     }
 
     pub(super) async fn store(&self, entry: Value) {
-        if !self.policy.access().writes {
+        if !self.policy.access.writes {
             return;
         }
         if self
@@ -108,7 +110,7 @@ impl<P: Cachable> CacheSession<P> {
     where
         P::Response: Serialize,
     {
-        if !self.policy.access().writes || !P::reusable(response) {
+        if !self.policy.access.writes || !P::reusable(response) {
             return;
         }
         if let Ok(value) = serde_json::to_value(response)
@@ -144,7 +146,7 @@ impl<P: StreamCachable> CacheSession<P> {
         P::Response: Serialize,
     {
         let Some(session) = session
-            .filter(|session| *source == ResultSource::Provider && session.policy.access().writes)
+            .filter(|session| *source == ResultSource::Provider && session.policy.access.writes)
         else {
             return output;
         };

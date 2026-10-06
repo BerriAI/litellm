@@ -7,16 +7,14 @@ pub use batch::{BatchLookup, PendingWrite};
 use litellm_cache::{BaseCache, CacheConnectionResult, ConnectionCache, Error, FlushCache};
 use serde_json::Value;
 
-use crate::{
-    CacheEntry, CacheKey, CacheKeyInput, CacheScope, ResponseCacheConfig, key::KeyContext,
-};
+use crate::{CacheEntry, CacheKey, CacheKeyInput, CacheScope};
 
 pub struct ResponseCache<B: BaseCache<Value = CacheEntry>>
 where
     B::Context: Default + PartialEq,
 {
     backend: Arc<B>,
-    config: ResponseCacheConfig,
+    max_entry_bytes: Option<usize>,
 }
 
 impl<B> ResponseCache<B>
@@ -27,16 +25,19 @@ where
     pub fn new(backend: Arc<B>) -> Self {
         Self {
             backend,
-            config: ResponseCacheConfig::default(),
+            max_entry_bytes: None,
         }
     }
 
-    pub fn with_config(self, config: ResponseCacheConfig) -> Self {
-        Self { config, ..self }
+    pub fn with_max_entry_bytes(self, max_entry_bytes: usize) -> Self {
+        Self {
+            max_entry_bytes: Some(max_entry_bytes),
+            ..self
+        }
     }
 
-    pub fn config(&self) -> &ResponseCacheConfig {
-        &self.config
+    pub fn max_entry_bytes(&self) -> Option<usize> {
+        self.max_entry_bytes
     }
 
     pub fn backend(&self) -> &B {
@@ -62,13 +63,7 @@ where
     }
 
     pub fn key(&self, input: &CacheKeyInput, scope: &CacheScope) -> CacheKey {
-        CacheKey::derive(
-            input,
-            &KeyContext {
-                namespace: &self.config.namespace,
-                scope,
-            },
-        )
+        CacheKey::derive(input, scope)
     }
 
     pub fn lookup(
@@ -126,8 +121,8 @@ where
     }
 
     fn fits(&self, response: &Value) -> bool {
-        self.config.max_entry_bytes == usize::MAX
-            || response.to_string().len() <= self.config.max_entry_bytes
+        self.max_entry_bytes
+            .is_none_or(|limit| response.to_string().len() <= limit)
     }
 }
 

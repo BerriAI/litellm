@@ -81,7 +81,6 @@ impl MessagesRoute {
                 self.cache.as_ref(),
                 context.cache.clone(),
                 &call,
-                context.model_group.as_deref(),
             )?;
             let prepared = prepare::prepare(call, self.secrets.as_ref()).await?;
             litellm_inference::diagnostic::provider(

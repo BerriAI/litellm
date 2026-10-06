@@ -1,7 +1,8 @@
 mod support;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheOptions, CachePolicy, ResponseCache, ResponseCacheConfig, ResponseCacheService,
+    CacheContext, CacheOptions, ResponseCache, ResponseCacheConfig,
+    ResponseCacheService,
 };
 use litellm_host::{
     interceptors::{
@@ -22,10 +23,6 @@ use std::{
     },
     time::Duration,
 };
-fn shared() -> CacheOptions {
-    CacheOptions::shared(CachePolicy::default())
-}
-
 #[fixture]
 fn cache() -> Arc<dyn ResponseCacheService> {
     cache_with_limit(4096)
@@ -90,7 +87,7 @@ async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
                 },
                 &(),
                 litellm_inference::CallOptions {
-                    cache: caching.then(shared),
+                    cache: caching.then(CacheOptions::default),
                     observers: Some(observer.clone()),
                     ..Default::default()
                 },
@@ -276,7 +273,7 @@ async fn cache_identity_ignores_deployment_settings_and_skips_rewritten_requests
                 timeout: None,
             },
             &hooks,
-            shared(),
+            CacheOptions::default(),
         )
         .await
         .unwrap();
@@ -364,8 +361,13 @@ async fn the_model_group_decides_cache_reuse(
                 },
                 &hooks,
                 CallOptions {
-                    cache: Some(shared()),
-                    model_group: Some(model_group.into()),
+                    cache: Some(CacheOptions {
+                        context: CacheContext {
+                            model_group: Some(model_group.into()),
+                            ..CacheContext::default()
+                        },
+                        ..CacheOptions::default()
+                    }),
                     observers: None,
                 },
             )
@@ -405,7 +407,7 @@ async fn signed_requests_bypass_response_caching(cache: Arc<dyn ResponseCacheSer
         messages:json!([{"role":"user","content":"hello"}]),
         optional_params:json!({"aws_access_key_id":"test-access","aws_secret_access_key":"test-secret","aws_region_name":"eu-west-1"}).as_object().unwrap().clone(),
         api_key:None,api_base:Some(&upstream.uri()),custom_llm_provider:None,extra_headers:None,timeout:None,
-    }, &hooks, shared()).await.unwrap();
+    }, &hooks, CacheOptions::default()).await.unwrap();
         assert_eq!(
             serde_json::to_value(response).unwrap()["usage"]["total_tokens"],
             5

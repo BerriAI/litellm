@@ -8,23 +8,8 @@ use crate::{BatchLookup, CacheEntry, CacheKey, CacheKeyInput, CacheScope, Respon
 
 type CacheFuture<'a, T> = BoxFuture<'a, Result<T, Error>>;
 
-#[derive(Clone)]
-pub struct ResponseCacheConfig {
-    pub namespace: String,
-    pub max_entry_bytes: usize,
-}
-
-impl Default for ResponseCacheConfig {
-    fn default() -> Self {
-        Self {
-            namespace: String::new(),
-            max_entry_bytes: usize::MAX,
-        }
-    }
-}
-
 pub trait ResponseCacheService: Send + Sync {
-    fn config(&self) -> &ResponseCacheConfig;
+    fn max_entry_bytes(&self) -> Option<usize>;
 
     fn key<'a>(
         &'a self,
@@ -67,8 +52,8 @@ impl<B> ResponseCacheService for ResponseCache<B>
 where
     B: BaseCache<Value = CacheEntry, Context = ExactCacheContext> + BatchCache,
 {
-    fn config(&self) -> &ResponseCacheConfig {
-        self.config()
+    fn max_entry_bytes(&self) -> Option<usize> {
+        ResponseCache::max_entry_bytes(self)
     }
 
     fn key<'a>(

@@ -1,6 +1,6 @@
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheKey, CacheKeyInput, CacheOptions, CachePolicy, CacheScope, CacheTarget, ResponseCache,
+    CacheContext, CacheKey, CacheKeyInput, CacheOptions, Deployment, ResponseCache,
     ResponseCacheConfig, ResponseCacheService, ResponseEnvelope,
 };
 use litellm_host::interceptors::{Interceptors, ProviderIdentity};
@@ -19,7 +19,7 @@ use std::{
 };
 struct CacheRequest {
     identity: ProviderIdentity,
-    target: CacheTarget,
+    deployment: Deployment,
     parameters: Value,
 }
 
@@ -29,13 +29,9 @@ fn cache_request(input: Value) -> CacheRequest {
             model: "test-model".into(),
             provider: "test-provider".into(),
         },
-        target: CacheTarget::resolve(None, "test-model", None, None),
+        deployment: Deployment::new("test-model", None, None),
         parameters: input,
     }
-}
-
-fn shared() -> CacheOptions {
-    CacheOptions::shared(CachePolicy::default())
 }
 
 fn plan<P: Cachable>(
@@ -47,7 +43,7 @@ fn plan<P: Cachable>(
         CachePlan::new(
             cache,
             options,
-            CacheKeyInput::new(P::SURFACE, request.target, request.parameters),
+            CacheKeyInput::new(P::SURFACE, request.deployment, request.parameters),
         )
     });
     (request.identity, plan)
@@ -109,9 +105,9 @@ impl ResponseCacheService for InvalidEntryCache {
     fn key<'a>(
         &'a self,
         input: &'a CacheKeyInput,
-        scope: &'a CacheScope,
+        context: &'a CacheContext,
     ) -> futures_util::future::BoxFuture<'a, Result<CacheKey, litellm_cache::Error>> {
-        ResponseCacheService::key(&self.0, input, scope)
+        ResponseCacheService::key(&self.0, input, context)
     }
 
     fn lookup<'a>(
@@ -157,7 +153,7 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
         let response = execute_unary::<Responses, _, _>(
             cache_request(json!({"input":"hello"})),
             Some(cache.clone()),
-            Some(shared()),
+            Some(CacheOptions::default()),
             &(),
             None,
             || async {
@@ -199,7 +195,7 @@ async fn responses_cache_only_reuses_completed_responses(
         let response = execute_unary::<Responses, _, _>(
             cache_request(json!({"input":"hello"})),
             Some(cache.clone()),
-            Some(shared()),
+            Some(CacheOptions::default()),
             &(),
             None,
             || async {
@@ -358,7 +354,7 @@ async fn cache_identity_ignores_deployment_settings_and_skips_rewritten_requests
                     timeout: None,
                 },
                 &hooks,
-                shared(),
+                CacheOptions::default(),
             )
             .await
             .unwrap();

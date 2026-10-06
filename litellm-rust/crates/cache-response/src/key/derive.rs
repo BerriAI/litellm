@@ -1,10 +1,9 @@
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use super::CacheKeyInput;
-use crate::CacheScope;
+use super::{CacheCredential, CacheKeyInput, CacheScope, target::CacheTarget};
 
-const KEY_VERSION: &str = "inference-v4";
+const KEY_VERSION: &str = "v0";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CacheKey {
@@ -12,25 +11,16 @@ pub enum CacheKey {
     External(String),
 }
 
-pub(crate) struct KeyContext<'a> {
-    pub namespace: &'a str,
-    pub scope: &'a CacheScope,
-}
-
 impl CacheKey {
-    pub(crate) fn derive(input: &CacheKeyInput, context: &KeyContext<'_>) -> Self {
+    pub(crate) fn derive(input: &CacheKeyInput, scope: &CacheScope) -> Self {
         let material = json!({
-            "scope": match context.scope {
-                CacheScope::Shared => None,
-                CacheScope::Caller(caller) => Some(caller),
-            },
-            "input": input,
+            "credential": scope.credential.as_ref().map(CacheCredential::as_str),
+            "surface": input.surface,
+            "target": CacheTarget::resolve(scope, &input.deployment),
+            "parameters": input.parameters,
         });
         let hash = format!("{:x}", Sha256::digest(material.to_string()));
-        Self::Native(match context.namespace {
-            "" => format!("{KEY_VERSION}:{hash}"),
-            namespace => format!("{namespace}:{KEY_VERSION}:{hash}"),
-        })
+        Self::Native(format!("{KEY_VERSION}:{hash}"))
     }
 
     pub fn as_str(&self) -> &str {

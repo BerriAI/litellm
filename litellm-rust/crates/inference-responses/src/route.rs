@@ -31,7 +31,6 @@ impl ResponsesRoute {
     ) -> HostedMachine<Responses> {
         let litellm_inference::CallOptions {
             cache: cache_options,
-            model_group,
             observers,
         } = options.into();
         hosted_call(
@@ -41,7 +40,6 @@ impl ResponsesRoute {
                 self.run(
                     call,
                     cache_options,
-                    model_group.as_deref(),
                     &interceptors,
                     observers.as_ref(),
                 )

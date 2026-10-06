@@ -30,7 +30,6 @@ impl CachePlan {
         service: Option<&Arc<dyn ResponseCacheService>>,
         options: Option<CacheOptions>,
         request: &impl CacheKeyProjection,
-        model_group: Option<&str>,
     ) -> Result<Option<Self>, RouteError> {
         let (Some(service), Some(options)) = (service, options) else {
             return Ok(None);
@@ -41,7 +40,7 @@ impl CachePlan {
         Ok(Some(Self {
             service: service.clone(),
             options,
-            input: request.cache_key_input(model_group)?,
+            input: request.cache_key_input()?,
         }))
     }
 

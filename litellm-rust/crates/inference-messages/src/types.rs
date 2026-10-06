@@ -1,4 +1,4 @@
-use litellm_cache_response::{CacheKeyInput, CacheTarget, extra_headers};
+use litellm_cache_response::{CacheKeyInput, Deployment, extra_headers};
 use litellm_inference::{
     RouteError,
     caching::{Cachable, CacheKeyProjection},
@@ -52,7 +52,7 @@ pub struct MessagesShaping {
 }
 
 impl CacheKeyProjection for MessagesCall {
-    fn cache_key_input(&self, model_group: Option<&str>) -> Result<CacheKeyInput, RouteError> {
+    fn cache_key_input(&self) -> Result<CacheKeyInput, RouteError> {
         let invalid =
             |error: serde_json::Error| RouteError::InvalidRequest(error.to_string().into());
         let Value::Object(body) = serde_json::to_value(&self.body).map_err(invalid)? else {
@@ -69,12 +69,7 @@ impl CacheKeyProjection for MessagesCall {
             .map(|header| ("provider_specific_header", header));
         Ok(CacheKeyInput::forwarded(
             <crate::route::Messages as Cachable>::SURFACE,
-            CacheTarget::resolve(
-                model_group,
-                &self.body.model,
-                self.custom_llm_provider.as_deref(),
-                self.api_base.as_deref(),
-            ),
+            Deployment::new(&self.body.model, self.custom_llm_provider.as_deref(), self.api_base.as_deref()),
             body,
             extra_headers(self.extra_headers.as_ref())
                 .into_iter()
