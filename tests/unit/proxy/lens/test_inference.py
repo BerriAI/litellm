@@ -622,6 +622,38 @@ async def test_renewal_preserves_the_original_failure_while_request_cleanup_is_p
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stalled", ("budget", "model"))
+async def test_request_deadline_expiry_returns_gateway_timeout(stalled: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from litellm.proxy.lens.inference import BUDGET_LEASE, reserve_amount, reserved_budget
+    from litellm.proxy.lens.models import BudgetReservation
+    from litellm.proxy.lens.repository import LensRepository
+    from tests.unit.proxy.lens.test_endpoints import ResultDatabase
+    from tests.unit.proxy.lens.test_state import NOW, lens
+
+    monkeypatch.setattr(litellm, "request_timeout", 0.05)
+    db: Final = ResultDatabase(lens())
+    hold: Final = BudgetReservation(
+        id="active", job_id="run", amount=90, month=db.stored.budget_month, expires_at=NOW + BUDGET_LEASE
+    )
+    admitted: Final = asyncio.Event()
+
+    with pytest.raises(HTTPException) as error:
+        async with reserved_budget(
+            LensRepository(db),
+            "lens",
+            hold.id,
+            (lambda e: e) if stalled == "budget" else (lambda e: reserve_amount(e, hold, NOW)),
+            admitted,
+        ):
+            await asyncio.Event().wait()
+    assert error.value.status_code == 504
+    assert error.value.detail == "Analysis request timed out waiting for budget or model output"
+    assert admitted.is_set() is (stalled == "model")
+
+
+@pytest.mark.asyncio
 async def test_completed_paid_response_survives_simultaneous_renewal_failure() -> None:
     from litellm.proxy.lens.inference import model_with_renewal
 
