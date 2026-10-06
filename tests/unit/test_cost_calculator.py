@@ -13,6 +13,7 @@ from litellm.cost_calculator import (
     BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
+    batch_cost_calculator,
     completion_cost,
     cost_per_token,
     handle_realtime_stream_cost_calculation,
@@ -27,6 +28,7 @@ from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
     Choices,
+    CompletionTokensDetailsWrapper,
     EmbeddingResponse,
     ImageObject,
     ImageResponse,
@@ -3448,8 +3450,6 @@ def _batch_cache_usage() -> Usage:
 
 
 def test_batch_cost_calculator_prices_multimodal_tokens_at_modality_rates():
-    from litellm.cost_calculator import batch_cost_calculator
-
     model_info: ModelInfo = {
         "input_cost_per_token_batches": 1e-7,
         "input_cost_per_audio_token_batches": 3.25e-6,
@@ -3478,8 +3478,6 @@ def test_batch_cost_calculator_prices_multimodal_tokens_at_modality_rates():
 
 
 def test_batch_cost_calculator_falls_back_to_text_batch_rate_for_modalities():
-    from litellm.cost_calculator import batch_cost_calculator
-
     model_info: ModelInfo = {"input_cost_per_token_batches": 1e-7}
     usage = Usage(
         prompt_tokens=100,
@@ -3496,6 +3494,46 @@ def test_batch_cost_calculator_falls_back_to_text_batch_rate_for_modalities():
     )
 
     assert prompt_cost == pytest.approx(100 * 1e-7)
+
+
+@pytest.mark.parametrize(
+    ("image_batch_rate", "image_tokens", "expected_completion_cost"),
+    (
+        (5e-5, 80, 0.00408),
+        (None, 80, 0.00328),
+        (5e-5, 140, 0.006),
+    ),
+)
+def test_batch_cost_calculator_prices_image_completion_tokens_at_image_batch_rate(
+    image_batch_rate: float | None, image_tokens: int, expected_completion_cost: float
+) -> None:
+    model_info: Final[ModelInfo] = (
+        {
+            "output_cost_per_token_batches": 2e-6,
+            "output_cost_per_image_token": 8e-5,
+            "output_cost_per_image_token_batches": image_batch_rate,
+        }
+        if image_batch_rate is not None
+        else {
+            "output_cost_per_token_batches": 2e-6,
+            "output_cost_per_image_token": 8e-5,
+        }
+    )
+    usage: Final = Usage(
+        prompt_tokens=0,
+        completion_tokens=120,
+        total_tokens=120,
+        completion_tokens_details=CompletionTokensDetailsWrapper(image_tokens=image_tokens),
+    )
+
+    costs: Final = batch_cost_calculator(
+        usage=usage,
+        model="gemini-nano-banana-2.1",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert costs[1] == pytest.approx(expected_completion_cost)
 
 
 def test_batch_cost_calculator_prices_cache_creation_tokens_at_cache_write_rate():
