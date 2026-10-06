@@ -1,5 +1,50 @@
 import { z } from "zod";
 
+export type DecisionEndpoint = "/v1/decisions" | "/typesafe/v1/systemone";
+
+const decisionsJson = z.union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())]);
+const decisionInstructions = decisionsJson.nullish();
+const decisionQuestionSchema = z.discriminatedUnion("type", [
+  z.looseObject({
+    type: z.literal("choice"),
+    instructions: decisionInstructions,
+    criteria: z.record(z.string(), decisionsJson.nullable()).refine((value) => {
+      const count = Object.keys(value).length;
+      return count >= 1 && count <= 255;
+    }, "Choice criteria must contain between 1 and 255 options."),
+  }),
+  z
+    .looseObject({
+      type: z.literal("noul"),
+      instructions: decisionInstructions,
+      criteria: z.partialRecord(z.enum(["true", "false"]), decisionsJson.nullable()).nullish(),
+    })
+    .refine((value) => value.instructions != null || value.criteria != null, {
+      message: "A noul question requires instructions or criteria.",
+    }),
+  z.looseObject({
+    type: z.literal("score"),
+    instructions: decisionInstructions,
+    criteria: z.array(decisionsJson).min(1).max(10),
+  }),
+]);
+
+export const decisionsRequestSchema = z.looseObject({
+  model: z
+    .string()
+    .refine((value) => value.trim().length > 0, "Model must be a non-empty string.")
+    .optional(),
+  state: decisionsJson,
+  questions: z.record(z.string().min(1), decisionQuestionSchema).refine((value) => {
+    const count = Object.keys(value).length;
+    return count >= 1 && count <= 128;
+  }, "Questions must contain between 1 and 128 entries."),
+});
+
+export type DecisionRequest = z.infer<typeof decisionsRequestSchema>;
+export type PlaygroundRequest = SystemOneRequest | DecisionRequest;
+export type PlaygroundQuestion = SystemOneQuestion | z.infer<typeof decisionQuestionSchema>;
+
 const MAX_CHOICE_OPTIONS = 255;
 
 const nonEmptyString = (message: string) =>
@@ -89,7 +134,7 @@ const scoreAnswerShape = {
   type: z.literal("score"),
   score: z.number().finite(),
   confidence: probability.optional(),
-  legend: z.record(z.string(), z.string()).optional(),
+  legend: z.record(z.string(), decisionsJson).optional(),
   probabilities,
 };
 const scoreAnswerSchema = z.looseObject(scoreAnswerShape);
@@ -102,7 +147,7 @@ export const systemOneResponseSchema = z.looseObject({
     z.string(),
     z.discriminatedUnion("type", [noulAnswerSchema, choiceAnswerSchema, scoreAnswerSchema]),
   ),
-  usage: z.object({ input_tokens: tokenCount, output_tokens: tokenCount }).optional(),
+  usage: z.looseObject({ input_tokens: tokenCount, output_tokens: tokenCount }).nullish(),
 });
 
 export type SystemOneRequest = z.infer<typeof systemOneRequestSchema>;

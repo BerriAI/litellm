@@ -92,7 +92,11 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
       </div>
       <div className="grid gap-3">
         {levels.map(([level, probability]) => {
-          const label = answer.legend?.[level] ? `${level}: ${answer.legend[level]}` : level;
+          const description = answer.legend?.[level];
+          const label =
+            description === undefined
+              ? level
+              : `${level}: ${typeof description === "string" ? description : JSON.stringify(description)}`;
           return (
             <ProbabilityMeter
               key={level}
