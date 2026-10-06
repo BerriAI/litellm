@@ -844,14 +844,17 @@ async fn native_cost_correlation_survives_session_grouping_and_excludes_other_ow
 }
 
 #[rstest]
-#[case::recorded(false, true)]
-#[case::conflicting(true, true)]
-#[case::invocation_without_execution(false, false)]
+#[case::recorded(false, true, true)]
+#[case::conflicting(true, true, true)]
+#[case::invocation_without_execution(false, false, true)]
+#[case::untyped_invocation_without_execution(false, false, false)]
+#[case::untyped_invocation_with_execution(false, true, false)]
 #[tokio::test]
 async fn native_tool_content_agrees_between_single_and_bulk_reads(
     #[future(awt)] migrated_database: TestResult<SeededDatabase>,
     #[case] conflict: bool,
     #[case] executed: bool,
+    #[case] span_type: bool,
 ) -> TestResult {
     use litellm_storage_clickhouse::fetch;
     use litellm_traces::query::named::{SpanDetailParams, SpanDetailsParams};
@@ -977,7 +980,7 @@ async fn native_tool_content_agrees_between_single_and_bulk_reads(
                         ("Output".into(), json!(output)),
                         (
                             "SpanAttributes".into(),
-                            json!({"session.id":session,"tool_use_id":"call", "span.type": if kind == "tool" { "tool" } else { "" }}),
+                            json!({"session.id":session,"tool_use_id":"call", "span.type": if span_type && kind == "tool" { "tool" } else { "" }}),
                         ),
                         ("TeamId".into(), json!(team)),
                         ("ApiKeyHash".into(), json!(key)),
