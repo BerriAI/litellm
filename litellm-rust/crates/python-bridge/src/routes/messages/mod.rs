@@ -26,7 +26,7 @@ fn run_messages(
         py,
         arguments,
         move |py, arguments, request| {
-            let route = litellm_core::messages::MessagesRoute::new(
+            let route = litellm_inference_messages::MessagesRoute::new(
                 crate::http::provider_client(py, arguments, asynchronous)?
                     .map_err(crate::http::client_error)?,
                 crate::http::resources().auth.clone(),
@@ -48,7 +48,7 @@ fn run_messages(
                         .execute(
                             call,
                             &interceptors,
-                            litellm_core::CallOptions {
+                            litellm_inference::CallOptions {
                                 cache: Some(options.policy),
                                 observers,
                             },
