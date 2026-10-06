@@ -11,7 +11,7 @@ from typing import Final
 from urllib.parse import urlsplit
 
 import pytest
-from integration._support.connect_tunnel import connect_tunnel
+from integration._support.https_redirect import redirect_https_host
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -341,7 +341,7 @@ def test_aretrieve_batch_costs_native_gemini_image_tokens(
         with wire_server(_gcs_reply(row), tls=tls) as gcs:
             gcs_port: Final = urlsplit(gcs.url).port
             assert gcs_port is not None
-            with connect_tunnel("storage.googleapis.com", 443, "127.0.0.1", gcs_port) as proxy_url:
+            with redirect_https_host("storage.googleapis.com", 443, to_port=gcs_port) as proxy_url:
                 environment: Final = _subprocess_environment(
                     api, certificate, credentials, proxy_url, scenario, transform_output
                 )
