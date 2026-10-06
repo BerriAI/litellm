@@ -25,7 +25,7 @@ from litellm.integrations.websearch_interception.handler import (
 )
 from litellm.integrations.websearch_interception.tools import get_litellm_web_search_tool
 from litellm.litellm_core_utils.agentic_loop_settings import DEFAULT_MAX_AGENTIC_LOOPS
-from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
     FakeAnthropicMessagesStreamIterator,
 )
 from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult

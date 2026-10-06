@@ -11,6 +11,7 @@ import litellm
 from litellm.cost_calculator import default_video_cost_calculator
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
@@ -988,6 +989,7 @@ class TestVideoLogging:
         """
         custom_logger = self.TestVideoLogger()
         litellm.logging_callback_manager._reset_all_callbacks()
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
         litellm.callbacks = [custom_logger]
 
         # Mock video generation response
@@ -1107,6 +1109,7 @@ def test_video_content_handler_passes_variant_to_url():
     mock_client = MagicMock(spec=HTTPHandler)
     mock_response = MagicMock()
     mock_response.content = b"thumbnail-bytes"
+    mock_response.status_code = 200
     mock_client.get.return_value = mock_response
 
     with patch(
@@ -1152,6 +1155,7 @@ def test_video_content_handler_uses_get_for_openai():
     mock_client = MagicMock(spec=HTTPHandler)
     mock_response = MagicMock()
     mock_response.content = b"mp4-bytes"
+    mock_response.status_code = 200
     mock_client.get.return_value = mock_response
 
     # Patch _get_httpx_client to ensure no real HTTP client is created

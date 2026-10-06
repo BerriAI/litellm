@@ -10,7 +10,6 @@ import uuid as uuid_lib
 from typing import Final, cast
 
 import httpx
-from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -18,6 +17,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.trigger_audio import ready_trigger_pcm
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     OpenAIRealtimeContentPartDone,
     OpenAIRealtimeDoneEvent,
@@ -45,25 +45,25 @@ from litellm.types.realtime import (
 )
 
 
-class BedrockContentEnd(BaseModel):
+class BedrockContentEnd(LiteLLMBaseModel):
     stopReason: str | None = None
 
 
-class BedrockUsageTokenDetails(BaseModel):
+class BedrockUsageTokenDetails(LiteLLMBaseModel):
     speechTokens: int = 0
     textTokens: int = 0
 
 
-class BedrockUsageDetailsTotal(BaseModel):
+class BedrockUsageDetailsTotal(LiteLLMBaseModel):
     input: BedrockUsageTokenDetails = BedrockUsageTokenDetails()
     output: BedrockUsageTokenDetails = BedrockUsageTokenDetails()
 
 
-class BedrockUsageDetails(BaseModel):
+class BedrockUsageDetails(LiteLLMBaseModel):
     total: BedrockUsageDetailsTotal = BedrockUsageDetailsTotal()
 
 
-class BedrockUsageEvent(BaseModel):
+class BedrockUsageEvent(LiteLLMBaseModel):
     totalInputTokens: int = 0
     totalOutputTokens: int = 0
     totalTokens: int = 0
@@ -887,7 +887,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 id=f"resp_{uuid.uuid4()}",
                 status="completed",
                 conversation_id=f"conv_{uuid.uuid4()}",
-                usage=dict(usage),  # mutable-ok: OpenAIRealtimeResponseDoneObject types usage as plain dict
+                usage=dict(usage),
             ),
         )
         return (leftover_done,)

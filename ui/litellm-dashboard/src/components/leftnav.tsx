@@ -23,6 +23,7 @@ import {
 } from "@/components/shared/Sidebar";
 import {
   Activity,
+  Aperture,
   BarChart3,
   Bell,
   Blocks,
@@ -55,6 +56,7 @@ import {
   ShieldCheck,
   Tags,
   Terminal,
+  Trophy,
   User,
   Users,
   Wallet,
@@ -81,7 +83,13 @@ import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 
 const ICON = { strokeWidth: 1.75 } as const;
 
-const LOGO_CLASS_NAME = "h-7 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:w-7";
+const LOGO_CLASS_NAME =
+  "h-5 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:h-7 group-data-[collapsed=true]/sidebar:w-7";
+
+function bundledLogoSrc(baseUrl: string, { dark, monogram }: { dark: boolean; monogram: boolean }): string {
+  const query = [dark && "theme=dark", monogram && "variant=monogram"].filter(Boolean).join("&");
+  return `${baseUrl}/get_image${query ? `?${query}` : ""}`;
+}
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -205,17 +213,34 @@ const menuGroups: MenuGroup[] = [
         label: "Usage",
       },
       {
+        key: "model-insights",
+        page: "model-insights",
+        icon: <Trophy {...ICON} />,
+        roles: all_admin_roles,
+        label: (
+          <span className="flex items-center gap-2">
+            Model Leaderboard <BetaBadge />
+          </span>
+        ),
+      },
+      {
         key: "cost-optimization",
         page: "cost-optimization",
         icon: <PiggyBank {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
-        label: (
-          <span className="flex items-center gap-2">
-            Cost Optimization <BetaBadge />
-          </span>
-        ),
+        label: "Cost Optimization",
       },
       { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
+      {
+        key: "lens",
+        page: "lens",
+        label: (
+          <span className="flex items-center gap-2">
+            Lens <BetaBadge />
+          </span>
+        ),
+        icon: <Aperture {...ICON} />,
+      },
       {
         key: "guardrails-monitor",
         page: "guardrails-monitor",
@@ -594,9 +619,9 @@ const Sidebar_: React.FC<SidebarProps> = ({
     );
   };
 
-  const logoSrc = logoUrl || `${baseUrl}/get_image`;
+  const logoSrc = logoUrl || bundledLogoSrc(baseUrl, { dark: false, monogram: collapsed });
   const reachableDarkLogo = logoUrlDark === erroredDarkLogo ? null : logoUrlDark;
-  const darkLogoSrc = reachableDarkLogo || logoUrl || `${baseUrl}/get_image?theme=dark`;
+  const darkLogoSrc = reachableDarkLogo || logoUrl || bundledLogoSrc(baseUrl, { dark: true, monogram: collapsed });
 
   return (
     <Sidebar collapsed={collapsed}>

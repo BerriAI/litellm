@@ -70,10 +70,14 @@ _SERVICE_TIER_SUFFIXES: Final[tuple[str, ...]] = tuple(
 _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
     {
         ServiceTier.FLEX.value: ServiceTier.FLEX.value,
+        ServiceTier.BALANCED.value: ServiceTier.BALANCED.value,
         ServiceTier.PRIORITY.value: ServiceTier.PRIORITY.value,
         ServiceTier.FAST.value: ServiceTier.PRIORITY.value,
         ServiceTier.ULTRAFAST.value: ServiceTier.ULTRAFAST.value,
     }
+)
+SERVICE_TIER_COST_KEY_SUFFIXES: Final[tuple[str, ...]] = tuple(
+    sorted(frozenset(f"_{suffix}" for suffix in _SERVICE_TIER_TO_COST_KEY_SUFFIX.values()))
 )
 
 _INCLUSIVE_THRESHOLD_PROVIDERS: Final = frozenset({"xai"})
@@ -252,7 +256,7 @@ def _get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
 
     Args:
         base_key: The base cost key (e.g., "input_cost_per_token")
-        service_tier: The service tier ("flex", "priority", "fast", "ultrafast", or None for standard)
+        service_tier: The service tier ("flex", "balanced", "priority", "fast", "ultrafast", or None for standard)
 
     Returns:
         str: The cost key to use (e.g., "input_cost_per_token_flex" or "input_cost_per_token")
@@ -662,13 +666,15 @@ def _get_token_base_cost(
 
     ## CHECK IF ABOVE THRESHOLD
     # Optimization: collect threshold keys first to avoid sorting all model_info keys.
-    # Exclude service_tier-specific variants (e.g. input_cost_per_token_above_200k_tokens_priority)
-    # so that the threshold detection loop only processes standard keys.  The
-    # service_tier-specific above-threshold key is resolved later via _get_service_tier_cost_key.
+    # Standard thresholds and thresholds suffixed for this request's service tier both count.
+    tier_key_suffix: Final = _get_service_tier_cost_key("", service_tier)
     threshold_keys: Final = [
         k
         for k in model_info
-        if k.startswith("input_cost_per_token_above_") and not k.endswith(_NON_STANDARD_THRESHOLD_SUFFIXES)
+        if k.startswith("input_cost_per_token_above_")
+        and (
+            not k.endswith(_NON_STANDARD_THRESHOLD_SUFFIXES) or (tier_key_suffix != "" and k.endswith(tier_key_suffix))
+        )
     ]
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
@@ -1769,6 +1775,7 @@ def calculate_image_response_cost_from_usage(
     image_response: ImageResponse,
     custom_llm_provider: str,
     model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
 ) -> float | None:
     """
     Calculate image generation cost from usage metadata when available.
@@ -1852,6 +1859,7 @@ def calculate_image_response_cost_from_usage(
         usage=normalized_usage,
         custom_llm_provider=custom_llm_provider,
         model_info=model_info,
+        vertex_location=vertex_location,
     )
     return prompt_cost + completion_cost
 
@@ -1913,6 +1921,7 @@ class CostCalculatorUtils:
         optional_params: dict | None = None,
         call_type: str | None = None,
         model_info: ModelInfo | None = None,
+        vertex_location: str | None = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
@@ -1954,6 +1963,7 @@ class CostCalculatorUtils:
                     model=model,
                     image_response=completion_response,
                     model_info=pricing,
+                    vertex_location=vertex_location,
                 )
         elif custom_llm_provider == litellm.LlmProviders.BEDROCK.value:
             if isinstance(completion_response, ImageResponse):
