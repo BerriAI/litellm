@@ -144,6 +144,25 @@ describe("RunView", () => {
     expect(screen.getByLabelText("Keyboard shortcuts")).toHaveTextContent("↑/↓ step←/→ foldEsc close");
   });
 
+  it("shows a loading state until the first trace arrives", async () => {
+    let resolveTrace: (trace: Trace) => void = () => {};
+    vi.mocked(agentTraceCall).mockImplementation(
+      () =>
+        new Promise<Trace>((resolve) => {
+          resolveTrace = resolve;
+        }),
+    );
+    renderWithProviders(
+      <RoutedRunView traceId={research.summary.trace_id} accessToken="sk-test" onBack={vi.fn()} embedded />,
+    );
+    expect(screen.getByRole("status", { name: "Loading trace…" })).toBeVisible();
+    expect(screen.queryByTestId("run-view")).not.toBeInTheDocument();
+
+    act(() => resolveTrace(research));
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
+    expect(screen.queryByRole("status", { name: "Loading trace…" })).not.toBeInTheDocument();
+  });
+
   it("keeps the current run on screen, inert, while an unvisited run loads in the drawer", async () => {
     const user = userEvent.setup();
     let resolveSwarm: (trace: Trace) => void = () => {};
@@ -161,7 +180,7 @@ describe("RunView", () => {
 
     rerender(<RoutedRunView traceId={swarm.summary.trace_id} {...props} />);
     await waitFor(() => expect(screen.getByTestId("run-view")).toHaveAttribute("aria-busy", "true"));
-    expect(screen.queryByRole("status", { name: "Loading trace" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Loading trace…" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(traceDisplayName(research.summary));
     await user.keyboard("{ArrowDown}");
     expect(screen.getByTestId("detail-pane")).toHaveAttribute("data-row-id", root);

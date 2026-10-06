@@ -1,5 +1,5 @@
 import { getProxyBaseUrl } from "@/components/networking";
-import type { TimeWindow } from "@/components/shared/timeline/Timeline";
+import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 import type { TraceQueryBody } from "../../types";
 
 import { isNegatedOp, valueMatcher } from "@/components/shared/search/language";

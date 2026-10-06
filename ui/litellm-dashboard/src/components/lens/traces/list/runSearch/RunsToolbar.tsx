@@ -1,7 +1,7 @@
 "use client";
 
 import type { TraceSummary } from "../../types";
-import type { TimeWindow } from "@/components/shared/timeline/Timeline";
+import type { TimeWindow } from "@/components/shared/timeRange/timeRange";
 
 import {
   Combobox,
@@ -22,11 +22,13 @@ interface RunsToolbarProps {
   runs: readonly TraceSummary[];
   /** The range the list shows, for the copied query. */
   range?: TimeWindow;
+  /** The list is reloading for a new range; the search box shows a spinner. */
+  busy?: boolean;
   /** Extra controls (time range, live tail) rendered on the right. */
   children?: React.ReactNode;
 }
 
-export function RunsToolbar({ query, onQueryChange, runs, range, children }: RunsToolbarProps) {
+export function RunsToolbar({ query, onQueryChange, runs, range, busy, children }: RunsToolbarProps) {
   const { agent, status, setAgent, setStatus } = useRunFilterRouting();
   const agents = [...new Set([...runs.flatMap(traceAgentNames), ...(agent ? [agent] : [])])].sort();
   const statuses = [
@@ -36,7 +38,7 @@ export function RunsToolbar({ query, onQueryChange, runs, range, children }: Run
   ];
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-card p-2">
-      <RunSearch value={query} onChange={onQueryChange} runs={runs} range={range} />
+      <RunSearch value={query} onChange={onQueryChange} runs={runs} range={range} busy={busy} />
       <Combobox items={agents} value={agent || null} onValueChange={(name) => setAgent(name ?? "")} autoHighlight>
         <ComboboxInput
           aria-label="Filter traces by agent"

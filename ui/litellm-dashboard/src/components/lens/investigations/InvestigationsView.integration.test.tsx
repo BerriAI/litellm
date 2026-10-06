@@ -508,6 +508,27 @@ it("allows retrying a failed trace readiness check without treating it as an emp
   expect(traceCheck).toHaveBeenCalledTimes(2);
 });
 
+it("shows a loading state until the investigation list arrives", async () => {
+  window.history.replaceState({}, "", "/lens/");
+  testQueryClient.clear();
+  let resolveList: (list: unknown) => void = () => {};
+  proxy.get.mockImplementation((path) => {
+    if (path === "/lens")
+      return new Promise((resolve) => {
+        resolveList = resolve;
+      });
+    if (path === "/lens/agents") return Promise.resolve([]);
+    return Promise.resolve({ traces: true, requests: false, data: [] });
+  });
+  renderWithProviders(<InvestigationsView />);
+  expect(await screen.findByRole("status", { name: "Loading investigations…" })).toBeVisible();
+  expect(screen.queryByRole("region", { name: "Get Lens running" })).not.toBeInTheDocument();
+
+  act(() => resolveList({ lenses: [], workers: [], tracing_enabled: true }));
+  expect(await screen.findByRole("region", { name: "Get Lens running" })).toBeVisible();
+  expect(screen.queryByRole("status", { name: "Loading investigations…" })).not.toBeInTheDocument();
+});
+
 it("shows a centered failure with a retry when investigations cannot load, then recovers", async () => {
   window.history.replaceState({}, "", "/lens/");
   testQueryClient.clear();

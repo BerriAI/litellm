@@ -5,9 +5,9 @@ import { ArrowLeft } from "lucide-react";
 import { Suspense, useDeferredValue, useEffect, useMemo } from "react";
 import { ErrorBoundary } from "react-error-boundary";
 
+import { LoadingState } from "@/components/shared/LoadingState";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
-import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { cn } from "@/lib/cva.config";
 
 import { useTracesApi } from "../../api";
@@ -32,22 +32,8 @@ function selectedSpanMissing(trace: Trace, spanId: string | null): boolean {
   return Boolean(spanId && !trace.spans.some((span) => span.span_id === spanId));
 }
 
-function RunLoading({ embedded }: { embedded: boolean }) {
-  return (
-    <div
-      role="status"
-      aria-label="Loading trace"
-      className={embedded ? "flex flex-col gap-3 p-4" : "flex h-[60vh] items-center justify-center"}
-    >
-      {embedded ? (
-        [72, 48, 88, 60, 80].map((w) => (
-          <div key={w} className="h-4 animate-pulse rounded bg-trace-row-hover" style={{ width: `${w}%` }} />
-        ))
-      ) : (
-        <UiLoadingSpinner className="size-6 text-muted-foreground" />
-      )}
-    </div>
-  );
+function RunLoading() {
+  return <LoadingState title="Loading trace…" description="Fetching this run and its steps." />;
 }
 
 function RunLoadError({ error, onBack, onRetry }: { error: unknown; onBack: () => void; onRetry: () => void }) {
@@ -85,7 +71,7 @@ export function RunView(props: RunViewProps) {
             <RunLoadError error={error} onBack={props.onBack} onRetry={resetErrorBoundary} />
           )}
         >
-          <Suspense fallback={<RunLoading embedded={props.embedded ?? false} />}>
+          <Suspense fallback={<RunLoading />}>
             <LoadedRun key={shownKey} {...props} traceId={traceId} traceRef={traceRef} switching={switching} />
           </Suspense>
         </ErrorBoundary>

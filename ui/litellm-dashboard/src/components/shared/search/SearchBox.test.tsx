@@ -117,6 +117,24 @@ afterEach(() => {
 });
 
 describe("SearchBox", () => {
+  it("swaps the search icon for a loading status while results for the query load", () => {
+    const search = (busy: boolean) => (
+      <SearchBox.Root
+        language={NOTE_QUERY}
+        values={itemValues(NOTE_INDEX, notes)}
+        value=""
+        onValueChange={vi.fn()}
+        label="Search notes"
+      >
+        <SearchBox.Input placeholder="Search notes" busy={busy} />
+      </SearchBox.Root>
+    );
+    const { rerender } = render(search(true));
+    expect(screen.getByRole("status", { name: "Loading results" })).toBeVisible();
+    rerender(search(false));
+    expect(screen.queryByRole("status", { name: "Loading results" })).not.toBeInTheDocument();
+  });
+
   it("builds a filter from the keyboard: field, then value", async () => {
     const user = userEvent.setup();
     render(<Harness />);
