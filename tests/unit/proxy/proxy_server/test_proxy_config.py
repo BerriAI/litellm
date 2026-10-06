@@ -5445,7 +5445,7 @@ async def test_proxy_config_init_semantic_filter_settings_keeps_hook_after_faile
     await build_task
     hook: Final = MagicMock(spec=SemanticToolFilterHook)
     hook.index_build_task = build_task
-    hook.filter = SimpleNamespace(tool_router=None, context_window_error=None)
+    hook.filter = SimpleNamespace(tool_router=None)
     initialize: Final = AsyncMock()
     removed: Final = MagicMock()
     monkeypatch.setattr(
@@ -5462,38 +5462,3 @@ async def test_proxy_config_init_semantic_filter_settings_keeps_hook_after_faile
 
     removed.assert_not_called()
     initialize.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_proxy_config_init_semantic_filter_settings_rebuilds_after_context_window_failure(monkeypatch):
-    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
-
-    settings: Final = {
-        "enabled": True,
-        "embedding_model": "embed",
-        "top_k": 3,
-        "similarity_threshold": 0.5,
-        "defer_index_build": True,
-    }
-    build_task: Final = asyncio.create_task(asyncio.sleep(0))
-    await build_task
-    hook: Final = MagicMock(spec=SemanticToolFilterHook)
-    hook.index_build_task = build_task
-    hook.filter = SimpleNamespace(tool_router=None, context_window_error="input too long")
-    initialize: Final = AsyncMock()
-    removed: Final = MagicMock()
-    monkeypatch.setattr(litellm.logging_callback_manager, "add_litellm_callback", MagicMock())
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.get_config_param",
-        AsyncMock(return_value=SimpleNamespace(param_value={"mcp_semantic_tool_filter": settings})),
-    )
-    monkeypatch.setattr(litellm.logging_callback_manager, "get_custom_loggers_for_type", lambda _: [hook])
-    monkeypatch.setattr(litellm.logging_callback_manager, "remove_callbacks_by_type", removed)
-    monkeypatch.setattr(SemanticToolFilterHook, "initialize_from_config", initialize)
-    pc: Final = ProxyConfig()
-    pc._last_semantic_filter_config = settings
-
-    await pc._init_semantic_filter_settings_in_db(prisma_client=MagicMock())
-
-    removed.assert_called_once()
-    initialize.assert_awaited_once()
