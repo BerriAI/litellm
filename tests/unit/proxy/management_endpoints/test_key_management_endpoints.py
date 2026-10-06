@@ -13,7 +13,7 @@ import pytest
 import yaml
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pydantic import JsonValue, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -13333,12 +13333,13 @@ def test_enforce_upperbound_rejects_expiration_beyond_limit(
     with_timezone: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="1d"))
-    future: Final = datetime.now(timezone.utc) + timedelta(days=2)
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    future: Final = now + timedelta(days=2)
     expires: Final = future if with_timezone else future.replace(tzinfo=None)
     data: Final = request_type(key="sk-expiration-test", expires=expires)
 
     with pytest.raises(HTTPException) as error:
-        _enforce_upperbound_key_params(data, fill_defaults=fill_defaults)
+        _enforce_upperbound_key_params(data, fill_defaults=fill_defaults, now=now)
 
     assert error.value.status_code == 400
     assert "expires" in str(error.value.detail)
@@ -13348,16 +13349,19 @@ def test_enforce_upperbound_rejects_expiration_beyond_limit(
     ("request_type", "fill_defaults"),
     ((GenerateKeyRequest, True), (UpdateKeyRequest, False), (RegenerateKeyRequest, False)),
 )
+@pytest.mark.parametrize("hours", (1, 24))
 def test_enforce_upperbound_preserves_bounded_expiration(
     monkeypatch: pytest.MonkeyPatch,
     request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest],
     fill_defaults: bool,
+    hours: int,
 ) -> None:
     monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="1d"))
-    expires: Final = datetime.now(timezone.utc) + timedelta(hours=1)
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    expires: Final = now + timedelta(hours=hours)
     data: Final = request_type(key="sk-expiration-test", expires=expires)
 
-    _enforce_upperbound_key_params(data, fill_defaults=fill_defaults)
+    _enforce_upperbound_key_params(data, fill_defaults=fill_defaults, now=now)
 
     assert (data.duration, data.expires) == (None, expires)
 
@@ -13370,7 +13374,8 @@ def test_enforce_upperbound_rejects_clearing_expiration(
     clear_duration: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="1d"))
-    expires: Final = datetime.now(timezone.utc) + timedelta(hours=1)
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    expires: Final = now + timedelta(hours=1)
     data: Final = request_type.model_validate(
         {"key": "sk-expiration-test", "duration": None, "expires": expires}
         if clear_duration
@@ -13378,7 +13383,7 @@ def test_enforce_upperbound_rejects_clearing_expiration(
     )
 
     with pytest.raises(HTTPException) as error:
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, fill_defaults=False, now=now)
 
     assert error.value.status_code == 400
     assert "expires" in str(error.value.detail)
@@ -13394,10 +13399,11 @@ def test_enforce_upperbound_uses_explicit_duration_over_expiration(
     fill_defaults: bool,
 ) -> None:
     monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="1d"))
-    expires: Final = datetime.now(timezone.utc) + timedelta(days=2)
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    expires: Final = now + timedelta(days=2)
     data: Final = request_type(key="sk-expiration-test", duration="1h", expires=expires)
 
-    _enforce_upperbound_key_params(data, fill_defaults=fill_defaults)
+    _enforce_upperbound_key_params(data, fill_defaults=fill_defaults, now=now)
 
     assert (data.duration, data.expires) == ("1h", expires)
 
@@ -13484,8 +13490,9 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(
                 ),
     )
     existing_key = _make_regenerate_existing_key()
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
     data: Final = (
-        RegenerateKeyRequest(expires=datetime.now(timezone.utc) + timedelta(hours=2))
+        RegenerateKeyRequest(expires=now + timedelta(hours=2))
         if use_absolute_expiration
         else RegenerateKeyRequest(duration="2h")
     )
@@ -13522,6 +13529,7 @@ async def test_execute_virtual_key_regeneration_rejects_over_limit_duration(
                 litellm_changed_by=None,
                 user_api_key_cache=MagicMock(),
                 proxy_logging_obj=MagicMock(),
+                now=now,
             )
     assert exc_info.value.status_code == 400
     assert "duration" in str(exc_info.value.detail)
@@ -20207,7 +20215,9 @@ def _wire_key_generation_prisma(monkeypatch):
     return mock_prisma_client.insert_data
 
 
-async def _generate_key_and_get_persisted_row(data: GenerateKeyRequest, mock_insert_data):
+async def _generate_key_and_get_persisted_row(
+    data: GenerateKeyRequest, mock_insert_data: AsyncMock, *, now: datetime | None = None
+) -> Mapping[str, object]:
     await _common_key_generation_helper(
         data=data,
         user_api_key_dict=UserAPIKeyAuth(
@@ -20217,9 +20227,10 @@ async def _generate_key_and_get_persisted_row(data: GenerateKeyRequest, mock_ins
         ),
         litellm_changed_by=None,
         team_table=None,
+        now=now,
     )
-    key_call = next(c for c in mock_insert_data.call_args_list if c.kwargs["table_name"] == "key")
-    return key_call.kwargs["data"]
+    key_call: Final = next(c for c in mock_insert_data.call_args_list if c.kwargs["table_name"] == "key")
+    return TypeAdapter(Mapping[str, object]).validate_python(key_call.kwargs["data"])
 
 
 @pytest.mark.asyncio
@@ -20540,9 +20551,10 @@ async def test_key_generate_expiration_overrides_default_duration(
         LiteLLM_UpperboundKeyGenerateParams(duration="1d") if with_lifetime_limit else None,
     )
     insert_data: Final = _wire_key_generation_prisma(monkeypatch)
-    expires: Final = datetime.now(timezone.utc) + timedelta(hours=1)
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    expires: Final = now + timedelta(hours=1)
 
-    key_row: Final = await _generate_key_and_get_persisted_row(GenerateKeyRequest(expires=expires), insert_data)
+    key_row: Final = await _generate_key_and_get_persisted_row(GenerateKeyRequest(expires=expires), insert_data, now=now)
 
     assert key_row["expires"] == expires
 
