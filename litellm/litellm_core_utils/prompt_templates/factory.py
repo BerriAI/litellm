@@ -6,6 +6,7 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
+from bisect import bisect_left
 from collections.abc import Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
@@ -2412,6 +2413,7 @@ def anthropic_messages_pt(
             ) = messages[msg_i]
             if user_message_types_block["role"] == "user":
                 if isinstance(user_message_types_block["content"], list):
+                    user_content_start: int = len(user_content)  # pyright: ignore[reportGeneralTypeIssues]  # reset per user message
                     for m in user_message_types_block["content"]:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
@@ -2483,6 +2485,26 @@ def anthropic_messages_pt(
                                     _file_content_element,
                                 )
                             )
+                    if (
+                        len(user_content) > user_content_start
+                        and user_message_types_block.get("cache_control") is not None
+                        and not any(
+                            "cache_control" in content and content["cache_control"] is not None
+                            for content in user_content[user_content_start:]
+                        )
+                    ):
+                        user_content = [  # mutable-ok: Anthropic message content requires a list; build a fresh one
+                            *user_content[:-1],
+                            cast(  # cast-ok: helper preserves the copied content block type
+                                AnthropicMessagesUserMessageValues,
+                                add_cache_control_to_content(
+                                    anthropic_content_element=cast(  # cast-ok: copied TypedDict is a dict
+                                        dict[str, object], copy.copy(user_content[-1])
+                                    ),
+                                    original_content_element=user_message_types_block,
+                                ),
+                            ),
+                        ]
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
@@ -2542,6 +2564,28 @@ def anthropic_messages_pt(
                     if _tc_id and isinstance(_tc_id, str) and _tc_id.startswith("srvtoolu_"):
                         _has_server_tool_calls = True
                         break
+
+            _content_is_list: bool = "content" in assistant_content_block and isinstance(
+                assistant_content_block["content"], list
+            )  # pyright: ignore[reportGeneralTypeIssues]  # reset per assistant message
+            _content_list = assistant_content_block.get("content") if _content_is_list else None  # pyright: ignore[reportGeneralTypeIssues]  # reset per assistant message
+            _list_has_thinking: bool = (
+                _content_is_list
+                and _content_list is not None
+                and any(
+                    isinstance(item, dict)
+                    and cast(  # cast-ok: list items are inspected only for their type discriminator
+                        dict[str, object], item
+                    ).get("type")
+                    in ("thinking", "redacted_thinking")
+                    for item in _content_list
+                )
+            )  # pyright: ignore[reportGeneralTypeIssues]  # reset per assistant message
+            assistant_content_start: int = len(assistant_content) + (
+                len(thinking_blocks)
+                if _content_is_list and thinking_blocks is not None and not _list_has_thinking
+                else 0
+            )  # pyright: ignore[reportGeneralTypeIssues]  # reset per assistant message
 
             if (
                 thinking_blocks is not None
@@ -2666,20 +2710,6 @@ def anthropic_messages_pt(
                 # duplication and preserve the original interleaved order.
                 # Fixes the gap where list-content messages bypass INTERLEAVED
                 # MODE and still get thinking blocks prepended out of order.
-                _content_is_list = "content" in assistant_content_block and isinstance(
-                    assistant_content_block["content"], list
-                )
-                _content_list = assistant_content_block.get("content") if _content_is_list else None
-                _list_has_thinking = False
-                if _content_is_list and _content_list is not None:
-                    for _item in _content_list:
-                        if isinstance(_item, dict) and _item.get("type") in (
-                            "thinking",
-                            "redacted_thinking",
-                        ):
-                            _list_has_thinking = True
-                            break
-
                 if (
                     thinking_blocks is not None and not _list_has_thinking
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
@@ -2768,6 +2798,28 @@ def anthropic_messages_pt(
 
             if assistant_function_call is not None:
                 assistant_content.extend(convert_function_to_anthropic_tool_invoke(assistant_function_call))
+
+            if (
+                _content_is_list
+                and len(assistant_content) > assistant_content_start
+                and assistant_content_block.get("cache_control") is not None
+                and not any(
+                    "cache_control" in content and content["cache_control"] is not None
+                    for content in assistant_content[assistant_content_start:]
+                )
+            ):
+                assistant_content = [  # mutable-ok: Anthropic message content requires a list; build a fresh one
+                    *assistant_content[:-1],
+                    cast(  # cast-ok: helper preserves the copied content block type
+                        AnthropicMessagesAssistantMessageValues,
+                        add_cache_control_to_content(
+                            anthropic_content_element=cast(  # cast-ok: copied TypedDict is a dict
+                                dict[str, object], copy.copy(assistant_content[-1])
+                            ),
+                            original_content_element=assistant_content_block,
+                        ),
+                    ),
+                ]
 
             msg_i += 1
 
@@ -4036,24 +4088,32 @@ def _sort_bedrock_assistant_content_blocks(
     the request with a 400 error because the ``toolUse`` → ``toolResult``
     pairing is broken by the intervening ``text`` block.
 
-    Sort order (stable):
+    Sort order (stable) inside each cache-point segment:
       0 - reasoningContent
       1 - text / image / document / video / other non-tool blocks
       2 - toolUse
+      3 - cachePoint (kept at its original boundary)
     """
 
-    def _sort_key(block: BedrockContentBlock) -> int:
-        if "reasoningContent" in block:
-            return 0
-        if "toolUse" in block:
-            return 2
-        if "cachePoint" in block:
-            # cachePoint blocks are paired with their preceding toolUse block.
-            # Same key as toolUse so Python's stable sort keeps them together.
-            return 2
-        return 1
+    cache_point_indices: Final[tuple[int, ...]] = tuple(
+        index for index, block in enumerate(blocks) if "cachePoint" in block
+    )
 
-    return sorted(blocks, key=_sort_key)
+    def _sort_key(indexed_block: tuple[int, BedrockContentBlock]) -> tuple[int, int, int]:
+        index, block = indexed_block
+        segment_index: Final[int] = bisect_left(cache_point_indices, index)
+        if "reasoningContent" in block:
+            return segment_index, 0, index
+        if "cachePoint" in block:
+            return segment_index, 3, index
+        if "toolUse" in block:
+            return segment_index, 2, index
+        return segment_index, 1, index
+
+    sorted_indexed_blocks: Final = sorted(enumerate(blocks), key=_sort_key)
+    return [  # mutable-ok: Bedrock Converse requires a list of content blocks
+        block for _, block in sorted_indexed_blocks
+    ]
 
 
 def _insert_assistant_continue_message(
@@ -4420,6 +4480,16 @@ class BedrockConverseMessagesProcessor:
                             )
                             if _cache_point_block is not None:
                                 _parts.append(_cache_point_block)
+                    if (
+                        _parts
+                        and message_block.get("cache_control") is not None
+                        and not any("cachePoint" in part for part in _parts)
+                    ):
+                        _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
+                            message_block, block_type="content_block", model=model
+                        )
+                        if _cache_point_block is not None:
+                            _parts.append(_cache_point_block)
                     user_content.extend(_parts)
                 elif message_content and isinstance(message_content, str):
                     _part = BedrockContentBlock(text=message_content)
@@ -4505,6 +4575,7 @@ class BedrockConverseMessagesProcessor:
                     message=messages[msg_i],
                     assistant_continue_message=assistant_continue_message,
                 )
+                assistant_message_content_start: int = len(assistant_content)  # pyright: ignore[reportGeneralTypeIssues]  # reset per assistant message
                 _assistant_content = assistant_message_block.get("content", None)
                 thinking_blocks = cast(
                     list[ChatCompletionThinkingBlock] | None,
@@ -4563,15 +4634,29 @@ class BedrockConverseMessagesProcessor:
                         assistant_content.append(BedrockContentBlock(text=_assistant_content))
                     # If content is empty/whitespace, skip it (don't add a placeholder)
                     # Add cache point block for assistant string content
-                    _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                        assistant_message_block, block_type="content_block", model=model
-                    )
-                    if _cache_point_block is not None:
-                        assistant_content.append(_cache_point_block)
+                    if (
+                        assistant_message_cache_point_block := litellm.AmazonConverseConfig().get_cache_point_block(
+                            assistant_message_block, block_type="content_block", model=model
+                        )
+                    ) is not None:
+                        assistant_content.append(assistant_message_cache_point_block)
 
                 _tool_calls = assistant_message_block.get("tool_calls", [])
                 if _tool_calls:
                     assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls, model=model))
+
+                if (
+                    isinstance(_assistant_content, list)
+                    and len(assistant_content) > assistant_message_content_start
+                    and assistant_message_block.get("cache_control") is not None
+                    and not any("cachePoint" in block for block in assistant_content[assistant_message_content_start:])
+                ):
+                    if (
+                        assistant_list_cache_point_block := litellm.AmazonConverseConfig().get_cache_point_block(
+                            assistant_message_block, block_type="content_block", model=model
+                        )
+                    ) is not None:
+                        assistant_content.append(assistant_list_cache_point_block)
 
                 msg_i += 1
 
@@ -4794,6 +4879,16 @@ def _bedrock_converse_messages_pt(
                         )
                         if _cache_point_block is not None:
                             _parts.append(_cache_point_block)
+                if (
+                    _parts
+                    and message_block.get("cache_control") is not None
+                    and not any("cachePoint" in part for part in _parts)
+                ):
+                    _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
+                        message_block, block_type="content_block", model=model
+                    )
+                    if _cache_point_block is not None:
+                        _parts.append(_cache_point_block)
                 user_content.extend(_parts)
             elif message_content and isinstance(message_content, str):
                 _part = BedrockContentBlock(text=message_content)
@@ -4881,6 +4976,7 @@ def _bedrock_converse_messages_pt(
                 message=messages[msg_i],
                 assistant_continue_message=assistant_continue_message,
             )
+            assistant_message_content_start: int = len(assistant_content)  # pyright: ignore[reportGeneralTypeIssues]  # reset per assistant message
             _assistant_content = assistant_message_block.get("content", None)
             thinking_blocks = cast(
                 list[ChatCompletionThinkingBlock] | None,
@@ -4941,14 +5037,28 @@ def _bedrock_converse_messages_pt(
                 if _assistant_content.strip():
                     assistant_content.append(BedrockContentBlock(text=_assistant_content))
                 # Add cache point block for assistant string content
-                _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
-                    assistant_message_block, block_type="content_block", model=model
-                )
-                if _cache_point_block is not None:
-                    assistant_content.append(_cache_point_block)
+                if (
+                    assistant_message_cache_point_block := litellm.AmazonConverseConfig().get_cache_point_block(
+                        assistant_message_block, block_type="content_block", model=model
+                    )
+                ) is not None:
+                    assistant_content.append(assistant_message_cache_point_block)
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
                 assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls, model=model))
+
+            if (
+                isinstance(_assistant_content, list)
+                and len(assistant_content) > assistant_message_content_start
+                and assistant_message_block.get("cache_control") is not None
+                and not any("cachePoint" in block for block in assistant_content[assistant_message_content_start:])
+            ):
+                if (
+                    assistant_list_cache_point_block := litellm.AmazonConverseConfig().get_cache_point_block(
+                        assistant_message_block, block_type="content_block", model=model
+                    )
+                ) is not None:
+                    assistant_content.append(assistant_list_cache_point_block)
 
             msg_i += 1
 
