@@ -251,3 +251,44 @@ async def test_workspace_preserves_first_characters_and_quotes_across_gateway_pa
     loaded: Final = await workspace.respond(EvidenceRequest(action="read", execution_id=run.id))
     assert loaded.parts[0].content == text
     assert await workspace.valid(Evidence(execution_id=run.id, span_id="span", quote="boundary evidence"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("position", (0, 3000, 7999, 8000, 12000, 19999))
+async def test_long_span_fingerprint_detects_equal_length_edits_on_every_gateway_page(position: int) -> None:
+    from tests.unit.proxy.lens.test_agent_workspace import execution
+
+    run: Final = execution("trace").model_copy(update={"root_seen": True})
+    original: Final = "x" * 20000
+
+    class PagedStorage:
+        def __init__(self, text: str) -> None:
+            self.text: Final = text
+
+        async def lens_content(self, parameters: LensContentParams) -> tuple[PartRow, ...]:
+            start: Final = max(0, parameters.offset - 2)
+            return (
+                PartRow(
+                    span_id="span",
+                    parent_span_id="",
+                    name="agent",
+                    kind="agent",
+                    start_time="",
+                    end_time="",
+                    content="unchanged excerpt" if parameters.offset == 1 else self.text[start : start + 8000],
+                    truncated=int(start + 8000 < len(self.text)),
+                ),
+            )
+
+    async def fingerprint(text: str) -> str:
+        reader: Final = SourceReader(PagedStorage(text))
+
+        async def read(_identity: str, cursor: str, offset: int) -> ExecutionContent:
+            return await reader.content(Scope(all_teams=True), run, cursor, offset)
+
+        workspace: Final = await load_workspace(Sample(executions=(run,), eligible=1), read, 1)
+        return await workspace.fingerprint(run.id)
+
+    baseline: Final = await fingerprint(original)
+    assert await fingerprint(original) == baseline
+    assert await fingerprint(original[:position] + "y" + original[position + 1 :]) != baseline

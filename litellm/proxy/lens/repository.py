@@ -1,21 +1,38 @@
 import asyncio
 import json
 import random
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final, Protocol
 
+from fastapi import HTTPException
+from prisma import Prisma
 from pydantic import JsonValue, TypeAdapter
+from typing_extensions import LiteralString
 
 from litellm.proxy.db.prisma_client import PrismaWrapper
-from litellm.proxy.lens.models import Job, Lens, Review, ReviewVersion, Scope, TraceFindingCount, TraceIdentity, Worker
+from litellm.proxy.lens.models import (
+    Job,
+    Lens,
+    Progress,
+    Review,
+    ReviewVersion,
+    Scope,
+    TraceFindingCount,
+    TraceIdentity,
+    Worker,
+)
 from litellm.proxy.lens.reviews import criteria_key
+from litellm.proxy.lens.state import apply_progress, current_job, replace_job
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class Database(Protocol):
-    def query_raw(self, query: str, *args: object) -> Awaitable[object]: ...
-    def execute_raw(self, query: str, *args: object) -> Awaitable[int]: ...
+    def query_raw(self, query: LiteralString, *args: object) -> Awaitable[object]: ...
+    def execute_raw(self, query: LiteralString, *args: object) -> Awaitable[int]: ...
+    def transaction(self) -> AbstractAsyncContextManager["Database"]: ...
 
 
 class Row(LiteLLMBaseModel):
@@ -66,7 +83,40 @@ class LensRepository:
         )
         return tuple(Review.model_validate(row.data) for row in rows)
 
-    async def save_review(self, lens_id: str, job: Job, review: Review) -> None:
+    @asynccontextmanager
+    async def locked(self, lens_id: str) -> AsyncGenerator["LensRepository"]:
+        async with self.db.transaction() as db:
+            await db.query_raw('SELECT data FROM "LiteLLM_Lens" WHERE id=$1 FOR UPDATE', lens_id)
+            yield LensRepository(db, self.sleep)
+
+    async def update_locked(self, lens_id: str, transform: Callable[[Lens], Lens]) -> Lens | None:
+        async with self.locked(lens_id) as repo:
+            return await repo.update(lens_id, transform, attempts=1)
+
+    async def progress(self, lens_id: str, assigned: Job, body: Progress) -> Lens | None:
+        async with self.locked(lens_id) as repo:
+
+            def renew(lens: Lens) -> Lens:
+                job: Final = current_job(lens)
+                now: Final = datetime.now(timezone.utc)
+                if (
+                    job is None
+                    or job.id != assigned.id
+                    or job.worker_id != assigned.worker_id
+                    or job.attempts != assigned.attempts
+                    or job.status != "running"
+                    or job.lease_until is None
+                    or job.lease_until <= now
+                ):
+                    raise HTTPException(409, "This worker no longer owns the job")
+                return replace_job(lens, apply_progress(job, body, now))
+
+            updated: Final = await repo.update(lens_id, renew, attempts=1)
+            if updated is not None and body.review is not None:
+                await repo._save_review(lens_id, assigned, body.review)
+            return updated
+
+    async def _save_review(self, lens_id: str, job: Job, review: Review) -> None:
         if review.reused or review.extraction is None or not review.content_version:
             return
         await self.db.execute_raw(
@@ -309,11 +359,16 @@ class LensRepository:
 
 
 class WriterDatabase:
-    def __init__(self, writer: PrismaWrapper) -> None:
+    def __init__(self, writer: PrismaWrapper | Prisma) -> None:
         self.writer: Final = writer
 
-    async def query_raw(self, query: str, *args: object) -> object:
+    @asynccontextmanager
+    async def transaction(self) -> AsyncGenerator[Database]:
+        async with self.writer.tx(max_wait=timedelta(seconds=30), timeout=timedelta(seconds=30)) as tx:
+            yield WriterDatabase(tx)
+
+    async def query_raw(self, query: LiteralString, *args: object) -> object:
         return _ROWS.validate_python(await self.writer.query_raw(query, *args))  # pyright: ignore[reportAny]  # Prisma forwards dynamically; validate rows here.
 
-    async def execute_raw(self, query: str, *args: object) -> int:
+    async def execute_raw(self, query: LiteralString, *args: object) -> int:
         return TypeAdapter(int).validate_python(await self.writer.execute_raw(query, *args))  # pyright: ignore[reportAny]  # Prisma forwards dynamically; validate the count here.

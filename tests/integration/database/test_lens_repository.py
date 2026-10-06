@@ -1,7 +1,7 @@
 import asyncio
 import os
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
@@ -11,6 +11,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from prisma import Prisma
 from psycopg import sql
 
@@ -24,6 +25,7 @@ from litellm.proxy.lens.models import (
     Job,
     Lens,
     LensSettings,
+    Progress,
     RunAssessment,
     Sample,
     Scope,
@@ -323,6 +325,10 @@ async def test_review_checkpoints_survive_new_jobs_and_only_relevant_settings_in
         .model_copy(
             update={
                 "sample": Sample(executions=(execution,), eligible=1),
+                "status": "running",
+                "worker_id": uuid4().hex,
+                "attempts": 1,
+                "lease_until": now + timedelta(minutes=5),
             }
         )
     )
@@ -337,9 +343,9 @@ async def test_review_checkpoints_survive_new_jobs_and_only_relevant_settings_in
         content_version="version-1",
         extraction=Extraction(),
     )
-    await repo.create(lens)
+    await repo.create(lens.model_copy(update={"jobs": (job,)}))
     try:
-        await repo.save_review(lens.id, job, checkpoint)
+        assert await repo.progress(lens.id, job, Progress(review=checkpoint)) is not None
         resumed: Final = job.model_copy(
             update={"id": uuid4().hex, "settings": settings.model_copy(update={"monthly_budget": 200})}
         )
@@ -353,13 +359,159 @@ async def test_review_checkpoints_survive_new_jobs_and_only_relevant_settings_in
         )
         assert await repo.reviews(lens.id, changed) == ()
         updated: Final = checkpoint.model_copy(update={"content_version": "version-2"})
-        await repo.save_review(lens.id, resumed, updated)
+        await repo.update(lens.id, lambda value: value.model_copy(update={"jobs": (resumed,)}))
+        assert await repo.progress(lens.id, resumed, Progress(review=updated)) is not None
         await repo.complete_reviews(
             lens.id, resumed, (ReviewVersion(execution_id=execution.id, content_version="version-1"),)
         )
         assert await repo.reviews(lens.id, resumed) == (updated,)
     finally:
         await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', lens.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lost_ownership", ("expired", "reassigned", "same_worker", "cancelled", "next_job"))
+async def test_delayed_progress_cannot_replace_a_newer_checkpoint(lens_db: Prisma, lost_ownership: str) -> None:
+    from litellm.proxy.lens.models import Extraction, Review
+    from tests.unit.proxy.lens.test_state import lens, worker
+
+    now: Final = datetime.now(timezone.utc)
+    repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
+    claimed: Final = claim_job(queue_job(lens(), now, uuid4().hex), worker(), now).model_copy(
+        update={"id": uuid4().hex}
+    )
+    old: Final = claimed.jobs[0]
+    newer: Final = Review(
+        execution_id="trace",
+        trace_id="trace",
+        agent="agent",
+        name="task",
+        model="analysis",
+        duration_ms=1,
+        at=now,
+        content_version="new",
+        extraction=Extraction(),
+    )
+    await repo.create(claimed)
+    try:
+        assert await repo.progress(claimed.id, old, Progress(review=newer)) is not None
+        next_owner: Final = old.model_copy(
+            update={
+                "status": "cancelled" if lost_ownership == "cancelled" else "running",
+                "lease_until": now - timedelta(seconds=1) if lost_ownership == "expired" else old.lease_until,
+                "attempts": old.attempts + 1 if lost_ownership in ("reassigned", "same_worker") else old.attempts,
+                "worker_id": "replacement" if lost_ownership == "reassigned" else old.worker_id,
+                "id": uuid4().hex if lost_ownership == "next_job" else old.id,
+            }
+        )
+        await repo.update(claimed.id, lambda value: value.model_copy(update={"jobs": (next_owner,)}))
+        stale: Final = newer.model_copy(update={"content_version": "old"})
+        with pytest.raises(HTTPException) as error:
+            await repo.progress(claimed.id, old, Progress(review=stale))
+        assert error.value.status_code == 409
+        rows: Final = await lens_db.query_raw('SELECT data FROM "LiteLLM_LensReview" WHERE lens_id=$1', claimed.id)
+        assert tuple(Review.model_validate(row["data"]) for row in rows) == (newer,)
+        stored: Final = await repo.get(claimed.id)
+        assert stored is not None and stored.jobs == (next_owner,)
+    finally:
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', claimed.id)
+
+
+@pytest.mark.asyncio
+async def test_locked_settlement_charges_every_concurrent_call_exactly_once(lens_db: Prisma) -> None:
+    from litellm.proxy.lens.inference import settle_amount
+    from litellm.proxy.lens.models import BudgetReservation, Step
+    from tests.unit.proxy.lens.test_state import lens
+
+    now: Final = datetime.now(timezone.utc)
+    repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
+    queued: Final = queue_job(lens(), now, uuid4().hex).model_copy(update={"id": uuid4().hex})
+    holds: Final = tuple(
+        BudgetReservation(id=uuid4().hex, job_id=queued.jobs[0].id, amount=1, month=queued.budget_month)
+        for _ in range(50)
+    )
+    step: Final = Step(at=now, kind="model", label="Reviewed a run", cost=0.25)
+    await repo.create(queued.model_copy(update={"reservations": holds}))
+    try:
+
+        async def settle(hold: BudgetReservation) -> None:
+            updated: Final = await repo.update_locked(
+                queued.id, lambda value: settle_amount(value, hold.id, 0.25, step)
+            )
+            assert updated is not None
+
+        async with lens_db.tx() as transaction:
+            await transaction.query_raw('SELECT data FROM "LiteLLM_Lens" WHERE id=$1 FOR UPDATE', queued.id)
+            pending: Final = asyncio.create_task(settle(holds[0]))
+            await wait_for_lens_row_lock(lens_db, transaction)
+            await transaction.execute_raw(
+                'UPDATE "LiteLLM_Lens" SET version=version+1, '
+                "data=jsonb_set(data, '{version}', to_jsonb(version+1)) WHERE id=$1",
+                queued.id,
+            )
+        await pending
+        await asyncio.gather(*(settle(hold) for hold in (*holds, *holds)))
+        stored: Final = await repo.get(queued.id)
+        assert stored is not None
+        assert stored.spent == queued.spent + 50 * 0.25
+        assert stored.jobs[0].cost == 50 * 0.25
+        assert len(stored.jobs[0].steps) == 50
+        assert stored.reservations == ()
+    finally:
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', queued.id)
+
+
+@pytest.mark.asyncio
+async def test_progress_rechecks_ownership_after_waiting_for_a_concurrent_update(lens_db: Prisma) -> None:
+    from litellm.proxy.lens.models import Extraction, Review
+    from tests.unit.proxy.lens.test_state import lens, worker
+
+    now: Final = datetime.now(timezone.utc)
+    repo: Final = LensRepository(WriterDatabase(PrismaWrapper(lens_db)))
+    claimed: Final = claim_job(queue_job(lens(), now, uuid4().hex), worker(), now).model_copy(
+        update={"id": uuid4().hex}
+    )
+    old: Final = claimed.jobs[0]
+    review: Final = Review(
+        execution_id="trace",
+        trace_id="trace",
+        agent="agent",
+        name="task",
+        model="analysis",
+        duration_ms=1,
+        at=now,
+        content_version="stale",
+        extraction=Extraction(),
+    )
+    await repo.create(claimed)
+    try:
+        async with lens_db.tx() as transaction:
+            await transaction.query_raw('SELECT data FROM "LiteLLM_Lens" WHERE id=$1 FOR UPDATE', claimed.id)
+            delayed: Final = asyncio.create_task(repo.progress(claimed.id, old, Progress(review=review)))
+            await wait_for_lens_row_lock(lens_db, transaction)
+            await transaction.execute_raw(
+                "UPDATE \"LiteLLM_Lens\" SET data=jsonb_set(data, '{jobs,0,worker_id}', '\"replacement\"') WHERE id=$1",
+                claimed.id,
+            )
+        with pytest.raises(HTTPException) as error:
+            await delayed
+        assert error.value.status_code == 409
+        rows: Final = await lens_db.query_raw('SELECT data FROM "LiteLLM_LensReview" WHERE lens_id=$1', claimed.id)
+        assert rows == []
+        stored: Final = await repo.get(claimed.id)
+        assert stored is not None and stored.jobs[0].worker_id == "replacement"
+        assert stored.jobs[0].reviewed == 0
+    finally:
+        await lens_db.execute_raw('DELETE FROM "LiteLLM_Lens" WHERE id=$1', claimed.id)
+
+
+async def wait_for_lens_row_lock(db: Prisma, transaction: Prisma) -> None:
+    blocker: Final = await transaction.query_raw("SELECT pg_backend_pid() AS pid")
+    async with asyncio.timeout(5):
+        while not await db.query_raw(
+            "SELECT pid FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))", blocker[0]["pid"]
+        ):
+            await asyncio.sleep(0.01)
 
 
 @pytest.mark.asyncio

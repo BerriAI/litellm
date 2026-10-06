@@ -10,6 +10,7 @@ from fastapi import HTTPException, Request
 from pydantic import ConfigDict, Field, field_validator
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import ContextWindowExceededError, ModelNotMappedError
 from litellm.integrations.clickhouse.context import lens_analysis
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import inherit_message_logging_privacy
@@ -345,6 +346,19 @@ async def model_with_renewal(
 
 
 @asynccontextmanager
+async def release_failed_reservation(repo: LensRepository, lens_id: str, reservation_id: str) -> AsyncGenerator[None]:
+    try:
+        yield
+    except (Exception, asyncio.CancelledError):
+        try:
+            if await repo.update_locked(lens_id, lambda e: settle_amount(e, reservation_id, 0, None)) is None:
+                verbose_proxy_logger.warning("Lens budget cleanup found no investigation: %s", lens_id)
+        except Exception:
+            verbose_proxy_logger.exception("Lens budget cleanup failed; the reservation will expire: %s", lens_id)
+        raise
+
+
+@asynccontextmanager
 async def reserved_budget(
     repo: LensRepository, lens_id: str, reservation_id: str, reserve: Callable[[Lens], Lens], admitted: asyncio.Event
 ) -> AsyncGenerator[None]:
@@ -427,25 +441,26 @@ async def analyze(
     }
 
     try:
-        with lens_analysis(), inherit_message_logging_privacy(True):
-            response, billed_cost = await model_with_renewal(
-                complete(
-                    worker.analysis_key_id,
-                    data,
-                    lambda: reserved_budget(repo, lens.id, reservation_id, reserve, admitted),
-                    request,
-                ),
-                renew_budget_reservation(repo, lens.id, reservation_id, admitted),
-            )
-    except BaseException as error:
-        await repo.update(lens.id, lambda e: settle_amount(e, reservation_id, 0, None))
-        if isinstance(error, (ProxyException, ContextWindowExceededError)) and context_failure(error):
+        async with release_failed_reservation(repo, lens.id, reservation_id):
+            with lens_analysis(), inherit_message_logging_privacy(True):
+                response, billed_cost = await model_with_renewal(
+                    complete(
+                        worker.analysis_key_id,
+                        data,
+                        lambda: reserved_budget(repo, lens.id, reservation_id, reserve, admitted),
+                        request,
+                    ),
+                    renew_budget_reservation(repo, lens.id, reservation_id, admitted),
+                )
+    except (ProxyException, ContextWindowExceededError) as error:
+        if context_failure(error):
             return ModelResult(content="", cost=0, context_exceeded=True)
         raise
     cost: Final = billed_cost if billed_cost is not None else completion_charge(deployments, response, estimate)
 
     step: Final = model_step(response, body, job.settings.model, cost)
-    await repo.update(lens.id, lambda e: settle_amount(e, reservation_id, cost, step))
+    if await repo.update_locked(lens.id, lambda e: settle_amount(e, reservation_id, cost, step)) is None:
+        raise HTTPException(503, "Could not record analysis spend; investigation was deleted")
     parsed: Final = Completion.model_validate_json(response.model_dump_json())
     choice: Final = parsed.choices[0]
     return ModelResult(

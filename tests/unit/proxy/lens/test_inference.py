@@ -619,3 +619,65 @@ async def test_renewal_preserves_the_original_failure_while_request_cleanup_is_p
     assert error.value.status_code == (504 if timed_out else 400)
     assert stopped.is_set()
     assert db.stored.reservations == (hold,)
+
+
+@pytest.mark.asyncio
+async def test_completed_paid_response_survives_simultaneous_renewal_failure() -> None:
+    from litellm.proxy.lens.inference import model_with_renewal
+
+    response: Final = (ModelResponse(model="analysis"), 0.25)
+
+    async def model() -> tuple[ModelResponse, float | None]:
+        return response
+
+    async def renewal() -> None:
+        raise HTTPException(503, "Reservation lost")
+
+    assert await model_with_renewal(model(), renewal()) is response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", (False, True))
+@pytest.mark.parametrize("cleanup", ("success", "missing", "unavailable"))
+async def test_failed_budget_cleanup_preserves_the_original_request_error(cancelled: bool, cleanup: str) -> None:
+    import asyncio
+    from collections.abc import AsyncGenerator
+    from contextlib import asynccontextmanager
+
+    from litellm.proxy.lens.inference import release_failed_reservation
+    from litellm.proxy.lens.models import BudgetReservation
+    from litellm.proxy.lens.repository import Database, LensRepository, Row
+    from tests.unit.proxy.lens.test_state import lens
+
+    hold: Final = BudgetReservation(id="paid", job_id="job", amount=10, month=lens().budget_month)
+
+    class CleanupDatabase:
+        def __init__(self) -> None:
+            self.stored = lens().model_copy(update={"reservations": (hold,)})
+
+        @asynccontextmanager
+        async def transaction(self) -> AsyncGenerator[Database]:
+            if cleanup == "unavailable":
+                raise OSError("Database is unavailable")
+            yield self
+
+        async def query_raw(self, query: str, *args: object) -> tuple[Row, ...]:
+            if cleanup == "missing":
+                return ()
+            if query.startswith("SELECT data FROM"):
+                return (Row(data=self.stored.model_dump(mode="json")),)
+            assert isinstance(args[0], str)
+            self.stored = type(self.stored).model_validate_json(args[0])
+            return (Row(data=1),)
+
+        async def execute_raw(self, query: str, *args: object) -> int:
+            raise AssertionError("No checkpoint writes expected")
+
+    db: Final = CleanupDatabase()
+    failure: Final = asyncio.CancelledError() if cancelled else HTTPException(400, "Provider rejected the request")
+    with pytest.raises(type(failure)) as error:
+        async with release_failed_reservation(LensRepository(db), "lens", hold.id):
+            raise failure
+    assert error.value is failure
+    assert db.stored.reservations == (() if cleanup == "success" else (hold,))
+    assert db.stored.spent == 0

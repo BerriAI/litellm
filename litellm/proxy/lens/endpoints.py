@@ -53,7 +53,6 @@ from litellm.proxy.lens.repository import LensRepository, WriterDatabase
 from litellm.proxy.lens.reviews import criteria_key
 from litellm.proxy.lens.sources import ActivityAvailability, SourceReader, Storage, parse_execution
 from litellm.proxy.lens.state import (
-    apply_progress,
     can_access,
     cancel_job,
     claim_job,
@@ -525,17 +524,8 @@ async def progress(lens_id: str, job_id: str, body: Progress, worker: WorkerAuth
             for observation in body.review.extraction.observations
         ):
             raise HTTPException(422, "Cached review must use enabled checks and only its assigned trace")
-        await repository().save_review(lens_id, assigned_job, body.review)
-    now: Final = datetime.now(timezone.utc)
-
-    def renew(e: Lens) -> Lens:
-        job: Final = current_job(e)
-        if job is None or job.id != job_id or job.worker_id != worker.id:
-            return e
-        return replace_job(e, apply_progress(job, body, now))
-
-    required(await repository().update(lens_id, renew))
-    await repository().heartbeat(worker.id, now.isoformat())
+    required(await repository().progress(lens_id, assigned_job, body))
+    await repository().heartbeat(worker.id, datetime.now(timezone.utc).isoformat())
     return True
 
 
