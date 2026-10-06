@@ -2,13 +2,15 @@ import asyncio
 import contextlib
 import copy
 import datetime
+import importlib.abc
 import json
 import logging
 import os
 import sys
 import time
-from collections.abc import Callable, Iterator, Mapping
-from types import MappingProxyType
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from importlib.machinery import ModuleSpec
+from types import MappingProxyType, ModuleType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9373,3 +9375,147 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+def test_enterprise_alerting_loggers_resolves_real_classes():
+    from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
+    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import SendGridEmailLogger
+    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._enterprise_alerting_loggers.cache_clear()
+    try:
+        loggers = logging_module._enterprise_alerting_loggers()
+        assert loggers.pagerduty is PagerDutyAlerting
+        assert loggers.resend_email is ResendEmailLogger
+        assert loggers.sendgrid_email is SendGridEmailLogger
+        assert loggers.smtp_email is SMTPEmailLogger
+    finally:
+        logging_module._enterprise_alerting_loggers.cache_clear()
+
+
+def test_enterprise_alerting_loggers_falls_back_without_disabling_callback_controls(
+    monkeypatch,
+):
+    from litellm_enterprise.enterprise_callbacks.callback_controls import (
+        EnterpriseCallbackControls,
+    )
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    class BlockPagerDutyFinder(importlib.abc.MetaPathFinder):
+        def find_spec(
+            self,
+            fullname: str,
+            path: Sequence[str] | None = None,
+            target: ModuleType | None = None,
+        ) -> ModuleSpec | None:
+            if fullname == "litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty":
+                raise ImportError("blocked pagerduty import")
+            return None
+
+    module_prefixes: Final = (
+        "litellm_enterprise.enterprise_callbacks.pagerduty",
+        "litellm_enterprise.enterprise_callbacks.send_emails",
+    )
+    logging_module._enterprise_alerting_loggers.cache_clear()
+    for module_name in tuple(sys.modules):
+        if any(
+            module_name == prefix or module_name.startswith(f"{prefix}.")
+            for prefix in module_prefixes
+        ):
+            monkeypatch.delitem(sys.modules, module_name, raising=False)
+    monkeypatch.setattr(sys, "meta_path", [BlockPagerDutyFinder(), *sys.meta_path])
+
+    try:
+        loggers = logging_module._enterprise_alerting_loggers()
+        assert loggers.pagerduty is CustomLogger
+        assert loggers.resend_email is CustomLogger
+        assert loggers.sendgrid_email is CustomLogger
+        assert loggers.smtp_email is CustomLogger
+        assert logging_module.EnterpriseCallbackControls is EnterpriseCallbackControls
+    finally:
+        logging_module._enterprise_alerting_loggers.cache_clear()
+
+
+def test_init_smtp_email_logger_reuses_instance():
+    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    try:
+        logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="smtp_email",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert isinstance(logger, SMTPEmailLogger)
+        assert (
+            logging_module._init_custom_logger_compatible_class(
+                logging_integration="smtp_email",
+                internal_usage_cache=None,
+                llm_router=None,
+                custom_logger_init_args={},
+            )
+            is logger
+        )
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
+def test_init_pagerduty_logger_reuses_instance(monkeypatch):
+    from litellm.types.integrations.pagerduty import AlertingConfig
+    from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    monkeypatch.setenv("PAGERDUTY_API_KEY", "test-pagerduty-key")
+    logging_module._in_memory_loggers.clear()
+    try:
+        logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="pagerduty",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={
+                "alerting_args": AlertingConfig(
+                    failure_threshold=1,
+                    failure_threshold_window_seconds=10,
+                )
+            },
+        )
+        assert isinstance(logger, PagerDutyAlerting)
+        assert (
+            logging_module._init_custom_logger_compatible_class(
+                logging_integration="pagerduty",
+                internal_usage_cache=None,
+                llm_router=None,
+                custom_logger_init_args={
+                    "alerting_args": AlertingConfig(
+                        failure_threshold=1,
+                        failure_threshold_window_seconds=10,
+                    )
+                },
+            )
+            is logger
+        )
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
+@pytest.mark.parametrize("integration", ("smtp_email", "pagerduty"))
+def test_get_custom_logger_compatible_class_does_not_match_generic_api_logger(
+    integration: Literal["smtp_email", "pagerduty"],
+    monkeypatch,
+):
+    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", "https://generic-logger.test")
+    logging_module._in_memory_loggers.clear()
+    try:
+        with patch("asyncio.create_task", side_effect=lambda coro: coro.close()):
+            logging_module._in_memory_loggers.append(GenericAPILogger())
+        assert logging_module.get_custom_logger_compatible_class(integration) is None
+    finally:
+        logging_module._in_memory_loggers.clear()

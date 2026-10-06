@@ -1,114 +1,78 @@
-import ast
-import os
+import subprocess
 import sys
+from pathlib import Path
+from typing import Final
+
+import pytest
 
 
-def test_proxy_types_not_imported():
-    """
-    Test that proxy._types is not directly imported in litellm/__init__.py
-    by examining the source code using AST parsing.
-    """
-    # Read the litellm/__init__.py file
-    # local_init_file = "../litellm/"
-    init_file_path = os.path.join("./litellm", "__init__.py")
-    if not os.path.exists(init_file_path):
-        raise Exception(f"Could not find {init_file_path}")
-
-    with open(init_file_path, "r") as f:
-        content = f.read()
-        lines = content.splitlines()  # Get lines for line number reporting
-
-    try:
-        tree = ast.parse(content)
-    except SyntaxError as e:
-        raise Exception(f"Could not parse {init_file_path}: {e}")
-
-    # Check for direct imports of proxy._types
-    found_imports = []
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if "proxy._types" in alias.name or "proxy/_types" in alias.name:
-                    line_num = node.lineno
-                    line_content = (
-                        lines[line_num - 1] if line_num <= len(lines) else "Unknown"
-                    )
-                    import_statement = f"import {alias.name}"
-                    found_imports.append(
-                        {
-                            "type": "import",
-                            "line": line_num,
-                            "content": line_content.strip(),
-                            "statement": import_statement,
-                            "module": alias.name,
-                        }
-                    )
-
-        elif isinstance(node, ast.ImportFrom):
-            if node.module and (
-                "proxy._types" in node.module or "proxy/_types" in node.module
-            ):
-                line_num = node.lineno
-                line_content = (
-                    lines[line_num - 1] if line_num <= len(lines) else "Unknown"
-                )
-                import_names = [alias.name for alias in node.names]
-                import_statement = (
-                    f"from {node.module} import {', '.join(import_names)}"
-                )
-                found_imports.append(
-                    {
-                        "type": "from_import",
-                        "line": line_num,
-                        "content": line_content.strip(),
-                        "statement": import_statement,
-                        "module": node.module,
-                    }
-                )
-
-    if found_imports:
-        print(
-            "❌ BAD, this can import time to import litellm. Found direct imports of proxy._types in litellm/__init__.py:"
-        )
-        print("=" * 80)
-        for imp in found_imports:
-            print(f"Line {imp['line']}: {imp['content']}")
-            print(f"  Type: {imp['type']}")
-            print(f"  Statement: {imp['statement']}")
-            print(f"  Module: {imp['module']}")
-            print("-" * 80)
-        print("To fix this, please conditionally import this TYPE using TYPE_CHECKING")
-
-        raise Exception(
-            f"Found {len(found_imports)} direct import(s) of proxy._types in litellm/__init__.py"
-        )
-
-    print("✓ No direct imports of proxy._types found in litellm/__init__.py")
-    return True
+_REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 
 
-def main():
-    """
-    Main function to run the import test
-    """
-    print("=" * 60)
-    print("Testing litellm import performance")
-    print(
-        "Checking that proxy._types is not directly imported from litellm/__init__.py"
+def _run_import_check(
+    block_enterprise: bool, repo_root: Path
+) -> subprocess.CompletedProcess[str]:
+    program: Final = f"""
+import importlib.abc
+import sys
+import traceback
+
+repo_root = {str(repo_root.resolve())!r}
+
+class ImportTracer(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path, target=None):
+        if {block_enterprise!r} and name.startswith("litellm_enterprise"):
+            raise ImportError("blocked litellm_enterprise imports")
+        if name == "litellm.proxy._types":
+            repository_frames = [
+                frame for frame in traceback.extract_stack()
+                if repo_root in frame.filename
+            ]
+            print(
+                "FIRST _types importer chain:",
+                " | ".join(
+                    f"{{frame.filename}}:{{frame.lineno}}"
+                    for frame in repository_frames[-8:]
+                ),
+            )
+        return None
+
+sys.meta_path.insert(0, ImportTracer())
+import litellm
+print("litellm.__file__:", litellm.__file__)
+print("_types loaded:", "litellm.proxy._types" in sys.modules)
+"""
+    return subprocess.run(
+        [sys.executable, "-c", program],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    print("=" * 60)
 
-    try:
-        test_proxy_types_not_imported()
-        print("\n" + "=" * 60)
-        print(
-            "✓ Test passed! proxy._types is not directly imported from litellm/__init__.py"
-        )
-        print("=" * 60)
-    except Exception as e:
-        print(f"\n❌ Test failed: {e}")
-        print("=" * 60)
+
+@pytest.mark.parametrize("block_enterprise", (False, True))
+def test_import_litellm_does_not_load_proxy_types(block_enterprise: bool) -> None:
+    result: Final = _run_import_check(block_enterprise, _REPO_ROOT)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "_types loaded: False" in result.stdout, result.stdout + result.stderr
+
+
+def main(repo_root: Path = _REPO_ROOT) -> None:
+    results: Final = (
+        (False, _run_import_check(False, repo_root)),
+        (True, _run_import_check(True, repo_root)),
+    )
+    has_failures = False
+    for block_enterprise, result in results:
+        print(f"enterprise blocked: {block_enterprise}")
+        print(result.stdout, end="")
+        if result.stderr:
+            print(result.stderr, file=sys.stderr, end="")
+        if result.returncode != 0 or "_types loaded: False" not in result.stdout:
+            has_failures = True
+
+    if has_failures:
         sys.exit(1)
 
 
