@@ -26,7 +26,7 @@ class ProxyState:
         self,
         variable_name: valid_keys_literal,
     ) -> int:
-        return self.proxy_state_variables.get(variable_name, None)
+        return self.proxy_state_variables[variable_name]
 
     def set_proxy_state_variable(
         self,
