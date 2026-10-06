@@ -552,6 +552,17 @@ describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin Viewer" />);
     expect(screen.queryByTestId("create-team-button")).not.toBeInTheDocument();
   });
+
+  it("should hide the Require Trace ID switch from a view-only Admin session", async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" isViewOnly />);
+
+    fireEvent.click(screen.getByTestId("create-team-button"));
+    await screen.findByLabelText(/team name/i);
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    expect(screen.getByRole("switch", { name: /Disable Global Guardrails/i })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /Require Trace ID/i })).not.toBeInTheDocument();
+  });
 });
 
 describe("Teams - Default Team Settings tab visibility", () => {
@@ -1447,8 +1458,7 @@ describe("Teams - the exact bytes the create call sends", () => {
     await openCreateModal({ premiumUser: true });
     await openSection("Additional Settings", /Team Member Key Duration/);
 
-    const switches = screen.getAllByRole("switch");
-    fireEvent.click(switches[switches.length - 1]);
+    fireEvent.click(screen.getByRole("switch", { name: /Disable Global Guardrails/i }));
 
     const payload = await submit();
 
@@ -1459,8 +1469,7 @@ describe("Teams - the exact bytes the create call sends", () => {
     await openCreateModal();
     await openSection("Additional Settings", /Team Member Key Duration/);
 
-    const switches = screen.getAllByRole("switch");
-    fireEvent.click(switches[switches.length - 1]);
+    fireEvent.click(screen.getByRole("switch", { name: /Disable Global Guardrails/i }));
 
     const payload = await submit();
 
@@ -1797,6 +1806,7 @@ describe("Teams - disable_global_guardrails switch gating", () => {
     fireEvent.click(screen.getByText("Additional Settings"));
 
     expect(screen.queryByRole("switch", { name: /Disable Global Guardrails/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /Require Trace ID/i })).not.toBeInTheDocument();
   });
 
   it("shows the Disable Global Guardrails switch to a proxy admin", async () => {
@@ -1806,5 +1816,36 @@ describe("Teams - disable_global_guardrails switch gating", () => {
     fireEvent.click(screen.getByText("Additional Settings"));
 
     expect(await screen.findByRole("switch", { name: /Disable Global Guardrails/i })).toBeInTheDocument();
+  });
+
+  it("sends require_trace_id when a proxy admin enables it during team creation", async () => {
+    const createdTeamResponse = {
+      team_id: "new-team-1",
+      team_alias: "Trace Required",
+      models: [],
+      organization_id: null,
+      keys: [],
+      members_with_roles: [],
+      spend: 0,
+    };
+    vi.mocked(teamCreateCall).mockResolvedValue(createdTeamResponse);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await openCreateModal();
+
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Trace Required" } });
+    fireEvent.click(screen.getByText("Additional Settings"));
+    fireEvent.click(await screen.findByRole("switch", { name: /Require Trace ID/i }));
+    const submitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(submitButtons[submitButtons.length - 1]);
+
+    await waitFor(() => {
+      expect(teamCreateCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          team_alias: "Trace Required",
+          require_trace_id: true,
+        }),
+      );
+    });
   });
 });

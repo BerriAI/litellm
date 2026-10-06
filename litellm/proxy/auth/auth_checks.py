@@ -162,7 +162,13 @@ from .auth_checks_organization import (
     add_team_org_context_to_request_body,
     organization_role_based_access_check,
 )
-from .auth_utils import get_model_from_request, get_request_route_template, request_fallback_model_names
+from .auth_utils import (
+    get_model_from_request,
+    get_request_route,
+    get_request_route_template,
+    request_dispatched_to_pass_through_endpoint,
+    request_fallback_model_names,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -393,6 +399,39 @@ def _typed_request_body(request_body: dict) -> Mapping[str, object]:
 
 
 typed_general_settings: Final = _typed_request_body
+
+
+def _metadata_has_trace_id(metadata: object) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    trace_id: Final[object] = metadata.get("trace_id")
+    return isinstance(trace_id, str) and bool(trace_id)
+
+
+def _request_has_trace_id(request_body: Mapping[str, object], request: Request, *, headers_only: bool = False) -> bool:
+    from litellm.proxy.litellm_pre_call_utils import (
+        _trace_id_from_traceparent,  # pyright: ignore[reportPrivateUsage]  # reuse W3C traceparent parser
+        get_chain_id_from_headers,
+        metadata_variable_name_for_route,
+    )
+
+    if get_chain_id_from_headers(dict(request.headers)):
+        return True
+    if headers_only:
+        return False
+    litellm_trace_id: Final[object] = request_body.get("litellm_trace_id")
+    if isinstance(litellm_trace_id, str) and litellm_trace_id:
+        return True
+    if "litellm_trace_id" not in request_body:
+        traceparent: Final[str | None] = request.headers.get("traceparent")
+        if isinstance(traceparent, str) and _trace_id_from_traceparent(traceparent):
+            return True
+    metadata_variable_name: Final = metadata_variable_name_for_route(get_request_route(request))
+    selected_metadata: Final[object] = request_body.get(metadata_variable_name)
+    if isinstance(selected_metadata, dict) and "trace_id" in selected_metadata:
+        return _metadata_has_trace_id(selected_metadata)
+    other_metadata_variable_name: Final = "litellm_metadata" if metadata_variable_name == "metadata" else "metadata"
+    return _metadata_has_trace_id(request_body.get(other_metadata_variable_name))
 
 
 class _JsonLoadsObj(Protocol):
@@ -1121,6 +1160,48 @@ async def common_checks(
                         param=None,
                         code=status.HTTP_400_BAD_REQUEST,
                     )
+
+    pass_through_route: Final = RouteChecks.check_route_access(
+        route=route,
+        allowed_routes=LiteLLMRoutes.passthrough_routes_wildcard.value,
+    ) or request_dispatched_to_pass_through_endpoint(request)
+    headers_only: Final = (
+        RouteChecks.check_route_access(
+            route=route,
+            allowed_routes=LiteLLMRoutes.mcp_inference_routes.value,
+        )
+        or RouteChecks.check_route_access(
+            route=route,
+            allowed_routes=LiteLLMRoutes.agent_inference_routes.value,
+        )
+        or pass_through_route
+    )
+    if (
+        team_object is not None
+        and isinstance(team_object.metadata, dict)
+        and team_object.metadata.get("require_trace_id") is True
+        and request.method not in ("GET", "HEAD", "OPTIONS")
+        and (RouteChecks.is_llm_api_route(route=route) or pass_through_route)
+        and not RouteChecks.check_route_access(
+            route=route,
+            allowed_routes=LiteLLMRoutes.trace_telemetry_routes.value,
+        )
+        and not _request_has_trace_id(
+            request_body=_typed_request_body(request_body),
+            request=request,
+            headers_only=headers_only,
+        )
+    ):
+        raise ProxyException(
+            message=(
+                f"Team '{team_object.team_id}' requires a trace ID on every LLM, MCP and agent request. "
+                "Send an x-litellm-trace-id header. "
+                "LLM requests can also send a W3C traceparent header or set metadata.trace_id in the body."
+            ),
+            type=ProxyErrorTypes.bad_request_error,
+            param="trace_id",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
 
     managed_policy: Final = managed_agent_policy(valid_token)
     if _model and valid_token is not None and managed_policy is not None:
