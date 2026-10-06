@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"slices"
 
 	"github.com/hashicorp/go-cty/cty"
@@ -95,6 +96,24 @@ func resourceKey() *schema.Resource {
 			"key_alias": {
 				Type:     schema.TypeString,
 				Optional: true,
+			},
+			"auto_rotate": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Computed:    true,
+				Description: "Whether the proxy rotates this key on a schedule. Omit to leave the current setting unchanged. Set to false to stop rotation; that does not clear rotation_interval or key_rotation_at. Requires key_alias and rotation_interval",
+			},
+			"rotation_interval": {
+				Type:         schema.TypeString,
+				Optional:     true,
+				Computed:     true,
+				ValidateFunc: validateRotationInterval,
+				Description:  "How often the proxy rotates this key, for example \"30d\" or \"12h\". 1 to 3 digits followed by s, m, h, or d. Required when auto_rotate is true. Omit to leave the stored interval unchanged",
+			},
+			"key_rotation_at": {
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "When the proxy will next rotate this key, as returned by the API. Terraform never sends it",
 			},
 			"duration": {
 				Type:        schema.TypeString,
@@ -284,6 +303,10 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 	} else if v := d.Get("key").(string); v != "" {
 		key.Key = v
 	}
+	if err := validateKeyRotationConfig(d); err != nil {
+		return diag.FromErr(err)
+	}
+	applyKeyRotation(d, key, false)
 
 	createdKey, err := c.CreateKey(key)
 	if err != nil {
@@ -306,6 +329,12 @@ func resourceKeyRead(ctx context.Context, d *schema.ResourceData, m interface{})
 	}
 
 	if key == nil {
+		key, err = adoptRotatedKey(c, d)
+		if err != nil {
+			return diag.FromErr(err)
+		}
+	}
+	if key == nil {
 		log.Printf("[WARN] Key %s not found, removing from state", d.Id())
 		d.SetId("")
 		return nil
@@ -325,6 +354,10 @@ func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{
 	if !d.HasChange("duration") {
 		key.Duration = ""
 	}
+	if err := validateKeyRotationConfig(d); err != nil {
+		return diag.FromErr(err)
+	}
+	applyKeyRotation(d, key, true)
 	key.ModelRPMLimit = changedMap(d, "model_rpm_limit")
 	key.ModelTPMLimit = changedMap(d, "model_tpm_limit")
 
@@ -448,6 +481,94 @@ func resourceKeyDelete(ctx context.Context, d *schema.ResourceData, m interface{
 	return nil
 }
 
+var rotationIntervalPattern = regexp.MustCompile(`^[1-9][0-9]{0,2}[smhd]$`)
+
+func validateRotationInterval(v interface{}, k string) ([]string, []error) {
+	value, ok := v.(string)
+	if !ok || !rotationIntervalPattern.MatchString(value) {
+		return nil, []error{fmt.Errorf("%q must be 1 to 3 digits followed by s, m, h, or d, for example \"30d\"", k)}
+	}
+	return nil, nil
+}
+
+func validateKeyRotationConfig(d *schema.ResourceData) error {
+	interval, intervalSet := configuredString(d, "rotation_interval")
+	if intervalSet && interval != "" && !rotationIntervalPattern.MatchString(interval) {
+		return fmt.Errorf("rotation_interval must be 1 to 3 digits followed by s, m, h, or d, for example \"30d\"")
+	}
+	autoRotate, autoSet := configuredBool(d, "auto_rotate")
+	if !autoSet || !autoRotate {
+		return nil
+	}
+	if !intervalSet || interval == "" {
+		return fmt.Errorf("rotation_interval is required when auto_rotate is true")
+	}
+	alias, aliasSet := configuredString(d, "key_alias")
+	if !aliasSet || alias == "" {
+		return fmt.Errorf("key_alias is required when auto_rotate is true")
+	}
+	return nil
+}
+
+func applyKeyRotation(d *schema.ResourceData, key *Key, onlyIfChanged bool) {
+	autoRotate, autoSet := configuredBool(d, "auto_rotate")
+	interval, intervalSet := configuredString(d, "rotation_interval")
+	autoChanged := !onlyIfChanged || d.HasChange("auto_rotate")
+	intervalChanged := !onlyIfChanged || d.HasChange("rotation_interval")
+	sendInterval := intervalSet && interval != "" && intervalChanged
+	if autoSet && autoRotate && (autoChanged || sendInterval) {
+		key.AutoRotate = &autoRotate
+		key.RotationInterval = interval
+		return
+	}
+	if autoSet && autoChanged {
+		key.AutoRotate = &autoRotate
+	}
+	if sendInterval {
+		key.RotationInterval = interval
+	}
+}
+
+func configuredBool(d *schema.ResourceData, name string) (bool, bool) {
+	raw, diags := d.GetRawConfigAt(cty.GetAttrPath(name))
+	if diags.HasError() || raw.IsNull() || !raw.IsKnown() || !raw.Type().Equals(cty.Bool) {
+		return false, false
+	}
+	return raw.True(), true
+}
+
+func configuredString(d *schema.ResourceData, name string) (string, bool) {
+	raw, diags := d.GetRawConfigAt(cty.GetAttrPath(name))
+	if diags.HasError() || raw.IsNull() || !raw.IsKnown() || !raw.Type().Equals(cty.String) {
+		return "", false
+	}
+	return raw.AsString(), true
+}
+
+func adoptRotatedKey(c *Client, d *schema.ResourceData) (*Key, error) {
+	alias := d.Get("key_alias").(string)
+	if alias == "" {
+		return nil, nil
+	}
+	token, err := c.keyTokenForAlias(alias)
+	if err != nil {
+		return nil, fmt.Errorf("error finding key_alias %q after %s was not found: %s", alias, d.Id(), err)
+	}
+	if token == "" {
+		return nil, nil
+	}
+	key, err := c.GetKey(token)
+	if err != nil {
+		return nil, fmt.Errorf("error reading key %s: %s", token, err)
+	}
+	if key == nil {
+		return nil, nil
+	}
+	log.Printf("[WARN] Key %s not found; adopting %s for key_alias %q", d.Id(), token, alias)
+	d.SetId(token)
+	return key, nil
+}
+
 func mapResourceDataToKey(d *schema.ResourceData, key *Key) {
 	key.Models = expandStringList(d.Get("models").([]interface{}))
 	if v, ok := d.GetOk("max_budget"); ok {
@@ -540,6 +661,15 @@ func mapKeyToResourceData(d *schema.ResourceData, key *Key) {
 	}
 	if key.KeyAlias != "" {
 		d.Set("key_alias", key.KeyAlias)
+	}
+	if key.AutoRotate != nil {
+		d.Set("auto_rotate", *key.AutoRotate)
+	}
+	if key.RotationInterval != "" {
+		d.Set("rotation_interval", key.RotationInterval)
+	}
+	if key.KeyRotationAt != "" {
+		d.Set("key_rotation_at", key.KeyRotationAt)
 	}
 	if key.Duration != "" {
 		d.Set("duration", key.Duration)
