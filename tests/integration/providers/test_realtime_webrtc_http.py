@@ -8,8 +8,8 @@ request the deployment received instead of stopping at the status code.
 
 from __future__ import annotations
 
-import json
 import itertools
+import json
 import time
 import uuid
 from collections.abc import Callable, Mapping
