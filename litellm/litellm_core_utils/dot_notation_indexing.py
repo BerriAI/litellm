@@ -26,6 +26,8 @@ additional_drop_params to remove nested fields from optional parameters.
 from collections.abc import Mapping
 from typing import Any, Final, TypeVar
 
+from litellm.constants import NESTED_VALUE_MISSING_SENTINEL
+
 T = TypeVar("T")
 
 
@@ -54,29 +56,44 @@ def get_nested_value(data: Mapping[str, object], key_path: str, default: T | Non
     if not key_path:
         return default
 
-    # Remove metadata. prefix if it exists
-    key_path = key_path.replace("metadata.", "", 1) if key_path.startswith("metadata.") else key_path
-
     # Split the key path into parts, respecting escaped dots (\.)
     # Use a temporary placeholder, split on unescaped dots, then restore
     placeholder: Final = "\x00"
-    parts = key_path.replace("\\.", placeholder).split(".")
-    parts = [p.replace(placeholder, ".") for p in parts]
 
-    # Traverse through the dictionary
-    current: Any = data
-    for part in parts:
-        try:
-            current = current[part]
-        except (KeyError, TypeError):
-            return default
+    def _resolve(path: str) -> Any:
+        parts = path.replace("\\.", placeholder).split(".")
+        current: Any = data
+        for part in parts:
+            part = part.replace(placeholder, ".")
+            try:
+                current = current[part]
+            except (KeyError, TypeError):
+                return NESTED_VALUE_MISSING_SENTINEL
+        return current
+
+    # A leading "metadata." has always been stripped before resolving, so
+    # `roles_jwt_field: "metadata.roles"` reads a top-level `roles` claim. Keep
+    # that spelling authoritative so no token changes team, and fall back to the
+    # path as written only when the legacy one is absent, which is what makes a
+    # genuinely nested `metadata` object readable instead of silently falling back
+    # to the defaults JWT auth applies when a claim is missing.
+    resolved: Any = NESTED_VALUE_MISSING_SENTINEL
+    if key_path.startswith("metadata."):
+        without_prefix: Final = key_path[len("metadata.") :]
+        if without_prefix:
+            resolved = _resolve(without_prefix)
+    if resolved is NESTED_VALUE_MISSING_SENTINEL:
+        resolved = _resolve(key_path)
+
+    if resolved is NESTED_VALUE_MISSING_SENTINEL:
+        return default
 
     # If default is None, we can return any type
     if default is None:
-        return current
+        return resolved
 
     # Otherwise, ensure the type matches the default
-    return current if isinstance(current, type(default)) else default
+    return resolved if isinstance(resolved, type(default)) else default
 
 
 def _parse_path_segments(path: str) -> list:
